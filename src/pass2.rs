@@ -285,28 +285,29 @@ impl Pass2 {
         }
 
         // ── Phase 0c: Build class names ──────────────────────────────────
-        // Map from (class name string) → index in class_names vec
-        let mut class_name_to_idx: HashMap<String, u32> = HashMap::new();
+        // MAT keys the class histogram by CLASS-OBJECT identity, not by name: a
+        // class loaded by two different loaders yields two histogram rows even
+        // though the names are identical. We therefore intern by a u64 key:
+        //   - instances / object arrays: the class-object address (loader-distinct)
+        //   - primitive arrays: PRIM_KEY_BASE | type_code (boot-loaded, single row)
+        //   - class objects (java.lang.Class): the JLC_KEY sentinel (single row)
+        const PRIM_KEY_BASE: u64 = 0xFFFF_0000_0000_0000;
+        const JLC_KEY: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+        let mut class_key_to_idx: HashMap<u64, u32> = HashMap::new();
         let mut class_names: Vec<String> = Vec::new();
 
-        let mut get_or_insert_class_name = |name: String| -> u32 {
-            if let Some(&idx) = class_name_to_idx.get(&name) {
+        let mut get_or_insert_class = |key: u64, name: &dyn Fn() -> String| -> u32 {
+            if let Some(&idx) = class_key_to_idx.get(&key) {
                 return idx;
             }
             let idx = class_names.len() as u32;
-            class_name_to_idx.insert(name.clone(), idx);
-            class_names.push(name);
+            class_key_to_idx.insert(key, idx);
+            class_names.push(name());
             idx
         };
 
-        // Find java/lang/Class name
-        let java_lang_class_name = "java/lang/Class".to_string();
-
         // Build class_idx array
         let mut class_idx: Vec<u32> = vec![0u32; n];
-
-        // Find all class objects (so we know their class_idx = java/lang/Class)
-        let mut java_lang_class_idx: Option<u32> = None;
 
         // First pass: populate class_idx for all objects (kind-driven, no heuristics)
         for i in 0..n {
@@ -314,35 +315,34 @@ impl Pass2 {
 
             match p1.kind[i] {
                 3 => {
-                    // Class object → attributed to java/lang/Class (MAT parity)
-                    let idx = get_or_insert_class_name(java_lang_class_name.clone());
-                    if java_lang_class_idx.is_none() {
-                        java_lang_class_idx = Some(idx);
-                    }
-                    class_idx[i] = idx;
+                    // Class object → single java/lang/Class row (MAT parity)
+                    class_idx[i] = get_or_insert_class(JLC_KEY, &|| "java/lang/Class".to_string());
                 }
                 2 => {
-                    // Primitive array: cid is the element type code
-                    let nm = prim_array_class_name(cid as u8).to_string();
-                    class_idx[i] = get_or_insert_class_name(nm);
+                    // Primitive array: cid is the element type code.
+                    let tc = cid as u8;
+                    class_idx[i] = get_or_insert_class(
+                        PRIM_KEY_BASE | tc as u64,
+                        &|| prim_array_class_name(tc).to_string(),
+                    );
                 }
                 1 => {
-                    // Object array: cid is the array class id (e.g. "[Ljava/lang/Object;")
-                    let nm = p1
-                        .class_map
-                        .get(&cid)
-                        .and_then(|ci| p1.strings.get(&ci.name_id).cloned())
-                        .unwrap_or_else(|| "[Ljava/lang/Object;".to_string());
-                    class_idx[i] = get_or_insert_class_name(nm);
+                    // Object array: cid is the array-class address (loader-distinct).
+                    class_idx[i] = get_or_insert_class(cid, &|| {
+                        p1.class_map
+                            .get(&cid)
+                            .and_then(|ci| p1.strings.get(&ci.name_id).cloned())
+                            .unwrap_or_else(|| "[Ljava/lang/Object;".to_string())
+                    });
                 }
                 _ => {
-                    // Instance: class name from class_map[cid]
-                    let nm = p1
-                        .class_map
-                        .get(&cid)
-                        .and_then(|ci| p1.strings.get(&ci.name_id).cloned())
-                        .unwrap_or_else(|| format!("unknown@{cid:#x}"));
-                    class_idx[i] = get_or_insert_class_name(nm);
+                    // Instance: cid is the class-object address (loader-distinct).
+                    class_idx[i] = get_or_insert_class(cid, &|| {
+                        p1.class_map
+                            .get(&cid)
+                            .and_then(|ci| p1.strings.get(&ci.name_id).cloned())
+                            .unwrap_or_else(|| format!("unknown@{cid:#x}"))
+                    });
                 }
             }
         }
@@ -389,9 +389,7 @@ impl Pass2 {
                             &mut out_degree,
                             &mut in_degree,
                             &mut shallow,
-                            &mut class_idx,
                             &mut scratch,
-                            &mut get_or_insert_class_name,
                         )?;
                     }
                     tags::HEAP_DUMP_END => break,
@@ -400,31 +398,26 @@ impl Pass2 {
             }
         }
 
-        // Ensure java/lang/Class index is consistent (class objects already assigned above)
-        // Re-assign class objects to java/lang/Class index after possible updates
-        let jlc_idx = get_or_insert_class_name(java_lang_class_name);
-        for i in 0..n {
-            let addr = p1.id_map.addr_at(i);
-            if class_addrs.contains(&addr) {
-                class_idx[i] = jlc_idx;
-            }
-        }
+        // Class objects already map to the java/lang/Class row (JLC_KEY) from Phase 0c.
+        let jlc_idx = get_or_insert_class(JLC_KEY, &|| "java/lang/Class".to_string());
 
         // ── Build class_obj_class_idx ─────────────────────────────────────
-        // For each class object, record which class it represents (not java/lang/Class).
+        // For each class object, record the histogram row of the class it
+        // represents. Under identity keying, that row is keyed by the class
+        // object's own address (the same key instances of that class use).
         let mut class_obj_class_idx: Vec<u32> = vec![u32::MAX; n];
         for i in 0..n {
             let addr = p1.id_map.addr_at(i);
             if class_addrs.contains(&addr) {
-                if let Some(ci) = p1.class_map.get(&addr) {
-                    let nm = p1.strings.get(&ci.name_id)
-                        .cloned()
-                        .unwrap_or_else(|| format!("unknown@{addr:#x}"));
-                    let idx = get_or_insert_class_name(nm);
-                    class_obj_class_idx[i] = idx;
-                }
+                let ci = p1.class_map.get(&addr);
+                let idx = get_or_insert_class(addr, &|| {
+                    ci.and_then(|c| p1.strings.get(&c.name_id).cloned())
+                        .unwrap_or_else(|| format!("unknown@{addr:#x}"))
+                });
+                class_obj_class_idx[i] = idx;
             }
         }
+        let _ = jlc_idx;
 
         // Ensure no zero shallow sizes for instances/arrays (fall back to minimum).
         // Class objects (kind==3) are exempt: MAT reports 0 shallow for a class
@@ -676,7 +669,7 @@ impl Pass2 {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn scan_heap_2a<F>(
+    fn scan_heap_2a(
         r: &mut HprofReader,
         id_size: u8,
         ref_size: usize,
@@ -684,20 +677,15 @@ impl Pass2 {
         mut remaining: u64,
         id_map: &crate::id_map::IdMap,
         class_map: &HashMap<u64, ClassInfo>,
-        strings: &HashMap<u64, String>,
+        _strings: &HashMap<u64, String>,
         class_addrs: &std::collections::HashSet<u64>,
         field_plans: &HashMap<u64, FieldPlan>,
         size_cache: &mut HashMap<u64, usize>,
         out_degree: &mut Vec<u32>,
         in_degree: &mut Vec<u32>,
         shallow: &mut Vec<u32>,
-        class_idx: &mut Vec<u32>,
         scratch: &mut Vec<u8>,
-        get_class_name_idx: &mut F,
-    ) -> io::Result<()>
-    where
-        F: FnMut(String) -> u32,
-    {
+    ) -> io::Result<()> {
         let ids = id_size as u64;
 
         macro_rules! edge_if_valid {
@@ -815,14 +803,7 @@ impl Pass2 {
                     // Fix shallow size for object arrays
                     shallow[src_idx] = obj_array_shallow(count, ptr_size, ref_size);
 
-                    // elem_class_id is the array's class (e.g. "[Ljava/lang/Double;"), not the element type
-                    let arr_name = if let Some(ci) = class_map.get(&elem_class_id) {
-                        strings.get(&ci.name_id).cloned()
-                            .unwrap_or_else(|| "[Ljava/lang/Object;".to_string())
-                    } else {
-                        "[Ljava/lang/Object;".to_string()
-                    };
-                    class_idx[src_idx] = get_class_name_idx(arr_name);
+                    // class_idx[src_idx] already set by identity in Phase 0c.
 
                     // Edge: array → element class object
                     edge_if_valid!(src_idx, elem_class_id, false);
@@ -850,11 +831,8 @@ impl Pass2 {
                     checked_sub!(remaining, ids + 4 + 4 + 1 + count * esz);
 
                     if let Some(src_idx) = id_map.index_of(addr) {
-                        // Fix shallow size
+                        // Fix shallow size (class_idx set by identity in Phase 0c)
                         shallow[src_idx] = prim_array_shallow(count, esz as usize, ptr_size, ref_size);
-                        // Fix class_idx
-                        let nm = prim_array_class_name(elem_type).to_string();
-                        class_idx[src_idx] = get_class_name_idx(nm);
                     }
                 }
                 other => {
