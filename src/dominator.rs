@@ -49,19 +49,12 @@ pub fn compute_dominators(
     let mut ancestor = vec![0u32; count]; // 0 = no ancestor (unlinked)
     let mut label = vec![0u32; count];
 
-    // Initialize: semi[i] = i, label[i] = i, parent[i] = dfn[dfs_parent[vertex[i]]]
+    // Initialize: semi[i] = i, label[i] = i, parent[i] = parent_pre[i]
     for i in 0..count {
         semi[i] = i as u32;
         label[i] = i as u32;
         ancestor[i] = 0;
-        let node = rpo.vertex[i] as usize;
-        if i == 0 {
-            parent[i] = 0; // virtual root's parent is itself
-        } else {
-            let dp = rpo.dfs_parent[node];
-            // dfs_parent stores node index (n = vroot). Map to pre-order.
-            parent[i] = rpo.dfn[dp as usize];
-        }
+        parent[i] = rpo.parent_pre[i];
     }
 
     // vr_adjacent: which nodes have an implicit virtual-root predecessor (GC roots).

@@ -12,11 +12,12 @@
 pub struct RpoResult {
     /// Real nodes (indices 0..n-1) in reverse post-order; virtual root excluded.
     pub rpo_order: Vec<u32>,
-    /// `dfs_parent[v]` = DFS-tree parent of `v`.
-    /// `n` means the virtual root is the parent.
-    /// `u32::MAX` means unvisited / unset.
-    /// Length = n + 1.
-    pub dfs_parent: Vec<u32>,
+    /// `parent_pre[i]` = pre-order number of the DFS-tree parent of the node
+    /// whose pre-order number is `i` (i.e. of `vertex[i]`).
+    /// `parent_pre[0]` = 0 (virtual root's parent is itself).
+    /// Length = number of reachable nodes + 1 (index 0 = virtual root),
+    /// lockstep with `vertex`.
+    pub parent_pre: Vec<u32>,
     /// DFS pre-order number of each node. `u32::MAX` = unvisited.
     /// Virtual root (index n) gets dfn 0; visited nodes get 1, 2, 3, ... in DFS pre-order.
     /// Length = n + 1. Used by SEMI-NCA dominator.
@@ -29,7 +30,7 @@ pub struct RpoResult {
 pub fn rpo_dfs(n: usize, roots: &[u32], fwd_off: &[u32], fwd_tgt: &[u32]) -> RpoResult {
     let vroot = n as u32;
 
-    let mut dfs_parent = vec![u32::MAX; n + 1];
+    let mut parent_pre: Vec<u32> = Vec::with_capacity(n + 1);
     let mut dfn = vec![u32::MAX; n + 1];
     let mut vertex: Vec<u32> = Vec::with_capacity(n + 1);
     let mut dfs_count: u32 = 0;
@@ -40,9 +41,9 @@ pub fn rpo_dfs(n: usize, roots: &[u32], fwd_off: &[u32], fwd_tgt: &[u32]) -> Rpo
     let mut cursor_stack: Vec<usize> = Vec::with_capacity(1024);
 
     // Push virtual root (pre-order number 0)
-    dfs_parent[n] = vroot; // self-loop: vroot's parent is itself
     dfn[n] = dfs_count;
     vertex.push(vroot);
+    parent_pre.push(0); // virtual root's parent is itself (pre-order 0)
     dfs_count += 1;
     node_stack.push(vroot);
     cursor_stack.push(0);
@@ -76,9 +77,9 @@ pub fn rpo_dfs(n: usize, roots: &[u32], fwd_off: &[u32], fwd_tgt: &[u32]) -> Rpo
 
             if dfn[child as usize] == u32::MAX {
                 // Unvisited: push onto stack, assign pre-order number
-                dfs_parent[child as usize] = top;
                 dfn[child as usize] = dfs_count;
                 vertex.push(child);
+                parent_pre.push(dfn[top as usize]);
                 dfs_count += 1;
                 node_stack.push(child);
                 cursor_stack.push(0);
@@ -105,7 +106,7 @@ pub fn rpo_dfs(n: usize, roots: &[u32], fwd_off: &[u32], fwd_tgt: &[u32]) -> Rpo
     post_order.reverse();
     let rpo_order: Vec<u32> = post_order;
 
-    RpoResult { rpo_order, dfs_parent, dfn, vertex }
+    RpoResult { rpo_order, parent_pre, dfn, vertex }
 }
 
 #[cfg(test)]
