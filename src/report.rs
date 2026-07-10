@@ -248,14 +248,31 @@ pub fn leak_suspects(g: &Graph) -> String {
 
     let threshold = (total_shallow as f64 * THRESHOLD_PCT / 100.0) as u64;
 
-    // Build dom_children index
-    let mut dom_children: Vec<Vec<u32>> = vec![Vec::new(); n + 1];
+    // Build dom_children as a CSR (offsets + targets) to avoid the ~n Vec<Vec>
+    // header overhead (which dominated report-phase peak RSS).
+    let mut dc_offsets: Vec<u32> = vec![0u32; n + 2];
     for i in 0..n {
         let d = g.idom[i];
         if d != undef {
-            dom_children[d as usize].push(i as u32);
+            dc_offsets[d as usize + 1] += 1;
         }
     }
+    for i in 0..(n + 1) {
+        dc_offsets[i + 1] += dc_offsets[i];
+    }
+    let mut dc_targets: Vec<u32> = vec![0u32; dc_offsets[n + 1] as usize];
+    let mut dc_cursor: Vec<u32> = dc_offsets[..n + 1].to_vec();
+    for i in 0..n {
+        let d = g.idom[i] as usize;
+        if g.idom[i] != undef {
+            dc_targets[dc_cursor[d] as usize] = i as u32;
+            dc_cursor[d] += 1;
+        }
+    }
+    drop(dc_cursor);
+    let dom_children = |node: usize| -> &[u32] {
+        &dc_targets[dc_offsets[node] as usize..dc_offsets[node + 1] as usize]
+    };
 
     struct Suspect {
         is_single: bool,
@@ -270,7 +287,7 @@ pub fn leak_suspects(g: &Graph) -> String {
     let mut single_class_set: std::collections::HashSet<usize> = std::collections::HashSet::new();
 
     // Phase 1: single objects directly dominated by vroot with retained >= threshold
-    for &i in &dom_children[n] {
+    for &i in dom_children(n) {
         let idx = i as usize;
         if g.retained[idx] >= threshold {
             let ci = g.class_idx[idx] as usize;
@@ -291,7 +308,7 @@ pub fn leak_suspects(g: &Graph) -> String {
     let mut group_retained: Vec<u64> = vec![0; class_count];
     let mut group_count: Vec<u64> = vec![0; class_count];
     let mut group_shallow: Vec<u64> = vec![0; class_count];
-    for &i in &dom_children[n] {
+    for &i in dom_children(n) {
         let idx = i as usize;
         let ci = g.class_idx[idx] as usize;
         if ci < class_count {
@@ -380,7 +397,7 @@ pub fn leak_suspects(g: &Graph) -> String {
                 ));
 
                 // Find child with max retained
-                let best_child = dom_children[cur]
+                let best_child = dom_children(cur)
                     .iter()
                     .max_by_key(|&&c| g.retained[c as usize]);
                 match best_child {
