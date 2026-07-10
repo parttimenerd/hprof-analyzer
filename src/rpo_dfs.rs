@@ -12,11 +12,6 @@
 pub struct RpoResult {
     /// Real nodes (indices 0..n-1) in reverse post-order; virtual root excluded.
     pub rpo_order: Vec<u32>,
-    /// `rpo_pos[v]` = position of `v` in `rpo_order`.
-    /// -1 means unreachable / unvisited.
-    /// `i32::MAX` is used as an in-progress sentinel during DFS.
-    /// Length = n + 1 (slot `n` holds the virtual root, set to 0 after build).
-    pub rpo_pos: Vec<i32>,
     /// `dfs_parent[v]` = DFS-tree parent of `v`.
     /// `n` means the virtual root is the parent.
     /// `u32::MAX` means unvisited / unset.
@@ -34,8 +29,6 @@ pub struct RpoResult {
 pub fn rpo_dfs(n: usize, roots: &[u32], fwd_off: &[u32], fwd_tgt: &[u32]) -> RpoResult {
     let vroot = n as u32;
 
-    // rpo_pos: -1 = unvisited, i32::MAX = in-progress, >=0 = final position
-    let mut rpo_pos = vec![-1i32; n + 1];
     let mut dfs_parent = vec![u32::MAX; n + 1];
     let mut dfn = vec![u32::MAX; n + 1];
     let mut vertex: Vec<u32> = Vec::with_capacity(n + 1);
@@ -48,7 +41,6 @@ pub fn rpo_dfs(n: usize, roots: &[u32], fwd_off: &[u32], fwd_tgt: &[u32]) -> Rpo
 
     // Push virtual root (pre-order number 0)
     dfs_parent[n] = vroot; // self-loop: vroot's parent is itself
-    rpo_pos[n] = i32::MAX; // in-progress
     dfn[n] = dfs_count;
     vertex.push(vroot);
     dfs_count += 1;
@@ -82,9 +74,8 @@ pub fn rpo_dfs(n: usize, roots: &[u32], fwd_off: &[u32], fwd_tgt: &[u32]) -> Rpo
                 continue;
             }
 
-            if rpo_pos[child as usize] == -1 {
+            if dfn[child as usize] == u32::MAX {
                 // Unvisited: push onto stack, assign pre-order number
-                rpo_pos[child as usize] = i32::MAX; // in-progress
                 dfs_parent[child as usize] = top;
                 dfn[child as usize] = dfs_count;
                 vertex.push(child);
@@ -105,24 +96,16 @@ pub fn rpo_dfs(n: usize, roots: &[u32], fwd_off: &[u32], fwd_tgt: &[u32]) -> Rpo
         }
     }
 
-    // RPO = reverse of post-order, excluding virtual root
-    let rpo_order: Vec<u32> = post_order
-        .iter()
-        .rev()
-        .filter(|&&v| v != vroot)
-        .copied()
-        .collect();
+    // RPO = reverse of post-order, excluding the virtual root. The vroot
+    // finishes last, so it is the final entry of ; reversing in
+    // place puts it first, and truncating drops it — no second n-length
+    // allocation (reuses the post_order buffer as rpo_order).
+    debug_assert_eq!(post_order.last().copied(), Some(vroot));
+    post_order.pop(); // drop vroot (finishes last) — O(1), no element shift
+    post_order.reverse();
+    let rpo_order: Vec<u32> = post_order;
 
-    // Assign final RPO positions: virtual root = 0, real nodes = 1..=rpo_order.len()
-    // This matches hprof-redact's convention where VIRTUAL_ROOT has position 0
-    // and all real nodes have strictly positive positions, so intersect() can
-    // unambiguously walk up to the virtual root.
-    rpo_pos[n] = 0;  // virtual root always at position 0 (lowest)
-    for (i, &v) in rpo_order.iter().enumerate() {
-        rpo_pos[v as usize] = (i + 1) as i32;  // real nodes start at 1
-    }
-
-    RpoResult { rpo_order, rpo_pos, dfs_parent, dfn, vertex }
+    RpoResult { rpo_order, dfs_parent, dfn, vertex }
 }
 
 #[cfg(test)]
@@ -150,21 +133,8 @@ mod tests {
         let fwd_tgt = vec![1u32];
         let r = rpo_dfs(3, &[0u32], &fwd_off, &fwd_tgt);
         assert_eq!(r.rpo_order.len(), 2);
-        assert_eq!(r.rpo_pos[2], -1);
+        // node 2 unreachable → never assigned a DFS number
+        assert_eq!(r.dfn[2], u32::MAX);
     }
 
-    #[test]
-    fn rpo_pos_consistent() {
-        // rpo_pos is 1-indexed for real nodes (1..=rpo_order.len()); vroot=0
-        let fwd_off = vec![0u32, 2, 3, 4, 4];
-        let fwd_tgt = vec![1u32, 2, 3, 3];
-        let r = rpo_dfs(4, &[0u32], &fwd_off, &fwd_tgt);
-        // vroot (index 4) has rpo_pos=0
-        assert_eq!(r.rpo_pos[4], 0, "vroot should have rpo_pos=0");
-        // real nodes: rpo_pos[rpo_order[i]] == i+1
-        for (pos, &v) in r.rpo_order.iter().enumerate() {
-            assert_eq!(r.rpo_pos[v as usize], (pos + 1) as i32,
-                "node {} at rpo position {} should have rpo_pos={}", v, pos, pos+1);
-        }
-    }
 }

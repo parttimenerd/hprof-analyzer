@@ -347,8 +347,13 @@ impl Pass2 {
             }
         }
 
-        // We need to do a sub-pass to fix obj array class names and shallow sizes
-        // Do it in sub-pass 2a along with edge counting.
+        // Free pass1 per-object arrays that are dead after Phase 0b/0c: they
+        // are only read to derive  and  above. Releasing
+        // them here (~173 MB for a 11 M-object heap) shrinks peak RSS before
+        // the edge-scan allocations (inb_flat / fwd_targets).
+        p1.class_ids = Vec::new();
+        p1.shallow_sizes = Vec::new();
+        p1.elem_count = Vec::new();
 
         // ── Phase 1: Sub-pass 2a — count degrees ────────────────────────
         let mut out_degree: Vec<u32> = vec![0u32; n];
