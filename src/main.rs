@@ -9,26 +9,26 @@ mod rpo_dfs;
 mod types;
 mod vbyte;
 
-use std::{env, io, process};
+use std::{env, io, process, time::Instant};
 
 use pass1::Pass1;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    // parse flags
     let mut dump_json = false;
+    let mut verbose = false;
     let mut positional: Vec<&str> = Vec::new();
     for arg in args.iter().skip(1) {
-        if arg == "--dump-json" {
-            dump_json = true;
-        } else {
-            positional.push(arg.as_str());
+        match arg.as_str() {
+            "--dump-json" => dump_json = true,
+            "--verbose" | "-v" => verbose = true,
+            _ => positional.push(arg.as_str()),
         }
     }
 
     if positional.is_empty() {
-        eprintln!("usage: hprof-analyzer [--dump-json] <file.hprof[.gz]> [output.md]");
+        eprintln!("usage: hprof-analyzer [--verbose] [--dump-json] <file.hprof[.gz]> [output.md]");
         process::exit(1);
     }
 
@@ -38,35 +38,66 @@ fn main() {
     if dump_json {
         match dump_pass1_json(input) {
             Ok(()) => {}
-            Err(e) => {
-                eprintln!("Error: {e}");
-                process::exit(1);
-            }
+            Err(e) => { eprintln!("Error: {e}"); process::exit(1); }
         }
         return;
     }
 
-    match run(input, output) {
+    match run(input, output, verbose) {
         Ok(()) => {}
-        Err(e) => {
-            eprintln!("Error: {e}");
-            process::exit(1);
+        Err(e) => { eprintln!("Error: {e}"); process::exit(1); }
+    }
+}
+
+/// Read current process RSS from /proc/self/status (Linux only).
+/// Returns 0 on any error or non-Linux platform.
+fn rss_mb() -> f64 {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(s) = std::fs::read_to_string("/proc/self/status") {
+            for line in s.lines() {
+                if let Some(rest) = line.strip_prefix("VmRSS:") {
+                    let kb: u64 = rest.split_whitespace().next()
+                        .and_then(|v| v.parse().ok()).unwrap_or(0);
+                    return kb as f64 / 1024.0;
+                }
+            }
+        }
+    }
+    0.0
+}
+
+fn log(verbose: bool, phase: &str, elapsed: f64) {
+    if verbose {
+        let rss = rss_mb();
+        if rss > 0.0 {
+            eprintln!("{phase}: {elapsed:.2}s  RSS={rss:.0} MB");
+        } else {
+            eprintln!("{phase}: {elapsed:.2}s");
         }
     }
 }
 
-fn run(input: &str, output: Option<&str>) -> io::Result<()> {
-    let p1 = pass1::Pass1::run(input)?;
-    let mut g = pass2::Pass2::build(input, p1)?;
+fn run(input: &str, output: Option<&str>, verbose: bool) -> io::Result<()> {
+    let t_total = Instant::now();
 
-    // RPO DFS
+    let t = Instant::now();
+    let p1 = pass1::Pass1::run(input)?;
+    log(verbose, "pass1", t.elapsed().as_secs_f64());
+
+    let t = Instant::now();
+    let mut g = pass2::Pass2::build(input, p1)?;
+    log(verbose, &format!("pass2 n={}", g.n), t.elapsed().as_secs_f64());
+
+    let t = Instant::now();
     let rpo = rpo_dfs::rpo_dfs(g.n, &g.gc_root_indices, &g.fwd_offsets, &g.fwd_targets);
+    log(verbose, "rpo", t.elapsed().as_secs_f64());
 
     // Free forward CSR (no longer needed after DFS)
     g.fwd_offsets = Vec::new();
     g.fwd_targets = Vec::new();
 
-    // Dominator tree
+    let t = Instant::now();
     g.idom = dominator::compute_dominators(
         g.n,
         &rpo,
@@ -74,8 +105,9 @@ fn run(input: &str, output: Option<&str>) -> io::Result<()> {
         &g.inb_offsets,
         &g.inb_data,
     );
+    log(verbose, "dominator", t.elapsed().as_secs_f64());
 
-    // Retained sizes + hasSameClassAncestor
+    let t = Instant::now();
     let class_count = g.class_names.len();
     let (retained, has_same) = retained::compute_retained(
         g.n,
@@ -88,12 +120,14 @@ fn run(input: &str, output: Option<&str>) -> io::Result<()> {
     );
     g.retained = retained;
     g.has_same_class_ancestor = has_same;
+    log(verbose, "retained", t.elapsed().as_secs_f64());
 
-    // Generate report
+    let t = Instant::now();
     let mut md = String::new();
     md.push_str(&report::system_overview(&g));
     md.push_str(&report::leak_suspects(&g));
     md.push_str(&report::top_consumers(&g));
+    log(verbose, "report", t.elapsed().as_secs_f64());
 
     match output {
         Some(path) => {
@@ -102,13 +136,13 @@ fn run(input: &str, output: Option<&str>) -> io::Result<()> {
         None => print!("{}", md),
     }
 
+    log(verbose, "total", t_total.elapsed().as_secs_f64());
     Ok(())
 }
 
 fn dump_pass1_json(path: &str) -> io::Result<()> {
     let p = Pass1::run(path)?;
 
-    // Build class histogram: class name -> instance count
     let mut class_hist: std::collections::HashMap<String, u64> =
         std::collections::HashMap::new();
     for &cid in &p.class_ids {
@@ -122,13 +156,11 @@ fn dump_pass1_json(path: &str) -> io::Result<()> {
         }
     }
 
-    // Deduplicate GC root addresses and count unique roots
     let mut unique_roots: std::collections::HashSet<u64> = std::collections::HashSet::new();
     for &a in &p.gc_root_addrs {
         unique_roots.insert(a);
     }
 
-    // Emit JSON manually (no serde dependency)
     print!("{{");
     print!(r#""id_size":{}"#, p.id_size);
     print!(r#","format":"{}""#, p.format);
@@ -142,9 +174,7 @@ fn dump_pass1_json(path: &str) -> io::Result<()> {
     print!(r#","class_histogram":{{"#);
     let mut first = true;
     for (name, count) in &class_hist {
-        if !first {
-            print!(",");
-        }
+        if !first { print!(","); }
         let escaped = name.replace('"', "\"");
         print!(r#""{escaped}":{count}"#);
         first = false;

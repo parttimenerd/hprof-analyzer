@@ -22,6 +22,13 @@ pub struct RpoResult {
     /// `u32::MAX` means unvisited / unset.
     /// Length = n + 1.
     pub dfs_parent: Vec<u32>,
+    /// DFS pre-order number of each node. `u32::MAX` = unvisited.
+    /// Virtual root (index n) gets dfn 0; visited nodes get 1, 2, 3, ... in DFS pre-order.
+    /// Length = n + 1. Used by SEMI-NCA dominator.
+    pub dfn: Vec<u32>,
+    /// Inverse of `dfn`: `vertex[i]` = node whose pre-order number is `i`.
+    /// Length = number of reachable nodes + 1 (index 0 = virtual root).
+    pub vertex: Vec<u32>,
 }
 
 pub fn rpo_dfs(n: usize, roots: &[u32], fwd_off: &[u32], fwd_tgt: &[u32]) -> RpoResult {
@@ -30,15 +37,21 @@ pub fn rpo_dfs(n: usize, roots: &[u32], fwd_off: &[u32], fwd_tgt: &[u32]) -> Rpo
     // rpo_pos: -1 = unvisited, i32::MAX = in-progress, >=0 = final position
     let mut rpo_pos = vec![-1i32; n + 1];
     let mut dfs_parent = vec![u32::MAX; n + 1];
+    let mut dfn = vec![u32::MAX; n + 1];
+    let mut vertex: Vec<u32> = Vec::with_capacity(n + 1);
+    let mut dfs_count: u32 = 0;
     let mut post_order: Vec<u32> = Vec::with_capacity(n + 1);
 
     // Explicit stacks: parallel arrays (node, child_cursor)
     let mut node_stack: Vec<u32> = Vec::with_capacity(1024);
     let mut cursor_stack: Vec<usize> = Vec::with_capacity(1024);
 
-    // Push virtual root
+    // Push virtual root (pre-order number 0)
     dfs_parent[n] = vroot; // self-loop: vroot's parent is itself
     rpo_pos[n] = i32::MAX; // in-progress
+    dfn[n] = dfs_count;
+    vertex.push(vroot);
+    dfs_count += 1;
     node_stack.push(vroot);
     cursor_stack.push(0);
 
@@ -70,9 +83,12 @@ pub fn rpo_dfs(n: usize, roots: &[u32], fwd_off: &[u32], fwd_tgt: &[u32]) -> Rpo
             }
 
             if rpo_pos[child as usize] == -1 {
-                // Unvisited: push onto stack
+                // Unvisited: push onto stack, assign pre-order number
                 rpo_pos[child as usize] = i32::MAX; // in-progress
                 dfs_parent[child as usize] = top;
+                dfn[child as usize] = dfs_count;
+                vertex.push(child);
+                dfs_count += 1;
                 node_stack.push(child);
                 cursor_stack.push(0);
                 pushed = true;
@@ -106,7 +122,7 @@ pub fn rpo_dfs(n: usize, roots: &[u32], fwd_off: &[u32], fwd_tgt: &[u32]) -> Rpo
         rpo_pos[v as usize] = (i + 1) as i32;  // real nodes start at 1
     }
 
-    RpoResult { rpo_order, rpo_pos, dfs_parent }
+    RpoResult { rpo_order, rpo_pos, dfs_parent, dfn, vertex }
 }
 
 #[cfg(test)]
