@@ -18,6 +18,7 @@ pub struct Graph {
     pub ref_size: u8,
     pub format: String,
     pub file_size: u64,
+    pub source_name: String,
     pub gc_root_indices: Vec<u32>,
     pub shallow: Vec<u32>,
     pub class_idx: Vec<u32>,
@@ -651,6 +652,10 @@ impl Pass2 {
             ref_size: ref_size as u8,
             format: p1.format,
             file_size: p1.file_size,
+            source_name: std::path::Path::new(path)
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.to_string()),
             gc_root_indices,
             shallow,
             class_idx,
