@@ -86,7 +86,7 @@ fn run(input: &str, output: Option<&str>, verbose: bool) -> io::Result<()> {
     log(verbose, "pass1", t.elapsed().as_secs_f64());
 
     let t = Instant::now();
-    let mut g = pass2::Pass2::build(input, p1)?;
+    let (mut g, inbound) = pass2::Pass2::build(input, p1)?;
     log(verbose, &format!("pass2 n={}", g.n), t.elapsed().as_secs_f64());
 
     let t = Instant::now();
@@ -97,15 +97,23 @@ fn run(input: &str, output: Option<&str>, verbose: bool) -> io::Result<()> {
     g.fwd_offsets = Vec::new();
     g.fwd_targets = Vec::new();
 
+    // Build the inbound CSR now that rpo has freed its arrays — keeps the
+    // ~5.5GB inbound CSR off the rpo-phase RSS peak.
+    let t = Instant::now();
+    let (inb_offsets, inb_data) = inbound.build()?;
+    log(verbose, "inbound", t.elapsed().as_secs_f64());
+
     let t = Instant::now();
     g.idom = dominator::compute_dominators(
         g.n,
         &rpo,
         &g.gc_root_indices,
-        &g.inb_offsets,
-        &g.inb_data,
+        &inb_offsets,
+        &inb_data,
     );
     log(verbose, "dominator", t.elapsed().as_secs_f64());
+    drop(inb_offsets);
+    drop(inb_data);
 
     let t = Instant::now();
     let class_count = g.class_names.len();

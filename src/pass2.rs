@@ -39,6 +39,123 @@ pub struct Graph {
     pub has_same_class_ancestor: Vec<bool>,
 }
 
+/// Deferred inbound-CSR construction. Built by `Pass2::build` with everything
+/// needed to run the inbound scan + delta-encode later (after rpo frees its
+/// arrays), keeping the ~5.5GB inbound CSR off the rpo-phase RSS peak.
+pub struct InboundBuilder {
+    path: String,
+    id_size: u8,
+    ref_size: usize,
+    n: usize,
+    id_map: crate::id_map::IdMap,
+    class_addrs: std::collections::HashSet<u64>,
+    field_plans: HashMap<u64, FieldPlan>,
+    /// Prefix-summed inbound start cursors (in_degree after prefix-sum), len n.
+    in_cursors: Vec<u32>,
+    total_inb: u64,
+    /// Synthetic thread->local edges (src,dst), already deduped.
+    synthetic_edges: Vec<(u32, u32)>,
+}
+
+impl InboundBuilder {
+    /// Run the inbound scan + Phase-4 encode. Returns (inb_offsets, inb_data).
+    pub fn build(self) -> io::Result<(Vec<u32>, Vec<u8>)> {
+        let InboundBuilder {
+            path,
+            id_size,
+            ref_size,
+            n,
+            id_map,
+            class_addrs,
+            field_plans,
+            mut in_cursors,
+            total_inb,
+            synthetic_edges,
+        } = self;
+
+        // -- Alloc flat inbound array (deferred until after rpo freed its arrays) --
+        let mut inb_flat: Vec<u32> = vec![0u32; total_inb as usize];
+
+        // -- Sub-pass 2b scan: fill INBOUND edges only --
+        {
+            let mut r = HprofReader::open(&path)?;
+            let mut scratch: Vec<u8> = Vec::with_capacity(4096);
+            let mut fwd_t_stub: Vec<u32> = Vec::new();
+            let mut fwd_c_stub: Vec<u32> = Vec::new();
+            let fwd_offsets_stub: Vec<u32> = Vec::new();
+            loop {
+                let tag = match r.u1() {
+                    Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+                    other => other?,
+                };
+                let _ts = r.u4()?;
+                let length = r.u4()? as u64;
+                match tag {
+                    tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
+                        Pass2::fill_heap_2b(
+                            &mut r, id_size, ref_size, length,
+                            &id_map, &class_addrs, &field_plans,
+                            false, true,
+                            &mut fwd_t_stub, &mut fwd_c_stub, &fwd_offsets_stub,
+                            &mut inb_flat, &mut in_cursors, &mut scratch,
+                        )?;
+                    }
+                    tags::HEAP_DUMP_END => break,
+                    _ => { r.skip(length)?; }
+                }
+            }
+        }
+
+        // Synthetic thread->local INBOUND edges.
+        for &(src, dst) in &synthetic_edges {
+            inb_flat[in_cursors[dst as usize] as usize] = src;
+            in_cursors[dst as usize] += 1;
+        }
+
+        // -- Phase 4: Build inbound CSR --
+        let mut inb_offsets: Vec<u32> = Vec::with_capacity(n + 1);
+        let mut inb_data: Vec<u8> = Vec::new();
+        inb_offsets.push(0u32);
+        // CSR is contiguous: start[i] = end of node i-1 = in_cursors[i-1] after fill.
+        let mut start = 0usize;
+        for i in 0..n {
+            let end = in_cursors[i] as usize; // in_cursors[i] = end offset after fill
+            let slice = &mut inb_flat[start..end];
+            // Sort by stripped value (lower 31 bits), ignoring excluded-edge high-bit flag.
+            // Delta-encode stripped values only -- dominator processes all predecessors equally.
+            slice.sort_unstable_by_key(|&v| v & 0x7fff_ffff);
+            // Dedup by stripped value (in-place)
+            let unique_end = {
+                if slice.is_empty() {
+                    0
+                } else {
+                    let mut write = 1usize;
+                    for read in 1..slice.len() {
+                        if (slice[read] & 0x7fff_ffff) != (slice[write - 1] & 0x7fff_ffff) {
+                            slice[write] = slice[read];
+                            write += 1;
+                        }
+                    }
+                    write
+                }
+            };
+            // Delta-encode stripped values
+            let mut prev: u32 = 0;
+            for &v in &slice[..unique_end] {
+                let stripped = v & 0x7fff_ffff;
+                vbyte::encode(stripped - prev, &mut inb_data);
+                prev = stripped;
+            }
+            inb_offsets.push(inb_data.len() as u32);
+            start = end;
+        }
+        drop(inb_flat);
+        drop(in_cursors); // inbound CSR done; end-offset cursors no longer needed
+
+        Ok((inb_offsets, inb_data))
+    }
+}
+
 // ── Size helpers ───────────────────────────────────────────────────────────
 
 fn align_up(n: usize, align: usize) -> usize {
@@ -220,7 +337,7 @@ fn prim_array_class_name(elem_type_code: u8) -> &'static str {
 pub struct Pass2;
 
 impl Pass2 {
-    pub fn build(path: &str, mut p1: Pass1) -> io::Result<Graph> {
+    pub fn build(path: &str, mut p1: Pass1) -> io::Result<(Graph, InboundBuilder)> {
         let n = p1.id_map.len();
         let id_size = p1.id_size;
         let ptr_size = id_size as usize;
@@ -512,8 +629,6 @@ impl Pass2 {
         gc_root_indices.sort_unstable();
 
         // ── Phase 3: Build forward-CSR offsets (prefix sum only) ────────
-        // fwd_targets is deferred to Phase 3b so it does not coexist with the
-        // transient inb_flat scaffolding — lowers peak RSS.
         let mut fwd_offsets: Vec<u32> = Vec::with_capacity(n + 1);
         fwd_offsets.push(0u32);
         for i in 0..n {
@@ -522,91 +637,10 @@ impl Pass2 {
         }
         drop(out_degree); // dead after prefix sum
 
-        // Prefix-sum in_degree counts → cursors; allocate flat inbound array.
-        let mut total_inb: u64 = 0;
-        for d in in_degree.iter_mut() {
-            let cnt = *d as u64;
-            *d = total_inb as u32;
-            total_inb += cnt;
-        }
-        let mut inb_flat: Vec<u32> = vec![0u32; total_inb as usize];
-
-        // ── Sub-pass 2b scan: fill INBOUND edges only ────────────────────
-        {
-            let mut r = HprofReader::open(path)?;
-            let mut scratch: Vec<u8> = Vec::with_capacity(4096);
-            let mut fwd_t_stub: Vec<u32> = Vec::new();
-            let mut fwd_c_stub: Vec<u32> = Vec::new();
-            loop {
-                let tag = match r.u1() {
-                    Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
-                    other => other?,
-                };
-                let _ts = r.u4()?;
-                let length = r.u4()? as u64;
-                match tag {
-                    tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
-                        Self::fill_heap_2b(
-                            &mut r, id_size, ref_size, length,
-                            &p1.id_map, &class_addrs, &field_plans,
-                            false, true,
-                            &mut fwd_t_stub, &mut fwd_c_stub, &fwd_offsets,
-                            &mut inb_flat, &mut in_degree, &mut scratch,
-                        )?;
-                    }
-                    tags::HEAP_DUMP_END => break,
-                    _ => { r.skip(length)?; }
-                }
-            }
-        }
-
-        // Synthetic thread→local INBOUND edges.
-        for &(src, dst) in &synthetic_edges {
-            inb_flat[in_degree[dst as usize] as usize] = src;
-            in_degree[dst as usize] += 1;
-        }
-
-        // ── Phase 4: Build inbound CSR ────────────────────────────────────
-        let mut inb_offsets: Vec<u32> = Vec::with_capacity(n + 1);
-        let mut inb_data: Vec<u8> = Vec::new();
-        inb_offsets.push(0u32);
-        // CSR is contiguous: start[i] = end of node i-1 = in_degree[i-1] after fill.
-        let mut start = 0usize;
-        for i in 0..n {
-            let end = in_degree[i] as usize; // in_degree[i] = end offset after fill
-            let slice = &mut inb_flat[start..end];
-            // Sort by stripped value (lower 31 bits), ignoring excluded-edge high-bit flag.
-            // Delta-encode stripped values only — dominator processes all predecessors equally.
-            slice.sort_unstable_by_key(|&v| v & 0x7fff_ffff);
-            // Dedup by stripped value (in-place)
-            let unique_end = {
-                if slice.is_empty() {
-                    0
-                } else {
-                    let mut write = 1usize;
-                    for read in 1..slice.len() {
-                        if (slice[read] & 0x7fff_ffff) != (slice[write - 1] & 0x7fff_ffff) {
-                            slice[write] = slice[read];
-                            write += 1;
-                        }
-                    }
-                    write
-                }
-            };
-            // Delta-encode stripped values
-            let mut prev: u32 = 0;
-            for &v in &slice[..unique_end] {
-                let stripped = v & 0x7fff_ffff;
-                vbyte::encode(stripped - prev, &mut inb_data);
-                prev = stripped;
-            }
-            inb_offsets.push(inb_data.len() as u32);
-            start = end;
-        }
-        drop(inb_flat);
-        drop(in_degree); // inbound CSR done; end-offset cursors no longer needed
-
-        // ── Phase 3b: Build forward CSR (allocated only now, after inb_flat freed) ──
+        // ── Phase 3b: Build forward CSR ──────────────────────────────────
+        // The forward fill runs FIRST (inside build); the inbound CSR is
+        // deferred into InboundBuilder so its ~5.5GB does not coexist with
+        // the rpo phase's arrays. The forward fill never touches inb_flat.
         let total_edges = *fwd_offsets.last().unwrap() as usize;
         let mut fwd_targets: Vec<u32> = vec![u32::MAX; total_edges];
         let mut fwd_cursor: Vec<u32> = fwd_offsets[..n].to_vec();
@@ -637,7 +671,7 @@ impl Pass2 {
                 }
             }
         }
-        // Synthetic thread→local FORWARD edges.
+        // Synthetic thread->local FORWARD edges.
         for &(src, dst) in &synthetic_edges {
             let pos = fwd_cursor[src as usize] as usize;
             if pos < fwd_offsets[src as usize + 1] as usize {
@@ -646,18 +680,31 @@ impl Pass2 {
             }
         }
         drop(fwd_cursor);
-        drop(synthetic_edges);
 
-        Ok(Graph {
+        // Prefix-sum in_degree counts → START cursors for the deferred inbound
+        // build. in_degree[i] becomes node i's inbound slice START; total_inb
+        // is the flat inbound length. inb_flat is NOT allocated here.
+        let mut total_inb: u64 = 0;
+        for d in in_degree.iter_mut() {
+            let cnt = *d as u64;
+            *d = total_inb as u32;
+            total_inb += cnt;
+        }
+        let in_cursors = in_degree; // renamed for clarity: prefix-summed START cursors
+
+        // Precompute source_name before moving p1.id_map into InboundBuilder.
+        let source_name = std::path::Path::new(path)
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.to_string());
+
+        let graph = Graph {
             n,
             id_size,
             ref_size: ref_size as u8,
             format: p1.format,
             file_size: p1.file_size,
-            source_name: std::path::Path::new(path)
-                .file_name()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| path.to_string()),
+            source_name,
             gc_root_indices,
             shallow,
             class_idx,
@@ -665,13 +712,31 @@ impl Pass2 {
             class_obj_class_idx,
             fwd_offsets,
             fwd_targets,
-            inb_offsets,
-            inb_data,
+            inb_offsets: Vec::new(),
+            inb_data: Vec::new(),
             synthetic_root_count,
             idom: Vec::new(),
             retained: Vec::new(),
             has_same_class_ancestor: Vec::new(),
-        })
+        };
+
+        // Package the deferred inbound-CSR construction. Moves id_map,
+        // class_addrs, field_plans and synthetic_edges out of build (all
+        // unused here after the forward fill).
+        let inbound = InboundBuilder {
+            path: path.to_string(),
+            id_size,
+            ref_size,
+            n,
+            id_map: p1.id_map,
+            class_addrs,
+            field_plans,
+            in_cursors,
+            total_inb,
+            synthetic_edges,
+        };
+
+        Ok((graph, inbound))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1233,10 +1298,11 @@ mod tests {
     fn pass2_graph_has_edges() {
         if !std::path::Path::new(DUMP).exists() { return; }
         let p1 = Pass1::run(DUMP).unwrap();
-        let g = Pass2::build(DUMP, p1).unwrap();
+        let (g, inbound) = Pass2::build(DUMP, p1).unwrap();
         assert!(g.fwd_targets.len() > 0, "no forward edges");
         assert_eq!(g.fwd_offsets.len(), g.n + 1);
-        assert_eq!(g.inb_offsets.len() as usize, g.n + 1);
+        let (inb_offsets, _inb_data) = inbound.build().unwrap();
+        assert_eq!(inb_offsets.len() as usize, g.n + 1);
         for &r in &g.gc_root_indices {
             assert!((r as usize) < g.n, "gc_root idx {} out of range {}", r, g.n);
         }
@@ -1258,7 +1324,7 @@ mod tests {
     fn pass2_edge_counts_sane() {
         if !std::path::Path::new(DUMP).exists() { return; }
         let p1 = Pass1::run(DUMP).unwrap();
-        let g = Pass2::build(DUMP, p1).unwrap();
+        let (g, _inbound) = Pass2::build(DUMP, p1).unwrap();
         let fwd_edge_count: usize = g.fwd_offsets.windows(2).map(|w| (w[1]-w[0]) as usize).sum();
         assert!(fwd_edge_count > g.n / 2, "suspiciously few edges: {} for {} nodes", fwd_edge_count, g.n);
     }
