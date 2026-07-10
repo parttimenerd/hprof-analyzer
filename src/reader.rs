@@ -100,6 +100,14 @@ impl HprofReader {
         self.inner.read_exact(&mut v)?;
         Ok(v)
     }
+
+    /// Like `read_bytes` but reuses an existing buffer to avoid repeated allocation
+    /// in hot loops. The buffer is resized to exactly `n` bytes before reading.
+    pub fn read_bytes_reuse(&mut self, buf: &mut Vec<u8>, n: usize) -> io::Result<()> {
+        buf.resize(n, 0);
+        self.inner.read_exact(buf)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

@@ -26,6 +26,12 @@ pub struct Graph {
     pub fwd_offsets: Vec<u32>,
     pub fwd_targets: Vec<u32>,
     // Inbound CSR (VByte delta-encoded)
+    // TODO: fix excluded-edge VByte compression — currently excluded edges are stored
+    // as src|0x80000000 in inb_data, which breaks delta compression (the high-bit flip
+    // produces huge deltas and each excluded entry costs 5 bytes instead of 1-2).
+    // Fix: store excluded edges in a separate parallel bitset or use a per-node split
+    // counter (inb_excl_start: Vec<u32>) so that plain and excluded entries are each
+    // contiguous and delta-encode well.
     pub inb_offsets: Vec<u32>,
     pub inb_data: Vec<u8>,
     // Filled by later passes
@@ -330,6 +336,9 @@ impl Pass2 {
         // Build field layout cache: class_addr → Vec<usize> byte offsets for Object fields
         let mut field_offset_cache: HashMap<u64, Vec<usize>> = HashMap::new();
 
+        // Memoized excluded field offsets per class (fix #4)
+        let mut excl_offset_cache: HashMap<u64, Vec<usize>> = HashMap::new();
+
         // Build name lookup for excluded field detection
         // field_name_ids for excluded fields: pre-collect name_ids from strings
         let excluded_name_ids: std::collections::HashSet<u64> = {
@@ -371,7 +380,8 @@ impl Pass2 {
         // ── Sub-pass 2a scan ─────────────────────────────────────────────
         {
             let mut r = HprofReader::open(path)?;
-            let ids = id_size as u64;
+            // Scratch buffer reused across INSTANCE_DUMP and OBJ_ARRAY_DUMP reads (fix #6)
+            let mut scratch: Vec<u8> = Vec::with_capacity(4096);
 
             loop {
                 let tag = match r.u1() {
@@ -395,10 +405,13 @@ impl Pass2 {
                             &class_addrs,
                             &excluded_class_field,
                             &mut field_offset_cache,
+                            &mut excl_offset_cache,
+                            &mut size_cache,
                             &mut out_degree,
                             &mut in_degree,
                             &mut shallow,
                             &mut class_idx,
+                            &mut scratch,
                             &mut get_or_insert_class_name,
                         )?;
                     }
@@ -464,9 +477,14 @@ impl Pass2 {
         // Allocate per-node inbound lists (to be sorted + delta-encoded later)
         let mut inb_lists: Vec<Vec<u32>> = vec![Vec::new(); n];
 
+        // Reset memoized excluded-offset cache for sub-pass 2b (fix #4)
+        excl_offset_cache.clear();
+
         // ── Sub-pass 2b scan ─────────────────────────────────────────────
         {
             let mut r = HprofReader::open(path)?;
+            // Scratch buffer reused across INSTANCE_DUMP and OBJ_ARRAY_DUMP reads (fix #6)
+            let mut scratch: Vec<u8> = Vec::with_capacity(4096);
 
             loop {
                 let tag = match r.u1() {
@@ -489,10 +507,12 @@ impl Pass2 {
                             &class_addrs,
                             &excluded_class_field,
                             &mut field_offset_cache,
+                            &mut excl_offset_cache,
                             &mut fwd_targets,
                             &mut fwd_cursor,
                             &fwd_offsets,
                             &mut inb_lists,
+                            &mut scratch,
                         )?;
                     }
                     tags::HEAP_DUMP_END => break,
@@ -562,35 +582,43 @@ impl Pass2 {
                     let mut remaining = length;
                     while remaining > 0 {
                         let sub_tag = r.u1()?;
-                        remaining -= 1;
+                        remaining = remaining.checked_sub(1)
+                            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "segment overrun"))?;
                         match sub_tag {
                             heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED => {
                                 r.skip(ids)?;
-                                remaining -= ids;
+                                remaining = remaining.checked_sub(ids)
+                                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "segment overrun"))?;
                             }
                             heap::ROOT_JNI_GLOBAL => {
                                 r.skip(2 * ids)?;
-                                remaining -= 2 * ids;
+                                remaining = remaining.checked_sub(2 * ids)
+                                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "segment overrun"))?;
                             }
                             heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME => {
                                 r.skip(ids + 8)?;
-                                remaining -= ids + 8;
+                                remaining = remaining.checked_sub(ids + 8)
+                                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "segment overrun"))?;
                             }
                             heap::ROOT_NATIVE_STACK | heap::ROOT_THREAD_BLOCK => {
                                 r.skip(ids + 4)?;
-                                remaining -= ids + 4;
+                                remaining = remaining.checked_sub(ids + 4)
+                                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "segment overrun"))?;
                             }
                             heap::ROOT_STICKY_CLASS => {
                                 r.skip(ids)?;
-                                remaining -= ids;
+                                remaining = remaining.checked_sub(ids)
+                                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "segment overrun"))?;
                             }
                             heap::ROOT_THREAD_OBJ => {
                                 r.skip(ids + 8)?;
-                                remaining -= ids + 8;
+                                remaining = remaining.checked_sub(ids + 8)
+                                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "segment overrun"))?;
                             }
                             heap::CLASS_DUMP => {
                                 let consumed = Self::skip_class_dump(&mut r, id_size)?;
-                                remaining -= consumed;
+                                remaining = remaining.checked_sub(consumed)
+                                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "segment overrun"))?;
                             }
                             heap::INSTANCE_DUMP => {
                                 r.skip(ids)?; // addr
@@ -598,16 +626,22 @@ impl Pass2 {
                                 r.skip(ids)?; // class_id
                                 let data_len = r.u4()? as u64;
                                 r.skip(data_len)?;
-                                remaining -= ids + 4 + ids + 4 + data_len;
+                                remaining = remaining.checked_sub(ids + 4 + ids + 4 + data_len)
+                                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "segment overrun"))?;
                             }
                             heap::OBJ_ARRAY_DUMP => {
                                 let addr = r.id()?;
                                 r.skip(4)?; // stack serial
                                 let count = r.u4()? as u64;
                                 r.skip(ids)?; // elem_class_id
-                                r.skip(count * ids)?;
+                                let elem_bytes = count.saturating_mul(ids);
+                                if elem_bytes > remaining {
+                                    return Err(io::Error::new(io::ErrorKind::InvalidData, "array too large"));
+                                }
+                                r.skip(elem_bytes)?;
                                 array_addr_counts.push((addr, count));
-                                remaining -= ids + 4 + 4 + ids + count * ids;
+                                remaining = remaining.checked_sub(ids + 4 + 4 + ids + elem_bytes)
+                                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "segment overrun"))?;
                             }
                             heap::PRIM_ARRAY_DUMP => {
                                 r.skip(ids)?; // addr
@@ -618,7 +652,8 @@ impl Pass2 {
                                     .map(|t| t.byte_size() as u64)
                                     .unwrap_or(1);
                                 r.skip(count * esz)?;
-                                remaining -= ids + 4 + 4 + 1 + count * esz;
+                                remaining = remaining.checked_sub(ids + 4 + 4 + 1 + count * esz)
+                                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "segment overrun"))?;
                             }
                             _ => {
                                 return Err(io::Error::new(
@@ -678,10 +713,13 @@ impl Pass2 {
         class_addrs: &std::collections::HashSet<u64>,
         excluded_class_field: &HashMap<u64, std::collections::HashSet<u64>>,
         field_offset_cache: &mut HashMap<u64, Vec<usize>>,
+        excl_offset_cache: &mut HashMap<u64, Vec<usize>>,
+        size_cache: &mut HashMap<u64, usize>,
         out_degree: &mut Vec<u32>,
         in_degree: &mut Vec<u32>,
         shallow: &mut Vec<u32>,
         class_idx: &mut Vec<u32>,
+        scratch: &mut Vec<u8>,
         get_class_name_idx: &mut F,
     ) -> io::Result<()>
     where
@@ -701,57 +739,67 @@ impl Pass2 {
             };
         }
 
+        macro_rules! checked_sub {
+            ($remaining:expr, $sz:expr) => {
+                $remaining = $remaining.checked_sub($sz)
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "segment overrun"))?;
+            };
+        }
+
         while remaining > 0 {
             let sub_tag = r.u1()?;
-            remaining -= 1;
+            checked_sub!(remaining, 1u64);
 
             match sub_tag {
                 heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED => {
                     r.skip(ids)?;
-                    remaining -= ids;
+                    checked_sub!(remaining, ids);
                 }
                 heap::ROOT_JNI_GLOBAL => {
                     r.skip(2 * ids)?;
-                    remaining -= 2 * ids;
+                    checked_sub!(remaining, 2 * ids);
                 }
                 heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME => {
                     r.skip(ids + 8)?;
-                    remaining -= ids + 8;
+                    checked_sub!(remaining, ids + 8);
                 }
                 heap::ROOT_NATIVE_STACK | heap::ROOT_THREAD_BLOCK => {
                     r.skip(ids + 4)?;
-                    remaining -= ids + 4;
+                    checked_sub!(remaining, ids + 4);
                 }
                 heap::ROOT_STICKY_CLASS => {
                     r.skip(ids)?;
-                    remaining -= ids;
+                    checked_sub!(remaining, ids);
                 }
                 heap::ROOT_THREAD_OBJ => {
                     r.skip(ids + 8)?;
-                    remaining -= ids + 8;
+                    checked_sub!(remaining, ids + 8);
                 }
                 heap::CLASS_DUMP => {
                     let consumed = Self::count_class_dump_edges(
                         r, id_size, id_map, out_degree, in_degree,
                     )?;
-                    remaining -= consumed;
+                    checked_sub!(remaining, consumed);
                 }
                 heap::INSTANCE_DUMP => {
                     let addr = r.id()?;
                     r.skip(4)?;
                     let class_id = r.id()?;
                     let data_len = r.u4()? as u64;
-                    let data = r.read_bytes(data_len as usize)?;
-                    remaining -= ids + 4 + ids + 4 + data_len;
+                    if data_len > remaining {
+                        return Err(io::Error::new(io::ErrorKind::InvalidData, "array too large"));
+                    }
+                    r.read_bytes_reuse(scratch, data_len as usize)?;
+                    checked_sub!(remaining, ids + 4 + ids + 4 + data_len);
 
                     let src_idx = match id_map.index_of(addr) {
                         Some(i) => i,
                         None => continue,
                     };
 
-                    // Recalculate MAT shallow size for instances
+                    // Recalculate MAT shallow size for instances (fix #3: reuse size_cache)
                     if !class_addrs.contains(&addr) {
-                        let sz = instance_shallow_size(class_id, class_map, ptr_size, ref_size, &mut HashMap::new());
+                        let sz = instance_shallow_size(class_id, class_map, ptr_size, ref_size, size_cache);
                         shallow[src_idx] = sz;
                     }
 
@@ -764,15 +812,17 @@ impl Pass2 {
                         .or_insert_with(|| build_obj_field_offsets(class_id, class_map, ref_size, &mut HashMap::new()))
                         .clone();
 
-                    // Get excluded field offsets for this class (walk super chain)
-                    // We need to know which specific byte offsets correspond to excluded fields.
-                    // Build: for instance fields (walk chain), mark offset if field is excluded.
-                    // This is done by tracking excluded offsets per class.
-                    let excl_offsets = Self::excluded_field_offsets(class_id, class_map, strings, ref_size);
+                    // Get excluded field offsets for this class (fix #4: memoized per sub-pass)
+                    let excl_offsets = excl_offset_cache
+                        .entry(class_id)
+                        .or_insert_with(|| Self::compute_excluded_field_offsets(class_id, class_map, strings, ref_size))
+                        .clone();
+
+                    let _ = excl_offsets; // used only in fill_heap_2b for edge exclusion flag
 
                     for off in &offsets {
-                        if *off + ref_size <= data.len() {
-                            let ref_val = read_ref(&data[*off..], ref_size);
+                        if *off + ref_size <= scratch.len() {
+                            let ref_val = read_ref(&scratch[*off..], ref_size);
                             if ref_val != 0 {
                                 if let Some(dst) = id_map.index_of(ref_val) {
                                     out_degree[src_idx] += 1;
@@ -787,8 +837,12 @@ impl Pass2 {
                     r.skip(4)?;
                     let count = r.u4()? as u64;
                     let elem_class_id = r.id()?;
-                    let elems_bytes = r.read_bytes((count * ids) as usize)?;
-                    remaining -= ids + 4 + 4 + ids + count * ids;
+                    let byte_len = count.saturating_mul(ids);
+                    if byte_len > remaining {
+                        return Err(io::Error::new(io::ErrorKind::InvalidData, "array too large"));
+                    }
+                    r.read_bytes_reuse(scratch, byte_len as usize)?;
+                    checked_sub!(remaining, ids + 4 + 4 + ids + byte_len);
 
                     let src_idx = match id_map.index_of(addr) {
                         Some(i) => i,
@@ -816,7 +870,7 @@ impl Pass2 {
                     edge_if_valid!(src_idx, elem_class_id, false);
 
                     // Edges: array → non-null elements
-                    for chunk in elems_bytes.chunks(ids as usize) {
+                    for chunk in scratch.chunks(ids as usize) {
                         let ref_val = read_id(chunk, id_size);
                         if ref_val != 0 {
                             if let Some(dst) = id_map.index_of(ref_val) {
@@ -835,7 +889,7 @@ impl Pass2 {
                         .map(|t| t.byte_size() as u64)
                         .unwrap_or(1);
                     r.skip(count * esz)?;
-                    remaining -= ids + 4 + 4 + 1 + count * esz;
+                    checked_sub!(remaining, ids + 4 + 4 + 1 + count * esz);
 
                     if let Some(src_idx) = id_map.index_of(addr) {
                         // Fix shallow size
@@ -856,35 +910,9 @@ impl Pass2 {
         Ok(())
     }
 
-    /// Returns (consumed, class_addr, super_id, loader_id) and edges counted separately.
-    fn read_class_dump_edges(r: &mut HprofReader, id_size: u8) -> io::Result<(u64, u64, u64, u64)> {
-        let ids = id_size as u64;
-        let mut consumed = 0u64;
-        let class_addr = r.id()?; consumed += ids;
-        r.skip(4)?; consumed += 4;
-        let super_id = r.id()?; consumed += ids;
-        let loader_id = r.id()?; consumed += ids;
-        r.skip(ids * 4 + 4)?; consumed += ids * 4 + 4; // signers, pd, r1, r2, instance_size
-        let cp = r.u2()? as u64; consumed += 2;
-        for _ in 0..cp {
-            r.skip(2)?; consumed += 2;
-            let tp = r.u1()?; consumed += 1;
-            let vs = value_size(tp, id_size);
-            r.skip(vs)?; consumed += vs;
-        }
-        let sc = r.u2()? as u64; consumed += 2;
-        for _ in 0..sc {
-            r.skip(ids)?; consumed += ids;
-            let tp = r.u1()?; consumed += 1;
-            let vs = value_size(tp, id_size);
-            r.skip(vs)?; consumed += vs;
-        }
-        let ic = r.u2()? as u64; consumed += 2;
-        r.skip(ic * (ids + 1))?; consumed += ic * (ids + 1);
-        Ok((consumed, class_addr, super_id, loader_id))
-    }
-
-    fn excluded_field_offsets(
+    /// Compute the byte offsets of excluded (weak-reference) Object fields for a class.
+    /// This is the underlying implementation; callers should memoize via excl_offset_cache.
+    fn compute_excluded_field_offsets(
         class_id: u64,
         class_map: &HashMap<u64, ClassInfo>,
         strings: &HashMap<u64, String>,
@@ -933,10 +961,12 @@ impl Pass2 {
         class_addrs: &std::collections::HashSet<u64>,
         excluded_class_field: &HashMap<u64, std::collections::HashSet<u64>>,
         field_offset_cache: &mut HashMap<u64, Vec<usize>>,
+        excl_offset_cache: &mut HashMap<u64, Vec<usize>>,
         fwd_targets: &mut Vec<u32>,
         fwd_cursor: &mut Vec<u32>,
         fwd_offsets: &Vec<u32>,
         inb_lists: &mut Vec<Vec<u32>>,
+        scratch: &mut Vec<u8>,
     ) -> io::Result<()> {
         let ids = id_size as u64;
 
@@ -962,48 +992,58 @@ impl Pass2 {
             };
         }
 
+        macro_rules! checked_sub {
+            ($remaining:expr, $sz:expr) => {
+                $remaining = $remaining.checked_sub($sz)
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "segment overrun"))?;
+            };
+        }
+
         while remaining > 0 {
             let sub_tag = r.u1()?;
-            remaining -= 1;
+            checked_sub!(remaining, 1u64);
 
             match sub_tag {
                 heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED => {
                     r.skip(ids)?;
-                    remaining -= ids;
+                    checked_sub!(remaining, ids);
                 }
                 heap::ROOT_JNI_GLOBAL => {
                     r.skip(2 * ids)?;
-                    remaining -= 2 * ids;
+                    checked_sub!(remaining, 2 * ids);
                 }
                 heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME => {
                     r.skip(ids + 8)?;
-                    remaining -= ids + 8;
+                    checked_sub!(remaining, ids + 8);
                 }
                 heap::ROOT_NATIVE_STACK | heap::ROOT_THREAD_BLOCK => {
                     r.skip(ids + 4)?;
-                    remaining -= ids + 4;
+                    checked_sub!(remaining, ids + 4);
                 }
                 heap::ROOT_STICKY_CLASS => {
                     r.skip(ids)?;
-                    remaining -= ids;
+                    checked_sub!(remaining, ids);
                 }
                 heap::ROOT_THREAD_OBJ => {
                     r.skip(ids + 8)?;
-                    remaining -= ids + 8;
+                    checked_sub!(remaining, ids + 8);
                 }
                 heap::CLASS_DUMP => {
                     let consumed = Self::fill_class_dump_edges(
                         r, id_size, id_map, fwd_targets, fwd_cursor, fwd_offsets, inb_lists,
                     )?;
-                    remaining -= consumed;
+                    checked_sub!(remaining, consumed);
                 }
                 heap::INSTANCE_DUMP => {
                     let addr = r.id()?;
                     r.skip(4)?;
                     let class_id = r.id()?;
                     let data_len = r.u4()? as u64;
-                    let data = r.read_bytes(data_len as usize)?;
-                    remaining -= ids + 4 + ids + 4 + data_len;
+                    if data_len > remaining {
+                        return Err(io::Error::new(io::ErrorKind::InvalidData, "array too large"));
+                    }
+                    r.read_bytes_reuse(scratch, data_len as usize)?;
+                    checked_sub!(remaining, ids + 4 + ids + 4 + data_len);
 
                     let src_idx = match id_map.index_of(addr) {
                         Some(i) => i,
@@ -1019,12 +1059,16 @@ impl Pass2 {
                         .or_insert_with(|| build_obj_field_offsets(class_id, class_map, ref_size, &mut HashMap::new()))
                         .clone();
 
-                    let excl_offsets = Self::excluded_field_offsets(class_id, class_map, strings, ref_size);
+                    // Memoized excluded field offsets (fix #4)
+                    let excl_offsets = excl_offset_cache
+                        .entry(class_id)
+                        .or_insert_with(|| Self::compute_excluded_field_offsets(class_id, class_map, strings, ref_size))
+                        .clone();
                     let excl_set: std::collections::HashSet<usize> = excl_offsets.into_iter().collect();
 
                     for off in &offsets {
-                        if *off + ref_size <= data.len() {
-                            let ref_val = read_ref(&data[*off..], ref_size);
+                        if *off + ref_size <= scratch.len() {
+                            let ref_val = read_ref(&scratch[*off..], ref_size);
                             let excl = excl_set.contains(off);
                             add_edge!(src_idx, ref_val, excl);
                         }
@@ -1035,8 +1079,12 @@ impl Pass2 {
                     r.skip(4)?;
                     let count = r.u4()? as u64;
                     let elem_class_id = r.id()?;
-                    let elems_bytes = r.read_bytes((count * ids) as usize)?;
-                    remaining -= ids + 4 + 4 + ids + count * ids;
+                    let byte_len = count.saturating_mul(ids);
+                    if byte_len > remaining {
+                        return Err(io::Error::new(io::ErrorKind::InvalidData, "array too large"));
+                    }
+                    r.read_bytes_reuse(scratch, byte_len as usize)?;
+                    checked_sub!(remaining, ids + 4 + 4 + ids + byte_len);
 
                     let src_idx = match id_map.index_of(addr) {
                         Some(i) => i,
@@ -1047,7 +1095,7 @@ impl Pass2 {
                     add_edge!(src_idx, elem_class_id, false);
 
                     // Edges to elements
-                    for chunk in elems_bytes.chunks(ids as usize) {
+                    for chunk in scratch.chunks(ids as usize) {
                         let ref_val = read_id(chunk, id_size);
                         add_edge!(src_idx, ref_val, false);
                     }
@@ -1061,7 +1109,7 @@ impl Pass2 {
                         .map(|t| t.byte_size() as u64)
                         .unwrap_or(1);
                     r.skip(count * esz)?;
-                    remaining -= ids + 4 + 4 + 1 + count * esz;
+                    checked_sub!(remaining, ids + 4 + 4 + 1 + count * esz);
                     // No object edges from prim arrays
                 }
                 other => {
@@ -1153,8 +1201,6 @@ impl Pass2 {
 
 // ── Also need 2a version of CLASS_DUMP to count static obj edges ───────────
 // We need a version that also counts degrees for CLASS_DUMP static fields.
-// The scan_heap_2a already calls read_class_dump_edges which skips them.
-// Let's add a proper counting version.
 
 impl Pass2 {
     fn count_class_dump_edges(
