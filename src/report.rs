@@ -357,11 +357,11 @@ pub fn leak_suspects(g: &Graph) -> String {
             let mut cur = s.obj_idx as usize;
             for depth in 0..=5 {
                 let ci = g.class_idx[cur] as usize;
-                // For class objects, show the class they represent if available
+                // For class objects, show the class they represent (MAT parity: no "class " prefix)
                 let display_class = if g.class_obj_class_idx[cur] != u32::MAX {
                     let repr = g.class_obj_class_idx[cur] as usize;
                     if repr < g.class_names.len() {
-                        format!("class {}", pretty_class_name(&g.class_names[repr]))
+                        pretty_class_name(&g.class_names[repr])
                     } else {
                         pretty_class_name(&g.class_names[ci])
                     }
@@ -374,7 +374,7 @@ pub fn leak_suspects(g: &Graph) -> String {
                 out.push_str(&format!(
                     "| {} | {} | `{}` | {} |\n",
                     depth,
-                    cur,
+                    cur + 1,
                     display_class,
                     format_bytes(g.retained[cur]),
                 ));
@@ -413,8 +413,11 @@ pub fn top_consumers(g: &Graph) -> String {
         }
     }
 
-    // Total retained of all top-level dominators (for % display)
-    let total_retained: u64 = top_level.iter().map(|&i| g.retained[i as usize]).sum();
+    // Total shallow of all reachable objects (MAT parity: pct base for Biggest Objects)
+    let total_shallow: u64 = (0..n)
+        .filter(|&i| g.idom[i] != undef)
+        .map(|i| g.shallow[i] as u64)
+        .sum();
 
     // Sort by retained desc for biggest objects
     let mut sorted_top: Vec<u32> = top_level.clone();
@@ -430,11 +433,11 @@ pub fn top_consumers(g: &Graph) -> String {
     for (rank, &i) in sorted_top.iter().take(TOP_N).enumerate() {
         let idx = i as usize;
         let ci = g.class_idx[idx] as usize;
-        // For class objects, show the class they represent
+        // For class objects, show the class they represent (MAT parity: no "class " prefix)
         let display_class = if g.class_obj_class_idx[idx] != undef {
             let repr = g.class_obj_class_idx[idx] as usize;
             if repr < g.class_names.len() {
-                format!("class {}", pretty_class_name(&g.class_names[repr]))
+                pretty_class_name(&g.class_names[repr])
             } else if ci < g.class_names.len() {
                 pretty_class_name(&g.class_names[ci])
             } else {
@@ -446,8 +449,8 @@ pub fn top_consumers(g: &Graph) -> String {
             String::from("?")
         };
 
-        let pct = if total_retained > 0 {
-            g.retained[idx] as f64 / total_retained as f64 * 100.0
+        let pct = if total_shallow > 0 {
+            g.retained[idx] as f64 / total_shallow as f64 * 100.0
         } else {
             0.0
         };
@@ -455,7 +458,7 @@ pub fn top_consumers(g: &Graph) -> String {
         out.push_str(&format!(
             "| {} | {} | `{}` | {} | {} ({:.1}%) |\n",
             rank + 1,
-            idx,
+            idx + 1,
             display_class,
             format_bytes(g.shallow[idx] as u64),
             format_bytes(g.retained[idx]),
