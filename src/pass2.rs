@@ -22,6 +22,7 @@ pub struct Graph {
     pub shallow: Vec<u32>,
     pub class_idx: Vec<u32>,
     pub class_names: Vec<String>,
+    pub class_obj_class_idx: Vec<u32>,  // per obj: which class it represents (u32::MAX if not class obj)
     // Forward CSR
     pub fwd_offsets: Vec<u32>,
     pub fwd_targets: Vec<u32>,
@@ -431,6 +432,22 @@ impl Pass2 {
             }
         }
 
+        // ── Build class_obj_class_idx ─────────────────────────────────────
+        // For each class object, record which class it represents (not java/lang/Class).
+        let mut class_obj_class_idx: Vec<u32> = vec![u32::MAX; n];
+        for i in 0..n {
+            let addr = p1.id_map.addr_at(i);
+            if class_addrs.contains(&addr) {
+                if let Some(ci) = p1.class_map.get(&addr) {
+                    let nm = p1.strings.get(&ci.name_id)
+                        .cloned()
+                        .unwrap_or_else(|| format!("unknown@{addr:#x}"));
+                    let idx = get_or_insert_class_name(nm);
+                    class_obj_class_idx[i] = idx;
+                }
+            }
+        }
+
         // Ensure no zero shallow sizes (fall back to minimum)
         let min_obj = align_up(ptr_size + ref_size, 8) as u32;
         for s in shallow.iter_mut() {
@@ -554,6 +571,7 @@ impl Pass2 {
             shallow,
             class_idx,
             class_names,
+            class_obj_class_idx,
             fwd_offsets,
             fwd_targets,
             inb_offsets,

@@ -6,6 +6,7 @@ mod vbyte;
 mod pass2;
 mod rpo_dfs;
 mod dominator;
+mod retained;
 
 use std::{env, process};
 
