@@ -1,14 +1,15 @@
+mod dominator;
 mod id_map;
 mod pass1;
+mod pass2;
 mod reader;
+mod report;
+mod retained;
+mod rpo_dfs;
 mod types;
 mod vbyte;
-mod pass2;
-mod rpo_dfs;
-mod dominator;
-mod retained;
 
-use std::{env, process};
+use std::{env, io, process};
 
 use pass1::Pass1;
 
@@ -32,24 +33,82 @@ fn main() {
     }
 
     let input = positional[0];
-    let _output = positional.get(1).copied();
+    let output = positional.get(1).copied();
 
     if dump_json {
         match dump_pass1_json(input) {
             Ok(()) => {}
-            Err(e) => { eprintln!("Error: {e}"); process::exit(1); }
+            Err(e) => {
+                eprintln!("Error: {e}");
+                process::exit(1);
+            }
         }
         return;
     }
 
-    eprintln!("Input: {input:?}  (full analysis not yet implemented)");
+    match run(input, output) {
+        Ok(()) => {}
+        Err(e) => {
+            eprintln!("Error: {e}");
+            process::exit(1);
+        }
+    }
 }
 
-fn dump_pass1_json(path: &str) -> std::io::Result<()> {
+fn run(input: &str, output: Option<&str>) -> io::Result<()> {
+    let p1 = pass1::Pass1::run(input)?;
+    let mut g = pass2::Pass2::build(input, p1)?;
+
+    // RPO DFS
+    let rpo = rpo_dfs::rpo_dfs(g.n, &g.gc_root_indices, &g.fwd_offsets, &g.fwd_targets);
+
+    // Free forward CSR (no longer needed after DFS)
+    g.fwd_offsets = Vec::new();
+    g.fwd_targets = Vec::new();
+
+    // Dominator tree
+    g.idom = dominator::compute_dominators(
+        g.n,
+        &rpo,
+        &g.gc_root_indices,
+        &g.inb_offsets,
+        &g.inb_data,
+    );
+
+    // Retained sizes + hasSameClassAncestor
+    let class_count = g.class_names.len();
+    let (retained, has_same) = retained::compute_retained(
+        g.n,
+        &rpo.rpo_order,
+        &g.idom,
+        &g.shallow,
+        &g.class_idx,
+        class_count,
+        &g.class_obj_class_idx,
+    );
+    g.retained = retained;
+    g.has_same_class_ancestor = has_same;
+
+    // Generate report
+    let mut md = String::new();
+    md.push_str(&report::system_overview(&g));
+    md.push_str(&report::leak_suspects(&g));
+    md.push_str(&report::top_consumers(&g));
+
+    match output {
+        Some(path) => {
+            std::fs::write(path, &md).map_err(|e| io::Error::new(e.kind(), e))?;
+        }
+        None => print!("{}", md),
+    }
+
+    Ok(())
+}
+
+fn dump_pass1_json(path: &str) -> io::Result<()> {
     let p = Pass1::run(path)?;
 
     // Build class histogram: class name -> instance count
-    // For instances, map class_id -> name via class_map + strings
     let mut class_hist: std::collections::HashMap<String, u64> =
         std::collections::HashMap::new();
     for &cid in &p.class_ids {
@@ -64,8 +123,7 @@ fn dump_pass1_json(path: &str) -> std::io::Result<()> {
     }
 
     // Deduplicate GC root addresses and count unique roots
-    let mut unique_roots: std::collections::HashSet<u64> =
-        std::collections::HashSet::new();
+    let mut unique_roots: std::collections::HashSet<u64> = std::collections::HashSet::new();
     for &a in &p.gc_root_addrs {
         unique_roots.insert(a);
     }
@@ -84,8 +142,9 @@ fn dump_pass1_json(path: &str) -> std::io::Result<()> {
     print!(r#","class_histogram":{{"#);
     let mut first = true;
     for (name, count) in &class_hist {
-        if !first { print!(","); }
-        // escape any quotes in class name
+        if !first {
+            print!(",");
+        }
         let escaped = name.replace('"', "\\\"");
         print!(r#""{escaped}":{count}"#);
         first = false;
