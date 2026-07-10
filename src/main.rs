@@ -4,6 +4,8 @@ mod reader;
 mod types;
 mod vbyte;
 mod pass2;
+mod rpo_dfs;
+mod dominator;
 
 use std::{env, process};
 
