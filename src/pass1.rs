@@ -140,29 +140,58 @@ impl Pass1 {
             }
         }
 
-        // Sort by address and deduplicate (same address may appear under multiple roots)
+        // Sort by address and deduplicate (same address may appear under
+        // multiple roots). `order` is a u32 permutation (heaps hold < 4 G
+        // objects, so u32 suffices and halves this 90 MB->45 MB scaffold).
         let n = tmp_addrs.len();
-        let mut order: Vec<usize> = (0..n).collect();
-        order.sort_unstable_by_key(|&i| tmp_addrs[i]);
+        let mut order: Vec<u32> = (0..n as u32).collect();
+        order.sort_unstable_by_key(|&i| tmp_addrs[i as usize]);
 
+        // Build id_map + a keep-mask (false at a duplicate address).
         let mut id_map = IdMap::with_capacity(n);
-        let mut class_ids: Vec<u64> = Vec::with_capacity(n);
-        let mut shallow_sizes: Vec<u32> = Vec::with_capacity(n);
-        let mut kind: Vec<u8> = Vec::with_capacity(n);
-        let mut elem_count: Vec<u32> = Vec::with_capacity(n);
+        let mut keep: Vec<bool> = vec![false; n];
         let mut prev_addr = u64::MAX;
-        for &i in &order {
-            let a = tmp_addrs[i];
+        for (rank, &i) in order.iter().enumerate() {
+            let a = tmp_addrs[i as usize];
             if a != prev_addr {
                 id_map.push(a);
-                class_ids.push(tmp_class_ids[i]);
-                shallow_sizes.push(tmp_shallow[i]);
-                kind.push(tmp_kind[i]);
-                elem_count.push(tmp_elem_count[i]);
+                keep[rank] = true;
                 prev_addr = a;
             }
         }
-        id_map.sort_and_dedup(); // already sorted, just marks it done
+        id_map.sort_and_dedup(); // already sorted; marks it done
+        let m = id_map.len();
+        drop(tmp_addrs);
+
+        // Gather each parallel array in its own pass, then free the
+        // source buffer immediately — only one tmp/output pair is
+        // resident at a time, trimming the pass1 transient peak.
+        let mut class_ids: Vec<u64> = Vec::with_capacity(m);
+        for (rank, &i) in order.iter().enumerate() {
+            if keep[rank] { class_ids.push(tmp_class_ids[i as usize]); }
+        }
+        drop(tmp_class_ids);
+
+        let mut shallow_sizes: Vec<u32> = Vec::with_capacity(m);
+        for (rank, &i) in order.iter().enumerate() {
+            if keep[rank] { shallow_sizes.push(tmp_shallow[i as usize]); }
+        }
+        drop(tmp_shallow);
+
+        let mut kind: Vec<u8> = Vec::with_capacity(m);
+        for (rank, &i) in order.iter().enumerate() {
+            if keep[rank] { kind.push(tmp_kind[i as usize]); }
+        }
+        drop(tmp_kind);
+
+        let mut elem_count: Vec<u32> = Vec::with_capacity(m);
+        for (rank, &i) in order.iter().enumerate() {
+            if keep[rank] { elem_count.push(tmp_elem_count[i as usize]); }
+        }
+        drop(tmp_elem_count);
+
+        drop(order);
+        drop(keep);
 
         Ok(Pass1 {
             strings,
