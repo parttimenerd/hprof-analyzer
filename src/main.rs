@@ -3,6 +3,7 @@ mod pass1;
 mod reader;
 mod types;
 mod vbyte;
+mod pass2;
 
 use std::{env, process};
 
