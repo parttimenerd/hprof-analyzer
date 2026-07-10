@@ -731,18 +731,10 @@ impl Pass2 {
                     remaining -= ids + 8;
                 }
                 heap::CLASS_DUMP => {
-                    let (consumed, class_addr, super_id, loader_id) =
-                        Self::read_class_dump_edges(r, id_size)?;
+                    let consumed = Self::count_class_dump_edges(
+                        r, id_size, id_map, out_degree, in_degree,
+                    )?;
                     remaining -= consumed;
-                    if let Some(src_idx) = id_map.index_of(class_addr) {
-                        // class → super class object
-                        edge_if_valid!(src_idx, super_id, false);
-                        // class → loader object
-                        edge_if_valid!(src_idx, loader_id, false);
-                        // static object fields handled there
-                        // Actually we need them separately — re-read needed.
-                        // We already counted in read_class_dump_edges.
-                    }
                 }
                 heap::INSTANCE_DUMP => {
                     let addr = r.id()?;
