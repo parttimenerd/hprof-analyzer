@@ -426,10 +426,15 @@ impl Pass2 {
             }
         }
 
-        // Ensure no zero shallow sizes (fall back to minimum)
+        // Ensure no zero shallow sizes for instances/arrays (fall back to minimum).
+        // Class objects (kind==3) are exempt: MAT reports 0 shallow for a class
+        // whose static-field bytes sum to 0 (e.g. array classes like ), so we
+        // must not bump those to the object minimum.
         let min_obj = align_up(ptr_size + ref_size, 8) as u32;
-        for s in shallow.iter_mut() {
-            if *s == 0 { *s = min_obj; }
+        for (i, s) in shallow.iter_mut().enumerate() {
+            if *s == 0 && p1.kind[i] != 3 {
+                *s = min_obj;
+            }
         }
 
         // ── Phase 2: Build GC root indices ───────────────────────────────
@@ -1253,7 +1258,16 @@ mod tests {
         }
         assert_eq!(g.class_idx.len(), g.n);
         assert!(!g.class_names.is_empty());
-        assert!(g.shallow.iter().all(|&s| s > 0), "some shallow sizes are 0");
+        // Only class objects (e.g. array classes with no static fields) may have
+        // shallow 0 — MAT reports 0 for those. All other objects must be > 0.
+        for i in 0..g.n {
+            if g.shallow[i] == 0 {
+                assert!(
+                    g.class_obj_class_idx[i] != u32::MAX,
+                    "non-class object {i} has shallow 0"
+                );
+            }
+        }
     }
 
     #[test]
