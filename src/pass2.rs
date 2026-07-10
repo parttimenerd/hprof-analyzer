@@ -226,8 +226,17 @@ impl Pass2 {
         let ptr_size = id_size as usize;
 
         // ── Phase 0: detect ref_size ─────────────────────────────────────
+        // Reuse the object-array (addr, count) data already collected in pass1
+        // instead of re-scanning the whole file. Array addresses are the id_map
+        // entries whose kind == 1 (object array).
         let ref_size = if id_size == 8 {
-            Self::detect_compressed_oops(path, id_size)?
+            let mut array_addr_counts: Vec<(u64, u64)> = Vec::new();
+            for i in 0..n {
+                if p1.kind[i] == 1 {
+                    array_addr_counts.push((p1.id_map.addr_at(i), p1.elem_count[i] as u64));
+                }
+            }
+            detect_ref_size(id_size, &array_addr_counts)
         } else {
             id_size
         } as usize;
@@ -633,142 +642,6 @@ impl Pass2 {
             retained: Vec::new(),
             has_same_class_ancestor: Vec::new(),
         })
-    }
-
-    fn detect_compressed_oops(path: &str, id_size: u8) -> io::Result<u8> {
-        let mut r = HprofReader::open(path)?;
-        let ids = id_size as u64;
-        let mut array_addr_counts: Vec<(u64, u64)> = Vec::new();
-
-        loop {
-            let tag = match r.u1() {
-                Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
-                other => other?,
-            };
-            let _ts = r.u4()?;
-            let length = r.u4()? as u64;
-
-            match tag {
-                tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
-                    let mut remaining = length;
-                    while remaining > 0 {
-                        let sub_tag = r.u1()?;
-                        remaining = remaining.checked_sub(1)
-                            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "segment overrun"))?;
-                        match sub_tag {
-                            heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED => {
-                                r.skip(ids)?;
-                                remaining = remaining.checked_sub(ids)
-                                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "segment overrun"))?;
-                            }
-                            heap::ROOT_JNI_GLOBAL => {
-                                r.skip(2 * ids)?;
-                                remaining = remaining.checked_sub(2 * ids)
-                                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "segment overrun"))?;
-                            }
-                            heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME => {
-                                r.skip(ids + 8)?;
-                                remaining = remaining.checked_sub(ids + 8)
-                                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "segment overrun"))?;
-                            }
-                            heap::ROOT_NATIVE_STACK | heap::ROOT_THREAD_BLOCK => {
-                                r.skip(ids + 4)?;
-                                remaining = remaining.checked_sub(ids + 4)
-                                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "segment overrun"))?;
-                            }
-                            heap::ROOT_STICKY_CLASS => {
-                                r.skip(ids)?;
-                                remaining = remaining.checked_sub(ids)
-                                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "segment overrun"))?;
-                            }
-                            heap::ROOT_THREAD_OBJ => {
-                                r.skip(ids + 8)?;
-                                remaining = remaining.checked_sub(ids + 8)
-                                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "segment overrun"))?;
-                            }
-                            heap::CLASS_DUMP => {
-                                let consumed = Self::skip_class_dump(&mut r, id_size)?;
-                                remaining = remaining.checked_sub(consumed)
-                                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "segment overrun"))?;
-                            }
-                            heap::INSTANCE_DUMP => {
-                                r.skip(ids)?; // addr
-                                r.skip(4)?;   // stack serial
-                                r.skip(ids)?; // class_id
-                                let data_len = r.u4()? as u64;
-                                r.skip(data_len)?;
-                                remaining = remaining.checked_sub(ids + 4 + ids + 4 + data_len)
-                                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "segment overrun"))?;
-                            }
-                            heap::OBJ_ARRAY_DUMP => {
-                                let addr = r.id()?;
-                                r.skip(4)?; // stack serial
-                                let count = r.u4()? as u64;
-                                r.skip(ids)?; // elem_class_id
-                                let elem_bytes = count.saturating_mul(ids);
-                                if elem_bytes > remaining {
-                                    return Err(io::Error::new(io::ErrorKind::InvalidData, "array too large"));
-                                }
-                                r.skip(elem_bytes)?;
-                                array_addr_counts.push((addr, count));
-                                remaining = remaining.checked_sub(ids + 4 + 4 + ids + elem_bytes)
-                                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "segment overrun"))?;
-                            }
-                            heap::PRIM_ARRAY_DUMP => {
-                                r.skip(ids)?; // addr
-                                r.skip(4)?;   // stack serial
-                                let count = r.u4()? as u64;
-                                let elem_type = r.u1()?;
-                                let esz = HprofType::from_code(elem_type)
-                                    .map(|t| t.byte_size() as u64)
-                                    .unwrap_or(1);
-                                r.skip(count * esz)?;
-                                remaining = remaining.checked_sub(ids + 4 + 4 + 1 + count * esz)
-                                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "segment overrun"))?;
-                            }
-                            _ => {
-                                return Err(io::Error::new(
-                                    ErrorKind::InvalidData,
-                                    format!("unknown heap sub-tag 0x{sub_tag:02x} in detect_compressed_oops"),
-                                ));
-                            }
-                        }
-                    }
-                }
-                tags::HEAP_DUMP_END => break,
-                _ => { r.skip(length)?; }
-            }
-        }
-
-        Ok(detect_ref_size(id_size, &array_addr_counts))
-    }
-
-    fn skip_class_dump(r: &mut HprofReader, id_size: u8) -> io::Result<u64> {
-        let ids = id_size as u64;
-        let mut consumed = 0u64;
-        r.skip(ids)?; consumed += ids; // class addr
-        r.skip(4)?; consumed += 4;     // stack serial
-        r.skip(ids * 6 + 4)?; consumed += ids * 6 + 4; // super + loader + sigs + pd + r1 + r2 + instance_size
-        // constant pool
-        let cp = r.u2()? as u64; consumed += 2;
-        for _ in 0..cp {
-            r.skip(2)?; consumed += 2;
-            let tp = r.u1()?; consumed += 1;
-            let vs = value_size(tp, id_size);
-            r.skip(vs)?; consumed += vs;
-        }
-        // static fields
-        let sc = r.u2()? as u64; consumed += 2;
-        for _ in 0..sc {
-            r.skip(ids)?; consumed += ids;
-            let tp = r.u1()?; consumed += 1;
-            let vs = value_size(tp, id_size);
-            r.skip(vs)?; consumed += vs;
-        }
-        // instance fields
-        let ic = r.u2()? as u64; consumed += 2;
-        r.skip(ic * (ids + 1))?; consumed += ic * (ids + 1);
-        Ok(consumed)
     }
 
     #[allow(clippy::too_many_arguments)]
