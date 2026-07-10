@@ -13,3 +13,4 @@ fn main() {
 mod types;
 mod reader;
 mod id_map;
+mod vbyte;
