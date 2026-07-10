@@ -220,7 +220,7 @@ fn prim_array_class_name(elem_type_code: u8) -> &'static str {
 pub struct Pass2;
 
 impl Pass2 {
-    pub fn build(path: &str, p1: Pass1) -> io::Result<Graph> {
+    pub fn build(path: &str, mut p1: Pass1) -> io::Result<Graph> {
         let n = p1.id_map.len();
         let id_size = p1.id_size;
         let ptr_size = id_size as usize;
@@ -471,6 +471,11 @@ impl Pass2 {
             }
         }
 
+        // class_map + strings are no longer needed; free before the large edge
+        // arrays get allocated in Phase 3/4 to lower peak RSS.
+        p1.class_map = std::collections::HashMap::new();
+        p1.strings = std::collections::HashMap::new();
+
         // ── Resolve thread→local synthetic edges ─────────────────────────
         let mut synthetic_edges: Vec<(u32, u32)> = Vec::new();
         for &(thread_serial, local_addr) in &p1.thread_local_pairs {
@@ -511,6 +516,7 @@ impl Pass2 {
             fwd_offsets.push(next);
         }
         let total_edges = *fwd_offsets.last().unwrap() as usize;
+        drop(out_degree); // dead after prefix sum
         let mut fwd_targets: Vec<u32> = vec![u32::MAX; total_edges];
         let mut fwd_cursor: Vec<u32> = fwd_offsets[..n].to_vec();
 
@@ -523,8 +529,6 @@ impl Pass2 {
             *d = total_inb as u32;
             total_inb += cnt;
         }
-        // inb_start[i] = start byte offset of node i in inb_flat (before fill)
-        let inb_start: Vec<u32> = in_degree.clone();
         // Allocate single flat inbound edge array
         let mut inb_flat: Vec<u32> = vec![0u32; total_inb as usize];
         // in_degree now acts as write cursors; after fill, in_degree[i] = end offset of node i
@@ -580,13 +584,17 @@ impl Pass2 {
             in_degree[dst as usize] += 1;
         }
 
+        drop(fwd_cursor); // dead after forward CSR fully filled
+        drop(synthetic_edges);
+
         // ── Phase 4: Build inbound CSR ────────────────────────────────────
         let mut inb_offsets: Vec<u32> = Vec::with_capacity(n + 1);
         let mut inb_data: Vec<u8> = Vec::new();
         inb_offsets.push(0u32);
+        // CSR is contiguous: start[i] = end of node i-1 = in_degree[i-1] after fill.
+        let mut start = 0usize;
         for i in 0..n {
-            let start = inb_start[i] as usize;
-            let end   = in_degree[i] as usize; // in_degree[i] = end offset after fill
+            let end = in_degree[i] as usize; // in_degree[i] = end offset after fill
             let slice = &mut inb_flat[start..end];
             // Sort by stripped value (lower 31 bits), ignoring excluded-edge high-bit flag.
             // Delta-encode stripped values only — dominator processes all predecessors equally.
@@ -614,9 +622,9 @@ impl Pass2 {
                 prev = stripped;
             }
             inb_offsets.push(inb_data.len() as u32);
+            start = end;
         }
         drop(inb_flat);
-        drop(inb_start);
 
         Ok(Graph {
             n,
