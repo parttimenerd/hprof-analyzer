@@ -508,7 +508,8 @@ impl Pass2 {
             in_degree[dst as usize] += 1;
         }
 
-        let gc_root_indices: Vec<u32> = gc_root_set.into_iter().collect();
+        let mut gc_root_indices: Vec<u32> = gc_root_set.into_iter().collect();
+        gc_root_indices.sort_unstable();
 
         // ── Phase 3: Build forward-CSR offsets (prefix sum only) ────────
         // fwd_targets is deferred to Phase 3b so it does not coexist with the
