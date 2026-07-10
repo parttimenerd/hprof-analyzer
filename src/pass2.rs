@@ -507,40 +507,32 @@ impl Pass2 {
 
         let gc_root_indices: Vec<u32> = gc_root_set.into_iter().collect();
 
-        // ── Phase 3: Build forward CSR via prefix sum + fill pass ────────
-        // Prefix-sum out_degrees → fwd_offsets
+        // ── Phase 3: Build forward-CSR offsets (prefix sum only) ────────
+        // fwd_targets is deferred to Phase 3b so it does not coexist with the
+        // transient inb_flat scaffolding — lowers peak RSS.
         let mut fwd_offsets: Vec<u32> = Vec::with_capacity(n + 1);
         fwd_offsets.push(0u32);
         for i in 0..n {
             let next = fwd_offsets[i] + out_degree[i];
             fwd_offsets.push(next);
         }
-        let total_edges = *fwd_offsets.last().unwrap() as usize;
         drop(out_degree); // dead after prefix sum
-        let mut fwd_targets: Vec<u32> = vec![u32::MAX; total_edges];
-        let mut fwd_cursor: Vec<u32> = fwd_offsets[..n].to_vec();
 
-        // Build flat inbound CSR via prefix-sum on in_degree.
-        // in_degree already has counts for heap edges + synthetic edges from sub-pass 2a.
-        // Convert in_degree counts to write-cursors (prefix sum); save start offsets.
+        // Prefix-sum in_degree counts → cursors; allocate flat inbound array.
         let mut total_inb: u64 = 0;
         for d in in_degree.iter_mut() {
             let cnt = *d as u64;
             *d = total_inb as u32;
             total_inb += cnt;
         }
-        // Allocate single flat inbound edge array
         let mut inb_flat: Vec<u32> = vec![0u32; total_inb as usize];
-        // in_degree now acts as write cursors; after fill, in_degree[i] = end offset of node i
 
-        // Reset memoized excluded-offset cache for sub-pass 2b (fix #4)
-
-        // ── Sub-pass 2b scan ─────────────────────────────────────────────
+        // ── Sub-pass 2b scan: fill INBOUND edges only ────────────────────
         {
             let mut r = HprofReader::open(path)?;
-            // Scratch buffer reused across INSTANCE_DUMP and OBJ_ARRAY_DUMP reads (fix #6)
             let mut scratch: Vec<u8> = Vec::with_capacity(4096);
-
+            let mut fwd_t_stub: Vec<u32> = Vec::new();
+            let mut fwd_c_stub: Vec<u32> = Vec::new();
             loop {
                 let tag = match r.u1() {
                     Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
@@ -548,23 +540,14 @@ impl Pass2 {
                 };
                 let _ts = r.u4()?;
                 let length = r.u4()? as u64;
-
                 match tag {
                     tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
                         Self::fill_heap_2b(
-                            &mut r,
-                            id_size,
-                            ref_size,
-                            length,
-                            &p1.id_map,
-                            &class_addrs,
-                            &field_plans,
-                            &mut fwd_targets,
-                            &mut fwd_cursor,
-                            &fwd_offsets,
-                            &mut inb_flat,
-                            &mut in_degree,
-                            &mut scratch,
+                            &mut r, id_size, ref_size, length,
+                            &p1.id_map, &class_addrs, &field_plans,
+                            false, true,
+                            &mut fwd_t_stub, &mut fwd_c_stub, &fwd_offsets,
+                            &mut inb_flat, &mut in_degree, &mut scratch,
                         )?;
                     }
                     tags::HEAP_DUMP_END => break,
@@ -573,19 +556,11 @@ impl Pass2 {
             }
         }
 
-        // ── Add synthetic thread→local edges to fwd and inb ─────────────
+        // Synthetic thread→local INBOUND edges.
         for &(src, dst) in &synthetic_edges {
-            let pos = fwd_cursor[src as usize] as usize;
-            if pos < fwd_targets.len() {
-                fwd_targets[pos] = dst;
-                fwd_cursor[src as usize] += 1;
-            }
             inb_flat[in_degree[dst as usize] as usize] = src;
             in_degree[dst as usize] += 1;
         }
-
-        drop(fwd_cursor); // dead after forward CSR fully filled
-        drop(synthetic_edges);
 
         // ── Phase 4: Build inbound CSR ────────────────────────────────────
         let mut inb_offsets: Vec<u32> = Vec::with_capacity(n + 1);
@@ -625,6 +600,49 @@ impl Pass2 {
             start = end;
         }
         drop(inb_flat);
+        drop(in_degree); // inbound CSR done; end-offset cursors no longer needed
+
+        // ── Phase 3b: Build forward CSR (allocated only now, after inb_flat freed) ──
+        let total_edges = *fwd_offsets.last().unwrap() as usize;
+        let mut fwd_targets: Vec<u32> = vec![u32::MAX; total_edges];
+        let mut fwd_cursor: Vec<u32> = fwd_offsets[..n].to_vec();
+        {
+            let mut r = HprofReader::open(path)?;
+            let mut scratch: Vec<u8> = Vec::with_capacity(4096);
+            let mut inb_flat_stub: Vec<u32> = Vec::new();
+            let mut in_degree_stub: Vec<u32> = Vec::new();
+            loop {
+                let tag = match r.u1() {
+                    Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+                    other => other?,
+                };
+                let _ts = r.u4()?;
+                let length = r.u4()? as u64;
+                match tag {
+                    tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
+                        Self::fill_heap_2b(
+                            &mut r, id_size, ref_size, length,
+                            &p1.id_map, &class_addrs, &field_plans,
+                            true, false,
+                            &mut fwd_targets, &mut fwd_cursor, &fwd_offsets,
+                            &mut inb_flat_stub, &mut in_degree_stub, &mut scratch,
+                        )?;
+                    }
+                    tags::HEAP_DUMP_END => break,
+                    _ => { r.skip(length)?; }
+                }
+            }
+        }
+        // Synthetic thread→local FORWARD edges.
+        for &(src, dst) in &synthetic_edges {
+            let pos = fwd_cursor[src as usize] as usize;
+            if pos < fwd_offsets[src as usize + 1] as usize {
+                fwd_targets[pos] = dst;
+                fwd_cursor[src as usize] += 1;
+            }
+        }
+        drop(fwd_cursor);
+        drop(synthetic_edges);
 
         Ok(Graph {
             n,
@@ -846,17 +864,20 @@ impl Pass2 {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn fill_heap_2b(
         r: &mut HprofReader,
         id_size: u8,
-        ref_size: usize,
+        _ref_size: usize,
         mut remaining: u64,
         id_map: &crate::id_map::IdMap,
-        class_addrs: &std::collections::HashSet<u64>,
+        _class_addrs: &std::collections::HashSet<u64>,
         field_plans: &HashMap<u64, FieldPlan>,
+        do_fwd: bool,
+        do_inb: bool,
         fwd_targets: &mut Vec<u32>,
         fwd_cursor: &mut Vec<u32>,
-        fwd_offsets: &Vec<u32>,
+        fwd_offsets: &[u32],
         inb_flat: &mut Vec<u32>,
         in_degree: &mut Vec<u32>,
         scratch: &mut Vec<u8>,
@@ -868,19 +889,23 @@ impl Pass2 {
                 if $dst_addr != 0 {
                     if let Some(dst) = id_map.index_of($dst_addr) {
                         let src = $src as usize;
-                        let pos = fwd_cursor[src] as usize;
-                        if pos < fwd_offsets[src + 1] as usize {
-                            fwd_targets[pos] = dst as u32;
-                            fwd_cursor[src] += 1;
+                        if do_fwd {
+                            let pos = fwd_cursor[src] as usize;
+                            if pos < fwd_offsets[src + 1] as usize {
+                                fwd_targets[pos] = dst as u32;
+                                fwd_cursor[src] += 1;
+                            }
                         }
-                        // Inbound: store src with/without exclusion flag
-                        let inb_val = if $excluded {
-                            (src as u32) | 0x8000_0000u32
-                        } else {
-                            src as u32
-                        };
-                        inb_flat[in_degree[dst] as usize] = inb_val;
-                        in_degree[dst] += 1;
+                        if do_inb {
+                            // Inbound: store src with/without exclusion flag
+                            let inb_val = if $excluded {
+                                (src as u32) | 0x8000_0000u32
+                            } else {
+                                src as u32
+                            };
+                            inb_flat[in_degree[dst] as usize] = inb_val;
+                            in_degree[dst] += 1;
+                        }
                     }
                 }
             };
@@ -924,7 +949,8 @@ impl Pass2 {
                 }
                 heap::CLASS_DUMP => {
                     let consumed = Self::fill_class_dump_edges(
-                        r, id_size, id_map, fwd_targets, fwd_cursor, fwd_offsets, inb_flat, in_degree,
+                        r, id_size, id_map, do_fwd, do_inb,
+                        fwd_targets, fwd_cursor, fwd_offsets, inb_flat, in_degree,
                     )?;
                     checked_sub!(remaining, consumed);
                 }
@@ -1007,13 +1033,16 @@ impl Pass2 {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn fill_class_dump_edges(
         r: &mut HprofReader,
         id_size: u8,
         id_map: &crate::id_map::IdMap,
+        do_fwd: bool,
+        do_inb: bool,
         fwd_targets: &mut Vec<u32>,
         fwd_cursor: &mut Vec<u32>,
-        fwd_offsets: &Vec<u32>,
+        fwd_offsets: &[u32],
         inb_flat: &mut Vec<u32>,
         in_degree: &mut Vec<u32>,
     ) -> io::Result<u64> {
@@ -1033,13 +1062,17 @@ impl Pass2 {
                 if $dst_addr != 0 {
                     if let Some(dst) = id_map.index_of($dst_addr) {
                         let src = $src as usize;
-                        let pos = fwd_cursor[src] as usize;
-                        if pos < fwd_offsets[src + 1] as usize {
-                            fwd_targets[pos] = dst as u32;
-                            fwd_cursor[src] += 1;
+                        if do_fwd {
+                            let pos = fwd_cursor[src] as usize;
+                            if pos < fwd_offsets[src + 1] as usize {
+                                fwd_targets[pos] = dst as u32;
+                                fwd_cursor[src] += 1;
+                            }
                         }
-                        inb_flat[in_degree[dst] as usize] = src as u32;
-                        in_degree[dst] += 1;
+                        if do_inb {
+                            inb_flat[in_degree[dst] as usize] = src as u32;
+                            in_degree[dst] += 1;
+                        }
                     }
                 }
             };
