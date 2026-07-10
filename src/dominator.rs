@@ -41,11 +41,12 @@ pub fn compute_dominators(
     // ── Work arrays in pre-order index space (0..count) ──────────────────
     // parent[i]  = pre-order number of DFS-tree parent of vertex[i]
     // semi[i]    = pre-order number of semidominator of vertex[i]
-    // idom_pre[i]= pre-order number of immediate dominator of vertex[i]
-    // ancestor/label = union-find with path compression
+    // ancestor/label = union-find with path compression (dead after Phase 1)
+    // idom_pre[i]= pre-order number of immediate dominator of vertex[i]; not
+    //              allocated separately — reuses the `ancestor` buffer after
+    //              Phase 1 (see rebind below), saving one count-length u32 array.
     let mut parent = vec![0u32; count];
     let mut semi = vec![0u32; count];
-    let mut idom_pre = vec![0u32; count];
     let mut ancestor = vec![0u32; count]; // 0 = no ancestor (unlinked)
     let mut label = vec![0u32; count];
 
@@ -110,6 +111,11 @@ pub fn compute_dominators(
         // ancestor[i] = parent[i]; (path-compression union-find)
         link(i as u32, parent[i], &mut ancestor);
     }
+
+    // Phase 1 done: `ancestor` and `label` are dead. Reuse `ancestor`'s
+    // buffer as `idom_pre` (no new allocation) and free `label`.
+    let mut idom_pre = ancestor;
+    drop(label);
 
     // ── Phase 2: compute immediate dominators (forward pre-order) ────────
     // SEMI-NCA: idom[w] = nearest ancestor of parent[w] on the DFS path
