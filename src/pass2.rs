@@ -104,10 +104,11 @@ fn prim_array_shallow(num_elem: u64, elem_size: usize, ptr_size: usize, ref_size
     align_up(header + num_elem as usize * elem_size, 8) as u32
 }
 
-fn class_obj_shallow(ci: &ClassInfo, ptr_size: usize, ref_size: usize) -> u32 {
-    let base = ptr_size + ref_size;
+fn class_obj_shallow(ci: &ClassInfo, _ptr_size: usize, ref_size: usize) -> u32 {
+    // MAT parity: class-object shallow = alignUp(staticObjFields*refSize + staticPrimBytes, 8).
+    // No pointer+ref floor (matClassSize in hprof-redact); classes with no statics get 0.
     let computed = ci.static_obj_count as usize * ref_size + ci.static_prim_bytes as usize;
-    align_up(computed.max(base), 8) as u32
+    align_up(computed, 8) as u32
 }
 
 // ── Field layout cache ─────────────────────────────────────────────────────
@@ -221,41 +222,43 @@ impl Pass2 {
         } as usize;
 
         // ── Phase 0b: compute shallow sizes with MAT formula ─────────────
-        // Build size cache
+        // Uses per-object kind (0=instance,1=obj_array,2=prim_array,3=class_obj)
+        // and raw element counts collected in pass1 — authoritative, no heuristics.
         let mut size_cache: HashMap<u64, usize> = HashMap::new();
 
-        // Build set of class object addresses (objects that are class loaders/Java classes)
+        // Set of class-object addresses (used later for edge/class-obj resolution).
         let class_addrs: std::collections::HashSet<u64> =
             p1.class_map.keys().cloned().collect();
 
         let mut shallow: Vec<u32> = Vec::with_capacity(n);
         for i in 0..n {
-            let addr = p1.id_map.addr_at(i);
             let cid = p1.class_ids[i];
-
-            let sz = if class_addrs.contains(&addr) {
-                // This object IS a class object
-                if let Some(ci) = p1.class_map.get(&addr) {
-                    class_obj_shallow(ci, ptr_size, ref_size)
-                } else {
-                    align_up(ptr_size + ref_size, 8) as u32
+            let sz = match p1.kind[i] {
+                3 => {
+                    // Class object: shallow from static fields only, attributed to java.lang.Class.
+                    match p1.class_map.get(&cid) {
+                        Some(ci) => class_obj_shallow(ci, ptr_size, ref_size),
+                        None => align_up(ptr_size + ref_size, 8) as u32,
+                    }
                 }
-            } else if p1.shallow_sizes[i] == 0 {
-                // Unknown – fall back
-                align_up(ptr_size + ref_size, 8) as u32
-            } else {
-                // Determine object kind from pass1 class_ids:
-                // - For instances: cid is a class addr in class_map
-                // - For obj arrays: cid is the element class addr
-                // - For prim arrays: cid is the element type code (small number)
-                if cid <= 11 && !class_addrs.contains(&cid) {
-                    // Prim array – use pass1 shallow (accurate enough; recompute below)
-                    p1.shallow_sizes[i]
-                } else {
-                    // Could be instance or obj array; pass1 shallow_sizes is accurate for
-                    // instances (instance_size from CLASS_DUMP) but we want MAT formula.
-                    // Use pass1 value as hint. We refine in sub-pass 2a by re-reading.
-                    p1.shallow_sizes[i]
+                1 => {
+                    // Object array: cid is the array class id (elem count from pass1).
+                    obj_array_shallow(p1.elem_count[i] as u64, ptr_size, ref_size)
+                }
+                2 => {
+                    // Primitive array: cid is the element type code.
+                    let elem_size = HprofType::from_code(cid as u8)
+                        .map(|t| t.byte_size())
+                        .unwrap_or(1);
+                    prim_array_shallow(p1.elem_count[i] as u64, elem_size, ptr_size, ref_size)
+                }
+                _ => {
+                    // Instance: MAT calculateSizeRecursive over the super chain.
+                    if p1.class_map.contains_key(&cid) {
+                        instance_shallow_size(cid, &p1.class_map, ptr_size, ref_size, &mut size_cache)
+                    } else {
+                        align_up(ptr_size + ref_size, 8) as u32
+                    }
                 }
             };
             shallow.push(sz);
@@ -285,42 +288,42 @@ impl Pass2 {
         // Find all class objects (so we know their class_idx = java/lang/Class)
         let mut java_lang_class_idx: Option<u32> = None;
 
-        // First pass: populate class_idx for all objects
+        // First pass: populate class_idx for all objects (kind-driven, no heuristics)
         for i in 0..n {
-            let addr = p1.id_map.addr_at(i);
             let cid = p1.class_ids[i];
 
-            if class_addrs.contains(&addr) {
-                // This is a class object → its type is java/lang/Class
-                let nm = java_lang_class_name.clone();
-                let idx = get_or_insert_class_name(nm);
-                if java_lang_class_idx.is_none() {
-                    java_lang_class_idx = Some(idx);
+            match p1.kind[i] {
+                3 => {
+                    // Class object → attributed to java/lang/Class (MAT parity)
+                    let idx = get_or_insert_class_name(java_lang_class_name.clone());
+                    if java_lang_class_idx.is_none() {
+                        java_lang_class_idx = Some(idx);
+                    }
+                    class_idx[i] = idx;
                 }
-                class_idx[i] = idx;
-            } else if cid <= 11 && !class_addrs.contains(&cid) {
-                // Prim array
-                let nm = prim_array_class_name(cid as u8).to_string();
-                let idx = get_or_insert_class_name(nm);
-                class_idx[i] = idx;
-            } else {
-                // Instance or obj array
-                // For instances: look up class_map[cid].name_id → strings
-                // For obj arrays: pass1 stores elem_class_id in class_ids
-                // Disambiguate: if it's an obj array, the address in pass1
-                // has shallow_sizes[i] that was computed as array formula.
-                // We rely on whether cid → class name starts with '[' for arrays.
-                // Actually we can't tell instance vs obj array from pass1 alone without
-                // re-reading. We use class name from class_map if available.
-                let nm = if let Some(ci) = p1.class_map.get(&cid) {
-                    let base = p1.strings.get(&ci.name_id).cloned()
+                2 => {
+                    // Primitive array: cid is the element type code
+                    let nm = prim_array_class_name(cid as u8).to_string();
+                    class_idx[i] = get_or_insert_class_name(nm);
+                }
+                1 => {
+                    // Object array: cid is the array class id (e.g. "[Ljava/lang/Object;")
+                    let nm = p1
+                        .class_map
+                        .get(&cid)
+                        .and_then(|ci| p1.strings.get(&ci.name_id).cloned())
+                        .unwrap_or_else(|| "[Ljava/lang/Object;".to_string());
+                    class_idx[i] = get_or_insert_class_name(nm);
+                }
+                _ => {
+                    // Instance: class name from class_map[cid]
+                    let nm = p1
+                        .class_map
+                        .get(&cid)
+                        .and_then(|ci| p1.strings.get(&ci.name_id).cloned())
                         .unwrap_or_else(|| format!("unknown@{cid:#x}"));
-                    base
-                } else {
-                    format!("unknown@{cid:#x}")
-                };
-                let idx = get_or_insert_class_name(nm);
-                class_idx[i] = idx;
+                    class_idx[i] = get_or_insert_class_name(nm);
+                }
             }
         }
 

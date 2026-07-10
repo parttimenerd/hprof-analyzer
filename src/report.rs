@@ -123,7 +123,11 @@ pub fn system_overview(g: &Graph) -> String {
         }
         inst_count[ci] += 1;
         shallow_total[ci] += g.shallow[i] as u64;
-        class_retained[ci] += g.retained[i];
+        // MAT top-ancestor semantics: only count retained of objects with no
+        // same-class (or class-object) ancestor in the dominator tree.
+        if !g.has_same_class_ancestor[i] {
+            class_retained[ci] += g.retained[i];
+        }
     }
 
     // Second pass: for each class object, add its retained to the class it represents

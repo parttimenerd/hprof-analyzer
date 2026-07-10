@@ -30,6 +30,10 @@ pub struct Pass1 {
     pub id_map: IdMap,
     pub class_ids: Vec<u64>,
     pub shallow_sizes: Vec<u32>,
+    /// Per-object kind: 0=instance, 1=obj_array, 2=prim_array, 3=class_obj
+    pub kind: Vec<u8>,
+    /// Per-object raw element count (arrays only; 0 otherwise)
+    pub elem_count: Vec<u32>,
     pub gc_root_addrs: Vec<u64>,
     pub gc_root_types: Vec<u8>,
     /// threadSerial → thread object address (from ROOT_THREAD_OBJ records)
@@ -60,6 +64,8 @@ impl Pass1 {
         let mut tmp_addrs: Vec<u64> = Vec::new();
         let mut tmp_class_ids: Vec<u64> = Vec::new();
         let mut tmp_shallow: Vec<u32> = Vec::new();
+        let mut tmp_kind: Vec<u8> = Vec::new();
+        let mut tmp_elem_count: Vec<u32> = Vec::new();
         let mut gc_root_addrs: Vec<u64> = Vec::new();
         let mut gc_root_types: Vec<u8> = Vec::new();
         let mut thread_serial_to_obj_id: HashMap<u32, u64> = HashMap::new();
@@ -105,6 +111,8 @@ impl Pass1 {
                         &mut tmp_addrs,
                         &mut tmp_class_ids,
                         &mut tmp_shallow,
+                        &mut tmp_kind,
+                        &mut tmp_elem_count,
                         &mut gc_root_addrs,
                         &mut gc_root_types,
                         &mut thread_serial_to_obj_id,
@@ -140,6 +148,8 @@ impl Pass1 {
         let mut id_map = IdMap::with_capacity(n);
         let mut class_ids: Vec<u64> = Vec::with_capacity(n);
         let mut shallow_sizes: Vec<u32> = Vec::with_capacity(n);
+        let mut kind: Vec<u8> = Vec::with_capacity(n);
+        let mut elem_count: Vec<u32> = Vec::with_capacity(n);
         let mut prev_addr = u64::MAX;
         for &i in &order {
             let a = tmp_addrs[i];
@@ -147,6 +157,8 @@ impl Pass1 {
                 id_map.push(a);
                 class_ids.push(tmp_class_ids[i]);
                 shallow_sizes.push(tmp_shallow[i]);
+                kind.push(tmp_kind[i]);
+                elem_count.push(tmp_elem_count[i]);
                 prev_addr = a;
             }
         }
@@ -159,6 +171,8 @@ impl Pass1 {
             id_map,
             class_ids,
             shallow_sizes,
+            kind,
+            elem_count,
             gc_root_addrs,
             gc_root_types,
             thread_serial_to_obj_id,
@@ -184,6 +198,8 @@ fn scan_heap_segment(
     tmp_addrs: &mut Vec<u64>,
     tmp_class_ids: &mut Vec<u64>,
     tmp_shallow: &mut Vec<u32>,
+    tmp_kind: &mut Vec<u8>,
+    tmp_elem_count: &mut Vec<u32>,
     gc_root_addrs: &mut Vec<u64>,
     gc_root_types: &mut Vec<u8>,
     thread_serial_to_obj_id: &mut HashMap<u32, u64>,
@@ -251,6 +267,8 @@ fn scan_heap_segment(
                 tmp_addrs.push(class_addr);
                 tmp_class_ids.push(class_addr); // class-of-class resolved later in pass2
                 tmp_shallow.push(0);            // pass2 recalculates shallow size for class objects
+                tmp_kind.push(3);
+                tmp_elem_count.push(0);
             }
             heap::INSTANCE_DUMP => {
                 let addr = r.id()?;
@@ -262,6 +280,8 @@ fn scan_heap_segment(
                 tmp_addrs.push(addr);
                 tmp_class_ids.push(class_id);
                 tmp_shallow.push(shallow);
+                tmp_kind.push(0);
+                tmp_elem_count.push(0);
                 remaining -= ids + 4 + ids + 4 + data_len;
                 *instance_count += 1;
             }
@@ -276,6 +296,8 @@ fn scan_heap_segment(
                 tmp_addrs.push(addr);
                 tmp_class_ids.push(elem_class_id);
                 tmp_shallow.push(shallow);
+                tmp_kind.push(1);
+                tmp_elem_count.push(count as u32);
                 remaining -= ids + 4 + 4 + ids + count * ids;
                 *obj_array_count += 1;
             }
@@ -292,6 +314,8 @@ fn scan_heap_segment(
                 tmp_addrs.push(addr);
                 tmp_class_ids.push(elem_type_code as u64);
                 tmp_shallow.push(shallow);
+                tmp_kind.push(2);
+                tmp_elem_count.push(count as u32);
                 remaining -= ids + 4 + 4 + 1 + count * elem_size;
                 *prim_array_count += 1;
             }
