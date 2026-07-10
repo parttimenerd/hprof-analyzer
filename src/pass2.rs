@@ -23,7 +23,7 @@ pub struct Graph {
     pub shallow: Vec<u32>,
     pub class_idx: Vec<u32>,
     pub class_names: Vec<String>,
-    pub class_obj_class_idx: Vec<u32>,  // per obj: which class it represents (u32::MAX if not class obj)
+    pub class_obj_class_idx: HashMap<u32, u32>,  // class-obj index -> class-histogram row (sparse; absent = not a class obj)
     // Forward CSR
     pub fwd_offsets: Vec<u32>,
     pub fwd_targets: Vec<u32>,
@@ -527,7 +527,7 @@ impl Pass2 {
         // For each class object, record the histogram row of the class it
         // represents. Under identity keying, that row is keyed by the class
         // object's own address (the same key instances of that class use).
-        let mut class_obj_class_idx: Vec<u32> = vec![u32::MAX; n];
+        let mut class_obj_class_idx: HashMap<u32, u32> = HashMap::new();
         for i in 0..n {
             let addr = p1.id_map.addr_at(i);
             if class_addrs.contains(&addr) {
@@ -536,7 +536,7 @@ impl Pass2 {
                     ci.and_then(|c| p1.strings.get(&c.name_id).cloned())
                         .unwrap_or_else(|| format!("unknown@{addr:#x}"))
                 });
-                class_obj_class_idx[i] = idx;
+                class_obj_class_idx.insert(i as u32, idx);
             }
         }
         let _ = jlc_idx;
@@ -1313,7 +1313,7 @@ mod tests {
         for i in 0..g.n {
             if g.shallow[i] == 0 {
                 assert!(
-                    g.class_obj_class_idx[i] != u32::MAX,
+                    g.class_obj_class_idx.contains_key(&(i as u32)),
                     "non-class object {i} has shallow 0"
                 );
             }

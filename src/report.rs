@@ -2,6 +2,11 @@
 
 use crate::pass2::Graph;
 
+#[inline]
+fn class_obj_repr(g: &Graph, i: usize) -> u32 {
+    g.class_obj_class_idx.get(&(i as u32)).copied().unwrap_or(u32::MAX)
+}
+
 // ── Formatting helpers ─────────────────────────────────────────────────────
 
 /// ISO-8601 UTC timestamp matching java.time.Instant.toString() shape.
@@ -139,7 +144,7 @@ pub fn system_overview(g: &Graph) -> String {
     // Count reachable class-dump objects (objects that ARE Java classes, with defined idom)
     let undef_u32 = u32::MAX;
     let classes_loaded = (0..n)
-        .filter(|&i| g.class_obj_class_idx[i] != u32::MAX && g.idom[i] != undef_u32)
+        .filter(|&i| class_obj_repr(g, i) != u32::MAX && g.idom[i] != undef_u32)
         .count() as u64;
 
     // Class histogram: per-class instance count, shallow total, retained total
@@ -171,7 +176,7 @@ pub fn system_overview(g: &Graph) -> String {
         if g.idom[i] == undef {
             continue;
         }
-        let repr = g.class_obj_class_idx[i];
+        let repr = class_obj_repr(g, i);
         if repr == undef {
             continue;
         }
@@ -375,8 +380,8 @@ pub fn leak_suspects(g: &Graph) -> String {
             for depth in 0..=5 {
                 let ci = g.class_idx[cur] as usize;
                 // For class objects, show the class they represent (MAT parity: no "class " prefix)
-                let display_class = if g.class_obj_class_idx[cur] != u32::MAX {
-                    let repr = g.class_obj_class_idx[cur] as usize;
+                let display_class = if class_obj_repr(g, cur) != u32::MAX {
+                    let repr = class_obj_repr(g, cur) as usize;
                     if repr < g.class_names.len() {
                         pretty_class_name(&g.class_names[repr])
                     } else {
@@ -451,8 +456,8 @@ pub fn top_consumers(g: &Graph) -> String {
         let idx = i as usize;
         let ci = g.class_idx[idx] as usize;
         // For class objects, show the class they represent (MAT parity: no "class " prefix)
-        let display_class = if g.class_obj_class_idx[idx] != undef {
-            let repr = g.class_obj_class_idx[idx] as usize;
+        let display_class = if class_obj_repr(g, idx) != undef {
+            let repr = class_obj_repr(g, idx) as usize;
             if repr < g.class_names.len() {
                 pretty_class_name(&g.class_names[repr])
             } else if ci < g.class_names.len() {
@@ -523,8 +528,8 @@ pub fn top_consumers(g: &Graph) -> String {
     for &i in &top_level {
         let idx = i as usize;
         // Use the class the object represents (for class objects), else own class
-        let raw_name = if g.class_obj_class_idx[idx] != undef {
-            let repr = g.class_obj_class_idx[idx] as usize;
+        let raw_name = if class_obj_repr(g, idx) != undef {
+            let repr = class_obj_repr(g, idx) as usize;
             if repr < g.class_names.len() {
                 &g.class_names[repr]
             } else {

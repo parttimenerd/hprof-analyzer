@@ -7,7 +7,7 @@
 /// * `shallow`             - shallow size per object, len = n
 /// * `class_idx`           - class index per object (into class_names), len = n
 /// * `class_count`         - class_names.len()
-/// * `class_obj_class_idx` - for each obj: which class it represents (u32::MAX if not class obj), len = n
+/// * `class_obj_class_idx` - which class each class-obj represents (sparse map; absent key = not a class obj)
 ///
 /// # Returns
 /// `(retained, has_same_class_ancestor)` both of length n.
@@ -18,7 +18,7 @@ pub fn compute_retained(
     shallow: &[u32],
     class_idx: &[u32],
     class_count: usize,
-    class_obj_class_idx: &[u32],
+    class_obj_class_idx: &std::collections::HashMap<u32, u32>,
 ) -> (Vec<u64>, Vec<bool>) {
     let vroot = n as u32;
     let undef = u32::MAX;
@@ -103,7 +103,7 @@ pub fn compute_retained(
             stk_child_idx[top] = next_child_pos + 1;
 
             let cls = if (child as usize) < n { class_idx[child as usize] } else { undef };
-            let ci  = if (child as usize) < n { class_obj_class_idx[child as usize] } else { undef };
+            let ci  = class_obj_class_idx.get(&child).copied().unwrap_or(undef);
 
             // sp_new = depth the child will have on the stack (1-based, vroot is depth 1).
             let sp_new = (stk_node.len() + 1) as u32;
@@ -171,7 +171,7 @@ mod tests {
         let idom = vec![3u32, 0, 1, 3];
         let shallow = vec![10u32, 20, 30];
         let class_idx = vec![0u32, 0, 0];
-        let class_obj_class_idx = vec![u32::MAX, u32::MAX, u32::MAX];
+        let class_obj_class_idx = std::collections::HashMap::<u32, u32>::new();
         let (retained, _has_same) =
             compute_retained(n, &rpo_order, &idom, &shallow, &class_idx, 1, &class_obj_class_idx);
         assert_eq!(retained[0], 60, "0 retains all 3");
@@ -187,7 +187,7 @@ mod tests {
         let idom = vec![4u32, 0, 0, 0, 4]; // idom[4]=4 vroot self-loop
         let shallow = vec![1u32, 2, 3, 4];
         let class_idx = vec![0u32, 0, 0, 0];
-        let class_obj_class_idx = vec![u32::MAX; 4];
+        let class_obj_class_idx = std::collections::HashMap::<u32, u32>::new();
         let (retained, _) =
             compute_retained(n, &rpo_order, &idom, &shallow, &class_idx, 1, &class_obj_class_idx);
         // 3 propagates to 0, 1 propagates to 0, 2 propagates to 0
@@ -207,7 +207,7 @@ mod tests {
         let shallow = vec![10u32, 20, 30];
         // class 0: nodes 0 and 2; class 1: node 1
         let class_idx = vec![0u32, 1, 0];
-        let class_obj_class_idx = vec![u32::MAX; 3];
+        let class_obj_class_idx = std::collections::HashMap::<u32, u32>::new();
         let (_, has_same) =
             compute_retained(n, &rpo_order, &idom, &shallow, &class_idx, 2, &class_obj_class_idx);
         assert!(!has_same[0], "node 0 has no class-0 ancestor");
@@ -228,7 +228,8 @@ mod tests {
         let idom = vec![3u32, 0, 1, 3];
         let shallow = vec![10u32, 20, 30];
         let class_idx = vec![0u32, 1u32, 0u32];
-        let class_obj_class_idx = vec![1u32, u32::MAX, u32::MAX];
+        let mut class_obj_class_idx = std::collections::HashMap::<u32, u32>::new();
+        class_obj_class_idx.insert(0u32, 1u32);
         let (_, has_same) =
             compute_retained(n, &rpo_order, &idom, &shallow, &class_idx, 2, &class_obj_class_idx);
         assert!(!has_same[0], "node 0 has no ancestor of class 0 (nor class-obj for any class)");
