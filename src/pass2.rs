@@ -114,43 +114,53 @@ fn class_obj_shallow(ci: &ClassInfo, _ptr_size: usize, ref_size: usize) -> u32 {
 
 // ── Field layout cache ─────────────────────────────────────────────────────
 
-/// For a given class, returns a Vec of byte offsets within INSTANCE_DUMP data
-/// for each Object-type field (subclass fields appear first in HPROF data).
-fn build_obj_field_offsets(
-    class_addr: u64,
-    class_map: &HashMap<u64, ClassInfo>,
-    id_size: usize,  // HPROF instance data always uses id_size bytes for Object refs
-    cache: &mut HashMap<u64, Vec<(usize, u64)>>, // addr -> Vec<(offset, target_class_hint)>
-) -> Vec<usize> {
-    // Walk class hierarchy: subclass fields first, then super, super2, ...
-    // HPROF INSTANCE_DUMP data always stores references as id_size bytes (not refSize).
-    let mut chain: Vec<u64> = Vec::new();
-    let mut cur = class_addr;
-    loop {
-        match class_map.get(&cur) {
-            None => break,
-            Some(ci) => {
-                chain.push(cur);
-                if ci.super_id == 0 { break; }
-                cur = ci.super_id;
-            }
-        }
-    }
+/// Per-class instance-field plan: byte offset of each Object-type field within
+/// the INSTANCE_DUMP data, paired with whether that edge is excluded from the
+/// dominator computation (weak-reference / finalizer fields).
+pub type FieldPlan = Vec<(u32, bool)>;
 
-    let mut offsets = Vec::new();
-    let mut byte_offset = 0usize;
-    for &caddr in &chain {
-        let ci = match class_map.get(&caddr) { Some(c) => c, None => break };
-        for (_, t) in &ci.fields {
-            // HPROF data uses id_size for Object refs regardless of compressed OOPs
-            let fsize = if *t == HprofType::Object { id_size } else { t.byte_size() };
-            if *t == HprofType::Object {
-                offsets.push(byte_offset);
+/// Build the FieldPlan for every class in `class_map`, walking each class's
+/// super chain once. Excluded fields are marked via `is_excluded_field`.
+/// Precomputing this up front lets the hot scan loop borrow immutably with no
+/// per-instance allocation.
+fn build_field_plans(
+    class_map: &HashMap<u64, ClassInfo>,
+    strings: &HashMap<u64, String>,
+    id_size: usize,
+) -> HashMap<u64, FieldPlan> {
+    let mut plans: HashMap<u64, FieldPlan> = HashMap::with_capacity(class_map.len());
+    let mut chain: Vec<u64> = Vec::new();
+    for (&class_addr, _) in class_map {
+        chain.clear();
+        let mut cur = class_addr;
+        loop {
+            match class_map.get(&cur) {
+                None => break,
+                Some(ci) => {
+                    chain.push(cur);
+                    if ci.super_id == 0 { break; }
+                    cur = ci.super_id;
+                }
             }
-            byte_offset += fsize;
         }
+        let mut plan: FieldPlan = Vec::new();
+        let mut byte_offset = 0usize;
+        for &caddr in &chain {
+            let ci = match class_map.get(&caddr) { Some(c) => c, None => break };
+            let cname = strings.get(&ci.name_id).map(|s| s.as_str()).unwrap_or("");
+            for &(fname_id, t) in &ci.fields {
+                let fsize = if t == HprofType::Object { id_size } else { t.byte_size() };
+                if t == HprofType::Object {
+                    let fname = strings.get(&fname_id).map(|s| s.as_str()).unwrap_or("");
+                    let excluded = is_excluded_field(cname, fname);
+                    plan.push((byte_offset as u32, excluded));
+                }
+                byte_offset += fsize;
+            }
+        }
+        plans.insert(class_addr, plan);
     }
-    offsets
+    plans
 }
 
 // ── Excluded field detection ───────────────────────────────────────────────
@@ -335,49 +345,9 @@ impl Pass2 {
         let mut out_degree: Vec<u32> = vec![0u32; n];
         let mut in_degree: Vec<u32> = vec![0u32; n];
 
-        // Build field layout cache: class_addr → Vec<usize> byte offsets for Object fields
-        let mut field_offset_cache: HashMap<u64, Vec<usize>> = HashMap::new();
-
-        // Memoized excluded field offsets per class (fix #4)
-        let mut excl_offset_cache: HashMap<u64, Vec<usize>> = HashMap::new();
-
-        // Build name lookup for excluded field detection
-        // field_name_ids for excluded fields: pre-collect name_ids from strings
-        let excluded_name_ids: std::collections::HashSet<u64> = {
-            let mut s = std::collections::HashSet::new();
-            for (&id, name) in &p1.strings {
-                if matches!(name.as_str(), "referent" | "unfinalized" | "<Unfinalized>") {
-                    s.insert(id);
-                }
-            }
-            s
-        };
-
-        // Class addr → (class name, set of excluded field name_ids for this class)
-        // We need: for each class, which of its OWN field name_ids are excluded?
-        // Excluded = (class is java/lang/ref/Reference AND field is referent)
-        //           OR (class is java/lang/ref/Finalizer AND field is unfinalized)
-        //           OR (class is java/lang/Runtime AND field is <Unfinalized>)
-        let excluded_class_field: HashMap<u64, std::collections::HashSet<u64>> = {
-            let mut m: HashMap<u64, std::collections::HashSet<u64>> = HashMap::new();
-            for (&caddr, ci) in &p1.class_map {
-                let cname = p1.strings.get(&ci.name_id).map(|s| s.as_str()).unwrap_or("");
-                for &(fname_id, t) in &ci.fields {
-                    if t != HprofType::Object { continue; }
-                    let fname = p1.strings.get(&fname_id).map(|s| s.as_str()).unwrap_or("");
-                    if is_excluded_field(cname, fname) {
-                        m.entry(caddr).or_default().insert(fname_id);
-                    }
-                }
-            }
-            m
-        };
-
-        // We'll also rebuild shallow sizes for arrays during this pass.
-        // Track array info: addr → (num_elem, is_obj_array, elem_class_or_type)
-        // Actually we re-read during sub-pass 2a.
-
-        // Also track array addresses/counts for compressed OOPs detection (already done above).
+        // Precompute per-class instance-field plans once (offset + excluded flag).
+        // Borrowed immutably in the hot scan loop — no per-instance allocation.
+        let field_plans = build_field_plans(&p1.class_map, &p1.strings, id_size as usize);
 
         // ── Sub-pass 2a scan ─────────────────────────────────────────────
         {
@@ -405,9 +375,7 @@ impl Pass2 {
                             &p1.class_map,
                             &p1.strings,
                             &class_addrs,
-                            &excluded_class_field,
-                            &mut field_offset_cache,
-                            &mut excl_offset_cache,
+                            &field_plans,
                             &mut size_cache,
                             &mut out_degree,
                             &mut in_degree,
@@ -553,7 +521,6 @@ impl Pass2 {
         // in_degree now acts as write cursors; after fill, in_degree[i] = end offset of node i
 
         // Reset memoized excluded-offset cache for sub-pass 2b (fix #4)
-        excl_offset_cache.clear();
 
         // ── Sub-pass 2b scan ─────────────────────────────────────────────
         {
@@ -577,12 +544,8 @@ impl Pass2 {
                             ref_size,
                             length,
                             &p1.id_map,
-                            &p1.class_map,
-                            &p1.strings,
                             &class_addrs,
-                            &excluded_class_field,
-                            &mut field_offset_cache,
-                            &mut excl_offset_cache,
+                            &field_plans,
                             &mut fwd_targets,
                             &mut fwd_cursor,
                             &fwd_offsets,
@@ -819,9 +782,7 @@ impl Pass2 {
         class_map: &HashMap<u64, ClassInfo>,
         strings: &HashMap<u64, String>,
         class_addrs: &std::collections::HashSet<u64>,
-        excluded_class_field: &HashMap<u64, std::collections::HashSet<u64>>,
-        field_offset_cache: &mut HashMap<u64, Vec<usize>>,
-        excl_offset_cache: &mut HashMap<u64, Vec<usize>>,
+        field_plans: &HashMap<u64, FieldPlan>,
         size_cache: &mut HashMap<u64, usize>,
         out_degree: &mut Vec<u32>,
         in_degree: &mut Vec<u32>,
@@ -914,27 +875,17 @@ impl Pass2 {
                     // Edge: instance → class object
                     edge_if_valid!(src_idx, class_id, false);
 
-                    // Edges from Object-type fields
-                    let offsets = field_offset_cache
-                        .entry(class_id)
-                        .or_insert_with(|| build_obj_field_offsets(class_id, class_map, id_size as usize, &mut HashMap::new()))
-                        .clone();
-
-                    // Get excluded field offsets for this class (fix #4: memoized per sub-pass)
-                    let excl_offsets = excl_offset_cache
-                        .entry(class_id)
-                        .or_insert_with(|| Self::compute_excluded_field_offsets(class_id, class_map, strings, id_size as usize))
-                        .clone();
-
-                    let _ = excl_offsets; // used only in fill_heap_2b for edge exclusion flag
-
-                    for off in &offsets {
-                        if *off + id_size as usize <= scratch.len() {
-                            let ref_val = read_ref(&scratch[*off..], id_size as usize);
-                            if ref_val != 0 {
-                                if let Some(dst) = id_map.index_of(ref_val) {
-                                    out_degree[src_idx] += 1;
-                                    in_degree[dst] += 1;
+                    // Edges from Object-type fields (precomputed plan, immutable borrow)
+                    if let Some(plan) = field_plans.get(&class_id) {
+                        for &(off, _excluded) in plan {
+                            let off = off as usize;
+                            if off + id_size as usize <= scratch.len() {
+                                let ref_val = read_ref(&scratch[off..], id_size as usize);
+                                if ref_val != 0 {
+                                    if let Some(dst) = id_map.index_of(ref_val) {
+                                        out_degree[src_idx] += 1;
+                                        in_degree[dst] += 1;
+                                    }
                                 }
                             }
                         }
@@ -1013,46 +964,6 @@ impl Pass2 {
         Ok(())
     }
 
-    /// Compute the byte offsets of excluded (weak-reference) Object fields for a class.
-    /// This is the underlying implementation; callers should memoize via excl_offset_cache.
-    fn compute_excluded_field_offsets(
-        class_id: u64,
-        class_map: &HashMap<u64, ClassInfo>,
-        strings: &HashMap<u64, String>,
-        id_size: usize,  // HPROF instance data uses id_size for Object refs
-    ) -> Vec<usize> {
-        let mut excl = Vec::new();
-        let mut chain: Vec<u64> = Vec::new();
-        let mut cur = class_id;
-        loop {
-            match class_map.get(&cur) {
-                None => break,
-                Some(ci) => {
-                    chain.push(cur);
-                    if ci.super_id == 0 { break; }
-                    cur = ci.super_id;
-                }
-            }
-        }
-        let mut byte_offset = 0usize;
-        for caddr in &chain {
-            let ci = match class_map.get(caddr) { Some(c) => c, None => break };
-            let cname = strings.get(&ci.name_id).map(|s| s.as_str()).unwrap_or("");
-            for &(fname_id, t) in &ci.fields {
-                // HPROF data uses id_size for Object refs regardless of compressed OOPs
-                let fsize = if t == HprofType::Object { id_size } else { t.byte_size() };
-                if t == HprofType::Object {
-                    let fname = strings.get(&fname_id).map(|s| s.as_str()).unwrap_or("");
-                    if is_excluded_field(cname, fname) {
-                        excl.push(byte_offset);
-                    }
-                }
-                byte_offset += fsize;
-            }
-        }
-        excl
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn fill_heap_2b(
         r: &mut HprofReader,
@@ -1060,12 +971,8 @@ impl Pass2 {
         ref_size: usize,
         mut remaining: u64,
         id_map: &crate::id_map::IdMap,
-        class_map: &HashMap<u64, ClassInfo>,
-        strings: &HashMap<u64, String>,
         class_addrs: &std::collections::HashSet<u64>,
-        excluded_class_field: &HashMap<u64, std::collections::HashSet<u64>>,
-        field_offset_cache: &mut HashMap<u64, Vec<usize>>,
-        excl_offset_cache: &mut HashMap<u64, Vec<usize>>,
+        field_plans: &HashMap<u64, FieldPlan>,
         fwd_targets: &mut Vec<u32>,
         fwd_cursor: &mut Vec<u32>,
         fwd_offsets: &Vec<u32>,
@@ -1159,24 +1066,14 @@ impl Pass2 {
                     // Edge: instance → class object
                     add_edge!(src_idx, class_id, false);
 
-                    // Edges from Object-type fields (offsets use id_size; HPROF data stores refs as id_size bytes)
-                    let offsets = field_offset_cache
-                        .entry(class_id)
-                        .or_insert_with(|| build_obj_field_offsets(class_id, class_map, id_size as usize, &mut HashMap::new()))
-                        .clone();
-
-                    // Memoized excluded field offsets (fix #4)
-                    let excl_offsets = excl_offset_cache
-                        .entry(class_id)
-                        .or_insert_with(|| Self::compute_excluded_field_offsets(class_id, class_map, strings, id_size as usize))
-                        .clone();
-                    let excl_set: std::collections::HashSet<usize> = excl_offsets.into_iter().collect();
-
-                    for off in &offsets {
-                        if *off + id_size as usize <= scratch.len() {
-                            let ref_val = read_ref(&scratch[*off..], id_size as usize);
-                            let excl = excl_set.contains(off);
-                            add_edge!(src_idx, ref_val, excl);
+                    // Edges from Object-type fields (precomputed plan, immutable borrow)
+                    if let Some(plan) = field_plans.get(&class_id) {
+                        for &(off, excluded) in plan {
+                            let off = off as usize;
+                            if off + id_size as usize <= scratch.len() {
+                                let ref_val = read_ref(&scratch[off..], id_size as usize);
+                                add_edge!(src_idx, ref_val, excluded);
+                            }
                         }
                     }
                 }
