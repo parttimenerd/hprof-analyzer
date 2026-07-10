@@ -10,3 +10,4 @@ fn main() {
     let output = args.get(2).map(PathBuf::from);
     eprintln!("Input: {:?}  Output: {:?}", input, output);
 }
+mod types;
