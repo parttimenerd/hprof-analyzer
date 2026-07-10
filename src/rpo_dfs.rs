@@ -97,13 +97,14 @@ pub fn rpo_dfs(n: usize, roots: &[u32], fwd_off: &[u32], fwd_tgt: &[u32]) -> Rpo
         .copied()
         .collect();
 
-    // Assign final RPO positions (0-indexed)
-    // After this loop real nodes have positions 0..rpo_order.len()-1
+    // Assign final RPO positions: virtual root = 0, real nodes = 1..=rpo_order.len()
+    // This matches hprof-redact's convention where VIRTUAL_ROOT has position 0
+    // and all real nodes have strictly positive positions, so intersect() can
+    // unambiguously walk up to the virtual root.
+    rpo_pos[n] = 0;  // virtual root always at position 0 (lowest)
     for (i, &v) in rpo_order.iter().enumerate() {
-        rpo_pos[v as usize] = i as i32;
+        rpo_pos[v as usize] = (i + 1) as i32;  // real nodes start at 1
     }
-    // Virtual root is conceptually at RPO position 0 (before all real nodes)
-    rpo_pos[n] = 0;
 
     RpoResult { rpo_order, rpo_pos, dfs_parent }
 }
@@ -138,12 +139,16 @@ mod tests {
 
     #[test]
     fn rpo_pos_consistent() {
-        // rpo_pos[v] should equal the index of v in rpo_order for real nodes
+        // rpo_pos is 1-indexed for real nodes (1..=rpo_order.len()); vroot=0
         let fwd_off = vec![0u32, 2, 3, 4, 4];
         let fwd_tgt = vec![1u32, 2, 3, 3];
         let r = rpo_dfs(4, &[0u32], &fwd_off, &fwd_tgt);
+        // vroot (index 4) has rpo_pos=0
+        assert_eq!(r.rpo_pos[4], 0, "vroot should have rpo_pos=0");
+        // real nodes: rpo_pos[rpo_order[i]] == i+1
         for (pos, &v) in r.rpo_order.iter().enumerate() {
-            assert_eq!(r.rpo_pos[v as usize], pos as i32);
+            assert_eq!(r.rpo_pos[v as usize], (pos + 1) as i32,
+                "node {} at rpo position {} should have rpo_pos={}", v, pos, pos+1);
         }
     }
 }

@@ -145,7 +145,7 @@ fn dump_pass1_json(path: &str) -> io::Result<()> {
         if !first {
             print!(",");
         }
-        let escaped = name.replace('"', "\\\"");
+        let escaped = name.replace('"', "\"");
         print!(r#""{escaped}":{count}"#);
         first = false;
     }

@@ -32,6 +32,10 @@ pub struct Pass1 {
     pub shallow_sizes: Vec<u32>,
     pub gc_root_addrs: Vec<u64>,
     pub gc_root_types: Vec<u8>,
+    /// threadSerial → thread object address (from ROOT_THREAD_OBJ records)
+    pub thread_serial_to_obj_id: HashMap<u32, u64>,
+    /// (threadSerial, localAddr) from JAVA_FRAME/JNI_LOCAL/NATIVE_STACK/THREAD_BLOCK
+    pub thread_local_pairs: Vec<(u32, u64)>,
     pub id_size: u8,
     pub format: String,
     pub file_size: u64,
@@ -58,6 +62,8 @@ impl Pass1 {
         let mut tmp_shallow: Vec<u32> = Vec::new();
         let mut gc_root_addrs: Vec<u64> = Vec::new();
         let mut gc_root_types: Vec<u8> = Vec::new();
+        let mut thread_serial_to_obj_id: HashMap<u32, u64> = HashMap::new();
+        let mut thread_local_pairs: Vec<(u32, u64)> = Vec::new();
         let mut has_sticky_class_roots = false;
         let mut instance_count = 0u64;
         let mut obj_array_count = 0u64;
@@ -101,6 +107,8 @@ impl Pass1 {
                         &mut tmp_shallow,
                         &mut gc_root_addrs,
                         &mut gc_root_types,
+                        &mut thread_serial_to_obj_id,
+                        &mut thread_local_pairs,
                         &mut has_sticky_class_roots,
                         &mut instance_count,
                         &mut obj_array_count,
@@ -153,6 +161,8 @@ impl Pass1 {
             shallow_sizes,
             gc_root_addrs,
             gc_root_types,
+            thread_serial_to_obj_id,
+            thread_local_pairs,
             id_size,
             format,
             file_size,
@@ -176,6 +186,8 @@ fn scan_heap_segment(
     tmp_shallow: &mut Vec<u32>,
     gc_root_addrs: &mut Vec<u64>,
     gc_root_types: &mut Vec<u8>,
+    thread_serial_to_obj_id: &mut HashMap<u32, u64>,
+    thread_local_pairs: &mut Vec<(u32, u64)>,
     has_sticky_class_roots: &mut bool,
     instance_count: &mut u64,
     obj_array_count: &mut u64,
@@ -201,16 +213,19 @@ fn scan_heap_segment(
                 remaining -= 2 * ids;
             }
             heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME => {
-                gc_root_addrs.push(r.id()?);
-                gc_root_types.push(sub_tag);
-                r.skip(8)?; // thread_serial(u4) + frame_number(u4)
+                let local_id = r.id()?;
+                let thread_serial = r.u4()?;
+                r.skip(4)?; // frame_number
                 remaining -= ids + 8;
+                // NOT a direct GC root — synthetic edge from thread object (MAT parity)
+                thread_local_pairs.push((thread_serial, local_id));
             }
             heap::ROOT_NATIVE_STACK | heap::ROOT_THREAD_BLOCK => {
-                gc_root_addrs.push(r.id()?);
-                gc_root_types.push(sub_tag);
-                r.skip(4)?; // thread_serial(u4)
+                let local_id = r.id()?;
+                let thread_serial = r.u4()?;
                 remaining -= ids + 4;
+                // NOT a direct GC root — synthetic edge from thread object (MAT parity)
+                thread_local_pairs.push((thread_serial, local_id));
             }
             heap::ROOT_STICKY_CLASS => {
                 gc_root_addrs.push(r.id()?);
@@ -219,15 +234,23 @@ fn scan_heap_segment(
                 remaining -= ids;
             }
             heap::ROOT_THREAD_OBJ => {
-                gc_root_addrs.push(r.id()?);
-                gc_root_types.push(sub_tag);
-                r.skip(8)?; // thread_serial(u4) + stack_trace_serial(u4)
+                let obj_id = r.id()?;
+                let thread_serial = r.u4()?;
+                r.skip(4)?; // stack_trace_serial
                 remaining -= ids + 8;
+                gc_root_addrs.push(obj_id);
+                gc_root_types.push(sub_tag);
+                thread_serial_to_obj_id.insert(thread_serial, obj_id);
             }
             heap::CLASS_DUMP => {
-                let consumed = read_class_dump(r, id_size, class_map)?;
+                let (class_addr, consumed) = read_class_dump(r, id_size, class_map)?;
                 remaining -= consumed;
                 *class_dump_count += 1;
+                // Class objects must be in id_map so GC roots referencing them resolve correctly
+                // (hprof-redact: scanClassDumpA1 calls state.appendAddress(classId))
+                tmp_addrs.push(class_addr);
+                tmp_class_ids.push(class_addr); // class-of-class resolved later in pass2
+                tmp_shallow.push(0);            // pass2 recalculates shallow size for class objects
             }
             heap::INSTANCE_DUMP => {
                 let addr = r.id()?;
@@ -288,7 +311,7 @@ fn read_class_dump(
     r: &mut HprofReader,
     id_size: u8,
     class_map: &mut HashMap<u64, ClassInfo>,
-) -> io::Result<u64> {
+) -> io::Result<(u64, u64)> { // (class_addr, consumed)
     let ids = id_size as u64;
     let mut consumed: u64 = 0;
 
@@ -342,7 +365,7 @@ fn read_class_dump(
     entry.static_obj_count = static_obj_count;
     entry.static_prim_bytes = static_prim_bytes;
 
-    Ok(consumed)
+    Ok((class_addr, consumed))
 }
 
 fn value_size(type_code: u8, id_size: u8) -> u64 {
@@ -364,7 +387,7 @@ mod tests {
     const EXPECTED_OBJ_ARRAYS:  u64 =   504_353;
     const EXPECTED_PRIM_ARRAYS: u64 =    27_379;
     const EXPECTED_CLASSES:     u64 =     2_646;
-    const EXPECTED_GC_ROOTS:    u64 = 1_066 + 1_454 + 135 + 101; // 2,756
+    const EXPECTED_GC_ROOTS:    u64 = 1_454 + 135 + 101; // 1,690 (JAVA_FRAME/JNI_LOCAL/etc -> thread_local_pairs)
 
     #[test]
     fn record_counts_match_diagnose() {
@@ -382,7 +405,8 @@ mod tests {
     fn total_object_count() {
         if !std::path::Path::new(DUMP).exists() { return; }
         let p = Pass1::run(DUMP).unwrap();
-        let expected = EXPECTED_INSTANCES + EXPECTED_OBJ_ARRAYS + EXPECTED_PRIM_ARRAYS;
+        // id_map now includes class objects (from CLASS_DUMP records) in addition to instances/arrays
+        let expected = EXPECTED_INSTANCES + EXPECTED_OBJ_ARRAYS + EXPECTED_PRIM_ARRAYS + p.class_dump_count;
         assert_eq!(p.id_map.len() as u64, expected,
             "total objects (got {})", p.id_map.len());
     }
@@ -418,4 +442,87 @@ mod tests {
         let pct = resolved * 100 / p.class_map.len();
         assert!(pct >= 90, "only {pct}% of classes have resolvable names");
     }
+
+    #[test]
+    fn debug_root_coverage() {
+        if !std::path::Path::new(DUMP).exists() { return; }
+        let p = Pass1::run(DUMP).unwrap();
+        let mut in_idmap = 0usize;
+        let mut not_in_idmap = 0usize;
+        let mut by_type: std::collections::HashMap<u8, (usize, usize)> = std::collections::HashMap::new();
+        for (i, &addr) in p.gc_root_addrs.iter().enumerate() {
+            let t = p.gc_root_types[i];
+            let entry = by_type.entry(t).or_insert((0usize, 0usize));
+            if p.id_map.index_of(addr).is_some() {
+                in_idmap += 1;
+                entry.0 += 1;
+            } else {
+                not_in_idmap += 1;
+                entry.1 += 1;
+            }
+        }
+        eprintln!("in_idmap={} not_in_idmap={}", in_idmap, not_in_idmap);
+        let mut types: Vec<_> = by_type.iter().collect();
+        types.sort_by_key(|(t, _)| **t);
+        for (t, (found, missing)) in &types {
+            eprintln!("  type=0x{:02x} found={} missing={}", t, found, missing);
+        }
+    }
+
 }
+
+    #[test]
+    fn debug_gc_root_types() {
+        let dump = "/home/i560383/test-heapdumps/dump_0_fj-kmeans.hprof";
+        if !std::path::Path::new(dump).exists() { return; }
+        let p = Pass1::run(dump).unwrap();
+        let mut type_counts: std::collections::HashMap<u8, u32> = std::collections::HashMap::new();
+        for &t in &p.gc_root_types {
+            *type_counts.entry(t).or_insert(0) += 1;
+        }
+        eprintln!("GC root types:");
+        for (t, cnt) in &type_counts {
+            let name = match *t {
+                0xff => "ROOT_UNKNOWN",
+                0x01 => "ROOT_JNI_GLOBAL",
+                0x02 => "ROOT_JNI_LOCAL",
+                0x03 => "ROOT_JAVA_FRAME",
+                0x04 => "ROOT_NATIVE_STACK",
+                0x05 => "ROOT_STICKY_CLASS",
+                0x06 => "ROOT_THREAD_BLOCK",
+                0x07 => "ROOT_MONITOR_USED",
+                0x08 => "ROOT_THREAD_OBJ",
+                _ => "UNKNOWN",
+            };
+            eprintln!("  {} (0x{:02x}): {}", name, t, cnt);
+        }
+        eprintln!("Total gc_root_addrs: {}", p.gc_root_addrs.len());
+    }
+
+    #[test]
+    fn debug_java_frame_root_classes() {
+        let dump = "/home/i560383/test-heapdumps/dump_0_fj-kmeans.hprof";
+        if !std::path::Path::new(dump).exists() { return; }
+        let p = Pass1::run(dump).unwrap();
+        let mut class_counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+        for (i, &t) in p.gc_root_types.iter().enumerate() {
+            if t == 0x03 { // JAVA_FRAME
+                let addr = p.gc_root_addrs[i];
+                let class_name = if let Some(idx) = p.id_map.index_of(addr) {
+                    let cid = p.class_ids[idx];
+                    if let Some(ci) = p.class_map.get(&cid) {
+                        p.strings.get(&ci.name_id).cloned().unwrap_or_else(|| format!("@{cid:#x}"))
+                    } else { format!("no_class@{cid:#x}") }
+                } else { format!("not_in_idmap@{addr:#x}") };
+                *class_counts.entry(class_name).or_insert(0) += 1;
+            }
+        }
+        eprintln!("JAVA_FRAME root classes (top 15): total_entries={}", class_counts.len());
+        let java_frame_count = p.gc_root_types.iter().filter(|&&t| t == 0x03).count();
+        eprintln!("JAVA_FRAME root count: {}", java_frame_count);
+        let mut sorted: Vec<(u32, &String)> = class_counts.iter().map(|(k,&v)| (v,k)).collect();
+        sorted.sort_unstable_by(|a,b| b.0.cmp(&a.0));
+        for (cnt, name) in sorted.iter().take(30) {
+            eprintln!("  {:>8} {}", cnt, name);
+        }
+    }

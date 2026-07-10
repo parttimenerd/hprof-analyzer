@@ -99,8 +99,12 @@ pub fn system_overview(g: &Graph) -> String {
         }
     }
 
-    let gc_roots = g.gc_root_indices.len() as u64;
-    let classes_loaded = g.class_names.len() as u64;
+    let gc_roots = (g.gc_root_indices.len().saturating_sub(g.synthetic_root_count)) as u64;
+    // Count reachable class-dump objects (objects that ARE Java classes, with defined idom)
+    let undef_u32 = u32::MAX;
+    let classes_loaded = (0..n)
+        .filter(|&i| g.class_obj_class_idx[i] != u32::MAX && g.idom[i] != undef_u32)
+        .count() as u64;
 
     // Class histogram: per-class instance count, shallow total, retained total
     let class_count = g.class_names.len();
@@ -119,9 +123,7 @@ pub fn system_overview(g: &Graph) -> String {
         }
         inst_count[ci] += 1;
         shallow_total[ci] += g.shallow[i] as u64;
-        if !g.has_same_class_ancestor[i] {
-            class_retained[ci] += g.retained[i];
-        }
+        class_retained[ci] += g.retained[i];
     }
 
     // Second pass: for each class object, add its retained to the class it represents
@@ -137,9 +139,7 @@ pub fn system_overview(g: &Graph) -> String {
         if ci >= class_count {
             continue;
         }
-        if !g.has_same_class_ancestor[i] {
-            class_retained[ci] += g.retained[i];
-        }
+        class_retained[ci] += g.retained[i];
     }
 
     // Sort classes by retained desc, take top 50

@@ -45,8 +45,8 @@ pub fn compute_dominators(
             break;
         }
 
-        // Iterate in RPO order (skip index 0 which the spec processes starting at 1)
-        for rpo_idx in 1..rpo.rpo_order.len() {
+        // Iterate ALL nodes in RPO order (rpo_order contains only real nodes, vroot excluded)
+        for rpo_idx in 0..rpo.rpo_order.len() {
             let b = rpo.rpo_order[rpo_idx] as usize;
 
             let mut new_idom: u32 = if vr_adjacent[b] { vroot } else { UNDEFINED };
@@ -63,11 +63,8 @@ pub fn compute_dominators(
                 let pred_raw = prev.wrapping_add(delta);
                 prev = pred_raw;
 
-                // Skip excluded edges (high bit set)
-                if pred_raw & 0x8000_0000 != 0 {
-                    continue;
-                }
-                let pred = pred_raw as usize;
+                // Strip excluded-edge marker (high bit) — CHK processes all predecessors
+                let pred = (pred_raw & 0x7fff_ffff) as usize;
 
                 // Skip if pred is not yet processed / unreachable
                 if idom[pred] == UNDEFINED {

@@ -35,6 +35,9 @@ pub struct Graph {
     // contiguous and delta-encode well.
     pub inb_offsets: Vec<u32>,
     pub inb_data: Vec<u8>,
+    /// Number of GC roots added synthetically (system class roots, etc.)
+    /// Reported GC roots = gc_root_indices.len() - synthetic_root_count
+    pub synthetic_root_count: usize,
     // Filled by later passes
     pub idom: Vec<u32>,
     pub retained: Vec<u64>,
@@ -120,12 +123,11 @@ fn class_obj_shallow(ci: &ClassInfo, ptr_size: usize, ref_size: usize) -> u32 {
 fn build_obj_field_offsets(
     class_addr: u64,
     class_map: &HashMap<u64, ClassInfo>,
-    ref_size: usize,
+    id_size: usize,  // HPROF instance data always uses id_size bytes for Object refs
     cache: &mut HashMap<u64, Vec<(usize, u64)>>, // addr -> Vec<(offset, target_class_hint)>
 ) -> Vec<usize> {
-    // We need the chain of ClassInfo from subclass to root, collecting fields top-down
-    // but HPROF data layout has subclass fields first.
-    // So we walk: class → super → super2 → ... and collect field offsets in order.
+    // Walk class hierarchy: subclass fields first, then super, super2, ...
+    // HPROF INSTANCE_DUMP data always stores references as id_size bytes (not refSize).
     let mut chain: Vec<u64> = Vec::new();
     let mut cur = class_addr;
     loop {
@@ -144,7 +146,8 @@ fn build_obj_field_offsets(
     for &caddr in &chain {
         let ci = match class_map.get(&caddr) { Some(c) => c, None => break };
         for (_, t) in &ci.fields {
-            let fsize = if *t == HprofType::Object { ref_size } else { t.byte_size() };
+            // HPROF data uses id_size for Object refs regardless of compressed OOPs
+            let fsize = if *t == HprofType::Object { id_size } else { t.byte_size() };
             if *t == HprofType::Object {
                 offsets.push(byte_offset);
             }
@@ -477,6 +480,51 @@ impl Pass2 {
                 }
             }
         }
+        // ── addSystemClassRootsIfMissing: boot-loader non-array classes not yet roots ─
+        let mut synthetic_root_count = 0usize;
+        for (&caddr, ci) in &p1.class_map {
+            if ci.loader_id != 0 { continue; }
+            let is_array = p1.strings.get(&ci.name_id)
+                .map(|n| n.starts_with('['))
+                .unwrap_or(false);
+            if is_array { continue; }
+            if let Some(idx) = p1.id_map.index_of(caddr) {
+                if !gc_root_set.contains(&(idx as u32)) {
+                    gc_root_set.insert(idx as u32);
+                    synthetic_root_count += 1;
+                }
+            }
+        }
+
+        // ── Resolve thread→local synthetic edges ─────────────────────────
+        let mut synthetic_edges: Vec<(u32, u32)> = Vec::new();
+        for &(thread_serial, local_addr) in &p1.thread_local_pairs {
+            let thread_obj_addr = match p1.thread_serial_to_obj_id.get(&thread_serial) {
+                Some(&a) => a,
+                None => continue,
+            };
+            let thread_idx = match p1.id_map.index_of(thread_obj_addr) {
+                Some(i) => i as u32,
+                None => continue,
+            };
+            let local_idx = match p1.id_map.index_of(local_addr) {
+                Some(i) => i as u32,
+                None => continue,
+            };
+            if thread_idx != local_idx {
+                synthetic_edges.push((thread_idx, local_idx));
+            }
+        }
+        // Dedup synthetic edges (same thread may reference same local multiple times)
+        synthetic_edges.sort_unstable();
+        synthetic_edges.dedup();
+
+        // Add synthetic edge degrees to out_degree/in_degree
+        for &(src, dst) in &synthetic_edges {
+            out_degree[src as usize] += 1;
+            in_degree[dst as usize] += 1;
+        }
+
         let gc_root_indices: Vec<u32> = gc_root_set.into_iter().collect();
 
         // ── Phase 3: Build forward CSR via prefix sum + fill pass ────────
@@ -538,6 +586,16 @@ impl Pass2 {
             }
         }
 
+        // ── Add synthetic thread→local edges to fwd and inb ─────────────
+        for &(src, dst) in &synthetic_edges {
+            let pos = fwd_cursor[src as usize] as usize;
+            if pos < fwd_targets.len() {
+                fwd_targets[pos] = dst;
+                fwd_cursor[src as usize] += 1;
+            }
+            inb_lists[dst as usize].push(src);
+        }
+
         // ── Phase 4: Build inbound CSR ────────────────────────────────────
         let mut inb_offsets: Vec<u32> = Vec::with_capacity(n + 1);
         let mut inb_data: Vec<u8> = Vec::new();
@@ -576,6 +634,7 @@ impl Pass2 {
             fwd_targets,
             inb_offsets,
             inb_data,
+            synthetic_root_count,
             idom: Vec::new(),
             retained: Vec::new(),
             has_same_class_ancestor: Vec::new(),
@@ -827,20 +886,20 @@ impl Pass2 {
                     // Edges from Object-type fields
                     let offsets = field_offset_cache
                         .entry(class_id)
-                        .or_insert_with(|| build_obj_field_offsets(class_id, class_map, ref_size, &mut HashMap::new()))
+                        .or_insert_with(|| build_obj_field_offsets(class_id, class_map, id_size as usize, &mut HashMap::new()))
                         .clone();
 
                     // Get excluded field offsets for this class (fix #4: memoized per sub-pass)
                     let excl_offsets = excl_offset_cache
                         .entry(class_id)
-                        .or_insert_with(|| Self::compute_excluded_field_offsets(class_id, class_map, strings, ref_size))
+                        .or_insert_with(|| Self::compute_excluded_field_offsets(class_id, class_map, strings, id_size as usize))
                         .clone();
 
                     let _ = excl_offsets; // used only in fill_heap_2b for edge exclusion flag
 
                     for off in &offsets {
-                        if *off + ref_size <= scratch.len() {
-                            let ref_val = read_ref(&scratch[*off..], ref_size);
+                        if *off + id_size as usize <= scratch.len() {
+                            let ref_val = read_ref(&scratch[*off..], id_size as usize);
                             if ref_val != 0 {
                                 if let Some(dst) = id_map.index_of(ref_val) {
                                     out_degree[src_idx] += 1;
@@ -870,17 +929,12 @@ impl Pass2 {
                     // Fix shallow size for object arrays
                     shallow[src_idx] = obj_array_shallow(count, ptr_size, ref_size);
 
-                    // Fix class_idx: synthesize "[Lelem_class_name;" or "[java/lang/Object;"
-                    let elem_name = if let Some(ci) = class_map.get(&elem_class_id) {
+                    // elem_class_id is the array's class (e.g. "[Ljava/lang/Double;"), not the element type
+                    let arr_name = if let Some(ci) = class_map.get(&elem_class_id) {
                         strings.get(&ci.name_id).cloned()
-                            .unwrap_or_else(|| format!("unknown@{elem_class_id:#x}"))
+                            .unwrap_or_else(|| "[Ljava/lang/Object;".to_string())
                     } else {
-                        "java/lang/Object".to_string()
-                    };
-                    let arr_name = if elem_name.starts_with('[') {
-                        format!("[{elem_name}")
-                    } else {
-                        format!("[L{elem_name};")
+                        "[Ljava/lang/Object;".to_string()
                     };
                     class_idx[src_idx] = get_class_name_idx(arr_name);
 
@@ -934,7 +988,7 @@ impl Pass2 {
         class_id: u64,
         class_map: &HashMap<u64, ClassInfo>,
         strings: &HashMap<u64, String>,
-        ref_size: usize,
+        id_size: usize,  // HPROF instance data uses id_size for Object refs
     ) -> Vec<usize> {
         let mut excl = Vec::new();
         let mut chain: Vec<u64> = Vec::new();
@@ -954,7 +1008,8 @@ impl Pass2 {
             let ci = match class_map.get(caddr) { Some(c) => c, None => break };
             let cname = strings.get(&ci.name_id).map(|s| s.as_str()).unwrap_or("");
             for &(fname_id, t) in &ci.fields {
-                let fsize = if t == HprofType::Object { ref_size } else { t.byte_size() };
+                // HPROF data uses id_size for Object refs regardless of compressed OOPs
+                let fsize = if t == HprofType::Object { id_size } else { t.byte_size() };
                 if t == HprofType::Object {
                     let fname = strings.get(&fname_id).map(|s| s.as_str()).unwrap_or("");
                     if is_excluded_field(cname, fname) {
@@ -1071,22 +1126,22 @@ impl Pass2 {
                     // Edge: instance → class object
                     add_edge!(src_idx, class_id, false);
 
-                    // Edges from Object-type fields
+                    // Edges from Object-type fields (offsets use id_size; HPROF data stores refs as id_size bytes)
                     let offsets = field_offset_cache
                         .entry(class_id)
-                        .or_insert_with(|| build_obj_field_offsets(class_id, class_map, ref_size, &mut HashMap::new()))
+                        .or_insert_with(|| build_obj_field_offsets(class_id, class_map, id_size as usize, &mut HashMap::new()))
                         .clone();
 
                     // Memoized excluded field offsets (fix #4)
                     let excl_offsets = excl_offset_cache
                         .entry(class_id)
-                        .or_insert_with(|| Self::compute_excluded_field_offsets(class_id, class_map, strings, ref_size))
+                        .or_insert_with(|| Self::compute_excluded_field_offsets(class_id, class_map, strings, id_size as usize))
                         .clone();
                     let excl_set: std::collections::HashSet<usize> = excl_offsets.into_iter().collect();
 
                     for off in &offsets {
-                        if *off + ref_size <= scratch.len() {
-                            let ref_val = read_ref(&scratch[*off..], ref_size);
+                        if *off + id_size as usize <= scratch.len() {
+                            let ref_val = read_ref(&scratch[*off..], id_size as usize);
                             let excl = excl_set.contains(off);
                             add_edge!(src_idx, ref_val, excl);
                         }
@@ -1363,4 +1418,284 @@ mod tests {
         let fwd_edge_count: usize = g.fwd_offsets.windows(2).map(|w| (w[1]-w[0]) as usize).sum();
         assert!(fwd_edge_count > g.n / 2, "suspiciously few edges: {} for {} nodes", fwd_edge_count, g.n);
     }
+
+    #[test]
+    fn debug_double_edges() {
+        use crate::rpo_dfs::rpo_dfs;
+        if !std::path::Path::new(DUMP).exists() { return; }
+        let p1 = Pass1::run(DUMP).unwrap();
+        let g = Pass2::build(DUMP, p1).unwrap();
+
+        let double_arr_name = "[Ljava/lang/Double;";
+        let double_name = "java/lang/Double";
+        let double_arr_cidx = g.class_names.iter().position(|n| n == double_arr_name);
+        let double_cidx = g.class_names.iter().position(|n| n == double_name);
+
+        eprintln!("Double[] class idx: {:?}", double_arr_cidx);
+        eprintln!("Double class idx: {:?}", double_cidx);
+
+        if let (Some(da_idx), Some(d_idx)) = (double_arr_cidx, double_cidx) {
+            let double_arr_objs: Vec<usize> = (0..g.n)
+                .filter(|&i| g.class_idx[i] as usize == da_idx).collect();
+            let double_objs: Vec<usize> = (0..g.n)
+                .filter(|&i| g.class_idx[i] as usize == d_idx).collect();
+            eprintln!("Double[] count: {}", double_arr_objs.len());
+            eprintln!("Double count: {}", double_objs.len());
+
+            if let Some(&first_da) = double_arr_objs.first() {
+                let start = g.fwd_offsets[first_da] as usize;
+                let end = g.fwd_offsets[first_da+1] as usize;
+                eprintln!("First Double[] (idx={}) has {} forward edges", first_da, end - start);
+                for &tgt in &g.fwd_targets[start..end.min(start+5)] {
+                    let cname = g.class_names.get(g.class_idx[tgt as usize] as usize).map(|s| s.as_str()).unwrap_or("?");
+                    eprintln!("  -> idx={} class={}", tgt, cname);
+                }
+            }
+
+            let rpo = rpo_dfs(g.n, &g.gc_root_indices, &g.fwd_offsets, &g.fwd_targets);
+            let double_reachable = double_objs.iter().filter(|&&i| rpo.rpo_pos[i] >= 0).count();
+            let double_arr_reachable = double_arr_objs.iter().filter(|&&i| rpo.rpo_pos[i] >= 0).count();
+            eprintln!("Double reachable: {}/{}", double_reachable, double_objs.len());
+            eprintln!("Double[] reachable: {}/{}", double_arr_reachable, double_arr_objs.len());
+        }
+    }
 }
+
+    #[test]
+    fn debug_class_idx_for_arrays() {
+        let dump = "/home/i560383/test-heapdumps/dump_0_fj-kmeans.hprof";
+        if !std::path::Path::new(dump).exists() { return; }
+        let p1 = Pass1::run(dump).unwrap();
+        let g = Pass2::build(dump, p1).unwrap();
+        // Count objects per class in pass2
+        let mut class_counts: Vec<u64> = vec![0; g.class_names.len()];
+        for &ci in &g.class_idx {
+            if (ci as usize) < class_counts.len() {
+                class_counts[ci as usize] += 1;
+            }
+        }
+        // Find top classes by count
+        let mut sorted: Vec<(u64, usize)> = class_counts.iter().enumerate().map(|(i,&c)| (c, i)).collect();
+        sorted.sort_unstable_by(|a,b| b.0.cmp(&a.0));
+        eprintln!("Top 15 classes in pass2 graph:");
+        for (count, idx) in sorted.iter().take(15) {
+            eprintln!("  {:>10} {}", count, g.class_names.get(*idx).map(|s| s.as_str()).unwrap_or("?"));
+        }
+        // Check specifically what class objects are assigned to obj arrays
+        let arr_count = g.class_idx.iter().filter(|&&ci| {
+            g.class_names.get(ci as usize).map(|n| n.starts_with('[') && n.contains("java/lang/Double")).unwrap_or(false)
+        }).count();
+        eprintln!("Objects with Double[] class name: {}", arr_count);
+    }
+
+    #[test]
+    fn debug_double_arr_class_name() {
+        let dump = "/home/i560383/test-heapdumps/dump_0_fj-kmeans.hprof";
+        if !std::path::Path::new(dump).exists() { return; }
+        let p1 = Pass1::run(dump).unwrap();
+        let g = Pass2::build(dump, p1).unwrap();
+        // Find an obj_array with Double in the name
+        for (idx, name) in g.class_names.iter().enumerate() {
+            if name.contains("Double") && name.contains('[') {
+                let count = g.class_idx.iter().filter(|&&ci| ci as usize == idx).count();
+                eprintln!("class idx {} name='{}' count={}", idx, name, count);
+            }
+        }
+    }
+
+    #[test]
+    fn debug_root_reachability() {
+        use crate::rpo_dfs::rpo_dfs;
+        let dump = "/home/i560383/test-heapdumps/dump_0_fj-kmeans.hprof";
+        if !std::path::Path::new(dump).exists() { return; }
+        let p1 = Pass1::run(dump).unwrap();
+        let g = Pass2::build(dump, p1).unwrap();
+        
+        let rpo = rpo_dfs(g.n, &g.gc_root_indices, &g.fwd_offsets, &g.fwd_targets);
+        
+        // Check class distribution of reachable vs unreachable
+        let mut reachable_by_class: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+        let mut unreachable_by_class: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+        for i in 0..g.n {
+            let cname = g.class_names.get(g.class_idx[i] as usize).cloned().unwrap_or_else(|| "?".to_string());
+            if rpo.rpo_pos[i] >= 0 {
+                *reachable_by_class.entry(cname).or_insert(0) += 1;
+            } else {
+                *unreachable_by_class.entry(cname).or_insert(0) += 1;
+            }
+        }
+        eprintln!("Top unreachable classes:");
+        let mut unr: Vec<(u64, &String)> = unreachable_by_class.iter().map(|(k,&v)| (v,k)).collect();
+        unr.sort_unstable_by(|a,b| b.0.cmp(&a.0));
+        for (count, name) in unr.iter().take(10) {
+            eprintln!("  {:>10} {}", count, name);
+        }
+        eprintln!("Top reachable classes:");
+        let mut rch: Vec<(u64, &String)> = reachable_by_class.iter().map(|(k,&v)| (v,k)).collect();
+        rch.sort_unstable_by(|a,b| b.0.cmp(&a.0));
+        for (count, name) in rch.iter().take(10) {
+            eprintln!("  {:>10} {}", count, name);
+        }
+        // Check how many GC roots are in the "reachable" set
+        let roots_reachable = g.gc_root_indices.iter().filter(|&&ri| rpo.rpo_pos[ri as usize] >= 0).count();
+        eprintln!("GC roots reachable: {}/{}", roots_reachable, g.gc_root_indices.len());
+        // Sample first few GC roots and their edges
+        for &ri in g.gc_root_indices.iter().take(5) {
+            let start = g.fwd_offsets[ri as usize] as usize;
+            let end = g.fwd_offsets[ri as usize + 1] as usize;
+            let cname = g.class_names.get(g.class_idx[ri as usize] as usize).map(|s| s.as_str()).unwrap_or("?");
+            eprintln!("  root {} class={} edges={}", ri, cname, end - start);
+        }
+    }
+
+    #[test]
+    fn debug_forkjoin_edges() {
+        use crate::rpo_dfs::rpo_dfs;
+        let dump = "/home/i560383/test-heapdumps/dump_0_fj-kmeans.hprof";
+        if !std::path::Path::new(dump).exists() { return; }
+        let p1 = crate::pass1::Pass1::run(dump).unwrap();
+        let g = Pass2::build(dump, p1).unwrap();
+        
+        // Find JavaKMeans objects and check their edges
+        let kmeans_cidx = g.class_names.iter().position(|n| n.contains("JavaKMeans") || n.contains("FjKmeans"));
+        let fjpool_cidx = g.class_names.iter().position(|n| n.contains("WorkQueue"));
+        eprintln!("JavaKMeans class idx: {:?} WorkQueue: {:?}", kmeans_cidx, fjpool_cidx);
+        
+        // Check first JavaKMeans/FjKmeans object edges
+        if let Some(cidx) = kmeans_cidx {
+            let objects: Vec<usize> = (0..g.n).filter(|&i| g.class_idx[i] as usize == cidx).collect();
+            eprintln!("JavaKMeans objects count: {}", objects.len());
+            for &obj in objects.iter().take(3) {
+                let start = g.fwd_offsets[obj] as usize;
+                let end = g.fwd_offsets[obj+1] as usize;
+                eprintln!("  obj {} edges={}", obj, end - start);
+                for &tgt in &g.fwd_targets[start..end.min(start+10)] {
+                    let cname = g.class_names.get(g.class_idx[tgt as usize] as usize).map(|s| s.as_str()).unwrap_or("?");
+                    eprintln!("    -> {} ({})", tgt, cname);
+                }
+            }
+        }
+        
+        // Check gc roots reaching Double[]
+        let rpo = rpo_dfs(g.n, &g.gc_root_indices, &g.fwd_offsets, &g.fwd_targets);
+        let double_arr_cidx = g.class_names.iter().position(|n| n == "[Ljava/lang/Double;");
+        if let Some(dacidx) = double_arr_cidx {
+            let reachable_arrs = (0..g.n).filter(|&i| g.class_idx[i] as usize == dacidx && rpo.rpo_pos[i] >= 0).count();
+            let total_arrs = (0..g.n).filter(|&i| g.class_idx[i] as usize == dacidx).count();
+            eprintln!("Double[] reachable: {}/{}", reachable_arrs, total_arrs);
+        }
+    }
+
+    #[test] 
+    fn debug_idom_stats() {
+        use crate::rpo_dfs::rpo_dfs;
+        use crate::dominator::compute_dominators;
+        let dump = "/home/i560383/test-heapdumps/dump_0_fj-kmeans.hprof";
+        if !std::path::Path::new(dump).exists() { return; }
+        let p1 = crate::pass1::Pass1::run(dump).unwrap();
+        let g = Pass2::build(dump, p1).unwrap();
+        let rpo = rpo_dfs(g.n, &g.gc_root_indices, &g.fwd_offsets, &g.fwd_targets);
+        let idom = compute_dominators(g.n, &rpo, &g.gc_root_indices, &g.inb_offsets, &g.inb_data);
+        let rpo_reachable = rpo.rpo_order.len();
+        let idom_defined = idom.iter().filter(|&&x| x != u32::MAX).count();
+        let vroot_children = idom.iter().filter(|&&x| x == g.n as u32).count();
+        eprintln!("rpo_reachable={} idom_defined={} vroot_children={}", rpo_reachable, idom_defined, vroot_children);
+    }
+
+    #[test]
+    fn debug_undefined_idom() {
+        use crate::rpo_dfs::rpo_dfs;
+        use crate::dominator::compute_dominators;
+        let dump = "/home/i560383/test-heapdumps/dump_0_fj-kmeans.hprof";
+        if !std::path::Path::new(dump).exists() { return; }
+        let p1 = crate::pass1::Pass1::run(dump).unwrap();
+        let g = Pass2::build(dump, p1).unwrap();
+        let rpo = rpo_dfs(g.n, &g.gc_root_indices, &g.fwd_offsets, &g.fwd_targets);
+        let idom = compute_dominators(g.n, &rpo, &g.gc_root_indices, &g.inb_offsets, &g.inb_data);
+        
+        // Find first reachable node with undefined idom
+        let undef = u32::MAX;
+        let mut found = 0usize;
+        for i in 0..g.n {
+            if rpo.rpo_pos[i] > 0 && idom[i] == undef {
+                let cname = g.class_names.get(g.class_idx[i] as usize).map(|s| s.as_str()).unwrap_or("?");
+                if found < 5 {
+                    eprintln!("Undefined idom: i={} class={} rpo_pos={}", i, cname, rpo.rpo_pos[i]);
+                    // Show predecessors
+                    let byte_start = g.inb_offsets[i] as usize;
+                    let byte_end = g.inb_offsets[i+1] as usize;
+                    let mut pos = byte_start;
+                    let mut prev: u32 = 0;
+                    let mut pred_count = 0usize;
+                    let mut all_undefined = true;
+                    let mut all_not_reachable = true;
+                    while pos < byte_end && pred_count < 8 {
+                        let (delta, consumed) = crate::vbyte::decode_one(&g.inb_data[pos..]);
+                        pos += consumed;
+                        let pred_raw = prev.wrapping_add(delta);
+                        prev = pred_raw;
+                        if pred_raw & 0x8000_0000 != 0 { continue; }
+                        let pred = pred_raw as usize;
+                        if pred < g.n {
+                            let pred_idom = idom[pred];
+                            let pred_rpo = rpo.rpo_pos[pred];
+                            if pred_idom != undef { all_undefined = false; }
+                            if pred_rpo > 0 { all_not_reachable = false; }
+                            eprintln!("  pred={} idom={} rpo_pos={}", pred, pred_idom, pred_rpo);
+                        }
+                        pred_count += 1;
+                    }
+                    eprintln!("  all_undefined={} all_not_reachable={}", all_undefined, all_not_reachable);
+                }
+                found += 1;
+            }
+        }
+        eprintln!("Total with undefined idom but reachable: {}", found);
+    }
+
+    #[test]
+    fn debug_inb_for_289() {
+        use crate::rpo_dfs::rpo_dfs;
+        let dump = "/home/i560383/test-heapdumps/dump_0_fj-kmeans.hprof";
+        if !std::path::Path::new(dump).exists() { return; }
+        let p1 = crate::pass1::Pass1::run(dump).unwrap();
+        let g = Pass2::build(dump, p1).unwrap();
+        let rpo = rpo_dfs(g.n, &g.gc_root_indices, &g.fwd_offsets, &g.fwd_targets);
+        
+        // Check node 289's forward edges (who points to it)
+        let target_node = 289usize;
+        eprintln!("Node 289 class: {}", g.class_names.get(g.class_idx[289] as usize).unwrap_or(&"?".to_string()));
+        eprintln!("Node 289 rpo_pos: {}", rpo.rpo_pos[289]);
+        eprintln!("Node 289 dfs_parent: {}", rpo.dfs_parent[289]);
+        
+        // Who has 289 in their forward edge list?
+        let mut parents_in_fwd = Vec::new();
+        for src in 0..g.n {
+            let start = g.fwd_offsets[src] as usize;
+            let end = g.fwd_offsets[src+1] as usize;
+            if g.fwd_targets[start..end].contains(&(target_node as u32)) {
+                parents_in_fwd.push(src);
+                if parents_in_fwd.len() >= 10 { break; }
+            }
+        }
+        eprintln!("Nodes with fwd edge → 289: {}", parents_in_fwd.len());
+        for p in &parents_in_fwd {
+            let cname = g.class_names.get(g.class_idx[*p] as usize).map(|s| s.as_str()).unwrap_or("?");
+            eprintln!("  src={} class={} rpo_pos={}", p, cname, rpo.rpo_pos[*p]);
+        }
+        
+        // Check inbound CSR for 289
+        let byte_start = g.inb_offsets[289] as usize;
+        let byte_end = g.inb_offsets[290] as usize;
+        eprintln!("Node 289 inb bytes: {} ({} bytes)", byte_end - byte_start, byte_end - byte_start);
+        let mut pos = byte_start;
+        let mut prev: u32 = 0;
+        while pos < byte_end {
+            let (delta, consumed) = crate::vbyte::decode_one(&g.inb_data[pos..]);
+            pos += consumed;
+            let pred_raw = prev.wrapping_add(delta);
+            prev = pred_raw;
+            let pred = pred_raw & 0x7fffffff;
+            eprintln!("  inb pred_raw={} pred={} rpo_pos={}", pred_raw, pred, rpo.rpo_pos[pred as usize]);
+        }
+    }
