@@ -147,51 +147,51 @@ impl Pass1 {
         let mut order: Vec<u32> = (0..n as u32).collect();
         order.sort_unstable_by_key(|&i| tmp_addrs[i as usize]);
 
-        // Build id_map + a keep-mask (false at a duplicate address).
+        // Build id_map while compacting `order` in place to keep only the
+        // first `order` entry at each distinct address (dedup). No separate
+        // keep-mask (was a full Vec<bool>, ~0.5 GB @514M): we overwrite
+        // order[write] <= order[rank] as we go, then truncate to m. The
+        // gathers below then iterate the compacted order with no per-rank
+        // branch.
         let mut id_map = IdMap::with_capacity(n);
-        let mut keep: Vec<bool> = vec![false; n];
         let mut prev_addr = u64::MAX;
-        for (rank, &i) in order.iter().enumerate() {
+        let mut write = 0usize;
+        for rank in 0..order.len() {
+            let i = order[rank];
             let a = tmp_addrs[i as usize];
             if a != prev_addr {
                 id_map.push(a);
-                keep[rank] = true;
+                order[write] = i;
+                write += 1;
                 prev_addr = a;
             }
         }
+        order.truncate(write);
         id_map.sort_and_dedup(); // already sorted; marks it done
         let m = id_map.len();
         drop(tmp_addrs);
 
         // Gather each parallel array in its own pass, then free the
         // source buffer immediately — only one tmp/output pair is
-        // resident at a time, trimming the pass1 transient peak.
+        // resident at a time, trimming the pass1 transient peak. `order`
+        // is now the compacted (unique, sorted) index list of length m.
         let mut class_ids: Vec<u64> = Vec::with_capacity(m);
-        for (rank, &i) in order.iter().enumerate() {
-            if keep[rank] { class_ids.push(tmp_class_ids[i as usize]); }
-        }
+        for &i in &order { class_ids.push(tmp_class_ids[i as usize]); }
         drop(tmp_class_ids);
 
         let mut shallow_sizes: Vec<u32> = Vec::with_capacity(m);
-        for (rank, &i) in order.iter().enumerate() {
-            if keep[rank] { shallow_sizes.push(tmp_shallow[i as usize]); }
-        }
+        for &i in &order { shallow_sizes.push(tmp_shallow[i as usize]); }
         drop(tmp_shallow);
 
         let mut kind: Vec<u8> = Vec::with_capacity(m);
-        for (rank, &i) in order.iter().enumerate() {
-            if keep[rank] { kind.push(tmp_kind[i as usize]); }
-        }
+        for &i in &order { kind.push(tmp_kind[i as usize]); }
         drop(tmp_kind);
 
         let mut elem_count: Vec<u32> = Vec::with_capacity(m);
-        for (rank, &i) in order.iter().enumerate() {
-            if keep[rank] { elem_count.push(tmp_elem_count[i as usize]); }
-        }
+        for &i in &order { elem_count.push(tmp_elem_count[i as usize]); }
         drop(tmp_elem_count);
 
         drop(order);
-        drop(keep);
 
         Ok(Pass1 {
             strings,
