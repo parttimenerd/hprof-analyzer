@@ -57,7 +57,6 @@ pub fn build_dom_children_csr(n: usize, idom: &[u32]) -> (Vec<u32>, Vec<u32>) {
 /// `(retained, has_same_class_ancestor)` both of length n.
 pub fn compute_retained(
     n: usize,
-    rpo_order: Vec<u32>,
     idom: &[u32],
     shallow: &[u32],
     class_idx: &[u32],
@@ -69,28 +68,17 @@ pub fn compute_retained(
     let vroot = n as u32;
     let undef = u32::MAX;
 
-    // ── Retained size: reverse RPO accumulation ────────────────────────────
-    // Initialize retained[v] = shallow[v] for all real objects.
+    // ── Retained size: dom-tree post-order fold (fused into the hasSame DFS) ─
+    // Initialize retained[v] = shallow[v] for all real objects. The subtree
+    // rollup (retained[idom[v]] += retained[v]) happens on the DFS pop branch
+    // below — a valid post-order over the dominator tree, bit-exact to the old
+    // reverse-RPO loop (u64 add; each child finalized before flowing to parent).
+    // This removes the ~2GB rpo_order array from the inbound+dominator peaks.
     let mut retained: Vec<u64> = shallow.iter().map(|&s| s as u64).collect();
 
-    // Process from last to first in rpo_order (leaves before parents).
-    for &v in rpo_order.iter().rev() {
-        let parent = idom[v as usize];
-        // Skip unreachable (undef) or parent is vroot (no retained slot for vroot).
-        if parent == undef || parent == vroot {
-            continue;
-        }
-        retained[parent as usize] += retained[v as usize];
-    }
-    drop(rpo_order); // idle for the entire hasSame DFS -> free its ~2GB now
-    crate::trace::probe("retained: after size accumulation (rpo_order dropped, CSR shared)");
-
-    // ── hasSameClassAncestor: forward DFS of dominator tree ────────────────
+    // ── hasSameClassAncestor + size rollup: post-order DFS of dominator tree ─
     // The dominator-children CSR (child_off/child_tgt) is built ONCE by
-    // build_dom_children_csr and shared with report::leak_suspects (was rebuilt
-    // in each). idom is still read above for size accumulation.
-    let _ = idom;
-
+    // build_dom_children_csr and shared with report::leak_suspects.
     crate::trace::probe("retained: before hasSame DFS");
     // Iterative DFS over the dominator tree starting from vroot.
     let mut has_same = crate::bitset::Bitset::with_len(n);
@@ -163,7 +151,12 @@ pub fn compute_retained(
             stk_cls.push(cls);
             stk_ci.push(ci);
         } else {
-            // All children of v processed — restore saved state and pop.
+            // All children of v processed — roll up retained size into idom[v]
+            // (subtree total now final), then restore saved state and pop.
+            let parent = idom[v as usize];
+            if parent != undef && parent != vroot {
+                retained[parent as usize] += retained[v as usize];
+            }
             let cls = stk_cls[top];
             let ci  = stk_ci[top];
             if cls != undef && (cls as usize) < class_count {
@@ -194,13 +187,12 @@ mod tests {
     #[test]
     fn chain_retained() {
         let n = 3;
-        let rpo_order = vec![0u32, 1, 2];
         let idom = vec![3u32, 0, 1, 3];
         let shallow = vec![10u32, 20, 30];
         let class_idx = vec![0u32, 0, 0];
         let class_obj_class_idx = std::collections::HashMap::<u32, u32>::new();
         let (retained, _has_same) =
-            { let (co, ct) = build_dom_children_csr(n, &idom); compute_retained(n, rpo_order, &idom, &shallow, &class_idx, 1, &class_obj_class_idx, &co, &ct) };
+            { let (co, ct) = build_dom_children_csr(n, &idom); compute_retained(n, &idom, &shallow, &class_idx, 1, &class_obj_class_idx, &co, &ct) };
         assert_eq!(retained[0], 60, "0 retains all 3");
         assert_eq!(retained[1], 50, "1 retains 1+2");
         assert_eq!(retained[2], 30, "2 retains itself");
@@ -210,13 +202,12 @@ mod tests {
     #[test]
     fn diamond_retained() {
         let n = 4;
-        let rpo_order = vec![0u32, 1, 2, 3];
         let idom = vec![4u32, 0, 0, 0, 4]; // idom[4]=4 vroot self-loop
         let shallow = vec![1u32, 2, 3, 4];
         let class_idx = vec![0u32, 0, 0, 0];
         let class_obj_class_idx = std::collections::HashMap::<u32, u32>::new();
         let (retained, _) =
-            { let (co, ct) = build_dom_children_csr(n, &idom); compute_retained(n, rpo_order, &idom, &shallow, &class_idx, 1, &class_obj_class_idx, &co, &ct) };
+            { let (co, ct) = build_dom_children_csr(n, &idom); compute_retained(n, &idom, &shallow, &class_idx, 1, &class_obj_class_idx, &co, &ct) };
         // 3 propagates to 0, 1 propagates to 0, 2 propagates to 0
         // retained[0] = 1 + 2 + 3 + 4 = 10
         assert_eq!(retained[0], 10);
@@ -229,14 +220,13 @@ mod tests {
     #[test]
     fn has_same_class_ancestor() {
         let n = 3;
-        let rpo_order = vec![0u32, 1, 2];
         let idom = vec![3u32, 0, 1, 3];
         let shallow = vec![10u32, 20, 30];
         // class 0: nodes 0 and 2; class 1: node 1
         let class_idx = vec![0u32, 1, 0];
         let class_obj_class_idx = std::collections::HashMap::<u32, u32>::new();
         let (_, has_same) =
-            { let (co, ct) = build_dom_children_csr(n, &idom); compute_retained(n, rpo_order, &idom, &shallow, &class_idx, 2, &class_obj_class_idx, &co, &ct) };
+            { let (co, ct) = build_dom_children_csr(n, &idom); compute_retained(n, &idom, &shallow, &class_idx, 2, &class_obj_class_idx, &co, &ct) };
         assert!(!has_same.get(0), "node 0 has no class-0 ancestor");
         assert!(!has_same.get(1), "node 1 has no class-1 ancestor");
         assert!(has_same.get(2), "node 2 has class-0 ancestor (node 0)");
@@ -251,14 +241,13 @@ mod tests {
         //   2: instance of class 0   (class_idx=0, class_obj_class_idx=MAX)
         // Dominator tree: vroot(3) → 0 → 1 → 2
         let n = 3;
-        let rpo_order = vec![0u32, 1, 2];
         let idom = vec![3u32, 0, 1, 3];
         let shallow = vec![10u32, 20, 30];
         let class_idx = vec![0u32, 1u32, 0u32];
         let mut class_obj_class_idx = std::collections::HashMap::<u32, u32>::new();
         class_obj_class_idx.insert(0u32, 1u32);
         let (_, has_same) =
-            { let (co, ct) = build_dom_children_csr(n, &idom); compute_retained(n, rpo_order, &idom, &shallow, &class_idx, 2, &class_obj_class_idx, &co, &ct) };
+            { let (co, ct) = build_dom_children_csr(n, &idom); compute_retained(n, &idom, &shallow, &class_idx, 2, &class_obj_class_idx, &co, &ct) };
         assert!(!has_same.get(0), "node 0 has no ancestor of class 0 (nor class-obj for any class)");
         // node 1 has class 1; its ancestor node 0 is the class-object FOR class 1
         assert!(has_same.get(1), "node 1 has class-object-for-class-1 as ancestor");

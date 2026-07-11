@@ -124,7 +124,7 @@ fn run(input: &str, output: Option<&str>, verbose: bool, compress: cvec::Codec) 
     log(verbose, "compress-cold", t.elapsed().as_secs_f64());
 
     let t = Instant::now();
-    let mut rpo = rpo_dfs::rpo_dfs(g.n, &g.gc_root_indices, &g.fwd_offsets, &g.fwd_targets);
+    let rpo = rpo_dfs::rpo_dfs(g.n, &g.gc_root_indices, &g.fwd_offsets, &g.fwd_targets);
     log(verbose, "rpo", t.elapsed().as_secs_f64());
 
     // Free forward CSR (no longer needed after DFS)
@@ -149,10 +149,9 @@ fn run(input: &str, output: Option<&str>, verbose: bool, compress: cvec::Codec) 
     drop(inb_offsets);
     drop(inb_data);
 
-    // rpo's dfn/vertex/parent_pre are dead after dominator; only rpo_order is
-    // still needed (by retained's size loop). Move it out and free the rest
-    // (~5GB @514M) before the retained peak window.
-    let rpo_order = std::mem::take(&mut rpo.rpo_order);
+    // rpo (dfn/vertex/parent_pre) is fully dead after dominator — retained's
+    // size rollup now rides the hasSame dom-tree DFS (no rpo_order). Free ~6GB
+    // before the retained peak window.
     drop(rpo);
 
     // Build the dominator-children CSR ONCE and share it across compute_retained
@@ -179,7 +178,6 @@ fn run(input: &str, output: Option<&str>, verbose: bool, compress: cvec::Codec) 
     let class_count = g.class_names.len();
     let (retained, has_same) = retained::compute_retained(
         g.n,
-        rpo_order,
         &g.idom,
         &g.shallow,
         &g.class_idx,

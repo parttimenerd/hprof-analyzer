@@ -10,8 +10,6 @@
 /// convention flipped.
 
 pub struct RpoResult {
-    /// Real nodes (indices 0..n-1) in reverse post-order; virtual root excluded.
-    pub rpo_order: Vec<u32>,
     /// `parent_pre[i]` = pre-order number of the DFS-tree parent of the node
     /// whose pre-order number is `i` (i.e. of `vertex[i]`).
     /// `parent_pre[0]` = 0 (virtual root's parent is itself).
@@ -34,7 +32,6 @@ pub fn rpo_dfs(n: usize, roots: &[u32], fwd_off: &[u32], fwd_tgt: &[u32]) -> Rpo
     let mut dfn = vec![u32::MAX; n + 1];
     let mut vertex: Vec<u32> = Vec::with_capacity(n + 1);
     let mut dfs_count: u32 = 0;
-    let mut post_order: Vec<u32> = Vec::with_capacity(n + 1);
 
     // Explicit stacks: parallel arrays (node, child_cursor)
     let mut node_stack: Vec<u32> = Vec::with_capacity(1024);
@@ -90,23 +87,13 @@ pub fn rpo_dfs(n: usize, roots: &[u32], fwd_off: &[u32], fwd_tgt: &[u32]) -> Rpo
         }
 
         if !pushed {
-            // All children processed → node finishes, add to post-order
-            post_order.push(top);
+            // All children processed → node finishes, pop it.
             node_stack.pop();
             cursor_stack.pop();
         }
     }
 
-    // RPO = reverse of post-order, excluding the virtual root. The vroot
-    // finishes last, so it is the final entry of ; reversing in
-    // place puts it first, and truncating drops it — no second n-length
-    // allocation (reuses the post_order buffer as rpo_order).
-    debug_assert_eq!(post_order.last().copied(), Some(vroot));
-    post_order.pop(); // drop vroot (finishes last) — O(1), no element shift
-    post_order.reverse();
-    let rpo_order: Vec<u32> = post_order;
-
-    RpoResult { rpo_order, parent_pre, dfn, vertex }
+    RpoResult { parent_pre, dfn, vertex }
 }
 
 #[cfg(test)]
@@ -119,12 +106,16 @@ mod tests {
         let fwd_off = vec![0u32, 2, 3, 4, 4];
         let fwd_tgt = vec![1u32, 2, 3, 3];
         let r = rpo_dfs(4, &[0u32], &fwd_off, &fwd_tgt);
-        assert_eq!(r.rpo_order.len(), 4); // all 4 nodes reachable
-        let p3 = r.rpo_order.iter().position(|&x| x == 3).unwrap();
-        let p1 = r.rpo_order.iter().position(|&x| x == 1).unwrap();
-        let p2 = r.rpo_order.iter().position(|&x| x == 2).unwrap();
-        assert!(p3 > p1, "node 3 must come after node 1 in RPO");
-        assert!(p3 > p2, "node 3 must come after node 2 in RPO");
+        // All 4 nodes reachable → each has a real pre-order number.
+        for v in 0..4usize {
+            assert_ne!(r.dfn[v], u32::MAX, "node {v} must be reachable");
+        }
+        // Pre-order from root 0: 0 first, then its subtree. Node 3 is reached
+        // via node 1 (0's first child) before node 2 is opened, so
+        // dfn[0] < dfn[1] < dfn[3] < dfn[2].
+        assert!(r.dfn[0] < r.dfn[1], "root 0 visited before node 1");
+        assert!(r.dfn[1] < r.dfn[3], "node 3 discovered via node 1");
+        assert!(r.dfn[3] < r.dfn[2], "node 3 visited before node 2 (DFS)");
     }
 
     #[test]
@@ -133,8 +124,9 @@ mod tests {
         let fwd_off = vec![0u32, 1, 1, 1];
         let fwd_tgt = vec![1u32];
         let r = rpo_dfs(3, &[0u32], &fwd_off, &fwd_tgt);
-        assert_eq!(r.rpo_order.len(), 2);
-        // node 2 unreachable → never assigned a DFS number
+        // nodes 0,1 reachable; node 2 unreachable (no DFS number).
+        assert_ne!(r.dfn[0], u32::MAX);
+        assert_ne!(r.dfn[1], u32::MAX);
         assert_eq!(r.dfn[2], u32::MAX);
     }
 
