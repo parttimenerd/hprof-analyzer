@@ -69,7 +69,7 @@ pub fn compute_dominators(
 
         // For each predecessor v of w:
         //   if v is reachable, u = eval(dfn[v]); if semi[u] < semi[i], semi[i] = semi[u]
-        let mut process_pred = |pred_node: usize,
+        let process_pred = |pred_node: usize,
                                 semi: &mut [u32],
                                 ancestor: &mut [u32],
                                 label: &mut [u32]| {

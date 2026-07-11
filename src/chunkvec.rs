@@ -16,7 +16,6 @@ const CHUNK_MASK: usize = CHUNK_LEN - 1;
 
 pub struct ChunkU32 {
     chunks: Vec<Vec<u32>>,
-    len: usize,
 }
 
 impl ChunkU32 {
@@ -30,7 +29,7 @@ impl ChunkU32 {
             chunks.push(vec![0u32; this]);
             remaining -= this;
         }
-        ChunkU32 { chunks, len }
+        ChunkU32 { chunks }
     }
 
     #[inline(always)]
@@ -38,15 +37,6 @@ impl ChunkU32 {
         let c = idx >> CHUNK_LOG;
         let o = idx & CHUNK_MASK;
         self.chunks[c][o] = val;
-    }
-
-    #[inline(always)]
-    pub fn get(&self, idx: usize) -> u32 {
-        self.chunks[idx >> CHUNK_LOG][idx & CHUNK_MASK]
-    }
-
-    pub fn len(&self) -> usize {
-        self.len
     }
 
     /// Free every chunk whose slots are entirely below `boundary` (exclusive).

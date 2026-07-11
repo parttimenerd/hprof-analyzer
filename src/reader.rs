@@ -1,7 +1,6 @@
 use std::{
     fs::File,
     io::{self, BufReader, Read},
-    path::Path,
 };
 use flate2::read::GzDecoder;
 
@@ -209,6 +208,7 @@ impl HprofReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     const DUMP_PLAIN: &str = "/home/i560383/test-heapdumps/dump_0_fj-kmeans.hprof";
     const DUMP_GZ: &str =

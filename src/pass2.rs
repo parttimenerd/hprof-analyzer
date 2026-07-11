@@ -14,8 +14,6 @@ use crate::{
 
 pub struct Graph {
     pub n: usize,
-    pub id_size: u8,
-    pub ref_size: u8,
     pub format: String,
     pub file_size: u64,
     pub source_name: String,
@@ -27,9 +25,6 @@ pub struct Graph {
     // Forward CSR
     pub fwd_offsets: Vec<u32>,
     pub fwd_targets: Vec<u32>,
-    // Inbound CSR (VByte delta-encoded)
-    pub inb_offsets: Vec<u32>,
-    pub inb_data: Vec<u8>,
     /// Number of GC roots added synthetically (system class roots, etc.)
     /// Reported GC roots = gc_root_indices.len() - synthetic_root_count
     pub synthetic_root_count: usize,
@@ -758,8 +753,6 @@ impl Pass2 {
 
         let graph = Graph {
             n,
-            id_size,
-            ref_size: ref_size as u8,
             format: p1.format,
             file_size: p1.file_size,
             source_name,
@@ -770,8 +763,6 @@ impl Pass2 {
             class_obj_class_idx,
             fwd_offsets,
             fwd_targets,
-            inb_offsets: Vec::new(),
-            inb_data: Vec::new(),
             synthetic_root_count,
             idom: Vec::new(),
             retained: Vec::new(),
@@ -1123,7 +1114,7 @@ impl Pass2 {
                     }
                 }
                 heap::PRIM_ARRAY_DUMP => {
-                    let addr = r.id()?;
+                    let _addr = r.id()?;
                     r.skip(4)?;
                     let count = r.u4()? as u64;
                     let elem_type = r.u1()?;
@@ -1329,7 +1320,7 @@ fn read_id(chunk: &[u8], id_size: u8) -> u64 {
     }
 }
 
-fn read_id_from_reader(r: &mut HprofReader, id_size: u8) -> io::Result<u64> {
+fn read_id_from_reader(r: &mut HprofReader, _id_size: u8) -> io::Result<u64> {
     r.id()
 }
 
