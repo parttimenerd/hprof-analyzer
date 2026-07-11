@@ -66,7 +66,7 @@ pub fn compute_retained(
     class_obj_class_idx: &std::collections::HashMap<u32, u32>,
     child_off: &[u32],
     child_tgt: &[u32],
-) -> (Vec<u64>, Vec<bool>) {
+) -> (Vec<u64>, crate::bitset::Bitset) {
     let vroot = n as u32;
     let undef = u32::MAX;
 
@@ -94,7 +94,7 @@ pub fn compute_retained(
 
     crate::trace::probe("retained: before hasSame DFS");
     // Iterative DFS over the dominator tree starting from vroot.
-    let mut has_same = vec![false; n];
+    let mut has_same = crate::bitset::Bitset::with_len(n);
 
     // class_to_last_depth[c] = stack depth (sp) when class c was last pushed (0 = not on stack)
     // class_obj_depth[c]     = stack depth when class-object for class c was pushed (0 = not on stack)
@@ -138,7 +138,7 @@ pub fn compute_retained(
             // Check and update class_to_last_depth for the child's own class.
             let saved_depth = if cls != undef && (cls as usize) < class_count {
                 if class_to_last_depth[cls as usize] > 0 || class_obj_depth[cls as usize] > 0 {
-                    has_same[child as usize] = true;
+                    has_same.set(child as usize);
                 }
                 let sd = class_to_last_depth[cls as usize];
                 class_to_last_depth[cls as usize] = sp_new;
@@ -238,9 +238,9 @@ mod tests {
         let class_obj_class_idx = std::collections::HashMap::<u32, u32>::new();
         let (_, has_same) =
             { let (co, ct) = build_dom_children_csr(n, &idom); compute_retained(n, rpo_order, &idom, &shallow, &class_idx, 2, &class_obj_class_idx, &co, &ct) };
-        assert!(!has_same[0], "node 0 has no class-0 ancestor");
-        assert!(!has_same[1], "node 1 has no class-1 ancestor");
-        assert!(has_same[2], "node 2 has class-0 ancestor (node 0)");
+        assert!(!has_same.get(0), "node 0 has no class-0 ancestor");
+        assert!(!has_same.get(1), "node 1 has no class-1 ancestor");
+        assert!(has_same.get(2), "node 2 has class-0 ancestor (node 0)");
     }
 
     // hasSameClassAncestor: class object is ancestor
@@ -260,10 +260,10 @@ mod tests {
         class_obj_class_idx.insert(0u32, 1u32);
         let (_, has_same) =
             { let (co, ct) = build_dom_children_csr(n, &idom); compute_retained(n, rpo_order, &idom, &shallow, &class_idx, 2, &class_obj_class_idx, &co, &ct) };
-        assert!(!has_same[0], "node 0 has no ancestor of class 0 (nor class-obj for any class)");
+        assert!(!has_same.get(0), "node 0 has no ancestor of class 0 (nor class-obj for any class)");
         // node 1 has class 1; its ancestor node 0 is the class-object FOR class 1
-        assert!(has_same[1], "node 1 has class-object-for-class-1 as ancestor");
+        assert!(has_same.get(1), "node 1 has class-object-for-class-1 as ancestor");
         // node 2 has class 0; its ancestor node 0 also has class 0 → same class ancestor
-        assert!(has_same[2], "node 2 has class-0 ancestor (node 0)");
+        assert!(has_same.get(2), "node 2 has class-0 ancestor (node 0)");
     }
 }

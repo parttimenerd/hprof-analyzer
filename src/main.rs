@@ -1,6 +1,7 @@
 mod dominator;
 mod id_map;
 mod pass1;
+mod bitset;
 mod pass2;
 mod reader;
 mod report;
@@ -182,7 +183,7 @@ fn run(input: &str, output: Option<&str>, verbose: bool, compress: cvec::Codec) 
     let t = Instant::now();
     let mut md = String::new();
     md.push_str(&report::system_overview(&g));
-    g.has_same_class_ancestor = Vec::new(); // only system_overview reads it
+    g.has_same_class_ancestor = crate::bitset::Bitset::default(); // only system_overview reads it
     md.push_str(&report::leak_suspects(&g, &dc_off, &dc_tgt));
     drop(dc_off);
     drop(dc_tgt);

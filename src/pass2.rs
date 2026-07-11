@@ -36,7 +36,7 @@ pub struct Graph {
     // Filled by later passes
     pub idom: Vec<u32>,
     pub retained: Vec<u64>,
-    pub has_same_class_ancestor: Vec<bool>,
+    pub has_same_class_ancestor: crate::bitset::Bitset,
 }
 
 /// Deferred inbound-CSR construction. Built by `Pass2::build` with everything
@@ -757,7 +757,7 @@ impl Pass2 {
             synthetic_root_count,
             idom: Vec::new(),
             retained: Vec::new(),
-            has_same_class_ancestor: Vec::new(),
+            has_same_class_ancestor: crate::bitset::Bitset::default(),
         };
 
         // Package the deferred inbound-CSR construction. Moves id_map,
