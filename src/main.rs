@@ -109,9 +109,14 @@ fn run(input: &str, output: Option<&str>, verbose: bool, compress: cvec::Codec) 
     // across the rpo -> inbound -> dominator peak window, freeing their dense
     // Vecs and holding only small blobs. Restored just before each consumer.
     let t = Instant::now();
-    // Free each dense cold array the instant its blob exists, so shallow and
-    // class_idx are never both dense at once (they otherwise stack ~2GB on the
-    // fwd CSR + id_map during the second compress -> the compress-cold peak).
+    // Compress id_map FIRST: it is the largest cold array (~4.1GB dense u64)
+    // and sits dense atop the ~6GB fwd CSR while shallow/class_idx compress.
+    // The compress-cold RSS max is during shallow's compression, so freeing
+    // id_map's 4.1GB before that removes it from the binding peak. id_map is
+    // delta-vbyte+deflate (sorted addrs, fast), not a slow permutation deflate.
+    inbound.compress_id_map(compress)?;
+    // Then shallow/class_idx, freeing each dense Vec the instant its blob
+    // exists so the two are never both dense at once.
     let shallow_c = cvec::CompressedU32::compress(&g.shallow, compress)?;
     if compress != cvec::Codec::None {
         g.shallow = Vec::new();
@@ -120,7 +125,6 @@ fn run(input: &str, output: Option<&str>, verbose: bool, compress: cvec::Codec) 
     if compress != cvec::Codec::None {
         g.class_idx = Vec::new();
     }
-    inbound.compress_id_map(compress)?;
     log(verbose, "compress-cold", t.elapsed().as_secs_f64());
 
     let t = Instant::now();
