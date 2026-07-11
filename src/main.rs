@@ -149,19 +149,25 @@ fn run(input: &str, output: Option<&str>, verbose: bool, compress: cvec::Codec) 
     let rpo_order = std::mem::take(&mut rpo.rpo_order);
     drop(rpo);
 
-    // Restore shallow/class_idx (dominator has freed the inbound CSR, so this
-    // decompress spike lands outside the peak window).
+    // Build the dominator-children CSR ONCE and share it across compute_retained
+    // (hasSame DFS) and report::leak_suspects (both previously rebuilt it, ~6GB
+    // redundant @514M). Built BEFORE restoring shallow/class_idx: the build's
+    // transient (child_deg+child_off+child_tgt ~8GB, child_deg freed inside)
+    // must not coexist with the 4GB dense shallow+class_idx -> that stacking
+    // was the ~22GB global peak. It reads only idom.
+    crate::trace::probe("main: before build_dom_children_csr");
+    let (dc_off, dc_tgt) = retained::build_dom_children_csr(g.n, &g.idom);
+    crate::trace::probe("main: after build_dom_children_csr");
+
+    // Restore shallow/class_idx now that the CSR-build transient has freed
+    // child_deg (dominator already freed the inbound CSR too).
     if compress != cvec::Codec::None {
         g.shallow = shallow_c.restore()?;
         g.class_idx = class_idx_c.restore()?;
     }
     drop(shallow_c);
     drop(class_idx_c);
-
-    // Build the dominator-children CSR ONCE and share it across compute_retained
-    // (hasSame DFS) and report::leak_suspects (both previously rebuilt it, ~6GB
-    // redundant @514M).
-    let (dc_off, dc_tgt) = retained::build_dom_children_csr(g.n, &g.idom);
+    crate::trace::probe("main: after restore shallow/class_idx");
 
     let t = Instant::now();
     let class_count = g.class_names.len();
