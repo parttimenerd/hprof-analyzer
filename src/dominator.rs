@@ -39,13 +39,12 @@ pub fn compute_dominators(
     let count = rpo.vertex.len();
 
     // ── Work arrays in pre-order index space (0..count) ──────────────────
-    // parent[i]  = pre-order number of DFS-tree parent of vertex[i]
+    // parent info is read directly from rpo.parent_pre (no local copy)
     // semi[i]    = pre-order number of semidominator of vertex[i]
     // ancestor/label = union-find with path compression (dead after Phase 1)
     // idom_pre[i]= pre-order number of immediate dominator of vertex[i]; not
     //              allocated separately — reuses the `ancestor` buffer after
     //              Phase 1 (see rebind below), saving one count-length u32 array.
-    let mut parent = vec![0u32; count];
     let mut semi = vec![0u32; count];
     let mut ancestor = vec![0u32; count]; // 0 = no ancestor (unlinked)
     let mut label = vec![0u32; count];
@@ -55,7 +54,6 @@ pub fn compute_dominators(
         semi[i] = i as u32;
         label[i] = i as u32;
         ancestor[i] = 0;
-        parent[i] = rpo.parent_pre[i];
     }
 
     // vr_adjacent: which nodes have an implicit virtual-root predecessor (GC roots).
@@ -109,7 +107,7 @@ pub fn compute_dominators(
 
         // Link w to its parent in the forest
         // ancestor[i] = parent[i]; (path-compression union-find)
-        link(i as u32, parent[i], &mut ancestor);
+        link(i as u32, rpo.parent_pre[i], &mut ancestor);
     }
 
     // Phase 1 done: `ancestor` and `label` are dead. Reuse `ancestor`'s
@@ -122,7 +120,7 @@ pub fn compute_dominators(
     // whose pre-order <= semi[w].
     idom_pre[0] = 0;
     for i in 1..count {
-        let mut d = parent[i];
+        let mut d = rpo.parent_pre[i];
         while d > semi[i] {
             d = idom_pre[d as usize];
         }
