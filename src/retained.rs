@@ -36,6 +36,7 @@ pub fn compute_retained(
         }
         retained[parent as usize] += retained[v as usize];
     }
+    crate::trace::probe("retained: after size accumulation");
 
     // ── hasSameClassAncestor: forward DFS of dominator tree ────────────────
     // Build children CSR from idom.
@@ -55,8 +56,11 @@ pub fn compute_retained(
         child_off.push(child_off[i] + child_deg[i]);
     }
     let total_children = *child_off.last().unwrap() as usize;
+    crate::trace::probe("retained: after child_off prefix-sum (child_deg still live)");
     let mut child_tgt: Vec<u32> = vec![u32::MAX; total_children];
+    crate::trace::probe("retained: after child_tgt alloc");
     let mut cursor: Vec<u32> = child_off[..=n].to_vec();
+    crate::trace::probe("retained: after cursor clone");
     for u in 0..n {
         let p = idom[u];
         if p == undef || p == u as u32 {
@@ -66,6 +70,7 @@ pub fn compute_retained(
         cursor[p as usize] += 1;
     }
 
+    crate::trace::probe("retained: before hasSame DFS");
     // Iterative DFS over the dominator tree starting from vroot.
     let mut has_same = vec![false; n];
 
@@ -154,6 +159,7 @@ pub fn compute_retained(
             stk_ci.pop();
         }
     }
+    crate::trace::probe("retained: after hasSame DFS");
 
     (retained, has_same)
 }

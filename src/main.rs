@@ -7,6 +7,7 @@ mod report;
 mod retained;
 mod rpo_dfs;
 mod cvec;
+mod trace;
 mod types;
 mod vbyte;
 
@@ -25,6 +26,7 @@ fn main() {
         match arg.as_str() {
             "--dump-json" => dump_json = true,
             "--verbose" | "-v" => verbose = true,
+            "--trace-rss" => trace::set_enabled(true),
             s if s.starts_with("--compress=") => {
                 let val = &s["--compress=".len()..];
                 match cvec::Codec::parse(val) {
@@ -40,7 +42,7 @@ fn main() {
     }
 
     if positional.is_empty() {
-        eprintln!("usage: hprof-analyzer [--verbose] [--dump-json] [--compress=none|deflate9] <file.hprof[.gz]> [output.md]");
+        eprintln!("usage: hprof-analyzer [--verbose] [--dump-json] [--trace-rss] [--compress=none|deflate9] <file.hprof[.gz]> [output.md]");
         process::exit(1);
     }
 
