@@ -2,6 +2,7 @@ mod dominator;
 mod id_map;
 mod pass1;
 mod bitset;
+mod chunkvec;
 mod pass2;
 mod reader;
 mod report;

@@ -107,7 +107,9 @@ impl InboundBuilder {
         };
 
         // -- Alloc flat inbound array (deferred until after rpo freed its arrays) --
-        let mut inb_flat: Vec<u32> = vec![0u32; total_inb as usize];
+        // Chunked backing store so Phase-4 can free consumed chunks incrementally,
+        // avoiding the inb_flat+inb_data coexistence that was the global RSS peak.
+        let mut inb_flat = crate::chunkvec::ChunkU32::zeroed(total_inb as usize);
 
         // -- Sub-pass 2b scan: fill INBOUND edges only --
         {
@@ -147,7 +149,7 @@ impl InboundBuilder {
 
         // Synthetic thread->local INBOUND edges.
         for &(src, dst) in &synthetic_edges {
-            inb_flat[in_cursors[dst as usize] as usize] = src;
+            inb_flat.set(in_cursors[dst as usize] as usize, src);
             in_cursors[dst as usize] += 1;
         }
 
@@ -157,21 +159,25 @@ impl InboundBuilder {
         inb_offsets.push(0u32);
         // CSR is contiguous: start[i] = end of node i-1 = in_cursors[i-1] after fill.
         let mut start = 0usize;
+        // Reusable per-node scratch: copy each node's inbound slice out of the
+        // chunked store so we can sort/dedup it, then free chunks behind us.
+        let mut nb: Vec<u32> = Vec::new();
+        // Free consumed chunks every ~256 M slots crossed (one chunk).
+        let mut next_free_at: usize = 1 << 26;
         for i in 0..n {
             let end = in_cursors[i] as usize; // in_cursors[i] = end offset after fill
-            let slice = &mut inb_flat[start..end];
+            inb_flat.copy_range(start, end, &mut nb);
             // Sort by stripped value (lower 31 bits), ignoring excluded-edge high-bit flag.
-            // Delta-encode stripped values only -- dominator processes all predecessors equally.
-            slice.sort_unstable_by_key(|&v| v & 0x7fff_ffff);
+            nb.sort_unstable_by_key(|&v| v & 0x7fff_ffff);
             // Dedup by stripped value (in-place)
             let unique_end = {
-                if slice.is_empty() {
+                if nb.is_empty() {
                     0
                 } else {
                     let mut write = 1usize;
-                    for read in 1..slice.len() {
-                        if (slice[read] & 0x7fff_ffff) != (slice[write - 1] & 0x7fff_ffff) {
-                            slice[write] = slice[read];
+                    for read in 1..nb.len() {
+                        if (nb[read] & 0x7fff_ffff) != (nb[write - 1] & 0x7fff_ffff) {
+                            nb[write] = nb[read];
                             write += 1;
                         }
                     }
@@ -180,14 +186,19 @@ impl InboundBuilder {
             };
             // Delta-encode stripped values
             let mut prev: u32 = 0;
-            for &v in &slice[..unique_end] {
+            for &v in &nb[..unique_end] {
                 let stripped = v & 0x7fff_ffff;
                 vbyte::encode(stripped - prev, &mut inb_data);
                 prev = stripped;
             }
             inb_offsets.push(inb_data.len() as u32);
             start = end;
+            if start >= next_free_at {
+                inb_flat.free_below(start);
+                next_free_at = start + (1 << 26);
+            }
         }
+        drop(nb);
         drop(inb_flat);
         drop(in_cursors); // inbound CSR done; end-offset cursors no longer needed
 
@@ -687,7 +698,7 @@ impl Pass2 {
         {
             let mut r = HprofReader::open(path)?;
             let mut scratch: Vec<u8> = Vec::with_capacity(4096);
-            let mut inb_flat_stub: Vec<u32> = Vec::new();
+            let mut inb_flat_stub = crate::chunkvec::ChunkU32::zeroed(0);
             let mut in_degree_stub: Vec<u32> = Vec::new();
             loop {
                 let tag = match r.u1() {
@@ -980,7 +991,7 @@ impl Pass2 {
         do_inb: bool,
         fwd_targets: &mut Vec<u32>,
         fwd_offsets: &mut Vec<u32>,
-        inb_flat: &mut Vec<u32>,
+        inb_flat: &mut crate::chunkvec::ChunkU32,
         in_degree: &mut Vec<u32>,
         scratch: &mut Vec<u8>,
     ) -> io::Result<()> {
@@ -1004,7 +1015,7 @@ impl Pass2 {
                             } else {
                                 src as u32
                             };
-                            inb_flat[in_degree[dst] as usize] = inb_val;
+                            inb_flat.set(in_degree[dst] as usize, inb_val);
                             in_degree[dst] += 1;
                         }
                     }
@@ -1143,7 +1154,7 @@ impl Pass2 {
         do_inb: bool,
         fwd_targets: &mut Vec<u32>,
         fwd_offsets: &mut Vec<u32>,
-        inb_flat: &mut Vec<u32>,
+        inb_flat: &mut crate::chunkvec::ChunkU32,
         in_degree: &mut Vec<u32>,
     ) -> io::Result<u64> {
         let ids = id_size as u64;
@@ -1169,7 +1180,7 @@ impl Pass2 {
                             fwd_offsets[src] += 1;
                         }
                         if do_inb {
-                            inb_flat[in_degree[dst] as usize] = src as u32;
+                            inb_flat.set(in_degree[dst] as usize, src as u32);
                             in_degree[dst] += 1;
                         }
                     }
