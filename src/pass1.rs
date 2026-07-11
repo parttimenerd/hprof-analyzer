@@ -28,7 +28,13 @@ pub struct Pass1 {
     pub class_map: HashMap<u64, ClassInfo>,
     pub class_serial_to_addr: HashMap<u32, u64>,
     pub id_map: IdMap,
-    pub class_ids: Vec<u64>,
+    /// Per-object class reference, u32-interned to halve this array (was
+    /// Vec<u64> class addresses @514M = 4.1GB). For kind 0/1/3 it is an index
+    /// into class_addr_table (the distinct class-object addresses); for kind 2
+    /// (primitive array) it is the raw element type code (0-11).
+    pub class_ids: Vec<u32>,
+    /// Distinct class-object addresses; class_ids[i] indexes this for kind 0/1/3.
+    pub class_addr_table: Vec<u64>,
     pub shallow_sizes: Vec<u32>,
     /// Per-object kind: 0=instance, 1=obj_array, 2=prim_array, 3=class_obj
     pub kind: Vec<u8>,
@@ -62,7 +68,11 @@ impl Pass1 {
         let mut class_map: HashMap<u64, ClassInfo> = HashMap::new();
         let mut class_serial_to_addr: HashMap<u32, u64> = HashMap::new();
         let mut tmp_addrs: Vec<u64> = Vec::new();
-        let mut tmp_class_ids: Vec<u64> = Vec::new();
+        let mut tmp_class_ids: Vec<u32> = Vec::new();
+        // Intern class addresses to u32 during scan (heaps have < 4G classes;
+        // this dump ~133K). kind 2 stores the raw type code instead.
+        let mut class_addr_table: Vec<u64> = Vec::new();
+        let mut class_addr_to_idx: HashMap<u64, u32> = HashMap::new();
         let mut tmp_shallow: Vec<u32> = Vec::new();
         let mut tmp_kind: Vec<u8> = Vec::new();
         let mut tmp_elem_count: Vec<u32> = Vec::new();
@@ -110,6 +120,8 @@ impl Pass1 {
                         &mut class_map,
                         &mut tmp_addrs,
                         &mut tmp_class_ids,
+                        &mut class_addr_table,
+                        &mut class_addr_to_idx,
                         &mut tmp_shallow,
                         &mut tmp_kind,
                         &mut tmp_elem_count,
@@ -131,10 +143,13 @@ impl Pass1 {
             }
         }
 
-        // Fix up shallow sizes where class wasn't yet seen at scan time
-        for (i, &cid) in tmp_class_ids.iter().enumerate() {
-            if tmp_shallow[i] == 0 {
-                if let Some(ci) = class_map.get(&cid) {
+        // Fix up shallow sizes where class wasn't yet seen at scan time.
+        // tmp_class_ids holds interned indices; resolve to addr for kinds that
+        // reference a class (0=instance, 3=class-obj). kind 1/2 (arrays) skip.
+        for (i, &cidx) in tmp_class_ids.iter().enumerate() {
+            if tmp_shallow[i] == 0 && (tmp_kind[i] == 0 || tmp_kind[i] == 3) {
+                let addr = class_addr_table[cidx as usize];
+                if let Some(ci) = class_map.get(&addr) {
                     tmp_shallow[i] = ci.instance_size;
                 }
             }
@@ -175,7 +190,7 @@ impl Pass1 {
         // source buffer immediately — only one tmp/output pair is
         // resident at a time, trimming the pass1 transient peak. `order`
         // is now the compacted (unique, sorted) index list of length m.
-        let mut class_ids: Vec<u64> = Vec::with_capacity(m);
+        let mut class_ids: Vec<u32> = Vec::with_capacity(m);
         for &i in &order { class_ids.push(tmp_class_ids[i as usize]); }
         drop(tmp_class_ids);
 
@@ -199,6 +214,7 @@ impl Pass1 {
             class_serial_to_addr,
             id_map,
             class_ids,
+            class_addr_table,
             shallow_sizes,
             kind,
             elem_count,
@@ -225,7 +241,9 @@ fn scan_heap_segment(
     mut remaining: u64,
     class_map: &mut HashMap<u64, ClassInfo>,
     tmp_addrs: &mut Vec<u64>,
-    tmp_class_ids: &mut Vec<u64>,
+    tmp_class_ids: &mut Vec<u32>,
+    class_addr_table: &mut Vec<u64>,
+    class_addr_to_idx: &mut HashMap<u64, u32>,
     tmp_shallow: &mut Vec<u32>,
     tmp_kind: &mut Vec<u8>,
     tmp_elem_count: &mut Vec<u32>,
@@ -294,7 +312,14 @@ fn scan_heap_segment(
                 // Class objects must be in id_map so GC roots referencing them resolve correctly
                 // (hprof-redact: scanClassDumpA1 calls state.appendAddress(classId))
                 tmp_addrs.push(class_addr);
-                tmp_class_ids.push(class_addr); // class-of-class resolved later in pass2
+                {
+                    let idx = *class_addr_to_idx.entry(class_addr).or_insert_with(|| {
+                        let n = class_addr_table.len() as u32;
+                        class_addr_table.push(class_addr);
+                        n
+                    });
+                    tmp_class_ids.push(idx); // class-of-class resolved later in pass2
+                }
                 tmp_shallow.push(0);            // pass2 recalculates shallow size for class objects
                 tmp_kind.push(3);
                 tmp_elem_count.push(0);
@@ -307,7 +332,14 @@ fn scan_heap_segment(
                 r.skip(data_len)?;
                 let shallow = class_map.get(&class_id).map(|c| c.instance_size).unwrap_or(0);
                 tmp_addrs.push(addr);
-                tmp_class_ids.push(class_id);
+                {
+                    let idx = *class_addr_to_idx.entry(class_id).or_insert_with(|| {
+                        let n = class_addr_table.len() as u32;
+                        class_addr_table.push(class_id);
+                        n
+                    });
+                    tmp_class_ids.push(idx);
+                }
                 tmp_shallow.push(shallow);
                 tmp_kind.push(0);
                 tmp_elem_count.push(0);
@@ -323,7 +355,14 @@ fn scan_heap_segment(
                 // shallow size: use file id_size for elements (exact formula in pass2/report)
                 let shallow = (ids + ids + 4 + 4 + count * ids) as u32;
                 tmp_addrs.push(addr);
-                tmp_class_ids.push(elem_class_id);
+                {
+                    let idx = *class_addr_to_idx.entry(elem_class_id).or_insert_with(|| {
+                        let n = class_addr_table.len() as u32;
+                        class_addr_table.push(elem_class_id);
+                        n
+                    });
+                    tmp_class_ids.push(idx);
+                }
                 tmp_shallow.push(shallow);
                 tmp_kind.push(1);
                 tmp_elem_count.push(count as u32);
@@ -341,7 +380,7 @@ fn scan_heap_segment(
                 r.skip(count * elem_size)?;
                 let shallow = (ids + ids + 4 + 4 + 1 + count * elem_size) as u32;
                 tmp_addrs.push(addr);
-                tmp_class_ids.push(elem_type_code as u64);
+                tmp_class_ids.push(elem_type_code as u32);
                 tmp_shallow.push(shallow);
                 tmp_kind.push(2);
                 tmp_elem_count.push(count as u32);

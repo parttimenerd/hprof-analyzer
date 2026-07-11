@@ -220,13 +220,19 @@ fn dump_pass1_json(path: &str) -> io::Result<()> {
 
     let mut class_hist: std::collections::HashMap<String, u64> =
         std::collections::HashMap::new();
-    for &cid in &p.class_ids {
-        if let Some(ci) = p.class_map.get(&cid) {
+    for (i, &cidx) in p.class_ids.iter().enumerate() {
+        // class_ids holds interned indices; resolve to addr for kinds that
+        // reference a class object (0=instance, 3=class-obj). arrays skip.
+        if p.kind[i] != 0 && p.kind[i] != 3 {
+            continue;
+        }
+        let addr = p.class_addr_table[cidx as usize];
+        if let Some(ci) = p.class_map.get(&addr) {
             let name = p
                 .strings
                 .get(&ci.name_id)
                 .cloned()
-                .unwrap_or_else(|| format!("unknown@{cid:#x}"));
+                .unwrap_or_else(|| format!("unknown@{addr:#x}"));
             *class_hist.entry(name).or_insert(0) += 1;
         }
     }

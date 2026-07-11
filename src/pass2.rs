@@ -418,17 +418,18 @@ impl Pass2 {
             let sz = match p1.kind[i] {
                 3 => {
                     // Class object: shallow from static fields only, attributed to java.lang.Class.
-                    match p1.class_map.get(&cid) {
+                    let addr = p1.class_addr_table[cid as usize];
+                    match p1.class_map.get(&addr) {
                         Some(ci) => class_obj_shallow(ci, ptr_size, ref_size),
                         None => align_up(ptr_size + ref_size, 8) as u32,
                     }
                 }
                 1 => {
-                    // Object array: cid is the array class id (elem count from pass1).
+                    // Object array: cid is the array class index (elem count from pass1).
                     obj_array_shallow(p1.elem_count[i] as u64, ptr_size, ref_size)
                 }
                 2 => {
-                    // Primitive array: cid is the element type code.
+                    // Primitive array: cid is the raw element type code.
                     let elem_size = HprofType::from_code(cid as u8)
                         .map(|t| t.byte_size())
                         .unwrap_or(1);
@@ -436,8 +437,9 @@ impl Pass2 {
                 }
                 _ => {
                     // Instance: MAT calculateSizeRecursive over the super chain.
-                    if p1.class_map.contains_key(&cid) {
-                        instance_shallow_size(cid, &p1.class_map, ptr_size, ref_size, &mut size_cache)
+                    let addr = p1.class_addr_table[cid as usize];
+                    if p1.class_map.contains_key(&addr) {
+                        instance_shallow_size(addr, &p1.class_map, ptr_size, ref_size, &mut size_cache)
                     } else {
                         align_up(ptr_size + ref_size, 8) as u32
                     }
@@ -481,7 +483,7 @@ impl Pass2 {
                     class_idx[i] = get_or_insert_class(JLC_KEY, &|| "java/lang/Class".to_string());
                 }
                 2 => {
-                    // Primitive array: cid is the element type code.
+                    // Primitive array: cid is the raw element type code.
                     let tc = cid as u8;
                     class_idx[i] = get_or_insert_class(
                         PRIM_KEY_BASE | tc as u64,
@@ -489,21 +491,23 @@ impl Pass2 {
                     );
                 }
                 1 => {
-                    // Object array: cid is the array-class address (loader-distinct).
-                    class_idx[i] = get_or_insert_class(cid, &|| {
+                    // Object array: cid indexes the array-class address (loader-distinct).
+                    let addr = p1.class_addr_table[cid as usize];
+                    class_idx[i] = get_or_insert_class(addr, &|| {
                         p1.class_map
-                            .get(&cid)
+                            .get(&addr)
                             .and_then(|ci| p1.strings.get(&ci.name_id).cloned())
                             .unwrap_or_else(|| "[Ljava/lang/Object;".to_string())
                     });
                 }
                 _ => {
-                    // Instance: cid is the class-object address (loader-distinct).
-                    class_idx[i] = get_or_insert_class(cid, &|| {
+                    // Instance: cid indexes the class-object address (loader-distinct).
+                    let addr = p1.class_addr_table[cid as usize];
+                    class_idx[i] = get_or_insert_class(addr, &|| {
                         p1.class_map
-                            .get(&cid)
+                            .get(&addr)
                             .and_then(|ci| p1.strings.get(&ci.name_id).cloned())
-                            .unwrap_or_else(|| format!("unknown@{cid:#x}"))
+                            .unwrap_or_else(|| format!("unknown@{addr:#x}"))
                     });
                 }
             }
