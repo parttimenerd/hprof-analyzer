@@ -114,8 +114,7 @@ impl InboundBuilder {
             let mut r = HprofReader::open(&path)?;
             let mut scratch: Vec<u8> = Vec::with_capacity(4096);
             let mut fwd_t_stub: Vec<u32> = Vec::new();
-            let mut fwd_c_stub: Vec<u32> = Vec::new();
-            let fwd_offsets_stub: Vec<u32> = Vec::new();
+            let mut fwd_offsets_stub: Vec<u32> = Vec::new();
             loop {
                 let tag = match r.u1() {
                     Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
@@ -129,7 +128,7 @@ impl InboundBuilder {
                             &mut r, id_size, ref_size, length,
                             &id_map, &class_addrs, &field_plans,
                             false, true,
-                            &mut fwd_t_stub, &mut fwd_c_stub, &fwd_offsets_stub,
+                            &mut fwd_t_stub, &mut fwd_offsets_stub,
                             &mut inb_flat, &mut in_cursors, &mut scratch,
                         )?;
                     }
@@ -683,7 +682,8 @@ impl Pass2 {
         // the rpo phase's arrays. The forward fill never touches inb_flat.
         let total_edges = *fwd_offsets.last().unwrap() as usize;
         let mut fwd_targets: Vec<u32> = vec![u32::MAX; total_edges];
-        let mut fwd_cursor: Vec<u32> = fwd_offsets[..n].to_vec();
+        // B3: no fwd_cursor clone. fwd_offsets is advanced in place as the
+        // write cursor during the fill, then restored by right-shift below.
         {
             let mut r = HprofReader::open(path)?;
             let mut scratch: Vec<u8> = Vec::with_capacity(4096);
@@ -702,7 +702,7 @@ impl Pass2 {
                             &mut r, id_size, ref_size, length,
                             &p1.id_map, &class_addrs, &field_plans,
                             true, false,
-                            &mut fwd_targets, &mut fwd_cursor, &fwd_offsets,
+                            &mut fwd_targets, &mut fwd_offsets,
                             &mut inb_flat_stub, &mut in_degree_stub, &mut scratch,
                         )?;
                     }
@@ -711,15 +711,22 @@ impl Pass2 {
                 }
             }
         }
-        // Synthetic thread->local FORWARD edges.
+        // Synthetic thread->local FORWARD edges. Their degrees were added to
+        // out_degree above, so each fits within its node's slice.
         for &(src, dst) in &synthetic_edges {
-            let pos = fwd_cursor[src as usize] as usize;
-            if pos < fwd_offsets[src as usize + 1] as usize {
-                fwd_targets[pos] = dst;
-                fwd_cursor[src as usize] += 1;
-            }
+            let pos = fwd_offsets[src as usize] as usize;
+            fwd_targets[pos] = dst;
+            fwd_offsets[src as usize] += 1;
         }
-        drop(fwd_cursor);
+
+        // B3 restore: each fwd_offsets[i] (i in 0..n) has advanced to node i's
+        // END index; right-shift over (1..=n).rev() so fwd_offsets[node]..
+        // fwd_offsets[node+1] again bounds node's slice. fwd_offsets[n]
+        // (total_edges) was never a cursor and is preserved by starting at n.
+        for i in (1..=n).rev() {
+            fwd_offsets[i] = fwd_offsets[i - 1];
+        }
+        fwd_offsets[0] = 0;
 
         // Prefix-sum in_degree counts → START cursors for the deferred inbound
         // build. in_degree[i] becomes node i's inbound slice START; total_inb
@@ -972,8 +979,7 @@ impl Pass2 {
         do_fwd: bool,
         do_inb: bool,
         fwd_targets: &mut Vec<u32>,
-        fwd_cursor: &mut Vec<u32>,
-        fwd_offsets: &[u32],
+        fwd_offsets: &mut Vec<u32>,
         inb_flat: &mut Vec<u32>,
         in_degree: &mut Vec<u32>,
         scratch: &mut Vec<u8>,
@@ -986,11 +992,10 @@ impl Pass2 {
                     if let Some(dst) = id_map.index_of($dst_addr) {
                         let src = $src as usize;
                         if do_fwd {
-                            let pos = fwd_cursor[src] as usize;
-                            if pos < fwd_offsets[src + 1] as usize {
-                                fwd_targets[pos] = dst as u32;
-                                fwd_cursor[src] += 1;
-                            }
+                            // fwd_offsets[src] is the in-place write cursor.
+                            let pos = fwd_offsets[src] as usize;
+                            fwd_targets[pos] = dst as u32;
+                            fwd_offsets[src] += 1;
                         }
                         if do_inb {
                             // Inbound: store src with/without exclusion flag
@@ -1046,7 +1051,7 @@ impl Pass2 {
                 heap::CLASS_DUMP => {
                     let consumed = Self::fill_class_dump_edges(
                         r, id_size, id_map, do_fwd, do_inb,
-                        fwd_targets, fwd_cursor, fwd_offsets, inb_flat, in_degree,
+                        fwd_targets, fwd_offsets, inb_flat, in_degree,
                     )?;
                     checked_sub!(remaining, consumed);
                 }
@@ -1137,8 +1142,7 @@ impl Pass2 {
         do_fwd: bool,
         do_inb: bool,
         fwd_targets: &mut Vec<u32>,
-        fwd_cursor: &mut Vec<u32>,
-        fwd_offsets: &[u32],
+        fwd_offsets: &mut Vec<u32>,
         inb_flat: &mut Vec<u32>,
         in_degree: &mut Vec<u32>,
     ) -> io::Result<u64> {
@@ -1159,11 +1163,10 @@ impl Pass2 {
                     if let Some(dst) = id_map.index_of($dst_addr) {
                         let src = $src as usize;
                         if do_fwd {
-                            let pos = fwd_cursor[src] as usize;
-                            if pos < fwd_offsets[src + 1] as usize {
-                                fwd_targets[pos] = dst as u32;
-                                fwd_cursor[src] += 1;
-                            }
+                            // fwd_offsets[src] is the in-place write cursor.
+                            let pos = fwd_offsets[src] as usize;
+                            fwd_targets[pos] = dst as u32;
+                            fwd_offsets[src] += 1;
                         }
                         if do_inb {
                             inb_flat[in_degree[dst] as usize] = src as u32;
