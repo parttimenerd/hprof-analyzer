@@ -56,19 +56,27 @@ pub fn compute_retained(
         child_off.push(child_off[i] + child_deg[i]);
     }
     let total_children = *child_off.last().unwrap() as usize;
-    crate::trace::probe("retained: after child_off prefix-sum (child_deg still live)");
+    drop(child_deg);
+    crate::trace::probe("retained: after child_off prefix-sum (child_deg dropped)");
     let mut child_tgt: Vec<u32> = vec![u32::MAX; total_children];
-    crate::trace::probe("retained: after child_tgt alloc");
-    let mut cursor: Vec<u32> = child_off[..=n].to_vec();
-    crate::trace::probe("retained: after cursor clone");
+    crate::trace::probe("retained: after child_tgt alloc (in-place fill, no cursor clone)");
+    // In-place CSR fill: advance child_off[p] itself as the write cursor,
+    // avoiding a ~n-length cursor clone (~2GB @514M). After the fill, child_off[d]
+    // has walked forward to d's END index, so right-shift by one to restore the
+    // canonical offsets where child_off[node]..child_off[node+1] bounds node's
+    // children. Range MUST be 1..=n+1 so child_off[n+1] (vroot's child end) is set.
     for u in 0..n {
         let p = idom[u];
         if p == undef || p == u as u32 {
             continue;
         }
-        child_tgt[cursor[p as usize] as usize] = u as u32;
-        cursor[p as usize] += 1;
+        child_tgt[child_off[p as usize] as usize] = u as u32;
+        child_off[p as usize] += 1;
     }
+    for i in (1..=n + 1).rev() {
+        child_off[i] = child_off[i - 1];
+    }
+    child_off[0] = 0;
 
     crate::trace::probe("retained: before hasSame DFS");
     // Iterative DFS over the dominator tree starting from vroot.
