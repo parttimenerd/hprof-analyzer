@@ -1,3 +1,48 @@
+/// Build the dominator-children CSR from `idom`.
+///
+/// Returns `(child_off, child_tgt)` where `child_off` has length `n+2` (so
+/// `child_off[node]..child_off[node+1]` bounds node's children, and
+/// `child_off[n+1]` bounds vroot's children) and `child_tgt` lists child node
+/// indices grouped by parent. Built once and shared by compute_retained's
+/// hasSame DFS and report::leak_suspects (both previously rebuilt it).
+pub fn build_dom_children_csr(n: usize, idom: &[u32]) -> (Vec<u32>, Vec<u32>) {
+    let undef = u32::MAX;
+    let mut child_deg: Vec<u32> = vec![0u32; n + 1];
+    for u in 0..n {
+        let p = idom[u];
+        if p == undef || p == u as u32 {
+            continue;
+        }
+        child_deg[p as usize] += 1;
+    }
+    let mut child_off: Vec<u32> = Vec::with_capacity(n + 2);
+    child_off.push(0u32);
+    for i in 0..=n {
+        child_off.push(child_off[i] + child_deg[i]);
+    }
+    let total_children = *child_off.last().unwrap() as usize;
+    drop(child_deg);
+    let mut child_tgt: Vec<u32> = vec![u32::MAX; total_children];
+    // In-place CSR fill: advance child_off[p] itself as the write cursor,
+    // avoiding a ~n-length cursor clone (~2GB @514M). After the fill, child_off[d]
+    // has walked forward to d's END index, so right-shift by one to restore the
+    // canonical offsets. Range MUST be 1..=n+1 so child_off[n+1] (vroot's child
+    // end) is set.
+    for u in 0..n {
+        let p = idom[u];
+        if p == undef || p == u as u32 {
+            continue;
+        }
+        child_tgt[child_off[p as usize] as usize] = u as u32;
+        child_off[p as usize] += 1;
+    }
+    for i in (1..=n + 1).rev() {
+        child_off[i] = child_off[i - 1];
+    }
+    child_off[0] = 0;
+    (child_off, child_tgt)
+}
+
 /// Compute retained sizes and the hasSameClassAncestor bitset.
 ///
 /// # Arguments
@@ -19,6 +64,8 @@ pub fn compute_retained(
     class_idx: &[u32],
     class_count: usize,
     class_obj_class_idx: &std::collections::HashMap<u32, u32>,
+    child_off: &[u32],
+    child_tgt: &[u32],
 ) -> (Vec<u64>, Vec<bool>) {
     let vroot = n as u32;
     let undef = u32::MAX;
@@ -36,47 +83,13 @@ pub fn compute_retained(
         }
         retained[parent as usize] += retained[v as usize];
     }
-    crate::trace::probe("retained: after size accumulation");
+    crate::trace::probe("retained: after size accumulation (CSR shared, not rebuilt)");
 
     // ── hasSameClassAncestor: forward DFS of dominator tree ────────────────
-    // Build children CSR from idom.
-    // child_off has length n+2 to support indexing child_off[n+1] for vroot's child end.
-    let mut child_deg: Vec<u32> = vec![0u32; n + 1];
-    for u in 0..n {
-        let p = idom[u];
-        if p == undef || p == u as u32 {
-            continue;
-        }
-        child_deg[p as usize] += 1;
-    }
-
-    let mut child_off: Vec<u32> = Vec::with_capacity(n + 2);
-    child_off.push(0u32);
-    for i in 0..=n {
-        child_off.push(child_off[i] + child_deg[i]);
-    }
-    let total_children = *child_off.last().unwrap() as usize;
-    drop(child_deg);
-    crate::trace::probe("retained: after child_off prefix-sum (child_deg dropped)");
-    let mut child_tgt: Vec<u32> = vec![u32::MAX; total_children];
-    crate::trace::probe("retained: after child_tgt alloc (in-place fill, no cursor clone)");
-    // In-place CSR fill: advance child_off[p] itself as the write cursor,
-    // avoiding a ~n-length cursor clone (~2GB @514M). After the fill, child_off[d]
-    // has walked forward to d's END index, so right-shift by one to restore the
-    // canonical offsets where child_off[node]..child_off[node+1] bounds node's
-    // children. Range MUST be 1..=n+1 so child_off[n+1] (vroot's child end) is set.
-    for u in 0..n {
-        let p = idom[u];
-        if p == undef || p == u as u32 {
-            continue;
-        }
-        child_tgt[child_off[p as usize] as usize] = u as u32;
-        child_off[p as usize] += 1;
-    }
-    for i in (1..=n + 1).rev() {
-        child_off[i] = child_off[i - 1];
-    }
-    child_off[0] = 0;
+    // The dominator-children CSR (child_off/child_tgt) is built ONCE by
+    // build_dom_children_csr and shared with report::leak_suspects (was rebuilt
+    // in each). idom is still read above for size accumulation.
+    let _ = idom;
 
     crate::trace::probe("retained: before hasSame DFS");
     // Iterative DFS over the dominator tree starting from vroot.
@@ -187,7 +200,7 @@ mod tests {
         let class_idx = vec![0u32, 0, 0];
         let class_obj_class_idx = std::collections::HashMap::<u32, u32>::new();
         let (retained, _has_same) =
-            compute_retained(n, &rpo_order, &idom, &shallow, &class_idx, 1, &class_obj_class_idx);
+            { let (co, ct) = build_dom_children_csr(n, &idom); compute_retained(n, &rpo_order, &idom, &shallow, &class_idx, 1, &class_obj_class_idx, &co, &ct) };
         assert_eq!(retained[0], 60, "0 retains all 3");
         assert_eq!(retained[1], 50, "1 retains 1+2");
         assert_eq!(retained[2], 30, "2 retains itself");
@@ -203,7 +216,7 @@ mod tests {
         let class_idx = vec![0u32, 0, 0, 0];
         let class_obj_class_idx = std::collections::HashMap::<u32, u32>::new();
         let (retained, _) =
-            compute_retained(n, &rpo_order, &idom, &shallow, &class_idx, 1, &class_obj_class_idx);
+            { let (co, ct) = build_dom_children_csr(n, &idom); compute_retained(n, &rpo_order, &idom, &shallow, &class_idx, 1, &class_obj_class_idx, &co, &ct) };
         // 3 propagates to 0, 1 propagates to 0, 2 propagates to 0
         // retained[0] = 1 + 2 + 3 + 4 = 10
         assert_eq!(retained[0], 10);
@@ -223,7 +236,7 @@ mod tests {
         let class_idx = vec![0u32, 1, 0];
         let class_obj_class_idx = std::collections::HashMap::<u32, u32>::new();
         let (_, has_same) =
-            compute_retained(n, &rpo_order, &idom, &shallow, &class_idx, 2, &class_obj_class_idx);
+            { let (co, ct) = build_dom_children_csr(n, &idom); compute_retained(n, &rpo_order, &idom, &shallow, &class_idx, 2, &class_obj_class_idx, &co, &ct) };
         assert!(!has_same[0], "node 0 has no class-0 ancestor");
         assert!(!has_same[1], "node 1 has no class-1 ancestor");
         assert!(has_same[2], "node 2 has class-0 ancestor (node 0)");
@@ -245,7 +258,7 @@ mod tests {
         let mut class_obj_class_idx = std::collections::HashMap::<u32, u32>::new();
         class_obj_class_idx.insert(0u32, 1u32);
         let (_, has_same) =
-            compute_retained(n, &rpo_order, &idom, &shallow, &class_idx, 2, &class_obj_class_idx);
+            { let (co, ct) = build_dom_children_csr(n, &idom); compute_retained(n, &rpo_order, &idom, &shallow, &class_idx, 2, &class_obj_class_idx, &co, &ct) };
         assert!(!has_same[0], "node 0 has no ancestor of class 0 (nor class-obj for any class)");
         // node 1 has class 1; its ancestor node 0 is the class-object FOR class 1
         assert!(has_same[1], "node 1 has class-object-for-class-1 as ancestor");

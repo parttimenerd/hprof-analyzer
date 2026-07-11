@@ -151,6 +151,11 @@ fn run(input: &str, output: Option<&str>, verbose: bool, compress: cvec::Codec) 
     drop(shallow_c);
     drop(class_idx_c);
 
+    // Build the dominator-children CSR ONCE and share it across compute_retained
+    // (hasSame DFS) and report::leak_suspects (both previously rebuilt it, ~6GB
+    // redundant @514M).
+    let (dc_off, dc_tgt) = retained::build_dom_children_csr(g.n, &g.idom);
+
     let t = Instant::now();
     let class_count = g.class_names.len();
     let (retained, has_same) = retained::compute_retained(
@@ -161,6 +166,8 @@ fn run(input: &str, output: Option<&str>, verbose: bool, compress: cvec::Codec) 
         &g.class_idx,
         class_count,
         &g.class_obj_class_idx,
+        &dc_off,
+        &dc_tgt,
     );
     g.retained = retained;
     g.has_same_class_ancestor = has_same;
@@ -169,7 +176,9 @@ fn run(input: &str, output: Option<&str>, verbose: bool, compress: cvec::Codec) 
     let t = Instant::now();
     let mut md = String::new();
     md.push_str(&report::system_overview(&g));
-    md.push_str(&report::leak_suspects(&g));
+    md.push_str(&report::leak_suspects(&g, &dc_off, &dc_tgt));
+    drop(dc_off);
+    drop(dc_tgt);
     md.push_str(&report::top_consumers(&g));
     log(verbose, "report", t.elapsed().as_secs_f64());
 

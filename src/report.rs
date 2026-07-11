@@ -241,7 +241,7 @@ pub fn system_overview(g: &Graph) -> String {
 
 const THRESHOLD_PCT: f64 = 10.0;
 
-pub fn leak_suspects(g: &Graph) -> String {
+pub fn leak_suspects(g: &Graph, dc_offsets: &[u32], dc_targets: &[u32]) -> String {
     let n = g.n;
     let undef = u32::MAX;
 
@@ -253,35 +253,8 @@ pub fn leak_suspects(g: &Graph) -> String {
 
     let threshold = (total_shallow as f64 * THRESHOLD_PCT / 100.0) as u64;
 
-    // Build dom_children as a CSR (offsets + targets) to avoid the ~n Vec<Vec>
-    // header overhead (which dominated report-phase peak RSS).
-    let mut dc_offsets: Vec<u32> = vec![0u32; n + 2];
-    for i in 0..n {
-        let d = g.idom[i];
-        if d != undef {
-            dc_offsets[d as usize + 1] += 1;
-        }
-    }
-    for i in 0..(n + 1) {
-        dc_offsets[i + 1] += dc_offsets[i];
-    }
-    let mut dc_targets: Vec<u32> = vec![0u32; dc_offsets[n + 1] as usize];
-    // In-place CSR fill: advance dc_offsets[d] itself as the write cursor
-    // (avoids a separate ~n-length dc_cursor clone, ~2GB @514M). After the
-    // fill, dc_offsets[d] has been walked forward to node d's END index, so
-    // dc_offsets is shifted right by one to restore the canonical offsets
-    // where dc_offsets[node]..dc_offsets[node+1] bounds node's children.
-    for i in 0..n {
-        let d = g.idom[i] as usize;
-        if g.idom[i] != undef {
-            dc_targets[dc_offsets[d] as usize] = i as u32;
-            dc_offsets[d] += 1;
-        }
-    }
-    for i in (1..=n + 1).rev() {
-        dc_offsets[i] = dc_offsets[i - 1];
-    }
-    dc_offsets[0] = 0;
+    // The dominator-children CSR (dc_offsets/dc_targets) is built ONCE in main
+    // by retained::build_dom_children_csr and shared with compute_retained.
     let dom_children = |node: usize| -> &[u32] {
         &dc_targets[dc_offsets[node] as usize..dc_offsets[node + 1] as usize]
     };
