@@ -58,7 +58,7 @@ pub fn build_dom_children_csr(n: usize, idom: &[u32]) -> (Vec<u32>, Vec<u32>) {
 /// `(retained, has_same_class_ancestor)` both of length n.
 pub fn compute_retained(
     n: usize,
-    rpo_order: &[u32],
+    rpo_order: Vec<u32>,
     idom: &[u32],
     shallow: &[u32],
     class_idx: &[u32],
@@ -83,7 +83,8 @@ pub fn compute_retained(
         }
         retained[parent as usize] += retained[v as usize];
     }
-    crate::trace::probe("retained: after size accumulation (CSR shared, not rebuilt)");
+    drop(rpo_order); // idle for the entire hasSame DFS -> free its ~2GB now
+    crate::trace::probe("retained: after size accumulation (rpo_order dropped, CSR shared)");
 
     // ── hasSameClassAncestor: forward DFS of dominator tree ────────────────
     // The dominator-children CSR (child_off/child_tgt) is built ONCE by
@@ -200,7 +201,7 @@ mod tests {
         let class_idx = vec![0u32, 0, 0];
         let class_obj_class_idx = std::collections::HashMap::<u32, u32>::new();
         let (retained, _has_same) =
-            { let (co, ct) = build_dom_children_csr(n, &idom); compute_retained(n, &rpo_order, &idom, &shallow, &class_idx, 1, &class_obj_class_idx, &co, &ct) };
+            { let (co, ct) = build_dom_children_csr(n, &idom); compute_retained(n, rpo_order, &idom, &shallow, &class_idx, 1, &class_obj_class_idx, &co, &ct) };
         assert_eq!(retained[0], 60, "0 retains all 3");
         assert_eq!(retained[1], 50, "1 retains 1+2");
         assert_eq!(retained[2], 30, "2 retains itself");
@@ -216,7 +217,7 @@ mod tests {
         let class_idx = vec![0u32, 0, 0, 0];
         let class_obj_class_idx = std::collections::HashMap::<u32, u32>::new();
         let (retained, _) =
-            { let (co, ct) = build_dom_children_csr(n, &idom); compute_retained(n, &rpo_order, &idom, &shallow, &class_idx, 1, &class_obj_class_idx, &co, &ct) };
+            { let (co, ct) = build_dom_children_csr(n, &idom); compute_retained(n, rpo_order, &idom, &shallow, &class_idx, 1, &class_obj_class_idx, &co, &ct) };
         // 3 propagates to 0, 1 propagates to 0, 2 propagates to 0
         // retained[0] = 1 + 2 + 3 + 4 = 10
         assert_eq!(retained[0], 10);
@@ -236,7 +237,7 @@ mod tests {
         let class_idx = vec![0u32, 1, 0];
         let class_obj_class_idx = std::collections::HashMap::<u32, u32>::new();
         let (_, has_same) =
-            { let (co, ct) = build_dom_children_csr(n, &idom); compute_retained(n, &rpo_order, &idom, &shallow, &class_idx, 2, &class_obj_class_idx, &co, &ct) };
+            { let (co, ct) = build_dom_children_csr(n, &idom); compute_retained(n, rpo_order, &idom, &shallow, &class_idx, 2, &class_obj_class_idx, &co, &ct) };
         assert!(!has_same[0], "node 0 has no class-0 ancestor");
         assert!(!has_same[1], "node 1 has no class-1 ancestor");
         assert!(has_same[2], "node 2 has class-0 ancestor (node 0)");
@@ -258,7 +259,7 @@ mod tests {
         let mut class_obj_class_idx = std::collections::HashMap::<u32, u32>::new();
         class_obj_class_idx.insert(0u32, 1u32);
         let (_, has_same) =
-            { let (co, ct) = build_dom_children_csr(n, &idom); compute_retained(n, &rpo_order, &idom, &shallow, &class_idx, 2, &class_obj_class_idx, &co, &ct) };
+            { let (co, ct) = build_dom_children_csr(n, &idom); compute_retained(n, rpo_order, &idom, &shallow, &class_idx, 2, &class_obj_class_idx, &co, &ct) };
         assert!(!has_same[0], "node 0 has no ancestor of class 0 (nor class-obj for any class)");
         // node 1 has class 1; its ancestor node 0 is the class-object FOR class 1
         assert!(has_same[1], "node 1 has class-object-for-class-1 as ancestor");

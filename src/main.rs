@@ -117,7 +117,7 @@ fn run(input: &str, output: Option<&str>, verbose: bool, compress: cvec::Codec) 
     log(verbose, "compress-cold", t.elapsed().as_secs_f64());
 
     let t = Instant::now();
-    let rpo = rpo_dfs::rpo_dfs(g.n, &g.gc_root_indices, &g.fwd_offsets, &g.fwd_targets);
+    let mut rpo = rpo_dfs::rpo_dfs(g.n, &g.gc_root_indices, &g.fwd_offsets, &g.fwd_targets);
     log(verbose, "rpo", t.elapsed().as_secs_f64());
 
     // Free forward CSR (no longer needed after DFS)
@@ -142,6 +142,12 @@ fn run(input: &str, output: Option<&str>, verbose: bool, compress: cvec::Codec) 
     drop(inb_offsets);
     drop(inb_data);
 
+    // rpo's dfn/vertex/parent_pre are dead after dominator; only rpo_order is
+    // still needed (by retained's size loop). Move it out and free the rest
+    // (~5GB @514M) before the retained peak window.
+    let rpo_order = std::mem::take(&mut rpo.rpo_order);
+    drop(rpo);
+
     // Restore shallow/class_idx (dominator has freed the inbound CSR, so this
     // decompress spike lands outside the peak window).
     if compress != cvec::Codec::None {
@@ -160,7 +166,7 @@ fn run(input: &str, output: Option<&str>, verbose: bool, compress: cvec::Codec) 
     let class_count = g.class_names.len();
     let (retained, has_same) = retained::compute_retained(
         g.n,
-        &rpo.rpo_order,
+        rpo_order,
         &g.idom,
         &g.shallow,
         &g.class_idx,
@@ -176,6 +182,7 @@ fn run(input: &str, output: Option<&str>, verbose: bool, compress: cvec::Codec) 
     let t = Instant::now();
     let mut md = String::new();
     md.push_str(&report::system_overview(&g));
+    g.has_same_class_ancestor = Vec::new(); // only system_overview reads it
     md.push_str(&report::leak_suspects(&g, &dc_off, &dc_tgt));
     drop(dc_off);
     drop(dc_tgt);
