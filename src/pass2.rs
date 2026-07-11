@@ -47,7 +47,11 @@ pub struct InboundBuilder {
     id_size: u8,
     ref_size: usize,
     n: usize,
-    id_map: crate::id_map::IdMap,
+    /// Live id_map as constructed by `build`; taken by `compress_id_map`.
+    id_map: Option<crate::id_map::IdMap>,
+    /// Compressed id_map (blob, element_count); set by `compress_id_map`.
+    id_map_c: Option<(Vec<u8>, usize)>,
+    id_map_codec: crate::cvec::Codec,
     class_addrs: std::collections::HashSet<u64>,
     field_plans: HashMap<u64, FieldPlan>,
     /// Prefix-summed inbound start cursors (in_degree after prefix-sum), len n.
@@ -58,6 +62,20 @@ pub struct InboundBuilder {
 }
 
 impl InboundBuilder {
+    /// Compress the live id_map into a blob and free the dense Vec, so the
+    /// ~4.1GB addr array is off the rpo-phase RSS peak. No-op for Codec::None.
+    pub fn compress_id_map(&mut self, codec: crate::cvec::Codec) -> io::Result<()> {
+        self.id_map_codec = codec;
+        if codec == crate::cvec::Codec::None {
+            return Ok(());
+        }
+        if let Some(m) = self.id_map.take() {
+            let (blob, len) = m.compress(codec)?;
+            self.id_map_c = Some((blob, len));
+        }
+        Ok(())
+    }
+
     /// Run the inbound scan + Phase-4 encode. Returns (inb_offsets, inb_data).
     pub fn build(self) -> io::Result<(Vec<u32>, Vec<u8>)> {
         let InboundBuilder {
@@ -66,12 +84,27 @@ impl InboundBuilder {
             ref_size,
             n,
             id_map,
+            id_map_c,
+            id_map_codec,
             class_addrs,
             field_plans,
             mut in_cursors,
             total_inb,
             synthetic_edges,
         } = self;
+
+        // Reconstruct the id_map: either it was left live (Codec::None) or it
+        // was compressed by `compress_id_map` and must be decompressed here.
+        // This decompress spike lands at inbound-start, after rpo freed its
+        // dfn/vertex arrays, so it stays below the rpo peak.
+        let id_map = match id_map {
+            Some(m) => m,
+            None => {
+                let (blob, len) = id_map_c
+                    .expect("id_map neither live nor compressed");
+                crate::id_map::IdMap::from_compressed(&blob, len, id_map_codec)?
+            }
+        };
 
         // -- Alloc flat inbound array (deferred until after rpo freed its arrays) --
         let mut inb_flat: Vec<u32> = vec![0u32; total_inb as usize];
@@ -735,7 +768,9 @@ impl Pass2 {
             id_size,
             ref_size,
             n,
-            id_map: p1.id_map,
+            id_map: Some(p1.id_map),
+            id_map_c: None,
+            id_map_codec: crate::cvec::Codec::None,
             class_addrs,
             field_plans,
             in_cursors,

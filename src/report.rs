@@ -266,15 +266,22 @@ pub fn leak_suspects(g: &Graph) -> String {
         dc_offsets[i + 1] += dc_offsets[i];
     }
     let mut dc_targets: Vec<u32> = vec![0u32; dc_offsets[n + 1] as usize];
-    let mut dc_cursor: Vec<u32> = dc_offsets[..n + 1].to_vec();
+    // In-place CSR fill: advance dc_offsets[d] itself as the write cursor
+    // (avoids a separate ~n-length dc_cursor clone, ~2GB @514M). After the
+    // fill, dc_offsets[d] has been walked forward to node d's END index, so
+    // dc_offsets is shifted right by one to restore the canonical offsets
+    // where dc_offsets[node]..dc_offsets[node+1] bounds node's children.
     for i in 0..n {
         let d = g.idom[i] as usize;
         if g.idom[i] != undef {
-            dc_targets[dc_cursor[d] as usize] = i as u32;
-            dc_cursor[d] += 1;
+            dc_targets[dc_offsets[d] as usize] = i as u32;
+            dc_offsets[d] += 1;
         }
     }
-    drop(dc_cursor);
+    for i in (1..=n + 1).rev() {
+        dc_offsets[i] = dc_offsets[i - 1];
+    }
+    dc_offsets[0] = 0;
     let dom_children = |node: usize| -> &[u32] {
         &dc_targets[dc_offsets[node] as usize..dc_offsets[node + 1] as usize]
     };

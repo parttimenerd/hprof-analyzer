@@ -1,3 +1,8 @@
+use std::io::{self, Read, Write};
+
+use crate::cvec::Codec;
+use crate::vbyte;
+
 /// Maps heap object addresses (u64) to dense integer indices via sorted binary search.
 /// Push all addresses, call sort_and_dedup(), then use index_of() for O(log n) lookup.
 pub struct IdMap {
@@ -37,6 +42,58 @@ impl IdMap {
 
     pub fn addr_at(&self, i: usize) -> u64 {
         self.addrs[i]
+    }
+
+    /// Compress the sorted addr array under `codec` into a self-describing blob,
+    /// returning (blob, element_count). For `Deflate9` the addrs are vbyte
+    /// delta-encoded (small gaps, ~8x) then deflated; for `None` the raw LE u64
+    /// bytes are stored uncompressed. `from_compressed` reverses either.
+    pub fn compress(&self, codec: Codec) -> io::Result<(Vec<u8>, usize)> {
+        let len = self.addrs.len();
+        match codec {
+            Codec::None => {
+                let mut out = Vec::with_capacity(len * 8);
+                for &a in &self.addrs {
+                    out.extend_from_slice(&a.to_le_bytes());
+                }
+                Ok((out, len))
+            }
+            Codec::Deflate9 => {
+                let mut vb = Vec::with_capacity(len * 2);
+                vbyte::encode_delta_u64(&self.addrs, &mut vb);
+                let mut e = flate2::write::DeflateEncoder::new(
+                    Vec::new(),
+                    flate2::Compression::best(),
+                );
+                e.write_all(&vb)?;
+                let blob = e.finish()?;
+                Ok((blob, len))
+            }
+        }
+    }
+
+    /// Rebuild an IdMap from a blob produced by `compress` with the same codec.
+    pub fn from_compressed(blob: &[u8], len: usize, codec: Codec) -> io::Result<Self> {
+        match codec {
+            Codec::None => {
+                debug_assert_eq!(blob.len(), len * 8);
+                let addrs = blob
+                    .chunks_exact(8)
+                    .map(|c| u64::from_le_bytes([
+                        c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7],
+                    ]))
+                    .collect();
+                Ok(Self { addrs })
+            }
+            Codec::Deflate9 => {
+                let mut d = flate2::read::DeflateDecoder::new(blob);
+                let mut vb = Vec::new();
+                d.read_to_end(&mut vb)?;
+                let addrs = vbyte::decode_delta_u64(&vb, len);
+                debug_assert_eq!(addrs.len(), len);
+                Ok(Self { addrs })
+            }
+        }
     }
 }
 

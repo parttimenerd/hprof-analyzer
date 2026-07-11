@@ -68,6 +68,56 @@ pub fn encoded_len(mut v: u32) -> usize {
     n
 }
 
+/// Variable-length encode a u64 (7 bits per byte, MSB = continuation).
+pub fn encode_u64(mut v: u64, out: &mut Vec<u8>) {
+    loop {
+        let b = (v & 0x7f) as u8;
+        v >>= 7;
+        if v == 0 {
+            out.push(b);
+            break;
+        }
+        out.push(b | 0x80);
+    }
+}
+
+/// Decode one vbyte u64 from the front of `buf`, returning (value, bytes_read).
+pub fn decode_one_u64(buf: &[u8]) -> (u64, usize) {
+    let mut val = 0u64;
+    let mut shift = 0u32;
+    for (i, &b) in buf.iter().enumerate() {
+        val |= ((b & 0x7f) as u64) << shift;
+        if b & 0x80 == 0 {
+            return (val, i + 1);
+        }
+        shift += 7;
+    }
+    (val, buf.len())
+}
+
+/// Encode a sorted u64 slice as vbyte delta-from-previous values.
+pub fn encode_delta_u64(sorted: &[u64], out: &mut Vec<u8>) {
+    let mut prev = 0u64;
+    for &v in sorted {
+        encode_u64(v - prev, out);
+        prev = v;
+    }
+}
+
+/// Decode a vbyte delta-encoded u64 stream back into the original sorted values.
+pub fn decode_delta_u64(buf: &[u8], count: usize) -> Vec<u64> {
+    let mut result = Vec::with_capacity(count);
+    let mut prev = 0u64;
+    let mut i = 0;
+    while i < buf.len() && result.len() < count {
+        let (delta, consumed) = decode_one_u64(&buf[i..]);
+        prev += delta;
+        result.push(prev);
+        i += consumed;
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,5 +173,43 @@ mod tests {
         encode_delta(&[], &mut buf);
         assert!(buf.is_empty());
         assert_eq!(decode_delta(&buf, 0), vec![]);
+    }
+
+    #[test]
+    fn u64_roundtrip_values() {
+        let vals: Vec<u64> = vec![
+            0, 1, 127, 128, 255, 16383, 16384, u32::MAX as u64,
+            1u64 << 40, u64::MAX,
+        ];
+        let mut buf = Vec::new();
+        for &v in &vals {
+            encode_u64(v, &mut buf);
+        }
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < buf.len() {
+            let (v, c) = decode_one_u64(&buf[i..]);
+            out.push(v);
+            i += c;
+        }
+        assert_eq!(out, vals);
+    }
+
+    #[test]
+    fn u64_delta_roundtrip() {
+        let sorted: Vec<u64> = vec![
+            0x1000, 0x1010, 0x1028, 0x1040, 0x5000, 0x5000_0000, 0x5000_0018,
+        ];
+        let mut buf = Vec::new();
+        encode_delta_u64(&sorted, &mut buf);
+        assert_eq!(decode_delta_u64(&buf, sorted.len()), sorted);
+    }
+
+    #[test]
+    fn u64_empty_delta() {
+        let mut buf = Vec::new();
+        encode_delta_u64(&[], &mut buf);
+        assert!(buf.is_empty());
+        assert_eq!(decode_delta_u64(&buf, 0), Vec::<u64>::new());
     }
 }

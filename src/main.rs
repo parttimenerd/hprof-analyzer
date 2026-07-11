@@ -6,6 +6,7 @@ mod reader;
 mod report;
 mod retained;
 mod rpo_dfs;
+mod cvec;
 mod types;
 mod vbyte;
 
@@ -18,17 +19,28 @@ fn main() {
 
     let mut dump_json = false;
     let mut verbose = false;
+    let mut compress = cvec::Codec::Deflate9;
     let mut positional: Vec<&str> = Vec::new();
     for arg in args.iter().skip(1) {
         match arg.as_str() {
             "--dump-json" => dump_json = true,
             "--verbose" | "-v" => verbose = true,
+            s if s.starts_with("--compress=") => {
+                let val = &s["--compress=".len()..];
+                match cvec::Codec::parse(val) {
+                    Some(c) => compress = c,
+                    None => {
+                        eprintln!("unknown --compress codec '{val}' (use: none, deflate9)");
+                        process::exit(1);
+                    }
+                }
+            }
             _ => positional.push(arg.as_str()),
         }
     }
 
     if positional.is_empty() {
-        eprintln!("usage: hprof-analyzer [--verbose] [--dump-json] <file.hprof[.gz]> [output.md]");
+        eprintln!("usage: hprof-analyzer [--verbose] [--dump-json] [--compress=none|deflate9] <file.hprof[.gz]> [output.md]");
         process::exit(1);
     }
 
@@ -43,7 +55,7 @@ fn main() {
         return;
     }
 
-    match run(input, output, verbose) {
+    match run(input, output, verbose, compress) {
         Ok(()) => {}
         Err(e) => { eprintln!("Error: {e}"); process::exit(1); }
     }
@@ -78,7 +90,7 @@ fn log(verbose: bool, phase: &str, elapsed: f64) {
     }
 }
 
-fn run(input: &str, output: Option<&str>, verbose: bool) -> io::Result<()> {
+fn run(input: &str, output: Option<&str>, verbose: bool, compress: cvec::Codec) -> io::Result<()> {
     let t_total = Instant::now();
 
     let t = Instant::now();
@@ -86,8 +98,21 @@ fn run(input: &str, output: Option<&str>, verbose: bool) -> io::Result<()> {
     log(verbose, "pass1", t.elapsed().as_secs_f64());
 
     let t = Instant::now();
-    let (mut g, inbound) = pass2::Pass2::build(input, p1)?;
+    let (mut g, mut inbound) = pass2::Pass2::build(input, p1)?;
     log(verbose, &format!("pass2 n={}", g.n), t.elapsed().as_secs_f64());
+
+    // Compress the three cold arrays (shallow, class_idx, id_map) that sit idle
+    // across the rpo -> inbound -> dominator peak window, freeing their dense
+    // Vecs and holding only small blobs. Restored just before each consumer.
+    let t = Instant::now();
+    let shallow_c = cvec::CompressedU32::compress(&g.shallow, compress)?;
+    let class_idx_c = cvec::CompressedU32::compress(&g.class_idx, compress)?;
+    if compress != cvec::Codec::None {
+        g.shallow = Vec::new();
+        g.class_idx = Vec::new();
+    }
+    inbound.compress_id_map(compress)?;
+    log(verbose, "compress-cold", t.elapsed().as_secs_f64());
 
     let t = Instant::now();
     let rpo = rpo_dfs::rpo_dfs(g.n, &g.gc_root_indices, &g.fwd_offsets, &g.fwd_targets);
@@ -114,6 +139,15 @@ fn run(input: &str, output: Option<&str>, verbose: bool) -> io::Result<()> {
     log(verbose, "dominator", t.elapsed().as_secs_f64());
     drop(inb_offsets);
     drop(inb_data);
+
+    // Restore shallow/class_idx (dominator has freed the inbound CSR, so this
+    // decompress spike lands outside the peak window).
+    if compress != cvec::Codec::None {
+        g.shallow = shallow_c.restore()?;
+        g.class_idx = class_idx_c.restore()?;
+    }
+    drop(shallow_c);
+    drop(class_idx_c);
 
     let t = Instant::now();
     let class_count = g.class_names.len();
