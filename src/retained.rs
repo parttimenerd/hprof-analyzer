@@ -7,27 +7,26 @@
 /// hasSame DFS and report::leak_suspects (both previously rebuilt it).
 pub fn build_dom_children_csr(n: usize, idom: &[u32]) -> (Vec<u32>, Vec<u32>) {
     let undef = u32::MAX;
-    let mut child_deg: Vec<u32> = vec![0u32; n + 1];
+    // Single offsets array of length n+2 (no separate child_deg ~2GB @514M).
+    // Step 1: count each parent's degree into child_off[p+1] (shifted by one).
+    let mut child_off: Vec<u32> = vec![0u32; n + 2];
     for u in 0..n {
         let p = idom[u];
         if p == undef || p == u as u32 {
             continue;
         }
-        child_deg[p as usize] += 1;
+        child_off[p as usize + 1] += 1;
     }
-    let mut child_off: Vec<u32> = Vec::with_capacity(n + 2);
-    child_off.push(0u32);
+    // Step 2: prefix-sum in place -> child_off[i] is node i's children START.
     for i in 0..=n {
-        child_off.push(child_off[i] + child_deg[i]);
+        child_off[i + 1] += child_off[i];
     }
-    let total_children = *child_off.last().unwrap() as usize;
-    drop(child_deg);
+    let total_children = child_off[n + 1] as usize;
     let mut child_tgt: Vec<u32> = vec![u32::MAX; total_children];
-    // In-place CSR fill: advance child_off[p] itself as the write cursor,
-    // avoiding a ~n-length cursor clone (~2GB @514M). After the fill, child_off[d]
-    // has walked forward to d's END index, so right-shift by one to restore the
-    // canonical offsets. Range MUST be 1..=n+1 so child_off[n+1] (vroot's child
-    // end) is set.
+    // Step 3: in-place CSR fill: advance child_off[p] itself as the write cursor
+    // (no ~n-length cursor clone). After the fill, child_off[d] has walked forward
+    // to d's END index, so right-shift by one to restore the canonical offsets.
+    // Range MUST be 1..=n+1 so child_off[n+1] (vroot's child end) is preserved.
     for u in 0..n {
         let p = idom[u];
         if p == undef || p == u as u32 {
