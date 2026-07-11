@@ -106,6 +106,13 @@ impl InboundBuilder {
             }
         }
 
+        // id_map / class_addrs / field_plans are consumed only by the 2b scan
+        // above. Free them now (id_map alone is ~4.1 GB at 514M objects) before
+        // the Phase-4 encode allocates inb_data, trimming the global RSS peak.
+        drop(id_map);
+        drop(class_addrs);
+        drop(field_plans);
+
         // Synthetic thread->local INBOUND edges.
         for &(src, dst) in &synthetic_edges {
             inb_flat[in_cursors[dst as usize] as usize] = src;
