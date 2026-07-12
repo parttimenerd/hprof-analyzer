@@ -29,6 +29,58 @@ pub struct IdMap {
 
 const BLOCK_SPAN: u64 = 1u64 << 32;
 
+/// Branchless prefetching search over a strictly-ascending, unique `u32` slice
+/// (the per-block invariant `sort_and_dedup`/`push_sorted_addr` guarantee).
+/// Returns `Some(i)` such that `slice[i] == d`, or `None` if absent — the exact
+/// result of `slice.binary_search(&d).ok()`.
+///
+/// `offsets` is ~2 GB on a 500M-object dump, so each probe of a plain
+/// `binary_search` is a cache miss and `index_of` is DRAM-latency bound (23%
+/// self-time in profiles). This variant computes the two possible next probe
+/// addresses and issues `_mm_prefetch` for both before the current comparison
+/// resolves which half is taken, overlapping the miss with the compare. The
+/// loop is the classic Khuong–Morin branchless bisection: it narrows to a
+/// single candidate index, then one equality check decides hit vs. miss.
+#[inline]
+fn search_offsets(slice: &[u32], d: u32) -> Option<usize> {
+    let n = slice.len();
+    if n == 0 {
+        return None;
+    }
+    let mut base = 0usize;
+    let mut len = n;
+    while len > 1 {
+        let half = len / 2;
+        let mid = base + half;
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            use core::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
+            // The next iteration probes the midpoint of whichever half is
+            // taken; prefetch both candidates now so the load for the next
+            // compare is already in flight.
+            let q = (len - half) / 2;
+            let ptr = slice.as_ptr();
+            _mm_prefetch(ptr.add(base + q) as *const i8, _MM_HINT_T0);
+            _mm_prefetch(ptr.add(mid + q) as *const i8, _MM_HINT_T0);
+        }
+        // Branchless: advance base into the upper half iff slice[mid] < d.
+        // SAFETY: mid = base + half < base + len <= n, so mid is in bounds.
+        let take_upper = unsafe { *slice.get_unchecked(mid) } < d;
+        base = if take_upper { mid } else { base };
+        len -= half;
+    }
+    // The loop leaves `base` at the greatest index with slice[base] < d, or 0
+    // if none. The lower-bound (first index >= d) is base + (slice[base] < d).
+    // Since the slice is unique+ascending, an exact hit is lower-bound == d.
+    // SAFETY: base < n throughout; pos <= n and is only dereferenced when < n.
+    let pos = base + (unsafe { *slice.get_unchecked(base) } < d) as usize;
+    if pos < n && unsafe { *slice.get_unchecked(pos) } == d {
+        Some(pos)
+    } else {
+        None
+    }
+}
+
 #[allow(dead_code)]
 impl IdMap {
     pub fn new() -> Self {
@@ -157,10 +209,7 @@ impl IdMap {
         let d = delta as u32;
         let lo = self.block_start[b] as usize;
         let hi = self.block_start[b + 1] as usize;
-        match self.offsets[lo..hi].binary_search(&d) {
-            Ok(pos) => Some(lo + pos),
-            Err(_) => None,
-        }
+        search_offsets(&self.offsets[lo..hi], d).map(|pos| lo + pos)
     }
 
     pub fn addr_at(&self, i: usize) -> u64 {
@@ -457,6 +506,70 @@ mod tests {
         for probe in [base - 5, base + 0x9E37 / 2, addrs.last().unwrap() + 7] {
             let want = addrs.binary_search(&probe).ok();
             assert_eq!(m.index_of(probe), want);
+        }
+    }
+
+    // Differential test: the prefetching branchless search must return exactly
+    // what stdlib slice::binary_search returns for every probe (hit index on a
+    // match, None on a miss), on strictly-ascending unique u32 slices — the
+    // invariant sort_and_dedup guarantees per block. This is the correctness
+    // gate for the prefetch replacement of the inner offsets search.
+    #[test]
+    fn search_offsets_matches_stdlib_binary_search() {
+        // A spread of slice shapes: empty, singletons, dense, sparse, gaps.
+        let cases: Vec<Vec<u32>> = vec![
+            vec![],
+            vec![0],
+            vec![7],
+            vec![0, 1, 2, 3, 4, 5, 6, 7],
+            vec![1, 3, 5, 7, 9, 11],
+            vec![0, 100, 200, 5000, 5001, u32::MAX - 1, u32::MAX],
+            (0..257u32).collect(),
+            (0..1000u32).map(|k| k.wrapping_mul(37)).collect(),
+        ];
+        for slice in &cases {
+            // Probe every element, the neighbors of every element, the ends,
+            // and a scattering of interior values -> covers hits + misses.
+            let mut probes: Vec<u32> = Vec::new();
+            for &v in slice {
+                probes.push(v);
+                probes.push(v.wrapping_sub(1));
+                probes.push(v.wrapping_add(1));
+            }
+            probes.push(0);
+            probes.push(u32::MAX);
+            for d in 0..64u32 {
+                probes.push(d.wrapping_mul(97));
+            }
+            for &d in &probes {
+                let want = slice.binary_search(&d).ok();
+                let got = search_offsets(slice, d);
+                assert_eq!(got, want, "slice={slice:?} probe={d}");
+            }
+        }
+    }
+
+    proptest::proptest! {
+        // Property form of the differential gate: on ANY sorted unique u32
+        // slice, search_offsets agrees with stdlib binary_search for arbitrary
+        // probes (members and non-members alike).
+        #[test]
+        fn prop_search_offsets_matches_stdlib(
+            raw in proptest::collection::vec(0u32.., 0..300),
+            probes in proptest::collection::vec(0u32.., 0..80),
+        ) {
+            let mut slice: Vec<u32> = raw;
+            slice.sort_unstable();
+            slice.dedup();
+            for &d in &probes {
+                let want = slice.binary_search(&d).ok();
+                let got = search_offsets(&slice, d);
+                proptest::prop_assert_eq!(got, want);
+            }
+            // Every member must also be found at its exact index.
+            for (i, &v) in slice.iter().enumerate() {
+                proptest::prop_assert_eq!(search_offsets(&slice, v), Some(i));
+            }
         }
     }
 
