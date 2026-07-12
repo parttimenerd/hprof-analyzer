@@ -102,7 +102,7 @@ fn run(input: &str, output: Option<&str>, verbose: bool, compress: cvec::Codec) 
     log(verbose, "pass1", t.elapsed().as_secs_f64());
 
     let t = Instant::now();
-    let (mut g, mut inbound) = pass2::Pass2::build(input, p1)?;
+    let (mut g, mut inbound, shallow_c, class_idx_c) = pass2::Pass2::build(input, p1, compress)?;
     log(verbose, &format!("pass2 n={}", g.n), t.elapsed().as_secs_f64());
 
     // Compress the three cold arrays (shallow, class_idx, id_map) that sit idle
@@ -115,16 +115,9 @@ fn run(input: &str, output: Option<&str>, verbose: bool, compress: cvec::Codec) 
     // id_map's 4.1GB before that removes it from the binding peak. id_map is
     // delta-vbyte+deflate (sorted addrs, fast), not a slow permutation deflate.
     inbound.compress_id_map(compress)?;
-    // Then shallow/class_idx, freeing each dense Vec the instant its blob
-    // exists so the two are never both dense at once.
-    let shallow_c = cvec::CompressedU32::compress(&g.shallow, compress)?;
-    if compress != cvec::Codec::None {
-        g.shallow = Vec::new();
-    }
-    let class_idx_c = cvec::CompressedU32::compress(&g.class_idx, compress)?;
-    if compress != cvec::Codec::None {
-        g.class_idx = Vec::new();
-    }
+    // shallow/class_idx were already compressed inside pass2 (before the
+    // fwd_targets alloc) to keep their ~4GB dense forms off the binding peak;
+    // shallow_c/class_idx_c hold the blobs, g.shallow/g.class_idx are empty.
     log(verbose, "compress-cold", t.elapsed().as_secs_f64());
 
     let t = Instant::now();
@@ -134,17 +127,27 @@ fn run(input: &str, output: Option<&str>, verbose: bool, compress: cvec::Codec) 
     // Free forward CSR (no longer needed after DFS)
     g.fwd_offsets = Vec::new();
     g.fwd_targets = Vec::new();
+    crate::trace::trim();
 
     // Build the inbound CSR now that rpo has freed its arrays — keeps the
     // ~5.5GB inbound CSR off the rpo-phase RSS peak.
+    // build() translates inbound predecessors into pre-order space using dfn,
+    // so dominator Phase 1 no longer needs dfn. Free dfn immediately after,
+    // BEFORE dominator's Phase-1 peak (semi/ancestor/label + rpo + inbound all
+    // resident) — this is the binding global peak; dropping dfn cuts ~2GB.
+    let mut rpo = rpo;
     let t = Instant::now();
-    let (inb_offsets, inb_data) = inbound.build()?;
+    let (inb_offsets, inb_data) = inbound.build(&rpo.dfn)?;
     log(verbose, "inbound", t.elapsed().as_secs_f64());
+    rpo.dfn = Vec::new();
+    crate::trace::trim();
 
     let t = Instant::now();
+    // rpo moved by value; vertex/parent_pre owned through translation. dfn
+    // already freed above. No separate drop(rpo).
     g.idom = dominator::compute_dominators(
         g.n,
-        &rpo,
+        rpo,
         &g.gc_root_indices,
         &inb_offsets,
         &inb_data,
@@ -152,11 +155,7 @@ fn run(input: &str, output: Option<&str>, verbose: bool, compress: cvec::Codec) 
     log(verbose, "dominator", t.elapsed().as_secs_f64());
     drop(inb_offsets);
     drop(inb_data);
-
-    // rpo (dfn/vertex/parent_pre) is fully dead after dominator — retained's
-    // size rollup now rides the hasSame dom-tree DFS (no rpo_order). Free ~6GB
-    // before the retained peak window.
-    drop(rpo);
+    crate::trace::trim();
 
     // Build the dominator-children CSR ONCE and share it across compute_retained
     // (hasSame DFS) and report::leak_suspects (both previously rebuilt it, ~6GB
@@ -196,12 +195,17 @@ fn run(input: &str, output: Option<&str>, verbose: bool, compress: cvec::Codec) 
 
     let t = Instant::now();
     let mut md = String::new();
+    crate::trace::probe("report: before system_overview");
     md.push_str(&report::system_overview(&g));
+    crate::trace::probe("report: after system_overview");
     g.has_same_class_ancestor = crate::bitset::Bitset::default(); // only system_overview reads it
     md.push_str(&report::leak_suspects(&g, &dc_off, &dc_tgt));
+    crate::trace::probe("report: after leak_suspects");
     drop(dc_off);
     drop(dc_tgt);
+    crate::trace::trim();
     md.push_str(&report::top_consumers(&g));
+    crate::trace::probe("report: after top_consumers");
     log(verbose, "report", t.elapsed().as_secs_f64());
 
     match output {

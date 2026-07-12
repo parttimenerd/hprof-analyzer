@@ -72,7 +72,7 @@ impl InboundBuilder {
     }
 
     /// Run the inbound scan + Phase-4 encode. Returns (inb_offsets, inb_data).
-    pub fn build(self) -> io::Result<(Vec<u32>, Vec<u8>)> {
+    pub fn build(self, dfn: &[u32]) -> io::Result<(Vec<u32>, Vec<u8>)> {
         let InboundBuilder {
             path,
             id_size,
@@ -105,6 +105,11 @@ impl InboundBuilder {
         // Chunked backing store so Phase-4 can free consumed chunks incrementally,
         // avoiding the inb_flat+inb_data coexistence that was the global RSS peak.
         let mut inb_flat = crate::chunkvec::ChunkU32::zeroed(total_inb as usize);
+        if crate::trace::enabled() {
+            eprintln!("[trace-rss] inbound 2b: total_inb={} edges, inb_flat={} MB",
+                total_inb, (total_inb as usize * 4) / (1024*1024));
+        }
+        crate::trace::probe("inbound 2b: after inb_flat alloc");
 
         // -- Sub-pass 2b scan: fill INBOUND edges only --
         {
@@ -148,6 +153,7 @@ impl InboundBuilder {
             in_cursors[dst as usize] += 1;
         }
 
+        crate::trace::probe("inbound: before Phase-4 (after 2b scan + drops)");
         // -- Phase 4: Build inbound CSR --
         let mut inb_offsets: Vec<u32> = Vec::with_capacity(n + 1);
         let mut inb_data: Vec<u8> = Vec::new();
@@ -162,29 +168,43 @@ impl InboundBuilder {
         for i in 0..n {
             let end = in_cursors[i] as usize; // in_cursors[i] = end offset after fill
             inb_flat.copy_range(start, end, &mut nb);
-            // Sort by stripped value (lower 31 bits), ignoring excluded-edge high-bit flag.
-            nb.sort_unstable_by_key(|&v| v & 0x7fff_ffff);
-            // Dedup by stripped value (in-place)
+            // Translate each stripped predecessor NODE -> its pre-order number
+            // (dfn); drop unreachable predecessors (dfn == UNDEFINED). Storing
+            // pre-order values here means dominator Phase 1 never needs dfn, so
+            // the caller frees dfn (2GB) before the Phase-1 peak. Reuse `nb` in
+            // place: overwrite the front with translated pre-order values.
+            let mut w = 0usize;
+            for r in 0..nb.len() {
+                let node = (nb[r] & 0x7fff_ffff) as usize;
+                let pre = dfn[node];
+                if pre != u32::MAX {
+                    nb[w] = pre;
+                    w += 1;
+                }
+            }
+            // Sort by pre-order and dedup (two distinct nodes cannot share a
+            // pre-order, so this preserves the node-level dedup done at fill).
+            let pre_slice = &mut nb[..w];
+            pre_slice.sort_unstable();
             let unique_end = {
-                if nb.is_empty() {
+                if pre_slice.is_empty() {
                     0
                 } else {
                     let mut write = 1usize;
-                    for read in 1..nb.len() {
-                        if (nb[read] & 0x7fff_ffff) != (nb[write - 1] & 0x7fff_ffff) {
-                            nb[write] = nb[read];
+                    for read in 1..pre_slice.len() {
+                        if pre_slice[read] != pre_slice[write - 1] {
+                            pre_slice[write] = pre_slice[read];
                             write += 1;
                         }
                     }
                     write
                 }
             };
-            // Delta-encode stripped values
+            // Delta-encode pre-order values.
             let mut prev: u32 = 0;
-            for &v in &nb[..unique_end] {
-                let stripped = v & 0x7fff_ffff;
-                vbyte::encode(stripped - prev, &mut inb_data);
-                prev = stripped;
+            for &pre in &nb[..unique_end] {
+                vbyte::encode(pre - prev, &mut inb_data);
+                prev = pre;
             }
             inb_offsets.push(inb_data.len() as u32);
             start = end;
@@ -192,11 +212,17 @@ impl InboundBuilder {
                 inb_flat.free_below(start);
                 next_free_at = start + (1 << 26);
             }
+            if i == n / 2 { crate::trace::probe("inbound Phase-4: midpoint (inb_flat+inb_data coexist)"); }
         }
         drop(nb);
         drop(inb_flat);
         drop(in_cursors); // inbound CSR done; end-offset cursors no longer needed
 
+        if crate::trace::enabled() {
+            eprintln!("[trace-rss] inbound Phase-4: inb_data len={} MB cap={} MB",
+                inb_data.len() / (1024*1024), inb_data.capacity() / (1024*1024));
+        }
+        crate::trace::probe("inbound Phase-4: after inb_data built");
         Ok((inb_offsets, inb_data))
     }
 }
@@ -382,7 +408,7 @@ fn prim_array_class_name(elem_type_code: u8) -> &'static str {
 pub struct Pass2;
 
 impl Pass2 {
-    pub fn build(path: &str, mut p1: Pass1) -> io::Result<(Graph, InboundBuilder)> {
+    pub fn build(path: &str, mut p1: Pass1, compress: crate::cvec::Codec) -> io::Result<(Graph, InboundBuilder, crate::cvec::CompressedU32, crate::cvec::CompressedU32)> {
         let n = p1.id_map.len();
         let id_size = p1.id_size;
         let ptr_size = id_size as usize;
@@ -524,6 +550,7 @@ impl Pass2 {
         // ── Phase 1: Sub-pass 2a — count degrees ────────────────────────
         let mut out_degree: Vec<u32> = vec![0u32; n];
         let mut in_degree: Vec<u32> = vec![0u32; n];
+        crate::trace::probe("pass2: after out/in_degree alloc");
 
         // Precompute per-class instance-field plans once (offset + excluded flag).
         // Borrowed immutably in the hot scan loop — no per-instance allocation.
@@ -677,6 +704,21 @@ impl Pass2 {
         let mut gc_root_indices: Vec<u32> = gc_root_set.into_iter().collect();
         gc_root_indices.sort_unstable();
 
+        // Compress the two cold per-object arrays (shallow, class_idx) NOW,
+        // before the forward-CSR fwd_targets (~6GB) is allocated. Both are
+        // final here and idle until the retained phase, so freeing their dense
+        // ~2GB Vecs each removes ~4GB from the binding fwd_targets-alloc peak.
+        // main.rs holds the blobs across the peak and restores before consumers.
+        let shallow_c = crate::cvec::CompressedU32::compress(&shallow, compress)?;
+        if compress != crate::cvec::Codec::None {
+            shallow = Vec::new();
+        }
+        let class_idx_c = crate::cvec::CompressedU32::compress(&class_idx, compress)?;
+        if compress != crate::cvec::Codec::None {
+            class_idx = Vec::new();
+        }
+        crate::trace::probe("pass2: after early-compress shallow/class_idx");
+
         // ── Phase 3: Build forward-CSR offsets (prefix sum only) ────────
         let mut fwd_offsets: Vec<u32> = Vec::with_capacity(n + 1);
         fwd_offsets.push(0u32);
@@ -685,6 +727,7 @@ impl Pass2 {
             fwd_offsets.push(next);
         }
         drop(out_degree); // dead after prefix sum
+        crate::trace::probe("pass2: after fwd_offsets prefix-sum (out_degree freed)");
 
         // ── Phase 3b: Build forward CSR ──────────────────────────────────
         // The forward fill runs FIRST (inside build); the inbound CSR is
@@ -692,6 +735,7 @@ impl Pass2 {
         // the rpo phase's arrays. The forward fill never touches inb_flat.
         let total_edges = *fwd_offsets.last().unwrap() as usize;
         let mut fwd_targets: Vec<u32> = vec![u32::MAX; total_edges];
+        crate::trace::probe("pass2: after fwd_targets alloc");
         // B3: no fwd_cursor clone. fwd_offsets is advanced in place as the
         // write cursor during the fill, then restored by right-shift below.
         {
@@ -791,7 +835,7 @@ impl Pass2 {
             synthetic_edges,
         };
 
-        Ok((graph, inbound))
+        Ok((graph, inbound, shallow_c, class_idx_c))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1349,10 +1393,13 @@ mod tests {
     fn pass2_graph_has_edges() {
         if !std::path::Path::new(DUMP).exists() { return; }
         let p1 = Pass1::run(DUMP).unwrap();
-        let (g, inbound) = Pass2::build(DUMP, p1).unwrap();
+        let (g, inbound, _sc, _ci) = Pass2::build(DUMP, p1, crate::cvec::Codec::None).unwrap();
         assert!(g.fwd_targets.len() > 0, "no forward edges");
         assert_eq!(g.fwd_offsets.len(), g.n + 1);
-        let (inb_offsets, _inb_data) = inbound.build().unwrap();
+        // Identity dfn (node -> pre-order) suffices: this test only checks
+        // inb_offsets.len() == n+1, which the pre-order transpose preserves.
+        let dfn: Vec<u32> = (0..g.n as u32).collect();
+        let (inb_offsets, _inb_data) = inbound.build(&dfn).unwrap();
         assert_eq!(inb_offsets.len() as usize, g.n + 1);
         for &r in &g.gc_root_indices {
             assert!((r as usize) < g.n, "gc_root idx {} out of range {}", r, g.n);
@@ -1375,7 +1422,7 @@ mod tests {
     fn pass2_edge_counts_sane() {
         if !std::path::Path::new(DUMP).exists() { return; }
         let p1 = Pass1::run(DUMP).unwrap();
-        let (g, _inbound) = Pass2::build(DUMP, p1).unwrap();
+        let (g, _inbound, _sc, _ci) = Pass2::build(DUMP, p1, crate::cvec::Codec::None).unwrap();
         let fwd_edge_count: usize = g.fwd_offsets.windows(2).map(|w| (w[1]-w[0]) as usize).sum();
         assert!(fwd_edge_count > g.n / 2, "suspiciously few edges: {} for {} nodes", fwd_edge_count, g.n);
     }

@@ -143,6 +143,7 @@ impl Pass1 {
             }
         }
 
+        crate::trace::probe("pass1: after scan loop (all tmp_* grown)");
         // Fix up shallow sizes where class wasn't yet seen at scan time.
         // tmp_class_ids holds interned indices; resolve to addr for kinds that
         // reference a class (0=instance, 3=class-obj). kind 1/2 (arrays) skip.
@@ -160,7 +161,9 @@ impl Pass1 {
         // objects, so u32 suffices and halves this 90 MB->45 MB scaffold).
         let n = tmp_addrs.len();
         let mut order: Vec<u32> = (0..n as u32).collect();
+        crate::trace::probe("pass1: before order.sort_unstable_by_key");
         order.sort_unstable_by_key(|&i| tmp_addrs[i as usize]);
+        crate::trace::probe("pass1: after order.sort_unstable_by_key");
 
         // Build id_map while compacting `order` in place to keep only the
         // first `order` entry at each distinct address (dedup). No separate
@@ -168,23 +171,29 @@ impl Pass1 {
         // order[write] <= order[rank] as we go, then truncate to m. The
         // gathers below then iterate the compacted order with no per-rank
         // branch.
-        let mut id_map = IdMap::with_capacity(n);
+        // `order` is sorted by address, so we feed strictly-ascending, deduped
+        // addresses directly into the two-level index — no 4.1GB staging Vec.
+        let mut id_map = IdMap::new();
+        id_map.reserve_offsets(n);
         let mut prev_addr = u64::MAX;
         let mut write = 0usize;
         for rank in 0..order.len() {
             let i = order[rank];
             let a = tmp_addrs[i as usize];
             if a != prev_addr {
-                id_map.push(a);
+                id_map.push_sorted_addr(a);
                 order[write] = i;
                 write += 1;
                 prev_addr = a;
             }
         }
+        crate::trace::probe("pass1: before id_map.finalize (tmp_addrs+order+tmps live)");
         order.truncate(write);
-        id_map.sort_and_dedup(); // already sorted; marks it done
+        id_map.finalize_sorted();
+        crate::trace::probe("pass1: after id_map.finalize (offsets built)");
         let m = id_map.len();
         drop(tmp_addrs);
+        crate::trace::probe("pass1: after drop(tmp_addrs)");
 
         // Gather each parallel array in its own pass, then free the
         // source buffer immediately — only one tmp/output pair is

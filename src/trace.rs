@@ -35,3 +35,20 @@ pub fn probe(label: &str) {
         eprintln!("[trace-rss] {label} RSS={} MB", rss_mb());
     }
 }
+
+// glibc malloc_trim: return free memory from the top of the heap to the OS.
+// Declared directly (no libc crate). No-op / harmless on non-glibc allocators.
+unsafe extern "C" {
+    fn malloc_trim(pad: usize) -> i32;
+}
+
+/// Ask the allocator to return freed pages to the OS. Called after large Vecs
+/// are dropped at stage boundaries so freed arenas do not inflate peak RSS
+/// (glibc otherwise retains freed pages, pushing the high-water mark ~3-4 GB
+/// above the genuinely-live set). Safe: malloc_trim only releases already-free
+/// memory. Gated to run always (cheap: one syscall-ish call per stage).
+pub fn trim() {
+    unsafe {
+        malloc_trim(0);
+    }
+}

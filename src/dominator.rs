@@ -28,7 +28,7 @@ const UNDEFINED: u32 = u32::MAX;
 /// Compute immediate dominators for all reachable nodes using SEMI-NCA.
 pub fn compute_dominators(
     n: usize,
-    rpo: &RpoResult,
+    rpo: RpoResult,
     gc_root_indices: &[u32],
     inb_offsets: &[u32], // byte offsets into inb_data, len = n+1
     inb_data: &[u8],
@@ -48,6 +48,7 @@ pub fn compute_dominators(
     let mut semi = vec![0u32; count];
     let mut ancestor = vec![0u32; count]; // 0 = no ancestor (unlinked)
     let mut label = vec![0u32; count];
+    crate::trace::probe("dominator: after semi/ancestor/label alloc");
 
     // Initialize: semi[i] = i, label[i] = i, parent[i] = parent_pre[i]
     for i in 0..count {
@@ -55,12 +56,13 @@ pub fn compute_dominators(
         label[i] = i as u32;
         ancestor[i] = 0;
     }
+    crate::trace::probe("dominator: after init loop (semi/ancestor/label resident)");
 
     // vr_adjacent: which nodes have an implicit virtual-root predecessor (GC roots).
     // For these, the virtual root is always a predecessor in the eval step.
-    let mut vr_adjacent = vec![false; n + 1];
+    let mut vr_adjacent = crate::bitset::Bitset::with_len(n + 1);
     for &r in gc_root_indices {
-        vr_adjacent[r as usize] = true;
+        vr_adjacent.set(r as usize);
     }
 
     // ── Phase 1: compute semidominators (reverse pre-order, i = count-1 .. 1) ──
@@ -69,14 +71,12 @@ pub fn compute_dominators(
 
         // For each predecessor v of w:
         //   if v is reachable, u = eval(dfn[v]); if semi[u] < semi[i], semi[i] = semi[u]
-        let process_pred = |pred_node: usize,
+        let process_pred = |pv: u32,
                                 semi: &mut [u32],
                                 ancestor: &mut [u32],
                                 label: &mut [u32]| {
-            let pv = rpo.dfn[pred_node];
-            if pv == UNDEFINED {
-                return; // predecessor unreachable
-            }
+            // `pv` is the predecessor's pre-order number (inbound CSR is stored
+            // in pre-order space; unreachable preds were dropped at encode).
             let u = eval(pv, ancestor, label, semi);
             if semi[u as usize] < semi[i] {
                 semi[i] = semi[u as usize];
@@ -84,7 +84,7 @@ pub fn compute_dominators(
         };
 
         // Implicit virtual-root predecessor for GC roots
-        if vr_adjacent[w_node] {
+        if vr_adjacent.get(w_node) {
             // eval(0) = 0, semi[0] = 0 → semi[i] becomes 0 (dominated by vroot)
             let u = eval(0, &mut ancestor, &mut label, &semi);
             if semi[u as usize] < semi[i] {
@@ -100,9 +100,9 @@ pub fn compute_dominators(
         while pos < byte_end {
             let (delta, consumed) = vbyte::decode_one(&inb_data[pos..]);
             pos += consumed;
-            let pred = prev.wrapping_add(delta);
-            prev = pred;
-            process_pred(pred as usize, &mut semi, &mut ancestor, &mut label);
+            let pred_pre = prev.wrapping_add(delta);
+            prev = pred_pre;
+            process_pred(pred_pre, &mut semi, &mut ancestor, &mut label);
         }
 
         // Link w to its parent in the forest
@@ -127,8 +127,16 @@ pub fn compute_dominators(
         idom_pre[i] = d;
     }
 
+    // `semi` is dead after the SEMI-NCA loop above (its last read is the
+    // `d > semi[i]` guard). Free it before allocating `idom` so the ~2GB
+    // (count*4 @514M) region can back the new (n+1)*4 `idom` array in place,
+    // rather than adding a fresh 2GB on top of the dominator-window peak.
+    drop(semi);
+    crate::trace::probe("dominator: after drop(semi), before idom alloc");
+
     // ── Translate pre-order idom back to node-index space ────────────────
     let mut idom = vec![UNDEFINED; n + 1];
+    crate::trace::probe("dominator: after idom alloc");
     idom[n] = vroot; // virtual root dominates itself
     for i in 1..count {
         let node = rpo.vertex[i] as usize;
@@ -185,16 +193,22 @@ mod tests {
     use crate::rpo_dfs::rpo_dfs;
 
     // Build inbound CSR (VByte delta-encoded) from a per-node predecessor list.
-    fn build_inb(n: usize, preds: &[Vec<u32>]) -> (Vec<u32>, Vec<u8>) {
+    fn build_inb(n: usize, preds: &[Vec<u32>], dfn: &[u32]) -> (Vec<u32>, Vec<u8>) {
+        // Mirror production: store predecessors in PRE-ORDER space (node -> dfn),
+        // dropping unreachable preds, sorted+deduped by pre-order.
         let mut offsets = Vec::with_capacity(n + 2);
         let mut data = Vec::new();
         offsets.push(0u32);
         for i in 0..n {
-            let mut sorted = preds.get(i).cloned().unwrap_or_default();
-            sorted.sort_unstable();
-            sorted.dedup();
+            let mut pre: Vec<u32> = preds.get(i).cloned().unwrap_or_default()
+                .into_iter()
+                .map(|node| dfn[node as usize])
+                .filter(|&p| p != u32::MAX)
+                .collect();
+            pre.sort_unstable();
+            pre.dedup();
             let mut prev = 0u32;
-            for &v in &sorted {
+            for &v in &pre {
                 vbyte::encode(v - prev, &mut data);
                 prev = v;
             }
@@ -214,8 +228,8 @@ mod tests {
         let rpo = rpo_dfs(4, &roots, &fwd_off, &fwd_tgt);
         // inbound: node1←[0], node2←[0], node3←[1,2]
         let preds = vec![vec![], vec![0u32], vec![0u32], vec![1u32, 2u32]];
-        let (inb_offsets, inb_data) = build_inb(4, &preds);
-        let idom = compute_dominators(4, &rpo, &roots, &inb_offsets, &inb_data);
+        let (inb_offsets, inb_data) = build_inb(4, &preds, &rpo.dfn);
+        let idom = compute_dominators(4, rpo, &roots, &inb_offsets, &inb_data);
         assert_eq!(idom[0], 4, "idom[0]=vroot");
         assert_eq!(idom[1], 0, "idom[1]=0");
         assert_eq!(idom[2], 0, "idom[2]=0");
@@ -230,8 +244,8 @@ mod tests {
         let roots = vec![0u32];
         let rpo = rpo_dfs(3, &roots, &fwd_off, &fwd_tgt);
         let preds = vec![vec![], vec![0u32], vec![1u32]];
-        let (inb_offsets, inb_data) = build_inb(3, &preds);
-        let idom = compute_dominators(3, &rpo, &roots, &inb_offsets, &inb_data);
+        let (inb_offsets, inb_data) = build_inb(3, &preds, &rpo.dfn);
+        let idom = compute_dominators(3, rpo, &roots, &inb_offsets, &inb_data);
         assert_eq!(idom[0], 3, "idom[0]=vroot");
         assert_eq!(idom[1], 0);
         assert_eq!(idom[2], 1);
@@ -245,8 +259,8 @@ mod tests {
         let roots = vec![0u32, 1u32];
         let rpo = rpo_dfs(2, &roots, &fwd_off, &fwd_tgt);
         let preds = vec![vec![], vec![]];
-        let (inb_offsets, inb_data) = build_inb(2, &preds);
-        let idom = compute_dominators(2, &rpo, &roots, &inb_offsets, &inb_data);
+        let (inb_offsets, inb_data) = build_inb(2, &preds, &rpo.dfn);
+        let idom = compute_dominators(2, rpo, &roots, &inb_offsets, &inb_data);
         let vroot = 2u32;
         assert_eq!(idom[0], vroot);
         assert_eq!(idom[1], vroot);
@@ -263,8 +277,8 @@ mod tests {
         let rpo = rpo_dfs(4, &roots, &fwd_off, &fwd_tgt);
         // inbound: 1←[0], 2←[0,1], 3←[1,2]
         let preds = vec![vec![], vec![0u32], vec![0u32, 1u32], vec![1u32, 2u32]];
-        let (inb_offsets, inb_data) = build_inb(4, &preds);
-        let idom = compute_dominators(4, &rpo, &roots, &inb_offsets, &inb_data);
+        let (inb_offsets, inb_data) = build_inb(4, &preds, &rpo.dfn);
+        let idom = compute_dominators(4, rpo, &roots, &inb_offsets, &inb_data);
         assert_eq!(idom[0], 4);
         assert_eq!(idom[1], 0);
         assert_eq!(idom[2], 0, "2 dominated by 0 (direct edge bypasses 1)");
