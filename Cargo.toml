@@ -5,3 +5,21 @@ edition = "2024"
 
 [dependencies]
 flate2 = "1.1.9"
+
+# Clippy is run in CI (see .github/workflows/ci.yml). Most lints are enforced;
+# the allows below are deliberate patterns in the memory-critical hot paths,
+# not tech debt:
+#   needless_range_loop  - index drives several parallel per-object arrays at
+#                          once (semi/ancestor/label, class_idx, ...); the
+#                          iterator rewrite obscures the shared index and can
+#                          perturb the bit-exact dominator/pass2 hot loops.
+#   ptr_arg              - &mut Vec params are grown via push()/clear() inside
+#                          the fill routines; a slice cannot resize.
+#   collapsible_if       - nested `if let` guards read more clearly unmerged.
+#   too_many_arguments   - the retained-set builder threads many CSR arrays by
+#                          reference to avoid extra allocations.
+[lints.clippy]
+needless_range_loop = "allow"
+ptr_arg = "allow"
+collapsible_if = "allow"
+too_many_arguments = "allow"

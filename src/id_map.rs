@@ -8,7 +8,7 @@ use crate::vbyte;
 /// Two-level layout: instead of one sorted `Vec<u64>` (8 bytes/entry), the
 /// sorted addresses are stored as `Vec<u32>` offsets from a small number of
 /// 64-bit block bases. A new block starts whenever the next sorted address is
-/// >= 2^32 beyond the current block base, so every offset fits in u32. Real
+/// 2^32 or more beyond the current block base, so every offset fits in u32. Real
 /// heap dumps span a handful of regions => a handful of blocks, so this halves
 /// the per-object cost (4 bytes vs 8) — the dominant array at 500M+ objects.
 ///
@@ -29,13 +29,24 @@ pub struct IdMap {
 
 const BLOCK_SPAN: u64 = 1u64 << 32;
 
+#[allow(dead_code)]
 impl IdMap {
     pub fn new() -> Self {
-        Self { block_base: Vec::new(), block_start: Vec::new(), offsets: Vec::new(), staging: Vec::new() }
+        Self {
+            block_base: Vec::new(),
+            block_start: Vec::new(),
+            offsets: Vec::new(),
+            staging: Vec::new(),
+        }
     }
 
     pub fn with_capacity(cap: usize) -> Self {
-        Self { block_base: Vec::new(), block_start: Vec::new(), offsets: Vec::new(), staging: Vec::with_capacity(cap) }
+        Self {
+            block_base: Vec::new(),
+            block_start: Vec::new(),
+            offsets: Vec::new(),
+            staging: Vec::with_capacity(cap),
+        }
     }
 
     pub fn push(&mut self, addr: u64) {
@@ -58,7 +69,10 @@ impl IdMap {
     /// `reserve_offsets` to avoid repeated reallocs.
     #[inline]
     pub fn push_sorted_addr(&mut self, addr: u64) {
-        debug_assert!(self.staging.is_empty(), "cannot mix push and push_sorted_addr");
+        debug_assert!(
+            self.staging.is_empty(),
+            "cannot mix push and push_sorted_addr"
+        );
         if self.block_base.is_empty() {
             // First address opens the first block.
             self.block_base.push(addr);
@@ -67,7 +81,10 @@ impl IdMap {
             return;
         }
         let mut base = *self.block_base.last().unwrap();
-        debug_assert!(addr > self.addr_at(self.offsets.len() - 1), "push_sorted_addr not ascending");
+        debug_assert!(
+            addr > self.addr_at(self.offsets.len() - 1),
+            "push_sorted_addr not ascending"
+        );
         if addr - base >= BLOCK_SPAN {
             base = addr;
             self.block_base.push(base);
@@ -173,10 +190,8 @@ impl IdMap {
                 }
                 let mut vb = Vec::with_capacity(len * 2);
                 vbyte::encode_delta_u64(&addrs, &mut vb);
-                let mut e = flate2::write::DeflateEncoder::new(
-                    Vec::new(),
-                    flate2::Compression::best(),
-                );
+                let mut e =
+                    flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());
                 e.write_all(&vb)?;
                 let blob = e.finish()?;
                 Ok((blob, len))
@@ -199,9 +214,7 @@ impl IdMap {
             Codec::None => {
                 debug_assert_eq!(blob.len(), len * 8);
                 for c in blob.chunks_exact(8) {
-                    let addr = u64::from_le_bytes([
-                        c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7],
-                    ]);
+                    let addr = u64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]);
                     m.push_sorted_addr(addr);
                 }
             }
@@ -231,7 +244,9 @@ impl IdMap {
 }
 
 impl Default for IdMap {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]
@@ -276,7 +291,9 @@ mod tests {
     fn addr_roundtrip() {
         let mut m = IdMap::new();
         let addrs = vec![0x10u64, 0x30, 0x50, 0x20, 0x40];
-        for &a in &addrs { m.push(a); }
+        for &a in &addrs {
+            m.push(a);
+        }
         m.sort_and_dedup();
         assert_eq!(m.addr_at(0), 0x10);
         assert_eq!(m.addr_at(2), 0x30);
@@ -288,10 +305,12 @@ mod tests {
         // Addresses spanning >2^32 force multiple blocks.
         let mut m = IdMap::new();
         let a0 = 0x1000u64;
-        let a1 = 0x1000u64 + (1u64 << 33);       // new block
-        let a2 = a1 + 0x40;                        // same block as a1
-        let a3 = a1 + (1u64 << 34);                // another new block
-        for &a in &[a3, a0, a2, a1] { m.push(a); } // unsorted on purpose
+        let a1 = 0x1000u64 + (1u64 << 33); // new block
+        let a2 = a1 + 0x40; // same block as a1
+        let a3 = a1 + (1u64 << 34); // another new block
+        for &a in &[a3, a0, a2, a1] {
+            m.push(a);
+        } // unsorted on purpose
         m.sort_and_dedup();
         assert_eq!(m.len(), 4);
         // sorted: a0, a1, a2, a3
@@ -325,12 +344,16 @@ mod tests {
         };
 
         let mut batch = IdMap::new();
-        for &a in &addrs_sorted { batch.push(a); }
+        for &a in &addrs_sorted {
+            batch.push(a);
+        }
         batch.sort_and_dedup();
 
         let mut incr = IdMap::new();
         incr.reserve_offsets(addrs_sorted.len());
-        for &a in &addrs_sorted { incr.push_sorted_addr(a); }
+        for &a in &addrs_sorted {
+            incr.push_sorted_addr(a);
+        }
         incr.finalize_sorted();
 
         assert_eq!(incr.len(), batch.len());

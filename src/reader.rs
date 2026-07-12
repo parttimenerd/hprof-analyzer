@@ -1,8 +1,8 @@
+use flate2::read::GzDecoder;
 use std::{
     fs::File,
     io::{self, BufReader, Read},
 };
-use flate2::read::GzDecoder;
 
 const BUF_CAP: usize = 1 << 20; // 1 MiB refill chunk
 
@@ -52,7 +52,9 @@ impl HprofReader {
         let mut s = Vec::new();
         loop {
             let b = self.u1()?;
-            if b == 0 { break; }
+            if b == 0 {
+                break;
+            }
             s.push(b);
         }
         self.format = String::from_utf8_lossy(&s).into_owned();
@@ -74,7 +76,10 @@ impl HprofReader {
         self.end = leftover;
         while self.end < self.buf.len() {
             let n = self.inner.read(&mut self.buf[self.end..])?;
-            if n == 0 { self.eof = true; break; }
+            if n == 0 {
+                self.eof = true;
+                break;
+            }
             self.end += n;
         }
         Ok(self.end - self.pos)
@@ -91,7 +96,10 @@ impl HprofReader {
         if self.end - self.pos >= n {
             Ok(())
         } else {
-            Err(io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected eof"))
+            Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "unexpected eof",
+            ))
         }
     }
 
@@ -119,7 +127,10 @@ impl HprofReader {
         self.ensure(4)?;
         let p = self.pos;
         let v = u32::from_be_bytes([
-            self.buf[p], self.buf[p + 1], self.buf[p + 2], self.buf[p + 3],
+            self.buf[p],
+            self.buf[p + 1],
+            self.buf[p + 2],
+            self.buf[p + 3],
         ]);
         self.pos = p + 4;
         Ok(v)
@@ -130,8 +141,14 @@ impl HprofReader {
         self.ensure(8)?;
         let p = self.pos;
         let v = u64::from_be_bytes([
-            self.buf[p], self.buf[p + 1], self.buf[p + 2], self.buf[p + 3],
-            self.buf[p + 4], self.buf[p + 5], self.buf[p + 6], self.buf[p + 7],
+            self.buf[p],
+            self.buf[p + 1],
+            self.buf[p + 2],
+            self.buf[p + 3],
+            self.buf[p + 4],
+            self.buf[p + 5],
+            self.buf[p + 6],
+            self.buf[p + 7],
         ]);
         self.pos = p + 8;
         Ok(v)
@@ -185,8 +202,7 @@ impl HprofReader {
             let avail = self.end - self.pos;
             if avail > 0 {
                 let take = avail.min(dst.len() - written);
-                dst[written..written + take]
-                    .copy_from_slice(&self.buf[self.pos..self.pos + take]);
+                dst[written..written + take].copy_from_slice(&self.buf[self.pos..self.pos + take]);
                 self.pos += take;
                 written += take;
             } else {
@@ -197,7 +213,10 @@ impl HprofReader {
                     self.inner.read_exact(&mut dst[written..])?;
                     written = dst.len();
                 } else if self.refill()? == 0 {
-                    return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "eof in read_into"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "eof in read_into",
+                    ));
                 }
             }
         }
@@ -211,8 +230,7 @@ mod tests {
     use std::path::Path;
 
     const DUMP_PLAIN: &str = "/home/i560383/test-heapdumps/dump_0_fj-kmeans.hprof";
-    const DUMP_GZ: &str =
-        "/home/i560383/test-heapdumps/ArrayTest_84219_20260624_160147.hprof.gz";
+    const DUMP_GZ: &str = "/home/i560383/test-heapdumps/ArrayTest_84219_20260624_160147.hprof.gz";
 
     #[test]
     fn read_header_plain() {
@@ -246,10 +264,8 @@ mod tests {
     #[test]
     fn read_primitives() {
         let data: Vec<u8> = vec![
-            0xAB,
-            0x12, 0x34,
-            0xDE, 0xAD, 0xBE, 0xEF,
-            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+            0xAB, 0x12, 0x34, 0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+            0x08,
         ];
         let mut r = HprofReader {
             format: String::new(),

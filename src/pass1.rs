@@ -6,7 +6,7 @@ use std::{
 use crate::{
     id_map::IdMap,
     reader::HprofReader,
-    types::{heap, tags, HprofType},
+    types::{HprofType, heap, tags},
 };
 
 #[derive(Debug, Default)]
@@ -26,6 +26,7 @@ pub struct ClassInfo {
 pub struct Pass1 {
     pub strings: HashMap<u64, String>,
     pub class_map: HashMap<u64, ClassInfo>,
+    #[allow(dead_code)]
     pub class_serial_to_addr: HashMap<u32, u64>,
     pub id_map: IdMap,
     /// Per-object class reference, u32-interned to halve this array (was
@@ -41,6 +42,7 @@ pub struct Pass1 {
     /// Per-object raw element count (arrays only; 0 otherwise)
     pub elem_count: Vec<u32>,
     pub gc_root_addrs: Vec<u64>,
+    #[allow(dead_code)]
     pub gc_root_types: Vec<u8>,
     /// threadSerial → thread object address (from ROOT_THREAD_OBJ records)
     pub thread_serial_to_obj_id: HashMap<u32, u64>,
@@ -107,10 +109,7 @@ impl Pass1 {
                     let _stack_serial = r.u4()?;
                     let name_id = r.id()?;
                     class_serial_to_addr.insert(serial, class_addr);
-                    class_map
-                        .entry(class_addr)
-                        .or_insert_with(ClassInfo::default)
-                        .name_id = name_id;
+                    class_map.entry(class_addr).or_default().name_id = name_id;
                 }
                 tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
                     scan_heap_segment(
@@ -200,19 +199,27 @@ impl Pass1 {
         // resident at a time, trimming the pass1 transient peak. `order`
         // is now the compacted (unique, sorted) index list of length m.
         let mut class_ids: Vec<u32> = Vec::with_capacity(m);
-        for &i in &order { class_ids.push(tmp_class_ids[i as usize]); }
+        for &i in &order {
+            class_ids.push(tmp_class_ids[i as usize]);
+        }
         drop(tmp_class_ids);
 
         let mut shallow_sizes: Vec<u32> = Vec::with_capacity(m);
-        for &i in &order { shallow_sizes.push(tmp_shallow[i as usize]); }
+        for &i in &order {
+            shallow_sizes.push(tmp_shallow[i as usize]);
+        }
         drop(tmp_shallow);
 
         let mut kind: Vec<u8> = Vec::with_capacity(m);
-        for &i in &order { kind.push(tmp_kind[i as usize]); }
+        for &i in &order {
+            kind.push(tmp_kind[i as usize]);
+        }
         drop(tmp_kind);
 
         let mut elem_count: Vec<u32> = Vec::with_capacity(m);
-        for &i in &order { elem_count.push(tmp_elem_count[i as usize]); }
+        for &i in &order {
+            elem_count.push(tmp_elem_count[i as usize]);
+        }
         drop(tmp_elem_count);
 
         drop(order);
@@ -329,7 +336,7 @@ fn scan_heap_segment(
                     });
                     tmp_class_ids.push(idx); // class-of-class resolved later in pass2
                 }
-                tmp_shallow.push(0);            // pass2 recalculates shallow size for class objects
+                tmp_shallow.push(0); // pass2 recalculates shallow size for class objects
                 tmp_kind.push(3);
                 tmp_elem_count.push(0);
             }
@@ -339,7 +346,10 @@ fn scan_heap_segment(
                 let class_id = r.id()?;
                 let data_len = r.u4()? as u64;
                 r.skip(data_len)?;
-                let shallow = class_map.get(&class_id).map(|c| c.instance_size).unwrap_or(0);
+                let shallow = class_map
+                    .get(&class_id)
+                    .map(|c| c.instance_size)
+                    .unwrap_or(0);
                 tmp_addrs.push(addr);
                 {
                     let idx = *class_addr_to_idx.entry(class_id).or_insert_with(|| {
@@ -412,53 +422,77 @@ fn read_class_dump(
     r: &mut HprofReader,
     id_size: u8,
     class_map: &mut HashMap<u64, ClassInfo>,
-) -> io::Result<(u64, u64)> { // (class_addr, consumed)
+) -> io::Result<(u64, u64)> {
+    // (class_addr, consumed)
     let ids = id_size as u64;
     let mut consumed: u64 = 0;
 
-    let class_addr = r.id()?; consumed += ids;
-    r.skip(4)?; consumed += 4; // stack_trace_serial
-    let super_id = r.id()?; consumed += ids;
-    let loader_id = r.id()?; consumed += ids;
-    r.skip(ids)?; consumed += ids; // signers_id
-    r.skip(ids)?; consumed += ids; // protection_domain_id
-    r.skip(ids)?; consumed += ids; // reserved1
-    r.skip(ids)?; consumed += ids; // reserved2
-    let instance_size = r.u4()?; consumed += 4;
+    let class_addr = r.id()?;
+    consumed += ids;
+    r.skip(4)?;
+    consumed += 4; // stack_trace_serial
+    let super_id = r.id()?;
+    consumed += ids;
+    let loader_id = r.id()?;
+    consumed += ids;
+    r.skip(ids)?;
+    consumed += ids; // signers_id
+    r.skip(ids)?;
+    consumed += ids; // protection_domain_id
+    r.skip(ids)?;
+    consumed += ids; // reserved1
+    r.skip(ids)?;
+    consumed += ids; // reserved2
+    let instance_size = r.u4()?;
+    consumed += 4;
 
     // Constant pool entries
-    let cp_count = r.u2()? as u64; consumed += 2;
+    let cp_count = r.u2()? as u64;
+    consumed += 2;
     for _ in 0..cp_count {
-        r.skip(2)?; consumed += 2; // cp index (u2)
-        let cp_type = r.u1()?; consumed += 1;
+        r.skip(2)?;
+        consumed += 2; // cp index (u2)
+        let cp_type = r.u1()?;
+        consumed += 1;
         let vs = value_size(cp_type, id_size);
-        r.skip(vs)?; consumed += vs;
+        r.skip(vs)?;
+        consumed += vs;
     }
 
     // Static fields
-    let static_count = r.u2()? as u64; consumed += 2;
+    let static_count = r.u2()? as u64;
+    consumed += 2;
     let mut static_obj_count = 0u32;
     let mut static_prim_bytes = 0u32;
     for _ in 0..static_count {
-        r.skip(ids)?; consumed += ids; // name_id
-        let field_type = r.u1()?; consumed += 1;
+        r.skip(ids)?;
+        consumed += ids; // name_id
+        let field_type = r.u1()?;
+        consumed += 1;
         let vs = value_size(field_type, id_size);
-        r.skip(vs)?; consumed += vs;
-        if field_type == 2 { static_obj_count += 1; }
-        else { static_prim_bytes += vs as u32; }
+        r.skip(vs)?;
+        consumed += vs;
+        if field_type == 2 {
+            static_obj_count += 1;
+        } else {
+            static_prim_bytes += vs as u32;
+        }
     }
 
     // Instance fields
-    let field_count = r.u2()? as u64; consumed += 2;
+    let field_count = r.u2()? as u64;
+    consumed += 2;
     let mut fields = Vec::with_capacity(field_count as usize);
     for _ in 0..field_count {
-        let name_id = r.id()?; consumed += ids;
-        let type_code = r.u1()?; consumed += 1;
+        let name_id = r.id()?;
+        consumed += ids;
+        let type_code = r.u1()?;
+        consumed += 1;
         let htype = HprofType::from_code(type_code).unwrap_or(HprofType::Int);
         fields.push((name_id, htype));
     }
 
-    let entry = class_map.entry(class_addr).or_insert_with(ClassInfo::default);
+    let entry = class_map.entry(class_addr).or_default();
     entry.super_id = super_id;
     entry.loader_id = loader_id;
     entry.instance_size = instance_size;
@@ -484,37 +518,52 @@ mod tests {
     const DUMP: &str = "/home/i560383/test-heapdumps/dump_0_fj-kmeans.hprof";
 
     // Ground truth from: java -jar ~/hprof-redact.jar diagnose dump_0_fj-kmeans.hprof
-    const EXPECTED_INSTANCES:   u64 = 2_698_510;
-    const EXPECTED_OBJ_ARRAYS:  u64 =   504_353;
-    const EXPECTED_PRIM_ARRAYS: u64 =    27_379;
-    const EXPECTED_CLASSES:     u64 =     2_646;
-    const EXPECTED_GC_ROOTS:    u64 = 1_454 + 135 + 101; // 1,690 (JAVA_FRAME/JNI_LOCAL/etc -> thread_local_pairs)
+    const EXPECTED_INSTANCES: u64 = 2_698_510;
+    const EXPECTED_OBJ_ARRAYS: u64 = 504_353;
+    const EXPECTED_PRIM_ARRAYS: u64 = 27_379;
+    const EXPECTED_CLASSES: u64 = 2_646;
+    const EXPECTED_GC_ROOTS: u64 = 1_454 + 135 + 101; // 1,690 (JAVA_FRAME/JNI_LOCAL/etc -> thread_local_pairs)
 
     #[test]
     fn record_counts_match_diagnose() {
-        if !std::path::Path::new(DUMP).exists() { return; }
+        if !std::path::Path::new(DUMP).exists() {
+            return;
+        }
         let p = Pass1::run(DUMP).unwrap();
-        assert_eq!(p.instance_count,   EXPECTED_INSTANCES,   "instances");
-        assert_eq!(p.obj_array_count,  EXPECTED_OBJ_ARRAYS,  "obj arrays");
+        assert_eq!(p.instance_count, EXPECTED_INSTANCES, "instances");
+        assert_eq!(p.obj_array_count, EXPECTED_OBJ_ARRAYS, "obj arrays");
         assert_eq!(p.prim_array_count, EXPECTED_PRIM_ARRAYS, "prim arrays");
-        assert_eq!(p.class_dump_count, EXPECTED_CLASSES,     "classes");
-        assert_eq!(p.gc_root_addrs.len() as u64, EXPECTED_GC_ROOTS,
-            "gc roots (got {})", p.gc_root_addrs.len());
+        assert_eq!(p.class_dump_count, EXPECTED_CLASSES, "classes");
+        assert_eq!(
+            p.gc_root_addrs.len() as u64,
+            EXPECTED_GC_ROOTS,
+            "gc roots (got {})",
+            p.gc_root_addrs.len()
+        );
     }
 
     #[test]
     fn total_object_count() {
-        if !std::path::Path::new(DUMP).exists() { return; }
+        if !std::path::Path::new(DUMP).exists() {
+            return;
+        }
         let p = Pass1::run(DUMP).unwrap();
         // id_map now includes class objects (from CLASS_DUMP records) in addition to instances/arrays
-        let expected = EXPECTED_INSTANCES + EXPECTED_OBJ_ARRAYS + EXPECTED_PRIM_ARRAYS + p.class_dump_count;
-        assert_eq!(p.id_map.len() as u64, expected,
-            "total objects (got {})", p.id_map.len());
+        let expected =
+            EXPECTED_INSTANCES + EXPECTED_OBJ_ARRAYS + EXPECTED_PRIM_ARRAYS + p.class_dump_count;
+        assert_eq!(
+            p.id_map.len() as u64,
+            expected,
+            "total objects (got {})",
+            p.id_map.len()
+        );
     }
 
     #[test]
     fn parallel_arrays_consistent() {
-        if !std::path::Path::new(DUMP).exists() { return; }
+        if !std::path::Path::new(DUMP).exists() {
+            return;
+        }
         let p = Pass1::run(DUMP).unwrap();
         assert_eq!(p.id_map.len(), p.class_ids.len(), "class_ids len");
         assert_eq!(p.id_map.len(), p.shallow_sizes.len(), "shallow_sizes len");
@@ -522,7 +571,9 @@ mod tests {
 
     #[test]
     fn header_fields() {
-        if !std::path::Path::new(DUMP).exists() { return; }
+        if !std::path::Path::new(DUMP).exists() {
+            return;
+        }
         let p = Pass1::run(DUMP).unwrap();
         assert_eq!(p.id_size, 8);
         assert!(p.format.starts_with("JAVA PROFILE"));
@@ -532,17 +583,19 @@ mod tests {
 
     #[test]
     fn class_name_resolvable() {
-        if !std::path::Path::new(DUMP).exists() { return; }
+        if !std::path::Path::new(DUMP).exists() {
+            return;
+        }
         let p = Pass1::run(DUMP).unwrap();
         // Every class in class_map should have a name_id, and that name_id should be in strings
         let mut resolved = 0usize;
         for ci in p.class_map.values() {
-            if p.strings.contains_key(&ci.name_id) { resolved += 1; }
+            if p.strings.contains_key(&ci.name_id) {
+                resolved += 1;
+            }
         }
         // At least 90% of classes should have resolvable names
         let pct = resolved * 100 / p.class_map.len();
         assert!(pct >= 90, "only {pct}% of classes have resolvable names");
     }
-
-
 }

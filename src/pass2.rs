@@ -6,9 +6,16 @@ use std::{
 use crate::{
     pass1::{ClassInfo, Pass1},
     reader::HprofReader,
-    types::{heap, tags, HprofType},
+    types::{HprofType, heap, tags},
     vbyte,
 };
+
+/// Inbound CSR block size: one sampled byte-offset per INB_BLOCK nodes.
+/// Each node's predecessor slice is count-prefixed so it is self-delimiting;
+/// dominator Phase-1 seeks to the block start then scans-skips to node w.
+/// Trades ~K/2 extra vbyte skips per lookup for dropping the full per-node
+/// offset array (n+1 u32 = ~2GB) down to (n/K) u32.
+pub const INB_BLOCK: usize = 16;
 
 // ── Graph output struct ────────────────────────────────────────────────────
 
@@ -21,7 +28,7 @@ pub struct Graph {
     pub shallow: Vec<u32>,
     pub class_idx: Vec<u32>,
     pub class_names: Vec<String>,
-    pub class_obj_class_idx: HashMap<u32, u32>,  // class-obj index -> class-histogram row (sparse; absent = not a class obj)
+    pub class_obj_class_idx: HashMap<u32, u32>, // class-obj index -> class-histogram row (sparse; absent = not a class obj)
     // Forward CSR
     pub fwd_offsets: Vec<u32>,
     pub fwd_targets: Vec<u32>,
@@ -72,7 +79,7 @@ impl InboundBuilder {
     }
 
     /// Run the inbound scan + Phase-4 encode. Returns (inb_offsets, inb_data).
-    pub fn build(self, dfn: &[u32]) -> io::Result<(Vec<u32>, Vec<u8>)> {
+    pub fn build(self, dfn: &[u32]) -> io::Result<(Vec<u64>, Vec<u8>)> {
         let InboundBuilder {
             path,
             id_size,
@@ -95,8 +102,7 @@ impl InboundBuilder {
         let id_map = match id_map {
             Some(m) => m,
             None => {
-                let (blob, len) = id_map_c
-                    .expect("id_map neither live nor compressed");
+                let (blob, len) = id_map_c.expect("id_map neither live nor compressed");
                 crate::id_map::IdMap::from_compressed(&blob, len, id_map_codec)?
             }
         };
@@ -106,8 +112,11 @@ impl InboundBuilder {
         // avoiding the inb_flat+inb_data coexistence that was the global RSS peak.
         let mut inb_flat = crate::chunkvec::ChunkU32::zeroed(total_inb as usize);
         if crate::trace::enabled() {
-            eprintln!("[trace-rss] inbound 2b: total_inb={} edges, inb_flat={} MB",
-                total_inb, (total_inb as usize * 4) / (1024*1024));
+            eprintln!(
+                "[trace-rss] inbound 2b: total_inb={} edges, inb_flat={} MB",
+                total_inb,
+                (total_inb as usize * 4) / (1024 * 1024)
+            );
         }
         crate::trace::probe("inbound 2b: after inb_flat alloc");
 
@@ -127,15 +136,26 @@ impl InboundBuilder {
                 match tag {
                     tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
                         Pass2::fill_heap_2b(
-                            &mut r, id_size, ref_size, length,
-                            &id_map, &class_addrs, &field_plans,
-                            false, true,
-                            &mut fwd_t_stub, &mut fwd_offsets_stub,
-                            &mut inb_flat, &mut in_cursors, &mut scratch,
+                            &mut r,
+                            id_size,
+                            ref_size,
+                            length,
+                            &id_map,
+                            &class_addrs,
+                            &field_plans,
+                            false,
+                            true,
+                            &mut fwd_t_stub,
+                            &mut fwd_offsets_stub,
+                            &mut inb_flat,
+                            &mut in_cursors,
+                            &mut scratch,
                         )?;
                     }
                     tags::HEAP_DUMP_END => break,
-                    _ => { r.skip(length)?; }
+                    _ => {
+                        r.skip(length)?;
+                    }
                 }
             }
         }
@@ -154,10 +174,11 @@ impl InboundBuilder {
         }
 
         crate::trace::probe("inbound: before Phase-4 (after 2b scan + drops)");
-        // -- Phase 4: Build inbound CSR --
-        let mut inb_offsets: Vec<u32> = Vec::with_capacity(n + 1);
+        // -- Phase 4: Build inbound CSR (blocked offsets + count-prefixed data) --
+        // inb_block_off[b] = byte offset where node (b*INB_BLOCK)'s slice begins.
+        // Each node's slice = vbyte(count) then `count` vbyte pre-order deltas.
+        let mut inb_block_off: Vec<u64> = Vec::with_capacity(n / INB_BLOCK + 2);
         let mut inb_data: Vec<u8> = Vec::new();
-        inb_offsets.push(0u32);
         // CSR is contiguous: start[i] = end of node i-1 = in_cursors[i-1] after fill.
         let mut start = 0usize;
         // Reusable per-node scratch: copy each node's inbound slice out of the
@@ -200,37 +221,53 @@ impl InboundBuilder {
                     write
                 }
             };
+            // Record a sampled block offset at each block boundary (BEFORE the
+            // count-prefix), so a lookup for any node in the block can seek here
+            // and scan-skip forward to the target node.
+            if i % INB_BLOCK == 0 {
+                inb_block_off.push(inb_data.len() as u64);
+            }
+            // Count-prefix makes each node's slice self-delimiting.
+            vbyte::encode(unique_end as u32, &mut inb_data);
             // Delta-encode pre-order values.
             let mut prev: u32 = 0;
             for &pre in &nb[..unique_end] {
                 vbyte::encode(pre - prev, &mut inb_data);
                 prev = pre;
             }
-            inb_offsets.push(inb_data.len() as u32);
             start = end;
             if start >= next_free_at {
                 inb_flat.free_below(start);
                 next_free_at = start + (1 << 26);
             }
-            if i == n / 2 { crate::trace::probe("inbound Phase-4: midpoint (inb_flat+inb_data coexist)"); }
+            if i == n / 2 {
+                crate::trace::probe("inbound Phase-4: midpoint (inb_flat+inb_data coexist)");
+            }
         }
         drop(nb);
         drop(inb_flat);
         drop(in_cursors); // inbound CSR done; end-offset cursors no longer needed
 
+        // Trailing sentinel = total byte length (bounds the last block's scan).
+        inb_block_off.push(inb_data.len() as u64);
+
         if crate::trace::enabled() {
-            eprintln!("[trace-rss] inbound Phase-4: inb_data len={} MB cap={} MB",
-                inb_data.len() / (1024*1024), inb_data.capacity() / (1024*1024));
+            eprintln!(
+                "[trace-rss] inbound Phase-4: inb_data len={} MB cap={} MB block_off len={}",
+                inb_data.len() / (1024 * 1024),
+                inb_data.capacity() / (1024 * 1024),
+                inb_block_off.len()
+            );
         }
         crate::trace::probe("inbound Phase-4: after inb_data built");
-        Ok((inb_offsets, inb_data))
+        Ok((inb_block_off, inb_data))
     }
 }
 
 // ── Size helpers ───────────────────────────────────────────────────────────
 
 fn align_up(n: usize, align: usize) -> usize {
-    ((n + align - 1) / align) * align
+    n.div_ceil(align) * align
 }
 
 /// Byte sizes of non-Object (primitive) fields for a class's own fields only.
@@ -243,7 +280,10 @@ fn own_prim_bytes(ci: &ClassInfo, _ref_size: usize) -> usize {
 }
 
 fn own_obj_count(ci: &ClassInfo) -> usize {
-    ci.fields.iter().filter(|(_, t)| *t == HprofType::Object).count()
+    ci.fields
+        .iter()
+        .filter(|(_, t)| *t == HprofType::Object)
+        .count()
 }
 
 /// Recursively compute unaligned instance body size (MAT formula).
@@ -264,7 +304,8 @@ fn calculate_size_recursive(
                 ptr_size + ref_size
             } else {
                 let own = own_obj_count(ci) * ref_size + own_prim_bytes(ci, ref_size);
-                let super_size = calculate_size_recursive(ci.super_id, class_map, ptr_size, ref_size, cache);
+                let super_size =
+                    calculate_size_recursive(ci.super_id, class_map, ptr_size, ref_size, cache);
                 align_up(own + super_size, ref_size)
             }
         }
@@ -318,7 +359,7 @@ fn build_field_plans(
 ) -> HashMap<u64, FieldPlan> {
     let mut plans: HashMap<u64, FieldPlan> = HashMap::with_capacity(class_map.len());
     let mut chain: Vec<u64> = Vec::new();
-    for (&class_addr, _) in class_map {
+    for &class_addr in class_map.keys() {
         chain.clear();
         let mut cur = class_addr;
         loop {
@@ -326,7 +367,9 @@ fn build_field_plans(
                 None => break,
                 Some(ci) => {
                     chain.push(cur);
-                    if ci.super_id == 0 { break; }
+                    if ci.super_id == 0 {
+                        break;
+                    }
                     cur = ci.super_id;
                 }
             }
@@ -334,10 +377,17 @@ fn build_field_plans(
         let mut plan: FieldPlan = Vec::new();
         let mut byte_offset = 0usize;
         for &caddr in &chain {
-            let ci = match class_map.get(&caddr) { Some(c) => c, None => break };
+            let ci = match class_map.get(&caddr) {
+                Some(c) => c,
+                None => break,
+            };
             let cname = strings.get(&ci.name_id).map(|s| s.as_str()).unwrap_or("");
             for &(fname_id, t) in &ci.fields {
-                let fsize = if t == HprofType::Object { id_size } else { t.byte_size() };
+                let fsize = if t == HprofType::Object {
+                    id_size
+                } else {
+                    t.byte_size()
+                };
                 if t == HprofType::Object {
                     let fname = strings.get(&fname_id).map(|s| s.as_str()).unwrap_or("");
                     let excluded = is_excluded_field(cname, fname);
@@ -408,7 +458,16 @@ fn prim_array_class_name(elem_type_code: u8) -> &'static str {
 pub struct Pass2;
 
 impl Pass2 {
-    pub fn build(path: &str, mut p1: Pass1, compress: crate::cvec::Codec) -> io::Result<(Graph, InboundBuilder, crate::cvec::CompressedU32, crate::cvec::CompressedU32)> {
+    pub fn build(
+        path: &str,
+        mut p1: Pass1,
+        compress: crate::cvec::Codec,
+    ) -> io::Result<(
+        Graph,
+        InboundBuilder,
+        crate::cvec::CompressedU32,
+        crate::cvec::CompressedU32,
+    )> {
         let n = p1.id_map.len();
         let id_size = p1.id_size;
         let ptr_size = id_size as usize;
@@ -435,8 +494,7 @@ impl Pass2 {
         let mut size_cache: HashMap<u64, usize> = HashMap::new();
 
         // Set of class-object addresses (used later for edge/class-obj resolution).
-        let class_addrs: std::collections::HashSet<u64> =
-            p1.class_map.keys().cloned().collect();
+        let class_addrs: std::collections::HashSet<u64> = p1.class_map.keys().cloned().collect();
 
         let mut shallow: Vec<u32> = Vec::with_capacity(n);
         for i in 0..n {
@@ -465,7 +523,13 @@ impl Pass2 {
                     // Instance: MAT calculateSizeRecursive over the super chain.
                     let addr = p1.class_addr_table[cid as usize];
                     if p1.class_map.contains_key(&addr) {
-                        instance_shallow_size(addr, &p1.class_map, ptr_size, ref_size, &mut size_cache)
+                        instance_shallow_size(
+                            addr,
+                            &p1.class_map,
+                            ptr_size,
+                            ref_size,
+                            &mut size_cache,
+                        )
                     } else {
                         align_up(ptr_size + ref_size, 8) as u32
                     }
@@ -511,10 +575,9 @@ impl Pass2 {
                 2 => {
                     // Primitive array: cid is the raw element type code.
                     let tc = cid as u8;
-                    class_idx[i] = get_or_insert_class(
-                        PRIM_KEY_BASE | tc as u64,
-                        &|| prim_array_class_name(tc).to_string(),
-                    );
+                    class_idx[i] = get_or_insert_class(PRIM_KEY_BASE | tc as u64, &|| {
+                        prim_array_class_name(tc).to_string()
+                    });
                 }
                 1 => {
                     // Object array: cid indexes the array-class address (loader-distinct).
@@ -591,7 +654,9 @@ impl Pass2 {
                         )?;
                     }
                     tags::HEAP_DUMP_END => break,
-                    _ => { r.skip(length)?; }
+                    _ => {
+                        r.skip(length)?;
+                    }
                 }
             }
         }
@@ -640,7 +705,9 @@ impl Pass2 {
             for (&caddr, ci) in &p1.class_map {
                 if ci.loader_id == 0 {
                     // Check it's not an array class (name doesn't start with '[')
-                    let is_array = p1.strings.get(&ci.name_id)
+                    let is_array = p1
+                        .strings
+                        .get(&ci.name_id)
                         .map(|n| n.starts_with('['))
                         .unwrap_or(false);
                     if !is_array {
@@ -654,11 +721,17 @@ impl Pass2 {
         // ── addSystemClassRootsIfMissing: boot-loader non-array classes not yet roots ─
         let mut synthetic_root_count = 0usize;
         for (&caddr, ci) in &p1.class_map {
-            if ci.loader_id != 0 { continue; }
-            let is_array = p1.strings.get(&ci.name_id)
+            if ci.loader_id != 0 {
+                continue;
+            }
+            let is_array = p1
+                .strings
+                .get(&ci.name_id)
                 .map(|n| n.starts_with('['))
                 .unwrap_or(false);
-            if is_array { continue; }
+            if is_array {
+                continue;
+            }
             if let Some(idx) = p1.id_map.index_of(caddr) {
                 if !gc_root_set.contains(&(idx as u32)) {
                     gc_root_set.insert(idx as u32);
@@ -753,15 +826,26 @@ impl Pass2 {
                 match tag {
                     tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
                         Self::fill_heap_2b(
-                            &mut r, id_size, ref_size, length,
-                            &p1.id_map, &class_addrs, &field_plans,
-                            true, false,
-                            &mut fwd_targets, &mut fwd_offsets,
-                            &mut inb_flat_stub, &mut in_degree_stub, &mut scratch,
+                            &mut r,
+                            id_size,
+                            ref_size,
+                            length,
+                            &p1.id_map,
+                            &class_addrs,
+                            &field_plans,
+                            true,
+                            false,
+                            &mut fwd_targets,
+                            &mut fwd_offsets,
+                            &mut inb_flat_stub,
+                            &mut in_degree_stub,
+                            &mut scratch,
                         )?;
                     }
                     tags::HEAP_DUMP_END => break,
-                    _ => { r.skip(length)?; }
+                    _ => {
+                        r.skip(length)?;
+                    }
                 }
             }
         }
@@ -872,7 +956,8 @@ impl Pass2 {
 
         macro_rules! checked_sub {
             ($remaining:expr, $sz:expr) => {
-                $remaining = $remaining.checked_sub($sz)
+                $remaining = $remaining
+                    .checked_sub($sz)
                     .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "segment overrun"))?;
             };
         }
@@ -907,9 +992,8 @@ impl Pass2 {
                     checked_sub!(remaining, ids + 8);
                 }
                 heap::CLASS_DUMP => {
-                    let consumed = Self::count_class_dump_edges(
-                        r, id_size, id_map, out_degree, in_degree,
-                    )?;
+                    let consumed =
+                        Self::count_class_dump_edges(r, id_size, id_map, out_degree, in_degree)?;
                     checked_sub!(remaining, consumed);
                 }
                 heap::INSTANCE_DUMP => {
@@ -918,7 +1002,10 @@ impl Pass2 {
                     let class_id = r.id()?;
                     let data_len = r.u4()? as u64;
                     if data_len > remaining {
-                        return Err(io::Error::new(io::ErrorKind::InvalidData, "array too large"));
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "array too large",
+                        ));
                     }
                     r.read_bytes_reuse(scratch, data_len as usize)?;
                     checked_sub!(remaining, ids + 4 + ids + 4 + data_len);
@@ -930,7 +1017,9 @@ impl Pass2 {
 
                     // Recalculate MAT shallow size for instances (fix #3: reuse size_cache)
                     if !class_addrs.contains(&addr) {
-                        let sz = instance_shallow_size(class_id, class_map, ptr_size, ref_size, size_cache);
+                        let sz = instance_shallow_size(
+                            class_id, class_map, ptr_size, ref_size, size_cache,
+                        );
                         shallow[src_idx] = sz;
                     }
 
@@ -960,7 +1049,10 @@ impl Pass2 {
                     let elem_class_id = r.id()?;
                     let byte_len = count.saturating_mul(ids);
                     if byte_len > remaining {
-                        return Err(io::Error::new(io::ErrorKind::InvalidData, "array too large"));
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "array too large",
+                        ));
                     }
                     r.read_bytes_reuse(scratch, byte_len as usize)?;
                     checked_sub!(remaining, ids + 4 + 4 + ids + byte_len);
@@ -1002,7 +1094,8 @@ impl Pass2 {
 
                     if let Some(src_idx) = id_map.index_of(addr) {
                         // Fix shallow size (class_idx set by identity in Phase 0c)
-                        shallow[src_idx] = prim_array_shallow(count, esz as usize, ptr_size, ref_size);
+                        shallow[src_idx] =
+                            prim_array_shallow(count, esz as usize, ptr_size, ref_size);
                     }
                 }
                 other => {
@@ -1064,7 +1157,8 @@ impl Pass2 {
 
         macro_rules! checked_sub {
             ($remaining:expr, $sz:expr) => {
-                $remaining = $remaining.checked_sub($sz)
+                $remaining = $remaining
+                    .checked_sub($sz)
                     .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "segment overrun"))?;
             };
         }
@@ -1100,8 +1194,15 @@ impl Pass2 {
                 }
                 heap::CLASS_DUMP => {
                     let consumed = Self::fill_class_dump_edges(
-                        r, id_size, id_map, do_fwd, do_inb,
-                        fwd_targets, fwd_offsets, inb_flat, in_degree,
+                        r,
+                        id_size,
+                        id_map,
+                        do_fwd,
+                        do_inb,
+                        fwd_targets,
+                        fwd_offsets,
+                        inb_flat,
+                        in_degree,
                     )?;
                     checked_sub!(remaining, consumed);
                 }
@@ -1111,7 +1212,10 @@ impl Pass2 {
                     let class_id = r.id()?;
                     let data_len = r.u4()? as u64;
                     if data_len > remaining {
-                        return Err(io::Error::new(io::ErrorKind::InvalidData, "array too large"));
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "array too large",
+                        ));
                     }
                     r.read_bytes_reuse(scratch, data_len as usize)?;
                     checked_sub!(remaining, ids + 4 + ids + 4 + data_len);
@@ -1142,7 +1246,10 @@ impl Pass2 {
                     let elem_class_id = r.id()?;
                     let byte_len = count.saturating_mul(ids);
                     if byte_len > remaining {
-                        return Err(io::Error::new(io::ErrorKind::InvalidData, "array too large"));
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "array too large",
+                        ));
                     }
                     r.read_bytes_reuse(scratch, byte_len as usize)?;
                     checked_sub!(remaining, ids + 4 + 4 + ids + byte_len);
@@ -1199,11 +1306,16 @@ impl Pass2 {
         let ids = id_size as u64;
         let mut consumed = 0u64;
 
-        let class_addr = r.id()?; consumed += ids;
-        r.skip(4)?; consumed += 4;
-        let super_id = r.id()?; consumed += ids;
-        let loader_id = r.id()?; consumed += ids;
-        r.skip(ids * 4 + 4)?; consumed += ids * 4 + 4;
+        let class_addr = r.id()?;
+        consumed += ids;
+        r.skip(4)?;
+        consumed += 4;
+        let super_id = r.id()?;
+        consumed += ids;
+        let loader_id = r.id()?;
+        consumed += ids;
+        r.skip(ids * 4 + 4)?;
+        consumed += ids * 4 + 4;
 
         let src_idx_opt = id_map.index_of(class_addr);
 
@@ -1233,19 +1345,26 @@ impl Pass2 {
         }
 
         // Constant pool
-        let cp = r.u2()? as u64; consumed += 2;
+        let cp = r.u2()? as u64;
+        consumed += 2;
         for _ in 0..cp {
-            r.skip(2)?; consumed += 2;
-            let tp = r.u1()?; consumed += 1;
+            r.skip(2)?;
+            consumed += 2;
+            let tp = r.u1()?;
+            consumed += 1;
             let vs = value_size(tp, id_size);
-            r.skip(vs)?; consumed += vs;
+            r.skip(vs)?;
+            consumed += vs;
         }
 
         // Static fields
-        let sc = r.u2()? as u64; consumed += 2;
+        let sc = r.u2()? as u64;
+        consumed += 2;
         for _ in 0..sc {
-            r.skip(ids)?; consumed += ids; // name_id
-            let tp = r.u1()?; consumed += 1;
+            r.skip(ids)?;
+            consumed += ids; // name_id
+            let tp = r.u1()?;
+            consumed += 1;
             let vs = value_size(tp, id_size);
             if tp == 2 {
                 // Object static field
@@ -1255,13 +1374,16 @@ impl Pass2 {
                     add_edge_inner!(src, ref_val);
                 }
             } else {
-                r.skip(vs)?; consumed += vs;
+                r.skip(vs)?;
+                consumed += vs;
             }
         }
 
         // Instance fields (just skip)
-        let ic = r.u2()? as u64; consumed += 2;
-        r.skip(ic * (ids + 1))?; consumed += ic * (ids + 1);
+        let ic = r.u2()? as u64;
+        consumed += 2;
+        r.skip(ic * (ids + 1))?;
+        consumed += ic * (ids + 1);
 
         Ok(consumed)
     }
@@ -1281,11 +1403,16 @@ impl Pass2 {
         let ids = id_size as u64;
         let mut consumed = 0u64;
 
-        let class_addr = r.id()?; consumed += ids;
-        r.skip(4)?; consumed += 4;
-        let super_id = r.id()?; consumed += ids;
-        let loader_id = r.id()?; consumed += ids;
-        r.skip(ids * 4 + 4)?; consumed += ids * 4 + 4;
+        let class_addr = r.id()?;
+        consumed += ids;
+        r.skip(4)?;
+        consumed += 4;
+        let super_id = r.id()?;
+        consumed += ids;
+        let loader_id = r.id()?;
+        consumed += ids;
+        r.skip(ids * 4 + 4)?;
+        consumed += ids * 4 + 4;
 
         let src_opt = id_map.index_of(class_addr);
 
@@ -1307,30 +1434,40 @@ impl Pass2 {
             count_edge!(loader_id);
         }
 
-        let cp = r.u2()? as u64; consumed += 2;
+        let cp = r.u2()? as u64;
+        consumed += 2;
         for _ in 0..cp {
-            r.skip(2)?; consumed += 2;
-            let tp = r.u1()?; consumed += 1;
+            r.skip(2)?;
+            consumed += 2;
+            let tp = r.u1()?;
+            consumed += 1;
             let vs = value_size(tp, id_size);
-            r.skip(vs)?; consumed += vs;
+            r.skip(vs)?;
+            consumed += vs;
         }
 
-        let sc = r.u2()? as u64; consumed += 2;
+        let sc = r.u2()? as u64;
+        consumed += 2;
         for _ in 0..sc {
-            r.skip(ids)?; consumed += ids;
-            let tp = r.u1()?; consumed += 1;
+            r.skip(ids)?;
+            consumed += ids;
+            let tp = r.u1()?;
+            consumed += 1;
             let vs = value_size(tp, id_size);
             if tp == 2 {
                 let ref_val = read_id_from_reader(r, id_size)?;
                 consumed += vs;
                 count_edge!(ref_val);
             } else {
-                r.skip(vs)?; consumed += vs;
+                r.skip(vs)?;
+                consumed += vs;
             }
         }
 
-        let ic = r.u2()? as u64; consumed += 2;
-        r.skip(ic * (ids + 1))?; consumed += ic * (ids + 1);
+        let ic = r.u2()? as u64;
+        consumed += 2;
+        r.skip(ic * (ids + 1))?;
+        consumed += ic * (ids + 1);
 
         Ok(consumed)
     }
@@ -1342,14 +1479,15 @@ fn read_ref(data: &[u8], ref_size: usize) -> u64 {
     if ref_size == 4 {
         if data.len() >= 4 {
             u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as u64
-        } else { 0 }
+        } else {
+            0
+        }
+    } else if data.len() >= 8 {
+        u64::from_be_bytes([
+            data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+        ])
     } else {
-        if data.len() >= 8 {
-            u64::from_be_bytes([
-                data[0], data[1], data[2], data[3],
-                data[4], data[5], data[6], data[7],
-            ])
-        } else { 0 }
+        0
     }
 }
 
@@ -1357,14 +1495,15 @@ fn read_id(chunk: &[u8], id_size: u8) -> u64 {
     if id_size == 4 {
         if chunk.len() >= 4 {
             u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as u64
-        } else { 0 }
+        } else {
+            0
+        }
+    } else if chunk.len() >= 8 {
+        u64::from_be_bytes([
+            chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
+        ])
     } else {
-        if chunk.len() >= 8 {
-            u64::from_be_bytes([
-                chunk[0], chunk[1], chunk[2], chunk[3],
-                chunk[4], chunk[5], chunk[6], chunk[7],
-            ])
-        } else { 0 }
+        0
     }
 }
 
@@ -1391,16 +1530,19 @@ mod tests {
 
     #[test]
     fn pass2_graph_has_edges() {
-        if !std::path::Path::new(DUMP).exists() { return; }
+        if !std::path::Path::new(DUMP).exists() {
+            return;
+        }
         let p1 = Pass1::run(DUMP).unwrap();
         let (g, inbound, _sc, _ci) = Pass2::build(DUMP, p1, crate::cvec::Codec::None).unwrap();
-        assert!(g.fwd_targets.len() > 0, "no forward edges");
+        assert!(!g.fwd_targets.is_empty(), "no forward edges");
         assert_eq!(g.fwd_offsets.len(), g.n + 1);
-        // Identity dfn (node -> pre-order) suffices: this test only checks
-        // inb_offsets.len() == n+1, which the pre-order transpose preserves.
+        // Identity dfn (node -> pre-order) suffices. build() now returns
+        // blocked offsets: one sampled offset per INB_BLOCK nodes + a trailing
+        // sentinel, so len == ceil(n / INB_BLOCK) + 1.
         let dfn: Vec<u32> = (0..g.n as u32).collect();
-        let (inb_offsets, _inb_data) = inbound.build(&dfn).unwrap();
-        assert_eq!(inb_offsets.len() as usize, g.n + 1);
+        let (inb_block_off, _inb_data) = inbound.build(&dfn).unwrap();
+        assert_eq!(inb_block_off.len(), g.n.div_ceil(INB_BLOCK) + 1);
         for &r in &g.gc_root_indices {
             assert!((r as usize) < g.n, "gc_root idx {} out of range {}", r, g.n);
         }
@@ -1420,10 +1562,21 @@ mod tests {
 
     #[test]
     fn pass2_edge_counts_sane() {
-        if !std::path::Path::new(DUMP).exists() { return; }
+        if !std::path::Path::new(DUMP).exists() {
+            return;
+        }
         let p1 = Pass1::run(DUMP).unwrap();
         let (g, _inbound, _sc, _ci) = Pass2::build(DUMP, p1, crate::cvec::Codec::None).unwrap();
-        let fwd_edge_count: usize = g.fwd_offsets.windows(2).map(|w| (w[1]-w[0]) as usize).sum();
-        assert!(fwd_edge_count > g.n / 2, "suspiciously few edges: {} for {} nodes", fwd_edge_count, g.n);
+        let fwd_edge_count: usize = g
+            .fwd_offsets
+            .windows(2)
+            .map(|w| (w[1] - w[0]) as usize)
+            .sum();
+        assert!(
+            fwd_edge_count > g.n / 2,
+            "suspiciously few edges: {} for {} nodes",
+            fwd_edge_count,
+            g.n
+        );
     }
-    }
+}

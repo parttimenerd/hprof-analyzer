@@ -60,14 +60,24 @@ impl CompressedU32 {
     pub fn compress(v: &[u32], codec: Codec) -> io::Result<Self> {
         let len = v.len();
         match codec {
-            Codec::None => Ok(Self { codec, blob: Vec::new(), raw: v.to_vec(), len }),
+            Codec::None => Ok(Self {
+                codec,
+                blob: Vec::new(),
+                raw: v.to_vec(),
+                len,
+            }),
             Codec::Deflate9 => {
                 let mut bytes = Vec::with_capacity(len * 4);
                 for &x in v {
                     bytes.extend_from_slice(&x.to_le_bytes());
                 }
                 let blob = deflate_compress(&bytes)?;
-                Ok(Self { codec, blob, raw: Vec::new(), len })
+                Ok(Self {
+                    codec,
+                    blob,
+                    raw: Vec::new(),
+                    len,
+                })
             }
         }
     }
@@ -88,6 +98,7 @@ impl CompressedU32 {
     }
 
     /// Bytes currently held (blob for Deflate9, raw*4 for None).
+    #[allow(dead_code)]
     pub fn held_bytes(&self) -> usize {
         match self.codec {
             Codec::None => self.raw.len() * 4,

@@ -1,6 +1,5 @@
 /// Variable-length integer encoding (7 bits per byte, MSB = continuation flag).
 /// Used for delta-encoding sorted inbound edge lists to reduce memory ~4x.
-
 pub fn encode(mut v: u32, out: &mut Vec<u8>) {
     loop {
         let b = (v & 0x7f) as u8;
@@ -26,6 +25,7 @@ pub fn decode_one(buf: &[u8]) -> (u32, usize) {
     (val, buf.len())
 }
 
+#[allow(dead_code)]
 pub fn decode_all(buf: &[u8]) -> Vec<u32> {
     let mut result = Vec::new();
     let mut i = 0;
@@ -38,6 +38,7 @@ pub fn decode_all(buf: &[u8]) -> Vec<u32> {
 }
 
 /// Encode a sorted slice as delta-from-previous values.
+#[allow(dead_code)]
 pub fn encode_delta(sorted: &[u32], out: &mut Vec<u8>) {
     let mut prev = 0u32;
     for &v in sorted {
@@ -47,6 +48,7 @@ pub fn encode_delta(sorted: &[u32], out: &mut Vec<u8>) {
 }
 
 /// Decode delta-encoded slice, returning original sorted values.
+#[allow(dead_code)]
 pub fn decode_delta(buf: &[u8], count: usize) -> Vec<u32> {
     let mut result = Vec::with_capacity(count);
     let mut prev = 0u32;
@@ -61,10 +63,14 @@ pub fn decode_delta(buf: &[u8], count: usize) -> Vec<u32> {
 }
 
 /// Encoded byte length for a u32 value.
+#[allow(dead_code)]
 pub fn encoded_len(mut v: u32) -> usize {
     let mut n = 1;
     v >>= 7;
-    while v > 0 { n += 1; v >>= 7; }
+    while v > 0 {
+        n += 1;
+        v >>= 7;
+    }
     n
 }
 
@@ -105,6 +111,7 @@ pub fn encode_delta_u64(sorted: &[u64], out: &mut Vec<u8>) {
 }
 
 /// Decode a vbyte delta-encoded u64 stream back into the original sorted values.
+#[allow(dead_code)]
 pub fn decode_delta_u64(buf: &[u8], count: usize) -> Vec<u64> {
     let mut result = Vec::with_capacity(count);
     let mut prev = 0u64;
@@ -126,7 +133,9 @@ mod tests {
     fn roundtrip_values() {
         let vals: Vec<u32> = vec![0, 1, 63, 64, 127, 128, 255, 300, 16383, 16384, u32::MAX];
         let mut buf = Vec::new();
-        for &v in &vals { encode(v, &mut buf); }
+        for &v in &vals {
+            encode(v, &mut buf);
+        }
         assert_eq!(decode_all(&buf), vals);
     }
 
@@ -178,8 +187,16 @@ mod tests {
     #[test]
     fn u64_roundtrip_values() {
         let vals: Vec<u64> = vec![
-            0, 1, 127, 128, 255, 16383, 16384, u32::MAX as u64,
-            1u64 << 40, u64::MAX,
+            0,
+            1,
+            127,
+            128,
+            255,
+            16383,
+            16384,
+            u32::MAX as u64,
+            1u64 << 40,
+            u64::MAX,
         ];
         let mut buf = Vec::new();
         for &v in &vals {
@@ -198,7 +215,13 @@ mod tests {
     #[test]
     fn u64_delta_roundtrip() {
         let sorted: Vec<u64> = vec![
-            0x1000, 0x1010, 0x1028, 0x1040, 0x5000, 0x5000_0000, 0x5000_0018,
+            0x1000,
+            0x1010,
+            0x1028,
+            0x1040,
+            0x5000,
+            0x5000_0000,
+            0x5000_0018,
         ];
         let mut buf = Vec::new();
         encode_delta_u64(&sorted, &mut buf);

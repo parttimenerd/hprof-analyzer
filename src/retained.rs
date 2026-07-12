@@ -89,12 +89,12 @@ pub fn compute_retained(
     let mut class_obj_depth: Vec<u32> = vec![0u32; class_count];
 
     // Parallel stacks for iterative DFS.
-    let mut stk_node:            Vec<u32> = Vec::new();
-    let mut stk_child_idx:       Vec<u32> = Vec::new();
-    let mut stk_saved_depth:     Vec<u32> = Vec::new(); // saved class_to_last_depth value
+    let mut stk_node: Vec<u32> = Vec::new();
+    let mut stk_child_idx: Vec<u32> = Vec::new();
+    let mut stk_saved_depth: Vec<u32> = Vec::new(); // saved class_to_last_depth value
     let mut stk_saved_obj_depth: Vec<u32> = Vec::new(); // saved class_obj_depth value
-    let mut stk_cls:             Vec<u32> = Vec::new(); // class index of node (u32::MAX = vroot/none)
-    let mut stk_ci:              Vec<u32> = Vec::new(); // class-obj class idx (u32::MAX = not a class obj)
+    let mut stk_cls: Vec<u32> = Vec::new(); // class index of node (u32::MAX = vroot/none)
+    let mut stk_ci: Vec<u32> = Vec::new(); // class-obj class idx (u32::MAX = not a class obj)
 
     // Push virtual root (index n) to seed the DFS.
     stk_node.push(vroot);
@@ -116,8 +116,12 @@ pub fn compute_retained(
             let child = child_tgt[next_child_pos as usize];
             stk_child_idx[top] = next_child_pos + 1;
 
-            let cls = if (child as usize) < n { class_idx[child as usize] } else { undef };
-            let ci  = class_obj_class_idx.get(&child).copied().unwrap_or(undef);
+            let cls = if (child as usize) < n {
+                class_idx[child as usize]
+            } else {
+                undef
+            };
+            let ci = class_obj_class_idx.get(&child).copied().unwrap_or(undef);
 
             // sp_new = depth the child will have on the stack (1-based, vroot is depth 1).
             let sp_new = (stk_node.len() + 1) as u32;
@@ -158,7 +162,7 @@ pub fn compute_retained(
                 retained[parent as usize] += retained[v as usize];
             }
             let cls = stk_cls[top];
-            let ci  = stk_ci[top];
+            let ci = stk_ci[top];
             if cls != undef && (cls as usize) < class_count {
                 class_to_last_depth[cls as usize] = stk_saved_depth[top];
             }
@@ -191,8 +195,19 @@ mod tests {
         let shallow = vec![10u32, 20, 30];
         let class_idx = vec![0u32, 0, 0];
         let class_obj_class_idx = std::collections::HashMap::<u32, u32>::new();
-        let (retained, _has_same) =
-            { let (co, ct) = build_dom_children_csr(n, &idom); compute_retained(n, &idom, &shallow, &class_idx, 1, &class_obj_class_idx, &co, &ct) };
+        let (retained, _has_same) = {
+            let (co, ct) = build_dom_children_csr(n, &idom);
+            compute_retained(
+                n,
+                &idom,
+                &shallow,
+                &class_idx,
+                1,
+                &class_obj_class_idx,
+                &co,
+                &ct,
+            )
+        };
         assert_eq!(retained[0], 60, "0 retains all 3");
         assert_eq!(retained[1], 50, "1 retains 1+2");
         assert_eq!(retained[2], 30, "2 retains itself");
@@ -206,8 +221,19 @@ mod tests {
         let shallow = vec![1u32, 2, 3, 4];
         let class_idx = vec![0u32, 0, 0, 0];
         let class_obj_class_idx = std::collections::HashMap::<u32, u32>::new();
-        let (retained, _) =
-            { let (co, ct) = build_dom_children_csr(n, &idom); compute_retained(n, &idom, &shallow, &class_idx, 1, &class_obj_class_idx, &co, &ct) };
+        let (retained, _) = {
+            let (co, ct) = build_dom_children_csr(n, &idom);
+            compute_retained(
+                n,
+                &idom,
+                &shallow,
+                &class_idx,
+                1,
+                &class_obj_class_idx,
+                &co,
+                &ct,
+            )
+        };
         // 3 propagates to 0, 1 propagates to 0, 2 propagates to 0
         // retained[0] = 1 + 2 + 3 + 4 = 10
         assert_eq!(retained[0], 10);
@@ -225,8 +251,19 @@ mod tests {
         // class 0: nodes 0 and 2; class 1: node 1
         let class_idx = vec![0u32, 1, 0];
         let class_obj_class_idx = std::collections::HashMap::<u32, u32>::new();
-        let (_, has_same) =
-            { let (co, ct) = build_dom_children_csr(n, &idom); compute_retained(n, &idom, &shallow, &class_idx, 2, &class_obj_class_idx, &co, &ct) };
+        let (_, has_same) = {
+            let (co, ct) = build_dom_children_csr(n, &idom);
+            compute_retained(
+                n,
+                &idom,
+                &shallow,
+                &class_idx,
+                2,
+                &class_obj_class_idx,
+                &co,
+                &ct,
+            )
+        };
         assert!(!has_same.get(0), "node 0 has no class-0 ancestor");
         assert!(!has_same.get(1), "node 1 has no class-1 ancestor");
         assert!(has_same.get(2), "node 2 has class-0 ancestor (node 0)");
@@ -246,11 +283,28 @@ mod tests {
         let class_idx = vec![0u32, 1u32, 0u32];
         let mut class_obj_class_idx = std::collections::HashMap::<u32, u32>::new();
         class_obj_class_idx.insert(0u32, 1u32);
-        let (_, has_same) =
-            { let (co, ct) = build_dom_children_csr(n, &idom); compute_retained(n, &idom, &shallow, &class_idx, 2, &class_obj_class_idx, &co, &ct) };
-        assert!(!has_same.get(0), "node 0 has no ancestor of class 0 (nor class-obj for any class)");
+        let (_, has_same) = {
+            let (co, ct) = build_dom_children_csr(n, &idom);
+            compute_retained(
+                n,
+                &idom,
+                &shallow,
+                &class_idx,
+                2,
+                &class_obj_class_idx,
+                &co,
+                &ct,
+            )
+        };
+        assert!(
+            !has_same.get(0),
+            "node 0 has no ancestor of class 0 (nor class-obj for any class)"
+        );
         // node 1 has class 1; its ancestor node 0 is the class-object FOR class 1
-        assert!(has_same.get(1), "node 1 has class-object-for-class-1 as ancestor");
+        assert!(
+            has_same.get(1),
+            "node 1 has class-object-for-class-1 as ancestor"
+        );
         // node 2 has class 0; its ancestor node 0 also has class 0 → same class ancestor
         assert!(has_same.get(2), "node 2 has class-0 ancestor (node 0)");
     }

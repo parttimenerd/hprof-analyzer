@@ -10,7 +10,9 @@ pub struct Bitset {
 
 impl Bitset {
     pub fn with_len(n: usize) -> Self {
-        Bitset { words: vec![0u64; n.div_ceil(64)] }
+        Bitset {
+            words: vec![0u64; n.div_ceil(64)],
+        }
     }
 
     #[inline]

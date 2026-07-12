@@ -8,7 +8,6 @@
 /// Objects are 0..n-1; the virtual root is index `n`.
 /// Mirrors the Java `RpoDfs` in hprof-redact with the root/object index
 /// convention flipped.
-
 pub struct RpoResult {
     /// `parent_pre[i]` = pre-order number of the DFS-tree parent of the node
     /// whose pre-order number is `i` (i.e. of `vertex[i]`).
@@ -68,7 +67,7 @@ pub fn rpo_dfs(n: usize, roots: &[u32], fwd_off: &[u32], fwd_tgt: &[u32]) -> Rpo
             *cursor += 1;
 
             // Bounds check
-            if child as usize >= n + 1 {
+            if child as usize > n {
                 continue;
             }
 
@@ -93,7 +92,11 @@ pub fn rpo_dfs(n: usize, roots: &[u32], fwd_off: &[u32], fwd_tgt: &[u32]) -> Rpo
         }
     }
 
-    RpoResult { parent_pre, dfn, vertex }
+    RpoResult {
+        parent_pre,
+        dfn,
+        vertex,
+    }
 }
 
 #[cfg(test)]
@@ -129,5 +132,4 @@ mod tests {
         assert_ne!(r.dfn[1], u32::MAX);
         assert_eq!(r.dfn[2], u32::MAX);
     }
-
 }

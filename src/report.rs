@@ -4,7 +4,10 @@ use crate::pass2::Graph;
 
 #[inline]
 fn class_obj_repr(g: &Graph, i: usize) -> u32 {
-    g.class_obj_class_idx.get(&(i as u32)).copied().unwrap_or(u32::MAX)
+    g.class_obj_class_idx
+        .get(&(i as u32))
+        .copied()
+        .unwrap_or(u32::MAX)
 }
 
 // ── Formatting helpers ─────────────────────────────────────────────────────
@@ -140,7 +143,10 @@ pub fn system_overview(g: &Graph) -> String {
         }
     }
 
-    let gc_roots = (g.gc_root_indices.len().saturating_sub(g.synthetic_root_count)) as u64;
+    let gc_roots = (g
+        .gc_root_indices
+        .len()
+        .saturating_sub(g.synthetic_root_count)) as u64;
     // Count reachable class-dump objects (objects that ARE Java classes, with defined idom)
     let undef_u32 = u32::MAX;
     let classes_loaded = (0..n)
@@ -205,10 +211,19 @@ pub fn system_overview(g: &Graph) -> String {
     out.push_str("|---|---|\n");
     out.push_str(&format!("| HPROF format | {} |\n", g.format));
     out.push_str(&format!("| File size | {} |\n", format_bytes(g.file_size)));
-    out.push_str(&format!("| Total objects | {} |\n", fmt_count(total_objects)));
-    out.push_str(&format!("| Total shallow heap | {} |\n", format_bytes(total_shallow)));
+    out.push_str(&format!(
+        "| Total objects | {} |\n",
+        fmt_count(total_objects)
+    ));
+    out.push_str(&format!(
+        "| Total shallow heap | {} |\n",
+        format_bytes(total_shallow)
+    ));
     out.push_str(&format!("| GC roots | {} |\n", fmt_count(gc_roots)));
-    out.push_str(&format!("| Classes loaded | {} |\n", fmt_count(classes_loaded)));
+    out.push_str(&format!(
+        "| Classes loaded | {} |\n",
+        fmt_count(classes_loaded)
+    ));
     if unreachable_count > 0 {
         out.push_str(&format!(
             "| Unreachable objects (excluded) | {} ({}) |\n",
@@ -261,7 +276,7 @@ pub fn leak_suspects(g: &Graph, dc_offsets: &[u32], dc_targets: &[u32]) -> Strin
 
     struct Suspect {
         is_single: bool,
-        obj_idx: u32,            // only meaningful for single
+        obj_idx: u32, // only meaningful for single
         class_idx: usize,
         instance_count: u64,
         retained: u64,
@@ -341,13 +356,19 @@ pub fn leak_suspects(g: &Graph, dc_offsets: &[u32], dc_targets: &[u32]) -> Strin
 
         out.push_str(&format!("### Suspect {}: `{}`\n\n", rank + 1, pretty));
         out.push_str(&format!("- **Type**: {}\n", type_label));
-        out.push_str(&format!("- **Instances**: {}\n", fmt_count(s.instance_count)));
+        out.push_str(&format!(
+            "- **Instances**: {}\n",
+            fmt_count(s.instance_count)
+        ));
         out.push_str(&format!(
             "- **Retained heap**: {} ({:.1}% of total)\n",
             format_bytes(s.retained),
             pct
         ));
-        out.push_str(&format!("- **Shallow heap**: {}\n", format_bytes(s.shallow)));
+        out.push_str(&format!(
+            "- **Shallow heap**: {}\n",
+            format_bytes(s.shallow)
+        ));
         out.push('\n');
 
         // Accumulation path for single suspects
@@ -501,10 +522,8 @@ pub fn top_consumers(g: &Graph) -> String {
     out.push('\n');
 
     // Biggest Packages
-    let mut pkg_retained: std::collections::HashMap<String, u64> =
-        std::collections::HashMap::new();
-    let mut pkg_count: std::collections::HashMap<String, u64> =
-        std::collections::HashMap::new();
+    let mut pkg_retained: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    let mut pkg_count: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
     for &i in &top_level {
         let idx = i as usize;
         // Use the class the object represents (for class objects), else own class
@@ -584,7 +603,10 @@ mod tests {
         assert_eq!(pretty_class_name("java/lang/String"), "java.lang.String");
         assert_eq!(pretty_class_name("[I"), "int[]");
         assert_eq!(pretty_class_name("[B"), "byte[]");
-        assert_eq!(pretty_class_name("[Ljava/lang/String;"), "java.lang.String[]");
+        assert_eq!(
+            pretty_class_name("[Ljava/lang/String;"),
+            "java.lang.String[]"
+        );
         assert_eq!(pretty_class_name("[[I"), "int[][]");
         assert_eq!(pretty_class_name("[Z"), "boolean[]");
         assert_eq!(pretty_class_name("[C"), "char[]");

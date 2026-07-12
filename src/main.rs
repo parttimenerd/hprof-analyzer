@@ -1,14 +1,14 @@
+mod bitset;
+mod chunkvec;
+mod cvec;
 mod dominator;
 mod id_map;
 mod pass1;
-mod bitset;
-mod chunkvec;
 mod pass2;
 mod reader;
 mod report;
 mod retained;
 mod rpo_dfs;
-mod cvec;
 mod trace;
 mod types;
 mod vbyte;
@@ -44,7 +44,9 @@ fn main() {
     }
 
     if positional.is_empty() {
-        eprintln!("usage: hprof-analyzer [--verbose] [--dump-json] [--trace-rss] [--compress=none|deflate9] <file.hprof[.gz]> [output.md]");
+        eprintln!(
+            "usage: hprof-analyzer [--verbose] [--dump-json] [--trace-rss] [--compress=none|deflate9] <file.hprof[.gz]> [output.md]"
+        );
         process::exit(1);
     }
 
@@ -54,14 +56,20 @@ fn main() {
     if dump_json {
         match dump_pass1_json(input) {
             Ok(()) => {}
-            Err(e) => { eprintln!("Error: {e}"); process::exit(1); }
+            Err(e) => {
+                eprintln!("Error: {e}");
+                process::exit(1);
+            }
         }
         return;
     }
 
     match run(input, output, verbose, compress) {
         Ok(()) => {}
-        Err(e) => { eprintln!("Error: {e}"); process::exit(1); }
+        Err(e) => {
+            eprintln!("Error: {e}");
+            process::exit(1);
+        }
     }
 }
 
@@ -73,8 +81,11 @@ fn rss_mb() -> f64 {
         if let Ok(s) = std::fs::read_to_string("/proc/self/status") {
             for line in s.lines() {
                 if let Some(rest) = line.strip_prefix("VmRSS:") {
-                    let kb: u64 = rest.split_whitespace().next()
-                        .and_then(|v| v.parse().ok()).unwrap_or(0);
+                    let kb: u64 = rest
+                        .split_whitespace()
+                        .next()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(0);
                     return kb as f64 / 1024.0;
                 }
             }
@@ -101,9 +112,29 @@ fn run(input: &str, output: Option<&str>, verbose: bool, compress: cvec::Codec) 
     let p1 = pass1::Pass1::run(input)?;
     log(verbose, "pass1", t.elapsed().as_secs_f64());
 
+    // The entire analysis works in u32 pre-order / node-index space (dfn,
+    // vertex, forward/inbound CSR, idom). A dump with more than u32::MAX
+    // objects would silently overflow every index, so refuse it up front with
+    // a clear message rather than emit corrupt results.
+    if p1.class_ids.len() > u32::MAX as usize {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "dump has {} objects, exceeding the {} (u32::MAX) limit of the \
+                 analyzer's index scheme; cannot analyze",
+                p1.class_ids.len(),
+                u32::MAX
+            ),
+        ));
+    }
+
     let t = Instant::now();
     let (mut g, mut inbound, shallow_c, class_idx_c) = pass2::Pass2::build(input, p1, compress)?;
-    log(verbose, &format!("pass2 n={}", g.n), t.elapsed().as_secs_f64());
+    log(
+        verbose,
+        &format!("pass2 n={}", g.n),
+        t.elapsed().as_secs_f64(),
+    );
 
     // Compress the three cold arrays (shallow, class_idx, id_map) that sit idle
     // across the rpo -> inbound -> dominator peak window, freeing their dense
@@ -137,7 +168,7 @@ fn run(input: &str, output: Option<&str>, verbose: bool, compress: cvec::Codec) 
     // resident) — this is the binding global peak; dropping dfn cuts ~2GB.
     let mut rpo = rpo;
     let t = Instant::now();
-    let (inb_offsets, inb_data) = inbound.build(&rpo.dfn)?;
+    let (inb_block_off, inb_data) = inbound.build(&rpo.dfn)?;
     log(verbose, "inbound", t.elapsed().as_secs_f64());
     rpo.dfn = Vec::new();
     crate::trace::trim();
@@ -145,15 +176,10 @@ fn run(input: &str, output: Option<&str>, verbose: bool, compress: cvec::Codec) 
     let t = Instant::now();
     // rpo moved by value; vertex/parent_pre owned through translation. dfn
     // already freed above. No separate drop(rpo).
-    g.idom = dominator::compute_dominators(
-        g.n,
-        rpo,
-        &g.gc_root_indices,
-        &inb_offsets,
-        &inb_data,
-    );
+    g.idom =
+        dominator::compute_dominators(g.n, rpo, &g.gc_root_indices, &inb_block_off, &inb_data)?;
     log(verbose, "dominator", t.elapsed().as_secs_f64());
-    drop(inb_offsets);
+    drop(inb_block_off);
     drop(inb_data);
     crate::trace::trim();
 
@@ -222,8 +248,7 @@ fn run(input: &str, output: Option<&str>, verbose: bool, compress: cvec::Codec) 
 fn dump_pass1_json(path: &str) -> io::Result<()> {
     let p = Pass1::run(path)?;
 
-    let mut class_hist: std::collections::HashMap<String, u64> =
-        std::collections::HashMap::new();
+    let mut class_hist: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
     for (i, &cidx) in p.class_ids.iter().enumerate() {
         // class_ids holds interned indices; resolve to addr for kinds that
         // reference a class object (0=instance, 3=class-obj). arrays skip.
@@ -259,8 +284,10 @@ fn dump_pass1_json(path: &str) -> io::Result<()> {
     print!(r#","class_histogram":{{"#);
     let mut first = true;
     for (name, count) in &class_hist {
-        if !first { print!(","); }
-        let escaped = name.replace('"', "\"");
+        if !first {
+            print!(",");
+        }
+        let escaped = name.replace('\\', "\\\\").replace('"', "\\\"");
         print!(r#""{escaped}":{count}"#);
         first = false;
     }
