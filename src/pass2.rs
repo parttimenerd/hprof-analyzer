@@ -644,7 +644,7 @@ impl Pass2 {
                             &p1.id_map,
                             &p1.class_map,
                             &p1.strings,
-                            &class_addrs,
+                            &p1.kind,
                             &field_plans,
                             &mut size_cache,
                             &mut out_degree,
@@ -932,7 +932,7 @@ impl Pass2 {
         id_map: &crate::id_map::IdMap,
         class_map: &HashMap<u64, ClassInfo>,
         _strings: &HashMap<u64, String>,
-        class_addrs: &std::collections::HashSet<u64>,
+        kind: &[u8],
         field_plans: &HashMap<u64, FieldPlan>,
         size_cache: &mut HashMap<u64, usize>,
         out_degree: &mut Vec<u32>,
@@ -1015,8 +1015,11 @@ impl Pass2 {
                         None => continue,
                     };
 
-                    // Recalculate MAT shallow size for instances (fix #3: reuse size_cache)
-                    if !class_addrs.contains(&addr) {
+                    // Recalculate MAT shallow size for instances (fix #3: reuse size_cache).
+                    // kind[src_idx] == 3 marks class objects (pass1); equivalent
+                    // to the old class_addrs.contains(addr) hash probe but reuses
+                    // the already-computed src_idx (no per-instance hash lookup).
+                    if kind[src_idx] != 3 {
                         let sz = instance_shallow_size(
                             class_id, class_map, ptr_size, ref_size, size_cache,
                         );
@@ -1577,6 +1580,39 @@ mod tests {
             "suspiciously few edges: {} for {} nodes",
             fwd_edge_count,
             g.n
+        );
+    }
+
+    // Opt 1 invariant: `kind[i] == 3` (class_obj) is EXACTLY equivalent to the
+    // object's address being present in the `class_addrs` set that pass2 builds
+    // from `class_map.keys()`. scan_heap_2a relies on this to replace the
+    // per-instance `class_addrs.contains(addr)` hash probe with `kind[src] == 3`
+    // (src already computed).
+    #[test]
+    fn kind3_equals_class_addrs_membership() {
+        if !std::path::Path::new(DUMP).exists() {
+            return;
+        }
+        let p1 = Pass1::run(DUMP).unwrap();
+        let class_addrs: std::collections::HashSet<u64> = p1.class_map.keys().cloned().collect();
+        assert!(!class_addrs.is_empty(), "expected some class objects");
+        let mut class_count = 0usize;
+        for i in 0..p1.id_map.len() {
+            let addr = p1.id_map.addr_at(i);
+            let is_class_by_kind = p1.kind[i] == 3;
+            let is_class_by_set = class_addrs.contains(&addr);
+            assert_eq!(
+                is_class_by_kind, is_class_by_set,
+                "kind==3 vs class_addrs.contains disagree at index {i} (addr {addr:#x})"
+            );
+            if is_class_by_kind {
+                class_count += 1;
+            }
+        }
+        assert_eq!(
+            class_count,
+            class_addrs.len(),
+            "every class address must appear exactly once as a kind==3 object"
         );
     }
 }
