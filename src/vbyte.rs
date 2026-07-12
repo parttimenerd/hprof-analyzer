@@ -102,6 +102,7 @@ pub fn decode_one_u64(buf: &[u8]) -> (u64, usize) {
 }
 
 /// Encode a sorted u64 slice as vbyte delta-from-previous values.
+#[allow(dead_code)]
 pub fn encode_delta_u64(sorted: &[u64], out: &mut Vec<u8>) {
     let mut prev = 0u64;
     for &v in sorted {

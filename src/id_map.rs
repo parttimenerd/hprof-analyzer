@@ -183,13 +183,24 @@ impl IdMap {
                 Ok((out, len))
             }
             Codec::Deflate9 => {
-                // Reconstruct the absolute sorted addrs for delta encoding.
-                let mut addrs: Vec<u64> = Vec::with_capacity(len);
-                for i in 0..len {
-                    addrs.push(self.addr_at(i));
+                // Stream the sorted absolute addrs directly out of the block
+                // structure and delta-vbyte-encode on the fly. Walking the
+                // blocks in order yields the exact same globally-sorted address
+                // sequence addr_at(0..len) would, but WITHOUT reconstructing the
+                // 4.1GB `addrs: Vec<u64>` (@514M) that used to be the binding
+                // compress-cold peak on top of the ~13GB fwd CSR.
+                let mut vb: Vec<u8> = Vec::new();
+                let mut prev = 0u64;
+                for b in 0..self.block_base.len() {
+                    let base = self.block_base[b];
+                    let lo = self.block_start[b] as usize;
+                    let hi = self.block_start[b + 1] as usize;
+                    for &off in &self.offsets[lo..hi] {
+                        let addr = base + off as u64;
+                        vbyte::encode_u64(addr - prev, &mut vb);
+                        prev = addr;
+                    }
                 }
-                let mut vb = Vec::with_capacity(len * 2);
-                vbyte::encode_delta_u64(&addrs, &mut vb);
                 let mut e =
                     flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());
                 e.write_all(&vb)?;

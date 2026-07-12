@@ -21,7 +21,25 @@ pub struct RpoResult {
     pub dfn: Vec<u32>,
     /// Inverse of `dfn`: `vertex[i]` = node whose pre-order number is `i`.
     /// Length = number of reachable nodes + 1 (index 0 = virtual root).
+    ///
+    /// NOT built during the DFS: at 514M nodes this 1.96GB array is idle
+    /// through the inbound 2b scan (the binding RSS peak — inb_flat + id_map +
+    /// dfn + parent_pre + in_cursors all resident). `rpo_dfs` returns this
+    /// EMPTY; the caller rebuilds it from `dfn` via [`rebuild_vertex`] AFTER
+    /// inbound.build, just before the dominator stage that actually reads it.
     pub vertex: Vec<u32>,
+}
+
+/// Rebuild the `vertex` permutation (inverse of `dfn`) as a pure O(n) pass.
+/// `count` = number of reachable nodes + 1 (== parent_pre.len()).
+pub fn rebuild_vertex(dfn: &[u32], count: usize) -> Vec<u32> {
+    let mut vertex = vec![0u32; count];
+    for (node, &pre) in dfn.iter().enumerate() {
+        if pre != u32::MAX {
+            vertex[pre as usize] = node as u32;
+        }
+    }
+    vertex
 }
 
 pub fn rpo_dfs(n: usize, roots: &[u32], fwd_off: &[u32], fwd_tgt: &[u32]) -> RpoResult {
@@ -29,7 +47,6 @@ pub fn rpo_dfs(n: usize, roots: &[u32], fwd_off: &[u32], fwd_tgt: &[u32]) -> Rpo
 
     let mut parent_pre: Vec<u32> = Vec::with_capacity(n + 1);
     let mut dfn = vec![u32::MAX; n + 1];
-    let mut vertex: Vec<u32> = Vec::with_capacity(n + 1);
     let mut dfs_count: u32 = 0;
 
     // Explicit stacks: parallel arrays (node, child_cursor)
@@ -38,7 +55,6 @@ pub fn rpo_dfs(n: usize, roots: &[u32], fwd_off: &[u32], fwd_tgt: &[u32]) -> Rpo
 
     // Push virtual root (pre-order number 0)
     dfn[n] = dfs_count;
-    vertex.push(vroot);
     parent_pre.push(0); // virtual root's parent is itself (pre-order 0)
     dfs_count += 1;
     node_stack.push(vroot);
@@ -74,7 +90,6 @@ pub fn rpo_dfs(n: usize, roots: &[u32], fwd_off: &[u32], fwd_tgt: &[u32]) -> Rpo
             if dfn[child as usize] == u32::MAX {
                 // Unvisited: push onto stack, assign pre-order number
                 dfn[child as usize] = dfs_count;
-                vertex.push(child);
                 parent_pre.push(dfn[top as usize]);
                 dfs_count += 1;
                 node_stack.push(child);
@@ -95,7 +110,8 @@ pub fn rpo_dfs(n: usize, roots: &[u32], fwd_off: &[u32], fwd_tgt: &[u32]) -> Rpo
     RpoResult {
         parent_pre,
         dfn,
-        vertex,
+        // Rebuilt by the caller via rebuild_vertex() after inbound.build.
+        vertex: Vec::new(),
     }
 }
 

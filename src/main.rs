@@ -170,6 +170,12 @@ fn run(input: &str, output: Option<&str>, verbose: bool, compress: cvec::Codec) 
     let t = Instant::now();
     let (inb_block_off, inb_data) = inbound.build(&rpo.dfn)?;
     log(verbose, "inbound", t.elapsed().as_secs_f64());
+    // Rebuild vertex now: dfn is still live and inbound.build (the binding-peak
+    // 2b scan) has returned, so the 1.96GB vertex never coexists with inb_flat.
+    // vertex = invert(dfn) is a pure O(n) pass; the dominator reads it next.
+    let count = rpo.parent_pre.len();
+    rpo.vertex = rpo_dfs::rebuild_vertex(&rpo.dfn, count);
+    crate::trace::probe("main: after rebuild_vertex (post-inbound, dfn live)");
     rpo.dfn = Vec::new();
     crate::trace::trim();
 

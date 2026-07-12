@@ -36,7 +36,14 @@ pub fn compute_dominators(
     let vroot = n as u32;
 
     // Number of reachable vertices (including virtual root at pre-order 0).
-    let count = rpo.vertex.len();
+    // Read from parent_pre (lockstep with vertex); vertex must have been
+    // rebuilt by the caller via rpo_dfs::rebuild_vertex before this call.
+    let count = rpo.parent_pre.len();
+    debug_assert_eq!(
+        rpo.vertex.len(),
+        count,
+        "vertex must be rebuilt (rebuild_vertex) before compute_dominators"
+    );
 
     // ── Work arrays in pre-order index space (0..count) ──────────────────
     // parent info is read directly from rpo.parent_pre (no local copy)
@@ -379,7 +386,7 @@ fn link(w: u32, parent: u32, ancestor: &mut [u32]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rpo_dfs::rpo_dfs;
+    use crate::rpo_dfs::{rebuild_vertex, rpo_dfs};
 
     // Build inbound CSR in the production BLOCKED format: predecessors in
     // PRE-ORDER space (node -> dfn, drop unreachable, sort+dedup), each node's
@@ -420,7 +427,8 @@ mod tests {
         let fwd_off = vec![0u32, 2, 3, 4, 4];
         let fwd_tgt = vec![1u32, 2, 3, 3];
         let roots = vec![0u32];
-        let rpo = rpo_dfs(4, &roots, &fwd_off, &fwd_tgt);
+        let mut rpo = rpo_dfs(4, &roots, &fwd_off, &fwd_tgt);
+        rpo.vertex = rebuild_vertex(&rpo.dfn, rpo.parent_pre.len());
         // inbound: node1←[0], node2←[0], node3←[1,2]
         let preds = vec![vec![], vec![0u32], vec![0u32], vec![1u32, 2u32]];
         let (inb_offsets, inb_data) = build_inb(4, &preds, &rpo.dfn);
@@ -437,7 +445,8 @@ mod tests {
         let fwd_off = vec![0u32, 1, 2, 2];
         let fwd_tgt = vec![1u32, 2u32];
         let roots = vec![0u32];
-        let rpo = rpo_dfs(3, &roots, &fwd_off, &fwd_tgt);
+        let mut rpo = rpo_dfs(3, &roots, &fwd_off, &fwd_tgt);
+        rpo.vertex = rebuild_vertex(&rpo.dfn, rpo.parent_pre.len());
         let preds = vec![vec![], vec![0u32], vec![1u32]];
         let (inb_offsets, inb_data) = build_inb(3, &preds, &rpo.dfn);
         let idom = compute_dominators(3, rpo, &roots, &inb_offsets, &inb_data).unwrap();
@@ -452,7 +461,8 @@ mod tests {
         let fwd_off = vec![0u32, 0, 0];
         let fwd_tgt = vec![];
         let roots = vec![0u32, 1u32];
-        let rpo = rpo_dfs(2, &roots, &fwd_off, &fwd_tgt);
+        let mut rpo = rpo_dfs(2, &roots, &fwd_off, &fwd_tgt);
+        rpo.vertex = rebuild_vertex(&rpo.dfn, rpo.parent_pre.len());
         let preds = vec![vec![], vec![]];
         let (inb_offsets, inb_data) = build_inb(2, &preds, &rpo.dfn);
         let idom = compute_dominators(2, rpo, &roots, &inb_offsets, &inb_data).unwrap();
@@ -469,7 +479,8 @@ mod tests {
         let fwd_off = vec![0u32, 2, 4, 5, 5];
         let fwd_tgt = vec![1u32, 2, 2, 3, 3];
         let roots = vec![0u32];
-        let rpo = rpo_dfs(4, &roots, &fwd_off, &fwd_tgt);
+        let mut rpo = rpo_dfs(4, &roots, &fwd_off, &fwd_tgt);
+        rpo.vertex = rebuild_vertex(&rpo.dfn, rpo.parent_pre.len());
         // inbound: 1←[0], 2←[0,1], 3←[1,2]
         let preds = vec![vec![], vec![0u32], vec![0u32, 1u32], vec![1u32, 2u32]];
         let (inb_offsets, inb_data) = build_inb(4, &preds, &rpo.dfn);
@@ -499,7 +510,8 @@ mod tests {
         }
         fwd_off[n] = fwd_tgt.len() as u32;
         let roots = vec![0u32];
-        let rpo = rpo_dfs(n, &roots, &fwd_off, &fwd_tgt);
+        let mut rpo = rpo_dfs(n, &roots, &fwd_off, &fwd_tgt);
+        rpo.vertex = rebuild_vertex(&rpo.dfn, rpo.parent_pre.len());
         // inbound: node i (i>=1) has predecessor i-1
         let mut preds = vec![Vec::new(); n];
         for i in 1..n {
@@ -508,7 +520,8 @@ mod tests {
         let (good_off, inb_data) = build_inb(n, &preds, &rpo.dfn);
 
         // Sanity: uncorrupted run is correct.
-        let rpo2 = rpo_dfs(n, &roots, &fwd_off, &fwd_tgt);
+        let mut rpo2 = rpo_dfs(n, &roots, &fwd_off, &fwd_tgt);
+        rpo2.vertex = rebuild_vertex(&rpo2.dfn, rpo2.parent_pre.len());
         let idom_good = compute_dominators(n, rpo2, &roots, &good_off, &inb_data).unwrap();
         for i in 1..n {
             assert_eq!(idom_good[i], (i - 1) as u32, "good chain idom[{i}]");
@@ -517,7 +530,8 @@ mod tests {
         // Corrupt block offset 1 (a non-zero block start) to a wrong value.
         let mut bad_off = good_off.clone();
         bad_off[1] = bad_off[1].wrapping_add(1); // shift into the middle of a vbyte
-        let rpo3 = rpo_dfs(n, &roots, &fwd_off, &fwd_tgt);
+        let mut rpo3 = rpo_dfs(n, &roots, &fwd_off, &fwd_tgt);
+        rpo3.vertex = rebuild_vertex(&rpo3.dfn, rpo3.parent_pre.len());
         let idom_rec = compute_dominators(n, rpo3, &roots, &bad_off, &inb_data).unwrap();
         for i in 1..n {
             assert_eq!(idom_rec[i], (i - 1) as u32, "recovered chain idom[{i}]");
