@@ -226,18 +226,18 @@ fn run(input: &str, output: Option<&str>, verbose: bool, compress: cvec::Codec) 
     log(verbose, "retained", t.elapsed().as_secs_f64());
 
     let t = Instant::now();
-    let mut md = String::new();
-    crate::trace::probe("report: before system_overview");
-    md.push_str(&report::system_overview(&g));
-    crate::trace::probe("report: after system_overview");
-    g.has_same_class_ancestor = crate::bitset::Bitset::default(); // only system_overview reads it
-    md.push_str(&report::leak_suspects(&g, &dc_off, &dc_tgt));
-    crate::trace::probe("report: after leak_suspects");
+    crate::trace::probe("report: before build_model");
+    // build_model reads has_same_class_ancestor (system-overview group) and
+    // dc_off/dc_tgt (leak-suspect group) and stores only bounded aggregates,
+    // so both can be freed immediately after it returns.
+    let report = report::build_model(&g, &dc_off, &dc_tgt);
+    crate::trace::probe("report: after build_model");
+    g.has_same_class_ancestor = crate::bitset::Bitset::default(); // consumed by build_model
     drop(dc_off);
     drop(dc_tgt);
     crate::trace::trim();
-    md.push_str(&report::top_consumers(&g));
-    crate::trace::probe("report: after top_consumers");
+    let md = report::render_markdown(&report);
+    crate::trace::probe("report: after render_markdown");
     log(verbose, "report", t.elapsed().as_secs_f64());
 
     match output {
