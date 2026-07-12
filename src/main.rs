@@ -40,6 +40,7 @@ fn main() {
     let mut dump_json = false;
     let mut verbose = false;
     let mut emit_schema = false;
+    let mut render_file: Option<&str> = None;
     let mut format = OutputFormat::Md;
     let mut compress = cvec::Codec::Deflate9;
     let mut positional: Vec<&str> = Vec::new();
@@ -47,6 +48,9 @@ fn main() {
         match arg.as_str() {
             "--dump-json" => dump_json = true,
             "--emit-schema" => emit_schema = true,
+            s if s.starts_with("--render=") => {
+                render_file = Some(&s["--render=".len()..]);
+            }
             "--verbose" | "-v" => verbose = true,
             "--trace-rss" => trace::set_enabled(true),
             s if s.starts_with("--format=") => {
@@ -87,9 +91,23 @@ fn main() {
         return;
     }
 
+    // --render reads a saved canonical Report JSON (file path, or "-" for
+    // stdin), verifies its schema version, and renders Markdown to stdout. It
+    // never reads a .hprof file and never runs the analysis pipeline.
+    if let Some(path) = render_file {
+        match render_report_json(path) {
+            Ok(md) => print!("{md}"),
+            Err(e) => {
+                eprintln!("Error: {e}");
+                process::exit(1);
+            }
+        }
+        return;
+    }
+
     if positional.is_empty() {
         eprintln!(
-            "usage: hprof-analyzer [--verbose] [--dump-json] [--emit-schema] [--format=md|json] [--trace-rss] [--compress=none|deflate9] <file.hprof[.gz]> [output]"
+            "usage: hprof-analyzer [--verbose] [--dump-json] [--emit-schema] [--render=<file>] [--format=md|json] [--trace-rss] [--compress=none|deflate9] <file.hprof[.gz]> [output]"
         );
         process::exit(1);
     }
@@ -147,6 +165,37 @@ fn log(verbose: bool, phase: &str, elapsed: f64) {
             eprintln!("{phase}: {elapsed:.2}s");
         }
     }
+}
+
+/// Offline render path for `--render`: read a canonical Report JSON from
+/// `path` (or stdin when `path == "-"`), verify its schema version, and return
+/// the rendered Markdown. Never reads a .hprof file or runs the pipeline.
+fn render_report_json(path: &str) -> io::Result<String> {
+    use std::io::Read;
+    let json = if path == "-" {
+        let mut buf = String::new();
+        io::stdin().read_to_string(&mut buf)?;
+        buf
+    } else {
+        std::fs::read_to_string(path)?
+    };
+    let report: report::Report = serde_json::from_str(&json).map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid report JSON: {e}"),
+        )
+    })?;
+    if report.schema_version != report::SCHEMA_VERSION {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "report schema_version {} does not match supported version {}; refusing to render",
+                report.schema_version,
+                report::SCHEMA_VERSION
+            ),
+        ));
+    }
+    Ok(report::render_markdown(&report))
 }
 
 fn run(

@@ -681,7 +681,7 @@ pub fn render_markdown(r: &Report) -> String {
     render_oom_triage(r, &mut out);
     render_system_overview(&r.overview, &mut out);
     render_leak_suspects(&r.leaks, &mut out);
-    render_top_consumers(&r.top, &mut out);
+    render_top_consumers(&r.top, r.leaks.total_shallow, &mut out);
     out
 }
 
@@ -736,7 +736,7 @@ fn render_oom_triage(r: &Report, out: &mut String) {
             o.display_class,
             o.obj_index_1based,
             format_bytes(o.retained),
-            o.pct,
+            pct_of(o.retained),
         ));
     } else {
         out.push_str("- **Headline retainer:** No dominant retainer found.\n");
@@ -869,7 +869,7 @@ fn render_leak_suspects(l: &LeakSuspects, out: &mut String) {
     }
 }
 
-fn render_top_consumers(t: &TopConsumers, out: &mut String) {
+fn render_top_consumers(t: &TopConsumers, total_shallow: u64, out: &mut String) {
     out.push_str("## Top Consumers\n\n");
     out.push_str("### Biggest Objects (Top-Level Dominators)\n\n");
     out.push_str("| # | Object Index | Class | Shallow | Retained |\n");
@@ -883,7 +883,11 @@ fn render_top_consumers(t: &TopConsumers, out: &mut String) {
             row.display_class,
             format_bytes(row.shallow),
             format_bytes(row.retained),
-            row.pct,
+            if total_shallow > 0 {
+                row.retained as f64 / total_shallow as f64 * 100.0
+            } else {
+                0.0
+            },
         ));
     }
     out.push('\n');
@@ -1232,6 +1236,20 @@ mod tests {
             row.pct = 0.0;
         }
         assert_eq!(r, back, "round-tripped Report must equal the original");
+    }
+
+    #[test]
+    fn render_markdown_round_trips_through_json() {
+        // Proves the --render offline path is faithful: serializing a Report to
+        // JSON and deserializing it back must produce byte-identical Markdown.
+        let r = fixture_report();
+        let json = serde_json::to_string(&r).expect("serialize");
+        let back: Report = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(
+            render_markdown(&r),
+            render_markdown(&back),
+            "render_markdown must be stable across a JSON round trip"
+        );
     }
 
     #[test]
