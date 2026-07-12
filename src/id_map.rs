@@ -408,4 +408,89 @@ mod tests {
             }
         }
     }
+
+    // Single-block boundary coverage: every inserted addr round-trips, and
+    // absent addrs (below base, above max, in interior gaps) return None. All
+    // these addrs fit in one 4 GB span so they exercise the single-block path.
+    #[test]
+    fn single_block_boundaries() {
+        let base = 0x7f00_0000_0000u64;
+        let addrs: Vec<u64> = vec![base, base + 0x10, base + 0x1000, base + 0x1_0000];
+        let mut m = IdMap::new();
+        for &a in &addrs {
+            m.push(a);
+        }
+        m.sort_and_dedup();
+        assert_eq!(m.block_base.len(), 1, "all addrs must land in one block");
+        for (i, &a) in addrs.iter().enumerate() {
+            assert_eq!(m.index_of(a), Some(i));
+            assert_eq!(m.addr_at(i), a);
+        }
+        // below base, above max, interior gaps -> None
+        assert_eq!(m.index_of(base - 1), None);
+        assert_eq!(m.index_of(base + 0x1_0001), None);
+        assert_eq!(m.index_of(base + 1), None);
+        assert_eq!(m.index_of(base + 0x800), None);
+    }
+
+    // The single-block result must equal what a from-scratch general-path
+    // computation yields. We build the SAME address set once as a single block
+    // (all within 2^32) and confirm index_of/addr_at agree with a naive
+    // sorted-vec binary search reference.
+    #[test]
+    fn single_block_matches_naive_reference() {
+        let base = 0x1234_0000_0000u64;
+        let mut addrs: Vec<u64> = (0..500u64).map(|k| base + k.wrapping_mul(0x9E37)).collect();
+        addrs.sort_unstable();
+        addrs.dedup();
+        let mut m = IdMap::new();
+        for &a in &addrs {
+            m.push(a);
+        }
+        m.sort_and_dedup();
+        assert_eq!(m.block_base.len(), 1);
+        for (i, &a) in addrs.iter().enumerate() {
+            assert_eq!(m.index_of(a), Some(i));
+            assert_eq!(m.addr_at(i), a);
+        }
+        // A handful of non-members must resolve to None.
+        for probe in [base - 5, base + 0x9E37 / 2, addrs.last().unwrap() + 7] {
+            let want = addrs.binary_search(&probe).ok();
+            assert_eq!(m.index_of(probe), want);
+        }
+    }
+
+    proptest::proptest! {
+        // Random distinct addresses constrained to a single 4 GB span: every
+        // member round-trips via index_of/addr_at, and non-members return None,
+        // matching a naive sorted-slice binary search. This locks the
+        // single-block fast path against the reference on arbitrary inputs.
+        #[test]
+        fn prop_single_block_roundtrip(
+            raw in proptest::collection::vec(0u32.., 0..400),
+            probes in proptest::collection::vec(0u32.., 0..40),
+        ) {
+            let base = 0x2000_0000_0000u64;
+            let mut addrs: Vec<u64> = raw.iter().map(|&x| base + x as u64).collect();
+            addrs.sort_unstable();
+            addrs.dedup();
+            let mut m = IdMap::new();
+            for &a in &addrs {
+                m.push(a);
+            }
+            m.sort_and_dedup();
+            if !addrs.is_empty() {
+                proptest::prop_assert_eq!(m.block_base.len(), 1);
+            }
+            for (i, &a) in addrs.iter().enumerate() {
+                proptest::prop_assert_eq!(m.index_of(a), Some(i));
+                proptest::prop_assert_eq!(m.addr_at(i), a);
+            }
+            for &p in &probes {
+                let addr = base + p as u64;
+                let want = addrs.binary_search(&addr).ok();
+                proptest::prop_assert_eq!(m.index_of(addr), want);
+            }
+        }
+    }
 }
