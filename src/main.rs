@@ -17,18 +17,48 @@ use std::{env, io, process, time::Instant};
 
 use pass1::Pass1;
 
+/// Output format for the analysis report.
+#[derive(Clone, Copy, PartialEq)]
+enum OutputFormat {
+    Md,
+    Json,
+}
+
+impl OutputFormat {
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "md" | "markdown" => Some(OutputFormat::Md),
+            "json" => Some(OutputFormat::Json),
+            _ => None,
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
     let mut dump_json = false;
     let mut verbose = false;
+    let mut emit_schema = false;
+    let mut format = OutputFormat::Md;
     let mut compress = cvec::Codec::Deflate9;
     let mut positional: Vec<&str> = Vec::new();
     for arg in args.iter().skip(1) {
         match arg.as_str() {
             "--dump-json" => dump_json = true,
+            "--emit-schema" => emit_schema = true,
             "--verbose" | "-v" => verbose = true,
             "--trace-rss" => trace::set_enabled(true),
+            s if s.starts_with("--format=") => {
+                let val = &s["--format=".len()..];
+                match OutputFormat::parse(val) {
+                    Some(fmt) => format = fmt,
+                    None => {
+                        eprintln!("unknown --format '{val}' (use: md, json)");
+                        process::exit(1);
+                    }
+                }
+            }
             s if s.starts_with("--compress=") => {
                 let val = &s["--compress=".len()..];
                 match cvec::Codec::parse(val) {
@@ -43,9 +73,23 @@ fn main() {
         }
     }
 
+    // --emit-schema prints the JSON Schema of the report model and exits;
+    // it needs no input file.
+    if emit_schema {
+        let schema = schemars::schema_for!(report::Report);
+        match serde_json::to_string_pretty(&schema) {
+            Ok(js) => println!("{js}"),
+            Err(e) => {
+                eprintln!("Error: {e}");
+                process::exit(1);
+            }
+        }
+        return;
+    }
+
     if positional.is_empty() {
         eprintln!(
-            "usage: hprof-analyzer [--verbose] [--dump-json] [--trace-rss] [--compress=none|deflate9] <file.hprof[.gz]> [output.md]"
+            "usage: hprof-analyzer [--verbose] [--dump-json] [--emit-schema] [--format=md|json] [--trace-rss] [--compress=none|deflate9] <file.hprof[.gz]> [output]"
         );
         process::exit(1);
     }
@@ -64,7 +108,7 @@ fn main() {
         return;
     }
 
-    match run(input, output, verbose, compress) {
+    match run(input, output, format, verbose, compress) {
         Ok(()) => {}
         Err(e) => {
             eprintln!("Error: {e}");
@@ -105,7 +149,13 @@ fn log(verbose: bool, phase: &str, elapsed: f64) {
     }
 }
 
-fn run(input: &str, output: Option<&str>, verbose: bool, compress: cvec::Codec) -> io::Result<()> {
+fn run(
+    input: &str,
+    output: Option<&str>,
+    format: OutputFormat,
+    verbose: bool,
+    compress: cvec::Codec,
+) -> io::Result<()> {
     let t_total = Instant::now();
 
     let t = Instant::now();
@@ -236,15 +286,29 @@ fn run(input: &str, output: Option<&str>, verbose: bool, compress: cvec::Codec) 
     drop(dc_off);
     drop(dc_tgt);
     crate::trace::trim();
-    let md = report::render_markdown(&report);
-    crate::trace::probe("report: after render_markdown");
+    let out_text = match format {
+        OutputFormat::Md => {
+            let md = report::render_markdown(&report);
+            crate::trace::probe("report: after render_markdown");
+            md
+        }
+        OutputFormat::Json => {
+            // serde_json over a struct preserves field declaration order and
+            // carries no f64 (pct is #[serde(skip)]), so output is
+            // deterministic. The model holds only KB-scale aggregates, so
+            // serialization is trivially RSS-safe even for huge dumps.
+            let js = serde_json::to_string_pretty(&report).map_err(io::Error::other)?;
+            crate::trace::probe("report: after serialize_json");
+            js
+        }
+    };
     log(verbose, "report", t.elapsed().as_secs_f64());
 
     match output {
         Some(path) => {
-            std::fs::write(path, &md).map_err(|e| io::Error::new(e.kind(), e))?;
+            std::fs::write(path, &out_text).map_err(|e| io::Error::new(e.kind(), e))?;
         }
-        None => print!("{}", md),
+        None => print!("{}", out_text),
     }
 
     log(verbose, "total", t_total.elapsed().as_secs_f64());

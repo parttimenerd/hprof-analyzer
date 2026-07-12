@@ -182,7 +182,7 @@ mod tests {
         let mut buf = Vec::new();
         encode_delta(&[], &mut buf);
         assert!(buf.is_empty());
-        assert_eq!(decode_delta(&buf, 0), vec![]);
+        assert_eq!(decode_delta(&buf, 0), Vec::<u32>::new());
     }
 
     #[test]

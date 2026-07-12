@@ -137,6 +137,7 @@ const TOP_N: usize = 20;
 const CONCENTRATION_PCT: f64 = 50.0;
 
 /// One row of the System-Overview class histogram (top 50 by retained).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct HistRow {
     pub pretty_class: String,
     pub instances: u64,
@@ -145,6 +146,7 @@ pub struct HistRow {
 }
 
 /// Aggregates for the "System Overview" section.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct SystemOverview {
     pub source_name: String,
     pub format: String,
@@ -159,6 +161,7 @@ pub struct SystemOverview {
 }
 
 /// One step of a single-suspect accumulation path.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct PathStep {
     pub depth: usize,
     pub obj_index_1based: usize,
@@ -167,6 +170,7 @@ pub struct PathStep {
 }
 
 /// One leak suspect (single large object or class group).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct Suspect {
     pub is_single: bool,
     pub pretty_class: String,
@@ -178,21 +182,33 @@ pub struct Suspect {
 }
 
 /// Aggregates for the "Leak Suspects" section.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct LeakSuspects {
     pub total_shallow: u64,
     pub suspects: Vec<Suspect>,
 }
 
 /// One row of "Biggest Objects".
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct ObjRow {
     pub obj_index_1based: usize,
     pub display_class: String,
     pub shallow: u64,
     pub retained: u64,
+    /// Retained share of total reachable shallow heap, in integer basis
+    /// points (bp = round(retained / total_shallow * 10000)). Deterministic
+    /// integer for JSON output; the Markdown renderer uses `pct` instead.
+    pub pct_bp: u64,
+    /// Retained share as a percentage (0..=100), used only for Markdown
+    /// formatting. Skipped from JSON/schema because f64 is a
+    /// determinism/precision risk in the machine-readable output.
+    #[serde(skip)]
+    #[schemars(skip)]
     pub pct: f64,
 }
 
 /// One row of "Biggest Classes".
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct ClassRow {
     pub pretty_class: String,
     pub instances: u64,
@@ -200,6 +216,7 @@ pub struct ClassRow {
 }
 
 /// One row of "Biggest Packages".
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct PkgRow {
     pub package: String,
     pub objects: u64,
@@ -207,14 +224,21 @@ pub struct PkgRow {
 }
 
 /// Aggregates for the "Top Consumers" section.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct TopConsumers {
     pub biggest_objects: Vec<ObjRow>,
     pub biggest_classes: Vec<ClassRow>,
     pub biggest_packages: Vec<PkgRow>,
 }
 
+/// Schema version for the machine-readable JSON output. Bump on any
+/// breaking change to the `Report` shape; the JSON always carries this.
+pub const SCHEMA_VERSION: u32 = 1;
+
 /// Full report data model: only bounded aggregates, never a per-object Vec.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct Report {
+    pub schema_version: u32,
     pub generated: String,
     pub overview: SystemOverview,
     pub leaks: LeakSuspects,
@@ -242,6 +266,7 @@ pub fn build_model(g: &Graph, dc_offsets: &[u32], dc_targets: &[u32]) -> Report 
     let top = build_top_consumers(g);
     crate::trace::probe("build_model: after top_consumers aggregates");
     Report {
+        schema_version: SCHEMA_VERSION,
         generated,
         overview,
         leaks,
@@ -546,12 +571,20 @@ fn build_top_consumers(g: &Graph) -> TopConsumers {
             } else {
                 0.0
             };
+            // Integer basis points of the retained share, for deterministic
+            // JSON output (round-half-to-even via f64::round on *10000).
+            let pct_bp = if total_shallow > 0 {
+                (g.retained[idx] as f64 / total_shallow as f64 * 10000.0).round() as u64
+            } else {
+                0
+            };
 
             ObjRow {
                 obj_index_1based: idx + 1,
                 display_class,
                 shallow: g.shallow[idx] as u64,
                 retained: g.retained[idx],
+                pct_bp,
                 pct,
             }
         })
@@ -1175,5 +1208,77 @@ mod tests {
         ] {
             assert!(md.contains(needle), "missing section: {needle}");
         }
+    }
+
+    // ── Phase B: JSON / schema conformance ─────────────────────────────────
+
+    /// Build the fixture Report with the nondeterministic timestamp neutralised.
+    fn fixture_report() -> Report {
+        let (g, dc_off, dc_tgt) = fixture();
+        let mut r = build_model(&g, &dc_off, &dc_tgt);
+        r.generated = "FIXED".to_string();
+        r
+    }
+
+    #[test]
+    fn json_round_trip() {
+        let mut r = fixture_report();
+        let json = serde_json::to_string(&r).expect("serialize");
+        let back: Report = serde_json::from_str(&json).expect("deserialize");
+        // ObjRow::pct is #[serde(skip)] (f64 kept out of JSON), so it
+        // deserializes to its Default (0.0). Zero it on the original before
+        // comparing; every OTHER field must survive the round trip.
+        for row in &mut r.top.biggest_objects {
+            row.pct = 0.0;
+        }
+        assert_eq!(r, back, "round-tripped Report must equal the original");
+    }
+
+    #[test]
+    fn json_serialization_is_deterministic() {
+        let r = fixture_report();
+        let a = serde_json::to_string_pretty(&r).unwrap();
+        let b = serde_json::to_string_pretty(&r).unwrap();
+        assert_eq!(
+            a, b,
+            "serializing the same Report twice must be byte-identical"
+        );
+    }
+
+    #[test]
+    fn json_validates_against_schema() {
+        let r = fixture_report();
+        let instance = serde_json::to_value(&r).expect("Report -> Value");
+        let schema = serde_json::to_value(schemars::schema_for!(Report)).expect("schema -> Value");
+        let validator = jsonschema::validator_for(&schema).expect("compile schema (draft 2020-12)");
+        assert!(
+            validator.validate(&instance).is_ok(),
+            "serialized fixture Report must validate against schema_for!(Report)"
+        );
+    }
+
+    #[test]
+    fn emit_schema_matches_committed_file() {
+        let committed: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/schema/report.schema.json"
+            ))
+            .expect("read committed schema"),
+        )
+        .expect("parse committed schema");
+        let fresh = serde_json::to_value(schemars::schema_for!(Report)).expect("fresh schema");
+        // Value-equality: whitespace / key ordering must not cause false diffs.
+        assert_eq!(
+            committed, fresh,
+            "schema/report.schema.json must equal a fresh schema_for!(Report);              regenerate via `--emit-schema` if the model changed"
+        );
+    }
+
+    #[test]
+    fn schema_version_guard() {
+        let r = fixture_report();
+        assert_eq!(r.schema_version, SCHEMA_VERSION);
+        assert_eq!(SCHEMA_VERSION, 1);
     }
 }

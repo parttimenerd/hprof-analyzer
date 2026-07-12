@@ -1,0 +1,336 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Report",
+  "description": "Full report data model: only bounded aggregates, never a per-object Vec.",
+  "type": "object",
+  "properties": {
+    "generated": {
+      "type": "string"
+    },
+    "leaks": {
+      "$ref": "#/$defs/LeakSuspects"
+    },
+    "overview": {
+      "$ref": "#/$defs/SystemOverview"
+    },
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "top": {
+      "$ref": "#/$defs/TopConsumers"
+    }
+  },
+  "required": [
+    "schema_version",
+    "generated",
+    "overview",
+    "leaks",
+    "top"
+  ],
+  "$defs": {
+    "ClassRow": {
+      "description": "One row of \"Biggest Classes\".",
+      "type": "object",
+      "properties": {
+        "instances": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "pretty_class": {
+          "type": "string"
+        },
+        "retained": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "pretty_class",
+        "instances",
+        "retained"
+      ]
+    },
+    "HistRow": {
+      "description": "One row of the System-Overview class histogram (top 50 by retained).",
+      "type": "object",
+      "properties": {
+        "instances": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "pretty_class": {
+          "type": "string"
+        },
+        "retained": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "shallow": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "pretty_class",
+        "instances",
+        "shallow",
+        "retained"
+      ]
+    },
+    "LeakSuspects": {
+      "description": "Aggregates for the \"Leak Suspects\" section.",
+      "type": "object",
+      "properties": {
+        "suspects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Suspect"
+          }
+        },
+        "total_shallow": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "total_shallow",
+        "suspects"
+      ]
+    },
+    "ObjRow": {
+      "description": "One row of \"Biggest Objects\".",
+      "type": "object",
+      "properties": {
+        "display_class": {
+          "type": "string"
+        },
+        "obj_index_1based": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "pct_bp": {
+          "description": "Retained share of total reachable shallow heap, in integer basis\npoints (bp = round(retained / total_shallow * 10000)). Deterministic\ninteger for JSON output; the Markdown renderer uses `pct` instead.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "retained": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "shallow": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "obj_index_1based",
+        "display_class",
+        "shallow",
+        "retained",
+        "pct_bp"
+      ]
+    },
+    "PathStep": {
+      "description": "One step of a single-suspect accumulation path.",
+      "type": "object",
+      "properties": {
+        "depth": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "display_class": {
+          "type": "string"
+        },
+        "obj_index_1based": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "retained": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "depth",
+        "obj_index_1based",
+        "display_class",
+        "retained"
+      ]
+    },
+    "PkgRow": {
+      "description": "One row of \"Biggest Packages\".",
+      "type": "object",
+      "properties": {
+        "objects": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "package": {
+          "type": "string"
+        },
+        "retained": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "package",
+        "objects",
+        "retained"
+      ]
+    },
+    "Suspect": {
+      "description": "One leak suspect (single large object or class group).",
+      "type": "object",
+      "properties": {
+        "instance_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "is_single": {
+          "type": "boolean"
+        },
+        "path": {
+          "description": "Non-empty only for single suspects.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PathStep"
+          }
+        },
+        "pretty_class": {
+          "type": "string"
+        },
+        "retained": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "shallow": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "is_single",
+        "pretty_class",
+        "instance_count",
+        "retained",
+        "shallow",
+        "path"
+      ]
+    },
+    "SystemOverview": {
+      "description": "Aggregates for the \"System Overview\" section.",
+      "type": "object",
+      "properties": {
+        "classes_loaded": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "file_size": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "format": {
+          "type": "string"
+        },
+        "gc_roots": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "histogram": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HistRow"
+          }
+        },
+        "source_name": {
+          "type": "string"
+        },
+        "total_objects": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "total_shallow": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "unreachable_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "unreachable_shallow": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "source_name",
+        "format",
+        "file_size",
+        "total_objects",
+        "total_shallow",
+        "gc_roots",
+        "classes_loaded",
+        "unreachable_count",
+        "unreachable_shallow",
+        "histogram"
+      ]
+    },
+    "TopConsumers": {
+      "description": "Aggregates for the \"Top Consumers\" section.",
+      "type": "object",
+      "properties": {
+        "biggest_classes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ClassRow"
+          }
+        },
+        "biggest_objects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ObjRow"
+          }
+        },
+        "biggest_packages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PkgRow"
+          }
+        }
+      },
+      "required": [
+        "biggest_objects",
+        "biggest_classes",
+        "biggest_packages"
+      ]
+    }
+  }
+}
