@@ -6,6 +6,9 @@ edition = "2024"
 [dependencies]
 flate2 = "1.1.9"
 
+[dev-dependencies]
+proptest = "1"
+
 # Clippy is run in CI (see .github/workflows/ci.yml). Most lints are enforced;
 # the allows below are deliberate patterns in the memory-critical hot paths,
 # not tech debt:

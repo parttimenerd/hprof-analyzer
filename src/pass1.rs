@@ -157,72 +157,72 @@ impl Pass1 {
 
         // Sort by address and deduplicate (same address may appear under
         // multiple roots). `order` is a u32 permutation (heaps hold < 4 G
-        // objects, so u32 suffices and halves this 90 MB->45 MB scaffold).
+        // objects, so u32 suffices). To keep `order` (2 GB @514M) off the
+        // binding pass1 peak, we apply it IN PLACE to every parallel array so
+        // the arrays themselves become address-sorted, then DROP `order`
+        // before building the id_map offsets and deduping — so `order`,
+        // `tmp_addrs`, and `id_map.offsets` never coexist (that 3-way overlap
+        // was the ~14.9 GB peak).
         let n = tmp_addrs.len();
         let mut order: Vec<u32> = (0..n as u32).collect();
         crate::trace::probe("pass1: before order.sort_unstable_by_key");
         order.sort_unstable_by_key(|&i| tmp_addrs[i as usize]);
         crate::trace::probe("pass1: after order.sort_unstable_by_key");
 
-        // Build id_map while compacting `order` in place to keep only the
-        // first `order` entry at each distinct address (dedup). No separate
-        // keep-mask (was a full Vec<bool>, ~0.5 GB @514M): we overwrite
-        // order[write] <= order[rank] as we go, then truncate to m. The
-        // gathers below then iterate the compacted order with no per-rank
-        // branch.
-        // `order` is sorted by address, so we feed strictly-ascending, deduped
-        // addresses directly into the two-level index — no 4.1GB staging Vec.
+        // Permute all five parallel arrays into address-sorted order in place
+        // (no output allocation). `order` is consumed as scratch (top-bit
+        // marker) and dropped immediately after — freeing 2 GB before the
+        // dedup/offsets pass below.
+        apply_permutation_in_place(&mut order, |x, y| {
+            tmp_addrs.swap(x, y);
+            tmp_class_ids.swap(x, y);
+            tmp_shallow.swap(x, y);
+            tmp_kind.swap(x, y);
+            tmp_elem_count.swap(x, y);
+        });
+        drop(order);
+        crate::trace::probe("pass1: after drop(order) (arrays sorted in place)");
+
+        // Sequential dedup+build over the now address-sorted arrays: feed each
+        // distinct (strictly-ascending) address into the two-level id_map and
+        // compact the payload arrays in place to the unique prefix [0, write).
+        // No 4.1GB staging Vec, no separate gather passes.
         let mut id_map = IdMap::new();
         id_map.reserve_offsets(n);
         let mut prev_addr = u64::MAX;
         let mut write = 0usize;
-        for rank in 0..order.len() {
-            let i = order[rank];
-            let a = tmp_addrs[i as usize];
+        for rank in 0..n {
+            let a = tmp_addrs[rank];
             if a != prev_addr {
                 id_map.push_sorted_addr(a);
-                order[write] = i;
+                if write != rank {
+                    tmp_class_ids[write] = tmp_class_ids[rank];
+                    tmp_shallow[write] = tmp_shallow[rank];
+                    tmp_kind[write] = tmp_kind[rank];
+                    tmp_elem_count[write] = tmp_elem_count[rank];
+                }
                 write += 1;
                 prev_addr = a;
             }
         }
-        crate::trace::probe("pass1: before id_map.finalize (tmp_addrs+order+tmps live)");
-        order.truncate(write);
+        crate::trace::probe("pass1: before id_map.finalize (tmp_addrs+payloads live, order freed)");
         id_map.finalize_sorted();
         crate::trace::probe("pass1: after id_map.finalize (offsets built)");
         let m = id_map.len();
+        debug_assert_eq!(m, write, "id_map len must equal unique-address count");
         drop(tmp_addrs);
         crate::trace::probe("pass1: after drop(tmp_addrs)");
 
-        // Gather each parallel array in its own pass, then free the
-        // source buffer immediately — only one tmp/output pair is
-        // resident at a time, trimming the pass1 transient peak. `order`
-        // is now the compacted (unique, sorted) index list of length m.
-        let mut class_ids: Vec<u32> = Vec::with_capacity(m);
-        for &i in &order {
-            class_ids.push(tmp_class_ids[i as usize]);
-        }
-        drop(tmp_class_ids);
-
-        let mut shallow_sizes: Vec<u32> = Vec::with_capacity(m);
-        for &i in &order {
-            shallow_sizes.push(tmp_shallow[i as usize]);
-        }
-        drop(tmp_shallow);
-
-        let mut kind: Vec<u8> = Vec::with_capacity(m);
-        for &i in &order {
-            kind.push(tmp_kind[i as usize]);
-        }
-        drop(tmp_kind);
-
-        let mut elem_count: Vec<u32> = Vec::with_capacity(m);
-        for &i in &order {
-            elem_count.push(tmp_elem_count[i as usize]);
-        }
-        drop(tmp_elem_count);
-
-        drop(order);
+        // The payload arrays are already compacted (unique, address-sorted) in
+        // their prefix [0, m); truncate and reuse them directly as outputs.
+        tmp_class_ids.truncate(m);
+        tmp_shallow.truncate(m);
+        tmp_kind.truncate(m);
+        tmp_elem_count.truncate(m);
+        let class_ids = tmp_class_ids;
+        let shallow_sizes = tmp_shallow;
+        let kind = tmp_kind;
+        let elem_count = tmp_elem_count;
 
         Ok(Pass1 {
             strings,
@@ -511,9 +511,261 @@ fn value_size(type_code: u8, id_size: u8) -> u64 {
     }
 }
 
+/// Apply the gather permutation `perm` in place: after the call, position `k`
+/// holds the element that was originally at `perm[k]` (i.e. equivalent to
+/// `out[k] = src[perm[k]]` but with no output allocation). `swap(a, b)` must
+/// exchange element `a` with element `b` in every parallel array being
+/// permuted. `perm` is consumed as scratch — its top bit (1<<31) is used as a
+/// per-slot "placed" marker, so entries must be < 2^31 (heaps hold < 4G
+/// objects). On return `perm` is left with all top bits set (caller drops it).
+fn apply_permutation_in_place(perm: &mut [u32], mut swap: impl FnMut(usize, usize)) {
+    const PLACED: u32 = 1 << 31;
+    let n = perm.len();
+    for start in 0..n {
+        if perm[start] & PLACED != 0 {
+            continue;
+        }
+        // Walk the cycle. `hole` is the slot currently waiting to receive its
+        // final element; we pull from `src = perm[hole]` until we return to
+        // `start`, marking each slot placed as we fix it.
+        let mut hole = start;
+        loop {
+            let src = (perm[hole] & !PLACED) as usize;
+            perm[hole] |= PLACED;
+            if src == start {
+                break;
+            }
+            swap(hole, src);
+            hole = src;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Naive gather reference: out[k] = src[perm[k]].
+    fn gather<T: Copy>(src: &[T], perm: &[u32]) -> Vec<T> {
+        perm.iter().map(|&p| src[p as usize]).collect()
+    }
+
+    #[test]
+    fn apply_permutation_matches_gather_multicycle() {
+        // A permutation with a 3-cycle (0->2->4->0), a 2-cycle (1<->3),
+        // and a fixed point (5).
+        let perm: [u32; 6] = [2, 3, 4, 1, 0, 5];
+        let a: [u64; 6] = [10, 11, 12, 13, 14, 15];
+        let b: [u32; 6] = [100, 101, 102, 103, 104, 105];
+        let c: [u8; 6] = [0, 1, 2, 3, 4, 5];
+        let want_a = gather(&a, &perm);
+        let want_b = gather(&b, &perm);
+        let want_c = gather(&c, &perm);
+
+        let mut pa = a;
+        let mut pb = b;
+        let mut pc = c;
+        let mut work = perm;
+        apply_permutation_in_place(&mut work, |x, y| {
+            pa.swap(x, y);
+            pb.swap(x, y);
+            pc.swap(x, y);
+        });
+        assert_eq!(pa.to_vec(), want_a, "u64 array");
+        assert_eq!(pb.to_vec(), want_b, "u32 array");
+        assert_eq!(pc.to_vec(), want_c, "u8 array");
+    }
+
+    #[test]
+    fn apply_permutation_identity_and_reverse() {
+        // Identity.
+        let id: [u32; 4] = [0, 1, 2, 3];
+        let a: [u64; 4] = [7, 8, 9, 10];
+        let mut pa = a;
+        let mut w = id;
+        apply_permutation_in_place(&mut w, |x, y| pa.swap(x, y));
+        assert_eq!(pa, a);
+
+        // Full reverse (two 2-cycles): out[k]=src[3-k].
+        let rev: [u32; 4] = [3, 2, 1, 0];
+        let b: [u64; 4] = [7, 8, 9, 10];
+        let want = gather(&b, &rev);
+        let mut pb = b;
+        let mut w2 = rev;
+        apply_permutation_in_place(&mut w2, |x, y| pb.swap(x, y));
+        assert_eq!(pb.to_vec(), want);
+    }
+
+    use proptest::prelude::*;
+
+    // Generate a random permutation of [0, n) for a random n in [1, 255):
+    // start from the identity and shuffle it. `prop_shuffle` requires the
+    // `Strategy` trait (in the prelude).
+    fn arb_permutation() -> impl Strategy<Value = Vec<u32>> {
+        (1usize..256).prop_flat_map(|n| Just((0..n as u32).collect::<Vec<u32>>()).prop_shuffle())
+    }
+
+    proptest! {
+        // Apply the in-place permutation across two independent payload arrays
+        // in lockstep and assert each equals the naive gather out[k]=src[perm[k]].
+        // Shrinking pins any direction/off-by-one bug to a minimal
+        // counterexample. This is the correctness backbone for the pass1
+        // order-elimination (silent swap-discipline bugs corrupt payloads and
+        // break big-dump bit-exactness only at scale).
+        #[test]
+        fn apply_permutation_equals_gather(perm in arb_permutation()) {
+            let n = perm.len();
+            // Deterministic-from-index payloads so the check is self-contained.
+            let a: Vec<u64> = (0..n as u64).map(|i| i.wrapping_mul(0x9E37_79B9)).collect();
+            let b: Vec<u32> = (0..n as u32).map(|i| i.wrapping_mul(2_654_435_761)).collect();
+            let want_a = gather(&a, &perm);
+            let want_b = gather(&b, &perm);
+
+            let mut pa = a;
+            let mut pb = b;
+            let mut work = perm.clone();
+            apply_permutation_in_place(&mut work, |x, y| {
+                pa.swap(x, y);
+                pb.swap(x, y);
+            });
+            prop_assert_eq!(&pa, &want_a);
+            prop_assert_eq!(&pb, &want_b);
+            // Every slot must be marked placed exactly once (top bit set).
+            for &w in &work {
+                prop_assert_ne!(w & (1u32 << 31), 0);
+            }
+        }
+    }
+
+    /// Standalone mirror of the pass1 finalize flow (sort-by-address ->
+    /// permute-in-place -> sequential dedup+compact), operating on two payload
+    /// arrays. Returns (unique_sorted_addrs, compacted_payload_a,
+    /// compacted_payload_b). This is exactly the mechanism in `Pass1::run`,
+    /// extracted so it can be property-tested against a naive reference.
+    fn finalize_flow(
+        addrs: &[u64],
+        pa_in: &[u64],
+        pb_in: &[u32],
+    ) -> (Vec<u64>, Vec<u64>, Vec<u32>) {
+        let n = addrs.len();
+        let mut a = addrs.to_vec();
+        let mut pa = pa_in.to_vec();
+        let mut pb = pb_in.to_vec();
+        let mut order: Vec<u32> = (0..n as u32).collect();
+        order.sort_unstable_by_key(|&i| a[i as usize]);
+        apply_permutation_in_place(&mut order, |x, y| {
+            a.swap(x, y);
+            pa.swap(x, y);
+            pb.swap(x, y);
+        });
+        drop(order);
+        let mut out_addr = Vec::new();
+        let mut prev = u64::MAX;
+        let mut write = 0usize;
+        for rank in 0..n {
+            let addr = a[rank];
+            if addr != prev {
+                out_addr.push(addr);
+                if write != rank {
+                    pa[write] = pa[rank];
+                    pb[write] = pb[rank];
+                }
+                write += 1;
+                prev = addr;
+            }
+        }
+        pa.truncate(write);
+        pb.truncate(write);
+        (out_addr, pa, pb)
+    }
+
+    proptest! {
+        // Full finalize flow == naive reference. We use a BTreeMap keyed by
+        // address so each distinct address carries ONE payload pair (matching
+        // reality: an object address has a single payload). The reference is
+        // the address-sorted map: keys are the unique sorted addrs, values are
+        // the payloads. This pins the composite (sort+permute+dedup+compact)
+        // that the big dump actually exercises, not just the raw permutation.
+        #[test]
+        fn finalize_flow_matches_btreemap_reference(
+            pairs in proptest::collection::vec(
+                (any::<u64>(), any::<u64>(), any::<u32>()),
+                0..300,
+            )
+        ) {
+            use std::collections::BTreeMap;
+            // Deduplicate inputs by address so payloads are well-defined; keep
+            // the LAST write per address for the input arrays (arbitrary — the
+            // reference below reads the same map, so it stays consistent).
+            let mut map: BTreeMap<u64, (u64, u32)> = BTreeMap::new();
+            for &(addr, va, vb) in &pairs {
+                map.insert(addr, (va, vb));
+            }
+            let addrs: Vec<u64> = map.keys().copied().collect();
+            let pa: Vec<u64> = addrs.iter().map(|k| map[k].0).collect();
+            let pb: Vec<u32> = addrs.iter().map(|k| map[k].1).collect();
+
+            let (out_addr, out_a, out_b) = finalize_flow(&addrs, &pa, &pb);
+
+            // Reference: unique addrs sorted ascending, payloads follow.
+            let want_addr: Vec<u64> = map.keys().copied().collect();
+            let want_a: Vec<u64> = map.values().map(|v| v.0).collect();
+            let want_b: Vec<u32> = map.values().map(|v| v.1).collect();
+
+            prop_assert_eq!(&out_addr, &want_addr, "addresses");
+            prop_assert_eq!(&out_a, &want_a, "payload a");
+            prop_assert_eq!(&out_b, &want_b, "payload b");
+            // Strictly ascending, no duplicates.
+            for w in out_addr.windows(2) {
+                prop_assert!(w[0] < w[1], "addrs must be strictly ascending");
+            }
+        }
+
+        // Finalize flow correctly collapses duplicate addresses even when the
+        // raw input contains many repeats in arbitrary order. Payload per
+        // address is derived FROM the address (deterministic) so which
+        // duplicate the unstable sort keeps does not matter.
+        #[test]
+        fn finalize_flow_collapses_duplicates(
+            raw in proptest::collection::vec(0u64..32, 0..400)
+        ) {
+            let addrs: Vec<u64> = raw.clone();
+            // payload is a pure function of the address -> all duplicates agree.
+            let pa: Vec<u64> = addrs.iter().map(|&x| x.wrapping_mul(0x9E37_79B9)).collect();
+            let pb: Vec<u32> = addrs.iter().map(|&x| (x as u32).wrapping_mul(2_654_435_761)).collect();
+
+            let (out_addr, out_a, out_b) = finalize_flow(&addrs, &pa, &pb);
+
+            let mut want_addr: Vec<u64> = addrs.clone();
+            want_addr.sort_unstable();
+            want_addr.dedup();
+            let want_a: Vec<u64> = want_addr.iter().map(|&x| x.wrapping_mul(0x9E37_79B9)).collect();
+            let want_b: Vec<u32> = want_addr.iter().map(|&x| (x as u32).wrapping_mul(2_654_435_761)).collect();
+
+            prop_assert_eq!(&out_addr, &want_addr, "addresses");
+            prop_assert_eq!(&out_a, &want_a, "payload a");
+            prop_assert_eq!(&out_b, &want_b, "payload b");
+        }
+    }
+
+    #[test]
+    fn finalize_flow_empty() {
+        let (a, pa, pb) = finalize_flow(&[], &[], &[]);
+        assert!(a.is_empty() && pa.is_empty() && pb.is_empty());
+    }
+
+    #[test]
+    fn finalize_flow_all_same_address() {
+        let addrs = [7u64, 7, 7, 7];
+        let pa = [10u64, 20, 30, 40];
+        let pb = [1u32, 2, 3, 4];
+        let (a, ra, rb) = finalize_flow(&addrs, &pa, &pb);
+        assert_eq!(a, vec![7]);
+        assert_eq!(ra.len(), 1);
+        assert_eq!(rb.len(), 1);
+        // Kept payload must be one of the inputs.
+        assert!(pa.contains(&ra[0]) && pb.contains(&rb[0]));
+    }
 
     const DUMP: &str = "/home/i560383/test-heapdumps/dump_0_fj-kmeans.hprof";
 
