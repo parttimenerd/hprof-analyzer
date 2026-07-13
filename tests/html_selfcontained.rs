@@ -1,0 +1,85 @@
+//! Self-contained + determinism guards for the HTML report renderer.
+//!
+//! The HTML output is a SINGLE file that must open offline with NO network
+//! requests. These tests drive the CLI (`render --format html`) on the
+//! committed golden Report JSON, then assert the offline guarantee by grepping
+//! the emitted HTML for any external reference, and that two renders are
+//! byte-identical.
+
+use std::process::Command;
+
+fn fixture_path() -> String {
+    concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/dump_4_philosophers_report.json"
+    )
+    .to_string()
+}
+
+fn render_html() -> String {
+    let out = Command::new(env!("CARGO_BIN_EXE_hprof-analyzer"))
+        .arg("render")
+        .arg(fixture_path())
+        .arg("--format")
+        .arg("html")
+        .output()
+        .expect("failed to run hprof-analyzer render --format html");
+    assert!(
+        out.status.success(),
+        "render failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).expect("HTML output is UTF-8")
+}
+
+#[test]
+fn html_is_self_contained_no_network() {
+    let html = render_html();
+
+    // No absolute-URL references anywhere.
+    assert!(
+        !html.contains("http://"),
+        "HTML must not contain http:// references"
+    );
+    assert!(
+        !html.contains("https://"),
+        "HTML must not contain https:// references"
+    );
+    // No protocol-relative external references.
+    assert!(
+        !html.contains("src=\"//") && !html.contains("href=\"//"),
+        "HTML must not contain protocol-relative URLs"
+    );
+
+    // No external src=/href= that points outside the document. The app injects
+    // scripts via textContent (not src), so asserting there is no `src="` or
+    // `href="` attribute at all is the strictest form of the offline guarantee.
+    assert!(
+        !html.contains("src=\""),
+        "HTML must not contain any src=\"...\" attribute (external resource)"
+    );
+    assert!(
+        !html.contains("href=\""),
+        "HTML must not contain any href=\"...\" attribute (external resource)"
+    );
+
+    // The embedded data + bundle blobs are present.
+    assert!(
+        html.contains("id=\"report-data\""),
+        "HTML must embed the report-data script blob"
+    );
+    assert!(
+        html.contains("id=\"app-bundle\""),
+        "HTML must embed the app-bundle script blob"
+    );
+}
+
+#[test]
+fn html_render_is_deterministic() {
+    let a = render_html();
+    let b = render_html();
+    assert_eq!(
+        a, b,
+        "two renders of the same report must be byte-identical"
+    );
+}

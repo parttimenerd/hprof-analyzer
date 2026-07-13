@@ -4,6 +4,7 @@ mod cvec;
 mod diff;
 mod diff_reports;
 mod dominator;
+mod html;
 mod id_map;
 mod md;
 #[cfg(test)]
@@ -28,6 +29,7 @@ use pass1::Pass1;
 enum OutputFormat {
     Md,
     Json,
+    Html,
 }
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -102,6 +104,7 @@ enum DevCmd {
 enum FormatArg {
     Md,
     Json,
+    Html,
 }
 
 impl From<FormatArg> for OutputFormat {
@@ -109,6 +112,7 @@ impl From<FormatArg> for OutputFormat {
         match f {
             FormatArg::Md => OutputFormat::Md,
             FormatArg::Json => OutputFormat::Json,
+            FormatArg::Html => OutputFormat::Html,
         }
     }
 }
@@ -254,6 +258,7 @@ fn render_report(path: &str, format: OutputFormat) -> io::Result<String> {
     Ok(match format {
         OutputFormat::Md => report::render_markdown(&report),
         OutputFormat::Json => serde_json::to_string_pretty(&report).map_err(io::Error::other)?,
+        OutputFormat::Html => html::render_html(&report),
     })
 }
 
@@ -409,6 +414,11 @@ fn run(
             let js = serde_json::to_string_pretty(&report).map_err(io::Error::other)?;
             crate::trace::probe("report: after serialize_json");
             js
+        }
+        OutputFormat::Html => {
+            let h = html::render_html(&report);
+            crate::trace::probe("report: after render_html");
+            h
         }
     };
     log(verbose, "report", t.elapsed().as_secs_f64());

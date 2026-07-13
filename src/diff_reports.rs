@@ -345,8 +345,9 @@ pub fn run(a_path: &str, b_path: &str, format: OutputFormat) -> io::Result<Strin
     let b = load_report(b_path)?;
     let result = diff(&a, &b);
     Ok(match format {
-        OutputFormat::Md => render_md(&result),
         OutputFormat::Json => serde_json::to_string_pretty(&result).map_err(io::Error::other)?,
+        // The cross-dump diff has no HTML view; fall back to Markdown.
+        OutputFormat::Md | OutputFormat::Html => render_md(&result),
     })
 }
 
