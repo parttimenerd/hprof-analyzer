@@ -16,6 +16,56 @@ fn class_obj_repr(g: &Graph, i: usize) -> u32 {
         .unwrap_or(u32::MAX)
 }
 
+/// True iff `name` is a JVM primitive-array class descriptor (`[B`, `[I`, …):
+/// a single `[` followed by one primitive type char. These are boot-loaded
+/// (single loader), so exact-name duplicate rows can be folded safely.
+fn is_prim_array_desc(name: &str) -> bool {
+    name.len() == 2
+        && name.as_bytes()[0] == b'['
+        && matches!(
+            name.as_bytes()[1],
+            b'Z' | b'C' | b'F' | b'D' | b'S' | b'I' | b'J' | b'B'
+        )
+}
+
+/// Build a per-class-row remap that folds exact-raw-name duplicate histogram
+/// rows into a single canonical (lowest-indexed) row, matching MAT's
+/// by-object-type histogram semantics.
+///
+/// Two name families produce duplicate rows that MAT reports as one:
+///  - `java/lang/Class`: class objects (`kind==3`) key under a single sentinel
+///    row (`JLC_KEY`), but primitive-type Class *mirrors* (`int.class`, …) are
+///    parsed as plain instances whose class-object address *is*
+///    `java/lang/Class`, landing in a separate same-named row.
+///  - primitive-array descriptors (`[B`, `[I`, …): the actual `byte[]`/`int[]`
+///    INSTANCES key under `PRIM_KEY_BASE|type_code`, but the instance-less
+///    primitive-array CLASS objects (root-attached to mirror MAT's
+///    addSystemClassRootsIfMissing) become reachable metadata objects that
+///    intern into a *separate* zero-instance row with the same `[B`/`[I` name.
+///
+/// Only these two families are folded by name. Ordinary instance rows are
+/// interned by loader-distinct class-object address, so a class loaded by two
+/// loaders legitimately yields two same-name rows that MUST stay separate; we
+/// therefore never fold arbitrary same-name rows.
+///
+/// The returned vector maps `row -> canonical_row`; non-foldable rows map to
+/// themselves. Applying it in the histogram and Biggest-Classes tallies
+/// re-attributes the duplicates without touching reachability,
+/// `classes_loaded`, or `total_objects`.
+fn class_row_remap(g: &Graph) -> Vec<u32> {
+    let class_count = g.class_names.len();
+    let mut remap: Vec<u32> = (0..class_count as u32).collect();
+    // First occurrence of each foldable name becomes its canonical row.
+    let mut canonical: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
+    for (row, name) in g.class_names.iter().enumerate() {
+        if name == "java/lang/Class" || is_prim_array_desc(name) {
+            let canon = *canonical.entry(name.as_str()).or_insert(row as u32);
+            remap[row] = canon;
+        }
+    }
+    remap
+}
+
 // ── Formatting helpers ─────────────────────────────────────────────────────
 
 /// ISO-8601 UTC timestamp matching java.time.Instant.toString() shape.
@@ -24,9 +74,25 @@ pub fn now_iso8601() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
-    let secs = now.as_secs();
-    let nanos = now.subsec_nanos();
+    format_epoch_nanos(now.as_secs(), now.subsec_nanos())
+}
 
+/// Format a millis-since-Unix-epoch instant as `YYYY-MM-DDTHH:MM:SSZ` (UTC),
+/// second granularity. Used for the deterministic dump-creation timestamp;
+/// negative (pre-1970) values are clamped to the epoch.
+pub fn format_epoch_ms(ms: i64) -> String {
+    let secs = if ms < 0 { 0 } else { (ms / 1000) as u64 };
+    let full = format_epoch_nanos(secs, 0);
+    // full is "...SS.000000000Z"; trim the fractional seconds for readability.
+    match (full.find('.'), full.rfind('Z')) {
+        (Some(dot), Some(z)) if dot < z => format!("{}{}", &full[..dot], &full[z..]),
+        _ => full,
+    }
+}
+
+/// Core civil-date formatter (Howard Hinnant's algorithm) shared by the
+/// now/creation timestamp helpers. Produces `YYYY-MM-DDTHH:MM:SS.nnnnnnnnnZ`.
+fn format_epoch_nanos(secs: u64, nanos: u32) -> String {
     let days = secs / 86_400;
     let rem = secs % 86_400;
     let (hh, mm, ss) = (rem / 3600, (rem % 3600) / 60, rem % 60);
@@ -107,7 +173,14 @@ pub fn pretty_class_name(raw: &str) -> String {
     format!("{}{}", base, "[]".repeat(dims))
 }
 
-fn top_package(name: &str) -> String {
+/// The full dotted PACKAGE PATH of a class from its JVM internal name.
+///
+/// Normalises like the histogram (strip leading `[`, strip `L...;`), then takes
+/// everything BEFORE the final `.`. Primitives/arrays collapse to the sentinel
+/// `(primitives)`; a class in the default package (no dot) becomes `(default)`.
+/// Examples: `java/util/concurrent/Foo` -> `java.util.concurrent`;
+/// `Foo` -> `(default)`; `[I` -> `(primitives)`.
+fn package_path(name: &str) -> String {
     let mut s = name;
     while s.starts_with('[') {
         s = &s[1..];
@@ -122,9 +195,9 @@ fn top_package(name: &str) -> String {
         return "(primitives)".to_string();
     }
     let s = s.replace('/', ".");
-    match s.find('.') {
+    match s.rfind('.') {
         Some(dot) => s[..dot].to_string(),
-        None => s,
+        None => "(default)".to_string(),
     }
 }
 
@@ -132,11 +205,13 @@ fn top_package(name: &str) -> String {
 
 const THRESHOLD_PCT: f64 = 10.0;
 const TOP_N: usize = 20;
+/// MAT 1%-of-total pruning threshold for the package tree, in basis points.
+const PACKAGE_THRESHOLD_BP: u32 = 100;
 /// If the single largest suspect retains at least this share of the reachable
 /// heap, the OOM-triage lead-in calls the heap "dominated" by one retainer.
 const CONCENTRATION_PCT: f64 = 50.0;
 
-/// One row of the System-Overview class histogram (top 50 by retained).
+/// One row of the System-Overview class histogram (full, one row per class).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct HistRow {
     pub pretty_class: String,
@@ -149,8 +224,19 @@ pub struct HistRow {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct SystemOverview {
     pub source_name: String,
+    /// Full path the dump was opened from (superset of `source_name`).
+    pub file_path: String,
     pub format: String,
     pub file_size: u64,
+    /// HPROF identifier size in BITS (id_size bytes * 8: 32 or 64).
+    pub identifier_size_bits: u32,
+    /// Whether the JVM used compressed ordinary object pointers: true when
+    /// references are narrower than identifiers (8-byte id, 4-byte ref). None
+    /// when undeterminable. Not applicable (false) for 32-bit dumps.
+    pub compressed_oops: Option<bool>,
+    /// Dump creation time in millis since Unix epoch (HPROF header base
+    /// timestamp). None when the header timestamp is absent/zero.
+    pub dump_creation: Option<i64>,
     pub total_objects: u64,
     pub total_shallow: u64,
     pub gc_roots: u64,
@@ -158,6 +244,9 @@ pub struct SystemOverview {
     pub unreachable_count: u64,
     pub unreachable_shallow: u64,
     pub histogram: Vec<HistRow>,
+    /// Number of histogram rows the full histogram was capped to, or None when
+    /// the histogram is complete (never truncated). Always None today.
+    pub histogram_truncated_to: Option<u64>,
 }
 
 /// One step of a single-suspect accumulation path.
@@ -215,12 +304,20 @@ pub struct ClassRow {
     pub retained: u64,
 }
 
-/// One row of "Biggest Packages".
+/// One node of the pruned package tree (MAT PackageTreeResult parity).
+/// Totals are CUMULATIVE over all top-level dominators in this node's subtree.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
-pub struct PkgRow {
-    pub package: String,
-    pub objects: u64,
-    pub retained: u64,
+pub struct PackageNode {
+    /// This segment's name (e.g. "util"); the root node's name is "".
+    pub name: String,
+    /// Number of top-level dominators under this node (MAT "# Objects").
+    pub top_dominator_count: u64,
+    /// Sum of shallow heap of the top-level dominators under this node.
+    pub shallow_heap: u64,
+    /// Cumulative retained heap (sum over the top-level dominators under this node).
+    pub retained_heap: u64,
+    /// Children sorted retained-desc, tie-broken by name-asc.
+    pub children: Vec<PackageNode>,
 }
 
 /// Aggregates for the "Top Consumers" section.
@@ -228,7 +325,10 @@ pub struct PkgRow {
 pub struct TopConsumers {
     pub biggest_objects: Vec<ObjRow>,
     pub biggest_classes: Vec<ClassRow>,
-    pub biggest_packages: Vec<PkgRow>,
+    /// MAT 1%-of-total pruning threshold in basis points (100 bp = 1%).
+    pub threshold_bp: u32,
+    /// Root of the pruned package tree (root name = "").
+    pub biggest_packages: PackageNode,
 }
 
 /// Schema version for the machine-readable JSON output. Bump on any
@@ -303,11 +403,38 @@ fn build_system_overview(g: &Graph) -> SystemOverview {
         .filter(|&i| class_obj_repr(g, i) != u32::MAX && g.idom[i] != undef_u32)
         .count() as u64;
 
+    // TEMP DEBUG (env-gated, inert by default): dump reachable class-object
+    // indices so they can be joined against the pass2 index->addr file.
+    if std::env::var_os("EXP_DUMP_CLASS_ADDRS").is_some() {
+        use std::io::Write as _;
+        if let Ok(f) = std::fs::File::create("/tmp/ours_reachable_class_idx.txt") {
+            let mut w = std::io::BufWriter::new(f);
+            for i in 0..n {
+                if class_obj_repr(g, i) != u32::MAX && g.idom[i] != undef_u32 {
+                    let _ = writeln!(w, "{}", i);
+                }
+            }
+        }
+        if let Ok(f) = std::fs::File::create("/tmp/ours_reachable_all_idx.txt") {
+            let mut w = std::io::BufWriter::new(f);
+            for i in 0..n {
+                if g.idom[i] != undef_u32 {
+                    let _ = writeln!(w, "{} {} {}", i, g.shallow[i], g.class_idx[i]);
+                }
+            }
+        }
+    }
+
     // Class histogram: per-class instance count, shallow total, retained total
     let class_count = g.class_names.len();
     let mut inst_count: Vec<u64> = vec![0; class_count];
     let mut shallow_total: Vec<u64> = vec![0; class_count];
     let mut class_retained: Vec<u64> = vec![0; class_count];
+
+    // Fold duplicate `java/lang/Class` rows (primitive-type Class mirrors are
+    // parsed as plain instances in a separate row) into the single canonical
+    // row so the histogram counts by object type, matching MAT.
+    let remap = class_row_remap(g);
 
     // First pass: for all reachable objects
     for i in 0..n {
@@ -318,6 +445,7 @@ fn build_system_overview(g: &Graph) -> SystemOverview {
         if ci >= class_count {
             continue;
         }
+        let ci = remap[ci] as usize;
         inst_count[ci] += 1;
         shallow_total[ci] += g.shallow[i] as u64;
         // MAT top-ancestor semantics: only count retained of objects with no
@@ -340,16 +468,21 @@ fn build_system_overview(g: &Graph) -> SystemOverview {
         if ci >= class_count {
             continue;
         }
+        let ci = remap[ci] as usize;
         class_retained[ci] += g.retained[i];
     }
 
-    // Sort classes by retained desc, take top 50. Explicit tie-breaker on
-    // ascending class index so equal-retained rows are deterministic.
-    let mut order: Vec<usize> = (0..class_count).collect();
+    // Sort classes by retained desc, emit the FULL histogram (every class).
+    // Explicit tie-breaker on ascending class index so equal-retained rows are
+    // deterministic. No truncation — `histogram_truncated_to` stays None.
+    // Skip rows folded into a canonical row (their tallies moved to the
+    // canonical `java/lang/Class` row, leaving them empty).
+    let mut order: Vec<usize> = (0..class_count)
+        .filter(|&ci| remap[ci] as usize == ci)
+        .collect();
     order.sort_unstable_by(|&a, &b| class_retained[b].cmp(&class_retained[a]).then(a.cmp(&b)));
     let histogram: Vec<HistRow> = order
         .into_iter()
-        .take(50)
         .map(|ci| HistRow {
             pretty_class: pretty_class_name(&g.class_names[ci]),
             instances: inst_count[ci],
@@ -358,10 +491,22 @@ fn build_system_overview(g: &Graph) -> SystemOverview {
         })
         .collect();
 
+    // Compressed OOPs: references narrower than identifiers (id_size 8 -> ref 4).
+    let compressed_oops = Some(g.ref_size < g.id_size);
+    let dump_creation = if g.header_timestamp_ms != 0 {
+        Some(g.header_timestamp_ms as i64)
+    } else {
+        None
+    };
+
     SystemOverview {
         source_name: g.source_name.clone(),
+        file_path: g.file_path.clone(),
         format: g.format.clone(),
         file_size: g.file_size,
+        identifier_size_bits: g.id_size as u32 * 8,
+        compressed_oops,
+        dump_creation,
         total_objects,
         total_shallow,
         gc_roots,
@@ -369,6 +514,7 @@ fn build_system_overview(g: &Graph) -> SystemOverview {
         unreachable_count,
         unreachable_shallow,
         histogram,
+        histogram_truncated_to: None,
     }
 }
 
@@ -593,10 +739,14 @@ fn build_top_consumers(g: &Graph) -> TopConsumers {
     // Biggest Classes by Retained Heap
     let mut class_retained: Vec<u64> = vec![0; class_count];
     let mut class_count_map: Vec<u64> = vec![0; class_count];
+    // Fold duplicate `java/lang/Class` rows into the canonical row (see
+    // `class_row_remap`) so the by-type count matches the histogram + MAT.
+    let remap = class_row_remap(g);
     for &i in &top_level {
         let idx = i as usize;
         let ci = g.class_idx[idx] as usize;
         if ci < class_count {
+            let ci = remap[ci] as usize;
             class_retained[ci] += g.retained[idx];
             class_count_map[ci] += 1;
         }
@@ -617,12 +767,30 @@ fn build_top_consumers(g: &Graph) -> TopConsumers {
         })
         .collect();
 
-    // Biggest Packages
-    let mut pkg_retained: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
-    let mut pkg_count: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    // Biggest Packages: build a pruned package TREE (MAT PackageTreeResult
+    // parity). Accumulate cumulative retained/shallow/count into a BTreeMap-keyed
+    // builder so the model has no HashMap, then convert + sort + prune.
+    struct Builder {
+        top_dominator_count: u64,
+        shallow_heap: u64,
+        retained_heap: u64,
+        children: std::collections::BTreeMap<String, Builder>,
+    }
+    impl Builder {
+        fn new() -> Builder {
+            Builder {
+                top_dominator_count: 0,
+                shallow_heap: 0,
+                retained_heap: 0,
+                children: std::collections::BTreeMap::new(),
+            }
+        }
+    }
+
+    let mut root = Builder::new();
     for &i in &top_level {
         let idx = i as usize;
-        // Use the class the object represents (for class objects), else own class
+        // Use the class the object represents (for class objects), else own class.
         let raw_name = if class_obj_repr(g, idx) != undef {
             let repr = class_obj_repr(g, idx) as usize;
             if repr < g.class_names.len() {
@@ -643,30 +811,59 @@ fn build_top_consumers(g: &Graph) -> TopConsumers {
                 continue;
             }
         };
-        let pkg = top_package(raw_name);
-        *pkg_retained.entry(pkg.clone()).or_insert(0) += g.retained[idx];
-        *pkg_count.entry(pkg).or_insert(0) += 1;
+        let retained = g.retained[idx];
+        let shallow = g.shallow[idx] as u64;
+        let path = package_path(raw_name);
+
+        // Accumulate at the root and at every node along the dotted path.
+        root.top_dominator_count += 1;
+        root.shallow_heap += shallow;
+        root.retained_heap += retained;
+        let mut node = &mut root;
+        for seg in path.split('.') {
+            node = node
+                .children
+                .entry(seg.to_string())
+                .or_insert_with(Builder::new);
+            node.top_dominator_count += 1;
+            node.shallow_heap += shallow;
+            node.retained_heap += retained;
+        }
     }
-    let mut pkg_order: Vec<(String, u64, u64)> = pkg_retained
-        .iter()
-        .map(|(k, &v)| (k.clone(), v, *pkg_count.get(k).unwrap_or(&0)))
-        .collect();
-    // HashMap iteration is nondeterministic, so sort by retained desc AND
-    // package-name ascending to make the collect order and tie rows stable.
-    pkg_order.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    let biggest_packages: Vec<PkgRow> = pkg_order
-        .iter()
-        .take(TOP_N)
-        .map(|(pkg, retained, count)| PkgRow {
-            package: pkg.clone(),
-            objects: *count,
-            retained: *retained,
-        })
-        .collect();
+
+    // Prune below-threshold nodes (top-down) and convert to the sorted model.
+    let total = root.retained_heap;
+    let threshold_bp = PACKAGE_THRESHOLD_BP;
+    fn convert(name: String, b: Builder, total: u64, threshold_bp: u32) -> PackageNode {
+        let mut children: Vec<PackageNode> = b
+            .children
+            .into_iter()
+            // Prune any child below the threshold share of the total.
+            .filter(|(_, cb)| {
+                cb.retained_heap as u128 * 10_000 >= total as u128 * threshold_bp as u128
+            })
+            .map(|(seg, cb)| convert(seg, cb, total, threshold_bp))
+            .collect();
+        // Sort retained-desc, tie-broken by name-asc.
+        children.sort_by(|a, b| {
+            b.retained_heap
+                .cmp(&a.retained_heap)
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        PackageNode {
+            name,
+            top_dominator_count: b.top_dominator_count,
+            shallow_heap: b.shallow_heap,
+            retained_heap: b.retained_heap,
+            children,
+        }
+    }
+    let biggest_packages = convert(String::new(), root, total, threshold_bp);
 
     TopConsumers {
         biggest_objects,
         biggest_classes,
+        threshold_bp,
         biggest_packages,
     }
 }
@@ -771,6 +968,19 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
     out.push_str(&format!("| HPROF format | {} |\n", o.format));
     out.push_str(&format!("| File size | {} |\n", format_bytes(o.file_size)));
     out.push_str(&format!(
+        "| Identifier size | {}-bit |\n",
+        o.identifier_size_bits
+    ));
+    if let Some(coops) = o.compressed_oops {
+        out.push_str(&format!(
+            "| Compressed OOPs | {} |\n",
+            if coops { "yes" } else { "no" }
+        ));
+    }
+    if let Some(ms) = o.dump_creation {
+        out.push_str(&format!("| Dump created | {} |\n", format_epoch_ms(ms)));
+    }
+    out.push_str(&format!(
         "| Total objects | {} |\n",
         fmt_count(o.total_objects)
     ));
@@ -795,7 +1005,9 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
     out.push_str("### Class Histogram (by Retained Heap)\n\n");
     out.push_str("| # | Class | Instances | Shallow Heap | Retained Heap |\n");
     out.push_str("|---|---|---:|---:|---:|\n");
-    for (rank, row) in o.histogram.iter().enumerate() {
+    // The model carries the FULL histogram; the Markdown view shows the top 50
+    // rows for readability. The complete data lives in the JSON output.
+    for (rank, row) in o.histogram.iter().take(50).enumerate() {
         out.push_str(&format!(
             "| {} | `{}` | {} | {} | {} |\n",
             rank + 1,
@@ -907,16 +1119,35 @@ fn render_top_consumers(t: &TopConsumers, total_shallow: u64, out: &mut String) 
     out.push('\n');
 
     out.push_str("### Biggest Packages by Retained Heap\n\n");
-    out.push_str("| # | Package | Objects | Retained Heap |\n");
-    out.push_str("|---|---|---:|---:|\n");
-    for (rank, row) in t.biggest_packages.iter().enumerate() {
+    out.push_str("| Package | Objects | Shallow | Retained |\n");
+    out.push_str("|---|---:|---:|---:|\n");
+    if t.biggest_packages.children.is_empty() {
+        out.push_str("_No package retains more than 1% of the total retained heap._\n");
+        out.push('\n');
+        return;
+    }
+    // Pre-order DFS; the displayed name is the full dotted path accumulated
+    // down from the root, so each row is self-describing (no tree-drawing chars).
+    fn emit_node(node: &PackageNode, prefix: &str, out: &mut String) {
+        let full = if prefix.is_empty() {
+            node.name.clone()
+        } else {
+            format!("{}.{}", prefix, node.name)
+        };
         out.push_str(&format!(
-            "| {} | `{}` | {} | {} |\n",
-            rank + 1,
-            row.package,
-            fmt_count(row.objects),
-            format_bytes(row.retained),
+            "| `{}` | {} | {} | {} |\n",
+            full,
+            fmt_count(node.top_dominator_count),
+            format_bytes(node.shallow_heap),
+            format_bytes(node.retained_heap),
         ));
+        for child in &node.children {
+            emit_node(child, &full, out);
+        }
+    }
+    // Skip the synthetic root (name ""); start emitting at its children.
+    for child in &t.biggest_packages.children {
+        emit_node(child, "", out);
     }
     out.push('\n');
 }
@@ -962,12 +1193,20 @@ mod tests {
     }
 
     #[test]
-    fn test_top_package() {
-        assert_eq!(top_package("java/lang/String"), "java");
-        assert_eq!(top_package("com/example/Foo"), "com");
-        assert_eq!(top_package("[I"), "(primitives)");
-        assert_eq!(top_package("[B"), "(primitives)");
-        assert_eq!(top_package("[Ljava/lang/String;"), "java");
+    fn test_package_path() {
+        assert_eq!(
+            package_path("java/util/concurrent/Foo"),
+            "java.util.concurrent"
+        );
+        assert_eq!(package_path("Foo"), "(default)");
+        assert_eq!(package_path("[I"), "(primitives)");
+        assert_eq!(package_path("[B"), "(primitives)");
+        assert_eq!(package_path("java/lang/String"), "java.lang");
+        assert_eq!(package_path("[Ljava/lang/String;"), "java.lang");
+        assert_eq!(
+            package_path("java/util/concurrent/ConcurrentHashMap$Node"),
+            "java.util.concurrent"
+        );
     }
 
     /// Build a tiny synthetic Graph plus the dominator-children CSR that
@@ -1027,6 +1266,13 @@ mod tests {
             format: "JAVA PROFILE 1.0.2".to_string(),
             file_size: 4096,
             source_name: "test.hprof".to_string(),
+            // Full path superset of source_name; compressed-oops fixture: 8-byte
+            // ids, 4-byte refs. header_timestamp_ms = 1_700_000_000_000
+            // (2023-11-14T22:13:20Z).
+            file_path: "/tmp/dumps/test.hprof".to_string(),
+            id_size: 8,
+            ref_size: 4,
+            header_timestamp_ms: 1_700_000_000_000,
             gc_root_indices,
             shallow,
             class_idx,
@@ -1075,6 +1321,13 @@ mod tests {
         assert_eq!(o.gc_roots, 3);
         assert_eq!(o.classes_loaded, 0);
 
+        // Phase D System Overview cheap fields.
+        assert_eq!(o.identifier_size_bits, 64); // id_size 8 bytes * 8
+        assert_eq!(o.compressed_oops, Some(true)); // ref_size 4 < id_size 8
+        assert_eq!(o.dump_creation, Some(1_700_000_000_000));
+        assert_eq!(o.file_path, "/tmp/dumps/test.hprof");
+        assert_eq!(o.histogram_truncated_to, None);
+
         // Histogram: class0 retained = obj0(1000) + obj2 excluded (has_same) = 1000
         //            class1 retained = obj1(1000) = 1000
         //            class2 retained = obj3(200) = 200
@@ -1088,6 +1341,105 @@ mod tests {
         assert_eq!(o.histogram[1].retained, 1000);
         assert_eq!(o.histogram[2].pretty_class, "org.bar.C");
         assert_eq!(o.histogram[2].retained, 200);
+    }
+
+    /// Regression: MAT counts the class histogram BY OBJECT TYPE, so every
+    /// `java/lang/Class`-typed object must land in the single `java/lang/Class`
+    /// row — including primitive-type Class mirrors (`int.class`, `void.class`,
+    /// …) that HPROF stores as plain instances in a *separate* histogram row
+    /// that is also named `java/lang/Class`. This test builds both a real class
+    /// object and such a mirror instance and asserts they are counted together,
+    /// while `classes_loaded` (distinct CLASS_DUMP objects) stays unchanged and
+    /// an unrelated class is not miscounted.
+    #[test]
+    fn test_histogram_folds_duplicate_java_lang_class_rows() {
+        // Rows: 0 = java/lang/Class (canonical, used by the class object),
+        //       1 = com/foo/A (a normal class),
+        //       2 = java/lang/Class (duplicate row: the primitive mirror lands
+        //           here because it is a plain instance keyed by the
+        //           java/lang/Class class-object address).
+        // Objects:
+        //   obj0: class_idx 0, IS a class object (represents row 1), top-level.
+        //   obj1: class_idx 1, normal instance of com/foo/A, top-level.
+        //   obj2: class_idx 2, java/lang/Class-typed mirror, NOT a class object.
+        let (g, dc_off, dc_tgt) = make_graph(
+            vec![3, 3, 3],        // idom (vroot = 3)
+            vec![0, 1, 2],        // class_idx
+            vec![100, 50, 20],    // shallow
+            vec![1000, 500, 200], // retained
+            vec!["java/lang/Class", "com/foo/A", "java/lang/Class"],
+            &[(0, 1)], // obj0 is a class object representing row 1
+            &[],       // none excluded from retained accumulation
+            vec![0, 1, 2],
+            0,
+        );
+        let r = build_model(&g, &dc_off, &dc_tgt);
+        let o = &r.overview;
+
+        // classes_loaded counts distinct CLASS_DUMP objects (class_obj_repr set)
+        // — only obj0. The fold must NOT change this.
+        assert_eq!(o.classes_loaded, 1);
+        assert_eq!(o.total_objects, 3);
+
+        // Exactly ONE java.lang.Class histogram row, counting BOTH the class
+        // object (obj0) and the primitive mirror (obj2).
+        let jlc_rows: Vec<&HistRow> = o
+            .histogram
+            .iter()
+            .filter(|h| h.pretty_class == "java.lang.Class")
+            .collect();
+        assert_eq!(
+            jlc_rows.len(),
+            1,
+            "duplicate java.lang.Class rows not folded"
+        );
+        assert_eq!(
+            jlc_rows[0].instances, 2,
+            "mirror not counted under java.lang.Class"
+        );
+        // Shallow of both mirror + class object moved into the folded row.
+        assert_eq!(jlc_rows[0].shallow, 120);
+
+        // The unrelated class is not miscounted.
+        let a_row = o
+            .histogram
+            .iter()
+            .find(|h| h.pretty_class == "com.foo.A")
+            .expect("com.foo.A row present");
+        assert_eq!(a_row.instances, 1);
+
+        // Biggest Classes (over top-level dominators) also folds by type.
+        let jlc_big: Vec<&ClassRow> = r
+            .top
+            .biggest_classes
+            .iter()
+            .filter(|c| c.pretty_class == "java.lang.Class")
+            .collect();
+        assert_eq!(jlc_big.len(), 1);
+        assert_eq!(jlc_big[0].instances, 2);
+    }
+
+    #[test]
+    fn test_format_epoch_ms_edges() {
+        // Negative (pre-1970) inputs clamp to the epoch, identical to ms == 0.
+        assert_eq!(format_epoch_ms(-1), format_epoch_ms(0));
+        assert_eq!(format_epoch_ms(0), "1970-01-01T00:00:00Z");
+        // A known non-zero instant renders the expected second-granularity ISO.
+        assert_eq!(format_epoch_ms(1_700_000_000_000), "2023-11-14T22:13:20Z");
+    }
+
+    #[test]
+    fn test_system_overview_uncompressed_and_no_timestamp() {
+        // Same fixture, but override the two header-derived fields to cover the
+        // OTHER branches: ref_size == id_size (no compressed oops) and a zero
+        // header timestamp (no dump-creation instant).
+        let (mut g, dc_off, dc_tgt) = fixture();
+        g.ref_size = g.id_size; // 8 == 8 -> not compressed
+        g.header_timestamp_ms = 0; // no creation timestamp
+        let r = build_model(&g, &dc_off, &dc_tgt);
+        let o = &r.overview;
+        assert_eq!(o.compressed_oops, Some(false)); // ref_size == id_size
+        assert_eq!(o.dump_creation, None); // header_timestamp_ms == 0
     }
 
     #[test]
@@ -1108,13 +1460,101 @@ mod tests {
         assert_eq!(t.biggest_classes[1].pretty_class, "com.foo.B");
         assert_eq!(t.biggest_classes[2].pretty_class, "org.bar.C");
 
-        // Biggest packages: "com" = obj0+obj1 = 2000 (2 objs), "org" = 200 (1 obj).
-        assert_eq!(t.biggest_packages.len(), 2);
-        assert_eq!(t.biggest_packages[0].package, "com");
-        assert_eq!(t.biggest_packages[0].retained, 2000);
-        assert_eq!(t.biggest_packages[0].objects, 2);
-        assert_eq!(t.biggest_packages[1].package, "org");
-        assert_eq!(t.biggest_packages[1].retained, 200);
+        // Biggest packages: tree over full dotted paths.
+        //   obj0 com/foo/A -> path com.foo (retained 1000, shallow 100)
+        //   obj1 com/foo/B -> path com.foo (retained 1000, shallow 100)
+        //   obj3 org/bar/C -> path org.bar (retained 200, shallow 20)
+        // Root cumulative: retained 2200, shallow 220, count 3.
+        let root = &t.biggest_packages;
+        assert_eq!(root.name, "");
+        assert_eq!(root.retained_heap, 2200);
+        assert_eq!(root.shallow_heap, 220);
+        assert_eq!(root.top_dominator_count, 3);
+        // Children sorted retained-desc then name-asc: "com" (2000) before "org" (200).
+        assert_eq!(root.children.len(), 2);
+        assert_eq!(root.children[0].name, "com");
+        assert_eq!(root.children[0].retained_heap, 2000);
+        assert_eq!(root.children[0].shallow_heap, 200);
+        assert_eq!(root.children[0].top_dominator_count, 2);
+        assert_eq!(root.children[1].name, "org");
+        assert_eq!(root.children[1].retained_heap, 200);
+        // Nested path com -> foo carries the cumulative totals of its subtree.
+        assert_eq!(root.children[0].children.len(), 1);
+        let foo = &root.children[0].children[0];
+        assert_eq!(foo.name, "foo");
+        assert_eq!(foo.retained_heap, 2000);
+        assert_eq!(foo.shallow_heap, 200);
+        assert_eq!(foo.top_dominator_count, 2);
+        assert!(foo.children.is_empty());
+        // threshold_bp is the MAT 1%-of-total marker.
+        assert_eq!(t.threshold_bp, 100);
+    }
+
+    #[test]
+    fn test_build_model_packages_pruning() {
+        // Two top-level dominators: a big one (>=1% of total) and a tiny one
+        // (<1% of total). The tiny package's whole subtree must be pruned.
+        // big: retained 10000 in com/big/Foo; small: retained 1 in org/tiny/Bar.
+        // total = 10001; 1% threshold => keep >= 100.06 (i.e. >= floor via bp math).
+        let (g, dc_off, dc_tgt) = make_graph(
+            vec![2, 2],     // idom: obj0,obj1 both under vroot (node 2)
+            vec![0, 1],     // class_idx
+            vec![50, 5],    // shallow
+            vec![10000, 1], // retained
+            vec!["com/big/Foo", "org/tiny/Bar"],
+            &[],
+            &[],
+            vec![0, 1],
+            0,
+        );
+        let r = build_model(&g, &dc_off, &dc_tgt);
+        let root = &r.top.biggest_packages;
+        // Root keeps cumulative totals over ALL dominators (before pruning).
+        assert_eq!(root.retained_heap, 10001);
+        assert_eq!(root.top_dominator_count, 2);
+        // Only the big package survives pruning.
+        assert_eq!(root.children.len(), 1);
+        assert_eq!(root.children[0].name, "com");
+        assert_eq!(root.children[0].retained_heap, 10000);
+    }
+
+    #[test]
+    fn test_build_model_packages_nothing_over_threshold() {
+        // Many equal tiny packages: each is well under 1% of the total, so the
+        // root ends up with NO children ("nothing over threshold" case).
+        // 200 dominators, each retained 1, in packages pkgN/Foo (all distinct).
+        let count = 200usize;
+        let idom = vec![count as u32; count]; // all top-level (vroot = node `count`)
+        let class_idx: Vec<u32> = (0..count as u32).collect();
+        let shallow: Vec<u32> = vec![1; count];
+        let retained: Vec<u64> = vec![1; count];
+        let names: Vec<String> = (0..count).map(|i| format!("pkg{i}/Foo")).collect();
+        let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+        let gc_roots: Vec<u32> = (0..count as u32).collect();
+        let (g, dc_off, dc_tgt) = make_graph(
+            idom,
+            class_idx,
+            shallow,
+            retained,
+            name_refs,
+            &[],
+            &[],
+            gc_roots,
+            0,
+        );
+        let mut r = build_model(&g, &dc_off, &dc_tgt);
+        let root = &r.top.biggest_packages;
+        assert_eq!(root.top_dominator_count, count as u64);
+        assert!(
+            root.children.is_empty(),
+            "no single package should exceed 1% of the total"
+        );
+        r.generated = "FIXED".to_string();
+        let md = render_markdown(&r);
+        assert!(
+            md.contains("_No package retains more than 1% of the total retained heap._"),
+            "nothing-over-threshold marker must be rendered"
+        );
     }
 
     #[test]

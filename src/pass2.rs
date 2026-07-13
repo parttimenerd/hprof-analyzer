@@ -24,6 +24,16 @@ pub struct Graph {
     pub format: String,
     pub file_size: u64,
     pub source_name: String,
+    /// Full path/name the dump was opened from (Pass1::run's `path`). Distinct
+    /// from `source_name`, which is only the file basename.
+    pub file_path: String,
+    /// HPROF identifier size in bytes (4 or 8), straight from the header.
+    pub id_size: u8,
+    /// Object-reference size in bytes as detected in pass2. Equals `id_size`
+    /// unless compressed OOPs shrink 8-byte ids to 4-byte refs.
+    pub ref_size: u8,
+    /// Header base timestamp (millis since Unix epoch), 0 if absent/unknown.
+    pub header_timestamp_ms: u64,
     pub gc_root_indices: Vec<u32>,
     pub shallow: Vec<u32>,
     pub class_idx: Vec<u32>,
@@ -453,6 +463,18 @@ fn prim_array_class_name(elem_type_code: u8) -> &'static str {
     }
 }
 
+/// True iff `name` is a JVM primitive-array class descriptor: a single `[`
+/// followed by exactly one primitive type char (`Z C F D S I J B`), length 2.
+/// Object-array (`[Ljava/lang/String;`) and multi-dim (`[[I`) names are false.
+fn is_primitive_array_class_name(name: &str) -> bool {
+    name.len() == 2
+        && name.as_bytes()[0] == b'['
+        && matches!(
+            name.as_bytes()[1],
+            b'Z' | b'C' | b'F' | b'D' | b'S' | b'I' | b'J' | b'B'
+        )
+}
+
 // ── Pass2 main logic ───────────────────────────────────────────────────────
 
 pub struct Pass2;
@@ -682,6 +704,62 @@ impl Pass2 {
         }
         let _ = jlc_idx;
 
+        // TEMP DEBUG (env-gated, inert by default): dump every class-object
+        // index -> address so a downstream reachability dump can join by index.
+        if std::env::var_os("EXP_DUMP_CLASS_ADDRS").is_some() {
+            use std::io::Write as _;
+            if let Ok(f) = std::fs::File::create("/tmp/ours_class_idx_addr.txt") {
+                let mut w = std::io::BufWriter::new(f);
+                for &i in class_obj_class_idx.keys() {
+                    let _ = writeln!(w, "{} 0x{:x}", i, p1.id_map.addr_at(i as usize));
+                }
+            }
+            if let Ok(f) = std::fs::File::create("/tmp/ours_idx_addr_all2.txt") {
+                let mut w = std::io::BufWriter::new(f);
+                for i in 0..p1.id_map.len() {
+                    let _ = writeln!(w, "{} 0x{:x}", i, p1.id_map.addr_at(i));
+                }
+            }
+            if let Ok(f) = std::fs::File::create("/tmp/ours_probe_gap.txt") {
+                let mut w = std::io::BufWriter::new(f);
+                for i in [233526usize, 233527, 233528, 233537] {
+                    let addr = p1.id_map.addr_at(i);
+                    let in_classmap = p1.class_map.contains_key(&addr);
+                    let cidx = class_obj_class_idx.get(&(i as u32)).copied();
+                    let cname = cidx.and_then(|c| class_names.get(c as usize)).cloned();
+                    let _ = writeln!(
+                        w,
+                        "idx={} addr=0x{:x} kind={} shallow={} in_classmap={} class_obj_row={:?} row_name={:?}",
+                        i, addr, p1.kind[i], shallow[i], in_classmap, cidx, cname
+                    );
+                }
+            }
+            // Also probe the 9 MAT-only addresses against the FULL id_map (any
+            // object kind) and against class_map (parsed CLASS_DUMP records).
+            if let Ok(f) = std::fs::File::create("/tmp/ours_probe9.txt") {
+                let mut w = std::io::BufWriter::new(f);
+                for a in [
+                    0xffe7f6f8u64,
+                    0xffe7f768,
+                    0xffe7f7d8,
+                    0xffe7f848,
+                    0xffe7f8b8,
+                    0xffe7f928,
+                    0xffe7f998,
+                    0xffe7fa08,
+                    0xffe7fa78,
+                ] {
+                    let in_idmap = p1.id_map.index_of(a).is_some();
+                    let in_classmap = p1.class_map.contains_key(&a);
+                    let _ = writeln!(
+                        w,
+                        "0x{:x} in_idmap={} in_classmap={}",
+                        a, in_idmap, in_classmap
+                    );
+                }
+            }
+        }
+
         // Ensure no zero shallow sizes for instances/arrays (fall back to minimum).
         // Class objects (kind==3) are exempt: MAT reports 0 shallow for a class
         // whose static-field bytes sum to 0 (e.g. array classes like ), so we
@@ -724,12 +802,18 @@ impl Pass2 {
             if ci.loader_id != 0 {
                 continue;
             }
-            let is_array = p1
-                .strings
-                .get(&ci.name_id)
-                .map(|n| n.starts_with('['))
-                .unwrap_or(false);
-            if is_array {
+            let name = p1.strings.get(&ci.name_id);
+            let is_array = name.map(|n| n.starts_with('[')).unwrap_or(false);
+            // MAT's addSystemClassRootsIfMissing root-attaches instance-less
+            // primitive-array class objects ([Z [C [F [D [S [I [J [B) even
+            // with no instances/edges. Root those; skip all OTHER arrays
+            // (object arrays [L...;, multi-dim [[...) so their real
+            // reachability / dominator structure is preserved.
+            if is_array
+                && !name
+                    .map(|n| is_primitive_array_class_name(n))
+                    .unwrap_or(false)
+            {
                 continue;
             }
             if let Some(idx) = p1.id_map.index_of(caddr) {
@@ -888,6 +972,10 @@ impl Pass2 {
             format: p1.format,
             file_size: p1.file_size,
             source_name,
+            file_path: path.to_string(),
+            id_size,
+            ref_size: ref_size as u8,
+            header_timestamp_ms: p1.header_timestamp_ms,
             gc_root_indices,
             shallow,
             class_idx,
@@ -1614,5 +1702,34 @@ mod tests {
             class_addrs.len(),
             "every class address must appear exactly once as a kind==3 object"
         );
+    }
+
+    #[test]
+    fn primitive_array_class_name_recognizes_all_prims() {
+        for n in ["[Z", "[C", "[F", "[D", "[S", "[I", "[J", "[B"] {
+            assert!(
+                is_primitive_array_class_name(n),
+                "{n} should be a primitive-array class name"
+            );
+        }
+    }
+
+    #[test]
+    fn primitive_array_class_name_rejects_non_prims() {
+        for n in [
+            "[[I",                 // multi-dim int array
+            "[Ljava/lang/String;", // object array
+            "java/lang/String",    // ordinary class
+            "[",                   // lone bracket
+            "[ZZ",                 // too long
+            "",                    // empty
+            "Z",                   // no bracket
+            "[X",                  // bracket + non-prim char
+        ] {
+            assert!(
+                !is_primitive_array_class_name(n),
+                "{n:?} must NOT be a primitive-array class name"
+            );
+        }
     }
 }

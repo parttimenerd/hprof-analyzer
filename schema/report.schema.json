@@ -55,7 +55,7 @@
       ]
     },
     "HistRow": {
-      "description": "One row of the System-Overview class histogram (top 50 by retained).",
+      "description": "One row of the System-Overview class histogram (full, one row per class).",
       "type": "object",
       "properties": {
         "instances": {
@@ -142,6 +142,48 @@
         "pct_bp"
       ]
     },
+    "PackageNode": {
+      "description": "One node of the pruned package tree (MAT PackageTreeResult parity).\nTotals are CUMULATIVE over all top-level dominators in this node's subtree.",
+      "type": "object",
+      "properties": {
+        "children": {
+          "description": "Children sorted retained-desc, tie-broken by name-asc.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PackageNode"
+          }
+        },
+        "name": {
+          "description": "This segment's name (e.g. \"util\"); the root node's name is \"\".",
+          "type": "string"
+        },
+        "retained_heap": {
+          "description": "Cumulative retained heap (sum over the top-level dominators under this node).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "shallow_heap": {
+          "description": "Sum of shallow heap of the top-level dominators under this node.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "top_dominator_count": {
+          "description": "Number of top-level dominators under this node (MAT \"# Objects\").",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "name",
+        "top_dominator_count",
+        "shallow_heap",
+        "retained_heap",
+        "children"
+      ]
+    },
     "PathStep": {
       "description": "One step of a single-suspect accumulation path.",
       "type": "object",
@@ -169,30 +211,6 @@
         "depth",
         "obj_index_1based",
         "display_class",
-        "retained"
-      ]
-    },
-    "PkgRow": {
-      "description": "One row of \"Biggest Packages\".",
-      "type": "object",
-      "properties": {
-        "objects": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "package": {
-          "type": "string"
-        },
-        "retained": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        }
-      },
-      "required": [
-        "package",
-        "objects",
         "retained"
       ]
     },
@@ -247,6 +265,25 @@
           "format": "uint64",
           "minimum": 0
         },
+        "compressed_oops": {
+          "description": "Whether the JVM used compressed ordinary object pointers: true when\nreferences are narrower than identifiers (8-byte id, 4-byte ref). None\nwhen undeterminable. Not applicable (false) for 32-bit dumps.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "dump_creation": {
+          "description": "Dump creation time in millis since Unix epoch (HPROF header base\ntimestamp). None when the header timestamp is absent/zero.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "file_path": {
+          "description": "Full path the dump was opened from (superset of `source_name`).",
+          "type": "string"
+        },
         "file_size": {
           "type": "integer",
           "format": "uint64",
@@ -265,6 +302,21 @@
           "items": {
             "$ref": "#/$defs/HistRow"
           }
+        },
+        "histogram_truncated_to": {
+          "description": "Number of histogram rows the full histogram was capped to, or None when\nthe histogram is complete (never truncated). Always None today.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "identifier_size_bits": {
+          "description": "HPROF identifier size in BITS (id_size bytes * 8: 32 or 64).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
         },
         "source_name": {
           "type": "string"
@@ -292,8 +344,10 @@
       },
       "required": [
         "source_name",
+        "file_path",
         "format",
         "file_size",
+        "identifier_size_bits",
         "total_objects",
         "total_shallow",
         "gc_roots",
@@ -320,15 +374,20 @@
           }
         },
         "biggest_packages": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/PkgRow"
-          }
+          "description": "Root of the pruned package tree (root name = \"\").",
+          "$ref": "#/$defs/PackageNode"
+        },
+        "threshold_bp": {
+          "description": "MAT 1%-of-total pruning threshold in basis points (100 bp = 1%).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
         }
       },
       "required": [
         "biggest_objects",
         "biggest_classes",
+        "threshold_bp",
         "biggest_packages"
       ]
     }

@@ -1,6 +1,7 @@
 mod bitset;
 mod chunkvec;
 mod cvec;
+mod diff;
 mod dominator;
 mod id_map;
 mod pass1;
@@ -9,6 +10,7 @@ mod reader;
 mod report;
 mod retained;
 mod rpo_dfs;
+mod sweep;
 mod trace;
 mod types;
 mod vbyte;
@@ -38,6 +40,8 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     let mut dump_json = false;
+    let mut diff_mode = false;
+    let mut sweep_dir: Option<&str> = None;
     let mut verbose = false;
     let mut emit_schema = false;
     let mut render_file: Option<&str> = None;
@@ -47,6 +51,10 @@ fn main() {
     for arg in args.iter().skip(1) {
         match arg.as_str() {
             "--dump-json" => dump_json = true,
+            "--diff" => diff_mode = true,
+            s if s.starts_with("--diff-sweep-aggregate=") => {
+                sweep_dir = Some(&s["--diff-sweep-aggregate=".len()..]);
+            }
             "--emit-schema" => emit_schema = true,
             s if s.starts_with("--render=") => {
                 render_file = Some(&s["--render=".len()..]);
@@ -105,11 +113,48 @@ fn main() {
         return;
     }
 
+    // --diff-sweep-aggregate=<dir> reads the per-dump `*.diff.json` files a
+    // sweep produced, aggregates them into a gate report, and exits. It needs
+    // no input .hprof.
+    if let Some(dir) = sweep_dir {
+        match sweep::run_aggregate(dir) {
+            Ok(true) => {}
+            // GATE FAIL exits non-zero so CI can detect it; not an I/O error.
+            Ok(false) => process::exit(2),
+            Err(e) => {
+                eprintln!("Error: {e}");
+                process::exit(1);
+            }
+        }
+        return;
+    }
+
     if positional.is_empty() {
         eprintln!(
             "usage: hprof-analyzer [--verbose] [--dump-json] [--emit-schema] [--render=<file>] [--format=md|json] [--trace-rss] [--compress=none|deflate9] <file.hprof[.gz]> [output]"
         );
         process::exit(1);
+    }
+
+    if diff_mode {
+        if positional.len() < 2 {
+            eprintln!(
+                "usage: hprof-analyzer --diff <mat-report.zip|dir|html> <ours.json> [--format=json]"
+            );
+            process::exit(1);
+        }
+        let json_out = format == OutputFormat::Json;
+        match diff::run_diff(positional[0], positional[1], json_out) {
+            Ok(true) => {}
+            // A FAIL classification exits non-zero so a sweep can detect it,
+            // but is NOT an I/O error.
+            Ok(false) => process::exit(2),
+            Err(e) => {
+                eprintln!("Error: {e}");
+                process::exit(1);
+            }
+        }
+        return;
     }
 
     let input = positional[0];

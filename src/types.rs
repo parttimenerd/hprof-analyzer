@@ -28,6 +28,10 @@ pub mod heap {
     pub const INSTANCE_DUMP: u8 = 0x21;
     pub const OBJ_ARRAY_DUMP: u8 = 0x22;
     pub const PRIM_ARRAY_DUMP: u8 = 0x23;
+    /// HEAP_DUMP_INFO: `u4 heap_id` + `id heap_name_string_id`. Carries no
+    /// object/class data (and no compressed-oops flag) — consumed and skipped
+    /// so it does not corrupt the sub-record stream.
+    pub const HEAP_DUMP_INFO: u8 = 0xfe;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

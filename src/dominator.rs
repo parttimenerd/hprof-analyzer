@@ -53,7 +53,7 @@ pub fn compute_dominators(
     //              allocated separately — reuses the `ancestor` buffer after
     //              Phase 1 (see rebind below), saving one count-length u32 array.
     let mut semi = vec![0u32; count];
-    let mut ancestor = vec![0u32; count]; // 0 = no ancestor (unlinked)
+    let mut ancestor = vec![UNDEFINED; count]; // u32::MAX = no ancestor (unlinked); 0 is a real link to vroot
     let mut label = vec![0u32; count];
     crate::trace::probe("dominator: after semi/ancestor/label alloc");
 
@@ -61,7 +61,7 @@ pub fn compute_dominators(
     for i in 0..count {
         semi[i] = i as u32;
         label[i] = i as u32;
-        ancestor[i] = 0;
+        ancestor[i] = UNDEFINED;
     }
     crate::trace::probe("dominator: after init loop (semi/ancestor/label resident)");
 
@@ -95,7 +95,7 @@ pub fn compute_dominators(
         for i in 0..count {
             semi[i] = i as u32;
             label[i] = i as u32;
-            ancestor[i] = 0;
+            ancestor[i] = UNDEFINED;
         }
         let res = phase1(
             count,
@@ -349,7 +349,7 @@ fn build_exact_offsets(n: usize, inb_data: &[u8]) -> std::io::Result<Vec<u64>> {
 /// with the minimum semi value, applying path compression.
 /// Returns the label (pre-order index) of that minimum-semi vertex.
 fn eval(v: u32, ancestor: &mut [u32], label: &mut [u32], semi: &[u32]) -> u32 {
-    if ancestor[v as usize] == 0 {
+    if ancestor[v as usize] == UNDEFINED {
         return label[v as usize];
     }
     compress(v, ancestor, label, semi);
@@ -359,14 +359,14 @@ fn eval(v: u32, ancestor: &mut [u32], label: &mut [u32], semi: &[u32]) -> u32 {
 /// Iterative path compression: collect the path to the root, then update
 /// labels/ancestors from the top down.  No recursion (heaps have millions of nodes).
 fn compress(v: u32, ancestor: &mut [u32], label: &mut [u32], semi: &[u32]) {
-    // Collect chain v → ancestor[v] → ... while ancestor != 0
+    // Collect chain v → ancestor[v] → ... while ancestor != UNDEFINED
     let mut chain: Vec<u32> = Vec::new();
     let mut x = v;
-    while ancestor[ancestor[x as usize] as usize] != 0 {
+    while ancestor[ancestor[x as usize] as usize] != UNDEFINED {
         chain.push(x);
         x = ancestor[x as usize];
     }
-    // Now ancestor[ancestor[x]] == 0, i.e. ancestor[x] is a forest root.
+    // Now ancestor[ancestor[x]] == UNDEFINED, i.e. ancestor[x] is a forest root.
     // Process the chain from the one closest to root downward.
     // For each node in reverse: update label to the min-semi of itself vs its ancestor's label.
     for &node in chain.iter().rev() {
@@ -537,5 +537,37 @@ mod tests {
             assert_eq!(idom_rec[i], (i - 1) as u32, "recovered chain idom[{i}]");
         }
         assert_eq!(idom_rec, idom_good, "recovery reproduces the correct tree");
+    }
+
+    // Regression for the union-find sentinel collision: a node S reachable both
+    // via a gc-rooted subtree (vroot→A→S) AND an alternate path that reconverges
+    // below another gc-root child of vroot (vroot→C→D→S). Both A and C are GC
+    // roots, so link(A, vroot=preorder 0) and link(C, 0) set ancestor=0. With the
+    // old `0 = unlinked` sentinel, eval() returned early for these and misassigned
+    // S's idom to A instead of vroot. With u32::MAX as the unlinked sentinel,
+    // "linked to vroot" (ancestor=0) is distinct from "unlinked", so idom(S)=vroot.
+    #[test]
+    fn reconverge_below_gcroot_child_gets_vroot_idom() {
+        // Nodes: A=0, C=1, S=2, D=3.
+        // Forward edges: A→S, C→D, D→S. A and C are GC roots (vroot→A, vroot→C).
+        let fwd_off = vec![0u32, 1, 2, 2, 3];
+        let fwd_tgt = vec![2u32, 3u32, 2u32]; // A→S, C→D, D→S
+        let roots = vec![0u32, 1u32]; // A and C are GC roots
+        let mut rpo = rpo_dfs(4, &roots, &fwd_off, &fwd_tgt);
+        rpo.vertex = rebuild_vertex(&rpo.dfn, rpo.parent_pre.len());
+        // inbound: S←[A, D], D←[C]
+        let preds = vec![vec![], vec![], vec![0u32, 3u32], vec![1u32]];
+        let (inb_offsets, inb_data) = build_inb(4, &preds, &rpo.dfn);
+        let idom = compute_dominators(4, rpo, &roots, &inb_offsets, &inb_data).unwrap();
+        let vroot = 4u32;
+        assert_eq!(idom[0], vroot, "idom(A)=vroot");
+        assert_eq!(idom[1], vroot, "idom(C)=vroot");
+        assert_eq!(idom[3], 1, "idom(D)=C");
+        // S is reachable two independent ways (via A and via D), so its only
+        // common dominator is the virtual root.
+        assert_eq!(
+            idom[2], vroot,
+            "idom(S)=vroot (reconverges below two gc roots)"
+        );
     }
 }
