@@ -489,6 +489,40 @@ fn is_primitive_array_class_name(name: &str) -> bool {
         )
 }
 
+/// Decide whether a boot-loader (loader_id==0) class object should be added as
+/// a synthetic SYSTEM_CLASS GC root, mirroring MAT's
+/// `HprofParserHandlerImpl.fillIn` `addSystemClassRootsIfMissing` behaviour.
+///
+/// MAT (fillIn, lines 679-699) only runs its class-rooting loop when NO
+/// system-class (sticky) roots were found in the dump; that loop roots
+/// boot-loader classes that are **not array types** and not already roots.
+/// When sticky-class roots ARE present (`has_sticky` == true, the normal HPROF
+/// case), MAT roots NOTHING here — boot-loader classes are reached via the real
+/// sticky roots + structural edges. Rooting non-array boot classes
+/// unconditionally over-marks objects MAT discards as unreachable garbage
+/// (the big-dump +4,645-object / +452-class frontier divergence).
+///
+/// The one deliberate deviation: instance-less **primitive-array** class
+/// objects (`[Z [C [F [D [S [I [J [B`) are ALWAYS rooted. MAT's dominator tree
+/// root-attaches those metadata objects even without an explicit GC root; this
+/// is the empirically-verified "Group B" mirror needed for small-dump parity,
+/// and it has no effect on dumps that already reach those classes via live
+/// instances.
+fn should_add_system_class_root(is_array: bool, is_prim_array: bool, has_sticky: bool) -> bool {
+    if is_prim_array {
+        // Group B: always root the instance-less primitive-array metadata objects.
+        return true;
+    }
+    if is_array {
+        // Object arrays / multi-dim arrays: never synthetically rooted — MAT's
+        // fillIn guard is `!clazz.isArrayType()`.
+        return false;
+    }
+    // Non-array boot-loader class: root it only when MAT would, i.e. only when
+    // the dump has no sticky (SYSTEM_CLASS) roots of its own.
+    !has_sticky
+}
+
 // ── Pass2 main logic ───────────────────────────────────────────────────────
 
 pub struct Pass2;
@@ -819,16 +853,10 @@ impl Pass2 {
                 ));
             }
             let is_array = name.map(|n| n.starts_with('[')).unwrap_or(false);
-            // MAT's addSystemClassRootsIfMissing root-attaches instance-less
-            // primitive-array class objects ([Z [C [F [D [S [I [J [B) even
-            // with no instances/edges. Root those; skip all OTHER arrays
-            // (object arrays [L...;, multi-dim [[...) so their real
-            // reachability / dominator structure is preserved.
-            if is_array
-                && !name
-                    .map(|n| is_primitive_array_class_name(n))
-                    .unwrap_or(false)
-            {
+            let is_prim_array = name
+                .map(|n| is_primitive_array_class_name(n))
+                .unwrap_or(false);
+            if !should_add_system_class_root(is_array, is_prim_array, p1.has_sticky_class_roots) {
                 continue;
             }
             if let Some(idx) = p1.id_map.index_of(caddr) {
@@ -1756,5 +1784,36 @@ mod tests {
                 "{n:?} must NOT be a primitive-array class name"
             );
         }
+    }
+
+    #[test]
+    fn system_class_rooting_matches_mat_addsystemclassroots() {
+        // MAT's addSystemClassRootsIfMissing (HprofParserHandlerImpl.fillIn):
+        // the class-rooting loop runs ONLY when no sticky/SYSTEM_CLASS roots
+        // exist in the dump, and roots only non-array boot-loader classes.
+
+        // The normal HPROF case: sticky roots present -> MAT roots nothing.
+        // We match that for ordinary (non-array) boot-loader classes: this is
+        // the fix for the big-dump +4,645-object frontier over-marking.
+        assert!(
+            !should_add_system_class_root(false, false, true),
+            "non-array boot class must NOT be synthetically rooted when sticky roots exist"
+        );
+        // No sticky roots -> MAT (and we) root non-array boot-loader classes.
+        assert!(
+            should_add_system_class_root(false, false, false),
+            "non-array boot class must be rooted when the dump has no sticky roots"
+        );
+
+        // Object arrays / multi-dim arrays are never synthetically rooted,
+        // regardless of sticky presence (MAT guard: !clazz.isArrayType()).
+        assert!(!should_add_system_class_root(true, false, false));
+        assert!(!should_add_system_class_root(true, false, true));
+
+        // Primitive-array metadata classes ([Z etc.) are ALWAYS rooted
+        // (Group B mirror of MAT's dominator root-attachment), independent of
+        // sticky-root presence.
+        assert!(should_add_system_class_root(true, true, true));
+        assert!(should_add_system_class_root(true, true, false));
     }
 }
