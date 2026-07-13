@@ -190,13 +190,22 @@ export function ConcentrationChart({ rc }: { rc: RetentionSummary }) {
 
 export function DepthHistogramChart({ data }: { data: DepthBucket[] }) {
   if (data.length === 0) return null;
-  return (
-    <VBar
-      data={data.map((b) => ({ label: String(b.depth), value: b.objects }))}
-      fmt={fmtCount}
-      barColor={4}
-    />
-  );
+  // Deep dumps can produce hundreds of depth buckets; rendering one bar per
+  // depth is unreadable. Cap the x-axis to the first MAX_BARS depths and fold
+  // everything deeper into a single ">=N" bucket so the shape stays legible.
+  const MAX_BARS = 40;
+  let bars: { label: string; value: number }[];
+  if (data.length <= MAX_BARS) {
+    bars = data.map((b) => ({ label: String(b.depth), value: b.objects }));
+  } else {
+    const head = data.slice(0, MAX_BARS - 1);
+    const tail = data.slice(MAX_BARS - 1);
+    const tailStart = tail[0].depth;
+    const tailSum = tail.reduce((s, b) => s + b.objects, 0);
+    bars = head.map((b) => ({ label: String(b.depth), value: b.objects }));
+    bars.push({ label: `≥${tailStart}`, value: tailSum });
+  }
+  return <VBar data={bars} fmt={fmtCount} barColor={4} />;
 }
 
 export function GcRootsChart({ data }: { data: GcRootTypeRow[] }) {

@@ -12,6 +12,13 @@ export function fmtCount(n: number): string {
   return n.toLocaleString("en-US");
 }
 
+// Exact byte count with thousands separators, e.g. "509,972,304". MAT's Leak
+// Suspects report shows the precise retained byte total alongside the percent
+// ("509,972,304 (41.08%)"); this is the analogue for that exact figure.
+export function fmtExactBytes(n: number): string {
+  return `${n.toLocaleString("en-US")} B`;
+}
+
 // Percent of a total (retained / total * 100), matching the OOM-triage basis.
 export function pctOf(part: number, total: number): number {
   return total > 0 ? (part / total) * 100 : 0;
