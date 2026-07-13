@@ -124,12 +124,23 @@ export interface TopConsumers {
   biggest_packages: PackageNode;
 }
 
+export interface ThreadInfo {
+  thread_serial: number;
+  class_name: string | null;
+  frames: string[];
+}
+
+export interface ThreadOverview {
+  threads: ThreadInfo[];
+}
+
 export interface Report {
   schema_version: number;
   generated: string;
   overview: SystemOverview;
   leaks: LeakSuspects;
   top: TopConsumers;
+  threads: ThreadOverview;
 }
 
 declare global {

@@ -1,5 +1,5 @@
 import React from "react";
-import type { Report, Suspect } from "./types";
+import type { Report, Suspect, ThreadInfo } from "./types";
 import { fmtCount, formatBytes, formatEpochMs, pctOf } from "./format";
 import {
   ConcentrationChart,
@@ -415,6 +415,44 @@ function TopConsumersSection({ report }: { report: Report }) {
   );
 }
 
+// ── Threads ─────────────────────────────────────────────────────────────────
+// One collapsible block per thread; frames rendered verbatim in a monospace
+// <pre>. Preserves the upstream (thread_serial-sorted) order for determinism.
+function ThreadCard({ t }: { t: ThreadInfo }) {
+  const cls = t.class_name ?? "<unresolved>";
+  return (
+    <details className="thread">
+      <summary>
+        Thread {t.thread_serial} (<code>{cls}</code>) — {fmtCount(t.frames.length)} frame
+        {t.frames.length === 1 ? "" : "s"}
+      </summary>
+      <pre className="stack">{t.frames.join("\n")}</pre>
+    </details>
+  );
+}
+
+function ThreadsSection({ report }: { report: Report }) {
+  const threads = report.threads?.threads ?? [];
+  return (
+    <section>
+      <h2>Threads</h2>
+      <p className="subtitle">Per-thread call stacks recorded in the dump.</p>
+      {threads.length === 0 ? (
+        <p>No thread call stacks were recorded in this dump.</p>
+      ) : (
+        <>
+          <p className="subtitle" style={{ margin: "0 0 0.75rem" }}>
+            {fmtCount(threads.length)} thread{threads.length === 1 ? "" : "s"} with recorded stacks.
+          </p>
+          {threads.map((t, i) => (
+            <ThreadCard key={i} t={t} />
+          ))}
+        </>
+      )}
+    </section>
+  );
+}
+
 export default function App({ report }: { report: Report }) {
   return (
     <div className="app">
@@ -426,6 +464,7 @@ export default function App({ report }: { report: Report }) {
       <SystemOverviewSection report={report} />
       <LeakSuspectsSection report={report} />
       <TopConsumersSection report={report} />
+      <ThreadsSection report={report} />
     </div>
   );
 }
