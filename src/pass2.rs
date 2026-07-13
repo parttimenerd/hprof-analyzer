@@ -2918,7 +2918,7 @@ mod tests {
     use super::*;
     use crate::pass1::Pass1;
 
-    const DUMP: &str = "/home/i560383/test-heapdumps/dump_0_fj-kmeans.hprof";
+    const DUMP: &str = "tests/fixtures/dump_0_fj-kmeans.hprof";
 
     #[test]
     fn pretty_binary_name_strips_l_and_semicolon_and_dots() {

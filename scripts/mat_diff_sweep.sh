@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MAT diff validation sweep (Phase V, task 14 — a HARD GATE).
+# MAT diff validation sweep (a hard parity gate).
 #
 # For every dump that has BOTH a local `.hprof` AND a MAT `_System_Overview.zip`
 # reference, this script:
@@ -20,22 +20,20 @@
 #   BIN          path to the built analyzer binary
 #   WORK         scratch dir for per-dump json (default: mktemp)
 #   KEEP_WORK=1  keep the scratch dir instead of deleting it
-#
-# The 34 GB big dump is intentionally NOT part of any default dump list — MAT
-# cannot process it here, so it is excluded from the sweep.
+#   EXCLUDE      whitespace-separated dump names to skip (e.g. dumps MAT cannot
+#                open locally). Empty by default.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Defaults: fixtures ship locally; MAT zips are pulled to /tmp/matzips (see the
-# task instructions). Both are overridable by arg or env.
+# Defaults: fixtures ship locally; MAT zips are pulled to /tmp/matzips. Both are
+# overridable by arg or env.
 MAT_ZIP_DIR="${1:-${MAT_ZIP_DIR:-/tmp/matzips}}"
 DUMP_DIR="${2:-${DUMP_DIR:-$REPO_ROOT/tests/fixtures}}"
 BIN="${BIN:-$REPO_ROOT/target/release/hprof-analyzer}"
-# Dumps to exclude by name (whitespace-separated). The 34 GB production
-# triage dump is excluded by default: MAT cannot process it here, so it must
-# never enter the sweep even if its files happen to be present.
-EXCLUDE="${EXCLUDE:-pc52bs2job-triage-c475689d4-brk4b-20260617_145230}"
+# Dumps to exclude by name (whitespace-separated). Empty by default; set this to
+# skip dumps whose MAT reference cannot be produced locally.
+EXCLUDE="${EXCLUDE:-}"
 
 if [[ ! -x "$BIN" ]]; then
   echo "error: analyzer binary not found/executable at: $BIN" >&2
@@ -68,7 +66,7 @@ for zip in "$MAT_ZIP_DIR"/*_System_Overview.zip; do
   name="${base%_System_Overview.zip}"
   hprof="$DUMP_DIR/$name.hprof"
 
-  # Honor the exclusion list (e.g. the 34 GB dump MAT cannot process here).
+  # Honor the exclusion list (dumps whose MAT reference is unavailable locally).
   skip_excluded=0
   for ex in $EXCLUDE; do
     if [[ "$name" == "$ex" ]]; then skip_excluded=1; fi

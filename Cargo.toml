@@ -2,6 +2,14 @@
 name = "hprof-analyzer"
 version = "0.1.0"
 edition = "2024"
+description = "Fast, low-memory Java HPROF heap-dump analyzer with Eclipse MAT-parity reports (System Overview, Leak Suspects, Top Consumers)."
+license = "MIT"
+repository = "https://github.com/parttimenerd/hprof-analyzer"
+readme = "README.md"
+authors = ["Johannes Bechberger"]
+keywords = ["hprof", "heap-dump", "java", "memory", "oom"]
+categories = ["command-line-utilities", "development-tools::profiling"]
+exclude = ["tests/fixtures/*.hprof", ".git-worktrees/*", "docs/*"]
 
 [dependencies]
 base64 = "0.22"

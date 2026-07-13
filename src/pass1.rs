@@ -837,9 +837,9 @@ mod tests {
         assert!(pa.contains(&ra[0]) && pb.contains(&rb[0]));
     }
 
-    const DUMP: &str = "/home/i560383/test-heapdumps/dump_0_fj-kmeans.hprof";
+    const DUMP: &str = "tests/fixtures/dump_0_fj-kmeans.hprof";
 
-    // Ground truth from: java -jar ~/hprof-redact.jar diagnose dump_0_fj-kmeans.hprof
+    // Ground truth from the hprof-redact `diagnose` command on dump_0_fj-kmeans.
     const EXPECTED_INSTANCES: u64 = 2_698_510;
     const EXPECTED_OBJ_ARRAYS: u64 = 504_353;
     const EXPECTED_PRIM_ARRAYS: u64 = 27_379;

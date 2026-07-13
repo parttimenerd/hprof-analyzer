@@ -1,2 +1,7 @@
 /target
 /web/node_modules
+
+# Personal/local dev helpers and machine-specific artifacts (never committed).
+scripts/*.local.sh
+bigdump-rss.*
+*.timev
