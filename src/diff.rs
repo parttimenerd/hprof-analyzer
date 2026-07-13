@@ -260,6 +260,37 @@ pub struct MatComponent {
     pub pct: u32,
 }
 
+/// A "Biggest Objects" row from the Top Consumers page (dominator-tree table).
+/// MAT's label carries the object address ("class X @ 0xADDR", "X @ 0xADDR  Name");
+/// `class_name` is the normalized bare class name.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatBiggestObject {
+    pub class_name: String,
+    pub shallow: u64,
+    pub retained: u64,
+}
+
+/// A "Biggest Top-Level Dominator Classes" row from the Top Consumers page.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatBiggestClass {
+    pub class_name: String,
+    pub objects: u64,
+    pub retained: u64,
+}
+
+/// One row of MAT's "Biggest Top-Level Dominator Packages" tree. `depth` is the
+/// nesting level (0 = the `<all>` root). `dotted_path` is the accumulated
+/// package path from the root's children down ("java.util.zip"); the root
+/// itself has an empty path (mirroring our `PackageNode` root name "").
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatPackageRow {
+    pub depth: usize,
+    pub segment: String,
+    pub dotted_path: String,
+    pub retained: u64,
+    pub top_dominators: u64,
+}
+
 /// Everything comparable we managed to extract from whatever zip/dir/html we
 /// were handed. All fields are optional; absent data is skipped cleanly.
 #[derive(Debug, Default, Clone)]
@@ -278,8 +309,12 @@ pub struct MatReport {
     pub histogram_total_shallow: Option<u64>,
     // Leak suspects
     pub suspects: Vec<MatSuspect>,
-    // Top components
+    // Top components (class-loader components from the Top_Components index)
     pub components: Vec<MatComponent>,
+    // Top consumers page tables
+    pub biggest_objects: Vec<MatBiggestObject>,
+    pub biggest_classes: Vec<MatBiggestClass>,
+    pub packages: Vec<MatPackageRow>,
 }
 
 // ── Input detection & loading ────────────────────────────────────────────────
@@ -587,13 +622,40 @@ pub fn parse_leak_suspects(html: &str, out: &mut MatReport) {
 
     for imp in doc.select(&imp_sel) {
         let full_text = imp.text().collect::<String>();
-        // Suspect class name: first <q>.
-        let Some(q) = imp.select(&q_sel).next() else {
-            continue;
+        let trimmed = full_text.trim_start();
+        // MAT's leakhunter phrases a suspect in one of three ways:
+        //   (1) "N instances of <q>CLASS</q>, loaded by ... occupy BYTES"
+        //   (2) "The class <q>CLASS</q>, loaded by ..., occupies BYTES"
+        //   (3) "The thread <strong>THREAD @ 0xADDR  name</strong> keeps local
+        //        variables with total size BYTES. The top consumers ... are
+        //        <q>CONSUMER</q> ...  accumulated in one instance of
+        //        <q>THREAD-CLASS</q> ..."
+        // In (3) the FIRST <q> is a top-CONSUMER class, not the suspect; the
+        // suspect is the thread, whose class we take from the bare <strong>
+        // thread label (normalizing away the " @ 0xADDR  name" suffix). Using
+        // the first <q> here would misname the suspect (regression: dump_2
+        // named the suspect `cafesat.sat.Literal` instead of `java.lang.Thread`).
+        let is_thread_variant = trimmed.starts_with("The thread ");
+        let class_name = if is_thread_variant {
+            // First bare <strong> = thread label "java.lang.Thread @ 0x..  name".
+            let Some(st) = imp.select(&strong_sel).next() else {
+                continue;
+            };
+            normalize_mat_object_label(&st.text().collect::<String>())
+        } else {
+            // Suspect class name: first <q>.
+            let Some(q) = imp.select(&q_sel).next() else {
+                continue;
+            };
+            q.text().collect::<String>().trim().to_string()
         };
-        let class_name = q.text().collect::<String>().trim().to_string();
-        // "N instances of" prefix -> instance count (absent for "The class X").
-        let instance_count = full_text.split_whitespace().next().and_then(parse_int);
+        // "N instances of" prefix -> instance count (absent for "The class X"
+        // and for the thread variant, where the thread is a single object).
+        let instance_count = if is_thread_variant {
+            Some(1)
+        } else {
+            full_text.split_whitespace().next().and_then(parse_int)
+        };
         // Exact bytes + pct: the <strong> matching "NNN (PP.PP%)".
         let mut retained = None;
         let mut pct = None;
@@ -657,13 +719,229 @@ pub fn parse_top_components(html: &str, out: &mut MatReport) {
     }
 }
 
+/// Normalize a MAT dominator-tree object label to its bare class name.
+///
+/// MAT labels an object as `[class ]<CLASS> @ 0x<ADDR>[  <thread-name>]`
+/// (the leading `class ` prefix appears for java.lang.Class instances). Our
+/// `ObjRow.display_class` is the bare class name, so we strip the optional
+/// `class ` prefix and everything from the ` @ 0x` address marker onward.
+fn normalize_mat_object_label(label: &str) -> String {
+    let s = label.trim();
+    let s = s.strip_prefix("class ").unwrap_or(s);
+    // Cut at the address marker " @ 0x".
+    let s = match s.find(" @ 0x") {
+        Some(i) => &s[..i],
+        None => s,
+    };
+    normalize_array_len(s.trim())
+}
+
+/// Normalize array-instance length annotations to the class-level array form:
+/// MAT names an individual array OBJECT with its element count (e.g.
+/// `InstanceBlock[7]`, `java.lang.Object[131072]`, `int[7][]`), while our
+/// `display_class` uses the array TYPE name (`InstanceBlock[]`). Strip the
+/// digits inside every `[...]` so the two agree; the length is a display detail,
+/// not a heap-size fact (shallow/retained still compare exactly).
+fn normalize_array_len(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_bracket = false;
+    for c in s.chars() {
+        match c {
+            '[' => {
+                in_bracket = true;
+                out.push('[');
+            }
+            ']' => {
+                in_bracket = false;
+                out.push(']');
+            }
+            d if in_bracket && d.is_ascii_digit() => {} // drop the length digits
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Parse the "Top Consumers" page (`Top_Consumers*.html`), present in both the
+/// Leak_Suspects and Top_Components report zips. It carries three comparable
+/// tables:
+///   * "Biggest Objects" — a dominator-tree table (Class Name / Shallow /
+///     Retained), one row per top dominator object.
+///   * "Biggest Top-Level Dominator Classes" — Label / #Objects / Used Heap /
+///     Retained Heap / Retained%.
+///   * "Biggest Top-Level Dominator Packages" — a pruned package tree with an
+///     ASCII tree-prefix in the first cell encoding nesting depth.
+pub fn parse_top_consumers(html: &str, out: &mut MatReport) {
+    use scraper::{Html, Selector};
+    let doc = Html::parse_document(html);
+    let table_sel = Selector::parse("table.result").unwrap();
+    let row_sel = Selector::parse("tr").unwrap();
+    let td_sel = Selector::parse("td").unwrap();
+    let th_sel = Selector::parse("th").unwrap();
+    let obj_a_sel = Selector::parse("a[href^=\"mat://object/\"]").unwrap();
+    let li_sel = Selector::parse("li").unwrap();
+
+    for table in doc.select(&table_sel) {
+        // Identify the table by its header cells.
+        let headers: Vec<String> = table
+            .select(&th_sel)
+            .map(|th| th.text().collect::<String>().trim().to_string())
+            .collect();
+        let is_objects = headers == ["Class Name", "Shallow Heap", "Retained Heap"];
+        let is_classes = headers.first().map(|h| h == "Label").unwrap_or(false)
+            && headers.iter().any(|h| h == "Number of Objects")
+            && headers.iter().any(|h| h == "Retained Heap Size");
+        let is_packages = headers.first().map(|h| h == "Package").unwrap_or(false);
+
+        if is_objects {
+            for row in table.select(&row_sel) {
+                if row_is_totals(&row) {
+                    continue;
+                }
+                let tds: Vec<_> = row.select(&td_sel).collect();
+                if tds.len() < 3 {
+                    continue;
+                }
+                let Some(a) = tds[0].select(&obj_a_sel).next() else {
+                    continue;
+                };
+                let label = a.text().collect::<String>();
+                let class_name = normalize_mat_object_label(&label);
+                let shallow = parse_int(&tds[1].text().collect::<String>());
+                let retained = parse_int(&tds[2].text().collect::<String>());
+                if let (Some(shallow), Some(retained)) = (shallow, retained) {
+                    out.biggest_objects.push(MatBiggestObject {
+                        class_name,
+                        shallow,
+                        retained,
+                    });
+                }
+            }
+        } else if is_classes {
+            for row in table.select(&row_sel) {
+                if row_is_totals(&row) {
+                    continue;
+                }
+                let tds: Vec<_> = row.select(&td_sel).collect();
+                // Label / #Objects / Used Heap / Retained Heap / Retained%
+                if tds.len() < 4 {
+                    continue;
+                }
+                let Some(a) = tds[0].select(&obj_a_sel).next() else {
+                    continue;
+                };
+                let class_name = a.text().collect::<String>().trim().to_string();
+                // The "Biggest Top-Level Dominator Class Loaders" table shares
+                // the exact same header row as the Classes table. Its rows are
+                // class-LOADER labels ("<system class loader>", "X @ 0xADDR"),
+                // which are not classes and have no counterpart in our
+                // biggest_classes — reject them so they are not spuriously
+                // compared as classes.
+                if class_name == "<system class loader>" || class_name.contains(" @ 0x") {
+                    continue;
+                }
+                let objects = parse_int(&tds[1].text().collect::<String>());
+                let retained = parse_int(&tds[3].text().collect::<String>());
+                if let (Some(objects), Some(retained)) = (objects, retained) {
+                    out.biggest_classes.push(MatBiggestClass {
+                        class_name,
+                        objects,
+                        retained,
+                    });
+                }
+            }
+        } else if is_packages {
+            // Package tree: first cell = ASCII-tree prefix + <img> + <li>SEGMENT.
+            // Depth = length of the leading prefix chars (root "<all>" = 0).
+            let mut path_stack: Vec<String> = Vec::new();
+            for row in table.select(&row_sel) {
+                if row_is_totals(&row) {
+                    continue; // subtree-summary rows have no per-node counterpart
+                }
+                let tds: Vec<_> = row.select(&td_sel).collect();
+                // Package / Retained Heap / Retained% / # Top Dominators
+                if tds.len() < 4 {
+                    continue;
+                }
+                // Raw HTML of the first cell up to the first <img> = the prefix.
+                let first_html = tds[0].inner_html();
+                let prefix_len = first_html
+                    .find("<img")
+                    .map(|i| first_html[..i].chars().count())
+                    .unwrap_or(0);
+                let Some(li) = tds[0].select(&li_sel).next() else {
+                    continue;
+                };
+                // The <li> text is "SEGMENT" followed by an anchor's text; take
+                // the leading text node before any child element.
+                let seg_raw = li
+                    .text()
+                    .next()
+                    .map(|t| t.trim().to_string())
+                    .unwrap_or_default();
+                let segment = if seg_raw == "<all>" {
+                    String::new()
+                } else {
+                    seg_raw.clone()
+                };
+                let retained = parse_int(&tds[1].text().collect::<String>());
+                let top_dominators = parse_int(&tds[3].text().collect::<String>());
+                let (Some(retained), Some(top_dominators)) = (retained, top_dominators) else {
+                    continue;
+                };
+                // Maintain the dotted path from the prefix depth. A node at
+                // depth d sits at stack index d-1 (the root at depth 0 has the
+                // empty path); truncate to d-1, then push this segment.
+                if prefix_len > 0 {
+                    path_stack.truncate(prefix_len - 1);
+                    path_stack.push(segment.clone());
+                } else {
+                    path_stack.clear();
+                }
+                let dotted_path = path_stack.join(".");
+                out.packages.push(MatPackageRow {
+                    depth: prefix_len,
+                    segment,
+                    dotted_path,
+                    retained,
+                    top_dominators,
+                });
+            }
+        }
+    }
+}
+
+/// True if this row is a MAT `class="totals"` summary row.
+fn row_is_totals(row: &scraper::ElementRef) -> bool {
+    row.value()
+        .attr("class")
+        .map(|c| c.contains("totals"))
+        .unwrap_or(false)
+}
+
 /// Dispatch every HTML doc to the right parser based on its file name / content.
 fn parse_mat_docs(docs: &[HtmlDoc]) -> MatReport {
     let mut rep = MatReport::default();
+    // The whole-heap "Top Consumers" page (Biggest Objects/Classes/Packages of
+    // the ENTIRE heap) ships as the single `Top_Consumers*.html` in the
+    // Leak_Suspects and System_Overview zips. The Top_Components zip instead
+    // ships SEVERAL class-loader-SCOPED Top Consumers pages (one per component),
+    // whose tables are relative to a single component and have no whole-heap
+    // counterpart in our `top` model. Only parse the whole-heap page: require
+    // that exactly one such page is present.
+    let top_consumer_docs: Vec<&HtmlDoc> = docs
+        .iter()
+        .filter(|d| d.name.contains("top_consumers"))
+        .collect();
+    let parse_whole_heap_top = top_consumer_docs.len() == 1;
     for doc in docs {
         let n = &doc.name;
         if n.contains("class_histogram") {
             parse_class_histogram(&doc.html, &mut rep);
+        } else if n.contains("top_consumers") {
+            if parse_whole_heap_top {
+                parse_top_consumers(&doc.html, &mut rep);
+            }
         } else if n == "index.html" || n == "index.htm" {
             // The index could belong to any of the three report types. Detect
             // by content and run whichever parsers find data.
@@ -951,6 +1229,11 @@ pub fn compare(mat: &MatReport, ours: &Report) -> DiffResult {
     // ── Leak suspects ──
     compare_suspects(mat, ours, &mut r);
 
+    // ── Top consumers: Biggest Objects / Classes / Packages ──
+    compare_biggest_objects(mat, ours, &mut r);
+    compare_biggest_classes(mat, ours, &mut r);
+    compare_packages(mat, ours, &mut r);
+
     // ── Top components: no package counterpart -> tier iv skips ──
     for c in &mat.components {
         r.skipped.push(FieldDiff::explained(
@@ -1099,9 +1382,25 @@ fn compare_suspects(mat: &MatReport, ours: &Report, r: &mut DiffResult) {
                 ));
             }
             Some(os) => {
-                // Retained bytes: EXACT.
+                // Retained bytes: EXACT, with the single documented exemption
+                // for `java.lang.Class` — MAT roots extra java.lang.Class
+                // objects (the metadata-only object-rooting gap), so a
+                // java.lang.Class suspect's retained subtree legitimately
+                // differs. This mirrors the histogram comparator's treatment of
+                // the java.lang.Class row and is name-gated to that one class;
+                // it is NOT a numeric tolerance band.
                 r.fields
-                    .push(classify_int(&field, os.retained, ms.retained, || None));
+                    .push(classify_int(&field, os.retained, ms.retained, || {
+                        if ms.class_name == "java.lang.Class" {
+                            Some(Explanation::MatClassObjectRootingGap {
+                                proof: "java.lang.Class suspect retained differs by the \
+                                    documented object-rooting gap (metadata-only)"
+                                    .to_string(),
+                            })
+                        } else {
+                            None
+                        }
+                    }));
                 // Pct: MAT prints 2 decimals; require our rounded pct == MAT's.
                 let our_pct = pct_string(os.retained, denom);
                 let mat_pct = format!("{:.2}", ms.pct);
@@ -1116,6 +1415,25 @@ fn compare_suspects(mat: &MatReport, ours: &Report, r: &mut DiffResult) {
                             mat: mat_pct,
                         },
                     ));
+                } else if ms.class_name == "java.lang.Class"
+                    && pct_string(ms.retained, denom) == mat_pct
+                {
+                    // The pct diverges ONLY because the java.lang.Class retained
+                    // diverges (the object-rooting gap already accepted above):
+                    // ours faithfully renders OUR retained and MAT faithfully
+                    // renders MAT's larger retained. Proven consistent (MAT's
+                    // printed pct == round(MAT_retained/denom)); same root cause,
+                    // not a numeric tolerance band.
+                    r.fields.push(FieldDiff::explained(
+                        pfield,
+                        our_pct,
+                        mat_pct,
+                        Explanation::MatClassObjectRootingGap {
+                            proof: "java.lang.Class pct follows the retained object-rooting \
+                                    gap; each side renders its own retained faithfully"
+                                .to_string(),
+                        },
+                    ));
                 } else {
                     r.fields.push(FieldDiff::failed(pfield, our_pct, mat_pct));
                 }
@@ -1126,6 +1444,218 @@ fn compare_suspects(mat: &MatReport, ours: &Report, r: &mut DiffResult) {
 
 // ── Entry point wired from main ──────────────────────────────────────────────
 
+/// Compare MAT's "Biggest Objects" rows against our `top.biggest_objects`.
+/// Each MAT row is matched to one of ours by (normalized class name, shallow,
+/// retained) — the (shallow, retained) pair disambiguates legitimately
+/// duplicated class names (e.g. several `ZipFile$Source` objects). All values
+/// are exact; retained bytes are the same dominator-subtree sum.
+fn compare_biggest_objects(mat: &MatReport, ours: &Report, r: &mut DiffResult) {
+    if mat.biggest_objects.is_empty() {
+        return;
+    }
+    // Track which of our rows have already been consumed so two identical MAT
+    // rows do not both match a single one of ours.
+    let mut used = vec![false; ours.top.biggest_objects.len()];
+    for (i, mo) in mat.biggest_objects.iter().enumerate() {
+        let field = format!("top.biggest_object[{i}:{}]", mo.class_name);
+        let mat_s = format!("sh={} ret={}", mo.shallow, mo.retained);
+        // Prefer an unused, fully-exact match (name+shallow+retained). The
+        // class name is compared with array-length annotations normalized away.
+        let exact = ours.top.biggest_objects.iter().enumerate().find(|(j, o)| {
+            !used[*j]
+                && normalize_array_len(&o.display_class) == mo.class_name
+                && o.shallow == mo.shallow
+                && o.retained == mo.retained
+        });
+        if let Some((j, o)) = exact {
+            used[j] = true;
+            r.fields.push(FieldDiff::matched(
+                field,
+                format!("sh={} ret={}", o.shallow, o.retained),
+                mat_s,
+            ));
+            continue;
+        }
+        // No exact match: surface the closest same-name (unused) row for the
+        // FAIL detail, else report as missing. Never laundered.
+        match ours
+            .top
+            .biggest_objects
+            .iter()
+            .enumerate()
+            .find(|(j, o)| !used[*j] && normalize_array_len(&o.display_class) == mo.class_name)
+        {
+            Some((j, o)) => {
+                used[j] = true;
+                r.fields.push(FieldDiff::failed(
+                    field,
+                    format!("sh={} ret={}", o.shallow, o.retained),
+                    mat_s,
+                ));
+            }
+            None => {
+                r.fields.push(FieldDiff::failed(field, "(missing)", mat_s));
+            }
+        }
+    }
+}
+
+/// Compare MAT's "Biggest Top-Level Dominator Classes" rows against our
+/// `top.biggest_classes`, keyed by class name. Instances + retained are exact.
+fn compare_biggest_classes(mat: &MatReport, ours: &Report, r: &mut DiffResult) {
+    use std::collections::HashMap;
+    if mat.biggest_classes.is_empty() {
+        return;
+    }
+    let our_by_name: HashMap<&str, &report::ClassRow> = ours
+        .top
+        .biggest_classes
+        .iter()
+        .map(|c| (c.pretty_class.as_str(), c))
+        .collect();
+    for mc in &mat.biggest_classes {
+        let field = format!("top.biggest_class[{}]", mc.class_name);
+        let mat_s = format!("obj={} ret={}", mc.objects, mc.retained);
+        match our_by_name.get(mc.class_name.as_str()) {
+            None => {
+                r.fields.push(FieldDiff::failed(field, "(missing)", mat_s));
+            }
+            Some(oc) => {
+                let ours_s = format!("obj={} ret={}", oc.instances, oc.retained);
+                if oc.instances == mc.objects && oc.retained == mc.retained {
+                    r.fields.push(FieldDiff::matched(field, ours_s, mat_s));
+                } else {
+                    r.fields.push(FieldDiff::failed(field, ours_s, mat_s));
+                }
+            }
+        }
+    }
+}
+
+/// Is this dotted package path on the `java.lang` chain (root, `java`,
+/// `java.lang`, or a descendant of `java.lang`)?
+fn on_java_lang_path(path: &str) -> bool {
+    path.is_empty() || path == "java" || path == "java.lang" || path.starts_with("java.lang.")
+}
+
+/// Prove the package-tree retained divergence is the documented
+/// `java.lang.Class` object-rooting gap: MAT roots ONE (or more) extra
+/// top-level dominator(s), all java.lang-related, that we do not, so the ONLY
+/// packages whose retained differs are those on the `java.lang` chain, and each
+/// such node also shows MAT's top-dominator count strictly greater than ours
+/// (the extra rooted object). Returns Some(proof) iff EVERY divergent package
+/// satisfies both conditions; None otherwise (=> divergences FAIL).
+fn package_gap_proof(
+    mat: &MatReport,
+    our_by_path: &std::collections::HashMap<String, &report::PackageNode>,
+) -> Option<String> {
+    let mut divergent = 0usize;
+    for mp in &mat.packages {
+        let Some(on) = our_by_path.get(&mp.dotted_path) else {
+            continue; // class-leaf, no counterpart — handled as SKIP elsewhere
+        };
+        if on.retained_heap == mp.retained {
+            continue;
+        }
+        divergent += 1;
+        // A divergent package NOT on the java.lang chain voids the proof.
+        if !on_java_lang_path(&mp.dotted_path) {
+            return None;
+        }
+        // The divergence must be accompanied by MAT rooting more top-level
+        // dominators than us at this node (the extra rooted object). If MAT's
+        // count is <= ours yet retained differs, this is not the rooting gap.
+        if mp.top_dominators <= on.top_dominator_count {
+            return None;
+        }
+    }
+    if divergent == 0 {
+        return None;
+    }
+    Some(format!(
+        "package retained delta confined to the java.lang chain ({divergent} node(s)); \
+         MAT roots extra top-level dominator(s) there (java.lang.Class object-rooting gap)"
+    ))
+}
+
+/// Compare MAT's "Biggest Top-Level Dominator Packages" tree against our
+/// `top.biggest_packages` (PackageNode tree). Matched by dotted package path;
+/// retained bytes are exact. MAT descends one level deeper than we do (into
+/// class-name leaves under each package); those class-leaf rows have no
+/// PackageNode counterpart and are tier-iv SKIPs. A package present on both
+/// sides whose retained differs is a FAIL, EXCEPT the one documented benign
+/// case: the `java.lang.Class` object-rooting gap, proven by
+/// `package_gap_proof` (divergence confined to the java.lang chain, each such
+/// node carrying MAT's extra rooted top-level dominator).
+fn compare_packages(mat: &MatReport, ours: &Report, r: &mut DiffResult) {
+    use std::collections::HashMap;
+    if mat.packages.is_empty() {
+        return;
+    }
+    // Flatten our package tree into a path -> node map (root path = "").
+    let mut our_by_path: HashMap<String, &report::PackageNode> = HashMap::new();
+    fn walk<'a>(
+        node: &'a report::PackageNode,
+        path: &str,
+        map: &mut HashMap<String, &'a report::PackageNode>,
+    ) {
+        map.insert(path.to_string(), node);
+        for child in &node.children {
+            let child_path = if path.is_empty() {
+                child.name.clone()
+            } else {
+                format!("{path}.{}", child.name)
+            };
+            walk(child, &child_path, map);
+        }
+    }
+    walk(&ours.top.biggest_packages, "", &mut our_by_path);
+
+    // Prove (or refute) the java.lang.Class package-rooting gap once.
+    let pkg_gap = package_gap_proof(mat, &our_by_path);
+
+    for mp in &mat.packages {
+        let label = if mp.dotted_path.is_empty() {
+            "<all>".to_string()
+        } else {
+            mp.dotted_path.clone()
+        };
+        let field = format!("top.package[{label}].retained");
+        let mat_s = mp.retained.to_string();
+        match our_by_path.get(&mp.dotted_path) {
+            None => {
+                // MAT descends into class-name leaves we do not model as
+                // package nodes -> tier-iv skip, not a FAIL.
+                r.skipped.push(FieldDiff::explained(
+                    field,
+                    "(no package-node counterpart)",
+                    mat_s,
+                    Explanation::NoCounterpart {
+                        note: "MAT package tree descends into a class-name leaf we do not model"
+                            .to_string(),
+                    },
+                ));
+            }
+            Some(on) => {
+                let ours_s = on.retained_heap.to_string();
+                if on.retained_heap == mp.retained {
+                    r.fields.push(FieldDiff::matched(field, ours_s, mat_s));
+                } else if on_java_lang_path(&mp.dotted_path) && pkg_gap.is_some() {
+                    r.fields.push(FieldDiff::explained(
+                        field,
+                        ours_s,
+                        mat_s,
+                        Explanation::MatClassObjectRootingGap {
+                            proof: pkg_gap.clone().unwrap(),
+                        },
+                    ));
+                } else {
+                    r.fields.push(FieldDiff::failed(field, ours_s, mat_s));
+                }
+            }
+        }
+    }
+}
 /// Run the `--diff <A> <B>` subcommand. Detects which side is the MAT report
 /// and which is our JSON, parses both, compares, and prints the result in the
 /// requested format. Returns a non-zero-worthy error only on I/O/parse failure;
@@ -1642,5 +2172,490 @@ mod tests {
             Tier::Explainable(Explanation::Rounding { .. })
         ));
         assert_eq!(r.n_fail(), 0);
+    }
+
+    // ── Top Consumers parsing (Biggest Objects / Classes / Packages) ──
+
+    // parse_top_consumers extracts all three tables and normalizes array-length
+    // annotations on object labels; class-loader rows in the classes table are
+    // rejected (they share the header but are not classes).
+    #[test]
+    fn parse_top_consumers_all_three_tables() {
+        let html = r####"<html><body>
+            <table class="result">
+              <thead><tr><th>Class Name</th><th>Shallow Heap</th><th>Retained Heap</th></tr></thead>
+              <tbody>
+                <tr><td><img><a href="mat://object/0x809002b0">scala.InstanceBlock[7] @ 0x809002b0</a></td><td align="right">8</td><td align="right">2,791,424</td></tr>
+                <tr><td><img><a href="mat://object/0x8e720fb0">class java.lang.Object @ 0x8e720fb0</a></td><td align="right">32</td><td align="right">2,500,000</td></tr>
+                <tr class="totals"><td>Total: 3 entries</td><td align="right">40</td><td align="right"></td></tr>
+              </tbody>
+            </table>
+            <table class="result">
+              <thead><tr><th>Label</th><th>Number of Objects</th><th>Used Heap Size</th><th>Retained Heap Size</th><th>Retained%</th></tr></thead>
+              <tbody>
+                <tr><td><img><a href="mat://object/0x1">scala.concurrent.stm.ccstm.InTxnImpl</a></td><td align="right">94</td><td align="right">13,536</td><td align="right">2,791,424</td><td align="right">22.90%</td></tr>
+                <tr><td><img><a href="mat://object/0x2">&lt;system class loader&gt;</a></td><td align="right">10</td><td align="right">100</td><td align="right">5,000</td><td align="right">0.04%</td></tr>
+                <tr><td><img><a href="mat://object/0x3">java.net.URLClassLoader @ 0x80300d20</a></td><td align="right">5</td><td align="right">50</td><td align="right">4,000</td><td align="right">0.03%</td></tr>
+              </tbody>
+            </table>
+            <table class="result">
+              <thead><tr><th>Package</th><th>Retained Heap</th><th>Retained%</th><th># Top Dominators</th></tr></thead>
+              <tbody>
+                <tr><td><img src="x"><ul><li>&lt;all&gt;</li></ul></td><td align="right">12,187,000</td><td align="right">100%</td><td align="right">25</td></tr>
+                <tr><td>+<img src="x"><ul><li>java<a href="q">q</a></li></ul></td><td align="right">3,000,000</td><td align="right">24%</td><td align="right">10</td></tr>
+                <tr><td>|+<img src="x"><ul><li>lang<a href="q">q</a></li></ul></td><td align="right">2,000,000</td><td align="right">16%</td><td align="right">7</td></tr>
+                <tr><td>+<img src="x"><ul><li>scala<a href="q">q</a></li></ul></td><td align="right">1,500,000</td><td align="right">12%</td><td align="right">3</td></tr>
+              </tbody>
+            </table>
+            </body></html>"####;
+        let mut rep = MatReport::default();
+        parse_top_consumers(html, &mut rep);
+
+        // Biggest Objects: array length stripped; "class " prefix + @ addr cut.
+        assert_eq!(rep.biggest_objects.len(), 2);
+        assert_eq!(rep.biggest_objects[0].class_name, "scala.InstanceBlock[]");
+        assert_eq!(rep.biggest_objects[0].shallow, 8);
+        assert_eq!(rep.biggest_objects[0].retained, 2_791_424);
+        assert_eq!(rep.biggest_objects[1].class_name, "java.lang.Object");
+        assert_eq!(rep.biggest_objects[1].shallow, 32);
+
+        // Biggest Classes: the two class-loader rows are rejected.
+        assert_eq!(rep.biggest_classes.len(), 1);
+        assert_eq!(
+            rep.biggest_classes[0].class_name,
+            "scala.concurrent.stm.ccstm.InTxnImpl"
+        );
+        assert_eq!(rep.biggest_classes[0].objects, 94);
+        assert_eq!(rep.biggest_classes[0].retained, 2_791_424);
+
+        // Packages: root -> java -> lang, then back up to java's sibling scala.
+        assert_eq!(rep.packages.len(), 4);
+        assert_eq!(rep.packages[0].depth, 0);
+        assert_eq!(rep.packages[0].dotted_path, ""); // <all> root
+        assert_eq!(rep.packages[0].retained, 12_187_000);
+        assert_eq!(rep.packages[1].dotted_path, "java");
+        assert_eq!(rep.packages[1].top_dominators, 10);
+        assert_eq!(rep.packages[2].dotted_path, "java.lang");
+        assert_eq!(rep.packages[2].retained, 2_000_000);
+        // scala is a sibling of java (depth 1), NOT java.scala — regression for
+        // the truncate-off-by-one path bug.
+        assert_eq!(rep.packages[3].dotted_path, "scala");
+    }
+
+    // Helpers for the top-consumer comparators.
+    fn objrow(display: &str, sh: u64, ret: u64) -> report::ObjRow {
+        report::ObjRow {
+            obj_index_1based: 1,
+            display_class: display.to_string(),
+            shallow: sh,
+            retained: ret,
+            pct_bp: 0,
+            pct: 0.0,
+        }
+    }
+    fn classrow(name: &str, inst: u64, ret: u64) -> report::ClassRow {
+        report::ClassRow {
+            pretty_class: name.to_string(),
+            instances: inst,
+            retained: ret,
+        }
+    }
+    fn pkg(
+        name: &str,
+        doms: u64,
+        ret: u64,
+        children: Vec<report::PackageNode>,
+    ) -> report::PackageNode {
+        report::PackageNode {
+            name: name.to_string(),
+            top_dominator_count: doms,
+            shallow_heap: 0,
+            retained_heap: ret,
+            children,
+        }
+    }
+
+    // compare_biggest_objects: array-length normalization means a MAT
+    // `Foo[131072]` matches our class-level `Foo[]` when shallow+retained agree;
+    // a genuine byte delta FAILs.
+    #[test]
+    fn compare_biggest_objects_normalizes_and_fails_on_delta() {
+        let mut ours = base_report(vec![]);
+        ours.top.biggest_objects = vec![
+            objrow("java.lang.Object[]", 32, 2_500_000),
+            objrow("byte[]", 24, 1_170_272),
+        ];
+        let mut mat = MatReport::default();
+        mat.biggest_objects = vec![
+            MatBiggestObject {
+                class_name: "java.lang.Object[]".into(),
+                shallow: 32,
+                retained: 2_500_000,
+            },
+            MatBiggestObject {
+                class_name: "byte[]".into(),
+                shallow: 24,
+                retained: 9_999_999, // wrong
+            },
+        ];
+        let mut r = DiffResult::default();
+        compare_biggest_objects(&mat, &ours, &mut r);
+        assert_eq!(r.fields.iter().filter(|f| f.tier == Tier::Match).count(), 1);
+        assert_eq!(r.n_fail(), 1);
+    }
+
+    // Two MAT rows with the same normalized name must consume two distinct rows
+    // of ours (the `used` guard), not double-match one.
+    #[test]
+    fn compare_biggest_objects_dedupes_same_name() {
+        let mut ours = base_report(vec![]);
+        ours.top.biggest_objects = vec![
+            objrow("java.util.zip.ZipFile$Source", 40, 700_000),
+            objrow("java.util.zip.ZipFile$Source", 40, 653_616),
+        ];
+        let mut mat = MatReport::default();
+        mat.biggest_objects = vec![
+            MatBiggestObject {
+                class_name: "java.util.zip.ZipFile$Source".into(),
+                shallow: 40,
+                retained: 700_000,
+            },
+            MatBiggestObject {
+                class_name: "java.util.zip.ZipFile$Source".into(),
+                shallow: 40,
+                retained: 653_616,
+            },
+        ];
+        let mut r = DiffResult::default();
+        compare_biggest_objects(&mat, &ours, &mut r);
+        assert_eq!(r.n_fail(), 0);
+        assert_eq!(r.fields.iter().filter(|f| f.tier == Tier::Match).count(), 2);
+    }
+
+    // compare_biggest_classes keys by name; exact instances+retained MATCH,
+    // a value delta FAILs, an absent class FAILs (never laundered).
+    #[test]
+    fn compare_biggest_classes_exact_and_missing() {
+        let mut ours = base_report(vec![]);
+        ours.top.biggest_classes = vec![classrow("scala.Sat", 94, 2_791_424)];
+        let mut mat = MatReport::default();
+        mat.biggest_classes = vec![
+            MatBiggestClass {
+                class_name: "scala.Sat".into(),
+                objects: 94,
+                retained: 2_791_424,
+            },
+            MatBiggestClass {
+                class_name: "not.present.Foo".into(),
+                objects: 3,
+                retained: 100,
+            },
+        ];
+        let mut r = DiffResult::default();
+        compare_biggest_classes(&mat, &ours, &mut r);
+        assert_eq!(r.fields.iter().filter(|f| f.tier == Tier::Match).count(), 1);
+        assert_eq!(r.n_fail(), 1); // the missing class
+    }
+
+    // ── package_gap_proof (positive + refutations) ──
+
+    fn our_pkg_map(
+        root: &report::PackageNode,
+    ) -> std::collections::HashMap<String, &report::PackageNode> {
+        use std::collections::HashMap;
+        let mut map: HashMap<String, &report::PackageNode> = HashMap::new();
+        fn walk<'a>(
+            n: &'a report::PackageNode,
+            path: &str,
+            m: &mut HashMap<String, &'a report::PackageNode>,
+        ) {
+            m.insert(path.to_string(), n);
+            for c in &n.children {
+                let cp = if path.is_empty() {
+                    c.name.clone()
+                } else {
+                    format!("{path}.{}", c.name)
+                };
+                walk(c, &cp, m);
+            }
+        }
+        walk(root, "", &mut map);
+        map
+    }
+
+    // Positive: retained delta confined to the java.lang chain, and MAT roots
+    // strictly more top-level dominators on each divergent node -> Some(proof).
+    #[test]
+    fn package_gap_proof_positive() {
+        let root = pkg(
+            "",
+            24,
+            12_187_000,
+            vec![pkg(
+                "java",
+                9,
+                3_000_000,
+                vec![pkg("lang", 6, 2_000_000, vec![])],
+            )],
+        );
+        let map = our_pkg_map(&root);
+        let mut mat = MatReport::default();
+        mat.packages = vec![
+            // root: MAT roots +1 dominator, retained a touch higher.
+            MatPackageRow {
+                depth: 0,
+                segment: String::new(),
+                dotted_path: "".into(),
+                retained: 12_187_072,
+                top_dominators: 25,
+            },
+            MatPackageRow {
+                depth: 1,
+                segment: "java".into(),
+                dotted_path: "java".into(),
+                retained: 3_000_072,
+                top_dominators: 10,
+            },
+            MatPackageRow {
+                depth: 2,
+                segment: "lang".into(),
+                dotted_path: "java.lang".into(),
+                retained: 2_000_072,
+                top_dominators: 7,
+            },
+        ];
+        assert!(package_gap_proof(&mat, &map).is_some());
+    }
+
+    // Refutation A: a divergent package OFF the java.lang chain voids the proof.
+    #[test]
+    fn package_gap_proof_void_off_path() {
+        let root = pkg("", 24, 12_187_000, vec![pkg("scala", 3, 1_500_000, vec![])]);
+        let map = our_pkg_map(&root);
+        let mut mat = MatReport::default();
+        mat.packages = vec![
+            MatPackageRow {
+                depth: 0,
+                segment: String::new(),
+                dotted_path: "".into(),
+                retained: 12_187_000,
+                top_dominators: 24,
+            },
+            // scala diverges — not on java.lang -> void.
+            MatPackageRow {
+                depth: 1,
+                segment: "scala".into(),
+                dotted_path: "scala".into(),
+                retained: 1_500_500,
+                top_dominators: 4,
+            },
+        ];
+        assert!(package_gap_proof(&mat, &map).is_none());
+    }
+
+    // Refutation B: on the java.lang chain but MAT's top-dominator count is NOT
+    // strictly greater than ours (no extra rooted object) -> void.
+    #[test]
+    fn package_gap_proof_void_no_extra_dominator() {
+        let root = pkg("", 24, 12_187_000, vec![pkg("java", 9, 3_000_000, vec![])]);
+        let map = our_pkg_map(&root);
+        let mut mat = MatReport::default();
+        mat.packages = vec![
+            MatPackageRow {
+                depth: 0,
+                segment: String::new(),
+                dotted_path: "".into(),
+                retained: 12_187_000,
+                top_dominators: 24,
+            },
+            // java retained diverges but top_dominators == ours (9) -> not the gap.
+            MatPackageRow {
+                depth: 1,
+                segment: "java".into(),
+                dotted_path: "java".into(),
+                retained: 3_000_500,
+                top_dominators: 9,
+            },
+        ];
+        assert!(package_gap_proof(&mat, &map).is_none());
+    }
+
+    // compare_packages end-to-end: exact package MATCHes, class-leaf (no
+    // counterpart) SKIPs, and the java.lang gap node is EXPLAINABLE.
+    #[test]
+    fn compare_packages_match_skip_and_gap() {
+        let mut ours = base_report(vec![]);
+        ours.top.biggest_packages = pkg(
+            "",
+            24,
+            12_187_000,
+            vec![
+                pkg(
+                    "java",
+                    9,
+                    3_000_000,
+                    vec![pkg("lang", 6, 2_000_000, vec![])],
+                ),
+                pkg("scala", 3, 1_500_000, vec![]),
+            ],
+        );
+        let mut mat = MatReport::default();
+        mat.packages = vec![
+            // root + java + lang diverge with an extra rooted dominator (the gap)
+            MatPackageRow {
+                depth: 0,
+                segment: String::new(),
+                dotted_path: "".into(),
+                retained: 12_187_072,
+                top_dominators: 25,
+            },
+            MatPackageRow {
+                depth: 1,
+                segment: "java".into(),
+                dotted_path: "java".into(),
+                retained: 3_000_072,
+                top_dominators: 10,
+            },
+            MatPackageRow {
+                depth: 2,
+                segment: "lang".into(),
+                dotted_path: "java.lang".into(),
+                retained: 2_000_072,
+                top_dominators: 7,
+            },
+            // scala matches exactly
+            MatPackageRow {
+                depth: 1,
+                segment: "scala".into(),
+                dotted_path: "scala".into(),
+                retained: 1_500_000,
+                top_dominators: 3,
+            },
+            // a class-leaf MAT descends into that we do not model
+            MatPackageRow {
+                depth: 2,
+                segment: "Object".into(),
+                dotted_path: "java.lang.Object".into(),
+                retained: 5,
+                top_dominators: 1,
+            },
+        ];
+        let mut r = DiffResult::default();
+        compare_packages(&mat, &ours, &mut r);
+        assert_eq!(r.n_fail(), 0);
+        // scala -> MATCH
+        assert!(
+            r.fields
+                .iter()
+                .any(|f| f.field.contains("[scala]") && f.tier == Tier::Match)
+        );
+        // root/java/lang -> EXPLAINABLE(MatClassObjectRootingGap)
+        let gap = r
+            .fields
+            .iter()
+            .filter(|f| {
+                matches!(
+                    f.tier,
+                    Tier::Explainable(Explanation::MatClassObjectRootingGap { .. })
+                )
+            })
+            .count();
+        assert_eq!(gap, 3);
+        // class-leaf -> SKIP (NoCounterpart)
+        assert!(
+            r.skipped
+                .iter()
+                .any(|f| f.field.contains("java.lang.Object"))
+        );
+    }
+
+    // ── Leak-suspect thread-variant parse ──
+
+    // Variant 3: "The thread java.lang.Thread @ 0x... keeps local variables with
+    // total size N ..." — the suspect is a bare <strong> (thread name), instance
+    // count is implicitly 1, and the class name is the address-stripped label.
+    #[test]
+    fn parse_leak_suspect_thread_variant() {
+        let html = r####"<html><body>
+            <div id="exp2"><div class="important"><div><p>The thread <strong>java.lang.Thread @ 0x8e7ddc48  main</strong> keeps local variables with total size <strong>309,608 (2.54%)</strong> bytes. The top consumers of its minimum retained heap are <strong><q>java.lang.Object</q></strong> (131,072 instances).</p></div></div></div>
+            </body></html>"####;
+        let mut rep = MatReport::default();
+        parse_leak_suspects(html, &mut rep);
+        assert_eq!(rep.suspects.len(), 1);
+        let s = &rep.suspects[0];
+        assert_eq!(s.class_name, "java.lang.Thread");
+        assert_eq!(s.instance_count, Some(1));
+        assert_eq!(s.retained, 309_608);
+        assert!((s.pct - 2.54).abs() < 1e-9);
+    }
+
+    // ── java.lang.Class suspect exemptions ──
+
+    // A java.lang.Class suspect whose retained (and thus pct) differ from ours is
+    // the documented object-rooting gap -> both fields EXPLAINABLE, zero FAIL.
+    // A non-Class suspect with the same kind of delta FAILs (name-gated).
+    #[test]
+    fn suspect_java_lang_class_retained_and_pct_exempt() {
+        let mut ours = base_report(vec![]);
+        ours.leaks.total_shallow = 12_187_000;
+        let mk = |name: &str, ret: u64| Suspect {
+            is_single: false,
+            pretty_class: name.to_string(),
+            instance_count: 1,
+            retained: ret,
+            shallow: 100,
+            path: vec![],
+            accumulation_obj_1based: None,
+            accumulation_class: None,
+            accumulation_retained: None,
+            dominated: vec![],
+            dominated_by_class: vec![],
+            keywords: vec![],
+            root_type_label: String::new(),
+        };
+        // ours: java.lang.Class retained 1,996,000 -> pct 16.38%; MAT roots
+        // more -> 2,100,000 -> pct 17.23% (differs in the 2nd decimal, so the
+        // pct exemption exercises the MatClassObjectRootingGap branch rather
+        // than the Rounding branch).
+        ours.leaks.suspects = vec![mk("java.lang.Class", 1_996_000)];
+        let mut mat = MatReport::default();
+        mat.suspects = vec![MatSuspect {
+            class_name: "java.lang.Class".into(),
+            instance_count: Some(2793),
+            retained: 2_100_000,
+            // MAT's printed pct is round(MAT_retained / denom).
+            pct: (2_100_000.0 / 12_187_000.0) * 100.0,
+        }];
+        let mut r = DiffResult::default();
+        compare_suspects(&mat, &ours, &mut r);
+        assert_eq!(r.n_fail(), 0);
+        let ret = r
+            .fields
+            .iter()
+            .find(|f| f.field.ends_with("retained"))
+            .unwrap();
+        assert!(matches!(
+            ret.tier,
+            Tier::Explainable(Explanation::MatClassObjectRootingGap { .. })
+        ));
+        let pct = r.fields.iter().find(|f| f.field.ends_with("pct")).unwrap();
+        assert!(matches!(
+            pct.tier,
+            Tier::Explainable(Explanation::MatClassObjectRootingGap { .. })
+        ));
+
+        // The exemption is name-gated: an identical delta on a non-Class suspect
+        // FAILs.
+        ours.leaks.suspects = vec![mk("scala.Foo", 1_996_000)];
+        let mut mat2 = MatReport::default();
+        mat2.suspects = vec![MatSuspect {
+            class_name: "scala.Foo".into(),
+            instance_count: Some(10),
+            retained: 2_100_000,
+            pct: (2_100_000.0 / 12_187_000.0) * 100.0,
+        }];
+        let mut r2 = DiffResult::default();
+        compare_suspects(&mat2, &ours, &mut r2);
+        assert!(r2.n_fail() >= 1);
     }
 }
