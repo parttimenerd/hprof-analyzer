@@ -227,17 +227,22 @@ impl HprofReader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
-    const DUMP_PLAIN: &str = "/home/i560383/test-heapdumps/dump_0_fj-kmeans.hprof";
-    const DUMP_GZ: &str = "/home/i560383/test-heapdumps/ArrayTest_84219_20260624_160147.hprof.gz";
+    // Optional machine-local dumps for smoke tests, supplied via env vars so no
+    // absolute path is baked into the source. Unset => the test no-ops.
+    fn dump_plain() -> Option<String> {
+        std::env::var("HPROF_TEST_DUMP").ok()
+    }
+    fn dump_gz() -> Option<String> {
+        std::env::var("HPROF_TEST_DUMP_GZ").ok()
+    }
 
     #[test]
     fn read_header_plain() {
-        if !Path::new(DUMP_PLAIN).exists() {
+        let Some(dump) = dump_plain() else {
             return;
-        }
-        let r = HprofReader::open(DUMP_PLAIN).unwrap();
+        };
+        let r = HprofReader::open(&dump).unwrap();
         assert!(
             r.id_size == 4 || r.id_size == 8,
             "bad id_size {}",
@@ -253,10 +258,10 @@ mod tests {
 
     #[test]
     fn read_header_gz() {
-        if !Path::new(DUMP_GZ).exists() {
+        let Some(dump) = dump_gz() else {
             return;
-        }
-        let r = HprofReader::open(DUMP_GZ).unwrap();
+        };
+        let r = HprofReader::open(&dump).unwrap();
         assert!(r.id_size == 4 || r.id_size == 8);
         assert!(r.format.starts_with("JAVA PROFILE"));
     }
