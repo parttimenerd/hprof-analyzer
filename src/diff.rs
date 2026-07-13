@@ -752,6 +752,35 @@ fn classify_int(
     }
 }
 
+/// Parse a MAT byte-size display string (e.g. "5 MB", "1.2 GB", "16 GB") into
+/// the inclusive byte band `[lo, hi]` it could represent at its OWN displayed
+/// precision. MAT uses a 1024-based DecimalFormat("#,##0.#"): at most one
+/// fractional digit, trailing zeros dropped, thousands grouped with commas.
+/// The band half-width is half of the last displayed digit's unit (e.g. "1.2
+/// GB" shows tenths of a GB, so ±0.05 GB; "16 GB" shows whole GB, so ±0.5 GB).
+/// Returns None if the string is not a `<number> <unit>` we recognize.
+fn mat_bytes_band(disp: &str) -> Option<(f64, f64)> {
+    let (num, unit) = disp.rsplit_once(' ')?;
+    let scale: f64 = match unit {
+        "B" => 1.0,
+        "KB" => 1024.0,
+        "MB" => 1024.0 * 1024.0,
+        "GB" => 1024.0 * 1024.0 * 1024.0,
+        "TB" => 1024.0 * 1024.0 * 1024.0 * 1024.0,
+        _ => return None,
+    };
+    let cleaned = num.replace(',', "");
+    let value: f64 = cleaned.parse().ok()?;
+    // Number of fractional digits MAT actually printed (0 or 1 for "#,##0.#").
+    let decimals = cleaned
+        .split_once('.')
+        .map(|(_, f)| f.len() as i32)
+        .unwrap_or(0);
+    let half = 0.5 * 10f64.powi(-decimals) * scale;
+    let center = value * scale;
+    Some(((center - half).max(0.0), center + half))
+}
+
 /// Round our exact percentage (retained/denominator*100) to 2 decimals as a
 /// display string, matching MAT's rendering.
 fn pct_string(retained: u64, denom: u64) -> String {
@@ -841,9 +870,28 @@ pub fn compare(mat: &MatReport, ours: &Report) -> DiffResult {
     }
 
     // ── Used heap dump: display-rounding of our reachable shallow ──
+    // MAT formats byte sizes with a Java DecimalFormat("#,##0.#"): 1024-based,
+    // at most ONE fractional digit, trailing zeros dropped ("5 MB", "1.2 GB",
+    // "16 GB"). Our format_bytes emits fixed .1 (KB/MB) / .2 (GB) decimals, so
+    // the two display strings frequently differ textually while representing
+    // the SAME underlying byte count. A strict string-equality test therefore
+    // FAILs benign precision differences (e.g. ours "1.16 GB" vs MAT "1.2 GB").
+    //
+    // We classify EXPLAINABLE(rounding) iff our exact byte count lands inside
+    // the value band MAT's displayed string could represent at its own shown
+    // precision (± half of its last displayed digit). This stays a HARD gate:
+    // a genuinely wrong total_shallow off by more than half MAT's last-digit
+    // unit falls outside the band and still FAILs.
     if let Some(mat_disp) = &mat.used_heap_dump {
         let our_disp = report::format_bytes(ov.total_shallow);
-        if &our_disp == mat_disp {
+        let in_band = &our_disp == mat_disp
+            || mat_bytes_band(mat_disp)
+                .map(|(lo, hi)| {
+                    let b = ov.total_shallow as f64;
+                    b >= lo && b <= hi
+                })
+                .unwrap_or(false);
+        if in_band {
             r.fields.push(FieldDiff::explained(
                 "overview.used_heap_dump",
                 our_disp.clone(),
@@ -1219,6 +1267,72 @@ mod tests {
         assert_eq!(s, "22.87");
         // and the real philosophers case: 2,791,424 / 12,187,000 -> "22.90"
         assert_eq!(pct_string(2_791_424, 12_187_000), "22.90");
+    }
+
+    // 4b. used_heap_dump band-containment: our exact byte count landing inside
+    // MAT's displayed precision band is EXPLAINABLE(rounding), even when our
+    // formatter renders more sig-figs than MAT. Regression for the 7 sweep
+    // FAILs where MAT drops trailing zeros / uses one fewer decimal than ours.
+    #[test]
+    fn used_heap_dump_band_containment() {
+        const GB: f64 = 1024.0 * 1024.0 * 1024.0;
+        const MB: f64 = 1024.0 * 1024.0;
+
+        // helper: a MatReport carrying only used_heap_dump, compared against a
+        // Report whose total_shallow is `bytes`.
+        let classify = |bytes: u64, mat_disp: &str| -> Tier {
+            let mut ours = base_report(vec![]);
+            ours.overview.total_shallow = bytes;
+            let mut mat = MatReport::default();
+            mat.used_heap_dump = Some(mat_disp.to_string());
+            let r = compare(&mat, &ours);
+            r.fields
+                .iter()
+                .find(|f| f.field == "overview.used_heap_dump")
+                .unwrap()
+                .tier
+                .clone()
+        };
+
+        // ours renders "1.16 GB", MAT shows "1.2 GB" -> inside ±0.05 GB band.
+        let b = (1.16 * GB) as u64;
+        assert!(matches!(classify(b, "1.2 GB"), Tier::Explainable(_)));
+
+        // "16.00 GB" (ours) vs "16 GB" (MAT, whole-unit) -> ±0.5 GB band.
+        let b = (16.0 * GB) as u64;
+        assert!(matches!(classify(b, "16 GB"), Tier::Explainable(_)));
+
+        // "5.0 MB" vs "5 MB" trailing-zero difference -> ±0.5 MB band.
+        let b = (5.0 * MB) as u64;
+        assert!(matches!(classify(b, "5 MB"), Tier::Explainable(_)));
+
+        // banker's-rounding case: 3.65 GB rounds to "3.6 GB" under HALF_EVEN;
+        // 3.65 is inside the "3.6 GB" ±0.05 GB band [3.55, 3.65].
+        let b = (3.6499 * GB) as u64;
+        assert!(matches!(classify(b, "3.6 GB"), Tier::Explainable(_)));
+
+        // A genuinely wrong value (off by 0.3 GB at GB scale) is OUTSIDE the
+        // ±0.05 GB band and MUST still FAIL — the gate stays honest.
+        let b = (1.5 * GB) as u64;
+        assert_eq!(classify(b, "1.2 GB"), Tier::Fail);
+    }
+
+    #[test]
+    fn mat_bytes_band_parses() {
+        const GB: f64 = 1024.0 * 1024.0 * 1024.0;
+        // "1.2 GB": tenths precision -> ±0.05 GB.
+        let (lo, hi) = mat_bytes_band("1.2 GB").unwrap();
+        assert!((lo - (1.15 * GB)).abs() < 1.0);
+        assert!((hi - (1.25 * GB)).abs() < 1.0);
+        // "16 GB": whole-unit -> ±0.5 GB.
+        let (lo, hi) = mat_bytes_band("16 GB").unwrap();
+        assert!((lo - (15.5 * GB)).abs() < 1.0);
+        assert!((hi - (16.5 * GB)).abs() < 1.0);
+        // thousands separator tolerated.
+        assert!(mat_bytes_band("1,024 MB").is_some());
+        // unknown unit -> None (never silently passes).
+        assert!(mat_bytes_band("5 PB").is_none());
+        assert!(mat_bytes_band("garbage").is_none());
     }
 
     // 5. MISSING set member disguised as reorder -> FAIL (anti-laundering)
