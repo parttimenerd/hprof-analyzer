@@ -16,6 +16,24 @@ fn class_obj_repr(g: &Graph, i: usize) -> u32 {
         .unwrap_or(u32::MAX)
 }
 
+/// Human-readable label for an HPROF GC-root sub-tag, used by the
+/// GC-roots-by-type breakdown. Mirrors the MAT root-type naming.
+fn gc_root_type_label(ty: u8) -> &'static str {
+    use crate::types::heap;
+    match ty {
+        heap::ROOT_SYSTEM_CLASS => "System Class",
+        heap::ROOT_JNI_GLOBAL => "JNI Global",
+        heap::ROOT_JNI_LOCAL => "JNI Local",
+        heap::ROOT_JAVA_FRAME => "Java Frame",
+        heap::ROOT_NATIVE_STACK => "Native Stack",
+        heap::ROOT_STICKY_CLASS => "Sticky Class",
+        heap::ROOT_THREAD_BLOCK => "Thread Block",
+        heap::ROOT_MONITOR_USED => "Busy Monitor",
+        heap::ROOT_THREAD_OBJ => "Thread",
+        _ => "Unknown",
+    }
+}
+
 /// True iff `name` is a JVM primitive-array class descriptor (`[B`, `[I`, …):
 /// a single `[` followed by one primitive type char. These are boot-loaded
 /// (single loader), so exact-name duplicate rows can be folded safely.
@@ -232,6 +250,14 @@ pub struct HistRow {
     pub retained: u64,
 }
 
+/// One row of the GC-roots-by-type breakdown: a human-readable root-type label
+/// and how many roots carry that HPROF type.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct GcRootTypeRow {
+    pub root_type: String,
+    pub count: u64,
+}
+
 /// Aggregates for the "System Overview" section.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct SystemOverview {
@@ -252,6 +278,10 @@ pub struct SystemOverview {
     pub total_objects: u64,
     pub total_shallow: u64,
     pub gc_roots: u64,
+    /// GC roots broken down by HPROF root type (e.g. "System Class", "Thread",
+    /// "JNI Global"), sorted by count descending then label ascending. Excludes
+    /// synthetic roots the analyzer injects. Empty only when there are no roots.
+    pub gc_roots_by_type: Vec<GcRootTypeRow>,
     pub classes_loaded: u64,
     pub unreachable_count: u64,
     pub unreachable_shallow: u64,
@@ -451,6 +481,38 @@ fn build_system_overview(g: &Graph) -> SystemOverview {
         .gc_root_indices
         .len()
         .saturating_sub(g.synthetic_root_count)) as u64;
+    // Break the roots down by HPROF type. Synthetic roots the analyzer injects
+    // are all ROOT_SYSTEM_CLASS; subtract them from that bucket so the rows sum
+    // to the reported `gc_roots` scalar. Sort by count desc, then label asc.
+    let gc_roots_by_type = {
+        let mut counts: std::collections::HashMap<&'static str, u64> =
+            std::collections::HashMap::new();
+        for &ty in &g.gc_root_types {
+            *counts.entry(gc_root_type_label(ty)).or_insert(0) += 1;
+        }
+        if g.synthetic_root_count > 0 {
+            let sys = gc_root_type_label(crate::types::heap::ROOT_SYSTEM_CLASS);
+            if let Some(c) = counts.get_mut(sys) {
+                *c = c.saturating_sub(g.synthetic_root_count as u64);
+                if *c == 0 {
+                    counts.remove(sys);
+                }
+            }
+        }
+        let mut rows: Vec<GcRootTypeRow> = counts
+            .into_iter()
+            .map(|(root_type, count)| GcRootTypeRow {
+                root_type: root_type.to_string(),
+                count,
+            })
+            .collect();
+        rows.sort_by(|a, b| {
+            b.count
+                .cmp(&a.count)
+                .then_with(|| a.root_type.cmp(&b.root_type))
+        });
+        rows
+    };
     // Count reachable class-dump objects (objects that ARE Java classes, with defined idom)
     let undef_u32 = u32::MAX;
     let classes_loaded = (0..n)
@@ -571,6 +633,7 @@ fn build_system_overview(g: &Graph) -> SystemOverview {
         total_objects,
         total_shallow,
         gc_roots,
+        gc_roots_by_type,
         classes_loaded,
         unreachable_count,
         unreachable_shallow,
@@ -1131,63 +1194,78 @@ fn render_oom_triage(r: &Report, out: &mut String) {
 }
 
 fn render_system_overview(o: &SystemOverview, out: &mut String) {
+    use crate::md::{Align, Table};
     out.push_str("## System Overview\n\n");
     out.push_str("_Reachable-heap totals and the largest classes by retained heap._\n\n");
     out.push_str("### Heap Summary\n\n");
-    out.push_str("| Property | Value |\n");
-    out.push_str("|---|---|\n");
-    out.push_str(&format!("| HPROF format | {} |\n", o.format));
-    out.push_str(&format!("| File size | {} |\n", format_bytes(o.file_size)));
-    out.push_str(&format!(
-        "| Identifier size | {}-bit |\n",
-        o.identifier_size_bits
-    ));
+    let mut summary = Table::new(&["Property", "Value"], &[Align::Left, Align::Left]);
+    summary.row(["HPROF format".into(), o.format.clone()]);
+    summary.row(["File size".into(), format_bytes(o.file_size)]);
+    summary.row([
+        "Identifier size".into(),
+        format!("{}-bit", o.identifier_size_bits),
+    ]);
     if let Some(coops) = o.compressed_oops {
-        out.push_str(&format!(
-            "| Compressed OOPs | {} |\n",
-            if coops { "yes" } else { "no" }
-        ));
+        summary.row([
+            "Compressed OOPs".into(),
+            if coops { "yes" } else { "no" }.into(),
+        ]);
     }
     if let Some(ms) = o.dump_creation {
-        out.push_str(&format!("| Dump created | {} |\n", format_epoch_ms(ms)));
+        summary.row(["Dump created".into(), format_epoch_ms(ms)]);
     }
-    out.push_str(&format!(
-        "| Total objects | {} |\n",
-        fmt_count(o.total_objects)
-    ));
-    out.push_str(&format!(
-        "| Total shallow heap | {} |\n",
-        format_bytes(o.total_shallow)
-    ));
-    out.push_str(&format!("| GC roots | {} |\n", fmt_count(o.gc_roots)));
-    out.push_str(&format!(
-        "| Classes loaded | {} |\n",
-        fmt_count(o.classes_loaded)
-    ));
+    summary.row(["Total objects".into(), fmt_count(o.total_objects)]);
+    summary.row(["Total shallow heap".into(), format_bytes(o.total_shallow)]);
+    summary.row(["GC roots".into(), fmt_count(o.gc_roots)]);
+    summary.row(["Classes loaded".into(), fmt_count(o.classes_loaded)]);
     if o.unreachable_count > 0 {
-        out.push_str(&format!(
-            "| Unreachable objects (excluded) | {} ({}) |\n",
-            fmt_count(o.unreachable_count),
-            format_bytes(o.unreachable_shallow),
-        ));
+        summary.row([
+            "Unreachable objects (excluded)".into(),
+            format!(
+                "{} ({})",
+                fmt_count(o.unreachable_count),
+                format_bytes(o.unreachable_shallow),
+            ),
+        ]);
     }
+    summary.render(out);
     out.push('\n');
 
+    // GC roots by type: only worth a table when there is more than one type
+    // (a single-type breakdown restates the "GC roots" scalar above).
+    if o.gc_roots_by_type.len() > 1 {
+        out.push_str("### GC Roots by Type\n\n");
+        let mut t = Table::new(&["Root Type", "Count"], &[Align::Left, Align::Right]);
+        for row in &o.gc_roots_by_type {
+            t.row([row.root_type.clone(), fmt_count(row.count)]);
+        }
+        t.render(out);
+        out.push('\n');
+    }
+
     out.push_str("### Class Histogram (by Retained Heap)\n\n");
-    out.push_str("| # | Class | Instances | Shallow Heap | Retained Heap |\n");
-    out.push_str("|---|---|---:|---:|---:|\n");
+    let mut hist = Table::new(
+        &["#", "Class", "Instances", "Shallow Heap", "Retained Heap"],
+        &[
+            Align::Left,
+            Align::Left,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+        ],
+    );
     // The model carries the FULL histogram; the Markdown view shows the top 50
     // rows for readability. The complete data lives in the JSON output.
     for (rank, row) in o.histogram.iter().take(50).enumerate() {
-        out.push_str(&format!(
-            "| {} | `{}` | {} | {} | {} |\n",
-            rank + 1,
-            row.pretty_class,
+        hist.row([
+            (rank + 1).to_string(),
+            format!("`{}`", row.pretty_class),
             fmt_count(row.instances),
             format_bytes(row.shallow),
             fmt_count(row.retained),
-        ));
+        ]);
     }
+    hist.render(out);
     out.push('\n');
 }
 
@@ -1262,111 +1340,129 @@ fn render_leak_suspects(l: &LeakSuspects, out: &mut String) {
 
         // Accumulated objects (immediately dominated by the accumulation point).
         if !s.dominated.is_empty() {
+            use crate::md::{Align, Table};
             out.push_str(&format!(
                 "**Accumulated objects (top {} by retained heap):**\n\n",
                 s.dominated.len(),
             ));
-            out.push_str("| Object Index | Class | Shallow | Retained |\n");
-            out.push_str("|---|---|---:|---:|\n");
+            let mut t = Table::new(
+                &["Object Index", "Class", "Shallow", "Retained"],
+                &[Align::Left, Align::Left, Align::Right, Align::Right],
+            );
             for row in &s.dominated {
-                out.push_str(&format!(
-                    "| {} | `{}` | {} | {} |\n",
-                    row.obj_index_1based,
-                    row.display_class,
+                t.row([
+                    row.obj_index_1based.to_string(),
+                    format!("`{}`", row.display_class),
                     format_bytes(row.shallow),
                     format_bytes(row.retained),
-                ));
+                ]);
             }
+            t.render(out);
             out.push('\n');
         }
 
         // By-class histogram of the accumulated objects.
         if !s.dominated_by_class.is_empty() {
+            use crate::md::{Align, Table};
             out.push_str("**Accumulated objects by class:**\n\n");
-            out.push_str("| Class | Objects | Shallow | Retained |\n");
-            out.push_str("|---|---:|---:|---:|\n");
+            let mut t = Table::new(
+                &["Class", "Objects", "Shallow", "Retained"],
+                &[Align::Left, Align::Right, Align::Right, Align::Right],
+            );
             for row in &s.dominated_by_class {
-                out.push_str(&format!(
-                    "| `{}` | {} | {} | {} |\n",
-                    row.pretty_class,
+                t.row([
+                    format!("`{}`", row.pretty_class),
                     fmt_count(row.instances),
                     format_bytes(row.shallow),
                     format_bytes(row.retained),
-                ));
+                ]);
             }
+            t.render(out);
             out.push('\n');
         }
     }
 }
 
 fn render_top_consumers(t: &TopConsumers, total_shallow: u64, out: &mut String) {
+    use crate::md::{Align, Table};
     out.push_str("## Top Consumers\n\n");
     out.push_str("### Biggest Objects (Top-Level Dominators)\n\n");
-    out.push_str("| # | Object Index | Class | Shallow | Retained |\n");
-    out.push_str("|---|---|---|---:|---:|\n");
-
+    let mut objs = Table::new(
+        &["#", "Object Index", "Class", "Shallow", "Retained"],
+        &[
+            Align::Left,
+            Align::Left,
+            Align::Left,
+            Align::Right,
+            Align::Right,
+        ],
+    );
     for (rank, row) in t.biggest_objects.iter().enumerate() {
-        out.push_str(&format!(
-            "| {} | {} | `{}` | {} | {} ({:.1}%) |\n",
-            rank + 1,
-            row.obj_index_1based,
-            row.display_class,
+        let pct = if total_shallow > 0 {
+            row.retained as f64 / total_shallow as f64 * 100.0
+        } else {
+            0.0
+        };
+        objs.row([
+            (rank + 1).to_string(),
+            row.obj_index_1based.to_string(),
+            format!("`{}`", row.display_class),
             format_bytes(row.shallow),
-            format_bytes(row.retained),
-            if total_shallow > 0 {
-                row.retained as f64 / total_shallow as f64 * 100.0
-            } else {
-                0.0
-            },
-        ));
+            format!("{} ({:.1}%)", format_bytes(row.retained), pct),
+        ]);
     }
+    objs.render(out);
     out.push('\n');
 
     out.push_str("### Biggest Classes by Retained Heap\n\n");
-    out.push_str("| # | Class | Instances | Retained Heap |\n");
-    out.push_str("|---|---|---:|---:|\n");
+    let mut classes = Table::new(
+        &["#", "Class", "Instances", "Retained Heap"],
+        &[Align::Left, Align::Left, Align::Right, Align::Right],
+    );
     for (rank, row) in t.biggest_classes.iter().enumerate() {
-        out.push_str(&format!(
-            "| {} | `{}` | {} | {} |\n",
-            rank + 1,
-            row.pretty_class,
+        classes.row([
+            (rank + 1).to_string(),
+            format!("`{}`", row.pretty_class),
             fmt_count(row.instances),
             format_bytes(row.retained),
-        ));
+        ]);
     }
+    classes.render(out);
     out.push('\n');
 
     out.push_str("### Biggest Packages by Retained Heap\n\n");
-    out.push_str("| Package | Objects | Shallow | Retained |\n");
-    out.push_str("|---|---:|---:|---:|\n");
     if t.biggest_packages.children.is_empty() {
         out.push_str("_No package retains more than 1% of the total retained heap._\n");
         out.push('\n');
         return;
     }
+    let mut pkgs = Table::new(
+        &["Package", "Objects", "Shallow", "Retained"],
+        &[Align::Left, Align::Right, Align::Right, Align::Right],
+    );
     // Pre-order DFS; the displayed name is the full dotted path accumulated
     // down from the root, so each row is self-describing (no tree-drawing chars).
-    fn emit_node(node: &PackageNode, prefix: &str, out: &mut String) {
+    fn emit_node(node: &PackageNode, prefix: &str, pkgs: &mut Table) {
         let full = if prefix.is_empty() {
             node.name.clone()
         } else {
             format!("{}.{}", prefix, node.name)
         };
-        out.push_str(&format!(
-            "| `{}` | {} | {} | {} |\n",
-            full,
+        pkgs.row([
+            format!("`{}`", full),
             fmt_count(node.top_dominator_count),
             format_bytes(node.shallow_heap),
             format_bytes(node.retained_heap),
-        ));
+        ]);
         for child in &node.children {
-            emit_node(child, &full, out);
+            emit_node(child, &full, pkgs);
         }
     }
     // Skip the synthetic root (name ""); start emitting at its children.
     for child in &t.biggest_packages.children {
-        emit_node(child, "", out);
+        emit_node(child, "", &mut pkgs);
     }
+    pkgs.render(out);
     out.push('\n');
 }
 
@@ -1562,6 +1658,63 @@ mod tests {
         assert_eq!(o.histogram[1].retained, 1000);
         assert_eq!(o.histogram[2].pretty_class, "org.bar.C");
         assert_eq!(o.histogram[2].retained, 200);
+    }
+
+    /// GC-roots-by-type breakdown: counts each reachable root by its HPROF
+    /// sub-tag label, subtracts the synthetic System-Class roots (so the rows
+    /// sum to the reported `gc_roots` scalar), and sorts count-desc / label-asc.
+    #[test]
+    fn test_gc_roots_by_type_breakdown() {
+        use crate::types::heap;
+        let (mut g, dc_off, dc_tgt) = fixture();
+        // fixture() has 3 reachable roots (obj0, obj1, obj3). Give them types:
+        // two System Class (one of which is synthetic) + one Thread. With
+        // synthetic_root_count = 1, the synthetic System Class root is removed,
+        // leaving System Class = 1 and Thread = 1.
+        g.gc_root_types = vec![
+            heap::ROOT_SYSTEM_CLASS,
+            heap::ROOT_SYSTEM_CLASS,
+            heap::ROOT_THREAD_OBJ,
+        ];
+        g.synthetic_root_count = 1;
+
+        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let o = &r.overview;
+        // Scalar: 3 roots - 1 synthetic = 2.
+        assert_eq!(o.gc_roots, 2);
+        // Rows must sum to the scalar.
+        let sum: u64 = o.gc_roots_by_type.iter().map(|r| r.count).sum();
+        assert_eq!(sum, o.gc_roots);
+        // Sorted count-desc, then label-asc: both have count 1, so "System
+        // Class" (S) precedes "Thread" (T) alphabetically.
+        assert_eq!(o.gc_roots_by_type.len(), 2);
+        assert_eq!(o.gc_roots_by_type[0].root_type, "System Class");
+        assert_eq!(o.gc_roots_by_type[0].count, 1);
+        assert_eq!(o.gc_roots_by_type[1].root_type, "Thread");
+        assert_eq!(o.gc_roots_by_type[1].count, 1);
+    }
+
+    /// When every synthetic root fills a label bucket exactly, that bucket must
+    /// be dropped (not left at count 0).
+    #[test]
+    fn test_gc_roots_by_type_drops_emptied_bucket() {
+        use crate::types::heap;
+        let (mut g, dc_off, dc_tgt) = fixture();
+        // 3 roots: 1 System Class (synthetic) + 2 JNI Global. Removing the 1
+        // synthetic System Class empties that bucket entirely.
+        g.gc_root_types = vec![
+            heap::ROOT_SYSTEM_CLASS,
+            heap::ROOT_JNI_GLOBAL,
+            heap::ROOT_JNI_GLOBAL,
+        ];
+        g.synthetic_root_count = 1;
+
+        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let o = &r.overview;
+        assert_eq!(o.gc_roots, 2);
+        assert_eq!(o.gc_roots_by_type.len(), 1);
+        assert_eq!(o.gc_roots_by_type[0].root_type, "JNI Global");
+        assert_eq!(o.gc_roots_by_type[0].count, 2);
     }
 
     /// Regression: MAT counts the class histogram BY OBJECT TYPE, so every

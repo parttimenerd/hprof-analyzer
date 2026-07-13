@@ -1118,6 +1118,7 @@ mod tests {
                 total_objects: 10,
                 total_shallow: 1000,
                 gc_roots: 5,
+                gc_roots_by_type: vec![],
                 classes_loaded: 3,
                 unreachable_count: 0,
                 unreachable_shallow: 0,

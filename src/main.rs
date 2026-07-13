@@ -4,6 +4,7 @@ mod cvec;
 mod diff;
 mod dominator;
 mod id_map;
+mod md;
 mod pass1;
 mod pass2;
 mod reader;

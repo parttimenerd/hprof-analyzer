@@ -84,6 +84,24 @@
         "retained"
       ]
     },
+    "GcRootTypeRow": {
+      "description": "One row of the GC-roots-by-type breakdown: a human-readable root-type label\nand how many roots carry that HPROF type.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "root_type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "root_type",
+        "count"
+      ]
+    },
     "HistRow": {
       "description": "One row of the System-Overview class histogram (full, one row per class).",
       "type": "object",
@@ -374,6 +392,13 @@
           "format": "uint64",
           "minimum": 0
         },
+        "gc_roots_by_type": {
+          "description": "GC roots broken down by HPROF root type (e.g. \"System Class\", \"Thread\",\n\"JNI Global\"), sorted by count descending then label ascending. Excludes\nsynthetic roots the analyzer injects. Empty only when there are no roots.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GcRootTypeRow"
+          }
+        },
         "histogram": {
           "type": "array",
           "items": {
@@ -428,6 +453,7 @@
         "total_objects",
         "total_shallow",
         "gc_roots",
+        "gc_roots_by_type",
         "classes_loaded",
         "unreachable_count",
         "unreachable_shallow",
