@@ -1,0 +1,48 @@
+:root {
+  --bg: #ffffff;
+  --fg: #1a1a1a;
+  --muted: #666;
+  --border: #e2e2e2;
+  --card: #f7f7f8;
+  --accent: #2563eb;
+  --warn-bg: #fff4e5;
+  --warn-border: #f0b429;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16181c;
+    --fg: #e7e7e7;
+    --muted: #9aa0aa;
+    --border: #2c2f36;
+    --card: #1e2127;
+    --accent: #60a5fa;
+    --warn-bg: #2a2318;
+    --warn-border: #b8860b;
+  }
+}
+
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); }
+.app { max-width: 1080px; margin: 0 auto; padding: 1.5rem 1.25rem 4rem; }
+h1 { font-size: 1.6rem; margin: 0 0 0.25rem; }
+h2 { font-size: 1.25rem; margin: 2rem 0 0.75rem; border-bottom: 1px solid var(--border); padding-bottom: 0.35rem; }
+h3 { font-size: 1.02rem; margin: 1.25rem 0 0.5rem; }
+.subtitle { color: var(--muted); font-size: 0.85rem; margin: 0 0 1rem; }
+.oom { background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 8px; padding: 1rem 1.25rem; margin: 0 0 1.5rem; }
+.oom h2 { border: none; margin: 0 0 0.5rem; }
+.oom ul { margin: 0; padding-left: 1.1rem; }
+.oom li { margin: 0.3rem 0; line-height: 1.45; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; background: var(--card); padding: 0.05rem 0.3rem; border-radius: 4px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.86rem; margin: 0.5rem 0 1rem; }
+th, td { text-align: left; padding: 0.35rem 0.6rem; border-bottom: 1px solid var(--border); }
+th { color: var(--muted); font-weight: 600; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem 1rem; margin: 0.75rem 0; }
+.summary-grid { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1.5rem; font-size: 0.9rem; }
+.summary-grid dt { color: var(--muted); }
+.summary-grid dd { margin: 0; }
+.chart-wrap { margin: 0.5rem 0 1rem; }
+details { margin: 0.5rem 0; }
+summary { cursor: pointer; color: var(--accent); font-size: 0.85rem; }
+.suspect { border-left: 3px solid var(--accent); padding-left: 0.9rem; margin: 1rem 0; }
+.pill { display: inline-block; background: var(--card); border: 1px solid var(--border); border-radius: 999px; padding: 0.05rem 0.55rem; font-size: 0.75rem; color: var(--muted); margin-left: 0.4rem; }
