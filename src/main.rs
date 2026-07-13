@@ -1,75 +1,213 @@
 mod bitset;
 mod chunkvec;
 mod cvec;
+mod diff;
+mod diff_reports;
 mod dominator;
 mod id_map;
+mod md;
+#[cfg(test)]
+mod md_test;
 mod pass1;
 mod pass2;
 mod reader;
 mod report;
 mod retained;
 mod rpo_dfs;
+mod sweep;
 mod trace;
 mod types;
 mod vbyte;
 
-use std::{env, io, process, time::Instant};
+use std::{io, process, time::Instant};
 
 use pass1::Pass1;
 
-fn main() {
-    let args: Vec<String> = env::args().collect();
+/// Output format for the analysis report.
+#[derive(Clone, Copy, PartialEq)]
+enum OutputFormat {
+    Md,
+    Json,
+}
 
-    let mut dump_json = false;
-    let mut verbose = false;
-    let mut compress = cvec::Codec::Deflate9;
-    let mut positional: Vec<&str> = Vec::new();
-    for arg in args.iter().skip(1) {
-        match arg.as_str() {
-            "--dump-json" => dump_json = true,
-            "--verbose" | "-v" => verbose = true,
-            "--trace-rss" => trace::set_enabled(true),
-            s if s.starts_with("--compress=") => {
-                let val = &s["--compress=".len()..];
-                match cvec::Codec::parse(val) {
-                    Some(c) => compress = c,
-                    None => {
-                        eprintln!("unknown --compress codec '{val}' (use: none, deflate9)");
-                        process::exit(1);
-                    }
-                }
-            }
-            _ => positional.push(arg.as_str()),
+use clap::{Parser, Subcommand, ValueEnum};
+
+#[derive(Parser)]
+#[command(
+    name = "hprof-analyzer",
+    version,
+    about = "Analyze Java HPROF heap dumps (Eclipse MAT parity)"
+)]
+struct Cli {
+    #[command(subcommand)]
+    cmd: Cmd,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    /// Analyze a heap dump and write a report (Markdown or JSON)
+    Analyze {
+        input: String,
+        output: Option<String>,
+        #[arg(short, long, value_enum, default_value_t = FormatArg::Md)]
+        format: FormatArg,
+        #[arg(short, long, value_enum, default_value_t = CompressArg::Deflate9)]
+        compress: CompressArg,
+        #[arg(long)]
+        leak_children_cap: Option<usize>,
+        #[arg(short, long)]
+        verbose: bool,
+        #[arg(long)]
+        trace_rss: bool,
+    },
+    /// Compare a MAT report against our canonical JSON (exit 2 on FAIL)
+    Diff {
+        mat: String,
+        ours: String,
+        #[arg(short, long, value_enum, default_value_t = FormatArg::Md)]
+        format: FormatArg,
+    },
+    /// Cross-dump growth diff: compare two canonical Report JSONs (A=baseline, B=current)
+    DiffReports {
+        /// Baseline (earlier) Report JSON, or "-" for stdin
+        a: String,
+        /// Current (later) Report JSON
+        b: String,
+        #[arg(short, long, value_enum, default_value_t = FormatArg::Md)]
+        format: FormatArg,
+    },
+    /// Render a saved canonical Report JSON to Markdown or JSON
+    Render {
+        /// Path to a Report JSON, or "-" for stdin
+        input: String,
+        #[arg(short, long, value_enum, default_value_t = FormatArg::Md)]
+        format: FormatArg,
+    },
+    /// Developer / diagnostic commands
+    Dev {
+        #[command(subcommand)]
+        cmd: DevCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum DevCmd {
+    /// Print the JSON Schema of the report model
+    EmitSchema,
+    /// Aggregate per-dump *.diff.json files into a gate report (exit 2 on gate-fail)
+    SweepAggregate { dir: String },
+    /// Dump pass-1 parse stats as JSON
+    DumpPass1 { input: String },
+}
+
+#[derive(Clone, Copy, PartialEq, ValueEnum)]
+enum FormatArg {
+    Md,
+    Json,
+}
+
+#[derive(Clone, Copy, PartialEq, ValueEnum)]
+enum CompressArg {
+    None,
+    Deflate9,
+}
+
+impl From<FormatArg> for OutputFormat {
+    fn from(f: FormatArg) -> Self {
+        match f {
+            FormatArg::Md => OutputFormat::Md,
+            FormatArg::Json => OutputFormat::Json,
         }
     }
-
-    if positional.is_empty() {
-        eprintln!(
-            "usage: hprof-analyzer [--verbose] [--dump-json] [--trace-rss] [--compress=none|deflate9] <file.hprof[.gz]> [output.md]"
-        );
-        process::exit(1);
+}
+impl From<CompressArg> for cvec::Codec {
+    fn from(c: CompressArg) -> Self {
+        match c {
+            CompressArg::None => cvec::Codec::None,
+            CompressArg::Deflate9 => cvec::Codec::Deflate9,
+        }
     }
+}
 
-    let input = positional[0];
-    let output = positional.get(1).copied();
-
-    if dump_json {
-        match dump_pass1_json(input) {
-            Ok(()) => {}
-            Err(e) => {
+fn main() {
+    let cli = Cli::parse();
+    match cli.cmd {
+        Cmd::Analyze {
+            input,
+            output,
+            format,
+            compress,
+            leak_children_cap,
+            verbose,
+            trace_rss,
+        } => {
+            if trace_rss {
+                trace::set_enabled(true);
+            }
+            let cap = leak_children_cap.unwrap_or(report::DOMINATED_CAP);
+            if let Err(e) = run(
+                &input,
+                output.as_deref(),
+                format.into(),
+                verbose,
+                compress.into(),
+                cap,
+            ) {
                 eprintln!("Error: {e}");
                 process::exit(1);
             }
         }
-        return;
-    }
-
-    match run(input, output, verbose, compress) {
-        Ok(()) => {}
-        Err(e) => {
-            eprintln!("Error: {e}");
-            process::exit(1);
+        Cmd::Diff { mat, ours, format } => {
+            let json_out = OutputFormat::from(format) == OutputFormat::Json;
+            match diff::run_diff(&mat, &ours, json_out) {
+                Ok(true) => {}
+                Ok(false) => process::exit(2),
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    process::exit(1);
+                }
+            }
         }
+        Cmd::DiffReports { a, b, format } => match diff_reports::run(&a, &b, format.into()) {
+            Ok(text) => print!("{text}"),
+            Err(e) => {
+                eprintln!("Error: {e}");
+                process::exit(1);
+            }
+        },
+        Cmd::Render { input, format } => match render_report(&input, format.into()) {
+            Ok(text) => print!("{text}"),
+            Err(e) => {
+                eprintln!("Error: {e}");
+                process::exit(1);
+            }
+        },
+        Cmd::Dev { cmd } => match cmd {
+            DevCmd::EmitSchema => {
+                let schema = schemars::schema_for!(report::Report);
+                match serde_json::to_string_pretty(&schema) {
+                    Ok(js) => println!("{js}"),
+                    Err(e) => {
+                        eprintln!("Error: {e}");
+                        process::exit(1);
+                    }
+                }
+            }
+            DevCmd::SweepAggregate { dir } => match sweep::run_aggregate(&dir) {
+                Ok(true) => {}
+                Ok(false) => process::exit(2),
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    process::exit(1);
+                }
+            },
+            DevCmd::DumpPass1 { input } => {
+                if let Err(e) = dump_pass1_json(&input) {
+                    eprintln!("Error: {e}");
+                    process::exit(1);
+                }
+            }
+        },
     }
 }
 
@@ -105,7 +243,45 @@ fn log(verbose: bool, phase: &str, elapsed: f64) {
     }
 }
 
-fn run(input: &str, output: Option<&str>, verbose: bool, compress: cvec::Codec) -> io::Result<()> {
+fn render_report(path: &str, format: OutputFormat) -> io::Result<String> {
+    use std::io::Read;
+    let json = if path == "-" {
+        let mut buf = String::new();
+        io::stdin().read_to_string(&mut buf)?;
+        buf
+    } else {
+        std::fs::read_to_string(path)?
+    };
+    let report: report::Report = serde_json::from_str(&json).map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid report JSON: {e}"),
+        )
+    })?;
+    if report.schema_version != report::SCHEMA_VERSION {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "report schema_version {} does not match supported version {}; refusing to render",
+                report.schema_version,
+                report::SCHEMA_VERSION
+            ),
+        ));
+    }
+    Ok(match format {
+        OutputFormat::Md => report::render_markdown(&report),
+        OutputFormat::Json => serde_json::to_string_pretty(&report).map_err(io::Error::other)?,
+    })
+}
+
+fn run(
+    input: &str,
+    output: Option<&str>,
+    format: OutputFormat,
+    verbose: bool,
+    compress: cvec::Codec,
+    leak_children_cap: usize,
+) -> io::Result<()> {
     let t_total = Instant::now();
 
     let t = Instant::now();
@@ -226,25 +402,39 @@ fn run(input: &str, output: Option<&str>, verbose: bool, compress: cvec::Codec) 
     log(verbose, "retained", t.elapsed().as_secs_f64());
 
     let t = Instant::now();
-    let mut md = String::new();
-    crate::trace::probe("report: before system_overview");
-    md.push_str(&report::system_overview(&g));
-    crate::trace::probe("report: after system_overview");
-    g.has_same_class_ancestor = crate::bitset::Bitset::default(); // only system_overview reads it
-    md.push_str(&report::leak_suspects(&g, &dc_off, &dc_tgt));
-    crate::trace::probe("report: after leak_suspects");
+    crate::trace::probe("report: before build_model");
+    // build_model reads has_same_class_ancestor (system-overview group) and
+    // dc_off/dc_tgt (leak-suspect group) and stores only bounded aggregates,
+    // so both can be freed immediately after it returns.
+    let report = report::build_model(&g, &dc_off, &dc_tgt, leak_children_cap);
+    crate::trace::probe("report: after build_model");
+    g.has_same_class_ancestor = crate::bitset::Bitset::default(); // consumed by build_model
     drop(dc_off);
     drop(dc_tgt);
     crate::trace::trim();
-    md.push_str(&report::top_consumers(&g));
-    crate::trace::probe("report: after top_consumers");
+    let out_text = match format {
+        OutputFormat::Md => {
+            let md = report::render_markdown(&report);
+            crate::trace::probe("report: after render_markdown");
+            md
+        }
+        OutputFormat::Json => {
+            // serde_json over a struct preserves field declaration order and
+            // carries no f64 (pct is #[serde(skip)]), so output is
+            // deterministic. The model holds only KB-scale aggregates, so
+            // serialization is trivially RSS-safe even for huge dumps.
+            let js = serde_json::to_string_pretty(&report).map_err(io::Error::other)?;
+            crate::trace::probe("report: after serialize_json");
+            js
+        }
+    };
     log(verbose, "report", t.elapsed().as_secs_f64());
 
     match output {
         Some(path) => {
-            std::fs::write(path, &md).map_err(|e| io::Error::new(e.kind(), e))?;
+            std::fs::write(path, &out_text).map_err(|e| io::Error::new(e.kind(), e))?;
         }
-        None => print!("{}", md),
+        None => print!("{}", out_text),
     }
 
     log(verbose, "total", t_total.elapsed().as_secs_f64());

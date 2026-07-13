@@ -24,7 +24,24 @@ pub struct Graph {
     pub format: String,
     pub file_size: u64,
     pub source_name: String,
+    /// Full path/name the dump was opened from (Pass1::run's `path`). Distinct
+    /// from `source_name`, which is only the file basename.
+    pub file_path: String,
+    /// HPROF identifier size in bytes (4 or 8), straight from the header.
+    pub id_size: u8,
+    /// Object-reference size in bytes as detected in pass2. Equals `id_size`
+    /// unless compressed OOPs shrink 8-byte ids to 4-byte refs.
+    pub ref_size: u8,
+    /// Header base timestamp (millis since Unix epoch), 0 if absent/unknown.
+    pub header_timestamp_ms: u64,
     pub gc_root_indices: Vec<u32>,
+    /// Per-root HPROF sub-tag, aligned 1:1 with `gc_root_indices` (same order).
+    /// A representative type when an index has multiple root records (the
+    /// minimum sub-tag, deterministically). `heap::ROOT_SYSTEM_CLASS` (0x00)
+    /// marks synthetic system-class roots. Powers `gc_roots_by_type` (B1) and
+    /// the default why-alive line, so it is carried unconditionally.
+    #[allow(dead_code)]
+    pub gc_root_types: Vec<u8>,
     pub shallow: Vec<u32>,
     pub class_idx: Vec<u32>,
     pub class_names: Vec<String>,
@@ -35,6 +52,13 @@ pub struct Graph {
     /// Number of GC roots added synthetically (system class roots, etc.)
     /// Reported GC roots = gc_root_indices.len() - synthetic_root_count
     pub synthetic_root_count: usize,
+    /// MAT-formula instance shallow size of `java/lang/ClassLoader`, if that
+    /// class exists in the dump. MAT materializes a synthetic bootstrap
+    /// `<system class loader>` object at address 0x0 (no HPROF record) of this
+    /// class; the report layer injects one such object's count + shallow so
+    /// `total_objects`/`total_shallow` match MAT bit-exactly. `None` = the
+    /// class is absent, inject nothing.
+    pub system_classloader_shallow: Option<u32>,
     // Filled by later passes
     pub idom: Vec<u32>,
     pub retained: Vec<u64>,
@@ -453,6 +477,52 @@ fn prim_array_class_name(elem_type_code: u8) -> &'static str {
     }
 }
 
+/// True iff `name` is a JVM primitive-array class descriptor: a single `[`
+/// followed by exactly one primitive type char (`Z C F D S I J B`), length 2.
+/// Object-array (`[Ljava/lang/String;`) and multi-dim (`[[I`) names are false.
+fn is_primitive_array_class_name(name: &str) -> bool {
+    name.len() == 2
+        && name.as_bytes()[0] == b'['
+        && matches!(
+            name.as_bytes()[1],
+            b'Z' | b'C' | b'F' | b'D' | b'S' | b'I' | b'J' | b'B'
+        )
+}
+
+/// Decide whether a boot-loader (loader_id==0) class object should be added as
+/// a synthetic SYSTEM_CLASS GC root, mirroring MAT's
+/// `HprofParserHandlerImpl.fillIn` `addSystemClassRootsIfMissing` behaviour.
+///
+/// MAT (fillIn, lines 679-699) only runs its class-rooting loop when NO
+/// system-class (sticky) roots were found in the dump; that loop roots
+/// boot-loader classes that are **not array types** and not already roots.
+/// When sticky-class roots ARE present (`has_sticky` == true, the normal HPROF
+/// case), MAT roots NOTHING here — boot-loader classes are reached via the real
+/// sticky roots + structural edges. Rooting non-array boot classes
+/// unconditionally over-marks objects MAT discards as unreachable garbage
+/// (the big-dump +4,645-object / +452-class frontier divergence).
+///
+/// The one deliberate deviation: instance-less **primitive-array** class
+/// objects (`[Z [C [F [D [S [I [J [B`) are ALWAYS rooted. MAT's dominator tree
+/// root-attaches those metadata objects even without an explicit GC root; this
+/// is the empirically-verified "Group B" mirror needed for small-dump parity,
+/// and it has no effect on dumps that already reach those classes via live
+/// instances.
+fn should_add_system_class_root(is_array: bool, is_prim_array: bool, has_sticky: bool) -> bool {
+    if is_prim_array {
+        // Group B: always root the instance-less primitive-array metadata objects.
+        return true;
+    }
+    if is_array {
+        // Object arrays / multi-dim arrays: never synthetically rooted — MAT's
+        // fillIn guard is `!clazz.isArrayType()`.
+        return false;
+    }
+    // Non-array boot-loader class: root it only when MAT would, i.e. only when
+    // the dump has no sticky (SYSTEM_CLASS) roots of its own.
+    !has_sticky
+}
+
 // ── Pass2 main logic ───────────────────────────────────────────────────────
 
 pub struct Pass2;
@@ -682,6 +752,42 @@ impl Pass2 {
         }
         let _ = jlc_idx;
 
+        // TEMP DEBUG (env-gated, inert by default): dump every class-object
+        // index -> address so a downstream reachability dump can join by index.
+        if std::env::var_os("EXP_DUMP_CLASS_ADDRS").is_some() {
+            use std::io::Write as _;
+            if let Ok(f) = std::fs::File::create("/tmp/ours_class_idx_addr.txt") {
+                let mut w = std::io::BufWriter::new(f);
+                for &i in class_obj_class_idx.keys() {
+                    let _ = writeln!(w, "{} 0x{:x}", i, p1.id_map.addr_at(i as usize));
+                }
+            }
+            // Also probe the 9 MAT-only addresses against the FULL id_map (any
+            // object kind) and against class_map (parsed CLASS_DUMP records).
+            if let Ok(f) = std::fs::File::create("/tmp/ours_probe9.txt") {
+                let mut w = std::io::BufWriter::new(f);
+                for a in [
+                    0xffe7f6f8u64,
+                    0xffe7f768,
+                    0xffe7f7d8,
+                    0xffe7f848,
+                    0xffe7f8b8,
+                    0xffe7f928,
+                    0xffe7f998,
+                    0xffe7fa08,
+                    0xffe7fa78,
+                ] {
+                    let in_idmap = p1.id_map.index_of(a).is_some();
+                    let in_classmap = p1.class_map.contains_key(&a);
+                    let _ = writeln!(
+                        w,
+                        "0x{:x} in_idmap={} in_classmap={}",
+                        a, in_idmap, in_classmap
+                    );
+                }
+            }
+        }
+
         // Ensure no zero shallow sizes for instances/arrays (fall back to minimum).
         // Class objects (kind==3) are exempt: MAT reports 0 shallow for a class
         // whose static-field bytes sum to 0 (e.g. array classes like ), so we
@@ -695,9 +801,16 @@ impl Pass2 {
 
         // ── Phase 2: Build GC root indices ───────────────────────────────
         let mut gc_root_set: std::collections::HashSet<u32> = std::collections::HashSet::new();
-        for &addr in &p1.gc_root_addrs {
+        // Per-index representative root type (minimum sub-tag when an index has
+        // several root records), carried into Graph for B1 grouping + why-alive.
+        let mut root_type_of: std::collections::HashMap<u32, u8> = std::collections::HashMap::new();
+        let note_type = |m: &mut std::collections::HashMap<u32, u8>, idx: u32, ty: u8| {
+            m.entry(idx).and_modify(|e| *e = (*e).min(ty)).or_insert(ty);
+        };
+        for (&addr, &ty) in p1.gc_root_addrs.iter().zip(p1.gc_root_types.iter()) {
             if let Some(idx) = p1.id_map.index_of(addr) {
                 gc_root_set.insert(idx as u32);
+                note_type(&mut root_type_of, idx as u32, ty);
             }
         }
         // Add implicit roots: non-array boot-loader classes (loader_id==0) if no sticky roots
@@ -713,6 +826,7 @@ impl Pass2 {
                     if !is_array {
                         if let Some(idx) = p1.id_map.index_of(caddr) {
                             gc_root_set.insert(idx as u32);
+                            note_type(&mut root_type_of, idx as u32, heap::ROOT_SYSTEM_CLASS);
                         }
                     }
                 }
@@ -720,21 +834,35 @@ impl Pass2 {
         }
         // ── addSystemClassRootsIfMissing: boot-loader non-array classes not yet roots ─
         let mut synthetic_root_count = 0usize;
+        // MAT materializes a synthetic <system class loader> object at 0x0 of
+        // class java/lang/ClassLoader (no HPROF record). Capture that class's
+        // instance shallow size so the report layer can inject the object.
+        let mut system_classloader_shallow: Option<u32> = None;
         for (&caddr, ci) in &p1.class_map {
             if ci.loader_id != 0 {
                 continue;
             }
-            let is_array = p1
-                .strings
-                .get(&ci.name_id)
-                .map(|n| n.starts_with('['))
+            let name = p1.strings.get(&ci.name_id);
+            if name.map(|n| n == "java/lang/ClassLoader").unwrap_or(false) {
+                system_classloader_shallow = Some(instance_shallow_size(
+                    caddr,
+                    &p1.class_map,
+                    ptr_size,
+                    ref_size,
+                    &mut size_cache,
+                ));
+            }
+            let is_array = name.map(|n| n.starts_with('[')).unwrap_or(false);
+            let is_prim_array = name
+                .map(|n| is_primitive_array_class_name(n))
                 .unwrap_or(false);
-            if is_array {
+            if !should_add_system_class_root(is_array, is_prim_array, p1.has_sticky_class_roots) {
                 continue;
             }
             if let Some(idx) = p1.id_map.index_of(caddr) {
                 if !gc_root_set.contains(&(idx as u32)) {
                     gc_root_set.insert(idx as u32);
+                    note_type(&mut root_type_of, idx as u32, heap::ROOT_SYSTEM_CLASS);
                     synthetic_root_count += 1;
                 }
             }
@@ -776,6 +904,13 @@ impl Pass2 {
 
         let mut gc_root_indices: Vec<u32> = gc_root_set.into_iter().collect();
         gc_root_indices.sort_unstable();
+        // Per-root type aligned 1:1 with the sorted indices. Every index in the
+        // set came from a note_type call, so the lookup always hits; fall back
+        // to ROOT_UNKNOWN defensively.
+        let gc_root_types: Vec<u8> = gc_root_indices
+            .iter()
+            .map(|idx| root_type_of.get(idx).copied().unwrap_or(heap::ROOT_UNKNOWN))
+            .collect();
 
         // Compress the two cold per-object arrays (shallow, class_idx) NOW,
         // before the forward-CSR fwd_targets (~6GB) is allocated. Both are
@@ -888,7 +1023,12 @@ impl Pass2 {
             format: p1.format,
             file_size: p1.file_size,
             source_name,
+            file_path: path.to_string(),
+            id_size,
+            ref_size: ref_size as u8,
+            header_timestamp_ms: p1.header_timestamp_ms,
             gc_root_indices,
+            gc_root_types,
             shallow,
             class_idx,
             class_names,
@@ -896,6 +1036,7 @@ impl Pass2 {
             fwd_offsets,
             fwd_targets,
             synthetic_root_count,
+            system_classloader_shallow,
             idom: Vec::new(),
             retained: Vec::new(),
             has_same_class_ancestor: crate::bitset::Bitset::default(),
@@ -1614,5 +1755,65 @@ mod tests {
             class_addrs.len(),
             "every class address must appear exactly once as a kind==3 object"
         );
+    }
+
+    #[test]
+    fn primitive_array_class_name_recognizes_all_prims() {
+        for n in ["[Z", "[C", "[F", "[D", "[S", "[I", "[J", "[B"] {
+            assert!(
+                is_primitive_array_class_name(n),
+                "{n} should be a primitive-array class name"
+            );
+        }
+    }
+
+    #[test]
+    fn primitive_array_class_name_rejects_non_prims() {
+        for n in [
+            "[[I",                 // multi-dim int array
+            "[Ljava/lang/String;", // object array
+            "java/lang/String",    // ordinary class
+            "[",                   // lone bracket
+            "[ZZ",                 // too long
+            "",                    // empty
+            "Z",                   // no bracket
+            "[X",                  // bracket + non-prim char
+        ] {
+            assert!(
+                !is_primitive_array_class_name(n),
+                "{n:?} must NOT be a primitive-array class name"
+            );
+        }
+    }
+
+    #[test]
+    fn system_class_rooting_matches_mat_addsystemclassroots() {
+        // MAT's addSystemClassRootsIfMissing (HprofParserHandlerImpl.fillIn):
+        // the class-rooting loop runs ONLY when no sticky/SYSTEM_CLASS roots
+        // exist in the dump, and roots only non-array boot-loader classes.
+
+        // The normal HPROF case: sticky roots present -> MAT roots nothing.
+        // We match that for ordinary (non-array) boot-loader classes: this is
+        // the fix for the big-dump +4,645-object frontier over-marking.
+        assert!(
+            !should_add_system_class_root(false, false, true),
+            "non-array boot class must NOT be synthetically rooted when sticky roots exist"
+        );
+        // No sticky roots -> MAT (and we) root non-array boot-loader classes.
+        assert!(
+            should_add_system_class_root(false, false, false),
+            "non-array boot class must be rooted when the dump has no sticky roots"
+        );
+
+        // Object arrays / multi-dim arrays are never synthetically rooted,
+        // regardless of sticky presence (MAT guard: !clazz.isArrayType()).
+        assert!(!should_add_system_class_root(true, false, false));
+        assert!(!should_add_system_class_root(true, false, true));
+
+        // Primitive-array metadata classes ([Z etc.) are ALWAYS rooted
+        // (Group B mirror of MAT's dominator root-attachment), independent of
+        // sticky-root presence.
+        assert!(should_add_system_class_root(true, true, true));
+        assert!(should_add_system_class_root(true, true, false));
     }
 }

@@ -24,10 +24,18 @@ pub mod heap {
     pub const ROOT_THREAD_BLOCK: u8 = 0x06;
     pub const ROOT_MONITOR_USED: u8 = 0x07;
     pub const ROOT_THREAD_OBJ: u8 = 0x08;
+    /// Synthetic system-class root (MAT addSystemClassRootsIfMissing): a
+    /// boot-loader class object rooted with no explicit HPROF root record.
+    /// 0x00 is unused by HPROF root sub-tags (which are 0x01..=0x08, 0xff).
+    pub const ROOT_SYSTEM_CLASS: u8 = 0x00;
     pub const CLASS_DUMP: u8 = 0x20;
     pub const INSTANCE_DUMP: u8 = 0x21;
     pub const OBJ_ARRAY_DUMP: u8 = 0x22;
     pub const PRIM_ARRAY_DUMP: u8 = 0x23;
+    /// HEAP_DUMP_INFO: `u4 heap_id` + `id heap_name_string_id`. Carries no
+    /// object/class data (and no compressed-oops flag) — consumed and skipped
+    /// so it does not corrupt the sub-record stream.
+    pub const HEAP_DUMP_INFO: u8 = 0xfe;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

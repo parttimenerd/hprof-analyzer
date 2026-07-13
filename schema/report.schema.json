@@ -1,0 +1,621 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Report",
+  "description": "Full report data model: only bounded aggregates, never a per-object Vec.",
+  "type": "object",
+  "properties": {
+    "generated": {
+      "type": "string"
+    },
+    "leaks": {
+      "$ref": "#/$defs/LeakSuspects"
+    },
+    "overview": {
+      "$ref": "#/$defs/SystemOverview"
+    },
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "top": {
+      "$ref": "#/$defs/TopConsumers"
+    }
+  },
+  "required": [
+    "schema_version",
+    "generated",
+    "overview",
+    "leaks",
+    "top"
+  ],
+  "$defs": {
+    "ClassRow": {
+      "description": "One row of \"Biggest Classes\".",
+      "type": "object",
+      "properties": {
+        "instances": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "pretty_class": {
+          "type": "string"
+        },
+        "retained": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "pretty_class",
+        "instances",
+        "retained"
+      ]
+    },
+    "DepthBucket": {
+      "description": "One bucket of the dominator-depth histogram (B2): how many reachable objects\nsit exactly `depth` idom-hops below the virtual root.",
+      "type": "object",
+      "properties": {
+        "depth": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "objects": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "depth",
+        "objects"
+      ]
+    },
+    "DominatedRow": {
+      "description": "One immediately-dominated child of an accumulation point (a row of the\n\"Accumulated Objects in Dominator Tree\" list).",
+      "type": "object",
+      "properties": {
+        "display_class": {
+          "type": "string"
+        },
+        "obj_index_1based": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "retained": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "shallow": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "obj_index_1based",
+        "display_class",
+        "shallow",
+        "retained"
+      ]
+    },
+    "GcRootTypeRow": {
+      "description": "One row of the GC-roots-by-type breakdown: a human-readable root-type label\nand how many roots carry that HPROF type.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "root_type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "root_type",
+        "count"
+      ]
+    },
+    "HeapComposition": {
+      "description": "B5: reachable-heap composition split by object kind (instances vs. arrays\nvs. class objects). Rows are in fixed kind order; empty buckets are omitted.",
+      "type": "object",
+      "properties": {
+        "by_kind": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/KindStat"
+          }
+        }
+      },
+      "required": [
+        "by_kind"
+      ]
+    },
+    "HistRow": {
+      "description": "One row of the System-Overview class histogram (full, one row per class).",
+      "type": "object",
+      "properties": {
+        "instances": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "pretty_class": {
+          "type": "string"
+        },
+        "retained": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "shallow": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "pretty_class",
+        "instances",
+        "shallow",
+        "retained"
+      ]
+    },
+    "KindStat": {
+      "description": "One kind-bucket of the heap-composition breakdown (B5).",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "description": "One of: \"Instances\", \"Object arrays\", \"Primitive arrays\", \"Class objects\".",
+          "type": "string"
+        },
+        "objects": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "shallow_heap": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "kind",
+        "objects",
+        "shallow_heap"
+      ]
+    },
+    "LeakSuspects": {
+      "description": "Aggregates for the \"Leak Suspects\" section.",
+      "type": "object",
+      "properties": {
+        "suspects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Suspect"
+          }
+        },
+        "total_shallow": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "total_shallow",
+        "suspects"
+      ]
+    },
+    "ObjRow": {
+      "description": "One row of \"Biggest Objects\".",
+      "type": "object",
+      "properties": {
+        "display_class": {
+          "type": "string"
+        },
+        "obj_index_1based": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "pct_bp": {
+          "description": "Retained share of total reachable shallow heap, in integer basis\npoints (bp = round(retained / total_shallow * 10000)). Deterministic\ninteger for JSON output; the Markdown renderer uses `pct` instead.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "retained": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "shallow": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "obj_index_1based",
+        "display_class",
+        "shallow",
+        "retained",
+        "pct_bp"
+      ]
+    },
+    "PackageNode": {
+      "description": "One node of the pruned package tree (MAT PackageTreeResult parity).\nTotals are CUMULATIVE over all top-level dominators in this node's subtree.",
+      "type": "object",
+      "properties": {
+        "children": {
+          "description": "Children sorted retained-desc, tie-broken by name-asc.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PackageNode"
+          }
+        },
+        "name": {
+          "description": "This segment's name (e.g. \"util\"); the root node's name is \"\".",
+          "type": "string"
+        },
+        "retained_heap": {
+          "description": "Cumulative retained heap (sum over the top-level dominators under this node).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "shallow_heap": {
+          "description": "Sum of shallow heap of the top-level dominators under this node.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "top_dominator_count": {
+          "description": "Number of top-level dominators under this node (MAT \"# Objects\").",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "name",
+        "top_dominator_count",
+        "shallow_heap",
+        "retained_heap",
+        "children"
+      ]
+    },
+    "PathStep": {
+      "description": "One step of a single-suspect accumulation path.",
+      "type": "object",
+      "properties": {
+        "depth": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "display_class": {
+          "type": "string"
+        },
+        "obj_index_1based": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "retained": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "depth",
+        "obj_index_1based",
+        "display_class",
+        "retained"
+      ]
+    },
+    "RetentionSummary": {
+      "description": "B3: retention concentration over top-level dominators. Basis-point shares\n(of total reachable shallow heap) held by the top-1/10/100 objects, plus how\nmany single objects each hold >=1% of the heap. Answers \"one leak or many?\".",
+      "type": "object",
+      "properties": {
+        "num_objects_ge_1pct": {
+          "description": "Count of single objects each retaining >=1% of total reachable shallow.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "top100_bp": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "top10_bp": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "top1_bp": {
+          "description": "Retained share of the top-1 / top-10 / top-100 top-level dominators, in\ninteger basis points (100 bp = 1%) of total reachable shallow heap.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "total_retained": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "total_retained",
+        "top1_bp",
+        "top10_bp",
+        "top100_bp",
+        "num_objects_ge_1pct"
+      ]
+    },
+    "Suspect": {
+      "description": "One leak suspect (single large object or class group).",
+      "type": "object",
+      "properties": {
+        "accumulation_class": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "accumulation_obj_1based": {
+          "description": "The accumulation point object where retained heap piles up (the last\nstep of `path`). `None` for group suspects or when the descent hit\n`MAX_ACCUM_DEPTH` without a big drop.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "accumulation_retained": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "dominated": {
+          "description": "Top immediately-dominated children of the accumulation point, sorted\nretained-desc and capped at the configured cap. Empty for groups.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DominatedRow"
+          }
+        },
+        "dominated_by_class": {
+          "description": "By-class histogram (objects/shallow/retained) of the accumulation\npoint's immediately-dominated children, sorted retained-desc and\ncapped. Empty for groups.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HistRow"
+          }
+        },
+        "instance_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "is_single": {
+          "type": "boolean"
+        },
+        "keywords": {
+          "description": "Class names involved in this suspect (suspect class + accumulation\npoint class), de-duplicated in first-seen order, for search.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "path": {
+          "description": "Descent from the suspect object to the accumulation point (MAT\n`findAccumulationPoint`, big-drop-ratio 0.7). Non-empty only for singles.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PathStep"
+          }
+        },
+        "pretty_class": {
+          "type": "string"
+        },
+        "retained": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "root_type_label": {
+          "description": "Human label of the GC-root TYPE holding this suspect (e.g. \"Thread\",\n\"Sticky Class\", \"JNI Global\"), when the suspect's top-level dominator is\nitself an identifiable single GC root. Empty when unknown: the suspect\nis not itself a root, is held by multiple/ambiguous roots, or the root\ntype is `ROOT_UNKNOWN`. Only populated for single suspects.",
+          "type": "string"
+        },
+        "shallow": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "is_single",
+        "pretty_class",
+        "instance_count",
+        "retained",
+        "shallow",
+        "path",
+        "dominated",
+        "dominated_by_class",
+        "keywords",
+        "root_type_label"
+      ]
+    },
+    "SystemOverview": {
+      "description": "Aggregates for the \"System Overview\" section.",
+      "type": "object",
+      "properties": {
+        "classes_loaded": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "compressed_oops": {
+          "description": "Whether the JVM used compressed ordinary object pointers: true when\nreferences are narrower than identifiers (8-byte id, 4-byte ref). None\nwhen undeterminable. Not applicable (false) for 32-bit dumps.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "dominator_depth_histogram": {
+          "description": "B2: dominator-depth histogram (retention shape). depth = idom-hops to the\nvirtual root. Sorted by depth ascending. Always present; empty only for\nan empty heap. Surfaced in OOM Triage as a synthesized \"Shape\" line; the\nfull histogram lives in JSON. Excludes the synthetic system-classloader\nobject (it has no graph node).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DepthBucket"
+          }
+        },
+        "dump_creation": {
+          "description": "Dump creation time in millis since Unix epoch (HPROF header base\ntimestamp). None when the header timestamp is absent/zero.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "file_path": {
+          "description": "Full path the dump was opened from (superset of `source_name`).",
+          "type": "string"
+        },
+        "file_size": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "format": {
+          "type": "string"
+        },
+        "gc_roots": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "gc_roots_by_type": {
+          "description": "GC roots broken down by HPROF root type (e.g. \"System Class\", \"Thread\",\n\"JNI Global\"), sorted by count descending then label ascending. Excludes\nsynthetic roots the analyzer injects. Empty only when there are no roots.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GcRootTypeRow"
+          }
+        },
+        "heap_composition": {
+          "description": "B5: reachable-heap composition by object kind. Always present; empty\nonly for an empty heap.",
+          "$ref": "#/$defs/HeapComposition"
+        },
+        "histogram": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HistRow"
+          }
+        },
+        "histogram_truncated_to": {
+          "description": "Number of histogram rows the full histogram was capped to, or None when\nthe histogram is complete (never truncated). Always None today.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "identifier_size_bits": {
+          "description": "HPROF identifier size in BITS (id_size bytes * 8: 32 or 64).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "retention_concentration": {
+          "description": "B3: retention concentration over top-level dominators. Always present\n(zeroed for an empty heap). Surfaced in OOM Triage as a \"One leak or\nmany\" line.",
+          "$ref": "#/$defs/RetentionSummary"
+        },
+        "source_name": {
+          "type": "string"
+        },
+        "total_objects": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "total_shallow": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "unreachable_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "unreachable_shallow": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "source_name",
+        "file_path",
+        "format",
+        "file_size",
+        "identifier_size_bits",
+        "total_objects",
+        "total_shallow",
+        "gc_roots",
+        "gc_roots_by_type",
+        "heap_composition",
+        "dominator_depth_histogram",
+        "retention_concentration",
+        "classes_loaded",
+        "unreachable_count",
+        "unreachable_shallow",
+        "histogram"
+      ]
+    },
+    "TopConsumers": {
+      "description": "Aggregates for the \"Top Consumers\" section.",
+      "type": "object",
+      "properties": {
+        "biggest_classes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ClassRow"
+          }
+        },
+        "biggest_objects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ObjRow"
+          }
+        },
+        "biggest_packages": {
+          "description": "Root of the pruned package tree (root name = \"\").",
+          "$ref": "#/$defs/PackageNode"
+        },
+        "threshold_bp": {
+          "description": "MAT 1%-of-total pruning threshold in basis points (100 bp = 1%).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "biggest_objects",
+        "biggest_classes",
+        "threshold_bp",
+        "biggest_packages"
+      ]
+    }
+  }
+}

@@ -51,6 +51,8 @@ pub struct Pass1 {
     pub id_size: u8,
     pub format: String,
     pub file_size: u64,
+    /// HPROF header base timestamp (millis since Unix epoch), 0 if absent.
+    pub header_timestamp_ms: u64,
     pub has_sticky_class_roots: bool,
     // Validation counters
     pub instance_count: u64,
@@ -65,6 +67,10 @@ impl Pass1 {
         let mut r = HprofReader::open(path)?;
         let id_size = r.id_size;
         let format = r.format.clone();
+        // Header base timestamp (u8 millis-since-epoch after id_size), read by
+        // HprofReader::open. This is the dump creation time (not the per-record
+        // microsecond delta at `_timestamp` below).
+        let header_timestamp_ms = r.timestamp_ms;
 
         let mut strings: HashMap<u64, String> = HashMap::new();
         let mut class_map: HashMap<u64, ClassInfo> = HashMap::new();
@@ -241,6 +247,7 @@ impl Pass1 {
             id_size,
             format,
             file_size,
+            header_timestamp_ms,
             has_sticky_class_roots,
             instance_count,
             obj_array_count,
@@ -405,6 +412,12 @@ fn scan_heap_segment(
                 tmp_elem_count.push(count as u32);
                 remaining -= ids + 4 + 4 + 1 + count * elem_size;
                 *prim_array_count += 1;
+            }
+            heap::HEAP_DUMP_INFO => {
+                // u4 heap_id + id heap_name_string_id. No object/class payload;
+                // skip it so the sub-record stream stays aligned.
+                r.skip(4 + ids)?;
+                remaining -= 4 + ids;
             }
             other => {
                 return Err(io::Error::new(

@@ -48,6 +48,7 @@ fn parity_all_fixtures() {
         let hprof_path = dir.join(hprof);
         let baseline_path = dir.join(baseline);
         let out = Command::new(env!("CARGO_BIN_EXE_hprof-analyzer"))
+            .arg("analyze")
             .arg(&hprof_path)
             .output()
             .unwrap_or_else(|e| panic!("failed to run analyzer on {hprof}: {e}"));
