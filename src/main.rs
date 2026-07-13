@@ -2,6 +2,7 @@ mod bitset;
 mod chunkvec;
 mod cvec;
 mod diff;
+mod diff_reports;
 mod dominator;
 mod id_map;
 mod md;
@@ -63,6 +64,15 @@ enum Cmd {
     Diff {
         mat: String,
         ours: String,
+        #[arg(short, long, value_enum, default_value_t = FormatArg::Md)]
+        format: FormatArg,
+    },
+    /// Cross-dump growth diff: compare two canonical Report JSONs (A=baseline, B=current)
+    DiffReports {
+        /// Baseline (earlier) Report JSON, or "-" for stdin
+        a: String,
+        /// Current (later) Report JSON
+        b: String,
         #[arg(short, long, value_enum, default_value_t = FormatArg::Md)]
         format: FormatArg,
     },
@@ -158,6 +168,13 @@ fn main() {
                 }
             }
         }
+        Cmd::DiffReports { a, b, format } => match diff_reports::run(&a, &b, format.into()) {
+            Ok(text) => print!("{text}"),
+            Err(e) => {
+                eprintln!("Error: {e}");
+                process::exit(1);
+            }
+        },
         Cmd::Render { input, format } => match render_report(&input, format.into()) {
             Ok(text) => print!("{text}"),
             Err(e) => {
