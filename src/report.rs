@@ -290,6 +290,10 @@ pub struct HistRow {
     pub instances: u64,
     pub shallow: u64,
     pub retained: u64,
+    /// Class-loader object address that loaded this class (0 = boot loader).
+    /// Distinct (class, loader) pairs are distinct rows, matching MAT's
+    /// class-object-identity histogram keying.
+    pub loader_id: u64,
 }
 
 /// One row of the GC-roots-by-type breakdown: a human-readable root-type label
@@ -381,6 +385,10 @@ pub struct SystemOverview {
     /// many" line.
     pub retention_concentration: RetentionSummary,
     pub classes_loaded: u64,
+    /// Count of DISTINCT class-loader addresses among loaded classes (boot
+    /// loader counted once when present). This is "loaders referenced by loaded
+    /// classes", NOT MAT's loader-object count — not a parity-gated scalar.
+    pub classloaders_loaded: u64,
     pub unreachable_count: u64,
     pub unreachable_shallow: u64,
     pub histogram: Vec<HistRow>,
@@ -731,6 +739,25 @@ fn build_system_overview(g: &Graph) -> SystemOverview {
         .filter(|&i| class_obj_repr(g, i) != u32::MAX && g.idom[i] != undef_u32)
         .count() as u64;
 
+    // Distinct class loaders among the reachable class objects counted above.
+    // Each reachable class object maps to its histogram row via
+    // class_obj_class_idx, and the row carries the loader address. Mirrors the
+    // classes_loaded domain so the two scalars agree on "which classes".
+    let classloaders_loaded = {
+        let mut set: std::collections::HashSet<u64> = std::collections::HashSet::new();
+        for i in 0..n {
+            if class_obj_repr(g, i) != u32::MAX && g.idom[i] != undef_u32 {
+                let lid = g
+                    .class_obj_class_idx
+                    .get(&(i as u32))
+                    .and_then(|&row| g.class_loader_id.get(row as usize).copied())
+                    .unwrap_or(0);
+                set.insert(lid);
+            }
+        }
+        set.len() as u64
+    };
+
     // TEMP DEBUG (env-gated, inert by default): dump reachable class-object
     // indices so they can be joined against the pass2 index->addr file.
     if std::env::var_os("EXP_DUMP_CLASS_ADDRS").is_some() {
@@ -823,6 +850,7 @@ fn build_system_overview(g: &Graph) -> SystemOverview {
             instances: inst_count[ci],
             shallow: shallow_total[ci],
             retained: class_retained[ci],
+            loader_id: g.class_loader_id.get(ci).copied().unwrap_or(0),
         })
         .collect();
 
@@ -850,6 +878,7 @@ fn build_system_overview(g: &Graph) -> SystemOverview {
         dominator_depth_histogram,
         retention_concentration,
         classes_loaded,
+        classloaders_loaded,
         unreachable_count,
         unreachable_shallow,
         histogram,
@@ -1089,12 +1118,21 @@ fn build_leak_suspects(
                         instances: c,
                         shallow: sh,
                         retained: ret,
+                        loader_id: g.class_loader_id.get(ci).copied().unwrap_or(0),
                     });
                 }
             }
 
             // Keywords: suspect class + accumulation-point class, first-seen order.
-            let pretty_class = pretty_class_name(&g.class_names[s.class_idx]);
+            // For a single suspect whose object is itself a class mirror, resolve
+            // the REPRESENTED class (via display_of) so we print e.g.
+            // `scala.runtime.LazyVals$` not `java.lang.Class` (MAT parity). Group
+            // suspects have no object (obj_idx == u32::MAX) so use their class row.
+            let pretty_class = if s.obj_idx != u32::MAX {
+                display_of(s.obj_idx as usize)
+            } else {
+                pretty_class_name(&g.class_names[s.class_idx])
+            };
             let mut keywords: Vec<String> = vec![pretty_class.clone()];
             let (accumulation_class, accumulation_retained, accumulation_obj_1based) =
                 match accumulation {
@@ -1493,6 +1531,7 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
     summary.row(["Total shallow heap".into(), format_bytes(o.total_shallow)]);
     summary.row(["GC roots".into(), fmt_count(o.gc_roots)]);
     summary.row(["Classes loaded".into(), fmt_count(o.classes_loaded)]);
+    summary.row(["Class loaders".into(), fmt_count(o.classloaders_loaded)]);
     if o.unreachable_count > 0 {
         summary.row([
             "Unreachable objects (excluded)".into(),
@@ -1891,6 +1930,7 @@ mod tests {
             shallow,
             class_idx,
             class_names: class_names.iter().map(|s| s.to_string()).collect(),
+            class_loader_id: vec![0u64; class_names.len()],
             class_obj_class_idx,
             fwd_offsets: Vec::new(),
             fwd_targets: Vec::new(),
@@ -2207,6 +2247,78 @@ mod tests {
             .collect();
         assert_eq!(jlc_big.len(), 1);
         assert_eq!(jlc_big[0].instances, 2);
+    }
+
+    /// Task 19: class-loader identity flows Graph -> report. Three classes, two
+    /// distinct loaders (0 = boot, 0x1000). Two of the three are reachable class
+    /// objects (mapped via class_obj_class_idx). `classloaders_loaded` counts
+    /// distinct loaders among reachable class objects; each HistRow carries the
+    /// loader of its class; the Markdown renders a "Class loaders" line.
+    #[test]
+    fn test_class_loader_plumbing() {
+        // Rows: 0 = com/foo/A (loader 0x1000), 1 = com/foo/B (loader 0x1000),
+        //       2 = org/bar/C (loader 0 = boot).
+        // Objects: obj0 IS a class object -> row 0; obj1 IS a class object ->
+        // row 2; obj2 is a plain instance of row 1. vroot = 3.
+        let (mut g, _dc_off, _dc_tgt) = make_graph(
+            vec![3, 3, 3],        // idom (vroot = 3)
+            vec![0, 2, 1],        // class_idx
+            vec![100, 50, 20],    // shallow
+            vec![1000, 500, 200], // retained
+            vec!["com/foo/A", "com/foo/B", "org/bar/C"],
+            &[(0, 0), (1, 2)], // obj0 -> row 0, obj1 -> row 2 (class objects)
+            &[],
+            vec![0, 1, 2],
+            0,
+        );
+        // Assign loaders per histogram row: rows 0,1 = 0x1000; row 2 = boot(0).
+        g.class_loader_id = vec![0x1000, 0x1000, 0];
+        let (dc_off, dc_tgt) = crate::retained::build_dom_children_csr(g.n, &g.idom);
+        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let o = &r.overview;
+
+        // Reachable class objects: obj0 (row 0, loader 0x1000) and obj1 (row 2,
+        // loader 0). Two distinct loaders.
+        assert_eq!(o.classes_loaded, 2);
+        assert_eq!(o.classloaders_loaded, 2);
+
+        // Each HistRow carries its class's loader.
+        let a = o
+            .histogram
+            .iter()
+            .find(|h| h.pretty_class == "com.foo.A")
+            .expect("com.foo.A row");
+        assert_eq!(a.loader_id, 0x1000);
+        let c = o
+            .histogram
+            .iter()
+            .find(|h| h.pretty_class == "org.bar.C")
+            .expect("org.bar.C row");
+        assert_eq!(c.loader_id, 0);
+
+        // Markdown surfaces the Class loaders line.
+        let md = render_markdown(&r);
+        assert!(md.contains("Class loaders"), "missing Class loaders line");
+    }
+
+    /// A boot-only heap (all loaders 0) reports exactly one class loader.
+    #[test]
+    fn test_class_loader_boot_only() {
+        let (mut g, _dc_off, _dc_tgt) = make_graph(
+            vec![2, 2],
+            vec![0, 1],
+            vec![100, 50],
+            vec![1000, 500],
+            vec!["java/lang/Class", "com/foo/A"],
+            &[(0, 1)], // obj0 is a class object representing row 1
+            &[],
+            vec![0, 1],
+            0,
+        );
+        g.class_loader_id = vec![0, 0];
+        let (dc_off, dc_tgt) = crate::retained::build_dom_children_csr(g.n, &g.idom);
+        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        assert_eq!(r.overview.classloaders_loaded, 1);
     }
 
     /// MAT materializes a synthetic <system class loader> object at 0x0 of
@@ -2568,6 +2680,43 @@ mod tests {
         // obj1 (com.foo.B) is the Thread root -> labelled.
         assert_eq!(l.suspects[1].pretty_class, "com.foo.B");
         assert_eq!(l.suspects[1].root_type_label, "Thread");
+    }
+
+    #[test]
+    fn test_leak_suspect_class_object_shows_represented_class() {
+        // A single suspect whose object is itself a java.lang.Class MIRROR must
+        // print the REPRESENTED class (e.g. scala.runtime.LazyVals$), not
+        // "java.lang.Class" (MAT parity). Regression guard for report.rs:1127.
+        //
+        // 3 objects, 2 class rows:
+        //   row0 = java/lang/Class, row1 = scala/runtime/LazyVals$
+        //   obj0: class_idx row0 (a Class mirror), registered in
+        //         class_obj_class_idx -> represents row1. Top-level, big retained.
+        //   obj1: class_idx row1 (a normal instance), dominated by obj0.
+        //   vroot = 2.
+        let (g, dc_off, dc_tgt) = make_graph(
+            vec![2, 0],        // idom: obj0 top-level, obj1 under obj0
+            vec![0, 1],        // class_idx
+            vec![24, 16],      // shallow
+            vec![100_000, 16], // retained
+            vec!["java/lang/Class", "scala/runtime/LazyVals$"],
+            &[(0, 1)], // obj0 is a class-mirror representing row1
+            &[],
+            vec![0], // obj0 is a GC root
+            0,
+        );
+        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let s = &r.leaks.suspects[0];
+        assert!(s.is_single);
+        // The represented class, NOT "java.lang.Class".
+        assert_eq!(s.pretty_class, "scala.runtime.LazyVals$");
+        assert!(s.keywords.contains(&"scala.runtime.LazyVals$".to_string()));
+        assert!(!s.keywords.contains(&"java.lang.Class".to_string()));
+
+        let mut r2 = r.clone();
+        r2.generated = "FIXED".to_string();
+        let md = render_markdown(&r2);
+        assert!(md.contains("scala.runtime.LazyVals$"));
     }
 
     #[test]

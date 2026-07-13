@@ -697,25 +697,34 @@ fn class_gap_proof(mat: &MatReport, ours: &Report) -> Option<String> {
     if mat.histogram.is_empty() {
         return None; // no per-class evidence available; cannot grant exemption
     }
-    let our_by_name: std::collections::HashMap<&str, &report::HistRow> = ours
-        .overview
-        .histogram
-        .iter()
-        .map(|h| (h.pretty_class.as_str(), h))
-        .collect();
+    // Bucket our rows by name: a class NAME can legitimately map to MULTIPLE
+    // rows (same name, distinct class-object addresses / class loaders — HPROF
+    // interns classes by address). MAT reports each such row separately too.
+    let mut our_by_name: std::collections::HashMap<&str, Vec<&report::HistRow>> =
+        std::collections::HashMap::new();
+    for h in &ours.overview.histogram {
+        our_by_name
+            .entry(h.pretty_class.as_str())
+            .or_default()
+            .push(h);
+    }
 
     let mut class_differs = false;
     let mut other_differs = false;
     let mut compared = 0usize;
     for row in &mat.histogram {
-        let Some(o) = our_by_name.get(row.class_name.as_str()) else {
+        let Some(rows) = our_by_name.get(row.class_name.as_str()) else {
             // Present in MAT's top-N but not in our (top-50) histogram: we
             // cannot prove equality; be conservative and reject the exemption.
             // (In practice MAT's top-25 is a subset of our top-50.)
             return None;
         };
         compared += 1;
-        let eq = o.instances == row.objects && o.shallow == row.shallow;
+        // Among the same-name rows, this MAT row is considered equal if ANY of
+        // them matches objects+shallow exactly.
+        let eq = rows
+            .iter()
+            .any(|o| o.instances == row.objects && o.shallow == row.shallow);
         if row.class_name == "java.lang.Class" {
             if !eq {
                 class_differs = true;
@@ -965,12 +974,17 @@ fn compare_histogram(mat: &MatReport, ours: &Report, r: &mut DiffResult) {
     if mat.histogram.is_empty() {
         return;
     }
-    let our_by_name: HashMap<&str, &report::HistRow> = ours
-        .overview
-        .histogram
-        .iter()
-        .map(|h| (h.pretty_class.as_str(), h))
-        .collect();
+    // Bucket our rows by name: a class NAME can legitimately map to MULTIPLE
+    // rows (same name, distinct class-object addresses / class loaders — HPROF
+    // interns classes by address). Keying by name alone would drop all but one
+    // row; keep them all so the correct row is matched to each MAT row.
+    let mut our_by_name: HashMap<&str, Vec<&report::HistRow>> = HashMap::new();
+    for h in &ours.overview.histogram {
+        our_by_name
+            .entry(h.pretty_class.as_str())
+            .or_default()
+            .push(h);
+    }
 
     for row in &mat.histogram {
         let field = format!("histogram[{}]", row.class_name);
@@ -984,7 +998,23 @@ fn compare_histogram(mat: &MatReport, ours: &Report, r: &mut DiffResult) {
                     format!("obj={} sh={}", row.objects, row.shallow),
                 ));
             }
-            Some(o) => {
+            Some(rows) => {
+                // Match if ANY same-name row equals this MAT row EXACTLY
+                // (objects+shallow, and retained when MAT provides it). This
+                // picks the right row among legitimately-duplicated names
+                // without weakening zero-tolerance exact equality.
+                let exact = |o: &&report::HistRow| {
+                    o.instances == row.objects
+                        && o.shallow == row.shallow
+                        && match row.retained {
+                            Some(mr) => o.retained == mr,
+                            None => true, // MAT omitted retained (empty totals cell)
+                        }
+                };
+                // Prefer an exactly-matching row for the reported values; else
+                // fall back to the first row so the FAIL/explain arms show it.
+                let o: &report::HistRow =
+                    rows.iter().find(|o| exact(o)).copied().unwrap_or(rows[0]);
                 let obj_ok = o.instances == row.objects;
                 let sh_ok = o.shallow == row.shallow;
                 let ret_ok = match row.retained {
@@ -1148,6 +1178,7 @@ mod tests {
             instances: inst,
             shallow: sh,
             retained: ret,
+            loader_id: 0,
         }
     }
 
@@ -1171,6 +1202,7 @@ mod tests {
                 dominator_depth_histogram: vec![],
                 retention_concentration: Default::default(),
                 classes_loaded: 3,
+                classloaders_loaded: 1,
                 unreachable_count: 0,
                 unreachable_shallow: 0,
                 histogram,
@@ -1239,6 +1271,39 @@ mod tests {
         compare_histogram(&mat, &ours, &mut r);
         assert!(r.fields.iter().all(|f| f.tier == Tier::Match));
         assert_eq!(r.n_fail(), 0);
+    }
+
+    // 2b. Two histogram rows share ONE class name but are legitimately distinct
+    // classes (same name, different class loaders; HPROF interns by class-object
+    // address). MAT reports both too. The comparator must match a MAT row to the
+    // correct same-name row, not silently drop one and FAIL. Regression for the
+    // scala `$colon$colon` (146151 vs 30 instances) spurious-FAIL bug.
+    #[test]
+    fn colon_colon_duplicate_rows_matches_big_row() {
+        let name = "scala.collection.immutable.$colon$colon";
+        let big_shallow = 3_507_624;
+        let small_shallow = 720;
+        // Our histogram carries BOTH same-name rows (order: small first, so a
+        // name-keyed map would have kept the small one and dropped the big).
+        let ours = base_report(vec![
+            hist(name, 30, small_shallow, 900),
+            hist(name, 146151, big_shallow, 5_000_000),
+        ]);
+        // MAT reports the BIG row.
+        let mut mat = MatReport::default();
+        mat.histogram = vec![MatHistRow {
+            class_name: name.into(),
+            objects: 146151,
+            shallow: big_shallow,
+            retained: Some(5_000_000),
+        }];
+        let mut r = DiffResult::default();
+        compare_histogram(&mat, &ours, &mut r);
+        assert!(
+            r.fields.iter().any(|f| f.tier == Tier::Match),
+            "expected the big same-name row to MATCH"
+        );
+        assert_eq!(r.n_fail(), 0, "duplicate same-name rows must not FAIL");
     }
 
     // 3. tie-break on equal keys -> EXPLAINABLE(ii)

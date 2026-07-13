@@ -97,8 +97,6 @@ fn json_size_budget() {
         .arg(&hprof)
         .arg("--format")
         .arg("json")
-        .arg("--compress")
-        .arg("none")
         .output()
         .unwrap_or_else(|e| panic!("failed to run analyzer on {FIXTURE}: {e}"));
     assert!(

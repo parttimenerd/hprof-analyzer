@@ -51,8 +51,6 @@ enum Cmd {
         output: Option<String>,
         #[arg(short, long, value_enum, default_value_t = FormatArg::Md)]
         format: FormatArg,
-        #[arg(short, long, value_enum, default_value_t = CompressArg::Deflate9)]
-        compress: CompressArg,
         #[arg(long)]
         leak_children_cap: Option<usize>,
         #[arg(short, long)]
@@ -106,25 +104,11 @@ enum FormatArg {
     Json,
 }
 
-#[derive(Clone, Copy, PartialEq, ValueEnum)]
-enum CompressArg {
-    None,
-    Deflate9,
-}
-
 impl From<FormatArg> for OutputFormat {
     fn from(f: FormatArg) -> Self {
         match f {
             FormatArg::Md => OutputFormat::Md,
             FormatArg::Json => OutputFormat::Json,
-        }
-    }
-}
-impl From<CompressArg> for cvec::Codec {
-    fn from(c: CompressArg) -> Self {
-        match c {
-            CompressArg::None => cvec::Codec::None,
-            CompressArg::Deflate9 => cvec::Codec::Deflate9,
         }
     }
 }
@@ -136,7 +120,6 @@ fn main() {
             input,
             output,
             format,
-            compress,
             leak_children_cap,
             verbose,
             trace_rss,
@@ -150,7 +133,7 @@ fn main() {
                 output.as_deref(),
                 format.into(),
                 verbose,
-                compress.into(),
+                cvec::Codec::Deflate9,
                 cap,
             ) {
                 eprintln!("Error: {e}");

@@ -89,7 +89,7 @@ for zip in "$MAT_ZIP_DIR"/*_System_Overview.zip; do
   diff="$WORK/$name.diff.json"
 
   echo "RUN  $name : analyzing dump ..."
-  if ! "$BIN" analyze "$hprof" --format json --compress none >"$ours" 2>"$WORK/$name.analyze.err"; then
+  if ! "$BIN" analyze "$hprof" --format json >"$ours" 2>"$WORK/$name.analyze.err"; then
     echo "SKIP $name : analyzer failed (see $WORK/$name.analyze.err)"
     n_skip=$((n_skip + 1))
     continue

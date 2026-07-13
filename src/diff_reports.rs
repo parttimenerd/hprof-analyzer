@@ -363,6 +363,7 @@ mod tests {
             instances: inst,
             shallow: sh,
             retained: ret,
+            loader_id: 0,
         }
     }
 
@@ -409,6 +410,7 @@ mod tests {
                 dominator_depth_histogram: vec![],
                 retention_concentration: Default::default(),
                 classes_loaded: 3,
+                classloaders_loaded: 1,
                 unreachable_count: 0,
                 unreachable_shallow: 0,
                 histogram,

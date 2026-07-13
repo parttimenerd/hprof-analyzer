@@ -136,8 +136,6 @@ fn json_golden_snapshot() {
         .arg(&hprof)
         .arg("--format")
         .arg("json")
-        .arg("--compress")
-        .arg("none")
         .output()
         .expect("failed to run hprof-analyzer");
     assert!(
@@ -161,6 +159,6 @@ fn json_golden_snapshot() {
         "JSON report drifted from the golden snapshot at {golden_path}. If this \
          change is intended, regenerate the golden with:\n  \
          cargo run --release -- analyze tests/fixtures/dump_4_philosophers.hprof \
-         --format json --compress none > tests/fixtures/dump_4_philosophers_report.json"
+         --format json > tests/fixtures/dump_4_philosophers_report.json"
     );
 }

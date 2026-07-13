@@ -45,6 +45,12 @@ pub struct Graph {
     pub shallow: Vec<u32>,
     pub class_idx: Vec<u32>,
     pub class_names: Vec<String>,
+    /// Class-loader object address per histogram row, aligned 1:1 with
+    /// `class_names`. 0 = boot/bootstrap loader. Synthetic rows (primitive
+    /// arrays, the single java/lang/Class row) are boot-loaded (0). Powers the
+    /// class-loader count and per-loader grouping; a per-ROW array (not
+    /// per-object) so it costs O(#classes), never O(#objects).
+    pub class_loader_id: Vec<u64>,
     pub class_obj_class_idx: HashMap<u32, u32>, // class-obj index -> class-histogram row (sparse; absent = not a class obj)
     // Forward CSR
     pub fwd_offsets: Vec<u32>,
@@ -619,16 +625,19 @@ impl Pass2 {
         const JLC_KEY: u64 = 0xFFFF_FFFF_FFFF_FFFF;
         let mut class_key_to_idx: HashMap<u64, u32> = HashMap::new();
         let mut class_names: Vec<String> = Vec::new();
+        let mut class_loader_id: Vec<u64> = Vec::new();
 
-        let mut get_or_insert_class = |key: u64, name: &dyn Fn() -> String| -> u32 {
-            if let Some(&idx) = class_key_to_idx.get(&key) {
-                return idx;
-            }
-            let idx = class_names.len() as u32;
-            class_key_to_idx.insert(key, idx);
-            class_names.push(name());
-            idx
-        };
+        let mut get_or_insert_class =
+            |key: u64, name: &dyn Fn() -> String, loader: &dyn Fn() -> u64| -> u32 {
+                if let Some(&idx) = class_key_to_idx.get(&key) {
+                    return idx;
+                }
+                let idx = class_names.len() as u32;
+                class_key_to_idx.insert(key, idx);
+                class_names.push(name());
+                class_loader_id.push(loader());
+                idx
+            };
 
         // Build class_idx array
         let mut class_idx: Vec<u32> = vec![0u32; n];
@@ -639,35 +648,46 @@ impl Pass2 {
 
             match p1.kind[i] {
                 3 => {
-                    // Class object → single java/lang/Class row (MAT parity)
-                    class_idx[i] = get_or_insert_class(JLC_KEY, &|| "java/lang/Class".to_string());
+                    // Class object → single java/lang/Class row (MAT parity). Boot-loaded.
+                    class_idx[i] =
+                        get_or_insert_class(JLC_KEY, &|| "java/lang/Class".to_string(), &|| 0);
                 }
                 2 => {
-                    // Primitive array: cid is the raw element type code.
+                    // Primitive array: cid is the raw element type code. Boot-loaded.
                     let tc = cid as u8;
-                    class_idx[i] = get_or_insert_class(PRIM_KEY_BASE | tc as u64, &|| {
-                        prim_array_class_name(tc).to_string()
-                    });
+                    class_idx[i] = get_or_insert_class(
+                        PRIM_KEY_BASE | tc as u64,
+                        &|| prim_array_class_name(tc).to_string(),
+                        &|| 0,
+                    );
                 }
                 1 => {
                     // Object array: cid indexes the array-class address (loader-distinct).
                     let addr = p1.class_addr_table[cid as usize];
-                    class_idx[i] = get_or_insert_class(addr, &|| {
-                        p1.class_map
-                            .get(&addr)
-                            .and_then(|ci| p1.strings.get(&ci.name_id).cloned())
-                            .unwrap_or_else(|| "[Ljava/lang/Object;".to_string())
-                    });
+                    class_idx[i] = get_or_insert_class(
+                        addr,
+                        &|| {
+                            p1.class_map
+                                .get(&addr)
+                                .and_then(|ci| p1.strings.get(&ci.name_id).cloned())
+                                .unwrap_or_else(|| "[Ljava/lang/Object;".to_string())
+                        },
+                        &|| p1.class_map.get(&addr).map(|ci| ci.loader_id).unwrap_or(0),
+                    );
                 }
                 _ => {
                     // Instance: cid indexes the class-object address (loader-distinct).
                     let addr = p1.class_addr_table[cid as usize];
-                    class_idx[i] = get_or_insert_class(addr, &|| {
-                        p1.class_map
-                            .get(&addr)
-                            .and_then(|ci| p1.strings.get(&ci.name_id).cloned())
-                            .unwrap_or_else(|| format!("unknown@{addr:#x}"))
-                    });
+                    class_idx[i] = get_or_insert_class(
+                        addr,
+                        &|| {
+                            p1.class_map
+                                .get(&addr)
+                                .and_then(|ci| p1.strings.get(&ci.name_id).cloned())
+                                .unwrap_or_else(|| format!("unknown@{addr:#x}"))
+                        },
+                        &|| p1.class_map.get(&addr).map(|ci| ci.loader_id).unwrap_or(0),
+                    );
                 }
             }
         }
@@ -732,7 +752,7 @@ impl Pass2 {
         }
 
         // Class objects already map to the java/lang/Class row (JLC_KEY) from Phase 0c.
-        let jlc_idx = get_or_insert_class(JLC_KEY, &|| "java/lang/Class".to_string());
+        let jlc_idx = get_or_insert_class(JLC_KEY, &|| "java/lang/Class".to_string(), &|| 0);
 
         // ── Build class_obj_class_idx ─────────────────────────────────────
         // For each class object, record the histogram row of the class it
@@ -743,10 +763,14 @@ impl Pass2 {
             let addr = p1.id_map.addr_at(i);
             if class_addrs.contains(&addr) {
                 let ci = p1.class_map.get(&addr);
-                let idx = get_or_insert_class(addr, &|| {
-                    ci.and_then(|c| p1.strings.get(&c.name_id).cloned())
-                        .unwrap_or_else(|| format!("unknown@{addr:#x}"))
-                });
+                let idx = get_or_insert_class(
+                    addr,
+                    &|| {
+                        ci.and_then(|c| p1.strings.get(&c.name_id).cloned())
+                            .unwrap_or_else(|| format!("unknown@{addr:#x}"))
+                    },
+                    &|| ci.map(|c| c.loader_id).unwrap_or(0),
+                );
                 class_obj_class_idx.insert(i as u32, idx);
             }
         }
@@ -1032,6 +1056,7 @@ impl Pass2 {
             shallow,
             class_idx,
             class_names,
+            class_loader_id,
             class_obj_class_idx,
             fwd_offsets,
             fwd_targets,

@@ -146,6 +146,12 @@
           "format": "uint64",
           "minimum": 0
         },
+        "loader_id": {
+          "description": "Class-loader object address that loaded this class (0 = boot loader).\nDistinct (class, loader) pairs are distinct rows, matching MAT's\nclass-object-identity histogram keying.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
         "pretty_class": {
           "type": "string"
         },
@@ -164,7 +170,8 @@
         "pretty_class",
         "instances",
         "shallow",
-        "retained"
+        "retained",
+        "loader_id"
       ]
     },
     "KindStat": {
@@ -465,6 +472,12 @@
           "format": "uint64",
           "minimum": 0
         },
+        "classloaders_loaded": {
+          "description": "Count of DISTINCT class-loader addresses among loaded classes (boot\nloader counted once when present). This is \"loaders referenced by loaded\nclasses\", NOT MAT's loader-object count — not a parity-gated scalar.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
         "compressed_oops": {
           "description": "Whether the JVM used compressed ordinary object pointers: true when\nreferences are narrower than identifiers (8-byte id, 4-byte ref). None\nwhen undeterminable. Not applicable (false) for 32-bit dumps.",
           "type": [
@@ -578,6 +591,7 @@
         "dominator_depth_histogram",
         "retention_concentration",
         "classes_loaded",
+        "classloaders_loaded",
         "unreachable_count",
         "unreachable_shallow",
         "histogram"
