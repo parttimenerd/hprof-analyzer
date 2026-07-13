@@ -191,6 +191,28 @@ pub fn pretty_class_name(raw: &str) -> String {
     format!("{}{}", base, "[]".repeat(dims))
 }
 
+/// The 4-way kind of a reachable object, for heap composition (B5). Derives
+/// from class-object membership and the raw JVM class-name descriptor — there
+/// is no `kind[]` array in Graph. Mirrors `pretty_class_name`'s array parsing:
+/// a single `[X` primitive descriptor is a primitive array; any other `[…`
+/// (e.g. `[L…;`, `[[B`) is an object array.
+fn object_kind(g: &Graph, i: usize) -> &'static str {
+    if class_obj_repr(g, i) != u32::MAX {
+        return "Class objects";
+    }
+    let raw = match g.class_names.get(g.class_idx[i] as usize) {
+        Some(r) => r,
+        None => return "Instances",
+    };
+    if is_prim_array_desc(raw) {
+        "Primitive arrays"
+    } else if raw.starts_with('[') {
+        "Object arrays"
+    } else {
+        "Instances"
+    }
+}
+
 /// The full dotted PACKAGE PATH of a class from its JVM internal name.
 ///
 /// Normalises like the histogram (strip leading `[`, strip `L...;`), then takes
@@ -258,6 +280,49 @@ pub struct GcRootTypeRow {
     pub count: u64,
 }
 
+/// One kind-bucket of the heap-composition breakdown (B5).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct KindStat {
+    /// One of: "Instances", "Object arrays", "Primitive arrays", "Class objects".
+    pub kind: String,
+    pub objects: u64,
+    pub shallow_heap: u64,
+}
+
+/// B5: reachable-heap composition split by object kind (instances vs. arrays
+/// vs. class objects). Rows are in fixed kind order; empty buckets are omitted.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct HeapComposition {
+    pub by_kind: Vec<KindStat>,
+}
+
+/// One bucket of the dominator-depth histogram (B2): how many reachable objects
+/// sit exactly `depth` idom-hops below the virtual root.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct DepthBucket {
+    pub depth: u32,
+    pub objects: u64,
+}
+
+/// B3: retention concentration over top-level dominators. Basis-point shares
+/// (of total reachable shallow heap) held by the top-1/10/100 objects, plus how
+/// many single objects each hold >=1% of the heap. Answers "one leak or many?".
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct RetentionSummary {
+    pub total_retained: u64,
+    /// Retained share of the top-1 / top-10 / top-100 top-level dominators, in
+    /// integer basis points (100 bp = 1%) of total reachable shallow heap.
+    pub top1_bp: u32,
+    pub top10_bp: u32,
+    pub top100_bp: u32,
+    /// Count of single objects each retaining >=1% of total reachable shallow.
+    pub num_objects_ge_1pct: u64,
+}
+
 /// Aggregates for the "System Overview" section.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct SystemOverview {
@@ -282,6 +347,19 @@ pub struct SystemOverview {
     /// "JNI Global"), sorted by count descending then label ascending. Excludes
     /// synthetic roots the analyzer injects. Empty only when there are no roots.
     pub gc_roots_by_type: Vec<GcRootTypeRow>,
+    /// B5: reachable-heap composition by object kind. Always present; empty
+    /// only for an empty heap.
+    pub heap_composition: HeapComposition,
+    /// B2: dominator-depth histogram (retention shape). depth = idom-hops to the
+    /// virtual root. Sorted by depth ascending. Always present; empty only for
+    /// an empty heap. Surfaced in OOM Triage as a synthesized "Shape" line; the
+    /// full histogram lives in JSON. Excludes the synthetic system-classloader
+    /// object (it has no graph node).
+    pub dominator_depth_histogram: Vec<DepthBucket>,
+    /// B3: retention concentration over top-level dominators. Always present
+    /// (zeroed for an empty heap). Surfaced in OOM Triage as a "One leak or
+    /// many" line.
+    pub retention_concentration: RetentionSummary,
     pub classes_loaded: u64,
     pub unreachable_count: u64,
     pub unreachable_shallow: u64,
@@ -513,6 +591,114 @@ fn build_system_overview(g: &Graph) -> SystemOverview {
         });
         rows
     };
+    // B5: heap composition by kind. Fixed 4-bucket order.
+    const KIND_ORDER: [&str; 4] = [
+        "Instances",
+        "Object arrays",
+        "Primitive arrays",
+        "Class objects",
+    ];
+    let heap_composition = {
+        let mut objs = [0u64; 4];
+        let mut sh = [0u64; 4];
+        let idx = |k: &str| KIND_ORDER.iter().position(|&x| x == k).unwrap();
+        for i in 0..n {
+            if g.idom[i] == undef {
+                continue;
+            }
+            let b = idx(object_kind(g, i));
+            objs[b] += 1;
+            sh[b] += g.shallow[i] as u64;
+        }
+        // Synthetic <system class loader> counts as an Instance, matching how
+        // total_objects/total_shallow count it above.
+        if let Some(sz) = g.system_classloader_shallow {
+            let b = idx("Instances");
+            objs[b] += 1;
+            sh[b] += sz as u64;
+        }
+        let by_kind = KIND_ORDER
+            .iter()
+            .enumerate()
+            .filter(|&(b, _)| objs[b] > 0)
+            .map(|(b, &k)| KindStat {
+                kind: k.to_string(),
+                objects: objs[b],
+                shallow_heap: sh[b],
+            })
+            .collect();
+        HeapComposition { by_kind }
+    };
+    // B2: dominator-depth histogram. depth[i] = # idom hops from i up to vroot.
+    // Iterative memoized walk (n can be ~514M — no recursion). ~4 bytes/object
+    // transient (u32 depth memo); freed at end of this block.
+    let dominator_depth_histogram = {
+        let vroot = n as u32;
+        // memo[i] = 0 => unresolved/unreachable; otherwise the object's depth
+        // (1 = directly under vroot). vroot itself has no memo slot.
+        let mut memo: Vec<u32> = vec![0; n];
+        let mut stack: Vec<u32> = Vec::new();
+        for start in 0..n {
+            if g.idom[start] == undef || memo[start] != 0 {
+                continue;
+            }
+            // Walk up until a memoized/vroot node, pushing the unresolved chain.
+            stack.clear();
+            let mut cur = start as u32;
+            let base = loop {
+                let p = g.idom[cur as usize];
+                if p == vroot {
+                    break 1u32; // parent is vroot => cur is depth 1
+                }
+                if memo[p as usize] != 0 {
+                    break memo[p as usize] + 1; // depth of cur
+                }
+                stack.push(cur);
+                cur = p;
+            };
+            memo[cur as usize] = base;
+            let mut d = base;
+            while let Some(node) = stack.pop() {
+                d += 1;
+                memo[node as usize] = d;
+            }
+        }
+        // Tally depths into a histogram (depth range is small — bounded by the
+        // longest dominator chain). memo[i]==0 only for unreachable (skipped).
+        let mut counts: std::collections::BTreeMap<u32, u64> = std::collections::BTreeMap::new();
+        for i in 0..n {
+            if g.idom[i] != undef {
+                *counts.entry(memo[i]).or_insert(0) += 1;
+            }
+        }
+        // memo dropped here — freed before build_system_overview returns.
+        counts
+            .into_iter()
+            .map(|(depth, objects)| DepthBucket { depth, objects })
+            .collect::<Vec<_>>()
+    };
+    // B3: retention concentration over top-level dominators (idom == vroot).
+    let retention_concentration = {
+        let vroot = n as u32;
+        let mut tops: Vec<u64> = (0..n)
+            .filter(|&i| g.idom[i] == vroot)
+            .map(|i| g.retained[i])
+            .collect();
+        tops.sort_unstable_by(|a, b| b.cmp(a)); // retained desc
+        let denom = total_shallow.max(1);
+        let bp = |sum: u64| -> u32 { ((sum as u128 * 10_000) / denom as u128) as u32 };
+        let prefix = |k: usize| -> u64 { tops.iter().take(k).sum() };
+        let total_retained: u64 = tops.iter().sum();
+        let one_pct = denom / 100;
+        let num_objects_ge_1pct = tops.iter().filter(|&&r| r >= one_pct).count() as u64;
+        RetentionSummary {
+            total_retained,
+            top1_bp: bp(prefix(1)),
+            top10_bp: bp(prefix(10)),
+            top100_bp: bp(prefix(100)),
+            num_objects_ge_1pct,
+        }
+    };
     // Count reachable class-dump objects (objects that ARE Java classes, with defined idom)
     let undef_u32 = u32::MAX;
     let classes_loaded = (0..n)
@@ -634,6 +820,9 @@ fn build_system_overview(g: &Graph) -> SystemOverview {
         total_shallow,
         gc_roots,
         gc_roots_by_type,
+        heap_composition,
+        dominator_depth_histogram,
+        retention_concentration,
         classes_loaded,
         unreachable_count,
         unreachable_shallow,
@@ -1190,6 +1379,42 @@ fn render_oom_triage(r: &Report, out: &mut String) {
             );
         }
     }
+
+    // Shape (B2): shallow vs. deep retention, from the dominator-depth histogram.
+    let hist = &r.overview.dominator_depth_histogram;
+    if !hist.is_empty() {
+        let total: u64 = hist.iter().map(|b| b.objects).sum();
+        let max_depth = hist.iter().map(|b| b.depth).max().unwrap_or(0);
+        // p90 depth: smallest depth whose cumulative count reaches 90%.
+        let mut cum = 0u64;
+        let mut p90 = max_depth;
+        for b in hist {
+            cum += b.objects;
+            if cum * 10 >= total * 9 {
+                p90 = b.depth;
+                break;
+            }
+        }
+        let shape = if p90 <= 3 {
+            "shallow (most objects are held within a few hops of a GC root)"
+        } else {
+            "deep (retention flows through long dominator chains — often nested collections or linked structures)"
+        };
+        out.push_str(&format!(
+            "- **Shape:** {shape} — 90% of objects within depth {p90}, max depth {max_depth}.\n"
+        ));
+    }
+
+    // One leak or many (B3): from the retention-concentration summary.
+    let rc = &r.overview.retention_concentration;
+    if rc.top1_bp > 0 || rc.num_objects_ge_1pct > 0 {
+        let top1_pct = rc.top1_bp as f64 / 100.0;
+        let top10_pct = rc.top10_bp as f64 / 100.0;
+        out.push_str(&format!(
+            "- **One leak or many:** the single biggest object retains {:.1}% and the top 10 retain {:.1}% of the heap; {} object(s) each hold >=1%.\n",
+            top1_pct, top10_pct, rc.num_objects_ge_1pct,
+        ));
+    }
     out.push('\n');
 }
 
@@ -1238,6 +1463,25 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
         let mut t = Table::new(&["Root Type", "Count"], &[Align::Left, Align::Right]);
         for row in &o.gc_roots_by_type {
             t.row([row.root_type.clone(), fmt_count(row.count)]);
+        }
+        t.render(out);
+        out.push('\n');
+    }
+
+    // Heap composition by kind: worth a table only when >1 kind present
+    // (a single-kind heap just restates "Total objects").
+    if o.heap_composition.by_kind.len() > 1 {
+        out.push_str("### Heap Composition\n\n");
+        let mut t = Table::new(
+            &["Kind", "Objects", "Shallow Heap"],
+            &[Align::Left, Align::Right, Align::Right],
+        );
+        for k in &o.heap_composition.by_kind {
+            t.row([
+                k.kind.clone(),
+                fmt_count(k.objects),
+                format_bytes(k.shallow_heap),
+            ]);
         }
         t.render(out);
         out.push('\n');
@@ -1715,6 +1959,124 @@ mod tests {
         assert_eq!(o.gc_roots_by_type.len(), 1);
         assert_eq!(o.gc_roots_by_type[0].root_type, "JNI Global");
         assert_eq!(o.gc_roots_by_type[0].count, 2);
+    }
+
+    // ── B5: heap composition by kind ────────────────────────────────────────
+
+    #[test]
+    fn test_object_kind_derivation() {
+        // A graph with one of each kind: an instance, an object array, a
+        // primitive array, and a class object (present in class_obj_class_idx).
+        // idom: all top-level under vroot=4.
+        let (g, _dc_off, _dc_tgt) = make_graph(
+            vec![4, 4, 4, 4], // idom (vroot = 4)
+            vec![0, 1, 2, 3], // class_idx
+            vec![16, 24, 32, 8],
+            vec![16, 24, 32, 8],
+            vec!["com/foo/A", "[Ljava/lang/Object;", "[I", "java/lang/Class"],
+            &[(3, 0)], // obj3 is a class object representing class0
+            &[],
+            vec![],
+            0,
+        );
+        assert_eq!(object_kind(&g, 0), "Instances");
+        assert_eq!(object_kind(&g, 1), "Object arrays");
+        assert_eq!(object_kind(&g, 2), "Primitive arrays");
+        assert_eq!(object_kind(&g, 3), "Class objects");
+    }
+
+    #[test]
+    fn test_heap_composition_fixed_order_skips_empty() {
+        // Two instances + one primitive array; NO object arrays, NO class
+        // objects. by_kind must list Instances then Primitive arrays only,
+        // preserving the fixed kind order and skipping empty buckets.
+        let (g, dc_off, dc_tgt) = make_graph(
+            vec![3, 3, 3], // idom (vroot = 3)
+            vec![0, 0, 1], // class_idx
+            vec![16, 16, 40],
+            vec![16, 16, 40],
+            vec!["com/foo/A", "[I"],
+            &[],
+            &[],
+            vec![],
+            0,
+        );
+        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let bk = &r.overview.heap_composition.by_kind;
+        assert_eq!(bk.len(), 2);
+        assert_eq!(bk[0].kind, "Instances");
+        assert_eq!(bk[0].objects, 2);
+        assert_eq!(bk[0].shallow_heap, 32);
+        assert_eq!(bk[1].kind, "Primitive arrays");
+        assert_eq!(bk[1].objects, 1);
+        assert_eq!(bk[1].shallow_heap, 40);
+    }
+
+    // ── B2: dominator-depth histogram ───────────────────────────────────────
+
+    #[test]
+    fn test_dominator_depth_histogram() {
+        // fixture(): obj0/obj1/obj3 are top-level (depth 1); obj2 is dominated
+        // by obj0 (depth 2); obj4 is unreachable (excluded).
+        let (g, dc_off, dc_tgt) = fixture();
+        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let h = &r.overview.dominator_depth_histogram;
+        assert_eq!(h.len(), 2);
+        // Sorted by depth ascending.
+        assert_eq!(h[0].depth, 1);
+        assert_eq!(h[0].objects, 3);
+        assert_eq!(h[1].depth, 2);
+        assert_eq!(h[1].objects, 1);
+    }
+
+    // ── B3: retention concentration ─────────────────────────────────────────
+
+    #[test]
+    fn test_retention_concentration() {
+        // fixture(): top-level dominators retained = [1000, 1000, 200];
+        // total_shallow = 270 (denominator). one_pct = 270/100 = 2, so all
+        // three top-level objects (>=2) count toward num_objects_ge_1pct.
+        let (g, dc_off, dc_tgt) = fixture();
+        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let rc = &r.overview.retention_concentration;
+        assert_eq!(rc.total_retained, 2200);
+        // top1 = 1000/270 = 37037 bp; top10 (all 3) = 2200/270 = 81481 bp.
+        assert_eq!(rc.top1_bp, (1000u128 * 10_000 / 270) as u32);
+        assert_eq!(rc.top10_bp, (2200u128 * 10_000 / 270) as u32);
+        assert_eq!(rc.top100_bp, rc.top10_bp);
+        assert_eq!(rc.num_objects_ge_1pct, 3);
+    }
+
+    // ── OOM Triage render lines (B2/B3/B5 surfaced) ─────────────────────────
+
+    #[test]
+    fn test_render_includes_oom_triage_signals() {
+        // Mixed-kind graph so the Heap Composition table renders (>1 kind), with
+        // top-level dominators so Shape + One-leak-or-many lines emit.
+        // obj0 instance (top-level), obj1 primitive array (top-level),
+        // obj2 instance dominated by obj0.
+        let (g, dc_off, dc_tgt) = make_graph(
+            vec![3, 3, 0], // idom (vroot = 3); obj2 under obj0
+            vec![0, 1, 0], // class_idx
+            vec![100, 40, 20],
+            vec![120, 40, 20],
+            vec!["com/foo/A", "[I"],
+            &[],
+            &[2], // obj2 has same-class ancestor (obj0)
+            vec![0, 1],
+            0,
+        );
+        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let md = render_markdown(&r);
+        assert!(
+            md.contains("### Heap Composition"),
+            "missing heap composition table"
+        );
+        assert!(md.contains("**Shape:**"), "missing shape line");
+        assert!(
+            md.contains("**One leak or many:**"),
+            "missing concentration line"
+        );
     }
 
     /// Regression: MAT counts the class histogram BY OBJECT TYPE, so every
