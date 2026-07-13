@@ -5,6 +5,8 @@ mod diff;
 mod dominator;
 mod id_map;
 mod md;
+#[cfg(test)]
+mod md_test;
 mod pass1;
 mod pass2;
 mod reader;

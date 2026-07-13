@@ -433,6 +433,10 @@
           "format": "uint64",
           "minimum": 0
         },
+        "root_type_label": {
+          "description": "Human label of the GC-root TYPE holding this suspect (e.g. \"Thread\",\n\"Sticky Class\", \"JNI Global\"), when the suspect's top-level dominator is\nitself an identifiable single GC root. Empty when unknown: the suspect\nis not itself a root, is held by multiple/ambiguous roots, or the root\ntype is `ROOT_UNKNOWN`. Only populated for single suspects.",
+          "type": "string"
+        },
         "shallow": {
           "type": "integer",
           "format": "uint64",
@@ -448,7 +452,8 @@
         "path",
         "dominated",
         "dominated_by_class",
-        "keywords"
+        "keywords",
+        "root_type_label"
       ]
     },
     "SystemOverview": {

@@ -84,6 +84,26 @@ fn class_row_remap(g: &Graph) -> Vec<u32> {
     remap
 }
 
+/// Human-readable label for a GC-root HPROF sub-tag (see `types::heap::ROOT_*`).
+/// Returns `None` for `ROOT_UNKNOWN` and any unrecognised code, so callers can
+/// suppress the "held by" clause when the holding root type is not meaningful.
+/// Labels follow MAT's GC-root naming.
+fn gc_root_type_label_opt(code: u8) -> Option<&'static str> {
+    use crate::types::heap;
+    match code {
+        heap::ROOT_JNI_GLOBAL => Some("JNI Global"),
+        heap::ROOT_JNI_LOCAL => Some("JNI Local"),
+        heap::ROOT_JAVA_FRAME => Some("Java Frame"),
+        heap::ROOT_NATIVE_STACK => Some("Native Stack"),
+        heap::ROOT_STICKY_CLASS => Some("Sticky Class"),
+        heap::ROOT_THREAD_BLOCK => Some("Thread Block"),
+        heap::ROOT_MONITOR_USED => Some("Busy Monitor"),
+        heap::ROOT_THREAD_OBJ => Some("Thread"),
+        heap::ROOT_SYSTEM_CLASS => Some("System Class"),
+        _ => None,
+    }
+}
+
 // ── Formatting helpers ─────────────────────────────────────────────────────
 
 /// ISO-8601 UTC timestamp matching java.time.Instant.toString() shape.
@@ -415,6 +435,12 @@ pub struct Suspect {
     /// Class names involved in this suspect (suspect class + accumulation
     /// point class), de-duplicated in first-seen order, for search.
     pub keywords: Vec<String>,
+    /// Human label of the GC-root TYPE holding this suspect (e.g. "Thread",
+    /// "Sticky Class", "JNI Global"), when the suspect's top-level dominator is
+    /// itself an identifiable single GC root. Empty when unknown: the suspect
+    /// is not itself a root, is held by multiple/ambiguous roots, or the root
+    /// type is `ROOT_UNKNOWN`. Only populated for single suspects.
+    pub root_type_label: String,
 }
 
 /// Aggregates for the "Leak Suspects" section.
@@ -941,14 +967,37 @@ fn build_leak_suspects(
         }
     };
 
+    // Map each root object index -> a representative root type. When one index
+    // carries several root records we keep the minimum sub-tag (deterministic),
+    // matching the representative-type convention documented on
+    // `Graph::gc_root_types`. Suspects are top-level dominators (idom == vroot),
+    // so the only single root that can hold one is the object itself; we resolve
+    // the holding root TYPE by looking the suspect's object up in this map.
+    let mut root_type_of: std::collections::HashMap<u32, u8> = std::collections::HashMap::new();
+    for (idx, &ty) in g.gc_root_indices.iter().zip(g.gc_root_types.iter()) {
+        root_type_of
+            .entry(*idx)
+            .and_modify(|e| *e = (*e).min(ty))
+            .or_insert(ty);
+    }
+
     // Materialise into the model, resolving the accumulation point for singles
-    // via MAT's findAccumulationPoint (big-drop-ratio descent).
+    // via MAT's findAccumulationPoint (big-drop-ratio descent) and the holding
+    // GC-root type.
     let out: Vec<Suspect> = suspects
         .iter()
         .map(|s| {
             let mut path: Vec<PathStep> = Vec::new();
             let mut accumulation: Option<usize> = None;
+            let mut root_type_label = String::new();
             if s.is_single {
+                // The suspect object is a top-level dominator; if it is itself a
+                // GC root of an identifiable type, that root type holds it.
+                if let Some(&ty) = root_type_of.get(&s.obj_idx) {
+                    if let Some(label) = gc_root_type_label_opt(ty) {
+                        root_type_label = label.to_string();
+                    }
+                }
                 // Descend the dominator tree to the largest-retained child while
                 // that child retains >= BIG_DROP_RATIO of its parent; the parent
                 // at the first big drop (or a leaf) is the accumulation point.
@@ -1072,6 +1121,7 @@ fn build_leak_suspects(
                 dominated,
                 dominated_by_class,
                 keywords,
+                root_type_label,
             }
         })
         .collect();
@@ -1554,6 +1604,9 @@ fn render_leak_suspects(l: &LeakSuspects, out: &mut String) {
 
         // Accumulation point: where the retained heap actually piles up.
         if s.is_single {
+            if !s.root_type_label.is_empty() {
+                out.push_str(&format!("Held by a **{}** GC root.\n\n", s.root_type_label));
+            }
             match (
                 &s.accumulation_class,
                 s.accumulation_obj_1based,
@@ -1715,6 +1768,7 @@ fn render_top_consumers(t: &TopConsumers, total_shallow: u64, out: &mut String) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::md_test::Md;
     use crate::pass2::Graph;
     use std::collections::HashMap;
 
@@ -2348,9 +2402,18 @@ mod tests {
         );
         r.generated = "FIXED".to_string();
         let md = render_markdown(&r);
+        let doc = Md::parse(&md);
+        let pkgs = doc
+            .section("Biggest Packages by Retained Heap")
+            .expect("Biggest Packages section present");
         assert!(
-            md.contains("_No package retains more than 1% of the total retained heap._"),
-            "nothing-over-threshold marker must be rendered"
+            pkgs.body_contains("_No package retains more than 1% of the total retained heap._"),
+            "nothing-over-threshold marker must be rendered under Biggest Packages"
+        );
+        // And the table must have no data rows in this case.
+        assert!(
+            pkgs.table(0).map(|t| t.rows().is_empty()).unwrap_or(true),
+            "no package rows when nothing exceeds the threshold"
         );
     }
 
@@ -2451,6 +2514,63 @@ mod tests {
     }
 
     #[test]
+    fn test_leak_suspect_root_type_label() {
+        // Fixture GC roots are objects 0, 1, 3 (all single suspects). Override
+        // their root types: obj0 -> Thread, obj1 -> UNKNOWN (no label), obj3 ->
+        // JNI Global. Suspects sort com.foo.A (obj0), com.foo.B (obj1),
+        // org.bar.C (obj3).
+        let (mut g, dc_off, dc_tgt) = fixture();
+        use crate::types::heap;
+        // gc_root_indices is [0, 1, 3]; align types 1:1.
+        assert_eq!(g.gc_root_indices, vec![0, 1, 3]);
+        g.gc_root_types = vec![
+            heap::ROOT_THREAD_OBJ,
+            heap::ROOT_UNKNOWN,
+            heap::ROOT_JNI_GLOBAL,
+        ];
+
+        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let l = &r.leaks;
+        // obj0 is a Thread root -> "Thread".
+        assert_eq!(l.suspects[0].pretty_class, "com.foo.A");
+        assert_eq!(l.suspects[0].root_type_label, "Thread");
+        // obj1 is a root but ROOT_UNKNOWN -> no identifiable label (empty).
+        assert_eq!(l.suspects[1].pretty_class, "com.foo.B");
+        assert_eq!(l.suspects[1].root_type_label, "");
+        // obj3 is a JNI Global root -> "JNI Global".
+        assert_eq!(l.suspects[2].pretty_class, "org.bar.C");
+        assert_eq!(l.suspects[2].root_type_label, "JNI Global");
+
+        // The known labels render as the additive clause; the unknown one does not.
+        let mut r2 = r.clone();
+        r2.generated = "FIXED".to_string();
+        let md = render_markdown(&r2);
+        assert!(md.contains("Held by a **Thread** GC root."));
+        assert!(md.contains("Held by a **JNI Global** GC root."));
+    }
+
+    #[test]
+    fn test_leak_suspect_root_type_label_absent_when_not_root() {
+        // A single suspect whose object is NOT a GC root gets no label. obj0 is
+        // a top-level dominator (single suspect) but we make ONLY obj1 a root,
+        // so obj0's suspect has an empty root_type_label.
+        let (mut g, dc_off, dc_tgt) = fixture();
+        use crate::types::heap;
+        g.gc_root_indices = vec![1];
+        g.gc_root_types = vec![heap::ROOT_THREAD_OBJ];
+
+        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let l = &r.leaks;
+        // obj0 (com.foo.A) is a single suspect but not itself a root -> empty.
+        assert_eq!(l.suspects[0].pretty_class, "com.foo.A");
+        assert!(l.suspects[0].is_single);
+        assert_eq!(l.suspects[0].root_type_label, "");
+        // obj1 (com.foo.B) is the Thread root -> labelled.
+        assert_eq!(l.suspects[1].pretty_class, "com.foo.B");
+        assert_eq!(l.suspects[1].root_type_label, "Thread");
+    }
+
+    #[test]
     fn test_render_markdown_deterministic() {
         // Build the model twice and assert render output is byte-identical.
         // This specifically guards the Biggest-Packages HashMap sort fix.
@@ -2471,11 +2591,33 @@ mod tests {
         r.generated = "FIXED".to_string();
         let md = render_markdown(&r);
         assert!(md.starts_with("# Heap Dump Analysis: `test.hprof`\n\n"));
-        assert!(md.contains("## System Overview\n\n"));
-        assert!(md.contains("### Class Histogram (by Retained Heap)\n\n"));
-        assert!(md.contains("## Leak Suspects\n\n"));
-        assert!(md.contains("## Top Consumers\n\n"));
-        assert!(md.contains("### Biggest Packages by Retained Heap\n\n"));
+        let doc = Md::parse(&md);
+        // Top-level document title is an H1.
+        assert_eq!(
+            doc.heading("Heap Dump Analysis").map(|h| h.level()),
+            Some(1)
+        );
+        // Major sections are H2.
+        assert_eq!(doc.heading("System Overview").map(|h| h.level()), Some(2));
+        assert_eq!(doc.heading("Leak Suspects").map(|h| h.level()), Some(2));
+        assert_eq!(doc.heading("Top Consumers").map(|h| h.level()), Some(2));
+        // Sub-sections are H3, nested under their parents.
+        assert_eq!(
+            doc.heading("Class Histogram (by Retained Heap)")
+                .map(|h| h.level()),
+            Some(3)
+        );
+        assert_eq!(
+            doc.heading("Biggest Packages by Retained Heap")
+                .map(|h| h.level()),
+            Some(3)
+        );
+        // Class Histogram lives inside System Overview's body.
+        assert!(
+            doc.section("System Overview")
+                .unwrap()
+                .body_contains("### Class Histogram (by Retained Heap)")
+        );
     }
 
     #[test]
@@ -2484,29 +2626,31 @@ mod tests {
         let mut r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         r.generated = "FIXED".to_string();
         let md = render_markdown(&r);
+        let doc = Md::parse(&md);
 
         // (a) new OOM-triage heading + headline retainer line present.
+        let triage = doc
+            .section("OOM Triage")
+            .expect("missing OOM Triage heading");
+        assert_eq!(triage.level(), 2, "OOM Triage should be an H2 section");
+        // The headline retainer is a bullet, not just loose text.
         assert!(
-            md.contains("## OOM Triage\n\n"),
-            "missing OOM Triage heading"
-        );
-        assert!(
-            md.contains("- **Headline retainer:**"),
-            "missing headline retainer line"
+            triage.has_bullet_starting_with("**Headline retainer:**"),
+            "missing headline retainer bullet"
         );
         // Fixture's #1 suspect is com.foo.A (a single object) at 1000/270 -> dominates.
         assert!(
-            md.contains("`com.foo.A`"),
+            triage.has_bullet_containing("`com.foo.A`"),
             "headline should name the #1 suspect"
         );
         assert!(
-            md.contains("A single object/class group dominates the heap"),
+            triage.has_bullet_containing("A single object/class group dominates the heap"),
             "1000/270 is >= 50% so it should read as dominated"
         );
 
         // The triage block must precede System Overview.
-        let tri = md.find("## OOM Triage").unwrap();
-        let sys = md.find("## System Overview").unwrap();
+        let tri = doc.heading_offset("OOM Triage").unwrap();
+        let sys = doc.heading_offset("System Overview").unwrap();
         assert!(tri < sys, "OOM Triage must come before System Overview");
 
         // (b) determinism guard: render twice == identical.
@@ -2522,7 +2666,7 @@ mod tests {
             "Biggest Classes",
             "Biggest Packages",
         ] {
-            assert!(md.contains(needle), "missing section: {needle}");
+            assert!(doc.heading(needle).is_some(), "missing section: {needle}");
         }
     }
 

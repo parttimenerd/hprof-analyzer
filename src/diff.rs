@@ -1438,6 +1438,7 @@ mod tests {
             dominated: vec![],
             dominated_by_class: vec![],
             keywords: vec![],
+            root_type_label: String::new(),
         }];
         let mut mat = MatReport::default();
         mat.suspects = vec![MatSuspect {

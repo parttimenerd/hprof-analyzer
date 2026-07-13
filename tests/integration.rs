@@ -1,3 +1,11 @@
+// The structural Markdown helpers live in `src/md_test.rs`, gated behind
+// `#[cfg(test)]` in the binary crate — which an integration test (a separate
+// crate) cannot import. Rather than add a dependency or duplicate the code, we
+// `#[path]`-include the same source file here so both places share one parser.
+#[path = "../src/md_test.rs"]
+mod md_test;
+use md_test::Md;
+
 #[test]
 fn end_to_end_dump0() {
     let path = concat!(
@@ -20,24 +28,70 @@ fn end_to_end_dump0() {
         String::from_utf8_lossy(&out.stderr)
     );
     let md = String::from_utf8_lossy(&out.stdout);
-    assert!(md.contains("## System Overview"), "missing System Overview");
-    assert!(md.contains("### Heap Summary"), "missing Heap Summary");
-    assert!(
-        md.contains("### Class Histogram"),
-        "missing Class Histogram"
+    let doc = Md::parse(&md);
+
+    // Major sections are H2.
+    assert_eq!(
+        doc.heading("System Overview").map(|h| h.level()),
+        Some(2),
+        "missing System Overview (H2)"
     );
-    assert!(md.contains("## Leak Suspects"), "missing Leak Suspects");
-    assert!(md.contains("## Top Consumers"), "missing Top Consumers");
+    assert_eq!(
+        doc.heading("Leak Suspects").map(|h| h.level()),
+        Some(2),
+        "missing Leak Suspects (H2)"
+    );
+    assert_eq!(
+        doc.heading("Top Consumers").map(|h| h.level()),
+        Some(2),
+        "missing Top Consumers (H2)"
+    );
+
+    // Sub-sections are H3.
+    assert_eq!(
+        doc.heading("Heap Summary").map(|h| h.level()),
+        Some(3),
+        "missing Heap Summary (H3)"
+    );
+    assert_eq!(
+        doc.heading("Class Histogram").map(|h| h.level()),
+        Some(3),
+        "missing Class Histogram (H3)"
+    );
+    assert_eq!(
+        doc.heading("Biggest Objects").map(|h| h.level()),
+        Some(3),
+        "missing Biggest Objects (H3)"
+    );
+    assert_eq!(
+        doc.heading("Biggest Classes").map(|h| h.level()),
+        Some(3),
+        "missing Biggest Classes (H3)"
+    );
+    assert_eq!(
+        doc.heading("Biggest Packages").map(|h| h.level()),
+        Some(3),
+        "missing Biggest Packages (H3)"
+    );
+
+    // Structural nesting: Heap Summary and Class Histogram live inside System
+    // Overview's body, and the histogram is a real table with a Class column.
+    let sys = doc.section("System Overview").unwrap();
     assert!(
-        md.contains("### Biggest Objects"),
-        "missing Biggest Objects"
+        sys.body_contains("### Heap Summary"),
+        "Heap Summary should be nested under System Overview"
+    );
+    let hist = doc
+        .section("Class Histogram")
+        .expect("Class Histogram section");
+    let table = hist.table(0).expect("Class Histogram renders a table");
+    assert!(
+        table.has_column("Class"),
+        "histogram table should have a Class column, got {:?}",
+        table.columns()
     );
     assert!(
-        md.contains("### Biggest Classes"),
-        "missing Biggest Classes"
-    );
-    assert!(
-        md.contains("### Biggest Packages"),
-        "missing Biggest Packages"
+        table.has_column("Retained Heap"),
+        "histogram table should have a Retained Heap column"
     );
 }
