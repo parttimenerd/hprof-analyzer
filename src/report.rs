@@ -415,14 +415,6 @@ fn build_system_overview(g: &Graph) -> SystemOverview {
                 }
             }
         }
-        if let Ok(f) = std::fs::File::create("/tmp/ours_reachable_all_idx.txt") {
-            let mut w = std::io::BufWriter::new(f);
-            for i in 0..n {
-                if g.idom[i] != undef_u32 {
-                    let _ = writeln!(w, "{} {} {}", i, g.shallow[i], g.class_idx[i]);
-                }
-            }
-        }
     }
 
     // Class histogram: per-class instance count, shallow total, retained total
@@ -1261,6 +1253,7 @@ mod tests {
             dc_off.push(dc_tgt.len() as u32);
         }
 
+        let gc_root_types: Vec<u8> = vec![crate::types::heap::ROOT_UNKNOWN; gc_root_indices.len()];
         let g = Graph {
             n,
             format: "JAVA PROFILE 1.0.2".to_string(),
@@ -1274,6 +1267,7 @@ mod tests {
             ref_size: 4,
             header_timestamp_ms: 1_700_000_000_000,
             gc_root_indices,
+            gc_root_types,
             shallow,
             class_idx,
             class_names: class_names.iter().map(|s| s.to_string()).collect(),

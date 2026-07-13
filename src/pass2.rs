@@ -35,6 +35,13 @@ pub struct Graph {
     /// Header base timestamp (millis since Unix epoch), 0 if absent/unknown.
     pub header_timestamp_ms: u64,
     pub gc_root_indices: Vec<u32>,
+    /// Per-root HPROF sub-tag, aligned 1:1 with `gc_root_indices` (same order).
+    /// A representative type when an index has multiple root records (the
+    /// minimum sub-tag, deterministically). `heap::ROOT_SYSTEM_CLASS` (0x00)
+    /// marks synthetic system-class roots. Powers `gc_roots_by_type` (B1) and
+    /// the default why-alive line, so it is carried unconditionally.
+    #[allow(dead_code)]
+    pub gc_root_types: Vec<u8>,
     pub shallow: Vec<u32>,
     pub class_idx: Vec<u32>,
     pub class_names: Vec<String>,
@@ -714,26 +721,6 @@ impl Pass2 {
                     let _ = writeln!(w, "{} 0x{:x}", i, p1.id_map.addr_at(i as usize));
                 }
             }
-            if let Ok(f) = std::fs::File::create("/tmp/ours_idx_addr_all2.txt") {
-                let mut w = std::io::BufWriter::new(f);
-                for i in 0..p1.id_map.len() {
-                    let _ = writeln!(w, "{} 0x{:x}", i, p1.id_map.addr_at(i));
-                }
-            }
-            if let Ok(f) = std::fs::File::create("/tmp/ours_probe_gap.txt") {
-                let mut w = std::io::BufWriter::new(f);
-                for i in [233526usize, 233527, 233528, 233537] {
-                    let addr = p1.id_map.addr_at(i);
-                    let in_classmap = p1.class_map.contains_key(&addr);
-                    let cidx = class_obj_class_idx.get(&(i as u32)).copied();
-                    let cname = cidx.and_then(|c| class_names.get(c as usize)).cloned();
-                    let _ = writeln!(
-                        w,
-                        "idx={} addr=0x{:x} kind={} shallow={} in_classmap={} class_obj_row={:?} row_name={:?}",
-                        i, addr, p1.kind[i], shallow[i], in_classmap, cidx, cname
-                    );
-                }
-            }
             // Also probe the 9 MAT-only addresses against the FULL id_map (any
             // object kind) and against class_map (parsed CLASS_DUMP records).
             if let Ok(f) = std::fs::File::create("/tmp/ours_probe9.txt") {
@@ -773,9 +760,16 @@ impl Pass2 {
 
         // ── Phase 2: Build GC root indices ───────────────────────────────
         let mut gc_root_set: std::collections::HashSet<u32> = std::collections::HashSet::new();
-        for &addr in &p1.gc_root_addrs {
+        // Per-index representative root type (minimum sub-tag when an index has
+        // several root records), carried into Graph for B1 grouping + why-alive.
+        let mut root_type_of: std::collections::HashMap<u32, u8> = std::collections::HashMap::new();
+        let note_type = |m: &mut std::collections::HashMap<u32, u8>, idx: u32, ty: u8| {
+            m.entry(idx).and_modify(|e| *e = (*e).min(ty)).or_insert(ty);
+        };
+        for (&addr, &ty) in p1.gc_root_addrs.iter().zip(p1.gc_root_types.iter()) {
             if let Some(idx) = p1.id_map.index_of(addr) {
                 gc_root_set.insert(idx as u32);
+                note_type(&mut root_type_of, idx as u32, ty);
             }
         }
         // Add implicit roots: non-array boot-loader classes (loader_id==0) if no sticky roots
@@ -791,6 +785,7 @@ impl Pass2 {
                     if !is_array {
                         if let Some(idx) = p1.id_map.index_of(caddr) {
                             gc_root_set.insert(idx as u32);
+                            note_type(&mut root_type_of, idx as u32, heap::ROOT_SYSTEM_CLASS);
                         }
                     }
                 }
@@ -819,6 +814,7 @@ impl Pass2 {
             if let Some(idx) = p1.id_map.index_of(caddr) {
                 if !gc_root_set.contains(&(idx as u32)) {
                     gc_root_set.insert(idx as u32);
+                    note_type(&mut root_type_of, idx as u32, heap::ROOT_SYSTEM_CLASS);
                     synthetic_root_count += 1;
                 }
             }
@@ -860,6 +856,13 @@ impl Pass2 {
 
         let mut gc_root_indices: Vec<u32> = gc_root_set.into_iter().collect();
         gc_root_indices.sort_unstable();
+        // Per-root type aligned 1:1 with the sorted indices. Every index in the
+        // set came from a note_type call, so the lookup always hits; fall back
+        // to ROOT_UNKNOWN defensively.
+        let gc_root_types: Vec<u8> = gc_root_indices
+            .iter()
+            .map(|idx| root_type_of.get(idx).copied().unwrap_or(heap::ROOT_UNKNOWN))
+            .collect();
 
         // Compress the two cold per-object arrays (shallow, class_idx) NOW,
         // before the forward-CSR fwd_targets (~6GB) is allocated. Both are
@@ -977,6 +980,7 @@ impl Pass2 {
             ref_size: ref_size as u8,
             header_timestamp_ms: p1.header_timestamp_ms,
             gc_root_indices,
+            gc_root_types,
             shallow,
             class_idx,
             class_names,

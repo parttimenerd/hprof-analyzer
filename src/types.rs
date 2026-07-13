@@ -24,6 +24,10 @@ pub mod heap {
     pub const ROOT_THREAD_BLOCK: u8 = 0x06;
     pub const ROOT_MONITOR_USED: u8 = 0x07;
     pub const ROOT_THREAD_OBJ: u8 = 0x08;
+    /// Synthetic system-class root (MAT addSystemClassRootsIfMissing): a
+    /// boot-loader class object rooted with no explicit HPROF root record.
+    /// 0x00 is unused by HPROF root sub-tags (which are 0x01..=0x08, 0xff).
+    pub const ROOT_SYSTEM_CLASS: u8 = 0x00;
     pub const CLASS_DUMP: u8 = 0x20;
     pub const INSTANCE_DUMP: u8 = 0x21;
     pub const OBJ_ARRAY_DUMP: u8 = 0x22;
