@@ -30,3 +30,17 @@ export function formatEpochMs(ms: number): string {
   const d = new Date(ms);
   return d.toISOString().replace(/\.\d{3}Z$/, "Z");
 }
+
+// Compact display for a class-loader label. Labels are JVM-internal binary
+// names using '/' as the package separator (e.g.
+// "jdk/internal/loader/ClassLoaders$AppClassLoader"). We show just the final
+// simple name for the table cell and keep the full label as a tooltip. The
+// boot loader ("<boot>") is passed through verbatim. Returns null when there is
+// nothing meaningful to show.
+export function shortLoader(label: string | null | undefined): string | null {
+  if (!label) return null;
+  if (label === "<boot>") return "<boot>";
+  const slash = label.lastIndexOf("/");
+  return slash >= 0 ? label.slice(slash + 1) : label;
+}
+

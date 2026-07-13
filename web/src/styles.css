@@ -33,6 +33,7 @@ h3 { font-size: 1.02rem; margin: 1.25rem 0 0.5rem; }
 .oom ul { margin: 0; padding-left: 1.1rem; }
 .oom li { margin: 0.3rem 0; line-height: 1.45; }
 code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; background: var(--card); padding: 0.05rem 0.3rem; border-radius: 4px; }
+code.loader { font-size: 0.78rem; color: var(--muted); }
 table { border-collapse: collapse; width: 100%; font-size: 0.86rem; margin: 0.5rem 0 1rem; }
 th, td { text-align: left; padding: 0.35rem 0.6rem; border-bottom: 1px solid var(--border); }
 th { color: var(--muted); font-weight: 600; }
@@ -49,6 +50,8 @@ summary { cursor: pointer; color: var(--accent); font-size: 0.85rem; }
 .pill.keyword { margin-left: 0; margin-right: 0.4rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--accent); }
 .thread { margin: 0.35rem 0; border-bottom: 1px solid var(--border); }
 .thread summary { color: var(--fg); font-size: 0.9rem; padding: 0.25rem 0; }
+.thread-name { font-weight: 600; color: var(--accent); }
+.thread-serial { color: var(--muted); }
 .stack { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 0.6rem 0.8rem; margin: 0.35rem 0 0.75rem; overflow-x: auto; white-space: pre; line-height: 1.5; }
 
 /* Sticky in-page table of contents. */
@@ -91,3 +94,9 @@ th.sortable.active { color: var(--accent); }
 .bar-cell { position: relative; }
 .bar-bg { display: inline-block; width: 60px; height: 8px; background: var(--border); border-radius: 3px; vertical-align: middle; margin-right: 0.5rem; overflow: hidden; }
 .bar-fill { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+
+/* System properties: bounded key/value table in a scrollable container. */
+.sysprops { max-height: 22rem; overflow: auto; border: 1px solid var(--border); border-radius: 6px; margin: 0.35rem 0 0.75rem; }
+.sysprops table { margin: 0; }
+.sysprops th { position: sticky; top: 0; background: var(--card); }
+.sysprop-val { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.82rem; word-break: break-word; }

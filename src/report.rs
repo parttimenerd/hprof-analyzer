@@ -294,6 +294,13 @@ pub struct HistRow {
     /// Distinct (class, loader) pairs are distinct rows, matching MAT's
     /// class-object-identity histogram keying.
     pub loader_id: u64,
+    /// Human-readable label for `loader_id`: the class NAME of the loader
+    /// object (e.g. `jdk/internal/loader/ClassLoaders$AppClassLoader`), or
+    /// `<boot>` for the boot loader (address 0). `None` when the loader address
+    /// could not be resolved (e.g. leak-suspect `dominated_by_class` rows where
+    /// the histogram-row index is not readily available). Purely descriptive —
+    /// NOT parity-gated and never compared numerically.
+    pub loader_label: Option<String>,
 }
 
 /// One row of the GC-roots-by-type breakdown: a human-readable root-type label
@@ -347,6 +354,15 @@ pub struct RetentionSummary {
     pub num_objects_ge_1pct: u64,
 }
 
+/// One decoded JVM system property (`java.lang.System.props` entry). Serialized
+/// as a stable `{ "key": ..., "value": ... }` object (rather than a positional
+/// array) so the JSON schema is self-describing.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct PropEntry {
+    pub key: String,
+    pub value: String,
+}
+
 /// Aggregates for the "System Overview" section.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct SystemOverview {
@@ -395,6 +411,14 @@ pub struct SystemOverview {
     /// Number of histogram rows the full histogram was capped to, or None when
     /// the histogram is complete (never truncated). Always None today.
     pub histogram_truncated_to: Option<u64>,
+    /// Decoded JVM system properties (java.lang.System static `props`), sorted
+    /// by key. Empty when the props object is absent or its layout could not be
+    /// safely decoded (graceful fallback — never garbage). Additive: not
+    /// parity-compared.
+    pub system_properties: Vec<PropEntry>,
+    /// Derived JVM version (prefers `java.vm.version`, else `java.version`).
+    /// None when neither property was decoded. Additive: not parity-compared.
+    pub jvm_version: Option<String>,
 }
 
 /// One step of a single-suspect accumulation path.
@@ -519,6 +543,10 @@ pub struct TopConsumers {
 pub struct ThreadInfo {
     /// HPROF thread serial (stable within the dump).
     pub thread_serial: u32,
+    /// Decoded `java.lang.Thread.name`, or None when the name could not be
+    /// resolved (missing thread/String, JDK layout mismatch, or empty name).
+    /// Additive field: not part of MAT parity comparison.
+    pub name: Option<String>,
     /// Class name of the resolved thread object, or None when the thread
     /// object could not be located in the heap.
     pub class_name: Option<String>,
@@ -604,6 +632,7 @@ fn build_thread_overview(g: &Graph) -> ThreadOverview {
             };
             ThreadInfo {
                 thread_serial: t.thread_serial,
+                name: g.thread_names.get(&t.thread_serial).cloned(),
                 class_name,
                 frames: t.frames.clone(),
             }
@@ -870,6 +899,15 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64]) -> SystemOverview {
             shallow: shallow_total[ci],
             retained: class_retained[ci],
             loader_id: g.class_loader_id.get(ci).copied().unwrap_or(0),
+            loader_label: {
+                // `ci` is the histogram row index, aligned with class_loader_id.
+                let lid = g.class_loader_id.get(ci).copied().unwrap_or(0);
+                if lid == 0 {
+                    Some("<boot>".to_string())
+                } else {
+                    g.loader_labels.get(&lid).cloned()
+                }
+            },
         })
         .collect();
 
@@ -902,6 +940,15 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64]) -> SystemOverview {
         unreachable_shallow,
         histogram,
         histogram_truncated_to: None,
+        system_properties: g
+            .system_properties
+            .iter()
+            .map(|(k, v)| PropEntry {
+                key: k.clone(),
+                value: v.clone(),
+            })
+            .collect(),
+        jvm_version: g.jvm_version.clone(),
     }
 }
 
@@ -1138,6 +1185,16 @@ fn build_leak_suspects(
                         shallow: sh,
                         retained: ret,
                         loader_id: g.class_loader_id.get(ci).copied().unwrap_or(0),
+                        loader_label: {
+                            // `ci` = g.class_idx[ki], a valid histogram row
+                            // index aligned with class_loader_id.
+                            let lid = g.class_loader_id.get(ci).copied().unwrap_or(0);
+                            if lid == 0 {
+                                Some("<boot>".to_string())
+                            } else {
+                                g.loader_labels.get(&lid).cloned()
+                            }
+                        },
                     });
                 }
             }
@@ -1642,6 +1699,9 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
     if let Some(ms) = o.dump_creation {
         summary.row(["Dump created".into(), format_epoch_ms(ms)]);
     }
+    if let Some(ver) = &o.jvm_version {
+        summary.row(["JVM version".into(), ver.clone()]);
+    }
     summary.row(["Total objects".into(), fmt_count(o.total_objects)]);
     summary.row(["Total shallow heap".into(), format_bytes(o.total_shallow)]);
     summary.row(["GC roots".into(), fmt_count(o.gc_roots)]);
@@ -1660,7 +1720,57 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
     summary.render(out);
     out.push('\n');
 
-    // GC roots by type: only worth a table when there is more than one type
+    // Class-loader labels (additive; does not restructure the tables above).
+    // List the distinct non-boot loader labels seen across histogram rows, in
+    // first-seen order, capped for readability. Skips the `<boot>` label.
+    {
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let mut labels: Vec<&str> = Vec::new();
+        for row in &o.histogram {
+            if let Some(lbl) = row.loader_label.as_deref() {
+                if lbl != "<boot>" && seen.insert(lbl) {
+                    labels.push(lbl);
+                }
+            }
+        }
+        if !labels.is_empty() {
+            const CAP: usize = 8;
+            let shown = labels.len().min(CAP);
+            let mut line = labels[..shown].join(", ");
+            if labels.len() > CAP {
+                line.push_str(&format!(", … (+{} more)", labels.len() - CAP));
+            }
+            out.push_str(&format!("- **Class loaders (labels):** {line}\n\n"));
+        }
+    }
+
+    // System properties (additive; captured from java.lang.System.props). Table
+    // capped for readability; the full sorted list lives in JSON. Values are
+    // truncated to keep rows scannable.
+    if !o.system_properties.is_empty() {
+        const CAP: usize = 40;
+        const VAL_MAX: usize = 120;
+        out.push_str("### System Properties\n\n");
+        let shown = o.system_properties.len().min(CAP);
+        let mut t = Table::new(&["Property", "Value"], &[Align::Left, Align::Left]);
+        for p in &o.system_properties[..shown] {
+            let mut v = p.value.replace('\n', " ").replace('|', "\\|");
+            if v.chars().count() > VAL_MAX {
+                let truncated: String = v.chars().take(VAL_MAX).collect();
+                v = format!("{truncated}…");
+            }
+            t.row([p.key.clone(), v]);
+        }
+        t.render(out);
+        if o.system_properties.len() > CAP {
+            out.push_str(&format!(
+                "\n_… (+{} more properties in JSON)_\n",
+                o.system_properties.len() - CAP
+            ));
+        }
+        out.push('\n');
+    }
+
     // (a single-type breakdown restates the "GC roots" scalar above).
     if o.gc_roots_by_type.len() > 1 {
         out.push_str("### GC Roots by Type\n\n");
@@ -1953,7 +2063,13 @@ fn render_threads(t: &ThreadOverview, out: &mut String) {
     }
     for th in &t.threads {
         let class = th.class_name.as_deref().unwrap_or("<unresolved>");
-        out.push_str(&format!("### Thread {} ({})\n\n", th.thread_serial, class));
+        match &th.name {
+            Some(name) => out.push_str(&format!(
+                "### Thread {} \"{}\" ({})\n\n",
+                th.thread_serial, name, class
+            )),
+            None => out.push_str(&format!("### Thread {} ({})\n\n", th.thread_serial, class)),
+        }
         for frame in &th.frames {
             out.push_str(&format!("- `{frame}`\n"));
         }
@@ -2090,7 +2206,11 @@ mod tests {
             class_idx,
             class_names: class_names.iter().map(|s| s.to_string()).collect(),
             class_loader_id: vec![0u64; class_names.len()],
+            loader_labels: std::collections::HashMap::new(),
             thread_stacks: Vec::new(),
+            thread_names: std::collections::HashMap::new(),
+            system_properties: Vec::new(),
+            jvm_version: None,
             class_obj_class_idx,
             fwd_offsets: Vec::new(),
             fwd_targets: Vec::new(),
@@ -2517,6 +2637,52 @@ mod tests {
         let (dc_off, dc_tgt) = crate::retained::build_dom_children_csr(g.n, &g.idom);
         let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         assert_eq!(r.overview.classloaders_loaded, 1);
+    }
+
+    /// Stage 1: `HistRow.loader_label` resolves the boot loader (addr 0) to
+    /// `<boot>` and a named loader address to its label from `loader_labels`.
+    /// The Markdown "Class loaders (labels)" line lists the non-boot label.
+    #[test]
+    fn test_loader_label_resolution() {
+        // Row 0 = boot-loaded (addr 0); row 1 = loaded by 0x1234.
+        let (mut g, _dc_off, _dc_tgt) = make_graph(
+            vec![2, 2],
+            vec![0, 1],
+            vec![100, 50],
+            vec![1000, 500],
+            vec!["java/lang/Class", "com/foo/A"],
+            &[(0, 0), (1, 1)],
+            &[],
+            vec![0, 1],
+            0,
+        );
+        g.class_loader_id = vec![0, 0x1234];
+        g.loader_labels
+            .insert(0x1234, "com/example/MyLoader".to_string());
+        let (dc_off, dc_tgt) = crate::retained::build_dom_children_csr(g.n, &g.idom);
+        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let o = &r.overview;
+
+        let boot = o
+            .histogram
+            .iter()
+            .find(|h| h.loader_id == 0)
+            .expect("boot-loaded row present");
+        assert_eq!(boot.loader_label.as_deref(), Some("<boot>"));
+
+        let named = o
+            .histogram
+            .iter()
+            .find(|h| h.loader_id == 0x1234)
+            .expect("0x1234-loaded row present");
+        assert_eq!(named.loader_label.as_deref(), Some("com/example/MyLoader"));
+
+        // Markdown surfaces the label (not the boot pseudo-label) in the list.
+        let md = render_markdown(&r);
+        assert!(
+            md.contains("**Class loaders (labels):** com/example/MyLoader"),
+            "missing Class loaders labels line; got:\n{md}"
+        );
     }
 
     /// MAT materializes a synthetic <system class loader> object at 0x0 of
@@ -3149,6 +3315,7 @@ mod tests {
             &ThreadOverview {
                 threads: vec![ThreadInfo {
                     thread_serial: 3,
+                    name: Some("main".to_string()),
                     class_name: Some("java/lang/Thread".to_string()),
                     frames: vec!["java.lang.Object.wait (Object.java:1)".to_string()],
                 }],
@@ -3156,7 +3323,7 @@ mod tests {
             &mut out,
         );
         assert!(out.contains("## Threads"));
-        assert!(out.contains("### Thread 3 (java/lang/Thread)"));
+        assert!(out.contains("### Thread 3 \"main\" (java/lang/Thread)"));
         assert!(out.contains("java.lang.Object.wait (Object.java:1)"));
     }
 

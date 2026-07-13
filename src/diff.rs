@@ -1709,6 +1709,7 @@ mod tests {
             shallow: sh,
             retained: ret,
             loader_id: 0,
+            loader_label: None,
         }
     }
 
@@ -1737,6 +1738,8 @@ mod tests {
                 unreachable_shallow: 0,
                 histogram,
                 histogram_truncated_to: None,
+                system_properties: vec![],
+                jvm_version: None,
             },
             leaks: LeakSuspects {
                 total_shallow: 1000,

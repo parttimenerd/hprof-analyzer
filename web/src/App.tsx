@@ -1,6 +1,6 @@
 import React from "react";
 import type { HistRow, PackageNode, Report, Suspect, ThreadInfo } from "./types";
-import { fmtCount, fmtExactBytes, formatBytes, formatEpochMs, pctOf } from "./format";
+import { fmtCount, fmtExactBytes, formatBytes, formatEpochMs, pctOf, shortLoader } from "./format";
 import {
   ConcentrationChart,
   DepthHistogramChart,
@@ -145,6 +145,13 @@ function ClassHistogramTable({ rows }: { rows: HistRow[] }) {
   const [sortKey, setSortKey] = React.useState<HistKey>("retained");
   const [filter, setFilter] = React.useState("");
 
+  // Show the class-loader column only when at least one class was loaded by a
+  // non-boot loader — otherwise every cell would read "<boot>" and add noise.
+  const showLoader = React.useMemo(
+    () => rows.some((r) => r.loader_label != null && r.loader_label !== "<boot>"),
+    [rows],
+  );
+
   const view = React.useMemo(() => {
     const needle = filter.trim().toLowerCase();
     const filtered = needle
@@ -180,6 +187,7 @@ function ClassHistogramTable({ rows }: { rows: HistRow[] }) {
           <tr>
             <th>#</th>
             <th>Class</th>
+            {showLoader && <th>Loader</th>}
             {HIST_COLS.map((c) => (
               <th
                 key={c.key}
@@ -199,6 +207,11 @@ function ClassHistogramTable({ rows }: { rows: HistRow[] }) {
               <td>
                 <code>{h.pretty_class}</code>
               </td>
+              {showLoader && (
+                <td>
+                  <LoaderCell label={h.loader_label} />
+                </td>
+              )}
               <td className="num">{fmtCount(h.instances)}</td>
               <td className="num">{formatBytes(h.shallow)}</td>
               <td className="num">{formatBytes(h.retained)}</td>
@@ -207,6 +220,19 @@ function ClassHistogramTable({ rows }: { rows: HistRow[] }) {
         </tbody>
       </table>
     </details>
+  );
+}
+
+// Renders a class-loader label compactly: the loader's simple class name, with
+// the full JVM-internal name as a tooltip. The boot loader is shown muted.
+function LoaderCell({ label }: { label?: string | null }) {
+  const short = shortLoader(label);
+  if (short == null) return <span className="hint">—</span>;
+  if (short === "<boot>") return <span className="hint">&lt;boot&gt;</span>;
+  return (
+    <code className="loader" title={label ?? undefined}>
+      {short}
+    </code>
   );
 }
 
@@ -232,6 +258,14 @@ function SystemOverviewSection({ report }: { report: Report }) {
           </dd>
           <dt>HPROF format</dt>
           <dd>{o.format}</dd>
+          {o.jvm_version && (
+            <>
+              <dt>JVM version</dt>
+              <dd>
+                <code>{o.jvm_version}</code>
+              </dd>
+            </>
+          )}
           <dt>File size</dt>
           <dd>{formatBytes(o.file_size)}</dd>
           <dt>Identifier size</dt>
@@ -276,6 +310,34 @@ function SystemOverviewSection({ report }: { report: Report }) {
           )}
         </dl>
       </div>
+
+      {o.system_properties.length > 0 ? (
+        <details>
+          <summary>System properties ({fmtCount(o.system_properties.length)})</summary>
+          <div className="sysprops">
+            <table>
+              <thead>
+                <tr>
+                  <th>Key</th>
+                  <th>Value</th>
+                </tr>
+              </thead>
+              <tbody>
+                {o.system_properties.map((p, i) => (
+                  <tr key={i}>
+                    <td>
+                      <code>{p.key}</code>
+                    </td>
+                    <td className="sysprop-val">{p.value}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      ) : (
+        <p className="subtitle">System properties not captured in this dump.</p>
+      )}
 
       {o.heap_composition.by_kind.length > 0 && (
         <>
@@ -658,10 +720,24 @@ function TopConsumersSection({ report }: { report: Report }) {
 // the upstream (thread_serial-sorted) order for determinism.
 function ThreadCard({ t }: { t: ThreadInfo }) {
   const cls = t.class_name ?? "<unresolved>";
+  const name = t.name?.trim();
   return (
     <details className="thread">
       <summary>
-        Thread {t.thread_serial} (<code>{cls}</code>) — {fmtCount(t.frames.length)} frame
+        {name ? (
+          <>
+            <span className="thread-name">"{name}"</span>{" "}
+            <span className="thread-serial">
+              Thread {t.thread_serial}
+            </span>{" "}
+            (<code>{cls}</code>)
+          </>
+        ) : (
+          <>
+            Thread {t.thread_serial} (<code>{cls}</code>)
+          </>
+        )}
+        {" "}— {fmtCount(t.frames.length)} frame
         {t.frames.length === 1 ? "" : "s"}
       </summary>
       <pre className="stack">{t.frames.join("\n")}</pre>
@@ -677,6 +753,7 @@ function ThreadsSection({ report }: { report: Report }) {
     if (!needle) return threads;
     return threads.filter(
       (t) =>
+        (t.name ?? "").toLowerCase().includes(needle) ||
         (t.class_name ?? "").toLowerCase().includes(needle) ||
         String(t.thread_serial).includes(needle) ||
         t.frames.some((f) => f.toLowerCase().includes(needle)),
@@ -694,7 +771,7 @@ function ThreadsSection({ report }: { report: Report }) {
             <input
               type="text"
               className="filter"
-              placeholder="Filter threads (class, serial, or stack frame)…"
+              placeholder="Filter threads (name, class, serial, or stack frame)…"
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
               aria-label="Filter threads"

@@ -7,6 +7,10 @@ export interface HistRow {
   shallow: number;
   retained: number;
   loader_id: number;
+  // Human-readable class-loader label (the loader's runtime class name; the
+  // boot loader is "<boot>"). Absent when unresolved. Preferred over the raw
+  // numeric loader_id for display.
+  loader_label?: string | null;
 }
 
 export interface GcRootTypeRow {
@@ -37,10 +41,20 @@ export interface RetentionSummary {
   num_objects_ge_1pct: number;
 }
 
+export interface SysProp {
+  key: string;
+  value: string;
+}
+
 export interface SystemOverview {
   source_name: string;
   file_path: string;
   format: string;
+  // JVM version string (e.g. "17.0.9+11"); null when not derivable from the dump.
+  jvm_version: string | null;
+  // Captured java.lang.System properties. May be empty on modern JDKs where the
+  // Properties table is ConcurrentHashMap-backed (empty is normal/expected).
+  system_properties: SysProp[];
   file_size: number;
   identifier_size_bits: number;
   compressed_oops: boolean | null;
@@ -126,6 +140,7 @@ export interface TopConsumers {
 
 export interface ThreadInfo {
   thread_serial: number;
+  name?: string | null;
   class_name: string | null;
   frames: string[];
 }

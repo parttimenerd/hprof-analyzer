@@ -156,6 +156,13 @@
           "format": "uint64",
           "minimum": 0
         },
+        "loader_label": {
+          "description": "Human-readable label for `loader_id`: the class NAME of the loader\nobject (e.g. `jdk/internal/loader/ClassLoaders$AppClassLoader`), or\n`<boot>` for the boot loader (address 0). `None` when the loader address\ncould not be resolved (e.g. leak-suspect `dominated_by_class` rows where\nthe histogram-row index is not readily available). Purely descriptive —\nNOT parity-gated and never compared numerically.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "pretty_class": {
           "type": "string"
         },
@@ -331,6 +338,22 @@
         "obj_index_1based",
         "display_class",
         "retained"
+      ]
+    },
+    "PropEntry": {
+      "description": "One decoded JVM system property (`java.lang.System.props` entry). Serialized\nas a stable `{ \"key\": ..., \"value\": ... }` object (rather than a positional\narray) so the JSON schema is self-describing.",
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "value"
       ]
     },
     "RetentionSummary": {
@@ -553,12 +576,26 @@
           "format": "uint32",
           "minimum": 0
         },
+        "jvm_version": {
+          "description": "Derived JVM version (prefers `java.vm.version`, else `java.version`).\nNone when neither property was decoded. Additive: not parity-compared.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "retention_concentration": {
           "description": "B3: retention concentration over top-level dominators. Always present\n(zeroed for an empty heap). Surfaced in OOM Triage as a \"One leak or\nmany\" line.",
           "$ref": "#/$defs/RetentionSummary"
         },
         "source_name": {
           "type": "string"
+        },
+        "system_properties": {
+          "description": "Decoded JVM system properties (java.lang.System static `props`), sorted\nby key. Empty when the props object is absent or its layout could not be\nsafely decoded (graceful fallback — never garbage). Additive: not\nparity-compared.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PropEntry"
+          }
         },
         "total_objects": {
           "type": "integer",
@@ -598,7 +635,8 @@
         "classloaders_loaded",
         "unreachable_count",
         "unreachable_shallow",
-        "histogram"
+        "histogram",
+        "system_properties"
       ]
     },
     "ThreadInfo": {
@@ -618,6 +656,13 @@
           "items": {
             "type": "string"
           }
+        },
+        "name": {
+          "description": "Decoded `java.lang.Thread.name`, or None when the name could not be\nresolved (missing thread/String, JDK layout mismatch, or empty name).\nAdditive field: not part of MAT parity comparison.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "thread_serial": {
           "description": "HPROF thread serial (stable within the dump).",

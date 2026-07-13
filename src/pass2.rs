@@ -65,10 +65,33 @@ pub struct Graph {
     /// class-loader count and per-loader grouping; a per-ROW array (not
     /// per-object) so it costs O(#classes), never O(#objects).
     pub class_loader_id: Vec<u64>,
+    /// Class-loader OBJECT address -> class NAME of that loader object, for the
+    /// distinct non-boot loaders seen across histogram rows (`class_loader_id`).
+    /// Lets the report layer render a human loader label instead of a raw
+    /// address. Boot loader (addr 0) is absent here and labeled `<boot>` by the
+    /// report layer. Bounded by #distinct loaders, so O(#loaders), not O(#objects).
+    pub loader_labels: std::collections::HashMap<u64, String>,
     /// Resolved thread stack traces (one per STACK_TRACE with frames), built
     /// from pass1's STACK_FRAME/STACK_TRACE tables. Small; feeds Thread Overview
     /// and leak-suspect stack context. Empty when the dump carries no traces.
     pub thread_stacks: Vec<ThreadStack>,
+    /// Decoded `java.lang.Thread.name` per HPROF thread serial. Populated by a
+    /// bounded multi-pass worklist in `Pass2::build` (thread objects → their
+    /// name String → the String's char/byte array → decoded text). Bounded by
+    /// the number of threads (hundreds), so it never touches the per-object RSS
+    /// budget. Absent serials render as an unnamed thread.
+    pub thread_names: std::collections::HashMap<u32, String>,
+    /// Decoded JVM system properties (java.lang.System static `props`), as
+    /// (key, value) pairs sorted by key. Captured by `resolve_system_properties`
+    /// via a bounded multi-pass worklist over ONE Properties/Hashtable object.
+    /// Capped at 4096 entries. Empty when the props object is absent or its
+    /// layout does not match the Hashtable form (graceful fallback — never
+    /// garbage). Bounded, so off the per-object RSS budget on multi-GB dumps.
+    pub system_properties: Vec<(String, String)>,
+    /// Derived JVM version string: prefers the `java.vm.version` property, else
+    /// `java.version`, else None. Populated even when the full property table
+    /// could not be decoded (both keys are extracted from `system_properties`).
+    pub jvm_version: Option<String>,
     pub class_obj_class_idx: HashMap<u32, u32>, // class-obj index -> class-histogram row (sparse; absent = not a class obj)
     // Forward CSR
     pub fwd_offsets: Vec<u32>,
@@ -604,7 +627,986 @@ fn build_thread_stacks(p1: &Pass1) -> Vec<ThreadStack> {
     out
 }
 
-/// Render one resolved frame as `class.method (source:line)`, applying HPROF
+/// Compute the absolute byte offset of one named instance field within an
+/// object's INSTANCE_DUMP blob. HotSpot lays out SUPERCLASS fields first, so we
+/// walk the super-chain child→parent, then sum field widths oldest-ancestor
+/// first (the REVERSE of the collected chain). Returns `(offset, type)` for the
+/// first field whose name matches `field_name` AND whose DECLARING class name
+/// matches `owner_class`, or `None` if absent. `ref_size` widths are used for
+/// Object fields so offsets match the on-disk blob (compressed OOPs).
+///
+/// The `owner_class` filter is essential: a subclass may declare its own field
+/// with the same simple name (e.g. a Scala `PhilosopherThread.name`) that would
+/// otherwise be picked instead of the inherited `java.lang.Thread.name`.
+fn field_offset(
+    class_addr: u64,
+    field_name: &str,
+    owner_class: &str,
+    class_map: &HashMap<u64, ClassInfo>,
+    strings: &HashMap<u64, String>,
+    obj_ref_width: usize,
+) -> Option<(u32, HprofType)> {
+    // Collect the super-chain child-first.
+    let mut chain: Vec<u64> = Vec::new();
+    let mut cur = class_addr;
+    loop {
+        match class_map.get(&cur) {
+            None => break,
+            Some(ci) => {
+                chain.push(cur);
+                if ci.super_id == 0 {
+                    break;
+                }
+                cur = ci.super_id;
+            }
+        }
+    }
+    // HPROF stores instance field VALUES subclass-first: the object's own class
+    // fields come first in the blob, then the immediate superclass's, and so on
+    // up the chain (see `ClassInfo.fields` doc in pass1). Accumulate widths in
+    // that same child-first order — i.e. walk `chain` as collected, NOT reversed.
+    // Object references inside an INSTANCE_DUMP blob are always `id_size` wide
+    // (the compressed-oops narrowing only applies to object-array elements), so
+    // callers pass `id_size` as `obj_ref_width`.
+    let mut byte_offset = 0usize;
+    for &caddr in chain.iter() {
+        let ci = class_map.get(&caddr)?;
+        let cname = strings.get(&ci.name_id).map(|s| s.as_str()).unwrap_or("");
+        let owner_matches = cname == owner_class;
+        for &(fname_id, t) in &ci.fields {
+            let fsize = if t == HprofType::Object {
+                obj_ref_width
+            } else {
+                t.byte_size()
+            };
+            let fname = strings.get(&fname_id).map(|s| s.as_str()).unwrap_or("");
+            if owner_matches && fname == field_name {
+                return Some((byte_offset as u32, t));
+            }
+            byte_offset += fsize;
+        }
+    }
+    None
+}
+
+/// Decode each thread's `java.lang.Thread.name` String into UTF-8 via a bounded
+/// multi-pass worklist. All captured sets are bounded by the number of threads
+/// (hundreds) and the tiny Strings/arrays they reference, so this stays off the
+/// per-object RSS budget even on multi-GB dumps.
+///
+/// Runs THREE extra full-file sequential scans (the reader is streaming-only, so
+/// each multi-hop forward reference needs its own pass over the file):
+///   A: Thread object → its `name` String address.
+///   B: String → its backing array address + `coder` byte (Java 8 has no coder).
+///   C: backing PRIM_ARRAY → its raw element bytes.
+/// Then chains the maps per serial and decodes. Passes are NOT merged because a
+/// hop's target addresses are only known after the previous pass completes.
+///
+/// Field offsets are derived from each object's ACTUAL class id (memoized),
+/// because a heap may hold several loader-distinct class objects named
+/// `java/lang/Thread` / `java/lang/String`, and thread objects are frequently
+/// subclasses whose inherited `name` sits past the subclass's own fields.
+fn resolve_thread_names(path: &str, p1: &Pass1) -> io::Result<HashMap<u32, String>> {
+    let mut names: HashMap<u32, String> = HashMap::new();
+    if p1.thread_serial_to_obj_id.is_empty() {
+        return Ok(names);
+    }
+    let id_size = p1.id_size;
+    // Object references inside an INSTANCE_DUMP blob are always id_size wide (the
+    // compressed-oops narrowing detected for array elements does not apply here).
+    let obj_ref_width = id_size as usize;
+    let class_map = &p1.class_map;
+    let strings = &p1.strings;
+
+    // ── Pass A: Thread object addr → name String addr ────────────────────────
+    // Bounded by #threads. The `name` offset is resolved from each thread's own
+    // class id (memoized), matching only the field declared by java/lang/Thread
+    // so a subclass field of the same simple name cannot shadow it.
+    let wanted_threads: std::collections::HashSet<u64> =
+        p1.thread_serial_to_obj_id.values().copied().collect();
+    let mut thread_to_name_addr: HashMap<u64, u64> = HashMap::new();
+    let mut name_off_cache: HashMap<u64, Option<usize>> = HashMap::new();
+    scan_instance_blobs(path, id_size, &wanted_threads, |addr, class_id, blob| {
+        let name_off = *name_off_cache.entry(class_id).or_insert_with(|| {
+            match field_offset(
+                class_id,
+                "name",
+                "java/lang/Thread",
+                class_map,
+                strings,
+                obj_ref_width,
+            ) {
+                Some((off, HprofType::Object)) => Some(off as usize),
+                _ => None,
+            }
+        });
+        if let Some(off) = name_off {
+            if off + obj_ref_width <= blob.len() {
+                let name_ref = read_ref(&blob[off..], obj_ref_width);
+                if name_ref != 0 {
+                    thread_to_name_addr.insert(addr, name_ref);
+                }
+            }
+        }
+    })?;
+    if thread_to_name_addr.is_empty() {
+        return Ok(names);
+    }
+
+    // ── Pass B: String addr → (array addr, coder) ────────────────────────────
+    // Bounded by #threads (one name String each). The value/coder offsets are
+    // resolved per String's own class id (memoized): Java 8 char[] Strings have
+    // no `coder` field and are treated as UTF16 (coder 1).
+    let wanted_strings: std::collections::HashSet<u64> =
+        thread_to_name_addr.values().copied().collect();
+    let mut string_to_arr: HashMap<u64, (u64, u8)> = HashMap::new();
+    // class_id → (value_off, coder_off)
+    let mut str_off_cache: HashMap<u64, Option<(usize, Option<usize>)>> = HashMap::new();
+    scan_instance_blobs(path, id_size, &wanted_strings, |addr, class_id, blob| {
+        let offs = *str_off_cache.entry(class_id).or_insert_with(|| {
+            let value_off = match field_offset(
+                class_id,
+                "value",
+                "java/lang/String",
+                class_map,
+                strings,
+                obj_ref_width,
+            ) {
+                Some((off, HprofType::Object)) => off as usize,
+                _ => return None,
+            };
+            let coder_off = match field_offset(
+                class_id,
+                "coder",
+                "java/lang/String",
+                class_map,
+                strings,
+                obj_ref_width,
+            ) {
+                Some((off, HprofType::Byte)) => Some(off as usize),
+                _ => None,
+            };
+            Some((value_off, coder_off))
+        });
+        if let Some((value_off, coder_off)) = offs {
+            if value_off + obj_ref_width <= blob.len() {
+                let arr_ref = read_ref(&blob[value_off..], obj_ref_width);
+                // Java 8 char[]: no coder field → UTF16 (coder 1).
+                let coder = match coder_off {
+                    Some(co) if co < blob.len() => blob[co],
+                    _ => 1,
+                };
+                if arr_ref != 0 {
+                    string_to_arr.insert(addr, (arr_ref, coder));
+                }
+            }
+        }
+    })?;
+    if string_to_arr.is_empty() {
+        return Ok(names);
+    }
+
+    // ── Pass C: array addr → element bytes ───────────────────────────────────
+    // Bounded by #threads (each name array is tiny).
+    let wanted_arrays: std::collections::HashSet<u64> =
+        string_to_arr.values().map(|&(a, _)| a).collect();
+    let mut arr_bytes: HashMap<u64, Vec<u8>> = HashMap::new();
+    scan_prim_arrays(path, id_size, &wanted_arrays, |addr, bytes| {
+        arr_bytes.insert(addr, bytes.to_vec());
+    })?;
+
+    // ── Decode: chain serial → thread → String → array → text ────────────────
+    for (&serial, &thread_addr) in &p1.thread_serial_to_obj_id {
+        let Some(&name_addr) = thread_to_name_addr.get(&thread_addr) else {
+            continue;
+        };
+        let Some(&(arr_addr, coder)) = string_to_arr.get(&name_addr) else {
+            continue;
+        };
+        let Some(bytes) = arr_bytes.get(&arr_addr) else {
+            continue;
+        };
+        let text = decode_java_string(bytes, coder);
+        if !text.is_empty() {
+            names.insert(serial, text);
+        }
+    }
+
+    Ok(names)
+}
+
+/// Maximum number of system-property entries captured. The props table is ONE
+/// object, but its slot count is attacker/dump-controlled, so every worklist
+/// derived from it is capped at this bound to keep RSS bounded regardless of
+/// dump size.
+const MAX_PROP_ENTRIES: usize = 4096;
+
+/// Sorted `(key, value)` system-property pairs plus the derived JVM version.
+type SystemProps = (Vec<(String, String)>, Option<String>);
+
+/// Capture java.lang.System's static `props` object and decode it into a sorted
+/// (key, value) list of system properties plus a derived JVM version.
+///
+/// Strategy (all passes bounded — see `MAX_PROP_ENTRIES`):
+///   P0: scan CLASS_DUMP records for the class named `java/lang/System`; read
+///       its static object field `props` → the props object address.
+///   P1: props object → its `table` Object[] array address (Properties extends
+///       Hashtable; `table` is declared by java/util/Hashtable). Java 9+
+///       Properties that delegate to a ConcurrentHashMap have no such field →
+///       graceful empty fallback.
+///   P2: `table` Object[] → the non-null Hashtable$Entry slot addresses.
+///   P3: entries → (key,value,next) refs; follow `next` chains (bounded by the
+///       4096 cap) to collect all key/value String addresses.
+///   P4: key/value Strings → (backing array addr, coder).
+///   P5: backing PRIM_ARRAYs → raw bytes → decode.
+///
+/// Returns `(sorted (key,value) pairs, jvm_version)`. The JVM version is derived
+/// even when the property table itself is empty (both keys come from the pairs).
+/// On ANY layout mismatch the property list falls back to empty rather than
+/// emitting garbage.
+fn resolve_system_properties(path: &str, p1: &Pass1) -> io::Result<SystemProps> {
+    let empty = (Vec::new(), None);
+    let id_size = p1.id_size;
+    let obj_ref_width = id_size as usize;
+    let class_map = &p1.class_map;
+    let strings = &p1.strings;
+
+    // ── P0: locate java/lang/System's static `props` object address ──────────
+    // Bounded: ONE class' static fields. Scan CLASS_DUMP records; for the class
+    // whose name is "java/lang/System", read the OBJECT static field "props".
+    let mut props_addr: u64 = 0;
+    scan_class_dumps(path, id_size, |class_obj_id, statics| {
+        if props_addr != 0 {
+            return;
+        }
+        let cname = class_map
+            .get(&class_obj_id)
+            .and_then(|ci| strings.get(&ci.name_id))
+            .map(|s| s.as_str())
+            .unwrap_or("");
+        if cname != "java/lang/System" {
+            return;
+        }
+        for &(name_id, type_code, value) in statics {
+            if HprofType::from_code(type_code) != Some(HprofType::Object) {
+                continue;
+            }
+            let fname = strings.get(&name_id).map(|s| s.as_str()).unwrap_or("");
+            if fname == "props" && value != 0 {
+                props_addr = value;
+            }
+        }
+    })?;
+    if props_addr == 0 {
+        return Ok(empty);
+    }
+
+    // ── P1: props object → its Hashtable `table` Object[] array address ───────
+    // Bounded: ONE object. `table` is declared by java/util/Hashtable; matching
+    // that owner avoids a subclass field of the same simple name shadowing it.
+    let mut table_addr: u64 = 0;
+    let wanted_props: std::collections::HashSet<u64> = std::iter::once(props_addr).collect();
+    scan_instance_blobs(path, id_size, &wanted_props, |_addr, class_id, blob| {
+        let off = match field_offset(
+            class_id,
+            "table",
+            "java/util/Hashtable",
+            class_map,
+            strings,
+            obj_ref_width,
+        ) {
+            Some((o, HprofType::Object)) => o as usize,
+            _ => return,
+        };
+        if off + obj_ref_width <= blob.len() {
+            table_addr = read_ref(&blob[off..], obj_ref_width);
+        }
+    })?;
+    if table_addr == 0 {
+        // No Hashtable `table` field (e.g. Java 9+ ConcurrentHashMap-backed
+        // Properties). Fall back gracefully — no properties, no jvm_version.
+        return Ok(empty);
+    }
+
+    // ── P2: `table` Object[] → non-null Hashtable$Entry slot addresses ────────
+    // Bounded to MAX_PROP_ENTRIES.
+    let wanted_table: std::collections::HashSet<u64> = std::iter::once(table_addr).collect();
+    let mut entry_addrs: Vec<u64> = Vec::new();
+    scan_obj_arrays(path, id_size, &wanted_table, |_addr, elem_refs| {
+        for chunk in elem_refs.chunks_exact(obj_ref_width) {
+            if entry_addrs.len() >= MAX_PROP_ENTRIES {
+                break;
+            }
+            let r = read_ref(chunk, obj_ref_width);
+            if r != 0 {
+                entry_addrs.push(r);
+            }
+        }
+    })?;
+    if entry_addrs.is_empty() {
+        return Ok(empty);
+    }
+
+    // ── P3: entries → (key,value,next) refs; follow `next` chains ─────────────
+    // Bounded to MAX_PROP_ENTRIES entries total. Chains can add more entry
+    // addresses to resolve, so iterate the worklist across repeated bounded
+    // scans until it stabilizes (chains are short; capped by the entry budget).
+    // key_val: entry addr → (key String addr, value String addr).
+    let mut key_val: HashMap<u64, (u64, u64)> = HashMap::new();
+    let mut pending: std::collections::HashSet<u64> = entry_addrs.iter().copied().collect();
+    let mut entry_off_cache: HashMap<u64, Option<(usize, usize, usize)>> = HashMap::new();
+    // Bound the number of chain-following passes; each pass resolves at least
+    // one hop of every chain, so 64 caps the deepest Hashtable bucket chain we
+    // will follow (real buckets are 1-3 deep). Combined with the entry budget
+    // this is the fixed worst-case extra-pass ceiling; it terminates well before
+    // it in practice.
+    for _ in 0..64 {
+        if pending.is_empty() || key_val.len() >= MAX_PROP_ENTRIES {
+            break;
+        }
+        let mut next_pending: std::collections::HashSet<u64> = std::collections::HashSet::new();
+        scan_instance_blobs(path, id_size, &pending, |addr, class_id, blob| {
+            if key_val.contains_key(&addr) {
+                return;
+            }
+            let offs = *entry_off_cache.entry(class_id).or_insert_with(|| {
+                let key_off = match field_offset(
+                    class_id,
+                    "key",
+                    "java/util/Hashtable$Entry",
+                    class_map,
+                    strings,
+                    obj_ref_width,
+                ) {
+                    Some((o, HprofType::Object)) => o as usize,
+                    _ => return None,
+                };
+                let value_off = match field_offset(
+                    class_id,
+                    "value",
+                    "java/util/Hashtable$Entry",
+                    class_map,
+                    strings,
+                    obj_ref_width,
+                ) {
+                    Some((o, HprofType::Object)) => o as usize,
+                    _ => return None,
+                };
+                let next_off = match field_offset(
+                    class_id,
+                    "next",
+                    "java/util/Hashtable$Entry",
+                    class_map,
+                    strings,
+                    obj_ref_width,
+                ) {
+                    Some((o, HprofType::Object)) => o as usize,
+                    _ => return None,
+                };
+                Some((key_off, value_off, next_off))
+            });
+            let Some((key_off, value_off, next_off)) = offs else {
+                return;
+            };
+            if key_off + obj_ref_width > blob.len()
+                || value_off + obj_ref_width > blob.len()
+                || next_off + obj_ref_width > blob.len()
+            {
+                return;
+            }
+            let key_ref = read_ref(&blob[key_off..], obj_ref_width);
+            let value_ref = read_ref(&blob[value_off..], obj_ref_width);
+            let next_ref = read_ref(&blob[next_off..], obj_ref_width);
+            key_val.insert(addr, (key_ref, value_ref));
+            if next_ref != 0
+                && !key_val.contains_key(&next_ref)
+                && key_val.len() + next_pending.len() < MAX_PROP_ENTRIES
+            {
+                next_pending.insert(next_ref);
+            }
+        })?;
+        pending = next_pending;
+    }
+    if key_val.is_empty() {
+        return Ok(empty);
+    }
+
+    // ── P4: key/value Strings → (backing array addr, coder) ───────────────────
+    // Bounded by 2 * #entries. Reuses the Stage-2 String decode field offsets.
+    let mut wanted_strings: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    for &(k, v) in key_val.values() {
+        if k != 0 {
+            wanted_strings.insert(k);
+        }
+        if v != 0 {
+            wanted_strings.insert(v);
+        }
+    }
+    let mut string_to_arr: HashMap<u64, (u64, u8)> = HashMap::new();
+    let mut str_off_cache: HashMap<u64, Option<(usize, Option<usize>)>> = HashMap::new();
+    scan_instance_blobs(path, id_size, &wanted_strings, |addr, class_id, blob| {
+        let offs = *str_off_cache.entry(class_id).or_insert_with(|| {
+            let value_off = match field_offset(
+                class_id,
+                "value",
+                "java/lang/String",
+                class_map,
+                strings,
+                obj_ref_width,
+            ) {
+                Some((off, HprofType::Object)) => off as usize,
+                _ => return None,
+            };
+            let coder_off = match field_offset(
+                class_id,
+                "coder",
+                "java/lang/String",
+                class_map,
+                strings,
+                obj_ref_width,
+            ) {
+                Some((off, HprofType::Byte)) => Some(off as usize),
+                _ => None,
+            };
+            Some((value_off, coder_off))
+        });
+        if let Some((value_off, coder_off)) = offs {
+            if value_off + obj_ref_width <= blob.len() {
+                let arr_ref = read_ref(&blob[value_off..], obj_ref_width);
+                let coder = match coder_off {
+                    Some(co) if co < blob.len() => blob[co],
+                    _ => 1,
+                };
+                if arr_ref != 0 {
+                    string_to_arr.insert(addr, (arr_ref, coder));
+                }
+            }
+        }
+    })?;
+
+    // ── P5: backing PRIM_ARRAYs → raw bytes ───────────────────────────────────
+    // Bounded by the number of distinct backing arrays (≤ 2 * #entries).
+    let wanted_arrays: std::collections::HashSet<u64> =
+        string_to_arr.values().map(|&(a, _)| a).collect();
+    let mut arr_bytes: HashMap<u64, Vec<u8>> = HashMap::new();
+    scan_prim_arrays(path, id_size, &wanted_arrays, |addr, bytes| {
+        arr_bytes.insert(addr, bytes.to_vec());
+    })?;
+
+    // ── Decode: entry → key text, value text ─────────────────────────────────
+    let decode = |str_addr: u64| -> Option<String> {
+        if str_addr == 0 {
+            return None;
+        }
+        let &(arr_addr, coder) = string_to_arr.get(&str_addr)?;
+        let bytes = arr_bytes.get(&arr_addr)?;
+        Some(decode_java_string(bytes, coder))
+    };
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    for &(k, v) in key_val.values() {
+        let (Some(key), Some(value)) = (decode(k), decode(v)) else {
+            continue;
+        };
+        if key.is_empty() {
+            continue;
+        }
+        pairs.push((key, value));
+    }
+    // Deterministic: sort by key (then value), dedup exact duplicates.
+    pairs.sort();
+    pairs.dedup();
+
+    // ── Derive JVM version: prefer java.vm.version, else java.version ─────────
+    let find = |key: &str| -> Option<String> {
+        pairs.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
+    };
+    let jvm_version = find("java.vm.version").or_else(|| find("java.version"));
+
+    Ok((pairs, jvm_version))
+}
+
+/// whose object address is in `wanted`. Mirrors the heap-record scan skeleton
+/// in `scan_heap_2a`/`fill_heap_2b` (streaming-only reader, per-segment
+/// sub-record walk). Only the wanted objects' blobs are materialized; everything
+/// else is skipped, so RSS stays bounded by `wanted`.
+fn scan_instance_blobs<F: FnMut(u64, u64, &[u8])>(
+    path: &str,
+    id_size: u8,
+    wanted: &std::collections::HashSet<u64>,
+    mut f: F,
+) -> io::Result<()> {
+    let ids = id_size as u64;
+    let mut r = HprofReader::open(path)?;
+    let mut scratch: Vec<u8> = Vec::with_capacity(256);
+    loop {
+        let tag = match r.u1() {
+            Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+            other => other?,
+        };
+        let _ts = r.u4()?;
+        let length = r.u4()? as u64;
+        match tag {
+            tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
+                let mut remaining = length;
+                while remaining > 0 {
+                    let sub_tag = r.u1()?;
+                    remaining -= 1;
+                    match sub_tag {
+                        heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED | heap::ROOT_STICKY_CLASS => {
+                            r.skip(ids)?;
+                            remaining -= ids;
+                        }
+                        heap::ROOT_JNI_GLOBAL => {
+                            r.skip(2 * ids)?;
+                            remaining -= 2 * ids;
+                        }
+                        heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME | heap::ROOT_THREAD_OBJ => {
+                            r.skip(ids + 8)?;
+                            remaining -= ids + 8;
+                        }
+                        heap::ROOT_NATIVE_STACK | heap::ROOT_THREAD_BLOCK => {
+                            r.skip(ids + 4)?;
+                            remaining -= ids + 4;
+                        }
+                        heap::HEAP_DUMP_INFO => {
+                            r.skip(4 + ids)?;
+                            remaining -= 4 + ids;
+                        }
+                        heap::CLASS_DUMP => {
+                            let consumed = skip_class_dump(&mut r, id_size)?;
+                            remaining -= consumed;
+                        }
+                        heap::INSTANCE_DUMP => {
+                            let addr = r.id()?;
+                            r.skip(4)?;
+                            let class_id = r.id()?;
+                            let data_len = r.u4()? as u64;
+                            remaining -= ids + 4 + ids + 4 + data_len;
+                            if wanted.contains(&addr) {
+                                r.read_bytes_reuse(&mut scratch, data_len as usize)?;
+                                f(addr, class_id, &scratch);
+                            } else {
+                                r.skip(data_len)?;
+                            }
+                        }
+                        heap::OBJ_ARRAY_DUMP => {
+                            r.skip(ids + 4)?;
+                            let count = r.u4()? as u64;
+                            r.skip(ids)?;
+                            let byte_len = count.saturating_mul(ids);
+                            r.skip(byte_len)?;
+                            remaining -= ids + 4 + 4 + ids + byte_len;
+                        }
+                        heap::PRIM_ARRAY_DUMP => {
+                            r.skip(ids + 4)?;
+                            let count = r.u4()? as u64;
+                            let elem_type = r.u1()?;
+                            let esz = HprofType::from_code(elem_type)
+                                .map(|t| t.byte_size() as u64)
+                                .unwrap_or(1);
+                            r.skip(count * esz)?;
+                            remaining -= ids + 4 + 4 + 1 + count * esz;
+                        }
+                        other => {
+                            return Err(io::Error::new(
+                                ErrorKind::InvalidData,
+                                format!("unknown heap sub-tag 0x{other:02x} in thread-name scan"),
+                            ));
+                        }
+                    }
+                }
+            }
+            tags::HEAP_DUMP_END => break,
+            _ => r.skip(length)?,
+        }
+    }
+    Ok(())
+}
+
+/// Full-file sequential scan invoking `f(addr, elem_bytes)` for each
+/// PRIM_ARRAY_DUMP whose array address is in `wanted`. Only wanted arrays'
+/// element bytes are materialized; everything else is skipped.
+fn scan_prim_arrays<F: FnMut(u64, &[u8])>(
+    path: &str,
+    id_size: u8,
+    wanted: &std::collections::HashSet<u64>,
+    mut f: F,
+) -> io::Result<()> {
+    let ids = id_size as u64;
+    let mut r = HprofReader::open(path)?;
+    let mut scratch: Vec<u8> = Vec::with_capacity(256);
+    loop {
+        let tag = match r.u1() {
+            Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+            other => other?,
+        };
+        let _ts = r.u4()?;
+        let length = r.u4()? as u64;
+        match tag {
+            tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
+                let mut remaining = length;
+                while remaining > 0 {
+                    let sub_tag = r.u1()?;
+                    remaining -= 1;
+                    match sub_tag {
+                        heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED | heap::ROOT_STICKY_CLASS => {
+                            r.skip(ids)?;
+                            remaining -= ids;
+                        }
+                        heap::ROOT_JNI_GLOBAL => {
+                            r.skip(2 * ids)?;
+                            remaining -= 2 * ids;
+                        }
+                        heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME | heap::ROOT_THREAD_OBJ => {
+                            r.skip(ids + 8)?;
+                            remaining -= ids + 8;
+                        }
+                        heap::ROOT_NATIVE_STACK | heap::ROOT_THREAD_BLOCK => {
+                            r.skip(ids + 4)?;
+                            remaining -= ids + 4;
+                        }
+                        heap::HEAP_DUMP_INFO => {
+                            r.skip(4 + ids)?;
+                            remaining -= 4 + ids;
+                        }
+                        heap::CLASS_DUMP => {
+                            let consumed = skip_class_dump(&mut r, id_size)?;
+                            remaining -= consumed;
+                        }
+                        heap::INSTANCE_DUMP => {
+                            r.skip(ids + 4)?;
+                            let _class_id = r.id()?;
+                            let data_len = r.u4()? as u64;
+                            r.skip(data_len)?;
+                            remaining -= ids + 4 + ids + 4 + data_len;
+                        }
+                        heap::OBJ_ARRAY_DUMP => {
+                            r.skip(ids + 4)?;
+                            let count = r.u4()? as u64;
+                            r.skip(ids)?;
+                            let byte_len = count.saturating_mul(ids);
+                            r.skip(byte_len)?;
+                            remaining -= ids + 4 + 4 + ids + byte_len;
+                        }
+                        heap::PRIM_ARRAY_DUMP => {
+                            let addr = r.id()?;
+                            r.skip(4)?;
+                            let count = r.u4()? as u64;
+                            let elem_type = r.u1()?;
+                            let esz = HprofType::from_code(elem_type)
+                                .map(|t| t.byte_size() as u64)
+                                .unwrap_or(1);
+                            let byte_len = count * esz;
+                            remaining -= ids + 4 + 4 + 1 + byte_len;
+                            if wanted.contains(&addr) {
+                                r.read_bytes_reuse(&mut scratch, byte_len as usize)?;
+                                f(addr, &scratch);
+                            } else {
+                                r.skip(byte_len)?;
+                            }
+                        }
+                        other => {
+                            return Err(io::Error::new(
+                                ErrorKind::InvalidData,
+                                format!("unknown heap sub-tag 0x{other:02x} in thread-name scan"),
+                            ));
+                        }
+                    }
+                }
+            }
+            tags::HEAP_DUMP_END => break,
+            _ => r.skip(length)?,
+        }
+    }
+    Ok(())
+}
+
+/// Full-file sequential scan invoking `f(addr, elem_ref_bytes)` for each
+/// OBJ_ARRAY_DUMP whose array address is in `wanted`. `elem_ref_bytes` is the
+/// raw block of `num_elements * id_size` reference bytes (element refs are
+/// id_size wide inside an OBJ_ARRAY_DUMP, matching the array-element ref width
+/// this scanner skips over). Only wanted arrays are materialized; everything
+/// else is skipped, so RSS stays bounded by `wanted`.
+fn scan_obj_arrays<F: FnMut(u64, &[u8])>(
+    path: &str,
+    id_size: u8,
+    wanted: &std::collections::HashSet<u64>,
+    mut f: F,
+) -> io::Result<()> {
+    let ids = id_size as u64;
+    let mut r = HprofReader::open(path)?;
+    let mut scratch: Vec<u8> = Vec::with_capacity(256);
+    loop {
+        let tag = match r.u1() {
+            Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+            other => other?,
+        };
+        let _ts = r.u4()?;
+        let length = r.u4()? as u64;
+        match tag {
+            tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
+                let mut remaining = length;
+                while remaining > 0 {
+                    let sub_tag = r.u1()?;
+                    remaining -= 1;
+                    match sub_tag {
+                        heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED | heap::ROOT_STICKY_CLASS => {
+                            r.skip(ids)?;
+                            remaining -= ids;
+                        }
+                        heap::ROOT_JNI_GLOBAL => {
+                            r.skip(2 * ids)?;
+                            remaining -= 2 * ids;
+                        }
+                        heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME | heap::ROOT_THREAD_OBJ => {
+                            r.skip(ids + 8)?;
+                            remaining -= ids + 8;
+                        }
+                        heap::ROOT_NATIVE_STACK | heap::ROOT_THREAD_BLOCK => {
+                            r.skip(ids + 4)?;
+                            remaining -= ids + 4;
+                        }
+                        heap::HEAP_DUMP_INFO => {
+                            r.skip(4 + ids)?;
+                            remaining -= 4 + ids;
+                        }
+                        heap::CLASS_DUMP => {
+                            let consumed = skip_class_dump(&mut r, id_size)?;
+                            remaining -= consumed;
+                        }
+                        heap::INSTANCE_DUMP => {
+                            r.skip(ids + 4)?;
+                            let _class_id = r.id()?;
+                            let data_len = r.u4()? as u64;
+                            r.skip(data_len)?;
+                            remaining -= ids + 4 + ids + 4 + data_len;
+                        }
+                        heap::OBJ_ARRAY_DUMP => {
+                            let addr = r.id()?;
+                            r.skip(4)?; // stack serial
+                            let count = r.u4()? as u64;
+                            r.skip(ids)?; // array class id
+                            let byte_len = count.saturating_mul(ids);
+                            remaining -= ids + 4 + 4 + ids + byte_len;
+                            if wanted.contains(&addr) {
+                                r.read_bytes_reuse(&mut scratch, byte_len as usize)?;
+                                f(addr, &scratch);
+                            } else {
+                                r.skip(byte_len)?;
+                            }
+                        }
+                        heap::PRIM_ARRAY_DUMP => {
+                            r.skip(ids + 4)?;
+                            let count = r.u4()? as u64;
+                            let elem_type = r.u1()?;
+                            let esz = HprofType::from_code(elem_type)
+                                .map(|t| t.byte_size() as u64)
+                                .unwrap_or(1);
+                            r.skip(count * esz)?;
+                            remaining -= ids + 4 + 4 + 1 + count * esz;
+                        }
+                        other => {
+                            return Err(io::Error::new(
+                                ErrorKind::InvalidData,
+                                format!("unknown heap sub-tag 0x{other:02x} in obj-array scan"),
+                            ));
+                        }
+                    }
+                }
+            }
+            tags::HEAP_DUMP_END => break,
+            _ => r.skip(length)?,
+        }
+    }
+    Ok(())
+}
+
+/// Full-file sequential scan invoking `f(class_obj_id, &statics)` for every
+/// CLASS_DUMP sub-record, where `statics` is the captured list of static fields
+/// as `(name_id, type_code, value)`. Object-typed values are id_size-wide refs;
+/// primitive values are zero-extended into the u64. Only the (bounded) static
+/// header of each class is materialized — instance-field descriptors are
+/// skipped — so RSS stays O(#static-fields-of-one-class) inside the closure.
+fn scan_class_dumps<F: FnMut(u64, &[(u64, u8, u64)])>(
+    path: &str,
+    id_size: u8,
+    mut f: F,
+) -> io::Result<()> {
+    let ids = id_size as u64;
+    let mut r = HprofReader::open(path)?;
+    let mut statics: Vec<(u64, u8, u64)> = Vec::new();
+    let mut vbuf: Vec<u8> = Vec::with_capacity(8);
+    loop {
+        let tag = match r.u1() {
+            Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+            other => other?,
+        };
+        let _ts = r.u4()?;
+        let length = r.u4()? as u64;
+        match tag {
+            tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
+                let mut remaining = length;
+                while remaining > 0 {
+                    let sub_tag = r.u1()?;
+                    remaining -= 1;
+                    match sub_tag {
+                        heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED | heap::ROOT_STICKY_CLASS => {
+                            r.skip(ids)?;
+                            remaining -= ids;
+                        }
+                        heap::ROOT_JNI_GLOBAL => {
+                            r.skip(2 * ids)?;
+                            remaining -= 2 * ids;
+                        }
+                        heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME | heap::ROOT_THREAD_OBJ => {
+                            r.skip(ids + 8)?;
+                            remaining -= ids + 8;
+                        }
+                        heap::ROOT_NATIVE_STACK | heap::ROOT_THREAD_BLOCK => {
+                            r.skip(ids + 4)?;
+                            remaining -= ids + 4;
+                        }
+                        heap::HEAP_DUMP_INFO => {
+                            r.skip(4 + ids)?;
+                            remaining -= 4 + ids;
+                        }
+                        heap::CLASS_DUMP => {
+                            let mut consumed = 0u64;
+                            let class_obj_id = r.id()?;
+                            r.skip(4)?; // stack serial
+                            r.skip(ids * 6)?; // super, loader, signer, protdomain, r1, r2
+                            r.skip(4)?; // instance size
+                            consumed += ids + 4 + ids * 6 + 4;
+                            // Constant pool: u2 count, entries (u2 idx, u1 type, value).
+                            let cp_count = r.u2()?;
+                            consumed += 2;
+                            for _ in 0..cp_count {
+                                r.skip(2)?;
+                                let type_code = r.u1()?;
+                                let vs = value_size(type_code, id_size);
+                                r.skip(vs)?;
+                                consumed += 2 + 1 + vs;
+                            }
+                            // Static fields: u2 count, entries (name_id, u1 type, value).
+                            statics.clear();
+                            let static_count = r.u2()?;
+                            consumed += 2;
+                            for _ in 0..static_count {
+                                let name_id = r.id()?;
+                                let type_code = r.u1()?;
+                                let vs = value_size(type_code, id_size);
+                                let value = if vs == 0 {
+                                    0
+                                } else {
+                                    r.read_bytes_reuse(&mut vbuf, vs as usize)?;
+                                    // Big-endian value; only OBJECT (id-wide)
+                                    // values are consumed downstream, but decode
+                                    // any width uniformly into the low bytes.
+                                    let mut acc = 0u64;
+                                    for &b in vbuf.iter() {
+                                        acc = (acc << 8) | b as u64;
+                                    }
+                                    acc
+                                };
+                                consumed += ids + 1 + vs;
+                                statics.push((name_id, type_code, value));
+                            }
+                            // Instance fields: u2 count, entries (name_id, u1 type).
+                            let inst_count = r.u2()?;
+                            consumed += 2;
+                            for _ in 0..inst_count {
+                                r.skip(ids)?;
+                                r.skip(1)?;
+                                consumed += ids + 1;
+                            }
+                            f(class_obj_id, &statics);
+                            remaining -= consumed;
+                        }
+                        heap::INSTANCE_DUMP => {
+                            r.skip(ids + 4)?;
+                            let _class_id = r.id()?;
+                            let data_len = r.u4()? as u64;
+                            r.skip(data_len)?;
+                            remaining -= ids + 4 + ids + 4 + data_len;
+                        }
+                        heap::OBJ_ARRAY_DUMP => {
+                            r.skip(ids + 4)?;
+                            let count = r.u4()? as u64;
+                            r.skip(ids)?;
+                            let byte_len = count.saturating_mul(ids);
+                            r.skip(byte_len)?;
+                            remaining -= ids + 4 + 4 + ids + byte_len;
+                        }
+                        heap::PRIM_ARRAY_DUMP => {
+                            r.skip(ids + 4)?;
+                            let count = r.u4()? as u64;
+                            let elem_type = r.u1()?;
+                            let esz = HprofType::from_code(elem_type)
+                                .map(|t| t.byte_size() as u64)
+                                .unwrap_or(1);
+                            r.skip(count * esz)?;
+                            remaining -= ids + 4 + 4 + 1 + count * esz;
+                        }
+                        other => {
+                            return Err(io::Error::new(
+                                ErrorKind::InvalidData,
+                                format!("unknown heap sub-tag 0x{other:02x} in class-dump scan"),
+                            ));
+                        }
+                    }
+                }
+            }
+            tags::HEAP_DUMP_END => break,
+            _ => r.skip(length)?,
+        }
+    }
+    Ok(())
+}
+
+/// Skip a CLASS_DUMP sub-record, returning the byte count consumed AFTER the
+/// 1-byte sub-tag (which the caller has already read). Mirrors the CLASS_DUMP
+/// layout in pass1's `read_class_dump`: fixed header, constant pool, static
+/// fields, instance-field descriptors.
+fn skip_class_dump(r: &mut HprofReader, id_size: u8) -> io::Result<u64> {
+    let ids = id_size as u64;
+    let mut consumed = 0u64;
+    // class_obj_id, stack_serial(4), super_id, loader_id, signer, protdomain,
+    // reserved1, reserved2, instance_size(4)
+    r.skip(ids)?; // class_obj_id
+    r.skip(4)?; // stack serial
+    r.skip(ids * 6)?; // super, loader, signer, protection domain, reserved1, reserved2
+    r.skip(4)?; // instance_size
+    consumed += ids + 4 + ids * 6 + 4;
+    // Constant pool: u2 count, then entries of (u2 index, u1 type, value)
+    let cp_count = r.u2()?;
+    consumed += 2;
+    for _ in 0..cp_count {
+        r.skip(2)?; // constant pool index
+        let type_code = r.u1()?;
+        let vs = value_size(type_code, id_size);
+        r.skip(vs)?;
+        consumed += 2 + 1 + vs;
+    }
+    // Static fields: u2 count, then (name_id, u1 type, value)
+    let static_count = r.u2()?;
+    consumed += 2;
+    for _ in 0..static_count {
+        r.skip(ids)?; // name_id
+        let type_code = r.u1()?;
+        let vs = value_size(type_code, id_size);
+        r.skip(vs)?;
+        consumed += ids + 1 + vs;
+    }
+    // Instance fields: u2 count, then (name_id, u1 type)
+    let inst_count = r.u2()?;
+    consumed += 2;
+    for _ in 0..inst_count {
+        r.skip(ids)?; // name_id
+        r.skip(1)?; // type
+        consumed += ids + 1;
+    }
+    Ok(consumed)
+}
 /// line-number conventions (>0 = line; -1 unknown; -2 compiled; -3 native).
 /// Missing strings fall back to placeholders so a frame is always printable.
 fn render_frame(
@@ -803,7 +1805,12 @@ impl Pass2 {
         // are only read to derive  and  above. Releasing
         // them here (~173 MB for a 11 M-object heap) shrinks peak RSS before
         // the edge-scan allocations (inb_flat / fwd_targets).
-        p1.class_ids = Vec::new();
+        //
+        // NOTE: `class_ids`/`kind` are also read by the loader-label resolution
+        // loop below, which must run AFTER the `get_or_insert_class` closure is
+        // last used (~line 913, it holds a mutable borrow of `class_loader_id`).
+        // We therefore keep `class_ids` alive until after that loop and free it
+        // there; only the two vecs not needed by the loop are freed here.
         p1.shallow_sizes = Vec::new();
         p1.elem_count = Vec::new();
 
@@ -882,6 +1889,47 @@ impl Pass2 {
             }
         }
         let _ = jlc_idx;
+
+        // Resolve each distinct non-boot class-loader OBJECT address to the
+        // class NAME of that loader object (e.g.
+        // "jdk/internal/loader/ClassLoaders$AppClassLoader"), so the report
+        // layer can label loaders instead of showing a raw address. Runs here,
+        // AFTER the last `get_or_insert_class` use (that closure mutably borrows
+        // `class_loader_id`), and BEFORE class_map/strings/id_map are freed or
+        // moved (~lines 1013-1014, ~1198) and before `class_ids`/`kind` are
+        // freed just below. Bounded by #distinct loaders (tens to low
+        // hundreds), so it costs no per-object RSS. Boot loader (addr 0) is
+        // labeled `<boot>` in the report layer.
+        let mut loader_labels: std::collections::HashMap<u64, String> =
+            std::collections::HashMap::new();
+        for &loader_addr in &class_loader_id {
+            if loader_addr == 0 {
+                continue; // boot loader handled in report layer
+            }
+            if loader_labels.contains_key(&loader_addr) {
+                continue;
+            }
+            // Resolve: loader_addr -> object index -> its class-obj addr -> name.
+            if let Some(idx) = p1.id_map.index_of(loader_addr) {
+                // Only plain instances (kind 0) are real loader objects.
+                if p1.kind[idx] == 0 {
+                    let cid = p1.class_ids[idx];
+                    let class_addr = p1.class_addr_table[cid as usize];
+                    if let Some(name) = p1
+                        .class_map
+                        .get(&class_addr)
+                        .and_then(|ci| p1.strings.get(&ci.name_id))
+                    {
+                        loader_labels.insert(loader_addr, name.clone());
+                    }
+                }
+            }
+        }
+
+        // Now free `class_ids` (see the free block above): the loader-label
+        // loop was its last reader, so releasing it here keeps peak RSS low
+        // before the edge-scan allocations.
+        p1.class_ids = Vec::new();
 
         // TEMP DEBUG (env-gated, inert by default): dump every class-object
         // index -> address so a downstream reachability dump can join by index.
@@ -1004,6 +2052,21 @@ impl Pass2 {
         // below). Only traces that carry frames are kept. Small — one entry per
         // thread trace, off the per-object RSS budget.
         let thread_stacks = build_thread_stacks(&p1);
+
+        // Decode each thread's java.lang.Thread.name via a bounded 3-pass
+        // worklist, while class_map/strings/id_map are still alive (freed just
+        // below). All captured sets are bounded by #threads, so this stays off
+        // the per-object RSS budget on multi-GB dumps.
+        let thread_names = resolve_thread_names(path, &p1)?;
+
+        // Capture java.lang.System's static `props` (a Properties/Hashtable of
+        // String->String) via a bounded multi-pass worklist, while class_map/
+        // strings/id_map are still alive. All captured sets are bounded (ONE
+        // props object, capped at 4096 entries + their Strings/arrays), so this
+        // stays off the per-object RSS budget on multi-GB dumps. Derives a JVM
+        // version from the decoded properties. Falls back to empty/None (never
+        // garbage) if the layout does not match the Hashtable form.
+        let (system_properties, jvm_version) = resolve_system_properties(path, &p1)?;
 
         // class_map + strings are no longer needed; free before the large edge
         // arrays get allocated in Phase 3/4 to lower peak RSS. The STACK_FRAME/
@@ -1176,7 +2239,11 @@ impl Pass2 {
             class_idx,
             class_names,
             class_loader_id,
+            loader_labels,
             thread_stacks,
+            thread_names,
+            system_properties,
+            jvm_version,
             class_obj_class_idx,
             fwd_offsets,
             fwd_targets,
@@ -1764,6 +2831,30 @@ impl Pass2 {
 
 // ── Utility ────────────────────────────────────────────────────────────────
 
+/// Decode the backing element bytes of a `java.lang.String` into a Rust
+/// `String`. `coder` follows the JDK 9+ `String.coder` convention:
+///
+/// - `0` = LATIN1: one byte per char, interpreted as ISO-8859-1.
+/// - `1` = UTF16: two bytes per char, big-endian (HPROF byte order).
+///
+/// A JDK 8 `char[] value` has no `coder` field; callers pass `coder == 1`
+/// because HPROF stores its chars as big-endian UTF-16 code units. Any other
+/// `coder` value is treated as UTF16 (the only multi-byte case). Reusable by
+/// later String-decoding stages.
+pub fn decode_java_string(bytes: &[u8], coder: u8) -> String {
+    if coder == 0 {
+        // LATIN1 / ISO-8859-1: each byte is a Unicode code point 0..=255.
+        bytes.iter().map(|&b| b as char).collect()
+    } else {
+        // UTF-16BE: pair bytes big-endian, lossily decode surrogates.
+        let units: Vec<u16> = bytes
+            .chunks_exact(2)
+            .map(|c| u16::from_be_bytes([c[0], c[1]]))
+            .collect();
+        String::from_utf16_lossy(&units)
+    }
+}
+
 fn read_ref(data: &[u8], ref_size: usize) -> u64 {
     if ref_size == 4 {
         if data.len() >= 4 {
@@ -1995,5 +3086,94 @@ mod tests {
         // sticky-root presence.
         assert!(should_add_system_class_root(true, true, true));
         assert!(should_add_system_class_root(true, true, false));
+    }
+
+    #[test]
+    fn decode_latin1_string() {
+        // coder 0 = LATIN1: each byte is a code point 0..=255.
+        assert_eq!(decode_java_string(b"main", 0), "main");
+        assert_eq!(decode_java_string(&[0xe9], 0), "é"); // 0xE9 = U+00E9
+        assert_eq!(decode_java_string(&[], 0), "");
+    }
+
+    #[test]
+    fn decode_utf16be_string() {
+        // coder 1 = UTF-16BE: pair bytes big-endian.
+        // "main" as UTF-16BE.
+        let utf16: Vec<u8> = "main"
+            .encode_utf16()
+            .flat_map(|u| u.to_be_bytes())
+            .collect();
+        assert_eq!(decode_java_string(&utf16, 1), "main");
+        // A non-Latin code point that needs UTF-16 (U+4E2D 中).
+        let cjk: Vec<u8> = "中".encode_utf16().flat_map(|u| u.to_be_bytes()).collect();
+        assert_eq!(decode_java_string(&cjk, 1), "中");
+    }
+
+    #[test]
+    fn decode_java8_char_array_is_utf16() {
+        // Java 8 Strings have a char[] value and NO coder field; the resolver
+        // passes coder 1 (UTF16) for them. A char[] holds UTF-16BE code units.
+        let chars: Vec<u8> = "hi".encode_utf16().flat_map(|u| u.to_be_bytes()).collect();
+        assert_eq!(decode_java_string(&chars, 1), "hi");
+    }
+
+    #[test]
+    fn field_offset_places_superclass_fields_after_subclass_fields() {
+        // HPROF stores instance field VALUES subclass-first: the object's own
+        // class fields precede the inherited superclass fields in the blob. Build
+        // a synthetic two-class chain and confirm the inherited field's offset
+        // lands *after* the subclass's own fields, and that the owner_class
+        // filter skips a same-named field declared by the subclass.
+        let mut strings: HashMap<u64, String> = HashMap::new();
+        strings.insert(1, "java/lang/Thread".to_string());
+        strings.insert(2, "Sub".to_string());
+        strings.insert(10, "eetop".to_string()); // Thread field (Long)
+        strings.insert(11, "name".to_string()); // Thread field (Object)
+        strings.insert(20, "extra".to_string()); // Sub field (Int)
+        strings.insert(21, "name".to_string()); // Sub's OWN shadowing "name"
+
+        let obj_ref_width = 8usize;
+        let thread = ClassInfo {
+            name_id: 1,
+            super_id: 0,
+            fields: vec![(10, HprofType::Long), (11, HprofType::Object)],
+            ..Default::default()
+        };
+        let sub = ClassInfo {
+            name_id: 2,
+            super_id: 100, // points at Thread
+            fields: vec![(20, HprofType::Int), (21, HprofType::Object)],
+            ..Default::default()
+        };
+        let mut class_map: HashMap<u64, ClassInfo> = HashMap::new();
+        class_map.insert(100, thread);
+        class_map.insert(200, sub);
+
+        // Sub's own fields (int=4 + object=8) come first = 12 bytes, then Thread:
+        // eetop(Long=8), then name(Object) at 12 + 8 = 20.
+        let (off, t) = field_offset(
+            200,
+            "name",
+            "java/lang/Thread",
+            &class_map,
+            &strings,
+            obj_ref_width,
+        )
+        .expect("inherited Thread.name must resolve");
+        assert_eq!(off, 20);
+        assert_eq!(t, HprofType::Object);
+
+        // For a pure java/lang/Thread instance, name is right after eetop = 8.
+        let (off2, _) = field_offset(
+            100,
+            "name",
+            "java/lang/Thread",
+            &class_map,
+            &strings,
+            obj_ref_width,
+        )
+        .expect("Thread.name must resolve");
+        assert_eq!(off2, 8);
     }
 }
