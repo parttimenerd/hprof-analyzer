@@ -95,3 +95,72 @@ fn end_to_end_dump0() {
         "histogram table should have a Retained Heap column"
     );
 }
+
+/// Blank out the two report fields that legitimately vary between runs, so the
+/// rest of the JSON can be compared byte-for-byte against the golden fixture.
+/// `generated` is a per-run UTC timestamp; `overview.file_path` echoes the CLI
+/// path argument, which is absolute (via `CARGO_MANIFEST_DIR`) in the test but
+/// relative in the golden. Everything else (including `source_name`, a
+/// basename) is deterministic.
+fn normalize_nondeterministic(v: &mut serde_json::Value) {
+    if let Some(obj) = v.as_object_mut() {
+        if obj.contains_key("generated") {
+            obj["generated"] = serde_json::Value::Null;
+        }
+        if let Some(ov) = obj.get_mut("overview").and_then(|o| o.as_object_mut()) {
+            if ov.contains_key("file_path") {
+                ov["file_path"] = serde_json::Value::Null;
+            }
+        }
+    }
+}
+
+/// End-to-end golden snapshot: a fresh JSON run must equal the committed golden
+/// report (modulo the two run-varying fields). This catches ANY unintended
+/// change to the emitted model — a new/removed field, a reordered list, a
+/// changed count — that the structural assertions above would miss.
+#[test]
+fn json_golden_snapshot() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
+    let hprof = format!("{dir}/dump_4_philosophers.hprof");
+    let golden_path = format!("{dir}/dump_4_philosophers_report.json");
+
+    // Skip if the LFS fixture is absent or an unsmudged pointer (CI runs `git lfs pull`).
+    match std::fs::metadata(&hprof) {
+        Ok(m) if m.len() >= 1024 => {}
+        _ => return,
+    }
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_hprof-analyzer"))
+        .arg("analyze")
+        .arg(&hprof)
+        .arg("--format")
+        .arg("json")
+        .arg("--compress")
+        .arg("none")
+        .output()
+        .expect("failed to run hprof-analyzer");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let mut got: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("analyzer stdout was not valid JSON");
+    let golden_text = std::fs::read_to_string(&golden_path)
+        .unwrap_or_else(|e| panic!("cannot read golden {golden_path}: {e}"));
+    let mut want: serde_json::Value =
+        serde_json::from_str(&golden_text).expect("golden fixture was not valid JSON");
+
+    normalize_nondeterministic(&mut got);
+    normalize_nondeterministic(&mut want);
+
+    assert_eq!(
+        got, want,
+        "JSON report drifted from the golden snapshot at {golden_path}. If this \
+         change is intended, regenerate the golden with:\n  \
+         cargo run --release -- analyze tests/fixtures/dump_4_philosophers.hprof \
+         --format json --compress none > tests/fixtures/dump_4_philosophers_report.json"
+    );
+}
