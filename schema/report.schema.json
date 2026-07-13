@@ -54,6 +54,36 @@
         "retained"
       ]
     },
+    "DominatedRow": {
+      "description": "One immediately-dominated child of an accumulation point (a row of the\n\"Accumulated Objects in Dominator Tree\" list).",
+      "type": "object",
+      "properties": {
+        "display_class": {
+          "type": "string"
+        },
+        "obj_index_1based": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "retained": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "shallow": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "obj_index_1based",
+        "display_class",
+        "shallow",
+        "retained"
+      ]
+    },
     "HistRow": {
       "description": "One row of the System-Overview class histogram (full, one row per class).",
       "type": "object",
@@ -218,6 +248,43 @@
       "description": "One leak suspect (single large object or class group).",
       "type": "object",
       "properties": {
+        "accumulation_class": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "accumulation_obj_1based": {
+          "description": "The accumulation point object where retained heap piles up (the last\nstep of `path`). `None` for group suspects or when the descent hit\n`MAX_ACCUM_DEPTH` without a big drop.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "accumulation_retained": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "dominated": {
+          "description": "Top immediately-dominated children of the accumulation point, sorted\nretained-desc and capped at the configured cap. Empty for groups.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DominatedRow"
+          }
+        },
+        "dominated_by_class": {
+          "description": "By-class histogram (objects/shallow/retained) of the accumulation\npoint's immediately-dominated children, sorted retained-desc and\ncapped. Empty for groups.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HistRow"
+          }
+        },
         "instance_count": {
           "type": "integer",
           "format": "uint64",
@@ -226,8 +293,15 @@
         "is_single": {
           "type": "boolean"
         },
+        "keywords": {
+          "description": "Class names involved in this suspect (suspect class + accumulation\npoint class), de-duplicated in first-seen order, for search.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "path": {
-          "description": "Non-empty only for single suspects.",
+          "description": "Descent from the suspect object to the accumulation point (MAT\n`findAccumulationPoint`, big-drop-ratio 0.7). Non-empty only for singles.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/PathStep"
@@ -253,7 +327,10 @@
         "instance_count",
         "retained",
         "shallow",
-        "path"
+        "path",
+        "dominated",
+        "dominated_by_class",
+        "keywords"
       ]
     },
     "SystemOverview": {

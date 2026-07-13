@@ -15,7 +15,7 @@ mod trace;
 mod types;
 mod vbyte;
 
-use std::{env, io, process, time::Instant};
+use std::{io, process, time::Instant};
 
 use pass1::Pass1;
 
@@ -26,157 +26,168 @@ enum OutputFormat {
     Json,
 }
 
-impl OutputFormat {
-    fn parse(s: &str) -> Option<Self> {
-        match s {
-            "md" | "markdown" => Some(OutputFormat::Md),
-            "json" => Some(OutputFormat::Json),
-            _ => None,
+use clap::{Parser, Subcommand, ValueEnum};
+
+#[derive(Parser)]
+#[command(
+    name = "hprof-analyzer",
+    version,
+    about = "Analyze Java HPROF heap dumps (Eclipse MAT parity)"
+)]
+struct Cli {
+    #[command(subcommand)]
+    cmd: Cmd,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    /// Analyze a heap dump and write a report (Markdown or JSON)
+    Analyze {
+        input: String,
+        output: Option<String>,
+        #[arg(short, long, value_enum, default_value_t = FormatArg::Md)]
+        format: FormatArg,
+        #[arg(short, long, value_enum, default_value_t = CompressArg::Deflate9)]
+        compress: CompressArg,
+        #[arg(long)]
+        leak_children_cap: Option<usize>,
+        #[arg(short, long)]
+        verbose: bool,
+        #[arg(long)]
+        trace_rss: bool,
+    },
+    /// Compare a MAT report against our canonical JSON (exit 2 on FAIL)
+    Diff {
+        mat: String,
+        ours: String,
+        #[arg(short, long, value_enum, default_value_t = FormatArg::Md)]
+        format: FormatArg,
+    },
+    /// Render a saved canonical Report JSON to Markdown or JSON
+    Render {
+        /// Path to a Report JSON, or "-" for stdin
+        input: String,
+        #[arg(short, long, value_enum, default_value_t = FormatArg::Md)]
+        format: FormatArg,
+    },
+    /// Developer / diagnostic commands
+    Dev {
+        #[command(subcommand)]
+        cmd: DevCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum DevCmd {
+    /// Print the JSON Schema of the report model
+    EmitSchema,
+    /// Aggregate per-dump *.diff.json files into a gate report (exit 2 on gate-fail)
+    SweepAggregate { dir: String },
+    /// Dump pass-1 parse stats as JSON
+    DumpPass1 { input: String },
+}
+
+#[derive(Clone, Copy, PartialEq, ValueEnum)]
+enum FormatArg {
+    Md,
+    Json,
+}
+
+#[derive(Clone, Copy, PartialEq, ValueEnum)]
+enum CompressArg {
+    None,
+    Deflate9,
+}
+
+impl From<FormatArg> for OutputFormat {
+    fn from(f: FormatArg) -> Self {
+        match f {
+            FormatArg::Md => OutputFormat::Md,
+            FormatArg::Json => OutputFormat::Json,
+        }
+    }
+}
+impl From<CompressArg> for cvec::Codec {
+    fn from(c: CompressArg) -> Self {
+        match c {
+            CompressArg::None => cvec::Codec::None,
+            CompressArg::Deflate9 => cvec::Codec::Deflate9,
         }
     }
 }
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
-
-    let mut dump_json = false;
-    let mut diff_mode = false;
-    let mut sweep_dir: Option<&str> = None;
-    let mut verbose = false;
-    let mut emit_schema = false;
-    let mut render_file: Option<&str> = None;
-    let mut format = OutputFormat::Md;
-    let mut compress = cvec::Codec::Deflate9;
-    let mut positional: Vec<&str> = Vec::new();
-    for arg in args.iter().skip(1) {
-        match arg.as_str() {
-            "--dump-json" => dump_json = true,
-            "--diff" => diff_mode = true,
-            s if s.starts_with("--diff-sweep-aggregate=") => {
-                sweep_dir = Some(&s["--diff-sweep-aggregate=".len()..]);
+    let cli = Cli::parse();
+    match cli.cmd {
+        Cmd::Analyze {
+            input,
+            output,
+            format,
+            compress,
+            leak_children_cap,
+            verbose,
+            trace_rss,
+        } => {
+            if trace_rss {
+                trace::set_enabled(true);
             }
-            "--emit-schema" => emit_schema = true,
-            s if s.starts_with("--render=") => {
-                render_file = Some(&s["--render=".len()..]);
+            let cap = leak_children_cap.unwrap_or(report::DOMINATED_CAP);
+            if let Err(e) = run(
+                &input,
+                output.as_deref(),
+                format.into(),
+                verbose,
+                compress.into(),
+                cap,
+            ) {
+                eprintln!("Error: {e}");
+                process::exit(1);
             }
-            "--verbose" | "-v" => verbose = true,
-            "--trace-rss" => trace::set_enabled(true),
-            s if s.starts_with("--format=") => {
-                let val = &s["--format=".len()..];
-                match OutputFormat::parse(val) {
-                    Some(fmt) => format = fmt,
-                    None => {
-                        eprintln!("unknown --format '{val}' (use: md, json)");
+        }
+        Cmd::Diff { mat, ours, format } => {
+            let json_out = OutputFormat::from(format) == OutputFormat::Json;
+            match diff::run_diff(&mat, &ours, json_out) {
+                Ok(true) => {}
+                Ok(false) => process::exit(2),
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    process::exit(1);
+                }
+            }
+        }
+        Cmd::Render { input, format } => match render_report(&input, format.into()) {
+            Ok(text) => print!("{text}"),
+            Err(e) => {
+                eprintln!("Error: {e}");
+                process::exit(1);
+            }
+        },
+        Cmd::Dev { cmd } => match cmd {
+            DevCmd::EmitSchema => {
+                let schema = schemars::schema_for!(report::Report);
+                match serde_json::to_string_pretty(&schema) {
+                    Ok(js) => println!("{js}"),
+                    Err(e) => {
+                        eprintln!("Error: {e}");
                         process::exit(1);
                     }
                 }
             }
-            s if s.starts_with("--compress=") => {
-                let val = &s["--compress=".len()..];
-                match cvec::Codec::parse(val) {
-                    Some(c) => compress = c,
-                    None => {
-                        eprintln!("unknown --compress codec '{val}' (use: none, deflate9)");
-                        process::exit(1);
-                    }
+            DevCmd::SweepAggregate { dir } => match sweep::run_aggregate(&dir) {
+                Ok(true) => {}
+                Ok(false) => process::exit(2),
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    process::exit(1);
+                }
+            },
+            DevCmd::DumpPass1 { input } => {
+                if let Err(e) = dump_pass1_json(&input) {
+                    eprintln!("Error: {e}");
+                    process::exit(1);
                 }
             }
-            _ => positional.push(arg.as_str()),
-        }
-    }
-
-    // --emit-schema prints the JSON Schema of the report model and exits;
-    // it needs no input file.
-    if emit_schema {
-        let schema = schemars::schema_for!(report::Report);
-        match serde_json::to_string_pretty(&schema) {
-            Ok(js) => println!("{js}"),
-            Err(e) => {
-                eprintln!("Error: {e}");
-                process::exit(1);
-            }
-        }
-        return;
-    }
-
-    // --render reads a saved canonical Report JSON (file path, or "-" for
-    // stdin), verifies its schema version, and renders Markdown to stdout. It
-    // never reads a .hprof file and never runs the analysis pipeline.
-    if let Some(path) = render_file {
-        match render_report_json(path) {
-            Ok(md) => print!("{md}"),
-            Err(e) => {
-                eprintln!("Error: {e}");
-                process::exit(1);
-            }
-        }
-        return;
-    }
-
-    // --diff-sweep-aggregate=<dir> reads the per-dump `*.diff.json` files a
-    // sweep produced, aggregates them into a gate report, and exits. It needs
-    // no input .hprof.
-    if let Some(dir) = sweep_dir {
-        match sweep::run_aggregate(dir) {
-            Ok(true) => {}
-            // GATE FAIL exits non-zero so CI can detect it; not an I/O error.
-            Ok(false) => process::exit(2),
-            Err(e) => {
-                eprintln!("Error: {e}");
-                process::exit(1);
-            }
-        }
-        return;
-    }
-
-    if positional.is_empty() {
-        eprintln!(
-            "usage: hprof-analyzer [--verbose] [--dump-json] [--emit-schema] [--render=<file>] [--format=md|json] [--trace-rss] [--compress=none|deflate9] <file.hprof[.gz]> [output]"
-        );
-        process::exit(1);
-    }
-
-    if diff_mode {
-        if positional.len() < 2 {
-            eprintln!(
-                "usage: hprof-analyzer --diff <mat-report.zip|dir|html> <ours.json> [--format=json]"
-            );
-            process::exit(1);
-        }
-        let json_out = format == OutputFormat::Json;
-        match diff::run_diff(positional[0], positional[1], json_out) {
-            Ok(true) => {}
-            // A FAIL classification exits non-zero so a sweep can detect it,
-            // but is NOT an I/O error.
-            Ok(false) => process::exit(2),
-            Err(e) => {
-                eprintln!("Error: {e}");
-                process::exit(1);
-            }
-        }
-        return;
-    }
-
-    let input = positional[0];
-    let output = positional.get(1).copied();
-
-    if dump_json {
-        match dump_pass1_json(input) {
-            Ok(()) => {}
-            Err(e) => {
-                eprintln!("Error: {e}");
-                process::exit(1);
-            }
-        }
-        return;
-    }
-
-    match run(input, output, format, verbose, compress) {
-        Ok(()) => {}
-        Err(e) => {
-            eprintln!("Error: {e}");
-            process::exit(1);
-        }
+        },
     }
 }
 
@@ -212,10 +223,7 @@ fn log(verbose: bool, phase: &str, elapsed: f64) {
     }
 }
 
-/// Offline render path for `--render`: read a canonical Report JSON from
-/// `path` (or stdin when `path == "-"`), verify its schema version, and return
-/// the rendered Markdown. Never reads a .hprof file or runs the pipeline.
-fn render_report_json(path: &str) -> io::Result<String> {
+fn render_report(path: &str, format: OutputFormat) -> io::Result<String> {
     use std::io::Read;
     let json = if path == "-" {
         let mut buf = String::new();
@@ -240,7 +248,10 @@ fn render_report_json(path: &str) -> io::Result<String> {
             ),
         ));
     }
-    Ok(report::render_markdown(&report))
+    Ok(match format {
+        OutputFormat::Md => report::render_markdown(&report),
+        OutputFormat::Json => serde_json::to_string_pretty(&report).map_err(io::Error::other)?,
+    })
 }
 
 fn run(
@@ -249,6 +260,7 @@ fn run(
     format: OutputFormat,
     verbose: bool,
     compress: cvec::Codec,
+    leak_children_cap: usize,
 ) -> io::Result<()> {
     let t_total = Instant::now();
 
@@ -374,7 +386,7 @@ fn run(
     // build_model reads has_same_class_ancestor (system-overview group) and
     // dc_off/dc_tgt (leak-suspect group) and stores only bounded aggregates,
     // so both can be freed immediately after it returns.
-    let report = report::build_model(&g, &dc_off, &dc_tgt);
+    let report = report::build_model(&g, &dc_off, &dc_tgt, leak_children_cap);
     crate::trace::probe("report: after build_model");
     g.has_same_class_ancestor = crate::bitset::Bitset::default(); // consumed by build_model
     drop(dc_off);

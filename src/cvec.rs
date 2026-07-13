@@ -18,6 +18,7 @@ pub enum Codec {
 }
 
 impl Codec {
+    #[cfg(test)]
     pub fn parse(s: &str) -> Option<Codec> {
         match s {
             "none" => Some(Codec::None),

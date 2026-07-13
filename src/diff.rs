@@ -1428,6 +1428,12 @@ mod tests {
             retained: 2_791_424,
             shallow: 13_536,
             path: vec![],
+            accumulation_obj_1based: None,
+            accumulation_class: None,
+            accumulation_retained: None,
+            dominated: vec![],
+            dominated_by_class: vec![],
+            keywords: vec![],
         }];
         let mut mat = MatReport::default();
         mat.suspects = vec![MatSuspect {

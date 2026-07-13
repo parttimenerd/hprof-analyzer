@@ -205,6 +205,18 @@ fn package_path(name: &str) -> String {
 
 const THRESHOLD_PCT: f64 = 10.0;
 const TOP_N: usize = 20;
+/// Default per-suspect cap on the "accumulated objects" lists (immediately
+/// dominated children + by-class histogram). MAT uses 20; we default higher
+/// so more of the retained tail is visible. Overridable via
+/// `--leak-children-cap=N`.
+pub const DOMINATED_CAP: usize = 50;
+/// MAT `FindLeaksQuery.big_drop_ratio`: descend the dominator tree while the
+/// largest child retains at least this fraction of its parent; stop (parent is
+/// the accumulation point) on the first drop below it.
+const BIG_DROP_RATIO: f64 = 0.7;
+/// MAT `FindLeaksQuery.MAX_DEPTH`: give up the accumulation-point descent after
+/// this many steps without a big drop (no accumulation point reported).
+const MAX_ACCUM_DEPTH: usize = 1000;
 /// MAT 1%-of-total pruning threshold for the package tree, in basis points.
 const PACKAGE_THRESHOLD_BP: u32 = 100;
 /// If the single largest suspect retains at least this share of the reachable
@@ -258,6 +270,16 @@ pub struct PathStep {
     pub retained: u64,
 }
 
+/// One immediately-dominated child of an accumulation point (a row of the
+/// "Accumulated Objects in Dominator Tree" list).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct DominatedRow {
+    pub obj_index_1based: usize,
+    pub display_class: String,
+    pub shallow: u64,
+    pub retained: u64,
+}
+
 /// One leak suspect (single large object or class group).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct Suspect {
@@ -266,8 +288,25 @@ pub struct Suspect {
     pub instance_count: u64,
     pub retained: u64,
     pub shallow: u64,
-    /// Non-empty only for single suspects.
+    /// Descent from the suspect object to the accumulation point (MAT
+    /// `findAccumulationPoint`, big-drop-ratio 0.7). Non-empty only for singles.
     pub path: Vec<PathStep>,
+    /// The accumulation point object where retained heap piles up (the last
+    /// step of `path`). `None` for group suspects or when the descent hit
+    /// `MAX_ACCUM_DEPTH` without a big drop.
+    pub accumulation_obj_1based: Option<usize>,
+    pub accumulation_class: Option<String>,
+    pub accumulation_retained: Option<u64>,
+    /// Top immediately-dominated children of the accumulation point, sorted
+    /// retained-desc and capped at the configured cap. Empty for groups.
+    pub dominated: Vec<DominatedRow>,
+    /// By-class histogram (objects/shallow/retained) of the accumulation
+    /// point's immediately-dominated children, sorted retained-desc and
+    /// capped. Empty for groups.
+    pub dominated_by_class: Vec<HistRow>,
+    /// Class names involved in this suspect (suspect class + accumulation
+    /// point class), de-duplicated in first-seen order, for search.
+    pub keywords: Vec<String>,
 }
 
 /// Aggregates for the "Leak Suspects" section.
@@ -333,7 +372,7 @@ pub struct TopConsumers {
 
 /// Schema version for the machine-readable JSON output. Bump on any
 /// breaking change to the `Report` shape; the JSON always carries this.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Full report data model: only bounded aggregates, never a per-object Vec.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
@@ -356,12 +395,17 @@ pub struct Report {
 /// consumers. Because the returned `Report` holds only small aggregates, the
 /// caller may free `has_same_class_ancestor` and `dc_offsets`/`dc_targets`
 /// immediately after this returns.
-pub fn build_model(g: &Graph, dc_offsets: &[u32], dc_targets: &[u32]) -> Report {
+pub fn build_model(
+    g: &Graph,
+    dc_offsets: &[u32],
+    dc_targets: &[u32],
+    leak_children_cap: usize,
+) -> Report {
     let generated = now_iso8601();
     crate::trace::probe("build_model: before system_overview aggregates");
     let overview = build_system_overview(g);
     crate::trace::probe("build_model: after system_overview aggregates");
-    let leaks = build_leak_suspects(g, dc_offsets, dc_targets);
+    let leaks = build_leak_suspects(g, dc_offsets, dc_targets, leak_children_cap);
     crate::trace::probe("build_model: after leak_suspects aggregates");
     let top = build_top_consumers(g);
     crate::trace::probe("build_model: after top_consumers aggregates");
@@ -535,7 +579,12 @@ fn build_system_overview(g: &Graph) -> SystemOverview {
     }
 }
 
-fn build_leak_suspects(g: &Graph, dc_offsets: &[u32], dc_targets: &[u32]) -> LeakSuspects {
+fn build_leak_suspects(
+    g: &Graph,
+    dc_offsets: &[u32],
+    dc_targets: &[u32],
+    cap: usize,
+) -> LeakSuspects {
     let n = g.n;
     let undef = u32::MAX;
 
@@ -623,54 +672,154 @@ fn build_leak_suspects(g: &Graph, dc_offsets: &[u32], dc_targets: &[u32]) -> Lea
             .then(a.obj_idx.cmp(&b.obj_idx))
     });
 
-    // Materialise into the model, resolving the accumulation path for singles.
+    // For class objects, show the class they represent (MAT parity: no
+    // "class " prefix); otherwise the object's own class.
+    let display_of = |idx: usize| -> String {
+        let ci = g.class_idx[idx] as usize;
+        if class_obj_repr(g, idx) != u32::MAX {
+            let repr = class_obj_repr(g, idx) as usize;
+            if repr < g.class_names.len() {
+                return pretty_class_name(&g.class_names[repr]);
+            }
+        }
+        if ci < g.class_names.len() {
+            pretty_class_name(&g.class_names[ci])
+        } else {
+            String::from("?")
+        }
+    };
+
+    // Materialise into the model, resolving the accumulation point for singles
+    // via MAT's findAccumulationPoint (big-drop-ratio descent).
     let out: Vec<Suspect> = suspects
         .iter()
         .map(|s| {
             let mut path: Vec<PathStep> = Vec::new();
+            let mut accumulation: Option<usize> = None;
             if s.is_single {
+                // Descend the dominator tree to the largest-retained child while
+                // that child retains >= BIG_DROP_RATIO of its parent; the parent
+                // at the first big drop (or a leaf) is the accumulation point.
                 let mut cur = s.obj_idx as usize;
-                for depth in 0..=5 {
-                    let ci = g.class_idx[cur] as usize;
-                    // For class objects, show the class they represent (MAT
-                    // parity: no "class " prefix)
-                    let display_class = if class_obj_repr(g, cur) != u32::MAX {
-                        let repr = class_obj_repr(g, cur) as usize;
-                        if repr < g.class_names.len() {
-                            pretty_class_name(&g.class_names[repr])
-                        } else {
-                            pretty_class_name(&g.class_names[ci])
-                        }
-                    } else if ci < g.class_names.len() {
-                        pretty_class_name(&g.class_names[ci])
-                    } else {
-                        String::from("?")
-                    };
-
-                    path.push(PathStep {
-                        depth,
-                        obj_index_1based: cur + 1,
-                        display_class,
-                        retained: g.retained[cur],
-                    });
-
-                    // Find child with max retained
+                let mut cur_ret = g.retained[cur];
+                path.push(PathStep {
+                    depth: 0,
+                    obj_index_1based: cur + 1,
+                    display_class: display_of(cur),
+                    retained: cur_ret,
+                });
+                let mut depth = 0usize;
+                loop {
                     let best_child = dom_children(cur)
                         .iter()
                         .max_by_key(|&&c| g.retained[c as usize]);
-                    match best_child {
-                        Some(&c) => cur = c as usize,
-                        None => break,
+                    let Some(&c) = best_child else {
+                        // Leaf: current object is the accumulation point.
+                        accumulation = Some(cur);
+                        break;
+                    };
+                    let child = c as usize;
+                    let child_ret = g.retained[child];
+                    let drops = (child_ret as f64) < (cur_ret as f64) * BIG_DROP_RATIO;
+                    if drops {
+                        // Big drop: parent is the accumulation point; do not
+                        // descend into the child.
+                        accumulation = Some(cur);
+                        break;
                     }
+                    depth += 1;
+                    if depth >= MAX_ACCUM_DEPTH {
+                        // No big drop within MAX_DEPTH: no accumulation point.
+                        break;
+                    }
+                    path.push(PathStep {
+                        depth,
+                        obj_index_1based: child + 1,
+                        display_class: display_of(child),
+                        retained: child_ret,
+                    });
+                    cur = child;
+                    cur_ret = child_ret;
                 }
             }
+
+            // Accumulated objects: the accumulation point's immediately
+            // dominated children (retained-desc, tie obj-idx asc), capped.
+            let mut dominated: Vec<DominatedRow> = Vec::new();
+            let mut dominated_by_class: Vec<HistRow> = Vec::new();
+            if let Some(ap) = accumulation {
+                let mut kids: Vec<u32> = dom_children(ap).to_vec();
+                kids.sort_unstable_by(|&a, &b| {
+                    g.retained[b as usize]
+                        .cmp(&g.retained[a as usize])
+                        .then(a.cmp(&b))
+                });
+                for &k in kids.iter().take(cap) {
+                    let ki = k as usize;
+                    dominated.push(DominatedRow {
+                        obj_index_1based: ki + 1,
+                        display_class: display_of(ki),
+                        shallow: g.shallow[ki] as u64,
+                        retained: g.retained[ki],
+                    });
+                }
+                // By-class histogram of ALL immediately-dominated children.
+                let class_count = g.class_names.len();
+                let mut cls_count: std::collections::HashMap<usize, (u64, u64, u64)> =
+                    std::collections::HashMap::new();
+                for &k in &kids {
+                    let ki = k as usize;
+                    let ci = g.class_idx[ki] as usize;
+                    if ci < class_count {
+                        let e = cls_count.entry(ci).or_insert((0, 0, 0));
+                        e.0 += 1;
+                        e.1 += g.shallow[ki] as u64;
+                        e.2 += g.retained[ki];
+                    }
+                }
+                let mut rows: Vec<(usize, u64, u64, u64)> = cls_count
+                    .into_iter()
+                    .map(|(ci, (c, sh, ret))| (ci, c, sh, ret))
+                    .collect();
+                rows.sort_unstable_by(|a, b| b.3.cmp(&a.3).then(a.0.cmp(&b.0)));
+                for (ci, c, sh, ret) in rows.into_iter().take(cap) {
+                    dominated_by_class.push(HistRow {
+                        pretty_class: pretty_class_name(&g.class_names[ci]),
+                        instances: c,
+                        shallow: sh,
+                        retained: ret,
+                    });
+                }
+            }
+
+            // Keywords: suspect class + accumulation-point class, first-seen order.
+            let pretty_class = pretty_class_name(&g.class_names[s.class_idx]);
+            let mut keywords: Vec<String> = vec![pretty_class.clone()];
+            let (accumulation_class, accumulation_retained, accumulation_obj_1based) =
+                match accumulation {
+                    Some(ap) => {
+                        let ac = display_of(ap);
+                        if !keywords.contains(&ac) {
+                            keywords.push(ac.clone());
+                        }
+                        (Some(ac), Some(g.retained[ap]), Some(ap + 1))
+                    }
+                    None => (None, None, None),
+                };
+
             Suspect {
                 is_single: s.is_single,
-                pretty_class: pretty_class_name(&g.class_names[s.class_idx]),
+                pretty_class,
                 instance_count: s.instance_count,
                 retained: s.retained,
                 shallow: s.shallow,
                 path,
+                accumulation_obj_1based,
+                accumulation_class,
+                accumulation_retained,
+                dominated,
+                dominated_by_class,
+                keywords,
             }
         })
         .collect();
@@ -1056,46 +1205,93 @@ fn render_leak_suspects(l: &LeakSuspects, out: &mut String) {
         } else {
             0.0
         };
-        let type_label = if s.is_single {
-            "Single large object"
-        } else {
-            "Class group"
-        };
 
         out.push_str(&format!(
-            "### Suspect {}: `{}`\n\n",
+            "### {}. `{}` — retains {} ({:.1}% of reachable heap)\n\n",
             rank + 1,
-            s.pretty_class
-        ));
-        out.push_str(&format!("- **Type**: {}\n", type_label));
-        out.push_str(&format!(
-            "- **Instances**: {}\n",
-            fmt_count(s.instance_count)
-        ));
-        out.push_str(&format!(
-            "- **Retained heap**: {} ({:.1}% of total)\n",
+            s.pretty_class,
             format_bytes(s.retained),
-            pct
+            pct,
         ));
-        out.push_str(&format!(
-            "- **Shallow heap**: {}\n",
-            format_bytes(s.shallow)
-        ));
-        out.push('\n');
 
-        // Accumulation path for single suspects
+        // What the suspect is: a single object vs a class group.
         if s.is_single {
-            out.push_str("**Accumulation point path** (largest retained child at each step):\n\n");
-            out.push_str("| Depth | Object Index | Class | Retained |\n");
-            out.push_str("|---|---|---|---:|\n");
+            out.push_str(&format!(
+                "One `{}` object (shallow {}) dominates this retained heap.\n\n",
+                s.pretty_class,
+                format_bytes(s.shallow),
+            ));
+        } else {
+            out.push_str(&format!(
+                "{} instances of `{}` together retain this heap (combined shallow {}).\n\n",
+                fmt_count(s.instance_count),
+                s.pretty_class,
+                format_bytes(s.shallow),
+            ));
+        }
 
-            for step in &s.path {
+        // Accumulation point: where the retained heap actually piles up.
+        if s.is_single {
+            match (
+                &s.accumulation_class,
+                s.accumulation_obj_1based,
+                s.accumulation_retained,
+            ) {
+                (Some(ac), Some(obj), Some(ret)) => {
+                    if s.path.len() <= 1 {
+                        out.push_str(&format!(
+                            "This object is itself the accumulation point (retained {}).\n\n",
+                            format_bytes(ret),
+                        ));
+                    } else {
+                        out.push_str(&format!(
+                            "Retained heap accumulates at `{}` (object #{}, retained {}).\n\n",
+                            ac,
+                            obj,
+                            format_bytes(ret),
+                        ));
+                    }
+                }
+                _ => {
+                    out.push_str(
+                        "No single accumulation point was found within the search depth.\n\n",
+                    );
+                }
+            }
+        }
+
+        // Accumulated objects (immediately dominated by the accumulation point).
+        if !s.dominated.is_empty() {
+            out.push_str(&format!(
+                "**Accumulated objects (top {} by retained heap):**\n\n",
+                s.dominated.len(),
+            ));
+            out.push_str("| Object Index | Class | Shallow | Retained |\n");
+            out.push_str("|---|---|---:|---:|\n");
+            for row in &s.dominated {
                 out.push_str(&format!(
-                    "| {} | {} | `{}` | {} |\n",
-                    step.depth,
-                    step.obj_index_1based,
-                    step.display_class,
-                    format_bytes(step.retained),
+                    "| {} | `{}` | {} | {} |\n",
+                    row.obj_index_1based,
+                    row.display_class,
+                    format_bytes(row.shallow),
+                    format_bytes(row.retained),
+                ));
+            }
+            out.push('\n');
+        }
+
+        // By-class histogram of the accumulated objects.
+        if !s.dominated_by_class.is_empty() {
+            out.push_str("**Accumulated objects by class:**\n\n");
+            out.push_str("| Class | Objects | Shallow | Retained |\n");
+            out.push_str("|---|---:|---:|---:|\n");
+            for row in &s.dominated_by_class {
+                out.push_str(&format!(
+                    "| `{}` | {} | {} | {} |\n",
+                    row.pretty_class,
+                    fmt_count(row.instances),
+                    format_bytes(row.shallow),
+                    format_bytes(row.retained),
                 ));
             }
             out.push('\n');
@@ -1337,7 +1533,7 @@ mod tests {
     #[test]
     fn test_build_model_system_overview() {
         let (g, dc_off, dc_tgt) = fixture();
-        let r = build_model(&g, &dc_off, &dc_tgt);
+        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let o = &r.overview;
         assert_eq!(o.total_objects, 4);
         assert_eq!(o.total_shallow, 100 + 100 + 50 + 20);
@@ -1398,7 +1594,7 @@ mod tests {
             vec![0, 1, 2],
             0,
         );
-        let r = build_model(&g, &dc_off, &dc_tgt);
+        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let o = &r.overview;
 
         // classes_loaded counts distinct CLASS_DUMP objects (class_obj_repr set)
@@ -1472,7 +1668,7 @@ mod tests {
         {
             let (g, dc_off, dc_tgt) = build();
             assert_eq!(g.system_classloader_shallow, None);
-            let r = build_model(&g, &dc_off, &dc_tgt);
+            let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
             let o = &r.overview;
             assert_eq!(o.total_objects, 2);
             assert_eq!(o.total_shallow, 72 + 40);
@@ -1489,7 +1685,7 @@ mod tests {
         {
             let (mut g, dc_off, dc_tgt) = build();
             g.system_classloader_shallow = Some(72);
-            let r = build_model(&g, &dc_off, &dc_tgt);
+            let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
             let o = &r.overview;
             assert_eq!(o.total_objects, 3, "synthetic object not counted");
             assert_eq!(o.total_shallow, 72 + 40 + 72, "synthetic shallow missing");
@@ -1522,7 +1718,7 @@ mod tests {
         let (mut g, dc_off, dc_tgt) = fixture();
         g.ref_size = g.id_size; // 8 == 8 -> not compressed
         g.header_timestamp_ms = 0; // no creation timestamp
-        let r = build_model(&g, &dc_off, &dc_tgt);
+        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let o = &r.overview;
         assert_eq!(o.compressed_oops, Some(false)); // ref_size == id_size
         assert_eq!(o.dump_creation, None); // header_timestamp_ms == 0
@@ -1531,7 +1727,7 @@ mod tests {
     #[test]
     fn test_build_model_top_consumers_package_determinism() {
         let (g, dc_off, dc_tgt) = fixture();
-        let r = build_model(&g, &dc_off, &dc_tgt);
+        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let t = &r.top;
 
         // Biggest objects: top-level are obj0(1000), obj1(1000), obj3(200).
@@ -1593,7 +1789,7 @@ mod tests {
             vec![0, 1],
             0,
         );
-        let r = build_model(&g, &dc_off, &dc_tgt);
+        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let root = &r.top.biggest_packages;
         // Root keeps cumulative totals over ALL dominators (before pruning).
         assert_eq!(root.retained_heap, 10001);
@@ -1628,7 +1824,7 @@ mod tests {
             gc_roots,
             0,
         );
-        let mut r = build_model(&g, &dc_off, &dc_tgt);
+        let mut r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let root = &r.top.biggest_packages;
         assert_eq!(root.top_dominator_count, count as u64);
         assert!(
@@ -1646,7 +1842,7 @@ mod tests {
     #[test]
     fn test_build_model_leak_suspects() {
         let (g, dc_off, dc_tgt) = fixture();
-        let r = build_model(&g, &dc_off, &dc_tgt);
+        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let l = &r.leaks;
         // total_shallow = 270, threshold = 27. Singles directly under vroot with
         // retained >= 27: obj0(1000), obj1(1000), obj3(200) all qualify.
@@ -1665,13 +1861,88 @@ mod tests {
     }
 
     #[test]
+    fn test_accumulation_point_big_drop_and_leaf() {
+        // Two top-level singles under vroot (node 6):
+        //   A(obj0) -> B(obj1) -> {C(obj2), D(obj3)}   [big-drop chain]
+        //   E(obj4) -> F(obj5)                          [leaf chain]
+        // retained: A=1000 B=950 C=500 D=100 E=800 F=700.
+        // A->B: 950 >= 1000*0.7=700 -> descend. B's largest child C=500 <
+        //   950*0.7=665 -> BIG DROP -> accumulation point is B (the parent).
+        // E->F: 700 >= 800*0.7=560 -> descend. F is a leaf -> accumulation is F.
+        let (g, dc_off, dc_tgt) = make_graph(
+            vec![6, 0, 1, 1, 6, 4],
+            vec![0, 1, 2, 3, 4, 5],
+            vec![10, 10, 10, 10, 10, 10],
+            vec![1000, 950, 500, 100, 800, 700],
+            vec!["A", "B", "C", "D", "E", "F"],
+            &[],
+            &[],
+            vec![0, 4],
+            0,
+        );
+        let l = build_leak_suspects(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        // Two singles: A (1000) then E (800), retained-desc.
+        assert_eq!(l.suspects.len(), 2);
+        let a = &l.suspects[0];
+        assert_eq!(a.pretty_class, "A");
+        // A descends to B and stops (big drop at C): path = [A, B].
+        assert_eq!(a.path.len(), 2);
+        assert_eq!(a.accumulation_obj_1based, Some(2)); // B is obj1 -> 1-based 2
+        assert_eq!(a.accumulation_class, Some("B".to_string()));
+        assert_eq!(a.accumulation_retained, Some(950));
+        // B's immediately-dominated children, retained-desc: C(500), D(100).
+        assert_eq!(a.dominated.len(), 2);
+        assert_eq!(a.dominated[0].obj_index_1based, 3); // C = obj2
+        assert_eq!(a.dominated[0].retained, 500);
+        assert_eq!(a.dominated[1].obj_index_1based, 4); // D = obj3
+        assert_eq!(a.dominated[1].retained, 100);
+        // Keywords: suspect class + accumulation class.
+        assert_eq!(a.keywords, vec!["A".to_string(), "B".to_string()]);
+
+        // E chain: E -> F (leaf) -> accumulation point is F (obj5 -> 1-based 6).
+        let e = &l.suspects[1];
+        assert_eq!(e.pretty_class, "E");
+        assert_eq!(e.accumulation_obj_1based, Some(6));
+        assert_eq!(e.accumulation_class, Some("F".to_string()));
+        // F is a leaf: no dominated children.
+        assert!(e.dominated.is_empty());
+    }
+
+    #[test]
+    fn test_accumulation_dominated_cap_truncates() {
+        // A(obj0) is the accumulation point (its largest child drops below 0.7),
+        // with 3 immediately-dominated children B,C,D.
+        // retained: A=1000 B=100 C=90 D=80. 100 < 1000*0.7 -> A is accumulation.
+        let (g, dc_off, dc_tgt) = make_graph(
+            vec![4, 0, 0, 0],
+            vec![0, 1, 2, 3],
+            vec![10, 10, 10, 10],
+            vec![1000, 100, 90, 80],
+            vec!["A", "B", "C", "D"],
+            &[],
+            &[],
+            vec![0],
+            0,
+        );
+        // cap = 1 -> only the largest dominated child is listed.
+        let l1 = build_leak_suspects(&g, &dc_off, &dc_tgt, 1);
+        assert_eq!(l1.suspects.len(), 1);
+        assert_eq!(l1.suspects[0].accumulation_obj_1based, Some(1)); // A itself
+        assert_eq!(l1.suspects[0].dominated.len(), 1);
+        assert_eq!(l1.suspects[0].dominated[0].obj_index_1based, 2); // B, largest
+        // Default cap -> all three children listed.
+        let l2 = build_leak_suspects(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        assert_eq!(l2.suspects[0].dominated.len(), 3);
+    }
+
+    #[test]
     fn test_render_markdown_deterministic() {
         // Build the model twice and assert render output is byte-identical.
         // This specifically guards the Biggest-Packages HashMap sort fix.
         let (g1, off1, tgt1) = fixture();
         let (g2, off2, tgt2) = fixture();
-        let mut r1 = build_model(&g1, &off1, &tgt1);
-        let mut r2 = build_model(&g2, &off2, &tgt2);
+        let mut r1 = build_model(&g1, &off1, &tgt1, DOMINATED_CAP);
+        let mut r2 = build_model(&g2, &off2, &tgt2, DOMINATED_CAP);
         // Neutralise the nondeterministic timestamp line.
         r1.generated = "FIXED".to_string();
         r2.generated = "FIXED".to_string();
@@ -1681,7 +1952,7 @@ mod tests {
     #[test]
     fn test_render_markdown_structure() {
         let (g, dc_off, dc_tgt) = fixture();
-        let mut r = build_model(&g, &dc_off, &dc_tgt);
+        let mut r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         r.generated = "FIXED".to_string();
         let md = render_markdown(&r);
         assert!(md.starts_with("# Heap Dump Analysis: `test.hprof`\n\n"));
@@ -1695,7 +1966,7 @@ mod tests {
     #[test]
     fn test_render_markdown_oom_triage() {
         let (g, dc_off, dc_tgt) = fixture();
-        let mut r = build_model(&g, &dc_off, &dc_tgt);
+        let mut r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         r.generated = "FIXED".to_string();
         let md = render_markdown(&r);
 
@@ -1745,7 +2016,7 @@ mod tests {
     /// Build the fixture Report with the nondeterministic timestamp neutralised.
     fn fixture_report() -> Report {
         let (g, dc_off, dc_tgt) = fixture();
-        let mut r = build_model(&g, &dc_off, &dc_tgt);
+        let mut r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         r.generated = "FIXED".to_string();
         r
     }
@@ -1815,7 +2086,7 @@ mod tests {
         // Value-equality: whitespace / key ordering must not cause false diffs.
         assert_eq!(
             committed, fresh,
-            "schema/report.schema.json must equal a fresh schema_for!(Report);              regenerate via `--emit-schema` if the model changed"
+            "schema/report.schema.json must equal a fresh schema_for!(Report);              regenerate via `dev emit-schema` if the model changed"
         );
     }
 
@@ -1823,6 +2094,6 @@ mod tests {
     fn schema_version_guard() {
         let r = fixture_report();
         assert_eq!(r.schema_version, SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 1);
+        assert_eq!(SCHEMA_VERSION, 2);
     }
 }

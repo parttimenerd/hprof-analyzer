@@ -3,10 +3,10 @@
 #
 # For every dump that has BOTH a local `.hprof` AND a MAT `_System_Overview.zip`
 # reference, this script:
-#   (1) runs the analyzer `--format=json` on the dump      -> <name>.ours.json
-#   (2) runs `--diff <zip> <ours.json> --format=json`      -> <name>.diff.json
+#   (1) runs `analyze <dump> --format json` on the dump    -> <name>.ours.json
+#   (2) runs `diff <zip> <ours.json> --format json`         -> <name>.diff.json
 # then aggregates every per-dump diff into a single gate report via the
-# `--diff-sweep-aggregate=<dir>` subcommand (per-dump table, real-comparison
+# `dev sweep-aggregate <dir>` subcommand (per-dump table, real-comparison
 # count vs N_MIN=15, full EXPLAINABLE audit list + FAIL list, GATE verdict).
 #
 # It SKIPS cleanly (never errors) when a dump's hprof or zip is absent locally,
@@ -89,16 +89,16 @@ for zip in "$MAT_ZIP_DIR"/*_System_Overview.zip; do
   diff="$WORK/$name.diff.json"
 
   echo "RUN  $name : analyzing dump ..."
-  if ! "$BIN" "$hprof" --format=json --compress=none >"$ours" 2>"$WORK/$name.analyze.err"; then
+  if ! "$BIN" analyze "$hprof" --format json --compress none >"$ours" 2>"$WORK/$name.analyze.err"; then
     echo "SKIP $name : analyzer failed (see $WORK/$name.analyze.err)"
     n_skip=$((n_skip + 1))
     continue
   fi
 
-  # `--diff` exits 2 on a FAIL classification (NOT an error) and 1 on an I/O /
+  # `diff` exits 2 on a FAIL classification (NOT an error) and 1 on an I/O /
   # parse error. Treat exit 2 as a successful-but-failing diff we still record.
   set +e
-  "$BIN" --diff "$zip" "$ours" --format=json >"$diff" 2>"$WORK/$name.diff.err"
+  "$BIN" diff "$zip" "$ours" --format json >"$diff" 2>"$WORK/$name.diff.err"
   rc=$?
   set -e
   if [[ $rc -ne 0 && $rc -ne 2 ]]; then
@@ -118,7 +118,7 @@ echo
 
 # Aggregate. The aggregator exits 0 on GATE PASS, 2 on GATE FAIL; propagate it.
 set +e
-"$BIN" "--diff-sweep-aggregate=$WORK"
+"$BIN" dev sweep-aggregate "$WORK"
 agg_rc=$?
 set -e
 exit "$agg_rc"

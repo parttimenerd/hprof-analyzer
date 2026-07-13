@@ -10,6 +10,7 @@ fn end_to_end_dump0() {
         _ => return,
     }
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_hprof-analyzer"))
+        .arg("analyze")
         .arg(path)
         .output()
         .expect("failed to run hprof-analyzer");
