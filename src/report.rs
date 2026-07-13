@@ -1405,6 +1405,7 @@ fn build_top_consumers(g: &Graph) -> TopConsumers {
 pub fn render_markdown(r: &Report) -> String {
     let mut out = String::new();
     render_title(&r.overview, &r.generated, &mut out);
+    render_executive_summary(r, &mut out);
     render_oom_triage(r, &mut out);
     render_system_overview(&r.overview, &mut out);
     render_leak_suspects(&r.leaks, &mut out);
@@ -1423,6 +1424,100 @@ fn render_title(o: &SystemOverview, generated: &str, out: &mut String) {
         generated
     ));
     out.push_str("----\n\n");
+}
+
+/// Executive summary: a scannable digest at the very top of the report, before
+/// the detailed sections. Two compact mini-tables (a handful of rows each)
+/// re-project data already in the model — the headline scalars from System
+/// Overview and the top few retainers by retained heap — so a reader gets an
+/// at-a-glance answer to "what caused the OOM / where is the heap concentrated?"
+/// without scrolling. The full detail tables follow unchanged below. Pure
+/// function of `Report` (no new model fields, no graph access).
+fn render_executive_summary(r: &Report, out: &mut String) {
+    use crate::md::{Align, Table};
+    /// Rows shown in the top-suspects digest; the full lists follow below.
+    const SUMMARY_SUSPECTS: usize = 5;
+
+    out.push_str("## Summary\n\n");
+    out.push_str("_At-a-glance digest; see the sections below for full detail._\n\n");
+
+    // Key stats: the headline scalars the System Overview already exposes.
+    let o = &r.overview;
+    let mut stats = Table::new(&["Metric", "Value"], &[Align::Left, Align::Right]);
+    stats.row([
+        "Total heap (reachable)".into(),
+        format_bytes(o.total_shallow),
+    ]);
+    stats.row(["Objects".into(), fmt_count(o.total_objects)]);
+    stats.row(["Classes".into(), fmt_count(o.classes_loaded)]);
+    stats.row(["Class loaders".into(), fmt_count(o.classloaders_loaded)]);
+    stats.row(["Threads".into(), fmt_count(r.threads.threads.len() as u64)]);
+    stats.row(["GC roots".into(), fmt_count(o.gc_roots)]);
+    stats.render(out);
+    out.push('\n');
+
+    // Top suspects / biggest retained: the single most important OOM signal,
+    // shown up front. Prefer the leak-suspects list; fall back to the biggest
+    // top-level objects when no suspect exceeds the threshold. Percentage basis
+    // matches the detail tables: retained / total reachable shallow heap.
+    let total = r.leaks.total_shallow;
+    let pct_of = |retained: u64| -> f64 {
+        if total > 0 {
+            retained as f64 / total as f64 * 100.0
+        } else {
+            0.0
+        }
+    };
+
+    if !r.leaks.suspects.is_empty() {
+        out.push_str("**Top suspects by retained heap**\n\n");
+        let mut t = Table::new(
+            &["#", "Suspect", "Retained", "% Heap"],
+            &[Align::Right, Align::Left, Align::Right, Align::Right],
+        );
+        for (rank, s) in r.leaks.suspects.iter().take(SUMMARY_SUSPECTS).enumerate() {
+            let what = if s.is_single {
+                format!("`{}` (single object)", s.pretty_class)
+            } else {
+                format!(
+                    "`{}` ({} instances)",
+                    s.pretty_class,
+                    fmt_count(s.instance_count)
+                )
+            };
+            t.row([
+                (rank + 1).to_string(),
+                what,
+                format_bytes(s.retained),
+                format!("{:.1}%", pct_of(s.retained)),
+            ]);
+        }
+        t.render(out);
+    } else if !r.top.biggest_objects.is_empty() {
+        out.push_str("**Biggest retained objects**\n\n");
+        let mut t = Table::new(
+            &["#", "Class", "Retained", "% Heap"],
+            &[Align::Right, Align::Left, Align::Right, Align::Right],
+        );
+        for (rank, ob) in r
+            .top
+            .biggest_objects
+            .iter()
+            .take(SUMMARY_SUSPECTS)
+            .enumerate()
+        {
+            t.row([
+                (rank + 1).to_string(),
+                format!("`{}` (object #{})", ob.display_class, ob.obj_index_1based),
+                format_bytes(ob.retained),
+                format!("{:.1}%", pct_of(ob.retained)),
+            ]);
+        }
+        t.render(out);
+    } else {
+        out.push_str("_No dominant retainer found._\n");
+    }
+    out.push('\n');
 }
 
 /// OOM-triage lead-in: a short, human-readable summary re-projecting data
@@ -1597,10 +1692,13 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
     }
 
     out.push_str("### Class Histogram (by Retained Heap)\n\n");
+    out.push_str(
+        "_Top 50 classes ranked by retained heap; the full list is in the JSON output._\n\n",
+    );
     let mut hist = Table::new(
         &["#", "Class", "Instances", "Shallow Heap", "Retained Heap"],
         &[
-            Align::Left,
+            Align::Right,
             Align::Left,
             Align::Right,
             Align::Right,
@@ -1609,13 +1707,15 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
     );
     // The model carries the FULL histogram; the Markdown view shows the top 50
     // rows for readability. The complete data lives in the JSON output.
+    // Retained heap uses human-readable byte units (matching every other
+    // retained/shallow column) so the scale is scannable at a glance.
     for (rank, row) in o.histogram.iter().take(50).enumerate() {
         hist.row([
             (rank + 1).to_string(),
             format!("`{}`", row.pretty_class),
             fmt_count(row.instances),
             format_bytes(row.shallow),
-            fmt_count(row.retained),
+            format_bytes(row.retained),
         ]);
     }
     hist.render(out);
@@ -1629,6 +1729,10 @@ fn render_leak_suspects(l: &LeakSuspects, out: &mut String) {
         out.push_str("No single object or class group exceeds the threshold.\n\n");
         return;
     }
+
+    out.push_str(
+        "_Objects and class groups whose retained heap is large enough to be a likely OOM cause, ranked by retained heap._\n\n",
+    );
 
     for (rank, s) in l.suspects.iter().enumerate() {
         let pct = if l.total_shallow > 0 {
@@ -1703,7 +1807,7 @@ fn render_leak_suspects(l: &LeakSuspects, out: &mut String) {
             ));
             let mut t = Table::new(
                 &["Object Index", "Class", "Shallow", "Retained"],
-                &[Align::Left, Align::Left, Align::Right, Align::Right],
+                &[Align::Right, Align::Left, Align::Right, Align::Right],
             );
             for row in &s.dominated {
                 t.row([
@@ -1743,12 +1847,23 @@ fn render_top_consumers(t: &TopConsumers, total_shallow: u64, out: &mut String) 
     use crate::md::{Align, Table};
     out.push_str("## Top Consumers\n\n");
     out.push_str("### Biggest Objects (Top-Level Dominators)\n\n");
+    out.push_str(
+        "_Individual objects retaining the most heap; `% Heap` is the share of total reachable heap._\n\n",
+    );
     let mut objs = Table::new(
-        &["#", "Object Index", "Class", "Shallow", "Retained"],
         &[
+            "#",
+            "Object Index",
+            "Class",
+            "Shallow",
+            "Retained",
+            "% Heap",
+        ],
+        &[
+            Align::Right,
+            Align::Right,
             Align::Left,
-            Align::Left,
-            Align::Left,
+            Align::Right,
             Align::Right,
             Align::Right,
         ],
@@ -1764,16 +1879,18 @@ fn render_top_consumers(t: &TopConsumers, total_shallow: u64, out: &mut String) 
             row.obj_index_1based.to_string(),
             format!("`{}`", row.display_class),
             format_bytes(row.shallow),
-            format!("{} ({:.1}%)", format_bytes(row.retained), pct),
+            format_bytes(row.retained),
+            format!("{:.1}%", pct),
         ]);
     }
     objs.render(out);
     out.push('\n');
 
     out.push_str("### Biggest Classes by Retained Heap\n\n");
+    out.push_str("_Classes whose instances together retain the most heap._\n\n");
     let mut classes = Table::new(
         &["#", "Class", "Instances", "Retained Heap"],
-        &[Align::Left, Align::Left, Align::Right, Align::Right],
+        &[Align::Right, Align::Left, Align::Right, Align::Right],
     );
     for (rank, row) in t.biggest_classes.iter().enumerate() {
         classes.row([
@@ -1792,6 +1909,9 @@ fn render_top_consumers(t: &TopConsumers, total_shallow: u64, out: &mut String) 
         out.push('\n');
         return;
     }
+    out.push_str(
+        "_Retained heap aggregated by package prefix (rows retaining <1% of the total are pruned)._\n\n",
+    );
     let mut pkgs = Table::new(
         &["Package", "Objects", "Shallow", "Retained"],
         &[Align::Left, Align::Right, Align::Right, Align::Right],
