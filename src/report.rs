@@ -363,6 +363,37 @@ pub struct PropEntry {
     pub value: String,
 }
 
+/// F2: per-class-loader rollup over the class histogram. One row per distinct
+/// `loader_id`, aggregating the classes it loaded. A bounded reduction over the
+/// histogram (row count <= #loaders), so RSS-safe. Sorted retained-desc.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct LoaderRollup {
+    /// Human-readable loader label (class name of the loader object, or
+    /// `<boot>`); `None` when the label could not be resolved.
+    pub loader_label: Option<String>,
+    /// Loader object address (0 = boot loader).
+    pub loader_id: u64,
+    /// Number of distinct classes loaded by this loader.
+    pub class_count: u64,
+    pub instances: u64,
+    pub shallow: u64,
+    pub retained: u64,
+}
+
+/// F2: a class name loaded under more than one class loader — a classic
+/// class-loader-leak signature (the same class re-loaded per web-app reload,
+/// per plugin, etc.). Grouped by `pretty_class`; `loaders` is capped.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct DuplicateClass {
+    pub pretty_class: String,
+    /// Number of DISTINCT loader ids this class name appears under (>= 2).
+    pub loader_count: u64,
+    /// Loader labels (capped) that loaded this class name, for display.
+    pub loaders: Vec<String>,
+    pub total_instances: u64,
+    pub total_retained: u64,
+}
+
 /// Aggregates for the "System Overview" section.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct SystemOverview {
@@ -419,6 +450,12 @@ pub struct SystemOverview {
     /// Derived JVM version (prefers `java.vm.version`, else `java.version`).
     /// None when neither property was decoded. Additive: not parity-compared.
     pub jvm_version: Option<String>,
+    /// F2: per-loader rollup over the histogram, top-N by retained heap.
+    /// Additive bounded reduction (<= #loaders rows). Not parity-compared.
+    pub loader_rollup: Vec<LoaderRollup>,
+    /// F2: class names loaded under more than one loader (duplicate-class /
+    /// class-loader-leak signature), capped. Additive. Not parity-compared.
+    pub duplicate_classes: Vec<DuplicateClass>,
 }
 
 /// One step of a single-suspect accumulation path.
@@ -460,6 +497,14 @@ pub struct Suspect {
     /// Top immediately-dominated children of the accumulation point, sorted
     /// retained-desc and capped at the configured cap. Empty for groups.
     pub dominated: Vec<DominatedRow>,
+    /// F3: FULL count of immediately-dominated children of the accumulation
+    /// point (the dominator-children CSR degree, uncapped). The number the
+    /// capped `dominated` list cannot convey — "how many objects does this
+    /// accumulation point directly hold?". 0 for group suspects / no accum.
+    pub dominated_total_count: u64,
+    /// F3: how many rows the `dominated` list actually shows (== dominated.len()),
+    /// so a renderer can say "showing top M of N".
+    pub dominated_shown: u64,
     /// By-class histogram (objects/shallow/retained) of the accumulation
     /// point's immediately-dominated children, sorted retained-desc and
     /// capped. Empty for groups.
@@ -552,6 +597,11 @@ pub struct ThreadInfo {
     pub class_name: Option<String>,
     /// Stack frames, top-first, each "class.method (source:line)".
     pub frames: Vec<String>,
+    /// Number of GC-thread-local roots this thread holds that resolve to a live
+    /// object (from the dominator graph's synthetic thread→local edges). A high
+    /// count flags a thread pinning many objects alive. Additive field: not part
+    /// of MAT parity comparison. Bounded (per-thread), off the per-object budget.
+    pub local_root_count: u64,
 }
 
 /// Aggregates for the "Threads" section: one entry per resolved stack trace.
@@ -563,7 +613,7 @@ pub struct ThreadOverview {
 
 /// Schema version for the machine-readable JSON output. Bump on any
 /// breaking change to the `Report` shape; the JSON always carries this.
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// Full report data model: only bounded aggregates, never a per-object Vec.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
@@ -635,6 +685,11 @@ fn build_thread_overview(g: &Graph) -> ThreadOverview {
                 name: g.thread_names.get(&t.thread_serial).cloned(),
                 class_name,
                 frames: t.frames.clone(),
+                local_root_count: g
+                    .thread_local_counts
+                    .get(&t.thread_serial)
+                    .copied()
+                    .unwrap_or(0),
             }
         })
         .collect();
@@ -911,6 +966,87 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64]) -> SystemOverview {
         })
         .collect();
 
+    // F2: class-loader rollup + duplicate-class detection. Both are bounded
+    // folds over `histogram` (one pass; maps keyed by loader_id / pretty_class,
+    // so at most #loaders / #class-names entries — no per-object arrays).
+    let (loader_rollup, duplicate_classes) = {
+        use std::collections::HashMap;
+        // Rollup: aggregate per loader_id.
+        let mut roll: HashMap<u64, LoaderRollup> = HashMap::new();
+        // Duplicate detection: per pretty_class, the distinct loader ids and
+        // (labels, totals) seen. Labels de-duped in first-seen order.
+        struct DupAcc {
+            loader_ids: std::collections::HashSet<u64>,
+            loaders: Vec<String>,
+            total_instances: u64,
+            total_retained: u64,
+        }
+        let mut dup: HashMap<String, DupAcc> = HashMap::new();
+
+        for row in &histogram {
+            let e = roll.entry(row.loader_id).or_insert_with(|| LoaderRollup {
+                loader_label: row.loader_label.clone(),
+                loader_id: row.loader_id,
+                class_count: 0,
+                instances: 0,
+                shallow: 0,
+                retained: 0,
+            });
+            e.class_count += 1;
+            e.instances += row.instances;
+            e.shallow += row.shallow;
+            e.retained += row.retained;
+
+            let d = dup
+                .entry(row.pretty_class.clone())
+                .or_insert_with(|| DupAcc {
+                    loader_ids: std::collections::HashSet::new(),
+                    loaders: Vec::new(),
+                    total_instances: 0,
+                    total_retained: 0,
+                });
+            if d.loader_ids.insert(row.loader_id) {
+                const LOADER_CAP: usize = 8;
+                if d.loaders.len() < LOADER_CAP {
+                    d.loaders.push(
+                        row.loader_label
+                            .clone()
+                            .unwrap_or_else(|| format!("loader@{:#x}", row.loader_id)),
+                    );
+                }
+            }
+            d.total_instances += row.instances;
+            d.total_retained += row.retained;
+        }
+
+        let mut rollup: Vec<LoaderRollup> = roll.into_values().collect();
+        rollup.sort_unstable_by(|a, b| {
+            b.retained
+                .cmp(&a.retained)
+                .then(a.loader_id.cmp(&b.loader_id))
+        });
+        rollup.truncate(TOP_N);
+
+        let mut dups: Vec<DuplicateClass> = dup
+            .into_iter()
+            .filter(|(_, d)| d.loader_ids.len() > 1)
+            .map(|(pretty_class, d)| DuplicateClass {
+                pretty_class,
+                loader_count: d.loader_ids.len() as u64,
+                loaders: d.loaders,
+                total_instances: d.total_instances,
+                total_retained: d.total_retained,
+            })
+            .collect();
+        dups.sort_unstable_by(|a, b| {
+            b.total_retained
+                .cmp(&a.total_retained)
+                .then_with(|| a.pretty_class.cmp(&b.pretty_class))
+        });
+        dups.truncate(TOP_N);
+        (rollup, dups)
+    };
+
     // Compressed OOPs: references narrower than identifiers (id_size 8 -> ref 4).
     let compressed_oops = Some(g.ref_size < g.id_size);
     let dump_creation = if g.header_timestamp_ms != 0 {
@@ -949,6 +1085,8 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64]) -> SystemOverview {
             })
             .collect(),
         jvm_version: g.jvm_version.clone(),
+        loader_rollup,
+        duplicate_classes,
     }
 }
 
@@ -1143,8 +1281,10 @@ fn build_leak_suspects(
             // dominated children (retained-desc, tie obj-idx asc), capped.
             let mut dominated: Vec<DominatedRow> = Vec::new();
             let mut dominated_by_class: Vec<HistRow> = Vec::new();
+            let mut dominated_total_count: u64 = 0;
             if let Some(ap) = accumulation {
                 let mut kids: Vec<u32> = dom_children(ap).to_vec();
+                dominated_total_count = kids.len() as u64;
                 kids.sort_unstable_by(|&a, &b| {
                     g.retained[b as usize]
                         .cmp(&g.retained[a as usize])
@@ -1222,6 +1362,7 @@ fn build_leak_suspects(
                     None => (None, None, None),
                 };
 
+            let dominated_len_captured = dominated.len() as u64;
             Suspect {
                 is_single: s.is_single,
                 pretty_class,
@@ -1233,6 +1374,8 @@ fn build_leak_suspects(
                 accumulation_class,
                 accumulation_retained,
                 dominated,
+                dominated_total_count,
+                dominated_shown: dominated_len_captured,
                 dominated_by_class,
                 keywords,
                 root_type_label,
@@ -1469,6 +1612,38 @@ pub fn render_markdown(r: &Report) -> String {
     render_top_consumers(&r.top, r.leaks.total_shallow, &mut out);
     render_threads(&r.threads, &mut out);
     out
+}
+
+/// `md-graphs` output: the same Markdown report enriched with in-text ASCII/Unicode
+/// graphics (a linked table of contents, proportional bar columns, tree-drawn
+/// packages, and a sparkline depth histogram). Rendered independently of plain
+/// `md` so the byte-exact `md` output is never perturbed.
+pub fn render_markdown_graphs(r: &Report) -> String {
+    let mut out = String::new();
+    render_title(&r.overview, &r.generated, &mut out);
+    render_toc_graphs(&mut out);
+    render_executive_summary(r, &mut out);
+    render_oom_triage(r, &mut out);
+    render_system_overview_graphs(&r.overview, &mut out);
+    render_leak_suspects_graphs(&r.leaks, &mut out);
+    render_top_consumers_graphs(&r.top, r.leaks.total_shallow, &mut out);
+    render_threads(&r.threads, &mut out);
+    out
+}
+
+/// Linked in-document table of contents for the graphics report. The anchors
+/// use GitHub's slug convention (lowercase, spaces → hyphens) matching the
+/// `##`/`###` headings emitted by the section renderers.
+fn render_toc_graphs(out: &mut String) {
+    out.push_str("## Contents\n\n");
+    out.push_str("- [Summary](#summary)\n");
+    out.push_str("- [OOM Triage](#oom-triage)\n");
+    out.push_str("- [System Overview](#system-overview)\n");
+    out.push_str("- [Leak Suspects](#leak-suspects)\n");
+    out.push_str("- [Top Consumers](#top-consumers)\n");
+    out.push_str("- [Threads](#threads)\n");
+    out.push('\n');
+    out.push_str("----\n\n");
 }
 
 /// Emit the document title + generation timestamp + horizontal rule.
@@ -1801,6 +1976,61 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
         out.push('\n');
     }
 
+    // Retention Concentration (B3): how much of the heap the few biggest
+    // top-level dominators hold. Basis points → percent (100 bp = 1%).
+    {
+        let rc = &o.retention_concentration;
+        if rc.top1_bp > 0 || rc.top10_bp > 0 || rc.top100_bp > 0 || rc.num_objects_ge_1pct > 0 {
+            out.push_str("### Retention Concentration\n\n");
+            out.push_str(
+                "_Share of reachable heap held by the largest top-level dominators; \
+                 a high top-1 share points to a single dominant leak._\n\n",
+            );
+            let mut t = Table::new(&["Scope", "Retained Share"], &[Align::Left, Align::Right]);
+            t.row([
+                "Top 1 object".into(),
+                format!("{:.1}%", rc.top1_bp as f64 / 100.0),
+            ]);
+            t.row([
+                "Top 10 objects".into(),
+                format!("{:.1}%", rc.top10_bp as f64 / 100.0),
+            ]);
+            t.row([
+                "Top 100 objects".into(),
+                format!("{:.1}%", rc.top100_bp as f64 / 100.0),
+            ]);
+            t.row([
+                "Objects each >=1%".into(),
+                fmt_count(rc.num_objects_ge_1pct),
+            ]);
+            t.render(out);
+            out.push('\n');
+        }
+    }
+
+    // Dominator-Depth Distribution (B2): objects per idom-hop below a GC root.
+    if !o.dominator_depth_histogram.is_empty() {
+        const DEPTH_CAP: usize = 50;
+        out.push_str("### Dominator-Depth Distribution\n\n");
+        out.push_str(
+            "_Objects per hop-count below a GC root; a tall shallow side means shallow retention._\n\n",
+        );
+        let total = o.dominator_depth_histogram.len();
+        let shown = total.min(DEPTH_CAP);
+        let mut t = Table::new(&["Depth", "Objects"], &[Align::Right, Align::Right]);
+        for b in o.dominator_depth_histogram.iter().take(shown) {
+            t.row([b.depth.to_string(), fmt_count(b.objects)]);
+        }
+        t.render(out);
+        if total > shown {
+            out.push_str(&format!(
+                "\n_… (+{} deeper buckets in JSON)_\n",
+                total - shown
+            ));
+        }
+        out.push('\n');
+    }
+
     out.push_str("### Class Histogram (by Retained Heap)\n\n");
     out.push_str(
         "_Top 50 classes ranked by retained heap; the full list is in the JSON output._\n\n",
@@ -1830,6 +2060,65 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
     }
     hist.render(out);
     out.push('\n');
+
+    // Class Loaders (F2): per-loader rollup, top-N by retained heap.
+    if !o.loader_rollup.is_empty() {
+        out.push_str("### Class Loaders\n\n");
+        out.push_str(
+            "_Classes grouped by the loader that defined them; many loaders each holding heap \
+             can signal a class-loader leak._\n\n",
+        );
+        let mut t = Table::new(
+            &[
+                "Loader",
+                "Classes",
+                "Instances",
+                "Shallow Heap",
+                "Retained Heap",
+            ],
+            &[
+                Align::Left,
+                Align::Right,
+                Align::Right,
+                Align::Right,
+                Align::Right,
+            ],
+        );
+        for r in &o.loader_rollup {
+            t.row([
+                r.loader_label.clone().unwrap_or_else(|| "<unknown>".into()),
+                fmt_count(r.class_count),
+                fmt_count(r.instances),
+                format_bytes(r.shallow),
+                format_bytes(r.retained),
+            ]);
+        }
+        t.render(out);
+        out.push('\n');
+    }
+
+    // Duplicate Classes (F2): class names loaded under more than one loader.
+    if !o.duplicate_classes.is_empty() {
+        out.push_str("### Duplicate Classes\n\n");
+        out.push_str(
+            "_Class names loaded by more than one class loader — a classic class-loader-leak \
+             signature (the same class re-loaded repeatedly)._\n\n",
+        );
+        let mut t = Table::new(
+            &["Class", "#Loaders", "Instances", "Retained Heap"],
+            &[Align::Left, Align::Right, Align::Right, Align::Right],
+        );
+        for d in &o.duplicate_classes {
+            t.row([
+                format!("`{}`", d.pretty_class),
+                fmt_count(d.loader_count),
+                fmt_count(d.total_instances),
+                format_bytes(d.total_retained),
+            ]);
+        }
+        t.render(out);
+        out.push('\n');
+    }
 }
 
 fn render_leak_suspects(l: &LeakSuspects, out: &mut String) {
@@ -1911,6 +2200,18 @@ fn render_leak_suspects(l: &LeakSuspects, out: &mut String) {
         // Accumulated objects (immediately dominated by the accumulation point).
         if !s.dominated.is_empty() {
             use crate::md::{Align, Table};
+            if s.dominated_total_count > s.dominated_shown {
+                out.push_str(&format!(
+                    "_Directly dominates {} objects (showing top {})._\n\n",
+                    fmt_count(s.dominated_total_count),
+                    fmt_count(s.dominated_shown),
+                ));
+            } else if s.dominated_total_count > 0 {
+                out.push_str(&format!(
+                    "_Directly dominates {} objects._\n\n",
+                    fmt_count(s.dominated_total_count),
+                ));
+            }
             out.push_str(&format!(
                 "**Accumulated objects (top {} by retained heap):**\n\n",
                 s.dominated.len(),
@@ -2052,6 +2353,675 @@ fn render_top_consumers(t: &TopConsumers, total_shallow: u64, out: &mut String) 
     out.push('\n');
 }
 
+// ── md-graphs section renderers ─────────────────────────────────────────────
+// These mirror the plain-Markdown sections byte-for-byte in their data, but add
+// proportional bar columns, a sparkline, and tree-drawn package hierarchy. They
+// are only reachable from `render_markdown_graphs`; plain `md` never calls them.
+
+/// Width (in cells) of the in-table proportional bar columns. Fixed so columns
+/// stay aligned regardless of the values.
+const GRAPH_BAR_WIDTH: usize = 16;
+
+/// System Overview with bar columns on GC Roots / Heap Composition, a sparkline
+/// for the dominator-depth distribution, and a share bar on the class histogram.
+fn render_system_overview_graphs(o: &SystemOverview, out: &mut String) {
+    use crate::md::{Align, Table, bar, sparkline};
+    out.push_str("## System Overview\n\n");
+    out.push_str("_Reachable-heap totals and the largest classes by retained heap._\n\n");
+    out.push_str("### Heap Summary\n\n");
+    let mut summary = Table::new(&["Property", "Value"], &[Align::Left, Align::Left]);
+    summary.row(["HPROF format".into(), o.format.clone()]);
+    summary.row(["File size".into(), format_bytes(o.file_size)]);
+    summary.row([
+        "Identifier size".into(),
+        format!("{}-bit", o.identifier_size_bits),
+    ]);
+    if let Some(coops) = o.compressed_oops {
+        summary.row([
+            "Compressed OOPs".into(),
+            if coops { "yes" } else { "no" }.into(),
+        ]);
+    }
+    if let Some(ms) = o.dump_creation {
+        summary.row(["Dump created".into(), format_epoch_ms(ms)]);
+    }
+    if let Some(ver) = &o.jvm_version {
+        summary.row(["JVM version".into(), ver.clone()]);
+    }
+    summary.row(["Total objects".into(), fmt_count(o.total_objects)]);
+    summary.row(["Total shallow heap".into(), format_bytes(o.total_shallow)]);
+    summary.row(["GC roots".into(), fmt_count(o.gc_roots)]);
+    summary.row(["Classes loaded".into(), fmt_count(o.classes_loaded)]);
+    summary.row(["Class loaders".into(), fmt_count(o.classloaders_loaded)]);
+    if o.unreachable_count > 0 {
+        summary.row([
+            "Unreachable objects (excluded)".into(),
+            format!(
+                "{} ({})",
+                fmt_count(o.unreachable_count),
+                format_bytes(o.unreachable_shallow),
+            ),
+        ]);
+    }
+    summary.render(out);
+    out.push('\n');
+
+    {
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let mut labels: Vec<&str> = Vec::new();
+        for row in &o.histogram {
+            if let Some(lbl) = row.loader_label.as_deref() {
+                if lbl != "<boot>" && seen.insert(lbl) {
+                    labels.push(lbl);
+                }
+            }
+        }
+        if !labels.is_empty() {
+            const CAP: usize = 8;
+            let shown = labels.len().min(CAP);
+            let mut line = labels[..shown].join(", ");
+            if labels.len() > CAP {
+                line.push_str(&format!(", … (+{} more)", labels.len() - CAP));
+            }
+            out.push_str(&format!("- **Class loaders (labels):** {line}\n\n"));
+        }
+    }
+
+    if !o.system_properties.is_empty() {
+        const CAP: usize = 40;
+        const VAL_MAX: usize = 120;
+        out.push_str("### System Properties\n\n");
+        let shown = o.system_properties.len().min(CAP);
+        let mut t = Table::new(&["Property", "Value"], &[Align::Left, Align::Left]);
+        for p in &o.system_properties[..shown] {
+            let mut v = p.value.replace('\n', " ").replace('|', "\\|");
+            if v.chars().count() > VAL_MAX {
+                let truncated: String = v.chars().take(VAL_MAX).collect();
+                v = format!("{truncated}…");
+            }
+            t.row([p.key.clone(), v]);
+        }
+        t.render(out);
+        if o.system_properties.len() > CAP {
+            out.push_str(&format!(
+                "\n_… (+{} more properties in JSON)_\n",
+                o.system_properties.len() - CAP
+            ));
+        }
+        out.push('\n');
+    }
+
+    // GC Roots by Type — with a proportional count bar.
+    if o.gc_roots_by_type.len() > 1 {
+        out.push_str("### GC Roots by Type\n\n");
+        let max = o
+            .gc_roots_by_type
+            .iter()
+            .map(|r| r.count)
+            .max()
+            .unwrap_or(0);
+        let mut t = Table::new(
+            &["Root Type", "Count", ""],
+            &[Align::Left, Align::Right, Align::Left],
+        );
+        for row in &o.gc_roots_by_type {
+            t.row([
+                row.root_type.clone(),
+                fmt_count(row.count),
+                bar(row.count, max, GRAPH_BAR_WIDTH),
+            ]);
+        }
+        t.render(out);
+        out.push('\n');
+    }
+
+    // Heap Composition — with a proportional shallow-heap bar.
+    if o.heap_composition.by_kind.len() > 1 {
+        out.push_str("### Heap Composition\n\n");
+        let max = o
+            .heap_composition
+            .by_kind
+            .iter()
+            .map(|k| k.shallow_heap)
+            .max()
+            .unwrap_or(0);
+        let mut t = Table::new(
+            &["Kind", "Objects", "Shallow Heap", ""],
+            &[Align::Left, Align::Right, Align::Right, Align::Left],
+        );
+        for k in &o.heap_composition.by_kind {
+            t.row([
+                k.kind.clone(),
+                fmt_count(k.objects),
+                format_bytes(k.shallow_heap),
+                bar(k.shallow_heap, max, GRAPH_BAR_WIDTH),
+            ]);
+        }
+        t.render(out);
+        out.push('\n');
+    }
+
+    // Retention Concentration (B3) — same numbers as plain md (data parity).
+    {
+        let rc = &o.retention_concentration;
+        if rc.top1_bp > 0 || rc.top10_bp > 0 || rc.top100_bp > 0 || rc.num_objects_ge_1pct > 0 {
+            out.push_str("### Retention Concentration\n\n");
+            out.push_str(
+                "_Share of reachable heap held by the largest top-level dominators; \
+                 a high top-1 share points to a single dominant leak._\n\n",
+            );
+            let mut t = Table::new(
+                &["Scope", "Retained Share", ""],
+                &[Align::Left, Align::Right, Align::Left],
+            );
+            t.row([
+                "Top 1 object".into(),
+                format!("{:.1}%", rc.top1_bp as f64 / 100.0),
+                bar(rc.top1_bp as u64, 10_000, GRAPH_BAR_WIDTH),
+            ]);
+            t.row([
+                "Top 10 objects".into(),
+                format!("{:.1}%", rc.top10_bp as f64 / 100.0),
+                bar(rc.top10_bp as u64, 10_000, GRAPH_BAR_WIDTH),
+            ]);
+            t.row([
+                "Top 100 objects".into(),
+                format!("{:.1}%", rc.top100_bp as f64 / 100.0),
+                bar(rc.top100_bp as u64, 10_000, GRAPH_BAR_WIDTH),
+            ]);
+            t.row([
+                "Objects each >=1%".into(),
+                fmt_count(rc.num_objects_ge_1pct),
+                String::new(),
+            ]);
+            t.render(out);
+            out.push('\n');
+        }
+    }
+
+    // Dominator-Depth Distribution — a sparkline over the per-depth object
+    // counts, PLUS the full per-depth table (data parity with plain md).
+    if !o.dominator_depth_histogram.is_empty() {
+        out.push_str("### Dominator-Depth Distribution\n\n");
+        out.push_str(
+            "_Objects per hop-count below a GC root; a tall left side means shallow retention._\n\n",
+        );
+        let counts: Vec<u64> = o
+            .dominator_depth_histogram
+            .iter()
+            .map(|b| b.objects)
+            .collect();
+        let first = o
+            .dominator_depth_histogram
+            .first()
+            .map(|b| b.depth)
+            .unwrap_or(0);
+        let last = o
+            .dominator_depth_histogram
+            .last()
+            .map(|b| b.depth)
+            .unwrap_or(0);
+        out.push_str(&format!(
+            "`{}`  (depth {}–{})\n\n",
+            sparkline(&counts),
+            first,
+            last,
+        ));
+        const DEPTH_CAP: usize = 50;
+        let dmax = counts.iter().copied().max().unwrap_or(0);
+        let total = o.dominator_depth_histogram.len();
+        let shown = total.min(DEPTH_CAP);
+        let mut t = Table::new(
+            &["Depth", "Objects", ""],
+            &[Align::Right, Align::Right, Align::Left],
+        );
+        for b in o.dominator_depth_histogram.iter().take(shown) {
+            t.row([
+                b.depth.to_string(),
+                fmt_count(b.objects),
+                bar(b.objects, dmax, GRAPH_BAR_WIDTH),
+            ]);
+        }
+        t.render(out);
+        if total > shown {
+            out.push_str(&format!(
+                "\n_… (+{} deeper buckets in JSON)_\n",
+                total - shown
+            ));
+        }
+        out.push('\n');
+    }
+
+    out.push_str("### Class Histogram (by Retained Heap)\n\n");
+    out.push_str(
+        "_Top 50 classes ranked by retained heap; the full list is in the JSON output._\n\n",
+    );
+    let hist_max = o
+        .histogram
+        .iter()
+        .take(50)
+        .map(|r| r.retained)
+        .max()
+        .unwrap_or(0);
+    let mut hist = Table::new(
+        &[
+            "#",
+            "Class",
+            "Instances",
+            "Shallow Heap",
+            "Retained Heap",
+            "",
+        ],
+        &[
+            Align::Right,
+            Align::Left,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+            Align::Left,
+        ],
+    );
+    for (rank, row) in o.histogram.iter().take(50).enumerate() {
+        hist.row([
+            (rank + 1).to_string(),
+            format!("`{}`", row.pretty_class),
+            fmt_count(row.instances),
+            format_bytes(row.shallow),
+            format_bytes(row.retained),
+            bar(row.retained, hist_max, GRAPH_BAR_WIDTH),
+        ]);
+    }
+    hist.render(out);
+    out.push('\n');
+
+    // Class Loaders (F2) — with a proportional retained-heap bar.
+    if !o.loader_rollup.is_empty() {
+        out.push_str("### Class Loaders\n\n");
+        out.push_str(
+            "_Classes grouped by the loader that defined them; many loaders each holding heap \
+             can signal a class-loader leak._\n\n",
+        );
+        let lmax = o
+            .loader_rollup
+            .iter()
+            .map(|r| r.retained)
+            .max()
+            .unwrap_or(0);
+        let mut t = Table::new(
+            &[
+                "Loader",
+                "Classes",
+                "Instances",
+                "Shallow Heap",
+                "Retained Heap",
+                "",
+            ],
+            &[
+                Align::Left,
+                Align::Right,
+                Align::Right,
+                Align::Right,
+                Align::Right,
+                Align::Left,
+            ],
+        );
+        for r in &o.loader_rollup {
+            t.row([
+                r.loader_label.clone().unwrap_or_else(|| "<unknown>".into()),
+                fmt_count(r.class_count),
+                fmt_count(r.instances),
+                format_bytes(r.shallow),
+                format_bytes(r.retained),
+                bar(r.retained, lmax, GRAPH_BAR_WIDTH),
+            ]);
+        }
+        t.render(out);
+        out.push('\n');
+    }
+
+    // Duplicate Classes (F2) — same table as plain md (no extra glyph column;
+    // #Loaders is already the salient number).
+    if !o.duplicate_classes.is_empty() {
+        out.push_str("### Duplicate Classes\n\n");
+        out.push_str(
+            "_Class names loaded by more than one class loader — a classic class-loader-leak \
+             signature (the same class re-loaded repeatedly)._\n\n",
+        );
+        let mut t = Table::new(
+            &["Class", "#Loaders", "Instances", "Retained Heap"],
+            &[Align::Left, Align::Right, Align::Right, Align::Right],
+        );
+        for d in &o.duplicate_classes {
+            t.row([
+                format!("`{}`", d.pretty_class),
+                fmt_count(d.loader_count),
+                fmt_count(d.total_instances),
+                format_bytes(d.total_retained),
+            ]);
+        }
+        t.render(out);
+        out.push('\n');
+    }
+}
+
+/// Leak Suspects with a leading share-bar table across all suspects, then the
+/// full plain per-suspect detail (reused verbatim for byte-identical numbers).
+fn render_leak_suspects_graphs(l: &LeakSuspects, out: &mut String) {
+    use crate::md::{Align, Table, bar};
+    out.push_str("## Leak Suspects\n\n");
+
+    if l.suspects.is_empty() {
+        out.push_str("No single object or class group exceeds the threshold.\n\n");
+        return;
+    }
+
+    out.push_str(
+        "_Objects and class groups whose retained heap is large enough to be a likely OOM cause, ranked by retained heap._\n\n",
+    );
+
+    // Share overview: one proportional bar per suspect, keyed to the largest
+    // suspect's retained heap so the relative sizes read at a glance.
+    let max = l.suspects.iter().map(|s| s.retained).max().unwrap_or(0);
+    let mut share = Table::new(
+        &["#", "Suspect", "Retained", "% Heap", ""],
+        &[
+            Align::Right,
+            Align::Left,
+            Align::Right,
+            Align::Right,
+            Align::Left,
+        ],
+    );
+    for (rank, s) in l.suspects.iter().enumerate() {
+        let pct = if l.total_shallow > 0 {
+            s.retained as f64 / l.total_shallow as f64 * 100.0
+        } else {
+            0.0
+        };
+        share.row([
+            (rank + 1).to_string(),
+            format!("`{}`", s.pretty_class),
+            format_bytes(s.retained),
+            format!("{pct:.1}%"),
+            bar(s.retained, max, GRAPH_BAR_WIDTH),
+        ]);
+    }
+    share.render(out);
+    out.push('\n');
+
+    // Per-suspect detail: identical to plain Markdown.
+    for (rank, s) in l.suspects.iter().enumerate() {
+        let pct = if l.total_shallow > 0 {
+            s.retained as f64 / l.total_shallow as f64 * 100.0
+        } else {
+            0.0
+        };
+
+        out.push_str(&format!(
+            "### {}. `{}` — retains {} ({:.1}% of reachable heap)\n\n",
+            rank + 1,
+            s.pretty_class,
+            format_bytes(s.retained),
+            pct,
+        ));
+
+        if s.is_single {
+            out.push_str(&format!(
+                "One `{}` object (shallow {}) dominates this retained heap.\n\n",
+                s.pretty_class,
+                format_bytes(s.shallow),
+            ));
+        } else {
+            out.push_str(&format!(
+                "{} instances of `{}` together retain this heap (combined shallow {}).\n\n",
+                fmt_count(s.instance_count),
+                s.pretty_class,
+                format_bytes(s.shallow),
+            ));
+        }
+
+        if s.is_single {
+            if !s.root_type_label.is_empty() {
+                out.push_str(&format!("Held by a **{}** GC root.\n\n", s.root_type_label));
+            }
+            match (
+                &s.accumulation_class,
+                s.accumulation_obj_1based,
+                s.accumulation_retained,
+            ) {
+                (Some(ac), Some(obj), Some(ret)) => {
+                    if s.path.len() <= 1 {
+                        out.push_str(&format!(
+                            "This object is itself the accumulation point (retained {}).\n\n",
+                            format_bytes(ret),
+                        ));
+                    } else {
+                        out.push_str(&format!(
+                            "Retained heap accumulates at `{}` (object #{}, retained {}).\n\n",
+                            ac,
+                            obj,
+                            format_bytes(ret),
+                        ));
+                    }
+                }
+                _ => {
+                    out.push_str(
+                        "No single accumulation point was found within the search depth.\n\n",
+                    );
+                }
+            }
+        }
+
+        if !s.dominated.is_empty() {
+            if s.dominated_total_count > s.dominated_shown {
+                out.push_str(&format!(
+                    "_Directly dominates {} objects (showing top {})._\n\n",
+                    fmt_count(s.dominated_total_count),
+                    fmt_count(s.dominated_shown),
+                ));
+            } else if s.dominated_total_count > 0 {
+                out.push_str(&format!(
+                    "_Directly dominates {} objects._\n\n",
+                    fmt_count(s.dominated_total_count),
+                ));
+            }
+            out.push_str(&format!(
+                "**Accumulated objects (top {} by retained heap):**\n\n",
+                s.dominated.len(),
+            ));
+            let mut t = Table::new(
+                &["Object Index", "Class", "Shallow", "Retained"],
+                &[Align::Right, Align::Left, Align::Right, Align::Right],
+            );
+            for row in &s.dominated {
+                t.row([
+                    row.obj_index_1based.to_string(),
+                    format!("`{}`", row.display_class),
+                    format_bytes(row.shallow),
+                    format_bytes(row.retained),
+                ]);
+            }
+            t.render(out);
+            out.push('\n');
+        }
+
+        if !s.dominated_by_class.is_empty() {
+            out.push_str("**Accumulated objects by class:**\n\n");
+            let mut t = Table::new(
+                &["Class", "Objects", "Shallow", "Retained"],
+                &[Align::Left, Align::Right, Align::Right, Align::Right],
+            );
+            for row in &s.dominated_by_class {
+                t.row([
+                    format!("`{}`", row.pretty_class),
+                    fmt_count(row.instances),
+                    format_bytes(row.shallow),
+                    format_bytes(row.retained),
+                ]);
+            }
+            t.render(out);
+            out.push('\n');
+        }
+    }
+}
+
+/// Top Consumers with share bars on Biggest Objects / Classes and a tree-drawn
+/// package hierarchy (box-drawing connectors + a retained-heap bar per row).
+fn render_top_consumers_graphs(t: &TopConsumers, total_shallow: u64, out: &mut String) {
+    use crate::md::{Align, Table, bar, tree_prefix};
+    out.push_str("## Top Consumers\n\n");
+    out.push_str("### Biggest Objects (Top-Level Dominators)\n\n");
+    out.push_str(
+        "_Individual objects retaining the most heap; `% Heap` is the share of total reachable heap._\n\n",
+    );
+    let obj_max = t
+        .biggest_objects
+        .iter()
+        .map(|r| r.retained)
+        .max()
+        .unwrap_or(0);
+    let mut objs = Table::new(
+        &[
+            "#",
+            "Object Index",
+            "Class",
+            "Shallow",
+            "Retained",
+            "% Heap",
+            "",
+        ],
+        &[
+            Align::Right,
+            Align::Right,
+            Align::Left,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+            Align::Left,
+        ],
+    );
+    for (rank, row) in t.biggest_objects.iter().enumerate() {
+        let pct = if total_shallow > 0 {
+            row.retained as f64 / total_shallow as f64 * 100.0
+        } else {
+            0.0
+        };
+        objs.row([
+            (rank + 1).to_string(),
+            row.obj_index_1based.to_string(),
+            format!("`{}`", row.display_class),
+            format_bytes(row.shallow),
+            format_bytes(row.retained),
+            format!("{pct:.1}%"),
+            bar(row.retained, obj_max, GRAPH_BAR_WIDTH),
+        ]);
+    }
+    objs.render(out);
+    out.push('\n');
+
+    out.push_str("### Biggest Classes by Retained Heap\n\n");
+    out.push_str("_Classes whose instances together retain the most heap._\n\n");
+    let cls_max = t
+        .biggest_classes
+        .iter()
+        .map(|r| r.retained)
+        .max()
+        .unwrap_or(0);
+    let mut classes = Table::new(
+        &["#", "Class", "Instances", "Retained Heap", ""],
+        &[
+            Align::Right,
+            Align::Left,
+            Align::Right,
+            Align::Right,
+            Align::Left,
+        ],
+    );
+    for (rank, row) in t.biggest_classes.iter().enumerate() {
+        classes.row([
+            (rank + 1).to_string(),
+            format!("`{}`", row.pretty_class),
+            fmt_count(row.instances),
+            format_bytes(row.retained),
+            bar(row.retained, cls_max, GRAPH_BAR_WIDTH),
+        ]);
+    }
+    classes.render(out);
+    out.push('\n');
+
+    out.push_str("### Biggest Packages by Retained Heap\n\n");
+    if t.biggest_packages.children.is_empty() {
+        out.push_str("_No package retains more than 1% of the total retained heap._\n");
+        out.push('\n');
+        return;
+    }
+    out.push_str(
+        "_Retained heap aggregated by package prefix (rows retaining <1% of the total are pruned); the tree shows nesting._\n\n",
+    );
+    // Bar is keyed to the largest top-level package's retained heap.
+    let pkg_max = t
+        .biggest_packages
+        .children
+        .iter()
+        .map(|c| c.retained_heap)
+        .max()
+        .unwrap_or(0);
+    let mut pkgs = Table::new(
+        &["Package", "Objects", "Shallow", "Retained", ""],
+        &[
+            Align::Left,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+            Align::Left,
+        ],
+    );
+    // Pre-order DFS with box-drawing prefixes. Each row shows only this node's
+    // own segment name (last dotted component), indented by its tree position;
+    // the full path is implied by the nesting rather than repeated.
+    fn emit_node_tree(
+        node: &PackageNode,
+        depth: usize,
+        is_last: bool,
+        ancestors_continue: &[bool],
+        pkg_max: u64,
+        pkgs: &mut Table,
+    ) {
+        let prefix = tree_prefix(depth, is_last, ancestors_continue);
+        // Show the leaf segment (final dotted component) for depth > 0; the full
+        // name at the top level so top rows stay self-describing.
+        let label = if depth == 0 {
+            node.name.clone()
+        } else {
+            node.name
+                .rsplit('.')
+                .next()
+                .unwrap_or(&node.name)
+                .to_string()
+        };
+        pkgs.row([
+            format!("{prefix}`{label}`"),
+            fmt_count(node.top_dominator_count),
+            format_bytes(node.shallow_heap),
+            format_bytes(node.retained_heap),
+            bar(node.retained_heap, pkg_max, GRAPH_BAR_WIDTH),
+        ]);
+        let n = node.children.len();
+        for (i, child) in node.children.iter().enumerate() {
+            let child_last = i + 1 == n;
+            let mut cont = ancestors_continue.to_vec();
+            cont.push(!is_last);
+            emit_node_tree(child, depth + 1, child_last, &cont, pkg_max, pkgs);
+        }
+    }
+    let n = t.biggest_packages.children.len();
+    for (i, child) in t.biggest_packages.children.iter().enumerate() {
+        emit_node_tree(child, 0, i + 1 == n, &[], pkg_max, &mut pkgs);
+    }
+    pkgs.render(out);
+    out.push('\n');
+}
+
 /// Render the "Threads" section: each resolved thread's call stack. Threads
 /// without any frames are already dropped upstream; an empty section prints a
 /// placeholder so the heading is still self-describing.
@@ -2069,6 +3039,12 @@ fn render_threads(t: &ThreadOverview, out: &mut String) {
                 th.thread_serial, name, class
             )),
             None => out.push_str(&format!("### Thread {} ({})\n\n", th.thread_serial, class)),
+        }
+        if th.local_root_count > 0 {
+            out.push_str(&format!(
+                "_Local roots: {}._\n\n",
+                fmt_count(th.local_root_count)
+            ));
         }
         for frame in &th.frames {
             out.push_str(&format!("- `{frame}`\n"));
@@ -2209,6 +3185,7 @@ mod tests {
             loader_labels: std::collections::HashMap::new(),
             thread_stacks: Vec::new(),
             thread_names: std::collections::HashMap::new(),
+            thread_local_counts: std::collections::HashMap::new(),
             system_properties: Vec::new(),
             jvm_version: None,
             class_obj_class_idx,
@@ -3266,7 +4243,7 @@ mod tests {
     fn schema_version_guard() {
         let r = fixture_report();
         assert_eq!(r.schema_version, SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 3);
+        assert_eq!(SCHEMA_VERSION, 4);
     }
 
     #[test]
@@ -3318,6 +4295,7 @@ mod tests {
                     name: Some("main".to_string()),
                     class_name: Some("java/lang/Thread".to_string()),
                     frames: vec!["java.lang.Object.wait (Object.java:1)".to_string()],
+                    local_root_count: 0,
                 }],
             },
             &mut out,

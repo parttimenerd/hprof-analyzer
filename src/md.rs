@@ -148,6 +148,95 @@ fn display_width(s: &str) -> usize {
     s.chars().count()
 }
 
+// ── In-text graphics for the `md-graphs` report ─────────────────────────────
+// These render proportional bars, sparklines, and tree branches using fixed
+// block glyphs so the output is deterministic and lines up in a monospace
+// editor. They only feed the `md-graphs` renderer — plain `md` never calls
+// them, so its byte-exact output is untouched.
+
+/// Full and partial eighth-width block glyphs, indexed 0..=8, used by both the
+/// proportional bar and the sparkline. Index 0 is a space (empty); 1..=8 fill
+/// from a thin left/bottom sliver up to a full block.
+const EIGHTHS: [char; 9] = [' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉', '█'];
+/// Sparkline row glyphs, low → high (8 visible levels; a zero value renders as
+/// the lowest glyph so the baseline stays visible).
+const SPARK: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+/// A proportional horizontal bar `width` cells wide, filled to `value/max`
+/// using Unicode block glyphs with eighth-cell sub-resolution. `max == 0` (or
+/// `value <= 0`) renders an empty bar. `value` is clamped to `max`.
+///
+/// Example: `bar(3, 4, 10)` → `"█▎        "` (3/10 of ten cells).
+pub fn bar(value: u64, max: u64, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    if max == 0 || value == 0 {
+        return " ".repeat(width);
+    }
+    let v = value.min(max);
+    // Work in eighths of a cell to get sub-cell resolution deterministically
+    // with integer math: total filled eighths across the whole bar.
+    let total_eighths = (v as u128 * (width as u128) * 8) / max as u128;
+    let full = (total_eighths / 8) as usize;
+    let rem = (total_eighths % 8) as usize;
+    let mut s = String::with_capacity(width * 3);
+    for _ in 0..full.min(width) {
+        s.push(EIGHTHS[8]);
+    }
+    let mut cells = full.min(width);
+    if cells < width && rem > 0 {
+        s.push(EIGHTHS[rem]);
+        cells += 1;
+    }
+    for _ in cells..width {
+        s.push(' ');
+    }
+    s
+}
+
+/// A one-line sparkline of `values`, one glyph per value, scaled to the series
+/// max. An empty series yields an empty string; an all-zero series yields the
+/// lowest glyph repeated (a flat baseline).
+pub fn sparkline(values: &[u64]) -> String {
+    if values.is_empty() {
+        return String::new();
+    }
+    let max = *values.iter().max().unwrap();
+    if max == 0 {
+        return SPARK[0].to_string().repeat(values.len());
+    }
+    let mut s = String::with_capacity(values.len() * 3);
+    for &v in values {
+        // Map v into 0..=7. Guard the top so v==max lands on the highest glyph.
+        let idx = ((v as u128 * 7) / max as u128) as usize;
+        s.push(SPARK[idx.min(7)]);
+    }
+    s
+}
+
+/// The branch prefix for a node at `depth` in a hierarchy listing. `depth == 0`
+/// renders no prefix (top level). Deeper nodes get `is_last`-aware box-drawing
+/// connectors: `└─ ` for the last child at its level, `├─ ` otherwise, with the
+/// `ancestors_continue` flags supplying `│  ` / `   ` spacers for outer levels.
+///
+/// `ancestors_continue[i]` == true means the ancestor at depth `i` has a later
+/// sibling (so its vertical bar continues past this row). Its length must be
+/// `depth` (one flag per level above this node); the flag for this node's own
+/// level is given by `is_last`.
+pub fn tree_prefix(depth: usize, is_last: bool, ancestors_continue: &[bool]) -> String {
+    if depth == 0 {
+        return String::new();
+    }
+    let mut s = String::with_capacity(depth * 3);
+    // Spacers for every ancestor level except the immediate parent.
+    for &cont in ancestors_continue.iter().take(depth.saturating_sub(1)) {
+        s.push_str(if cont { "│  " } else { "   " });
+    }
+    s.push_str(if is_last { "└─ " } else { "├─ " });
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,5 +284,53 @@ mod tests {
             "delim should have no colon: {:?}",
             lines[1]
         );
+    }
+
+    #[test]
+    fn bar_is_fixed_display_width() {
+        // Every bar of a given width renders exactly `width` glyphs, regardless
+        // of value, so table columns stay aligned.
+        for &(v, m) in &[(0u64, 10u64), (1, 10), (5, 10), (10, 10), (10, 0), (7, 3)] {
+            assert_eq!(display_width(&bar(v, m, 10)), 10, "bar({v},{m},10)");
+        }
+    }
+
+    #[test]
+    fn bar_full_and_empty_endpoints() {
+        assert_eq!(bar(0, 10, 4), "    "); // empty
+        assert_eq!(bar(10, 10, 4), "████"); // full
+        assert_eq!(bar(5, 0, 4), "    "); // max==0 → empty
+        assert_eq!(bar(20, 10, 4), "████"); // value clamped to max
+    }
+
+    #[test]
+    fn bar_partial_uses_eighths() {
+        // Half of a single cell → the ▌ (4/8) glyph.
+        assert_eq!(bar(1, 2, 1), "▌");
+        // 3/10 of ten cells = 24 eighths = exactly 3 full blocks.
+        assert_eq!(bar(3, 10, 10), "███       ");
+        // 1/4 of one cell = 2 eighths → the ▎ glyph.
+        assert_eq!(bar(1, 4, 1), "▎");
+    }
+
+    #[test]
+    fn sparkline_scales_and_bounds() {
+        assert_eq!(sparkline(&[]), "");
+        assert_eq!(sparkline(&[0, 0, 0]), "▁▁▁"); // all-zero → flat baseline
+        let s = sparkline(&[1, 2, 4, 8]);
+        assert_eq!(s.chars().count(), 4);
+        // Max value maps to the tallest glyph; min (nonzero) to a low glyph.
+        assert!(s.ends_with('█'), "spark: {s:?}");
+    }
+
+    #[test]
+    fn tree_prefix_shapes() {
+        assert_eq!(tree_prefix(0, false, &[]), "");
+        assert_eq!(tree_prefix(1, false, &[true]), "├─ ");
+        assert_eq!(tree_prefix(1, true, &[true]), "└─ ");
+        // Depth 2, parent continues → "│  " spacer then a branch.
+        assert_eq!(tree_prefix(2, false, &[true, false]), "│  ├─ ");
+        // Depth 2, parent is last → "   " spacer then a branch.
+        assert_eq!(tree_prefix(2, true, &[false, true]), "   └─ ");
     }
 }

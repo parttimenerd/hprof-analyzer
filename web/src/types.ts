@@ -46,6 +46,23 @@ export interface SysProp {
   value: string;
 }
 
+export interface LoaderRollup {
+  loader_label?: string | null;
+  loader_id: number;
+  class_count: number;
+  instances: number;
+  shallow: number;
+  retained: number;
+}
+
+export interface DuplicateClass {
+  pretty_class: string;
+  loader_count: number;
+  loaders: string[];
+  total_instances: number;
+  total_retained: number;
+}
+
 export interface SystemOverview {
   source_name: string;
   file_path: string;
@@ -72,6 +89,8 @@ export interface SystemOverview {
   unreachable_shallow: number;
   histogram: HistRow[];
   histogram_truncated_to: number | null;
+  loader_rollup: LoaderRollup[];
+  duplicate_classes: DuplicateClass[];
 }
 
 export interface PathStep {
@@ -99,6 +118,8 @@ export interface Suspect {
   accumulation_class: string | null;
   accumulation_retained: number | null;
   dominated: DominatedRow[];
+  dominated_total_count: number;
+  dominated_shown: number;
   dominated_by_class: HistRow[];
   keywords: string[];
   root_type_label: string;
@@ -143,6 +164,9 @@ export interface ThreadInfo {
   name?: string | null;
   class_name: string | null;
   frames: string[];
+  // Count of GC-thread-local roots this thread holds that resolve to a live
+  // object; a high count flags a thread pinning many objects alive.
+  local_root_count: number;
 }
 
 export interface ThreadOverview {

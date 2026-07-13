@@ -81,6 +81,12 @@ pub struct Graph {
     /// the number of threads (hundreds), so it never touches the per-object RSS
     /// budget. Absent serials render as an unnamed thread.
     pub thread_names: std::collections::HashMap<u32, String>,
+    /// Per-thread count of GC-thread-local roots that resolved to a live object
+    /// (thread_serial -> #resolved locals). Filled from `p1.thread_local_pairs`
+    /// during synthetic-edge resolution, using the SAME guard (thread/local both
+    /// resolve to indices and are distinct). Bounded by #threads (hundreds), so
+    /// it never touches the per-object RSS budget on multi-GB dumps.
+    pub thread_local_counts: std::collections::HashMap<u32, u64>,
     /// Decoded JVM system properties (java.lang.System static `props`), as
     /// (key, value) pairs sorted by key. Captured by `resolve_system_properties`
     /// via a bounded multi-pass worklist over ONE Properties/Hashtable object.
@@ -2081,6 +2087,10 @@ impl Pass2 {
 
         // ── Resolve thread→local synthetic edges ─────────────────────────
         let mut synthetic_edges: Vec<(u32, u32)> = Vec::new();
+        // Per-thread count of local roots that resolve to a live object. Sized
+        // by #threads only (bounded), so it stays off the per-object RSS budget.
+        let mut thread_local_counts: std::collections::HashMap<u32, u64> =
+            std::collections::HashMap::new();
         for &(thread_serial, local_addr) in &p1.thread_local_pairs {
             let thread_obj_addr = match p1.thread_serial_to_obj_id.get(&thread_serial) {
                 Some(&a) => a,
@@ -2096,6 +2106,7 @@ impl Pass2 {
             };
             if thread_idx != local_idx {
                 synthetic_edges.push((thread_idx, local_idx));
+                *thread_local_counts.entry(thread_serial).or_insert(0) += 1;
             }
         }
         // Dedup synthetic edges (same thread may reference same local multiple times)
@@ -2242,6 +2253,7 @@ impl Pass2 {
             loader_labels,
             thread_stacks,
             thread_names,
+            thread_local_counts,
             system_properties,
             jvm_version,
             class_obj_class_idx,

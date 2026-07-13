@@ -108,6 +108,45 @@
         "retained"
       ]
     },
+    "DuplicateClass": {
+      "description": "F2: a class name loaded under more than one class loader — a classic\nclass-loader-leak signature (the same class re-loaded per web-app reload,\nper plugin, etc.). Grouped by `pretty_class`; `loaders` is capped.",
+      "type": "object",
+      "properties": {
+        "loader_count": {
+          "description": "Number of DISTINCT loader ids this class name appears under (>= 2).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "loaders": {
+          "description": "Loader labels (capped) that loaded this class name, for display.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "pretty_class": {
+          "type": "string"
+        },
+        "total_instances": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "total_retained": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "pretty_class",
+        "loader_count",
+        "loaders",
+        "total_instances",
+        "total_retained"
+      ]
+    },
     "GcRootTypeRow": {
       "description": "One row of the GC-roots-by-type breakdown: a human-readable root-type label\nand how many roots carry that HPROF type.",
       "type": "object",
@@ -229,6 +268,53 @@
       "required": [
         "total_shallow",
         "suspects"
+      ]
+    },
+    "LoaderRollup": {
+      "description": "F2: per-class-loader rollup over the class histogram. One row per distinct\n`loader_id`, aggregating the classes it loaded. A bounded reduction over the\nhistogram (row count <= #loaders), so RSS-safe. Sorted retained-desc.",
+      "type": "object",
+      "properties": {
+        "class_count": {
+          "description": "Number of distinct classes loaded by this loader.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "instances": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "loader_id": {
+          "description": "Loader object address (0 = boot loader).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "loader_label": {
+          "description": "Human-readable loader label (class name of the loader object, or\n`<boot>`); `None` when the label could not be resolved.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retained": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "shallow": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "loader_id",
+        "class_count",
+        "instances",
+        "shallow",
+        "retained"
       ]
     },
     "ObjRow": {
@@ -437,6 +523,18 @@
             "$ref": "#/$defs/HistRow"
           }
         },
+        "dominated_shown": {
+          "description": "F3: how many rows the `dominated` list actually shows (== dominated.len()),\nso a renderer can say \"showing top M of N\".",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "dominated_total_count": {
+          "description": "F3: FULL count of immediately-dominated children of the accumulation\npoint (the dominator-children CSR degree, uncapped). The number the\ncapped `dominated` list cannot convey — \"how many objects does this\naccumulation point directly hold?\". 0 for group suspects / no accum.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
         "instance_count": {
           "type": "integer",
           "format": "uint64",
@@ -485,6 +583,8 @@
         "shallow",
         "path",
         "dominated",
+        "dominated_total_count",
+        "dominated_shown",
         "dominated_by_class",
         "keywords",
         "root_type_label"
@@ -526,6 +626,13 @@
             "null"
           ],
           "format": "int64"
+        },
+        "duplicate_classes": {
+          "description": "F2: class names loaded under more than one loader (duplicate-class /\nclass-loader-leak signature), capped. Additive. Not parity-compared.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DuplicateClass"
+          }
         },
         "file_path": {
           "description": "Full path the dump was opened from (superset of `source_name`).",
@@ -583,6 +690,13 @@
             "null"
           ]
         },
+        "loader_rollup": {
+          "description": "F2: per-loader rollup over the histogram, top-N by retained heap.\nAdditive bounded reduction (<= #loaders rows). Not parity-compared.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LoaderRollup"
+          }
+        },
         "retention_concentration": {
           "description": "B3: retention concentration over top-level dominators. Always present\n(zeroed for an empty heap). Surfaced in OOM Triage as a \"One leak or\nmany\" line.",
           "$ref": "#/$defs/RetentionSummary"
@@ -636,7 +750,9 @@
         "unreachable_count",
         "unreachable_shallow",
         "histogram",
-        "system_properties"
+        "system_properties",
+        "loader_rollup",
+        "duplicate_classes"
       ]
     },
     "ThreadInfo": {
@@ -657,6 +773,12 @@
             "type": "string"
           }
         },
+        "local_root_count": {
+          "description": "Number of GC-thread-local roots this thread holds that resolve to a live\nobject (from the dominator graph's synthetic thread→local edges). A high\ncount flags a thread pinning many objects alive. Additive field: not part\nof MAT parity comparison. Bounded (per-thread), off the per-object budget.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
         "name": {
           "description": "Decoded `java.lang.Thread.name`, or None when the name could not be\nresolved (missing thread/String, JDK layout mismatch, or empty name).\nAdditive field: not part of MAT parity comparison.",
           "type": [
@@ -673,7 +795,8 @@
       },
       "required": [
         "thread_serial",
-        "frames"
+        "frames",
+        "local_root_count"
       ]
     },
     "ThreadOverview": {

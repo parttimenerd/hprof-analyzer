@@ -346,8 +346,8 @@ pub fn run(a_path: &str, b_path: &str, format: OutputFormat) -> io::Result<Strin
     let result = diff(&a, &b);
     Ok(match format {
         OutputFormat::Json => serde_json::to_string_pretty(&result).map_err(io::Error::other)?,
-        // The cross-dump diff has no HTML view; fall back to Markdown.
-        OutputFormat::Md | OutputFormat::Html => render_md(&result),
+        // The cross-dump diff has no HTML/graphics view; fall back to Markdown.
+        OutputFormat::Md | OutputFormat::MdGraphs | OutputFormat::Html => render_md(&result),
     })
 }
 
@@ -381,6 +381,8 @@ mod tests {
             accumulation_class: None,
             accumulation_retained: None,
             dominated: vec![],
+            dominated_total_count: 0,
+            dominated_shown: 0,
             dominated_by_class: vec![],
             keywords: vec![],
             root_type_label: String::new(),
@@ -419,6 +421,8 @@ mod tests {
                 histogram_truncated_to: None,
                 system_properties: vec![],
                 jvm_version: None,
+                loader_rollup: vec![],
+                duplicate_classes: vec![],
             },
             leaks: LeakSuspects {
                 total_shallow,

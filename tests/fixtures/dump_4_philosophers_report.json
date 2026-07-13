@@ -1,6 +1,6 @@
 {
-  "schema_version": 3,
-  "generated": "2026-07-13T19:42:36.855940000Z",
+  "schema_version": 4,
+  "generated": "2026-07-13T22:01:27.181054000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
     "file_path": "tests/fixtures/dump_4_philosophers.hprof",
@@ -24747,7 +24747,251 @@
     ],
     "histogram_truncated_to": null,
     "system_properties": [],
-    "jvm_version": null
+    "jvm_version": null,
+    "loader_rollup": [
+      {
+        "loader_label": "<boot>",
+        "loader_id": 0,
+        "class_count": 1705,
+        "instances": 232740,
+        "shallow": 10595880,
+        "retained": 32949552
+      },
+      {
+        "loader_label": "java/net/URLClassLoader",
+        "loader_id": 2150632736,
+        "class_count": 709,
+        "instances": 3322,
+        "shallow": 1571416,
+        "retained": 7403816
+      },
+      {
+        "loader_label": "java/net/URLClassLoader",
+        "loader_id": 2390753352,
+        "class_count": 575,
+        "instances": 330,
+        "shallow": 18424,
+        "retained": 2743184
+      },
+      {
+        "loader_label": "jdk/internal/loader/ClassLoaders$AppClassLoader",
+        "loader_id": 4293840712,
+        "class_count": 81,
+        "instances": 64,
+        "shallow": 1336,
+        "retained": 241840
+      },
+      {
+        "loader_label": "jdk/internal/loader/ClassLoaders$PlatformClassLoader",
+        "loader_id": 4293838888,
+        "class_count": 1,
+        "instances": 1,
+        "shallow": 16,
+        "retained": 7616
+      }
+    ],
+    "duplicate_classes": [
+      {
+        "pretty_class": "scala.collection.mutable.ArrayBuffer",
+        "loader_count": 2,
+        "loaders": [
+          "java/net/URLClassLoader",
+          "java/net/URLClassLoader"
+        ],
+        "total_instances": 4,
+        "total_retained": 129896
+      },
+      {
+        "pretty_class": "scala.math.BigInt$",
+        "loader_count": 2,
+        "loaders": [
+          "java/net/URLClassLoader",
+          "java/net/URLClassLoader"
+        ],
+        "total_instances": 2,
+        "total_retained": 16608
+      },
+      {
+        "pretty_class": "scala.math.BigInt[]",
+        "loader_count": 2,
+        "loaders": [
+          "java/net/URLClassLoader",
+          "java/net/URLClassLoader"
+        ],
+        "total_instances": 2,
+        "total_retained": 16432
+      },
+      {
+        "pretty_class": "scala.collection.immutable.$colon$colon",
+        "loader_count": 2,
+        "loaders": [
+          "java/net/URLClassLoader",
+          "java/net/URLClassLoader"
+        ],
+        "total_instances": 30,
+        "total_retained": 5976
+      },
+      {
+        "pretty_class": "scala.collection.immutable.Range",
+        "loader_count": 2,
+        "loaders": [
+          "java/net/URLClassLoader",
+          "java/net/URLClassLoader"
+        ],
+        "total_instances": 128,
+        "total_retained": 5672
+      },
+      {
+        "pretty_class": "scala.collection.mutable.Buffer",
+        "loader_count": 2,
+        "loaders": [
+          "java/net/URLClassLoader",
+          "java/net/URLClassLoader"
+        ],
+        "total_instances": 0,
+        "total_retained": 3560
+      },
+      {
+        "pretty_class": "scala.Some",
+        "loader_count": 2,
+        "loaders": [
+          "java/net/URLClassLoader",
+          "java/net/URLClassLoader"
+        ],
+        "total_instances": 110,
+        "total_retained": 2128
+      },
+      {
+        "pretty_class": "scala.collection.mutable.IndexedSeq",
+        "loader_count": 2,
+        "loaders": [
+          "java/net/URLClassLoader",
+          "java/net/URLClassLoader"
+        ],
+        "total_instances": 0,
+        "total_retained": 2112
+      },
+      {
+        "pretty_class": "scala.collection.IndexedSeq",
+        "loader_count": 2,
+        "loaders": [
+          "java/net/URLClassLoader",
+          "java/net/URLClassLoader"
+        ],
+        "total_instances": 0,
+        "total_retained": 1712
+      },
+      {
+        "pretty_class": "scala.collection.Iterable",
+        "loader_count": 2,
+        "loaders": [
+          "java/net/URLClassLoader",
+          "java/net/URLClassLoader"
+        ],
+        "total_instances": 0,
+        "total_retained": 1328
+      },
+      {
+        "pretty_class": "scala.collection.immutable.Vector",
+        "loader_count": 2,
+        "loaders": [
+          "java/net/URLClassLoader",
+          "java/net/URLClassLoader"
+        ],
+        "total_instances": 2,
+        "total_retained": 1080
+      },
+      {
+        "pretty_class": "scala.Array$",
+        "loader_count": 2,
+        "loaders": [
+          "java/net/URLClassLoader",
+          "java/net/URLClassLoader"
+        ],
+        "total_instances": 2,
+        "total_retained": 912
+      },
+      {
+        "pretty_class": "scala.collection.immutable.Map",
+        "loader_count": 2,
+        "loaders": [
+          "java/net/URLClassLoader",
+          "java/net/URLClassLoader"
+        ],
+        "total_instances": 0,
+        "total_retained": 784
+      },
+      {
+        "pretty_class": "scala.collection.mutable.AbstractSeq",
+        "loader_count": 2,
+        "loaders": [
+          "java/net/URLClassLoader",
+          "java/net/URLClassLoader"
+        ],
+        "total_instances": 0,
+        "total_retained": 744
+      },
+      {
+        "pretty_class": "scala.collection.mutable.HashMap",
+        "loader_count": 2,
+        "loaders": [
+          "java/net/URLClassLoader",
+          "java/net/URLClassLoader"
+        ],
+        "total_instances": 3,
+        "total_retained": 744
+      },
+      {
+        "pretty_class": "scala.Function1",
+        "loader_count": 2,
+        "loaders": [
+          "java/net/URLClassLoader",
+          "java/net/URLClassLoader"
+        ],
+        "total_instances": 0,
+        "total_retained": 616
+      },
+      {
+        "pretty_class": "scala.Predef$",
+        "loader_count": 2,
+        "loaders": [
+          "java/net/URLClassLoader",
+          "java/net/URLClassLoader"
+        ],
+        "total_instances": 2,
+        "total_retained": 608
+      },
+      {
+        "pretty_class": "scala.collection.AbstractSeq",
+        "loader_count": 2,
+        "loaders": [
+          "java/net/URLClassLoader",
+          "java/net/URLClassLoader"
+        ],
+        "total_instances": 0,
+        "total_retained": 568
+      },
+      {
+        "pretty_class": "scala.collection.immutable.Vector$",
+        "loader_count": 2,
+        "loaders": [
+          "java/net/URLClassLoader",
+          "java/net/URLClassLoader"
+        ],
+        "total_instances": 2,
+        "total_retained": 472
+      },
+      {
+        "pretty_class": "scala.runtime.ScalaRunTime$",
+        "loader_count": 2,
+        "loaders": [
+          "java/net/URLClassLoader",
+          "java/net/URLClassLoader"
+        ],
+        "total_instances": 2,
+        "total_retained": 408
+      }
+    ]
   },
   "leaks": {
     "total_shallow": 12187072,
@@ -24763,6 +25007,8 @@
         "accumulation_class": null,
         "accumulation_retained": null,
         "dominated": [],
+        "dominated_total_count": 0,
+        "dominated_shown": 0,
         "dominated_by_class": [],
         "keywords": [
           "scala.concurrent.stm.ccstm.InTxnImpl"
@@ -25094,6 +25340,8 @@
             "retained": 16
           }
         ],
+        "dominated_total_count": 131072,
+        "dominated_shown": 50,
         "dominated_by_class": [
           {
             "pretty_class": "java.lang.Object",
@@ -25121,6 +25369,8 @@
         "accumulation_class": null,
         "accumulation_retained": null,
         "dominated": [],
+        "dominated_total_count": 0,
+        "dominated_shown": 0,
         "dominated_by_class": [],
         "keywords": [
           "java.util.zip.ZipFile$Source"
@@ -25612,7 +25862,8 @@
           "org.renaissance.core.Launcher.loadAndInvokeHarnessClass (Launcher.java:129)",
           "org.renaissance.core.Launcher.launchHarnessClass (Launcher.java:78)",
           "org.renaissance.core.Launcher.main (Launcher.java:43)"
-        ]
+        ],
+        "local_root_count": 97
       },
       {
         "thread_serial": 2,
@@ -25622,7 +25873,8 @@
           "java.lang.ref.Reference.waitForReferencePendingList (Native Method)",
           "java.lang.ref.Reference.processPendingReferences (Reference.java:246)",
           "java.lang.ref.Reference$ReferenceHandler.run (Reference.java:208)"
-        ]
+        ],
+        "local_root_count": 0
       },
       {
         "thread_serial": 3,
@@ -25636,7 +25888,8 @@
           "java.lang.ref.ReferenceQueue.remove0 (ReferenceQueue.java:158)",
           "java.lang.ref.NativeReferenceQueue.remove (NativeReferenceQueue.java:89)",
           "java.lang.ref.Finalizer$FinalizerThread.run (Finalizer.java:173)"
-        ]
+        ],
+        "local_root_count": 7
       },
       {
         "thread_serial": 6,
@@ -25653,7 +25906,8 @@
           "java.lang.Thread.runWith (Thread.java:1596)",
           "java.lang.Thread.run (Thread.java:1583)",
           "jdk.internal.misc.InnocuousThread.run (InnocuousThread.java:186)"
-        ]
+        ],
+        "local_root_count": 12
       },
       {
         "thread_serial": 7,
@@ -25663,7 +25917,8 @@
           "java.lang.Thread.sleep0 (Native Method)",
           "java.lang.Thread.sleep (Thread.java:509)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$CameraThread.run (RealityShowPhilosophers.scala:58)"
-        ]
+        ],
+        "local_root_count": 0
       },
       {
         "thread_serial": 8,
@@ -25682,7 +25937,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 12
       },
       {
         "thread_serial": 9,
@@ -25701,7 +25957,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 10,
@@ -25720,7 +25977,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 11,
@@ -25742,7 +26000,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 9
       },
       {
         "thread_serial": 12,
@@ -25760,7 +26019,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 9
       },
       {
         "thread_serial": 13,
@@ -25779,7 +26039,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 14,
@@ -25796,7 +26057,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 13
       },
       {
         "thread_serial": 15,
@@ -25814,7 +26076,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 12
       },
       {
         "thread_serial": 16,
@@ -25831,7 +26094,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 7
       },
       {
         "thread_serial": 17,
@@ -25856,7 +26120,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 13
       },
       {
         "thread_serial": 18,
@@ -25892,7 +26157,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 12
       },
       {
         "thread_serial": 19,
@@ -25908,7 +26174,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 20,
@@ -25938,7 +26205,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 15
       },
       {
         "thread_serial": 21,
@@ -25957,7 +26225,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 22,
@@ -25979,7 +26248,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 9
       },
       {
         "thread_serial": 23,
@@ -25997,7 +26267,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 9
       },
       {
         "thread_serial": 24,
@@ -26015,7 +26286,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 12
       },
       {
         "thread_serial": 25,
@@ -26031,7 +26303,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 26,
@@ -26050,7 +26323,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 27,
@@ -26077,7 +26351,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 15
       },
       {
         "thread_serial": 28,
@@ -26095,7 +26370,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 12
       },
       {
         "thread_serial": 29,
@@ -26114,7 +26390,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 30,
@@ -26132,7 +26409,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 12
       },
       {
         "thread_serial": 31,
@@ -26159,7 +26437,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 15
       },
       {
         "thread_serial": 32,
@@ -26183,7 +26462,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 11
       },
       {
         "thread_serial": 33,
@@ -26202,7 +26482,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 34,
@@ -26220,7 +26501,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 12
       },
       {
         "thread_serial": 35,
@@ -26239,7 +26521,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 36,
@@ -26255,7 +26538,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 37,
@@ -26278,7 +26562,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 9
       },
       {
         "thread_serial": 38,
@@ -26294,7 +26579,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 39,
@@ -26316,7 +26602,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 9
       },
       {
         "thread_serial": 40,
@@ -26335,7 +26622,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 41,
@@ -26351,7 +26639,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 42,
@@ -26375,7 +26664,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 11
       },
       {
         "thread_serial": 43,
@@ -26393,7 +26683,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 11
       },
       {
         "thread_serial": 44,
@@ -26417,7 +26708,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 11
       },
       {
         "thread_serial": 45,
@@ -26435,7 +26727,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 11
       },
       {
         "thread_serial": 46,
@@ -26459,7 +26752,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 11
       },
       {
         "thread_serial": 47,
@@ -26476,7 +26770,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 11
       },
       {
         "thread_serial": 48,
@@ -26495,7 +26790,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 49,
@@ -26531,7 +26827,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 12
       },
       {
         "thread_serial": 50,
@@ -26555,7 +26852,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 11
       },
       {
         "thread_serial": 51,
@@ -26572,7 +26870,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 7
       },
       {
         "thread_serial": 52,
@@ -26591,7 +26890,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 53,
@@ -26615,7 +26915,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 11
       },
       {
         "thread_serial": 54,
@@ -26642,7 +26943,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 11
       },
       {
         "thread_serial": 55,
@@ -26658,7 +26960,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 56,
@@ -26682,7 +26985,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 11
       },
       {
         "thread_serial": 57,
@@ -26701,7 +27005,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 12
       },
       {
         "thread_serial": 58,
@@ -26725,7 +27030,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 11
       },
       {
         "thread_serial": 59,
@@ -26747,7 +27053,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 9
       },
       {
         "thread_serial": 60,
@@ -26766,7 +27073,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 61,
@@ -26784,7 +27092,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 12
       },
       {
         "thread_serial": 62,
@@ -26813,7 +27122,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 12
       },
       {
         "thread_serial": 63,
@@ -26829,7 +27139,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 64,
@@ -26858,7 +27169,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 12
       },
       {
         "thread_serial": 65,
@@ -26874,7 +27186,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 66,
@@ -26893,7 +27206,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 67,
@@ -26910,7 +27224,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 11
       },
       {
         "thread_serial": 68,
@@ -26939,7 +27254,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 16
       },
       {
         "thread_serial": 69,
@@ -26961,7 +27277,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 9
       },
       {
         "thread_serial": 70,
@@ -26984,7 +27301,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 9
       },
       {
         "thread_serial": 71,
@@ -27008,7 +27326,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 11
       },
       {
         "thread_serial": 72,
@@ -27026,7 +27345,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 12
       },
       {
         "thread_serial": 73,
@@ -27042,7 +27362,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 74,
@@ -27086,7 +27407,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 21
       },
       {
         "thread_serial": 75,
@@ -27110,7 +27432,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 11
       },
       {
         "thread_serial": 76,
@@ -27129,7 +27452,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 12
       },
       {
         "thread_serial": 77,
@@ -27156,7 +27480,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 11
       },
       {
         "thread_serial": 78,
@@ -27175,7 +27500,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 79,
@@ -27199,7 +27525,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 11
       },
       {
         "thread_serial": 80,
@@ -27218,7 +27545,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 81,
@@ -27235,7 +27563,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 11
       },
       {
         "thread_serial": 82,
@@ -27271,7 +27600,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 12
       },
       {
         "thread_serial": 83,
@@ -27288,7 +27618,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 11
       },
       {
         "thread_serial": 84,
@@ -27307,7 +27638,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 85,
@@ -27324,7 +27656,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 11
       },
       {
         "thread_serial": 86,
@@ -27351,7 +27684,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 15
       },
       {
         "thread_serial": 87,
@@ -27373,7 +27707,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 9
       },
       {
         "thread_serial": 88,
@@ -27399,7 +27734,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 9
       },
       {
         "thread_serial": 89,
@@ -27417,7 +27753,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 10
       },
       {
         "thread_serial": 90,
@@ -27461,7 +27798,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 21
       },
       {
         "thread_serial": 91,
@@ -27479,7 +27817,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 12
       },
       {
         "thread_serial": 92,
@@ -27504,7 +27843,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 14
       },
       {
         "thread_serial": 93,
@@ -27528,7 +27868,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 11
       },
       {
         "thread_serial": 94,
@@ -27545,7 +27886,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 11
       },
       {
         "thread_serial": 95,
@@ -27572,7 +27914,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 15
       },
       {
         "thread_serial": 96,
@@ -27596,7 +27939,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 11
       },
       {
         "thread_serial": 97,
@@ -27615,7 +27959,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 12
       },
       {
         "thread_serial": 98,
@@ -27643,7 +27988,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 13
       },
       {
         "thread_serial": 99,
@@ -27661,7 +28007,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 12
       },
       {
         "thread_serial": 100,
@@ -27697,7 +28044,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 12
       },
       {
         "thread_serial": 101,
@@ -27715,7 +28063,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 9
       },
       {
         "thread_serial": 102,
@@ -27740,7 +28089,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 13
       },
       {
         "thread_serial": 103,
@@ -27756,7 +28106,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 9
       },
       {
         "thread_serial": 104,
@@ -27778,7 +28129,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 9
       },
       {
         "thread_serial": 105,
@@ -27797,7 +28149,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 106,
@@ -27826,7 +28179,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 12
       },
       {
         "thread_serial": 107,
@@ -27862,7 +28216,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 12
       },
       {
         "thread_serial": 108,
@@ -27886,7 +28241,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 11
       },
       {
         "thread_serial": 109,
@@ -27902,7 +28258,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 110,
@@ -27921,7 +28278,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 111,
@@ -27943,7 +28301,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 9
       },
       {
         "thread_serial": 112,
@@ -27979,7 +28338,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 12
       },
       {
         "thread_serial": 113,
@@ -28015,7 +28375,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 12
       },
       {
         "thread_serial": 114,
@@ -28040,7 +28401,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 13
       },
       {
         "thread_serial": 115,
@@ -28067,7 +28429,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 11
       },
       {
         "thread_serial": 116,
@@ -28083,7 +28446,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 117,
@@ -28102,7 +28466,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 118,
@@ -28118,7 +28483,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 9
       },
       {
         "thread_serial": 119,
@@ -28137,7 +28503,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 120,
@@ -28164,7 +28531,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 9
       },
       {
         "thread_serial": 121,
@@ -28186,7 +28554,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 9
       },
       {
         "thread_serial": 122,
@@ -28205,7 +28574,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 123,
@@ -28223,7 +28593,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 12
       },
       {
         "thread_serial": 124,
@@ -28252,7 +28623,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 12
       },
       {
         "thread_serial": 125,
@@ -28268,7 +28640,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 126,
@@ -28296,7 +28669,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 15
       },
       {
         "thread_serial": 127,
@@ -28318,7 +28692,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 9
       },
       {
         "thread_serial": 128,
@@ -28362,7 +28737,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 21
       },
       {
         "thread_serial": 129,
@@ -28378,7 +28754,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 8
       },
       {
         "thread_serial": 130,
@@ -28407,7 +28784,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 12
       },
       {
         "thread_serial": 131,
@@ -28431,7 +28809,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 11
       },
       {
         "thread_serial": 132,
@@ -28448,7 +28827,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 11
       },
       {
         "thread_serial": 133,
@@ -28475,7 +28855,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 11
       },
       {
         "thread_serial": 134,
@@ -28492,7 +28873,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 11
       },
       {
         "thread_serial": 135,
@@ -28515,7 +28897,8 @@
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread$$Lambda+0x00007e41c01b5210.apply$mcVI$sp (Unknown Source)",
           "scala.collection.immutable.Range.foreach$mVc$sp (Range.scala:158)",
           "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread.run (RealityShowPhilosophers.scala:27)"
-        ]
+        ],
+        "local_root_count": 9
       }
     ]
   }

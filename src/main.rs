@@ -28,6 +28,7 @@ use pass1::Pass1;
 #[derive(Clone, Copy, PartialEq)]
 enum OutputFormat {
     Md,
+    MdGraphs,
     Json,
     Html,
 }
@@ -103,6 +104,7 @@ enum DevCmd {
 #[derive(Clone, Copy, PartialEq, ValueEnum)]
 enum FormatArg {
     Md,
+    MdGraphs,
     Json,
     Html,
 }
@@ -111,6 +113,7 @@ impl From<FormatArg> for OutputFormat {
     fn from(f: FormatArg) -> Self {
         match f {
             FormatArg::Md => OutputFormat::Md,
+            FormatArg::MdGraphs => OutputFormat::MdGraphs,
             FormatArg::Json => OutputFormat::Json,
             FormatArg::Html => OutputFormat::Html,
         }
@@ -257,6 +260,7 @@ fn render_report(path: &str, format: OutputFormat) -> io::Result<String> {
     }
     Ok(match format {
         OutputFormat::Md => report::render_markdown(&report),
+        OutputFormat::MdGraphs => report::render_markdown_graphs(&report),
         OutputFormat::Json => serde_json::to_string_pretty(&report).map_err(io::Error::other)?,
         OutputFormat::Html => html::render_html(&report),
     })
@@ -406,6 +410,11 @@ fn run(
         OutputFormat::Md => {
             let md = report::render_markdown(&report);
             crate::trace::probe("report: after render_markdown");
+            md
+        }
+        OutputFormat::MdGraphs => {
+            let md = report::render_markdown_graphs(&report);
+            crate::trace::probe("report: after render_markdown_graphs");
             md
         }
         OutputFormat::Json => {
