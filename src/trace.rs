@@ -29,10 +29,31 @@ fn rss_mb() -> u64 {
     }
 }
 
-/// Print `label RSS=NNNN MB` to stderr if tracing is enabled.
+/// Peak resident set (VmHWM) in MB from /proc/self/status. Monotonic kernel
+/// high-water mark — matches `/usr/bin/time -v` "Maximum resident set size".
+/// Its INCREASE between two probes attributes the true peak to a phase, which
+/// the current-RSS probe and a coarse /proc sampler both miss for short spikes.
+fn peak_mb() -> u64 {
+    match std::fs::read_to_string("/proc/self/status") {
+        Ok(s) => s
+            .lines()
+            .find_map(|l| l.strip_prefix("VmHWM:"))
+            .and_then(|v| v.split_whitespace().next())
+            .and_then(|kb| kb.parse::<u64>().ok())
+            .map(|kb| kb / 1024)
+            .unwrap_or(0),
+        Err(_) => 0,
+    }
+}
+
+/// Print `label RSS=NNNN MB (peak NNNN)` to stderr if tracing is enabled.
 pub fn probe(label: &str) {
     if enabled() {
-        eprintln!("[trace-rss] {label} RSS={} MB", rss_mb());
+        eprintln!(
+            "[trace-rss] {label} RSS={} MB (peak {} MB)",
+            rss_mb(),
+            peak_mb()
+        );
     }
 }
 

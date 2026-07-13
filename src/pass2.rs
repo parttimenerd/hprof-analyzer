@@ -19,6 +19,20 @@ pub const INB_BLOCK: usize = 16;
 
 // ── Graph output struct ────────────────────────────────────────────────────
 
+/// A resolved thread stack trace, produced at Graph-build time by resolving
+/// STACK_TRACE/STACK_FRAME string-ids and class-serials against pass1 tables
+/// (which are dropped before the report stage). Small (one per thread), off the
+/// per-object RSS budget.
+#[derive(Debug, Clone, Default)]
+pub struct ThreadStack {
+    /// HPROF thread serial from the STACK_TRACE record (0 = none).
+    pub thread_serial: u32,
+    /// Object index of the owning `java.lang.Thread` (u32::MAX = unresolved).
+    pub thread_obj_idx: u32,
+    /// Frames top-first, each pre-rendered as `class.method (source:line)`.
+    pub frames: Vec<String>,
+}
+
 pub struct Graph {
     pub n: usize,
     pub format: String,
@@ -51,6 +65,10 @@ pub struct Graph {
     /// class-loader count and per-loader grouping; a per-ROW array (not
     /// per-object) so it costs O(#classes), never O(#objects).
     pub class_loader_id: Vec<u64>,
+    /// Resolved thread stack traces (one per STACK_TRACE with frames), built
+    /// from pass1's STACK_FRAME/STACK_TRACE tables. Small; feeds Thread Overview
+    /// and leak-suspect stack context. Empty when the dump carries no traces.
+    pub thread_stacks: Vec<ThreadStack>,
     pub class_obj_class_idx: HashMap<u32, u32>, // class-obj index -> class-histogram row (sparse; absent = not a class obj)
     // Forward CSR
     pub fwd_offsets: Vec<u32>,
@@ -529,6 +547,95 @@ fn should_add_system_class_root(is_array: bool, is_prim_array: bool, has_sticky:
     !has_sticky
 }
 
+/// Resolve pass1's STACK_TRACE/STACK_FRAME tables into pre-rendered thread
+/// stacks. Each frame becomes `class.method (source:line)`; unresolved string
+/// ids fall back to their hex id, unknown/negative line numbers are rendered
+/// per HPROF convention. Traces with no frames are dropped. Output is sorted by
+/// `thread_serial` for determinism. Small (one entry per thread trace).
+fn build_thread_stacks(p1: &Pass1) -> Vec<ThreadStack> {
+    let resolve = |id: u64| -> Option<&str> { p1.strings.get(&id).map(|s| s.as_str()) };
+    let class_name_of = |serial: u32| -> Option<&str> {
+        let addr = *p1.class_serial_to_addr.get(&serial)?;
+        let ci = p1.class_map.get(&addr)?;
+        p1.strings.get(&ci.name_id).map(|s| s.as_str())
+    };
+
+    let mut out: Vec<ThreadStack> = Vec::new();
+    for (&stack_serial, frame_ids) in p1.stack_traces.iter() {
+        if frame_ids.is_empty() {
+            continue;
+        }
+        let thread_serial = p1
+            .stack_trace_thread
+            .get(&stack_serial)
+            .copied()
+            .unwrap_or(0);
+        let thread_obj_idx = p1
+            .thread_serial_to_obj_id
+            .get(&thread_serial)
+            .and_then(|&addr| p1.id_map.index_of(addr))
+            .map(|i| i as u32)
+            .unwrap_or(u32::MAX);
+
+        let mut frames = Vec::with_capacity(frame_ids.len());
+        for &fid in frame_ids {
+            let Some(f) = p1.stack_frames.get(&fid) else {
+                frames.push(format!("<unknown frame {fid:#x}>"));
+                continue;
+            };
+            let class = class_name_of(f.class_serial).map(pretty_binary_name);
+            let method = resolve(f.method_name_id);
+            let source = resolve(f.source_file_id);
+            frames.push(render_frame(
+                class.as_deref(),
+                method,
+                source,
+                f.class_serial,
+                f.line_number,
+            ));
+        }
+        out.push(ThreadStack {
+            thread_serial,
+            thread_obj_idx,
+            frames,
+        });
+    }
+    out.sort_by_key(|t| t.thread_serial);
+    out
+}
+
+/// Render one resolved frame as `class.method (source:line)`, applying HPROF
+/// line-number conventions (>0 = line; -1 unknown; -2 compiled; -3 native).
+/// Missing strings fall back to placeholders so a frame is always printable.
+fn render_frame(
+    class: Option<&str>,
+    method: Option<&str>,
+    source: Option<&str>,
+    class_serial: u32,
+    line_number: i32,
+) -> String {
+    let class = class
+        .map(|c| c.to_string())
+        .unwrap_or_else(|| format!("<class#{class_serial}>"));
+    let method = method.unwrap_or("<method>");
+    let source = source.unwrap_or("Unknown Source");
+    let loc = match line_number {
+        n if n > 0 => format!("{source}:{n}"),
+        -2 => format!("{source}(Compiled Method)"),
+        -3 => "Native Method".to_string(),
+        _ => source.to_string(),
+    };
+    format!("{class}.{method} ({loc})")
+}
+
+/// Convert an internal binary class name (`Lfoo/Bar;` or `foo/Bar`) into the
+/// dotted display form used in stack frames (`foo.Bar`).
+fn pretty_binary_name(name: &str) -> String {
+    let trimmed = name.strip_prefix('L').unwrap_or(name);
+    let trimmed = trimmed.strip_suffix(';').unwrap_or(trimmed);
+    trimmed.replace('/', ".")
+}
+
 // ── Pass2 main logic ───────────────────────────────────────────────────────
 
 pub struct Pass2;
@@ -892,10 +999,22 @@ impl Pass2 {
             }
         }
 
+        // Resolve STACK_TRACE/STACK_FRAME into pre-rendered thread stacks while
+        // pass1's string/class tables are still alive (they are freed just
+        // below). Only traces that carry frames are kept. Small — one entry per
+        // thread trace, off the per-object RSS budget.
+        let thread_stacks = build_thread_stacks(&p1);
+
         // class_map + strings are no longer needed; free before the large edge
-        // arrays get allocated in Phase 3/4 to lower peak RSS.
+        // arrays get allocated in Phase 3/4 to lower peak RSS. The STACK_FRAME/
+        // STACK_TRACE maps were just consumed by build_thread_stacks and are
+        // likewise dead — free them here too so they don't linger through the
+        // peak-binding dominator/retained phases.
         p1.class_map = std::collections::HashMap::new();
         p1.strings = std::collections::HashMap::new();
+        p1.stack_frames = std::collections::HashMap::new();
+        p1.stack_traces = std::collections::HashMap::new();
+        p1.stack_trace_thread = std::collections::HashMap::new();
 
         // ── Resolve thread→local synthetic edges ─────────────────────────
         let mut synthetic_edges: Vec<(u32, u32)> = Vec::new();
@@ -1057,6 +1176,7 @@ impl Pass2 {
             class_idx,
             class_names,
             class_loader_id,
+            thread_stacks,
             class_obj_class_idx,
             fwd_offsets,
             fwd_targets,
@@ -1696,6 +1816,41 @@ mod tests {
     use crate::pass1::Pass1;
 
     const DUMP: &str = "/home/i560383/test-heapdumps/dump_0_fj-kmeans.hprof";
+
+    #[test]
+    fn pretty_binary_name_strips_l_and_semicolon_and_dots() {
+        assert_eq!(pretty_binary_name("Lfoo/bar/Baz;"), "foo.bar.Baz");
+        assert_eq!(pretty_binary_name("foo/bar/Baz"), "foo.bar.Baz");
+        assert_eq!(pretty_binary_name("Baz"), "Baz");
+    }
+
+    #[test]
+    fn render_frame_applies_hprof_line_conventions() {
+        assert_eq!(
+            render_frame(Some("foo.Bar"), Some("run"), Some("Bar.java"), 7, 42),
+            "foo.Bar.run (Bar.java:42)"
+        );
+        assert_eq!(
+            render_frame(Some("foo.Bar"), Some("run"), Some("Bar.java"), 7, -1),
+            "foo.Bar.run (Bar.java)"
+        );
+        assert_eq!(
+            render_frame(Some("foo.Bar"), Some("run"), Some("Bar.java"), 7, -2),
+            "foo.Bar.run (Bar.java(Compiled Method))"
+        );
+        assert_eq!(
+            render_frame(Some("foo.Bar"), Some("run"), Some("Bar.java"), 7, -3),
+            "foo.Bar.run (Native Method)"
+        );
+    }
+
+    #[test]
+    fn render_frame_falls_back_when_strings_missing() {
+        assert_eq!(
+            render_frame(None, None, None, 99, -1),
+            "<class#99>.<method> (Unknown Source)"
+        );
+    }
 
     #[test]
     fn pass2_graph_has_edges() {

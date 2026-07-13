@@ -35,6 +35,9 @@ rsync -az --delete \
   --include='Cargo.toml' \
   --include='Cargo.lock' \
   --include='build.rs' \
+  --include='web/' \
+  --include='web/dist/' \
+  --include='web/dist/bundle.js' \
   --exclude='*' \
   "$LOCAL_DIR/" "$REMOTE:$REMOTE_DIR/"
 

@@ -18,6 +18,9 @@
       "format": "uint32",
       "minimum": 0
     },
+    "threads": {
+      "$ref": "#/$defs/ThreadOverview"
+    },
     "top": {
       "$ref": "#/$defs/TopConsumers"
     }
@@ -27,7 +30,8 @@
     "generated",
     "overview",
     "leaks",
-    "top"
+    "top",
+    "threads"
   ],
   "$defs": {
     "ClassRow": {
@@ -595,6 +599,52 @@
         "unreachable_count",
         "unreachable_shallow",
         "histogram"
+      ]
+    },
+    "ThreadInfo": {
+      "description": "A single thread's call stack, resolved from HPROF STACK_TRACE/STACK_FRAME\nrecords. Identifies the thread by its heap object (index + class) since the\nthread NAME requires decoding java.lang.Thread fields (a later step).",
+      "type": "object",
+      "properties": {
+        "class_name": {
+          "description": "Class name of the resolved thread object, or None when the thread\nobject could not be located in the heap.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "frames": {
+          "description": "Stack frames, top-first, each \"class.method (source:line)\".",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "thread_serial": {
+          "description": "HPROF thread serial (stable within the dump).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "thread_serial",
+        "frames"
+      ]
+    },
+    "ThreadOverview": {
+      "description": "Aggregates for the \"Threads\" section: one entry per resolved stack trace.",
+      "type": "object",
+      "properties": {
+        "threads": {
+          "description": "Threads with call stacks, sorted by thread serial for determinism.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ThreadInfo"
+          }
+        }
+      },
+      "required": [
+        "threads"
       ]
     },
     "TopConsumers": {

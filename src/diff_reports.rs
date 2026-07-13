@@ -433,6 +433,7 @@ mod tests {
                     children: vec![],
                 },
             },
+            threads: crate::report::ThreadOverview { threads: vec![] },
         }
     }
 

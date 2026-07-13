@@ -512,9 +512,30 @@ pub struct TopConsumers {
     pub biggest_packages: PackageNode,
 }
 
+/// A single thread's call stack, resolved from HPROF STACK_TRACE/STACK_FRAME
+/// records. Identifies the thread by its heap object (index + class) since the
+/// thread NAME requires decoding java.lang.Thread fields (a later step).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct ThreadInfo {
+    /// HPROF thread serial (stable within the dump).
+    pub thread_serial: u32,
+    /// Class name of the resolved thread object, or None when the thread
+    /// object could not be located in the heap.
+    pub class_name: Option<String>,
+    /// Stack frames, top-first, each "class.method (source:line)".
+    pub frames: Vec<String>,
+}
+
+/// Aggregates for the "Threads" section: one entry per resolved stack trace.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct ThreadOverview {
+    /// Threads with call stacks, sorted by thread serial for determinism.
+    pub threads: Vec<ThreadInfo>,
+}
+
 /// Schema version for the machine-readable JSON output. Bump on any
 /// breaking change to the `Report` shape; the JSON always carries this.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Full report data model: only bounded aggregates, never a per-object Vec.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
@@ -524,6 +545,7 @@ pub struct Report {
     pub overview: SystemOverview,
     pub leaks: LeakSuspects,
     pub top: TopConsumers,
+    pub threads: ThreadOverview,
 }
 
 // ── Model construction ───────────────────────────────────────────────────────
@@ -542,25 +564,55 @@ pub fn build_model(
     dc_offsets: &[u32],
     dc_targets: &[u32],
     leak_children_cap: usize,
+    depth_counts: &[u64],
 ) -> Report {
     let generated = now_iso8601();
     crate::trace::probe("build_model: before system_overview aggregates");
-    let overview = build_system_overview(g);
+    let overview = build_system_overview(g, depth_counts);
     crate::trace::probe("build_model: after system_overview aggregates");
     let leaks = build_leak_suspects(g, dc_offsets, dc_targets, leak_children_cap);
     crate::trace::probe("build_model: after leak_suspects aggregates");
     let top = build_top_consumers(g);
     crate::trace::probe("build_model: after top_consumers aggregates");
+    let threads = build_thread_overview(g);
+    crate::trace::probe("build_model: after thread_overview aggregates");
     Report {
         schema_version: SCHEMA_VERSION,
         generated,
         overview,
         leaks,
         top,
+        threads,
     }
 }
 
-fn build_system_overview(g: &Graph) -> SystemOverview {
+/// Resolve each thread stack into a `ThreadInfo`. The thread's class name is
+/// looked up via its object index (`u32::MAX` = unresolved). Small: one entry
+/// per stack trace.
+fn build_thread_overview(g: &Graph) -> ThreadOverview {
+    let threads = g
+        .thread_stacks
+        .iter()
+        .map(|t| {
+            let class_name = if t.thread_obj_idx == u32::MAX {
+                None
+            } else {
+                g.class_idx
+                    .get(t.thread_obj_idx as usize)
+                    .and_then(|&ci| g.class_names.get(ci as usize))
+                    .cloned()
+            };
+            ThreadInfo {
+                thread_serial: t.thread_serial,
+                class_name,
+                frames: t.frames.clone(),
+            }
+        })
+        .collect();
+    ThreadOverview { threads }
+}
+
+fn build_system_overview(g: &Graph, depth_counts: &[u64]) -> SystemOverview {
     let n = g.n;
     let undef = u32::MAX;
 
@@ -663,54 +715,21 @@ fn build_system_overview(g: &Graph) -> SystemOverview {
             .collect();
         HeapComposition { by_kind }
     };
-    // B2: dominator-depth histogram. depth[i] = # idom hops from i up to vroot.
-    // Iterative memoized walk (n can be ~514M — no recursion). ~4 bytes/object
-    // transient (u32 depth memo); freed at end of this block.
-    let dominator_depth_histogram = {
-        let vroot = n as u32;
-        // memo[i] = 0 => unresolved/unreachable; otherwise the object's depth
-        // (1 = directly under vroot). vroot itself has no memo slot.
-        let mut memo: Vec<u32> = vec![0; n];
-        let mut stack: Vec<u32> = Vec::new();
-        for start in 0..n {
-            if g.idom[start] == undef || memo[start] != 0 {
-                continue;
-            }
-            // Walk up until a memoized/vroot node, pushing the unresolved chain.
-            stack.clear();
-            let mut cur = start as u32;
-            let base = loop {
-                let p = g.idom[cur as usize];
-                if p == vroot {
-                    break 1u32; // parent is vroot => cur is depth 1
-                }
-                if memo[p as usize] != 0 {
-                    break memo[p as usize] + 1; // depth of cur
-                }
-                stack.push(cur);
-                cur = p;
-            };
-            memo[cur as usize] = base;
-            let mut d = base;
-            while let Some(node) = stack.pop() {
-                d += 1;
-                memo[node as usize] = d;
-            }
-        }
-        // Tally depths into a histogram (depth range is small — bounded by the
-        // longest dominator chain). memo[i]==0 only for unreachable (skipped).
-        let mut counts: std::collections::BTreeMap<u32, u64> = std::collections::BTreeMap::new();
-        for i in 0..n {
-            if g.idom[i] != undef {
-                *counts.entry(memo[i]).or_insert(0) += 1;
-            }
-        }
-        // memo dropped here — freed before build_system_overview returns.
-        counts
-            .into_iter()
-            .map(|(depth, objects)| DepthBucket { depth, objects })
-            .collect::<Vec<_>>()
-    };
+    // B2: dominator-depth histogram (depth = # idom hops up to vroot; 1 =
+    // directly under vroot). The per-depth counts were tallied for free during
+    // compute_retained's dominator-tree DFS (depth_counts[d-1] = objects at
+    // depth d), so no separate ~2GB per-object memo scan runs here. Emit only
+    // non-empty buckets, ascending by depth — identical to the old BTreeMap
+    // output (which likewise skipped absent depths).
+    let dominator_depth_histogram: Vec<DepthBucket> = depth_counts
+        .iter()
+        .enumerate()
+        .filter(|&(_, &objects)| objects > 0)
+        .map(|(i, &objects)| DepthBucket {
+            depth: (i + 1) as u32,
+            objects,
+        })
+        .collect();
     // B3: retention concentration over top-level dominators (idom == vroot).
     let retention_concentration = {
         let vroot = n as u32;
@@ -1390,6 +1409,7 @@ pub fn render_markdown(r: &Report) -> String {
     render_system_overview(&r.overview, &mut out);
     render_leak_suspects(&r.leaks, &mut out);
     render_top_consumers(&r.top, r.leaks.total_shallow, &mut out);
+    render_threads(&r.threads, &mut out);
     out
 }
 
@@ -1802,6 +1822,25 @@ fn render_top_consumers(t: &TopConsumers, total_shallow: u64, out: &mut String) 
     out.push('\n');
 }
 
+/// Render the "Threads" section: each resolved thread's call stack. Threads
+/// without any frames are already dropped upstream; an empty section prints a
+/// placeholder so the heading is still self-describing.
+fn render_threads(t: &ThreadOverview, out: &mut String) {
+    out.push_str("## Threads\n\n");
+    if t.threads.is_empty() {
+        out.push_str("_No thread call stacks were recorded in this dump._\n\n");
+        return;
+    }
+    for th in &t.threads {
+        let class = th.class_name.as_deref().unwrap_or("<unresolved>");
+        out.push_str(&format!("### Thread {} ({})\n\n", th.thread_serial, class));
+        for frame in &th.frames {
+            out.push_str(&format!("- `{frame}`\n"));
+        }
+        out.push('\n');
+    }
+}
+
 // ── Unit tests ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1931,6 +1970,7 @@ mod tests {
             class_idx,
             class_names: class_names.iter().map(|s| s.to_string()).collect(),
             class_loader_id: vec![0u64; class_names.len()],
+            thread_stacks: Vec::new(),
             class_obj_class_idx,
             fwd_offsets: Vec::new(),
             fwd_targets: Vec::new(),
@@ -1964,10 +2004,48 @@ mod tests {
         )
     }
 
+    /// Test-only wrapper: derives the B2 `depth_counts` histogram from `g.idom`
+    /// (the way the old per-object memo scan did) and calls the real
+    /// `build_model`. Production tallies `depth_counts` for free inside
+    /// `compute_retained`'s dominator-tree DFS; test graphs are tiny so
+    /// recomputing here is irrelevant.
+    fn build_model_t(g: &Graph, dc_off: &[u32], dc_tgt: &[u32], cap: usize) -> Report {
+        let n = g.n;
+        let vroot = n as u32;
+        let undef = u32::MAX;
+        let mut depth_counts: Vec<u64> = Vec::new();
+        for u in 0..n {
+            // A node is reachable iff it has a defined idom (roots have idom
+            // = vroot). Walk up to vroot counting hops; depth 1 = under vroot.
+            let mut cur = u as u32;
+            if g.idom[u] == undef {
+                continue;
+            }
+            let mut depth = 0usize;
+            while cur != vroot {
+                let p = g.idom[cur as usize];
+                if p == undef {
+                    depth = 0;
+                    break;
+                }
+                depth += 1;
+                cur = p;
+            }
+            if depth == 0 {
+                continue;
+            }
+            if depth > depth_counts.len() {
+                depth_counts.resize(depth, 0);
+            }
+            depth_counts[depth - 1] += 1;
+        }
+        build_model(g, dc_off, dc_tgt, cap, &depth_counts)
+    }
+
     #[test]
     fn test_build_model_system_overview() {
         let (g, dc_off, dc_tgt) = fixture();
-        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let o = &r.overview;
         assert_eq!(o.total_objects, 4);
         assert_eq!(o.total_shallow, 100 + 100 + 50 + 20);
@@ -2016,7 +2094,7 @@ mod tests {
         ];
         g.synthetic_root_count = 1;
 
-        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let o = &r.overview;
         // Scalar: 3 roots - 1 synthetic = 2.
         assert_eq!(o.gc_roots, 2);
@@ -2047,7 +2125,7 @@ mod tests {
         ];
         g.synthetic_root_count = 1;
 
-        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let o = &r.overview;
         assert_eq!(o.gc_roots, 2);
         assert_eq!(o.gc_roots_by_type.len(), 1);
@@ -2095,7 +2173,7 @@ mod tests {
             vec![],
             0,
         );
-        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let bk = &r.overview.heap_composition.by_kind;
         assert_eq!(bk.len(), 2);
         assert_eq!(bk[0].kind, "Instances");
@@ -2113,7 +2191,7 @@ mod tests {
         // fixture(): obj0/obj1/obj3 are top-level (depth 1); obj2 is dominated
         // by obj0 (depth 2); obj4 is unreachable (excluded).
         let (g, dc_off, dc_tgt) = fixture();
-        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let h = &r.overview.dominator_depth_histogram;
         assert_eq!(h.len(), 2);
         // Sorted by depth ascending.
@@ -2131,7 +2209,7 @@ mod tests {
         // total_shallow = 270 (denominator). one_pct = 270/100 = 2, so all
         // three top-level objects (>=2) count toward num_objects_ge_1pct.
         let (g, dc_off, dc_tgt) = fixture();
-        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let rc = &r.overview.retention_concentration;
         assert_eq!(rc.total_retained, 2200);
         // top1 = 1000/270 = 37037 bp; top10 (all 3) = 2200/270 = 81481 bp.
@@ -2160,7 +2238,7 @@ mod tests {
             vec![0, 1],
             0,
         );
-        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let md = render_markdown(&r);
         assert!(
             md.contains("### Heap Composition"),
@@ -2203,7 +2281,7 @@ mod tests {
             vec![0, 1, 2],
             0,
         );
-        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let o = &r.overview;
 
         // classes_loaded counts distinct CLASS_DUMP objects (class_obj_repr set)
@@ -2274,7 +2352,7 @@ mod tests {
         // Assign loaders per histogram row: rows 0,1 = 0x1000; row 2 = boot(0).
         g.class_loader_id = vec![0x1000, 0x1000, 0];
         let (dc_off, dc_tgt) = crate::retained::build_dom_children_csr(g.n, &g.idom);
-        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let o = &r.overview;
 
         // Reachable class objects: obj0 (row 0, loader 0x1000) and obj1 (row 2,
@@ -2317,7 +2395,7 @@ mod tests {
         );
         g.class_loader_id = vec![0, 0];
         let (dc_off, dc_tgt) = crate::retained::build_dom_children_csr(g.n, &g.idom);
-        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         assert_eq!(r.overview.classloaders_loaded, 1);
     }
 
@@ -2349,7 +2427,7 @@ mod tests {
         {
             let (g, dc_off, dc_tgt) = build();
             assert_eq!(g.system_classloader_shallow, None);
-            let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+            let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
             let o = &r.overview;
             assert_eq!(o.total_objects, 2);
             assert_eq!(o.total_shallow, 72 + 40);
@@ -2366,7 +2444,7 @@ mod tests {
         {
             let (mut g, dc_off, dc_tgt) = build();
             g.system_classloader_shallow = Some(72);
-            let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+            let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
             let o = &r.overview;
             assert_eq!(o.total_objects, 3, "synthetic object not counted");
             assert_eq!(o.total_shallow, 72 + 40 + 72, "synthetic shallow missing");
@@ -2399,7 +2477,7 @@ mod tests {
         let (mut g, dc_off, dc_tgt) = fixture();
         g.ref_size = g.id_size; // 8 == 8 -> not compressed
         g.header_timestamp_ms = 0; // no creation timestamp
-        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let o = &r.overview;
         assert_eq!(o.compressed_oops, Some(false)); // ref_size == id_size
         assert_eq!(o.dump_creation, None); // header_timestamp_ms == 0
@@ -2408,7 +2486,7 @@ mod tests {
     #[test]
     fn test_build_model_top_consumers_package_determinism() {
         let (g, dc_off, dc_tgt) = fixture();
-        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let t = &r.top;
 
         // Biggest objects: top-level are obj0(1000), obj1(1000), obj3(200).
@@ -2470,7 +2548,7 @@ mod tests {
             vec![0, 1],
             0,
         );
-        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let root = &r.top.biggest_packages;
         // Root keeps cumulative totals over ALL dominators (before pruning).
         assert_eq!(root.retained_heap, 10001);
@@ -2505,7 +2583,7 @@ mod tests {
             gc_roots,
             0,
         );
-        let mut r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let mut r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let root = &r.top.biggest_packages;
         assert_eq!(root.top_dominator_count, count as u64);
         assert!(
@@ -2532,7 +2610,7 @@ mod tests {
     #[test]
     fn test_build_model_leak_suspects() {
         let (g, dc_off, dc_tgt) = fixture();
-        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let l = &r.leaks;
         // total_shallow = 270, threshold = 27. Singles directly under vroot with
         // retained >= 27: obj0(1000), obj1(1000), obj3(200) all qualify.
@@ -2641,7 +2719,7 @@ mod tests {
             heap::ROOT_JNI_GLOBAL,
         ];
 
-        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let l = &r.leaks;
         // obj0 is a Thread root -> "Thread".
         assert_eq!(l.suspects[0].pretty_class, "com.foo.A");
@@ -2671,7 +2749,7 @@ mod tests {
         g.gc_root_indices = vec![1];
         g.gc_root_types = vec![heap::ROOT_THREAD_OBJ];
 
-        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let l = &r.leaks;
         // obj0 (com.foo.A) is a single suspect but not itself a root -> empty.
         assert_eq!(l.suspects[0].pretty_class, "com.foo.A");
@@ -2705,7 +2783,7 @@ mod tests {
             vec![0], // obj0 is a GC root
             0,
         );
-        let r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         let s = &r.leaks.suspects[0];
         assert!(s.is_single);
         // The represented class, NOT "java.lang.Class".
@@ -2725,8 +2803,8 @@ mod tests {
         // This specifically guards the Biggest-Packages HashMap sort fix.
         let (g1, off1, tgt1) = fixture();
         let (g2, off2, tgt2) = fixture();
-        let mut r1 = build_model(&g1, &off1, &tgt1, DOMINATED_CAP);
-        let mut r2 = build_model(&g2, &off2, &tgt2, DOMINATED_CAP);
+        let mut r1 = build_model_t(&g1, &off1, &tgt1, DOMINATED_CAP);
+        let mut r2 = build_model_t(&g2, &off2, &tgt2, DOMINATED_CAP);
         // Neutralise the nondeterministic timestamp line.
         r1.generated = "FIXED".to_string();
         r2.generated = "FIXED".to_string();
@@ -2736,7 +2814,7 @@ mod tests {
     #[test]
     fn test_render_markdown_structure() {
         let (g, dc_off, dc_tgt) = fixture();
-        let mut r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let mut r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         r.generated = "FIXED".to_string();
         let md = render_markdown(&r);
         assert!(md.starts_with("# Heap Dump Analysis: `test.hprof`\n\n"));
@@ -2772,7 +2850,7 @@ mod tests {
     #[test]
     fn test_render_markdown_oom_triage() {
         let (g, dc_off, dc_tgt) = fixture();
-        let mut r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let mut r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         r.generated = "FIXED".to_string();
         let md = render_markdown(&r);
         let doc = Md::parse(&md);
@@ -2824,7 +2902,7 @@ mod tests {
     /// Build the fixture Report with the nondeterministic timestamp neutralised.
     fn fixture_report() -> Report {
         let (g, dc_off, dc_tgt) = fixture();
-        let mut r = build_model(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let mut r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
         r.generated = "FIXED".to_string();
         r
     }
@@ -2902,6 +2980,71 @@ mod tests {
     fn schema_version_guard() {
         let r = fixture_report();
         assert_eq!(r.schema_version, SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 2);
+        assert_eq!(SCHEMA_VERSION, 3);
+    }
+
+    #[test]
+    fn thread_overview_resolves_class_from_object_index() {
+        // Two objects: idx 0 is an instance of class row 1 ("java/lang/Thread"),
+        // idx 1 is unreachable filler. A thread stack points at obj idx 0.
+        let (mut g, _o, _t) = make_graph(
+            vec![2, 2],
+            vec![1, 0],
+            vec![16, 16],
+            vec![16, 16],
+            vec!["Filler", "java/lang/Thread"],
+            &[],
+            &[],
+            vec![],
+            0,
+        );
+        g.thread_stacks = vec![
+            crate::pass2::ThreadStack {
+                thread_serial: 7,
+                thread_obj_idx: 0,
+                frames: vec!["java.lang.Object.wait (Object.java:1)".to_string()],
+            },
+            crate::pass2::ThreadStack {
+                thread_serial: 9,
+                thread_obj_idx: u32::MAX,
+                frames: vec!["x.y (Unknown Source)".to_string()],
+            },
+        ];
+        let ov = build_thread_overview(&g);
+        assert_eq!(ov.threads.len(), 2);
+        assert_eq!(ov.threads[0].thread_serial, 7);
+        assert_eq!(
+            ov.threads[0].class_name.as_deref(),
+            Some("java/lang/Thread")
+        );
+        assert_eq!(ov.threads[0].frames.len(), 1);
+        // Unresolved object index yields no class name.
+        assert_eq!(ov.threads[1].class_name, None);
+    }
+
+    #[test]
+    fn render_threads_emits_heading_and_frames() {
+        let mut out = String::new();
+        render_threads(
+            &ThreadOverview {
+                threads: vec![ThreadInfo {
+                    thread_serial: 3,
+                    class_name: Some("java/lang/Thread".to_string()),
+                    frames: vec!["java.lang.Object.wait (Object.java:1)".to_string()],
+                }],
+            },
+            &mut out,
+        );
+        assert!(out.contains("## Threads"));
+        assert!(out.contains("### Thread 3 (java/lang/Thread)"));
+        assert!(out.contains("java.lang.Object.wait (Object.java:1)"));
+    }
+
+    #[test]
+    fn render_threads_handles_empty() {
+        let mut out = String::new();
+        render_threads(&ThreadOverview { threads: vec![] }, &mut out);
+        assert!(out.contains("## Threads"));
+        assert!(out.contains("No thread call stacks"));
     }
 }

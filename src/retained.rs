@@ -64,9 +64,17 @@ pub fn compute_retained(
     class_obj_class_idx: &std::collections::HashMap<u32, u32>,
     child_off: &[u32],
     child_tgt: &[u32],
-) -> (Vec<u64>, crate::bitset::Bitset) {
+) -> (Vec<u64>, crate::bitset::Bitset, Vec<u64>) {
     let vroot = n as u32;
     let undef = u32::MAX;
+
+    // B2 dominator-depth histogram, tallied for free during the DFS below.
+    // depth_counts[d-1] = # reachable objects at dominator depth d (1 = directly
+    // under vroot). This replaces a separate ~2GB per-object `memo` scan in
+    // report::build_system_overview: the DFS already visits every reachable node
+    // once with its stack depth in hand, so the histogram costs only this small
+    // depth-indexed Vec (bounded by the longest dominator chain).
+    let mut depth_counts: Vec<u64> = Vec::new();
 
     // ── Retained size: dom-tree post-order fold (fused into the hasSame DFS) ─
     // Initialize retained[v] = shallow[v] for all real objects. The subtree
@@ -126,6 +134,15 @@ pub fn compute_retained(
             // sp_new = depth the child will have on the stack (1-based, vroot is depth 1).
             let sp_new = (stk_node.len() + 1) as u32;
 
+            // B2 tally: the child's dominator depth (vroot's direct children = 1)
+            // is sp_new - 1. Every reachable node is pushed exactly once here, so
+            // this reproduces the old per-object memo histogram bit-for-bit.
+            let b2_depth = (sp_new - 1) as usize;
+            if b2_depth > depth_counts.len() {
+                depth_counts.resize(b2_depth, 0);
+            }
+            depth_counts[b2_depth - 1] += 1;
+
             // Check and update class_to_last_depth for the child's own class.
             let saved_depth = if cls != undef && (cls as usize) < class_count {
                 if class_to_last_depth[cls as usize] > 0 || class_obj_depth[cls as usize] > 0 {
@@ -179,7 +196,7 @@ pub fn compute_retained(
     }
     crate::trace::probe("retained: after hasSame DFS");
 
-    (retained, has_same)
+    (retained, has_same, depth_counts)
 }
 
 #[cfg(test)]
@@ -195,7 +212,7 @@ mod tests {
         let shallow = vec![10u32, 20, 30];
         let class_idx = vec![0u32, 0, 0];
         let class_obj_class_idx = std::collections::HashMap::<u32, u32>::new();
-        let (retained, _has_same) = {
+        let (retained, _has_same, _depth) = {
             let (co, ct) = build_dom_children_csr(n, &idom);
             compute_retained(
                 n,
@@ -221,7 +238,7 @@ mod tests {
         let shallow = vec![1u32, 2, 3, 4];
         let class_idx = vec![0u32, 0, 0, 0];
         let class_obj_class_idx = std::collections::HashMap::<u32, u32>::new();
-        let (retained, _) = {
+        let (retained, _, _) = {
             let (co, ct) = build_dom_children_csr(n, &idom);
             compute_retained(
                 n,
@@ -251,7 +268,7 @@ mod tests {
         // class 0: nodes 0 and 2; class 1: node 1
         let class_idx = vec![0u32, 1, 0];
         let class_obj_class_idx = std::collections::HashMap::<u32, u32>::new();
-        let (_, has_same) = {
+        let (_, has_same, _) = {
             let (co, ct) = build_dom_children_csr(n, &idom);
             compute_retained(
                 n,
@@ -283,7 +300,7 @@ mod tests {
         let class_idx = vec![0u32, 1u32, 0u32];
         let mut class_obj_class_idx = std::collections::HashMap::<u32, u32>::new();
         class_obj_class_idx.insert(0u32, 1u32);
-        let (_, has_same) = {
+        let (_, has_same, _) = {
             let (co, ct) = build_dom_children_csr(n, &idom);
             compute_retained(
                 n,

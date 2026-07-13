@@ -375,7 +375,7 @@ fn run(
 
     let t = Instant::now();
     let class_count = g.class_names.len();
-    let (retained, has_same) = retained::compute_retained(
+    let (retained, has_same, depth_counts) = retained::compute_retained(
         g.n,
         &g.idom,
         &g.shallow,
@@ -393,8 +393,10 @@ fn run(
     crate::trace::probe("report: before build_model");
     // build_model reads has_same_class_ancestor (system-overview group) and
     // dc_off/dc_tgt (leak-suspect group) and stores only bounded aggregates,
-    // so both can be freed immediately after it returns.
-    let report = report::build_model(&g, &dc_off, &dc_tgt, leak_children_cap);
+    // so both can be freed immediately after it returns. depth_counts is the
+    // B2 dominator-depth histogram tallied during compute_retained's DFS (no
+    // separate ~2GB per-object memo scan).
+    let report = report::build_model(&g, &dc_off, &dc_tgt, leak_children_cap, &depth_counts);
     crate::trace::probe("report: after build_model");
     g.has_same_class_ancestor = crate::bitset::Bitset::default(); // consumed by build_model
     drop(dc_off);

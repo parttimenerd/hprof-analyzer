@@ -9,6 +9,18 @@ use crate::{
     types::{HprofType, heap, tags},
 };
 
+/// One HPROF STACK_FRAME (0x04) record. String ids resolve against `strings`;
+/// `class_serial` resolves against `class_serial_to_addr` → `class_map`.
+/// `line_number` uses the HPROF conventions (>0 = line; -1 unknown; -2 compiled
+/// method; -3 native method) stored as the raw i32.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StackFrame {
+    pub method_name_id: u64,
+    pub source_file_id: u64,
+    pub class_serial: u32,
+    pub line_number: i32,
+}
+
 #[derive(Debug, Default)]
 pub struct ClassInfo {
     pub name_id: u64,
@@ -26,7 +38,6 @@ pub struct ClassInfo {
 pub struct Pass1 {
     pub strings: HashMap<u64, String>,
     pub class_map: HashMap<u64, ClassInfo>,
-    #[allow(dead_code)]
     pub class_serial_to_addr: HashMap<u32, u64>,
     pub id_map: IdMap,
     /// Per-object class reference, u32-interned to halve this array (was
@@ -48,6 +59,14 @@ pub struct Pass1 {
     pub thread_serial_to_obj_id: HashMap<u32, u64>,
     /// (threadSerial, localAddr) from JAVA_FRAME/JNI_LOCAL/NATIVE_STACK/THREAD_BLOCK
     pub thread_local_pairs: Vec<(u32, u64)>,
+    /// STACK_FRAME (0x04) records, keyed by frame_id. Small (thousands), off
+    /// the per-object RSS budget.
+    pub stack_frames: HashMap<u64, StackFrame>,
+    /// STACK_TRACE (0x05) records: stack_serial → ordered frame_ids (top frame
+    /// first). Small (hundreds), off the per-object RSS budget.
+    pub stack_traces: HashMap<u32, Vec<u64>>,
+    /// STACK_TRACE (0x05): stack_serial → thread_serial (0 = no thread).
+    pub stack_trace_thread: HashMap<u32, u32>,
     pub id_size: u8,
     pub format: String,
     pub file_size: u64,
@@ -88,6 +107,9 @@ impl Pass1 {
         let mut gc_root_types: Vec<u8> = Vec::new();
         let mut thread_serial_to_obj_id: HashMap<u32, u64> = HashMap::new();
         let mut thread_local_pairs: Vec<(u32, u64)> = Vec::new();
+        let mut stack_frames: HashMap<u64, StackFrame> = HashMap::new();
+        let mut stack_traces: HashMap<u32, Vec<u64>> = HashMap::new();
+        let mut stack_trace_thread: HashMap<u32, u32> = HashMap::new();
         let mut has_sticky_class_roots = false;
         let mut instance_count = 0u64;
         let mut obj_array_count = 0u64;
@@ -116,6 +138,38 @@ impl Pass1 {
                     let name_id = r.id()?;
                     class_serial_to_addr.insert(serial, class_addr);
                     class_map.entry(class_addr).or_default().name_id = name_id;
+                }
+                tags::STACK_FRAME => {
+                    // frame_id(id) + method_name_id(id) + method_sig_id(id)
+                    // + source_file_id(id) + class_serial(u4) + line_number(u4)
+                    let frame_id = r.id()?;
+                    let method_name_id = r.id()?;
+                    let _method_sig_id = r.id()?;
+                    let source_file_id = r.id()?;
+                    let class_serial = r.u4()?;
+                    let line_number = r.u4()? as i32;
+                    stack_frames.insert(
+                        frame_id,
+                        StackFrame {
+                            method_name_id,
+                            source_file_id,
+                            class_serial,
+                            line_number,
+                        },
+                    );
+                }
+                tags::STACK_TRACE => {
+                    // stack_serial(u4) + thread_serial(u4) + num_frames(u4)
+                    // + frame_id[num_frames](id)
+                    let stack_serial = r.u4()?;
+                    let thread_serial = r.u4()?;
+                    let num_frames = r.u4()?;
+                    let mut frames = Vec::with_capacity(num_frames as usize);
+                    for _ in 0..num_frames {
+                        frames.push(r.id()?);
+                    }
+                    stack_traces.insert(stack_serial, frames);
+                    stack_trace_thread.insert(stack_serial, thread_serial);
                 }
                 tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
                     scan_heap_segment(
@@ -244,6 +298,9 @@ impl Pass1 {
             gc_root_types,
             thread_serial_to_obj_id,
             thread_local_pairs,
+            stack_frames,
+            stack_traces,
+            stack_trace_thread,
             id_size,
             format,
             file_size,
