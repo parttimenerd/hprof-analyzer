@@ -52,6 +52,13 @@ pub struct Graph {
     /// Number of GC roots added synthetically (system class roots, etc.)
     /// Reported GC roots = gc_root_indices.len() - synthetic_root_count
     pub synthetic_root_count: usize,
+    /// MAT-formula instance shallow size of `java/lang/ClassLoader`, if that
+    /// class exists in the dump. MAT materializes a synthetic bootstrap
+    /// `<system class loader>` object at address 0x0 (no HPROF record) of this
+    /// class; the report layer injects one such object's count + shallow so
+    /// `total_objects`/`total_shallow` match MAT bit-exactly. `None` = the
+    /// class is absent, inject nothing.
+    pub system_classloader_shallow: Option<u32>,
     // Filled by later passes
     pub idom: Vec<u32>,
     pub retained: Vec<u64>,
@@ -793,11 +800,24 @@ impl Pass2 {
         }
         // ── addSystemClassRootsIfMissing: boot-loader non-array classes not yet roots ─
         let mut synthetic_root_count = 0usize;
+        // MAT materializes a synthetic <system class loader> object at 0x0 of
+        // class java/lang/ClassLoader (no HPROF record). Capture that class's
+        // instance shallow size so the report layer can inject the object.
+        let mut system_classloader_shallow: Option<u32> = None;
         for (&caddr, ci) in &p1.class_map {
             if ci.loader_id != 0 {
                 continue;
             }
             let name = p1.strings.get(&ci.name_id);
+            if name.map(|n| n == "java/lang/ClassLoader").unwrap_or(false) {
+                system_classloader_shallow = Some(instance_shallow_size(
+                    caddr,
+                    &p1.class_map,
+                    ptr_size,
+                    ref_size,
+                    &mut size_cache,
+                ));
+            }
             let is_array = name.map(|n| n.starts_with('[')).unwrap_or(false);
             // MAT's addSystemClassRootsIfMissing root-attaches instance-less
             // primitive-array class objects ([Z [C [F [D [S [I [J [B) even
@@ -988,6 +1008,7 @@ impl Pass2 {
             fwd_offsets,
             fwd_targets,
             synthetic_root_count,
+            system_classloader_shallow,
             idom: Vec::new(),
             retained: Vec::new(),
             has_same_class_ancestor: crate::bitset::Bitset::default(),

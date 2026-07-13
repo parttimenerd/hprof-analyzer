@@ -393,6 +393,16 @@ fn build_system_overview(g: &Graph) -> SystemOverview {
         }
     }
 
+    // MAT materializes a synthetic <system class loader> object at 0x0
+    // (class java/lang/ClassLoader, no HPROF record). Inject its count +
+    // shallow so total_objects/total_shallow match MAT bit-exactly. The
+    // object has no outbound edges, so nothing else (gc_roots, retained,
+    // classes_loaded) is affected — see build_system_overview docs.
+    if let Some(sz) = g.system_classloader_shallow {
+        total_objects += 1;
+        total_shallow += sz as u64;
+    }
+
     let gc_roots = (g
         .gc_root_indices
         .len()
@@ -464,7 +474,22 @@ fn build_system_overview(g: &Graph) -> SystemOverview {
         class_retained[ci] += g.retained[i];
     }
 
-    // Sort classes by retained desc, emit the FULL histogram (every class).
+    // Inject the synthetic <system class loader> object into its class row so
+    // the histogram totals also match MAT. Find the canonical row whose pretty
+    // name is java.lang.ClassLoader; add +1 instance / +sz shallow (retained
+    // unchanged — the object has no retained subtree).
+    if let Some(sz) = g.system_classloader_shallow {
+        for ci in 0..class_count {
+            if remap[ci] as usize == ci
+                && pretty_class_name(&g.class_names[ci]) == "java.lang.ClassLoader"
+            {
+                inst_count[ci] += 1;
+                shallow_total[ci] += sz as u64;
+                break;
+            }
+        }
+    }
+
     // Explicit tie-breaker on ascending class index so equal-retained rows are
     // deterministic. No truncation — `histogram_truncated_to` stays None.
     // Skip rows folded into a canonical row (their tallies moved to the
@@ -515,10 +540,15 @@ fn build_leak_suspects(g: &Graph, dc_offsets: &[u32], dc_targets: &[u32]) -> Lea
     let undef = u32::MAX;
 
     // Total shallow heap of reachable objects
-    let total_shallow: u64 = (0..n)
+    let mut total_shallow: u64 = (0..n)
         .filter(|&i| g.idom[i] != undef)
         .map(|i| g.shallow[i] as u64)
         .sum();
+    // Include MAT's synthetic <system class loader> object for internal
+    // consistency with build_system_overview's total_shallow.
+    if let Some(sz) = g.system_classloader_shallow {
+        total_shallow += sz as u64;
+    }
 
     let threshold = (total_shallow as f64 * THRESHOLD_PCT / 100.0) as u64;
 
@@ -1275,6 +1305,7 @@ mod tests {
             fwd_offsets: Vec::new(),
             fwd_targets: Vec::new(),
             synthetic_root_count,
+            system_classloader_shallow: None,
             idom,
             retained,
             has_same_class_ancestor: has_same,
@@ -1411,6 +1442,67 @@ mod tests {
             .collect();
         assert_eq!(jlc_big.len(), 1);
         assert_eq!(jlc_big[0].instances, 2);
+    }
+
+    /// MAT materializes a synthetic <system class loader> object at 0x0 of
+    /// class java/lang/ClassLoader (no HPROF record). When
+    /// `system_classloader_shallow` is set, the report injects one such object:
+    /// +1 total_objects, +sz total_shallow, +1 instance / +sz shallow on the
+    /// java.lang.ClassLoader histogram row. With `None`, everything is
+    /// unchanged (regression guard). gc_roots/classes_loaded stay untouched.
+    #[test]
+    fn test_synthetic_system_classloader_injection() {
+        // obj0: java/lang/ClassLoader instance, top-level, shallow 72.
+        // obj1: com/foo/A instance, top-level.
+        let build = || {
+            make_graph(
+                vec![2, 2],   // idom (vroot = 2)
+                vec![0, 1],   // class_idx
+                vec![72, 40], // shallow
+                vec![72, 40], // retained
+                vec!["java/lang/ClassLoader", "com/foo/A"],
+                &[], // no class objects
+                &[], // none excluded
+                vec![0, 1],
+                0,
+            )
+        };
+
+        // None path: nothing injected.
+        {
+            let (g, dc_off, dc_tgt) = build();
+            assert_eq!(g.system_classloader_shallow, None);
+            let r = build_model(&g, &dc_off, &dc_tgt);
+            let o = &r.overview;
+            assert_eq!(o.total_objects, 2);
+            assert_eq!(o.total_shallow, 72 + 40);
+            let cl_row = o
+                .histogram
+                .iter()
+                .find(|h| h.pretty_class == "java.lang.ClassLoader")
+                .expect("ClassLoader row present");
+            assert_eq!(cl_row.instances, 1);
+            assert_eq!(cl_row.shallow, 72);
+        }
+
+        // Some(72) path: one synthetic object injected.
+        {
+            let (mut g, dc_off, dc_tgt) = build();
+            g.system_classloader_shallow = Some(72);
+            let r = build_model(&g, &dc_off, &dc_tgt);
+            let o = &r.overview;
+            assert_eq!(o.total_objects, 3, "synthetic object not counted");
+            assert_eq!(o.total_shallow, 72 + 40 + 72, "synthetic shallow missing");
+            assert_eq!(o.gc_roots, 2, "gc_roots must be unchanged");
+            assert_eq!(o.classes_loaded, 0, "classes_loaded must be unchanged");
+            let cl_row = o
+                .histogram
+                .iter()
+                .find(|h| h.pretty_class == "java.lang.ClassLoader")
+                .expect("ClassLoader row present");
+            assert_eq!(cl_row.instances, 2, "synthetic instance not in row");
+            assert_eq!(cl_row.shallow, 72 + 72, "synthetic shallow not in row");
+        }
     }
 
     #[test]

@@ -40,11 +40,12 @@ rsync -az --delete \
 
 if [ "$BUILD" = "1" ]; then
   echo "==> cargo build --release on $REMOTE"
-  # touch edited sources + main so the build sees them; source cargo env for
-  # non-login ssh shells.
-  ssh "$REMOTE" "source \$HOME/.cargo/env && cd $REMOTE_DIR && \
-    touch src/*.rs && cargo build --release 2>&1 | grep -E 'error|warning' || true; \
-    echo BUILD_DONE"
+  # touch edited sources + main so the build sees them. Use a login shell
+  # (bash -lc) so cargo resolves on PATH regardless of how it was installed
+  # (rustup ~/.cargo/env OR a snap/system package under /snap/bin).
+  ssh "$REMOTE" "bash -lc 'cd $REMOTE_DIR && \
+    touch src/*.rs && cargo build --release 2>&1 | grep -E \"error|warning\" || true; \
+    echo BUILD_DONE'"
 fi
 
 echo "==> sync complete"
