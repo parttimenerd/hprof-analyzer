@@ -1,3 +1,8 @@
+//! HPROF wire-format vocabulary: the record-tag byte constants and the
+//! primitive-type enum shared across the parser. These name the raw tag/type
+//! codes read off the dump stream so the rest of the pipeline can match on
+//! meaning rather than magic numbers.
+
 /// Top-level record tags (HPROF spec §2)
 pub mod tags {
     pub const STRING_IN_UTF8: u8 = 0x01;
@@ -38,6 +43,7 @@ pub mod heap {
     pub const HEAP_DUMP_INFO: u8 = 0xfe;
 }
 
+/// A field/array element's primitive type, as encoded by HPROF type codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HprofType {
     Object,
@@ -52,6 +58,7 @@ pub enum HprofType {
 }
 
 impl HprofType {
+    /// Maps a raw HPROF type code to its type; `None` for unknown codes.
     pub fn from_code(code: u8) -> Option<Self> {
         match code {
             2 => Some(Self::Object),

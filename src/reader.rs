@@ -1,3 +1,8 @@
+//! Streaming byte reader that fronts the HPROF dump file. Transparently
+//! decompresses gzip'd dumps (magic sniff) and serves the big-endian
+//! `u1`/`u2`/`u4`/`u8`/`id` primitives the parser consumes, buffering in large
+//! chunks so a multi-gigabyte scan stays sequential and allocation-light.
+
 use flate2::read::GzDecoder;
 use std::{
     fs::File,
@@ -20,10 +25,10 @@ pub struct HprofReader {
     buf: Vec<u8>,
     pos: usize,
     end: usize,
-    eof: bool,
 }
 
 impl HprofReader {
+    /// Open a dump (gzip auto-detected via magic) and consume its HPROF header.
     pub fn open(path: &str) -> io::Result<Self> {
         let file = File::open(path)?;
         let mut peek = BufReader::new(file);
@@ -42,7 +47,6 @@ impl HprofReader {
             buf: vec![0u8; BUF_CAP],
             pos: 0,
             end: 0,
-            eof: false,
         };
         r.read_header()?;
         Ok(r)
@@ -77,7 +81,6 @@ impl HprofReader {
         while self.end < self.buf.len() {
             let n = self.inner.read(&mut self.buf[self.end..])?;
             if n == 0 {
-                self.eof = true;
                 break;
             }
             self.end += n;
@@ -103,6 +106,7 @@ impl HprofReader {
         }
     }
 
+    /// Read one unsigned byte.
     #[inline]
     pub fn u1(&mut self) -> io::Result<u8> {
         if self.pos >= self.end {
@@ -113,6 +117,7 @@ impl HprofReader {
         Ok(b)
     }
 
+    /// Read a big-endian `u16`.
     #[inline]
     pub fn u2(&mut self) -> io::Result<u16> {
         self.ensure(2)?;
@@ -122,6 +127,7 @@ impl HprofReader {
         Ok(v)
     }
 
+    /// Read a big-endian `u32`.
     #[inline]
     pub fn u4(&mut self) -> io::Result<u32> {
         self.ensure(4)?;
@@ -136,6 +142,7 @@ impl HprofReader {
         Ok(v)
     }
 
+    /// Read a big-endian `u64`.
     #[inline]
     pub fn u8(&mut self) -> io::Result<u64> {
         self.ensure(8)?;
@@ -154,6 +161,7 @@ impl HprofReader {
         Ok(v)
     }
 
+    /// Read an object id (`u4` or `u8` per the header's `id_size`).
     #[inline]
     pub fn id(&mut self) -> io::Result<u64> {
         match self.id_size {
@@ -166,6 +174,7 @@ impl HprofReader {
         }
     }
 
+    /// Advance the stream by `n` bytes without materializing them.
     pub fn skip(&mut self, mut n: u64) -> io::Result<()> {
         while n > 0 {
             let avail = self.end - self.pos;
@@ -182,6 +191,7 @@ impl HprofReader {
         Ok(())
     }
 
+    /// Read exactly `n` bytes into a freshly allocated `Vec`.
     pub fn read_bytes(&mut self, n: usize) -> io::Result<Vec<u8>> {
         let mut v = vec![0u8; n];
         self.read_into(&mut v)?;
@@ -280,7 +290,6 @@ mod tests {
             buf: vec![0u8; BUF_CAP],
             pos: 0,
             end: 0,
-            eof: false,
         };
         assert_eq!(r.u1().unwrap(), 0xAB);
         assert_eq!(r.u2().unwrap(), 0x1234);
@@ -299,7 +308,6 @@ mod tests {
             buf: vec![0u8; BUF_CAP],
             pos: 0,
             end: 0,
-            eof: false,
         };
         assert_eq!(r.u1().unwrap(), 0);
         r.skip(9).unwrap(); // skip 1..=9

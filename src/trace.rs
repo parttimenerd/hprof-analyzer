@@ -6,10 +6,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 static TRACE: AtomicBool = AtomicBool::new(false);
 
+/// Enable or disable RSS tracing process-wide (set once from `--trace-rss`).
 pub fn set_enabled(on: bool) {
     TRACE.store(on, Ordering::Relaxed);
 }
 
+/// Whether RSS tracing is currently on (cheap atomic load on the hot path).
 pub fn enabled() -> bool {
     TRACE.load(Ordering::Relaxed)
 }

@@ -1,3 +1,11 @@
+//! Maps 64-bit HPROF object IDs to dense 0-based node indices.
+//!
+//! The mapping is a compact two-level structure (u32 offsets from a few 64-bit
+//! block bases) rather than a raw `Vec<u64>`, halving per-object cost at 500M+
+//! objects. It also (de)serializes to a compressed blob so the u64 address list
+//! is never materialized. This module is on the peak-RSS-critical path: its
+//! build/compress steps are among the binding memory peaks on large dumps.
+
 use std::io::{self, Read, Write};
 
 use crate::cvec::Codec;
@@ -83,6 +91,7 @@ fn search_offsets(slice: &[u32], d: u32) -> Option<usize> {
 
 #[allow(dead_code)]
 impl IdMap {
+    /// Empty map; push addresses then call `sort_and_dedup`.
     pub fn new() -> Self {
         Self {
             block_base: Vec::new(),
@@ -92,6 +101,7 @@ impl IdMap {
         }
     }
 
+    /// Empty map with `cap` staging slots preallocated for `push`.
     pub fn with_capacity(cap: usize) -> Self {
         Self {
             block_base: Vec::new(),
@@ -101,6 +111,7 @@ impl IdMap {
         }
     }
 
+    /// Stage one raw address; order-independent (sorted later by `sort_and_dedup`).
     pub fn push(&mut self, addr: u64) {
         self.staging.push(addr);
     }
@@ -187,10 +198,12 @@ impl IdMap {
         self.staging = Vec::new();
     }
 
+    /// Number of distinct addresses in the map.
     pub fn len(&self) -> usize {
         self.offsets.len()
     }
 
+    /// True when the map holds no addresses.
     pub fn is_empty(&self) -> bool {
         self.offsets.is_empty()
     }
@@ -212,6 +225,7 @@ impl IdMap {
         search_offsets(&self.offsets[lo..hi], d).map(|pos| lo + pos)
     }
 
+    /// Reconstruct the address stored at dense index `i` (inverse of `index_of`).
     pub fn addr_at(&self, i: usize) -> u64 {
         // Block whose start index is the greatest <= i.
         let b = self.block_start.partition_point(|&s| (s as usize) <= i) - 1;

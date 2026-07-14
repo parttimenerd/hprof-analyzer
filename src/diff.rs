@@ -75,17 +75,24 @@ impl Explanation {
 /// The 3-tier classification of one compared field.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Tier {
+    /// Bit-for-bit exact equality.
     Match,
+    /// Non-exact, but carries a whitelisted proof (see `Explanation`).
     Explainable(Explanation),
+    /// Any divergence without a whitelisted proof.
     Fail,
 }
 
 /// One compared field and its classification.
 #[derive(Debug, Clone)]
 pub struct FieldDiff {
+    /// Dotted field identifier (e.g. `histogram[java.lang.Object]`).
     pub field: String,
+    /// Our side's value rendered for display.
     pub ours: String,
+    /// MAT's side's value rendered for display.
     pub mat: String,
+    /// This field's 3-tier classification.
     pub tier: Tier,
 }
 
@@ -131,19 +138,23 @@ pub struct DiffResult {
 }
 
 impl DiffResult {
+    /// Count of fields classified MATCH.
     pub fn n_match(&self) -> usize {
         self.fields.iter().filter(|f| f.tier == Tier::Match).count()
     }
+    /// Count of fields classified EXPLAINABLE.
     pub fn n_explainable(&self) -> usize {
         self.fields
             .iter()
             .filter(|f| matches!(f.tier, Tier::Explainable(_)))
             .count()
     }
+    /// Count of fields classified FAIL (a non-zero count fails the diff).
     pub fn n_fail(&self) -> usize {
         self.fields.iter().filter(|f| f.tier == Tier::Fail).count()
     }
 
+    /// Render the diff as a human-readable text table with a summary line.
     pub fn render_text(&self) -> String {
         let mut out = String::new();
         out.push_str("=== hprof-analyzer --diff (MAT report vs our JSON) ===\n\n");
@@ -184,6 +195,7 @@ impl DiffResult {
         out
     }
 
+    /// Render the diff as machine-readable JSON (fields, skips, summary counts).
     pub fn render_json(&self) -> String {
         // Hand-rolled JSON to avoid deriving serde on the diff types; the shape
         // is small and stable so a sweep script can aggregate it.
@@ -241,6 +253,8 @@ pub struct MatHistRow {
     pub class_name: String,
     pub objects: u64,
     pub shallow: u64,
+    /// Retained bytes, when MAT's table included the column (it is empty on the
+    /// System Overview histogram, so `None` means "not exported", not zero).
     pub retained: Option<u64>,
 }
 
@@ -248,8 +262,11 @@ pub struct MatHistRow {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatSuspect {
     pub class_name: String,
+    /// "N instances of" count; `None` for the "The class X" phrasing, `Some(1)`
+    /// for the thread variant (a single thread object).
     pub instance_count: Option<u64>,
     pub retained: u64,
+    /// Retained % as MAT printed it (2-decimal display value, not exact).
     pub pct: f64,
 }
 
@@ -257,6 +274,7 @@ pub struct MatSuspect {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatComponent {
     pub name: String,
+    /// Whole-number percentage MAT printed for the component.
     pub pct: u32,
 }
 
@@ -288,6 +306,9 @@ pub struct MatPackageRow {
     pub segment: String,
     pub dotted_path: String,
     pub retained: u64,
+    /// MAT's "# Top Dominators" for this node — the count of top-level
+    /// dominator objects under the package. Load-bearing in `package_gap_proof`:
+    /// a divergent java.lang node must show MAT rooting strictly more than us.
     pub top_dominators: u64,
 }
 
