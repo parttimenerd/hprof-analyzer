@@ -236,8 +236,30 @@ export function DepthHistogramChart({ data }: { data: DepthBucket[] }) {
     bars = head.map((b) => ({ label: String(b.depth), value: b.objects }));
     bars.push({ label: `≥${tailStart}`, value: tailSum });
   }
-  return <VBar data={bars} fmt={fmtCount} barColor={4} />;
+  // Summary: smallest depth holding a cumulative 50% of objects, plus the
+  // deepest bucket. Derived here from the counts (not carried in the model).
+  const total = data.reduce((s, b) => s + b.objects, 0);
+  let running = 0;
+  let median = data[data.length - 1].depth;
+  for (const b of data) {
+    running += b.objects;
+    if (running * 2 >= total) {
+      median = b.depth;
+      break;
+    }
+  }
+  const maxDepth = data[data.length - 1].depth;
+  return (
+    <>
+      <VBar data={bars} fmt={fmtCount} barColor={4} />
+      <p className="subtitle" style={{ marginTop: "0.4rem" }}>
+        Half of all live objects sit within {median} hop{median === 1 ? "" : "s"} of a GC root; the deepest chain is{" "}
+        {maxDepth} hop{maxDepth === 1 ? "" : "s"}.
+      </p>
+    </>
+  );
 }
+
 
 export function GcRootsChart({ data }: { data: GcRootTypeRow[] }) {
   if (data.length < 2) return null;
