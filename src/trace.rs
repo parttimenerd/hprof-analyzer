@@ -60,8 +60,10 @@ pub fn probe(label: &str) {
 }
 
 // glibc malloc_trim: return free memory from the top of the heap to the OS.
-// Declared directly (no libc crate). glibc-only; absent on macOS/BSD libc.
-#[cfg(target_os = "linux")]
+// Declared directly (no libc crate). glibc-only: absent on macOS/BSD libc AND
+// on musl (static-musl builds link against musl, which has no malloc_trim), so
+// the guard is target_env = "gnu", not just target_os = "linux".
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
 unsafe extern "C" {
     fn malloc_trim(pad: usize) -> i32;
 }
@@ -71,9 +73,9 @@ unsafe extern "C" {
 /// (glibc otherwise retains freed pages, pushing the high-water mark ~3-4 GB
 /// above the genuinely-live set). Safe: malloc_trim only releases already-free
 /// memory. Gated to run always (cheap: one syscall-ish call per stage).
-/// Non-Linux (macOS dev builds) has no glibc malloc_trim, so this is a no-op there.
+/// No-op where glibc malloc_trim is unavailable (macOS dev builds, musl).
 pub fn trim() {
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
     unsafe {
         malloc_trim(0);
     }
