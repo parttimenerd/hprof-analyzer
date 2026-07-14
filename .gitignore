@@ -5,3 +5,10 @@
 scripts/*.local.sh
 bigdump-rss.*
 *.timev
+
+# Heap-dump fixtures larger than GitHub's 100MB file limit: kept locally for the
+# full parity suite, stripped from history and never committed. Tests skip these
+# cases automatically when the dump is absent.
+tests/fixtures/dump_0_fj-kmeans.hprof
+tests/fixtures/dump_6_dec-tree.hprof
+tests/fixtures/dump_8_log-regression.hprof
