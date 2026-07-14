@@ -41,6 +41,18 @@ fn deflate_decompress(blob: &[u8], cap: usize) -> io::Result<Vec<u8>> {
     Ok(out)
 }
 
+/// Deflate raw bytes at max level (Deflate9). Public thin wrapper so other
+/// modules (e.g. `RootPathCtx`) can hold arbitrary byte blobs compressed with
+/// the same codec used for the cold per-object arrays.
+pub fn deflate_bytes(raw: &[u8]) -> io::Result<Vec<u8>> {
+    deflate_compress(raw)
+}
+
+/// Inflate a `deflate_bytes` blob back to raw bytes; `cap` pre-sizes the output.
+pub fn inflate_bytes(blob: &[u8], cap: usize) -> io::Result<Vec<u8>> {
+    deflate_decompress(blob, cap)
+}
+
 /// A `Vec<u32>` held compressed across the peak window, restorable losslessly.
 ///
 /// With `Codec::None` this keeps the live `Vec<u32>` unchanged (no free); with

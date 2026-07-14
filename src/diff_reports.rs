@@ -386,6 +386,8 @@ mod tests {
             dominated_by_class: vec![],
             keywords: vec![],
             root_type_label: String::new(),
+            root_path: None,
+            dominator_tree: None,
         }
     }
 
@@ -441,6 +443,7 @@ mod tests {
                 },
             },
             threads: crate::report::ThreadOverview { threads: vec![] },
+            alloc_sites: None,
         }
     }
 
