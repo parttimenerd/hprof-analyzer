@@ -573,8 +573,9 @@ function SystemOverviewSection({ report }: { report: Report }) {
         <>
           <h3>Dominator-Depth Distribution</h3>
           <p className="subtitle">
-            How many hops each object sits below a GC root. A tall left side means shallow retention; a long tail means
-            deep, chained structures.
+            How far each live object sits below a GC root, counted in dominator hops. Most objects clustering at shallow
+            depths means memory is held close to the roots; a long tail means deep, chained structures (often a sign of
+            nested collections or linked leaks).
           </p>
           <DepthHistogramChart data={o.dominator_depth_histogram} />
         </>

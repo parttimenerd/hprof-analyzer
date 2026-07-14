@@ -186,6 +186,75 @@ fn fmt_count(n: u64) -> String {
     result.chars().rev().collect()
 }
 
+/// Plain-language explainer shown under every "Dominator-Depth Distribution"
+/// heading. Depth = how many dominator hops an object sits below a GC root, so a
+/// tall shallow side (low depths) means most memory is retained close to the
+/// roots, while a long tail means deep, chained structures.
+const DEPTH_DIST_CAPTION: &str = "_How far each live object sits below a GC \
+root, counted in dominator hops. Most objects clustering at shallow depths \
+means memory is held close to the roots; a long tail means deep, chained \
+structures (often a sign of nested collections or linked leaks)._\n\n";
+
+/// Derived per-bucket depth stats (percent + running cumulative percent) plus a
+/// one-line human summary, all computed from the raw `objects` counts. Kept out
+/// of the JSON model on purpose: it is fully derivable, so emitting it would
+/// bloat the report without adding information. Each row is
+/// `(depth, objects, pct_of_total, cumulative_pct)`; percents are 0.0–100.0.
+struct DepthStats {
+    rows: Vec<(u32, u64, f64, f64)>,
+    /// The smallest depth at which the cumulative object share reaches 50%.
+    median_depth: u32,
+    /// The deepest bucket present (longest dominator chain).
+    max_depth: u32,
+}
+
+/// Compute [`DepthStats`] from the histogram buckets. Returns `None` when there
+/// are no objects at all (nothing meaningful to summarise).
+fn depth_stats(hist: &[DepthBucket]) -> Option<DepthStats> {
+    let total: u64 = hist.iter().map(|b| b.objects).sum();
+    if total == 0 {
+        return None;
+    }
+    let total_f = total as f64;
+    let mut rows = Vec::with_capacity(hist.len());
+    let mut running: u64 = 0;
+    let mut median_depth = hist.last().map(|b| b.depth).unwrap_or(0);
+    let mut median_found = false;
+    for b in hist {
+        running += b.objects;
+        let pct = b.objects as f64 / total_f * 100.0;
+        let cum = running as f64 / total_f * 100.0;
+        if !median_found && running * 2 >= total {
+            median_depth = b.depth;
+            median_found = true;
+        }
+        rows.push((b.depth, b.objects, pct, cum));
+    }
+    let max_depth = hist.last().map(|b| b.depth).unwrap_or(0);
+    Some(DepthStats {
+        rows,
+        median_depth,
+        max_depth,
+    })
+}
+
+/// One-line summary sentence for the depth distribution, e.g. "Half of all live
+/// objects sit within 2 hops of a GC root; the deepest chain is 28 hops."
+fn depth_summary_line(s: &DepthStats) -> String {
+    format!(
+        "_Half of all live objects sit within {} hop{} of a GC root; the deepest chain is {} hop{}._\n\n",
+        s.median_depth,
+        if s.median_depth == 1 { "" } else { "s" },
+        s.max_depth,
+        if s.max_depth == 1 { "" } else { "s" },
+    )
+}
+
+/// Format a percentage to one decimal place with a trailing `%`, e.g. `12.3%`.
+fn fmt_pct(p: f64) -> String {
+    format!("{p:.1}%")
+}
+
 /// Convert a JVM internal class descriptor to a display name: `/` -> `.`, and
 /// array descriptors (`[I`, `[Ljava/lang/String;`) into `int[]` / `java.lang.String[]`.
 pub fn pretty_class_name(raw: &str) -> String {
@@ -2492,17 +2561,24 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
     }
 
     // Dominator-Depth Distribution (B2): objects per idom-hop below a GC root.
-    if !o.dominator_depth_histogram.is_empty() {
+    if let Some(stats) = depth_stats(&o.dominator_depth_histogram) {
         const DEPTH_CAP: usize = 50;
         out.push_str("### Dominator-Depth Distribution\n\n");
-        out.push_str(
-            "_Objects per hop-count below a GC root; a tall shallow side means shallow retention._\n\n",
-        );
-        let total = o.dominator_depth_histogram.len();
+        out.push_str(DEPTH_DIST_CAPTION);
+        out.push_str(&depth_summary_line(&stats));
+        let total = stats.rows.len();
         let shown = total.min(DEPTH_CAP);
-        let mut t = Table::new(&["Depth", "Objects"], &[Align::Right, Align::Right]);
-        for b in o.dominator_depth_histogram.iter().take(shown) {
-            t.row([b.depth.to_string(), fmt_count(b.objects)]);
+        let mut t = Table::new(
+            &["Depth", "Objects", "% Objects", "Cumulative %"],
+            &[Align::Right, Align::Right, Align::Right, Align::Right],
+        );
+        for &(depth, objects, pct, cum) in stats.rows.iter().take(shown) {
+            t.row([
+                depth.to_string(),
+                fmt_count(objects),
+                fmt_pct(pct),
+                fmt_pct(cum),
+            ]);
         }
         t.render(out);
         if total > shown {
@@ -3041,26 +3117,13 @@ fn render_system_overview_graphs(o: &SystemOverview, out: &mut String) {
 
     // Dominator-Depth Distribution — a sparkline over the per-depth object
     // counts, PLUS the full per-depth table (data parity with plain md).
-    if !o.dominator_depth_histogram.is_empty() {
+    if let Some(stats) = depth_stats(&o.dominator_depth_histogram) {
         out.push_str("### Dominator-Depth Distribution\n\n");
-        out.push_str(
-            "_Objects per hop-count below a GC root; a tall left side means shallow retention._\n\n",
-        );
-        let counts: Vec<u64> = o
-            .dominator_depth_histogram
-            .iter()
-            .map(|b| b.objects)
-            .collect();
-        let first = o
-            .dominator_depth_histogram
-            .first()
-            .map(|b| b.depth)
-            .unwrap_or(0);
-        let last = o
-            .dominator_depth_histogram
-            .last()
-            .map(|b| b.depth)
-            .unwrap_or(0);
+        out.push_str(DEPTH_DIST_CAPTION);
+        out.push_str(&depth_summary_line(&stats));
+        let counts: Vec<u64> = stats.rows.iter().map(|&(_, o, _, _)| o).collect();
+        let first = stats.rows.first().map(|&(d, ..)| d).unwrap_or(0);
+        let last = stats.rows.last().map(|&(d, ..)| d).unwrap_or(0);
         out.push_str(&format!(
             "`{}`  (depth {}–{})\n\n",
             sparkline(&counts),
@@ -3069,17 +3132,25 @@ fn render_system_overview_graphs(o: &SystemOverview, out: &mut String) {
         ));
         const DEPTH_CAP: usize = 50;
         let dmax = counts.iter().copied().max().unwrap_or(0);
-        let total = o.dominator_depth_histogram.len();
+        let total = stats.rows.len();
         let shown = total.min(DEPTH_CAP);
         let mut t = Table::new(
-            &["Depth", "Objects", ""],
-            &[Align::Right, Align::Right, Align::Left],
+            &["Depth", "Objects", "% Objects", "Cumulative %", ""],
+            &[
+                Align::Right,
+                Align::Right,
+                Align::Right,
+                Align::Right,
+                Align::Left,
+            ],
         );
-        for b in o.dominator_depth_histogram.iter().take(shown) {
+        for &(depth, objects, pct, cum) in stats.rows.iter().take(shown) {
             t.row([
-                b.depth.to_string(),
-                fmt_count(b.objects),
-                bar(b.objects, dmax, GRAPH_BAR_WIDTH),
+                depth.to_string(),
+                fmt_count(objects),
+                fmt_pct(pct),
+                fmt_pct(cum),
+                bar(objects, dmax, GRAPH_BAR_WIDTH),
             ]);
         }
         t.render(out);
