@@ -217,3 +217,81 @@ fn json_golden_snapshot_flags() {
          > tests/fixtures/dump_4_philosophers_report_flags.json"
     );
 }
+
+/// gzip round-trip: `analyze --format json <out>.json.gz` writes a gzip stream,
+/// and `render <out>.json.gz` reads it back transparently. The re-rendered JSON
+/// must equal a plain-JSON render of the same report (modulo the per-run
+/// `generated`/`file_path` fields), proving emit and render agree over the
+/// compressed form.
+#[test]
+fn json_gzip_roundtrip() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
+    let hprof = format!("{dir}/dump_4_philosophers.hprof");
+
+    // Skip if the LFS fixture is absent or an unsmudged pointer.
+    match std::fs::metadata(&hprof) {
+        Ok(m) if m.len() >= 1024 => {}
+        _ => return,
+    }
+
+    let bin = env!("CARGO_BIN_EXE_hprof-analyzer");
+    let tmp = std::env::temp_dir().join(format!("hprof_gz_roundtrip_{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let gz_path = tmp.join("report.json.gz");
+
+    // Emit gzip-compressed JSON to a .json.gz path.
+    let status = std::process::Command::new(bin)
+        .arg("analyze")
+        .arg(&hprof)
+        .arg("--format")
+        .arg("json")
+        .arg(&gz_path)
+        .status()
+        .expect("failed to run analyzer");
+    assert!(status.success(), "analyze to .json.gz exited non-zero");
+
+    // The file must be a real gzip stream (magic bytes 0x1f 0x8b).
+    let raw = std::fs::read(&gz_path).unwrap();
+    assert!(
+        raw.starts_with(&[0x1f, 0x8b]),
+        "output .json.gz is not gzip-compressed (magic {:x?})",
+        &raw[..raw.len().min(2)]
+    );
+
+    // Render the .json.gz back to JSON (transparent decompress).
+    let out = std::process::Command::new(bin)
+        .arg("render")
+        .arg(&gz_path)
+        .arg("--format")
+        .arg("json")
+        .output()
+        .expect("failed to run render");
+    assert!(
+        out.status.success(),
+        "render .json.gz stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let mut got: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("render output was not valid JSON");
+
+    // Compare against a plain JSON analyze of the same dump.
+    let plain = std::process::Command::new(bin)
+        .arg("analyze")
+        .arg(&hprof)
+        .arg("--format")
+        .arg("json")
+        .output()
+        .expect("failed to run analyzer (plain)");
+    assert!(plain.status.success());
+    let mut want: serde_json::Value =
+        serde_json::from_slice(&plain.stdout).expect("plain output was not valid JSON");
+
+    normalize_nondeterministic(&mut got);
+    normalize_nondeterministic(&mut want);
+
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert_eq!(
+        got, want,
+        "rendered .json.gz did not match a plain JSON render of the same dump"
+    );
+}

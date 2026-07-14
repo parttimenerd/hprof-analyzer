@@ -387,14 +387,28 @@ fn log(verbose: bool, phase: &str, elapsed: f64) {
 }
 
 /// Re-render a previously saved canonical Report JSON to the given format.
+/// The input may be gzip-compressed (`.json.gz`): decompression is transparent,
+/// detected by the gzip magic bytes so it works for files and stdin alike.
 fn render_report(path: &str, format: OutputFormat) -> io::Result<String> {
     use std::io::Read;
-    let json = if path == "-" {
-        let mut buf = String::new();
-        io::stdin().read_to_string(&mut buf)?;
+    let raw = if path == "-" {
+        let mut buf = Vec::new();
+        io::stdin().read_to_end(&mut buf)?;
         buf
     } else {
-        std::fs::read_to_string(path)?
+        std::fs::read(path)?
+    };
+    // gzip magic (0x1f 0x8b): decompress transparently, matching how the
+    // analyzer already reads `.hprof.gz` dumps.
+    let json = if raw.starts_with(&[0x1f, 0x8b]) {
+        let mut d = flate2::read::GzDecoder::new(&raw[..]);
+        let mut s = String::new();
+        d.read_to_string(&mut s)?;
+        s
+    } else {
+        String::from_utf8(raw).map_err(|e| {
+            io::Error::new(io::ErrorKind::InvalidData, format!("input not UTF-8: {e}"))
+        })?
     };
     let report: report::Report = serde_json::from_str(&json).map_err(|e| {
         io::Error::new(
@@ -632,7 +646,18 @@ fn run(
 
     match output {
         Some(path) => {
-            std::fs::write(path, &out_text).map_err(|e| io::Error::new(e.kind(), e))?;
+            // An output path ending in `.gz` is written gzip-compressed (e.g.
+            // `report.json.gz`); `render` reads it back transparently. Useful
+            // for the JSON canonical form, whose repetitive text compresses well.
+            if path.ends_with(".gz") {
+                use std::io::Write;
+                let f = std::fs::File::create(path).map_err(|e| io::Error::new(e.kind(), e))?;
+                let mut enc = flate2::write::GzEncoder::new(f, flate2::Compression::best());
+                enc.write_all(out_text.as_bytes())?;
+                enc.finish()?;
+            } else {
+                std::fs::write(path, &out_text).map_err(|e| io::Error::new(e.kind(), e))?;
+            }
         }
         None => print!("{}", out_text),
     }

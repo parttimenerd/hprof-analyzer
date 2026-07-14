@@ -135,6 +135,15 @@ without re-parsing the dump:
 hprof-analyzer render report.json -f md-graphs
 ```
 
+**Compressed JSON.** Write the canonical report gzip-compressed by giving the output path a
+`.gz` suffix (the JSON is repetitive and typically shrinks ~20×). `render` reads a `.gz`
+report back transparently — it sniffs the gzip magic bytes, so it also works from stdin:
+
+```sh
+hprof-analyzer analyze heap.hprof -f json report.json.gz   # gzip-compressed JSON
+hprof-analyzer render report.json.gz -f md-graphs          # read it back, no manual gunzip
+```
+
 ## Sample reports
 
 Generated from the public
