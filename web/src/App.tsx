@@ -1,5 +1,5 @@
 import React from "react";
-import type { ClassRow, HistRow, ObjRow, PackageNode, Report, Suspect, ThreadInfo } from "./types";
+import type { AllocSites, ClassRow, DomTreeNode, HistRow, ObjRow, PackageNode, Report, RootPathStep, Suspect, ThreadInfo, ThreadLocalObj } from "./types";
 import { fmtCount, fmtExactBytes, formatBytes, formatEpochMs, pctOf, shortLoader } from "./format";
 import {
   CompositionStackedBar,
@@ -62,7 +62,7 @@ function ThemeToggle() {
 // A sticky in-page table of contents so long reports (hundreds of threads,
 // thousands of histogram rows) stay navigable — MAT's report has an equivalent
 // left-hand section index.
-function Nav() {
+function Nav({ report }: { report: Report }) {
   const items: [string, string][] = [
     ["triage", "OOM Triage"],
     ["overview", "System Overview"],
@@ -70,6 +70,8 @@ function Nav() {
     ["top", "Top Consumers"],
     ["threads", "Threads"],
   ];
+  // Opt-in (`--alloc-sites`): show the entry only when the field is present.
+  if (report.alloc_sites) items.push(["alloc-sites", "Allocation Sites"]);
 
   const [active, setActive] = React.useState<string>("");
 
@@ -731,6 +733,75 @@ function DominatedByClass({ rows }: { rows: HistRow[] }) {
   );
 }
 
+// Opt-in (`--root-paths`): the literal inbound reference chain from a suspect
+// (first) to a GC root (last), as a numbered list. The final step is annotated
+// with the GC-root type when known. Mirrors report.rs::render_root_path.
+function RootPathList({ steps }: { steps: RootPathStep[] }) {
+  if (steps.length === 0) return null;
+  const last = steps.length - 1;
+  return (
+    <details>
+      <summary>Reference chain to GC root ({steps.length} step{steps.length === 1 ? "" : "s"})</summary>
+      <ol className="accum-path">
+        {steps.map((p, i) => (
+          <li key={i}>
+            <code>{p.display_class}</code> <span className="pill">obj #{p.obj_index_1based}</span>
+            <span className="path-ret">retains {formatBytes(p.retained)}</span>
+            {i === last && p.root_type_label && (
+              <> — <strong>GC root: {p.root_type_label}</strong></>
+            )}
+          </li>
+        ))}
+      </ol>
+    </details>
+  );
+}
+
+// Opt-in (`--dominator-tree`): one node of the recursive dominator subtree, as a
+// collapsible <details>/<summary> tree (modeled on PackageTreeRow). Children are
+// rendered nested; leaves are non-collapsible. Mirrors report.rs::render_dom_tree.
+function DomSubtreeNode({ node, depth }: { node: DomTreeNode; depth: number }) {
+  const hasChildren = node.children.length > 0;
+  const label = (
+    <>
+      <code>{node.display_class}</code> <span className="pill">obj #{node.obj_index_1based}</span>
+      <span className="path-ret">
+        shallow {formatBytes(node.shallow)} · retained {formatBytes(node.retained)}
+      </span>
+    </>
+  );
+  if (!hasChildren) {
+    return (
+      <li style={{ paddingLeft: `${depth * 1.1}rem` }}>
+        <span className="tree-leaf">•</span> {label}
+      </li>
+    );
+  }
+  return (
+    <li>
+      <details open={depth < 1}>
+        <summary style={{ paddingLeft: `${depth * 1.1}rem` }}>{label}</summary>
+        <ul className="dom-subtree">
+          {node.children.map((c, i) => (
+            <DomSubtreeNode key={i} node={c} depth={depth + 1} />
+          ))}
+        </ul>
+      </details>
+    </li>
+  );
+}
+
+function DomSubtree({ node }: { node: DomTreeNode }) {
+  return (
+    <details>
+      <summary>Dominator subtree</summary>
+      <ul className="dom-subtree">
+        <DomSubtreeNode node={node} depth={0} />
+      </ul>
+    </details>
+  );
+}
+
 function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: number }) {
   const share = pctOf(s.retained, total);
   return (
@@ -807,6 +878,8 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
           </table>
         </details>
       )}
+      {s.root_path && <RootPathList steps={s.root_path} />}
+      {s.dominator_tree && <DomSubtree node={s.dominator_tree} />}
     </div>
   );
 }
@@ -983,6 +1056,39 @@ function TopConsumersSection({ report }: { report: Report }) {
 // One collapsible block per thread; frames rendered verbatim in a monospace
 // <pre>. A filter box keeps large thread sets (hundreds) navigable. Preserves
 // the upstream (thread_serial-sorted) order for determinism.
+// Opt-in (`--thread-locals`): a small table of a thread's GC-thread-local root
+// objects. Renders nothing for an empty list. Mirrors report.rs::render_thread_locals.
+function ThreadLocalsTable({ objs }: { objs: ThreadLocalObj[] }) {
+  if (objs.length === 0) return null;
+  return (
+    <details className="thread-locals-detail">
+      <summary>Local root objects ({fmtCount(objs.length)})</summary>
+      <table>
+        <thead>
+          <tr>
+            <th>Object</th>
+            <th>Class</th>
+            <th className="num">Shallow</th>
+            <th className="num">Retained</th>
+          </tr>
+        </thead>
+        <tbody>
+          {objs.map((o, i) => (
+            <tr key={i}>
+              <td className="num">#{o.obj_index_1based}</td>
+              <td>
+                <code>{o.display_class}</code>
+              </td>
+              <td className="num">{formatBytes(o.shallow)}</td>
+              <td className="num">{formatBytes(o.retained)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </details>
+  );
+}
+
 function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
   const cls = t.class_name ?? "<unresolved>";
   const name = t.name?.trim();
@@ -1014,6 +1120,7 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
           </>
         ) : null}
       </summary>
+      {t.local_objects && <ThreadLocalsTable objs={t.local_objects} />}
       <pre className="stack">{t.frames.join("\n")}</pre>
     </details>
   );
@@ -1090,6 +1197,52 @@ function ThreadsSection({ report }: { report: Report }) {
   );
 }
 
+// ── Allocation Sites ──────────────────────────────────────────────────────────
+// Opt-in (`--alloc-sites`): aggregated allocation sites. Honest note when the
+// dump carried no allocation stack-trace info. Mirrors report.rs::render_alloc_sites.
+function AllocSitesSection({ data }: { data: AllocSites }) {
+  return (
+    <section id="alloc-sites">
+      <h2>Allocation Sites</h2>
+      <p className="subtitle">Objects grouped by the stack trace that allocated them.</p>
+      {!data.traces_present ? (
+        <p className="subtitle" style={{ color: "var(--muted)" }}>
+          Allocation tracking was off in this dump (stack_trace_serial = 0); no allocation sites available.
+        </p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>Stack</th>
+              <th className="num">Objects</th>
+              <th className="num">Shallow</th>
+              <th className="num">Retained</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.sites.map((s, i) => (
+              <tr key={i}>
+                <td>
+                  {s.frames.length > 0 ? (
+                    <code>{s.frames[0]}</code>
+                  ) : (
+                    <span className="hint">serial {s.stack_serial}</span>
+                  )}
+                </td>
+                <td className="num">{fmtCount(s.object_count)}</td>
+                <td className="num">{formatBytes(s.shallow_total)}</td>
+                <td className="num" title={fmtExactBytes(s.retained_total)}>
+                  {formatBytes(s.retained_total)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
 export default function App({ report }: { report: Report }) {
   return (
     <div className="app">
@@ -1100,13 +1253,14 @@ export default function App({ report }: { report: Report }) {
       <div className="theme-toggle-wrap">
         <ThemeToggle />
       </div>
-      <Nav />
+      <Nav report={report} />
       <OomTriage report={report} />
       <KpiStrip report={report} />
       <SystemOverviewSection report={report} />
       <LeakSuspectsSection report={report} />
       <TopConsumersSection report={report} />
       <ThreadsSection report={report} />
+      {report.alloc_sites && <AllocSitesSection data={report.alloc_sites} />}
       <BackToTop />
     </div>
   );

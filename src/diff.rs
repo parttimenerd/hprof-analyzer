@@ -1760,6 +1760,7 @@ mod tests {
                 },
             },
             threads: crate::report::ThreadOverview { threads: vec![] },
+            alloc_sites: None,
         }
     }
 
@@ -2156,6 +2157,8 @@ mod tests {
             dominated_by_class: vec![],
             keywords: vec![],
             root_type_label: String::new(),
+            root_path: None,
+            dominator_tree: None,
         }];
         let mut mat = MatReport::default();
         mat.suspects = vec![MatSuspect {
@@ -2621,6 +2624,8 @@ mod tests {
             dominated_by_class: vec![],
             keywords: vec![],
             root_type_label: String::new(),
+            root_path: None,
+            dominator_tree: None,
         };
         // ours: java.lang.Class retained 1,996,000 -> pct 16.38%; MAT roots
         // more -> 2,100,000 -> pct 17.23% (differs in the 2nd decimal, so the

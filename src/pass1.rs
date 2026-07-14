@@ -48,6 +48,12 @@ pub struct Pass1 {
     /// Distinct class-object addresses; class_ids[i] indexes this for kind 0/1/3.
     pub class_addr_table: Vec<u64>,
     pub shallow_sizes: Vec<u32>,
+    /// Per-object HPROF allocation stack-trace serial (u4), 1:1 with the other
+    /// per-object parallel arrays. Only populated when `--alloc-sites` capture
+    /// is on; otherwise left empty so the default path costs zero extra RSS.
+    /// CLASS_DUMP object slots carry 0 (no per-object alloc serial). HotSpot
+    /// writes 0 when allocation tracking is off.
+    pub alloc_stack_serial: Vec<u32>,
     /// Per-object kind: 0=instance, 1=obj_array, 2=prim_array, 3=class_obj
     pub kind: Vec<u8>,
     /// Per-object raw element count (arrays only; 0 otherwise)
@@ -81,7 +87,7 @@ pub struct Pass1 {
 }
 
 impl Pass1 {
-    pub fn run(path: &str) -> io::Result<Self> {
+    pub fn run(path: &str, capture_alloc_sites: bool) -> io::Result<Self> {
         let file_size = std::fs::metadata(path)?.len();
         let mut r = HprofReader::open(path)?;
         let id_size = r.id_size;
@@ -103,6 +109,9 @@ impl Pass1 {
         let mut tmp_shallow: Vec<u32> = Vec::new();
         let mut tmp_kind: Vec<u8> = Vec::new();
         let mut tmp_elem_count: Vec<u32> = Vec::new();
+        // Per-object alloc stack-trace serial. Only grown when capturing; stays
+        // empty (zero RSS) on the default path.
+        let mut tmp_alloc_serial: Vec<u32> = Vec::new();
         let mut gc_root_addrs: Vec<u64> = Vec::new();
         let mut gc_root_types: Vec<u8> = Vec::new();
         let mut thread_serial_to_obj_id: HashMap<u32, u64> = HashMap::new();
@@ -184,6 +193,8 @@ impl Pass1 {
                         &mut tmp_shallow,
                         &mut tmp_kind,
                         &mut tmp_elem_count,
+                        &mut tmp_alloc_serial,
+                        capture_alloc_sites,
                         &mut gc_root_addrs,
                         &mut gc_root_types,
                         &mut thread_serial_to_obj_id,
@@ -239,6 +250,11 @@ impl Pass1 {
             tmp_shallow.swap(x, y);
             tmp_kind.swap(x, y);
             tmp_elem_count.swap(x, y);
+            // Only permute the alloc-serial array when it was actually captured
+            // (1:1 with the others). Empty on the default path — leave untouched.
+            if !tmp_alloc_serial.is_empty() {
+                tmp_alloc_serial.swap(x, y);
+            }
         });
         drop(order);
         crate::trace::probe("pass1: after drop(order) (arrays sorted in place)");
@@ -260,6 +276,9 @@ impl Pass1 {
                     tmp_shallow[write] = tmp_shallow[rank];
                     tmp_kind[write] = tmp_kind[rank];
                     tmp_elem_count[write] = tmp_elem_count[rank];
+                    if !tmp_alloc_serial.is_empty() {
+                        tmp_alloc_serial[write] = tmp_alloc_serial[rank];
+                    }
                 }
                 write += 1;
                 prev_addr = a;
@@ -279,10 +298,15 @@ impl Pass1 {
         tmp_shallow.truncate(m);
         tmp_kind.truncate(m);
         tmp_elem_count.truncate(m);
+        // Only truncate the alloc-serial array when captured (else it is empty).
+        if !tmp_alloc_serial.is_empty() {
+            tmp_alloc_serial.truncate(m);
+        }
         let class_ids = tmp_class_ids;
         let shallow_sizes = tmp_shallow;
         let kind = tmp_kind;
         let elem_count = tmp_elem_count;
+        let alloc_stack_serial = tmp_alloc_serial;
 
         Ok(Pass1 {
             strings,
@@ -292,6 +316,7 @@ impl Pass1 {
             class_ids,
             class_addr_table,
             shallow_sizes,
+            alloc_stack_serial,
             kind,
             elem_count,
             gc_root_addrs,
@@ -327,6 +352,8 @@ fn scan_heap_segment(
     tmp_shallow: &mut Vec<u32>,
     tmp_kind: &mut Vec<u8>,
     tmp_elem_count: &mut Vec<u32>,
+    tmp_alloc_serial: &mut Vec<u32>,
+    capture_alloc_sites: bool,
     gc_root_addrs: &mut Vec<u64>,
     gc_root_types: &mut Vec<u8>,
     thread_serial_to_obj_id: &mut HashMap<u32, u64>,
@@ -403,10 +430,18 @@ fn scan_heap_segment(
                 tmp_shallow.push(0); // pass2 recalculates shallow size for class objects
                 tmp_kind.push(3);
                 tmp_elem_count.push(0);
+                // CLASS_DUMP has no per-object alloc serial; push 0 so the array
+                // stays 1:1 with the object ordering when capturing.
+                if capture_alloc_sites {
+                    tmp_alloc_serial.push(0);
+                }
             }
             heap::INSTANCE_DUMP => {
                 let addr = r.id()?;
-                r.skip(4)?; // stack_trace_serial(u4)
+                let stack_serial = r.u4()?; // stack_trace_serial(u4)
+                if capture_alloc_sites {
+                    tmp_alloc_serial.push(stack_serial);
+                }
                 let class_id = r.id()?;
                 let data_len = r.u4()? as u64;
                 r.skip(data_len)?;
@@ -431,7 +466,10 @@ fn scan_heap_segment(
             }
             heap::OBJ_ARRAY_DUMP => {
                 let addr = r.id()?;
-                r.skip(4)?; // stack_trace_serial
+                let stack_serial = r.u4()?; // stack_trace_serial
+                if capture_alloc_sites {
+                    tmp_alloc_serial.push(stack_serial);
+                }
                 let count = r.u4()? as u64;
                 let elem_class_id = r.id()?;
                 r.skip(count * ids)?;
@@ -454,7 +492,10 @@ fn scan_heap_segment(
             }
             heap::PRIM_ARRAY_DUMP => {
                 let addr = r.id()?;
-                r.skip(4)?; // stack_trace_serial
+                let stack_serial = r.u4()?; // stack_trace_serial
+                if capture_alloc_sites {
+                    tmp_alloc_serial.push(stack_serial);
+                }
                 let count = r.u4()? as u64;
                 let elem_type_code = r.u1()?;
                 let elem_size = HprofType::from_code(elem_type_code)
@@ -851,7 +892,7 @@ mod tests {
         if !std::path::Path::new(DUMP).exists() {
             return;
         }
-        let p = Pass1::run(DUMP).unwrap();
+        let p = Pass1::run(DUMP, false).unwrap();
         assert_eq!(p.instance_count, EXPECTED_INSTANCES, "instances");
         assert_eq!(p.obj_array_count, EXPECTED_OBJ_ARRAYS, "obj arrays");
         assert_eq!(p.prim_array_count, EXPECTED_PRIM_ARRAYS, "prim arrays");
@@ -869,7 +910,7 @@ mod tests {
         if !std::path::Path::new(DUMP).exists() {
             return;
         }
-        let p = Pass1::run(DUMP).unwrap();
+        let p = Pass1::run(DUMP, false).unwrap();
         // id_map now includes class objects (from CLASS_DUMP records) in addition to instances/arrays
         let expected =
             EXPECTED_INSTANCES + EXPECTED_OBJ_ARRAYS + EXPECTED_PRIM_ARRAYS + p.class_dump_count;
@@ -886,7 +927,7 @@ mod tests {
         if !std::path::Path::new(DUMP).exists() {
             return;
         }
-        let p = Pass1::run(DUMP).unwrap();
+        let p = Pass1::run(DUMP, false).unwrap();
         assert_eq!(p.id_map.len(), p.class_ids.len(), "class_ids len");
         assert_eq!(p.id_map.len(), p.shallow_sizes.len(), "shallow_sizes len");
     }
@@ -896,7 +937,7 @@ mod tests {
         if !std::path::Path::new(DUMP).exists() {
             return;
         }
-        let p = Pass1::run(DUMP).unwrap();
+        let p = Pass1::run(DUMP, false).unwrap();
         assert_eq!(p.id_size, 8);
         assert!(p.format.starts_with("JAVA PROFILE"));
         assert!(p.has_sticky_class_roots);
@@ -908,7 +949,7 @@ mod tests {
         if !std::path::Path::new(DUMP).exists() {
             return;
         }
-        let p = Pass1::run(DUMP).unwrap();
+        let p = Pass1::run(DUMP, false).unwrap();
         // Every class in class_map should have a name_id, and that name_id should be in strings
         let mut resolved = 0usize;
         for ci in p.class_map.values() {

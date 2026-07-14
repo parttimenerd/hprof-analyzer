@@ -131,6 +131,11 @@ th.sortable.active { color: var(--accent); }
 .bar-bg { display: inline-block; width: 60px; height: 8px; background: var(--border); border-radius: 3px; vertical-align: middle; margin-right: 0.5rem; overflow: hidden; }
 .bar-fill { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
 
+/* Dominator subtree (opt-in --dominator-tree): nested collapsible tree. */
+.dom-subtree { list-style: none; padding: 0; margin: 0.3rem 0 0.3rem 0.6rem; border-left: 1px solid var(--border); }
+.dom-subtree li { padding: 0.15rem 0; font-size: 0.85rem; }
+.dom-subtree summary { cursor: pointer; font-size: 0.85rem; }
+
 /* System properties: bounded key/value table in a scrollable container. */
 .sysprops { max-height: 22rem; overflow: auto; border: 1px solid var(--border); border-radius: 6px; margin: 0.35rem 0 0.75rem; }
 .sysprops table { margin: 0; }

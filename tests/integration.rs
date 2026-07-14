@@ -162,3 +162,58 @@ fn json_golden_snapshot() {
          --format json > tests/fixtures/dump_4_philosophers_report.json"
     );
 }
+
+/// Flag-ON golden snapshot: a fresh JSON run with all four opt-in heavy-analysis
+/// flags (`--root-paths --alloc-sites --thread-locals --dominator-tree`) must
+/// equal the committed flag-ON golden. This locks the additive fields
+/// (`root_path`, `alloc_sites`, `local_objects`, `dominator_tree`) — their
+/// presence, shape, and values. `dump_4_philosophers` has allocation tracking
+/// off, so this also pins the honest `traces_present:false`/empty-frames branch.
+#[test]
+fn json_golden_snapshot_flags() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
+    let hprof = format!("{dir}/dump_4_philosophers.hprof");
+    let golden_path = format!("{dir}/dump_4_philosophers_report_flags.json");
+
+    // Skip if the LFS fixture is absent or an unsmudged pointer (CI runs `git lfs pull`).
+    match std::fs::metadata(&hprof) {
+        Ok(m) if m.len() >= 1024 => {}
+        _ => return,
+    }
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_hprof-analyzer"))
+        .arg("analyze")
+        .arg(&hprof)
+        .arg("--format")
+        .arg("json")
+        .arg("--root-paths")
+        .arg("--alloc-sites")
+        .arg("--thread-locals")
+        .arg("--dominator-tree")
+        .output()
+        .expect("failed to run hprof-analyzer");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let mut got: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("analyzer stdout was not valid JSON");
+    let golden_text = std::fs::read_to_string(&golden_path)
+        .unwrap_or_else(|e| panic!("cannot read golden {golden_path}: {e}"));
+    let mut want: serde_json::Value =
+        serde_json::from_str(&golden_text).expect("golden fixture was not valid JSON");
+
+    normalize_nondeterministic(&mut got);
+    normalize_nondeterministic(&mut want);
+
+    assert_eq!(
+        got, want,
+        "flag-ON JSON report drifted from the golden snapshot at {golden_path}. If \
+         this change is intended, regenerate the golden with:\n  \
+         cargo run --release -- analyze tests/fixtures/dump_4_philosophers.hprof \
+         --format json --root-paths --alloc-sites --thread-locals --dominator-tree \
+         > tests/fixtures/dump_4_philosophers_report_flags.json"
+    );
+}

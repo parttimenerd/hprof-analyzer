@@ -33,6 +33,74 @@ enum OutputFormat {
     Html,
 }
 
+/// Opt-in heavy-analysis toggles and their per-analysis caps. All disabled by
+/// default; the cap defaults (30/50/20/5000/20) come from clap `default_value_t`
+/// on the CLI args, not from `Default` (which zeros the caps).
+#[derive(Clone, Copy, Default)]
+pub struct AnalyzeOptions {
+    pub root_paths: bool,
+    pub root_path_max_depth: usize, // default 30
+    pub alloc_sites: bool,
+    pub alloc_sites_top: usize, // default 50
+    pub thread_locals: bool,
+    pub thread_locals_per_thread: usize, // default 20
+    pub dominator_tree: bool,
+    pub dominator_tree_max_nodes: usize, // default 5000
+    pub dominator_tree_max_depth: usize, // default 20
+}
+
+/// Referrer-graph context preserved (compressed) only under `--root-paths`, so
+/// the leak-suspect builder can walk literal inbound edges to GC roots. Holds
+/// the inbound CSR (`inb_block_off`/`inb_data`) and the pre-order->node `vertex`
+/// map deflated; `restore_*` rebuild the live arrays just-in-time for the
+/// bounded per-suspect walk, which drops them immediately after.
+pub struct RootPathCtx {
+    inb_block_off: Vec<u8>, // deflate of the u64 LE bytes
+    inb_block_off_len: usize,
+    inb_data: Vec<u8>, // deflate of the raw bytes
+    vertex: crate::cvec::CompressedU32,
+}
+
+impl RootPathCtx {
+    /// Compress the three referrer-walk arrays for low-RSS hold across the rest
+    /// of the pipeline. Only ever called under `--root-paths`.
+    fn compress(inb_block_off: &[u64], inb_data: &[u8], vertex: &[u32]) -> std::io::Result<Self> {
+        let mut block_off_bytes = Vec::with_capacity(inb_block_off.len() * 8);
+        for &x in inb_block_off {
+            block_off_bytes.extend_from_slice(&x.to_le_bytes());
+        }
+        let block_off_blob = crate::cvec::deflate_bytes(&block_off_bytes)?;
+        let data_blob = crate::cvec::deflate_bytes(inb_data)?;
+        let vertex_c = crate::cvec::CompressedU32::compress(vertex, cvec::Codec::Deflate9)?;
+        Ok(Self {
+            inb_block_off: block_off_blob,
+            inb_block_off_len: inb_block_off.len(),
+            inb_data: data_blob,
+            vertex: vertex_c,
+        })
+    }
+
+    /// Rebuild the inbound CSR block-offset array (byte-identical to input).
+    pub fn restore_inb_block_off(&self) -> std::io::Result<Vec<u64>> {
+        let bytes = crate::cvec::inflate_bytes(&self.inb_block_off, self.inb_block_off_len * 8)?;
+        Ok(bytes
+            .chunks_exact(8)
+            .map(|c| u64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]))
+            .collect())
+    }
+
+    /// Rebuild the inbound CSR data blob (byte-identical to input).
+    pub fn restore_inb_data(&self) -> std::io::Result<Vec<u8>> {
+        // Deflate stores no length; inflate reads to EOF (cap only pre-sizes).
+        crate::cvec::inflate_bytes(&self.inb_data, self.inb_data.len())
+    }
+
+    /// Rebuild the pre-order->node `vertex` map (byte-identical to input).
+    pub fn restore_vertex(&self) -> std::io::Result<Vec<u32>> {
+        self.vertex.restore()
+    }
+}
+
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
@@ -60,6 +128,36 @@ enum Cmd {
         verbose: bool,
         #[arg(long)]
         trace_rss: bool,
+        /// Add a literal reference chain from each leak suspect to a GC root
+        /// (opt-in; may raise peak memory well above the default ceiling).
+        #[arg(long)]
+        root_paths: bool,
+        /// Max hops to walk when building a root path.
+        #[arg(long, default_value_t = 30)]
+        root_path_max_depth: usize,
+        /// Aggregate objects by allocation stack-trace serial (opt-in). Reports
+        /// nothing useful unless the JVM ran with allocation tracking enabled.
+        #[arg(long)]
+        alloc_sites: bool,
+        /// Keep only the top-N allocation sites by object count.
+        #[arg(long, default_value_t = 50)]
+        alloc_sites_top: usize,
+        /// List a bounded sample of each thread's local root objects (opt-in).
+        #[arg(long)]
+        thread_locals: bool,
+        /// Max local objects to list per thread.
+        #[arg(long, default_value_t = 20)]
+        thread_locals_per_thread: usize,
+        /// Emit the full multi-level dominator subtree per accumulation point
+        /// (opt-in; output can be large and may raise peak memory).
+        #[arg(long)]
+        dominator_tree: bool,
+        /// Cap total nodes in a dominator subtree (heaviest kept first).
+        #[arg(long, default_value_t = 5000)]
+        dominator_tree_max_nodes: usize,
+        /// Cap dominator-subtree depth.
+        #[arg(long, default_value_t = 20)]
+        dominator_tree_max_depth: usize,
     },
     /// Compare a MAT report against our canonical JSON (exit 2 on FAIL)
     Diff {
@@ -130,11 +228,31 @@ fn main() {
             leak_children_cap,
             verbose,
             trace_rss,
+            root_paths,
+            root_path_max_depth,
+            alloc_sites,
+            alloc_sites_top,
+            thread_locals,
+            thread_locals_per_thread,
+            dominator_tree,
+            dominator_tree_max_nodes,
+            dominator_tree_max_depth,
         } => {
             if trace_rss {
                 trace::set_enabled(true);
             }
             let cap = leak_children_cap.unwrap_or(report::DOMINATED_CAP);
+            let opts = AnalyzeOptions {
+                root_paths,
+                root_path_max_depth,
+                alloc_sites,
+                alloc_sites_top,
+                thread_locals,
+                thread_locals_per_thread,
+                dominator_tree,
+                dominator_tree_max_nodes,
+                dominator_tree_max_depth,
+            };
             if let Err(e) = run(
                 &input,
                 output.as_deref(),
@@ -142,6 +260,7 @@ fn main() {
                 verbose,
                 cvec::Codec::Deflate9,
                 cap,
+                opts,
             ) {
                 eprintln!("Error: {e}");
                 process::exit(1);
@@ -273,11 +392,12 @@ fn run(
     verbose: bool,
     compress: cvec::Codec,
     leak_children_cap: usize,
+    opts: AnalyzeOptions,
 ) -> io::Result<()> {
     let t_total = Instant::now();
 
     let t = Instant::now();
-    let p1 = pass1::Pass1::run(input)?;
+    let p1 = pass1::Pass1::run(input, opts.alloc_sites)?;
     log(verbose, "pass1", t.elapsed().as_secs_f64());
 
     // The entire analysis works in u32 pre-order / node-index space (dfn,
@@ -297,7 +417,8 @@ fn run(
     }
 
     let t = Instant::now();
-    let (mut g, mut inbound, shallow_c, class_idx_c) = pass2::Pass2::build(input, p1, compress)?;
+    let (mut g, mut inbound, shallow_c, class_idx_c) =
+        pass2::Pass2::build(input, p1, compress, &opts)?;
     log(
         verbose,
         &format!("pass2 n={}", g.n),
@@ -343,6 +464,13 @@ fn run(
     // vertex = invert(dfn) is a pure O(n) pass; the dominator reads it next.
     let count = rpo.parent_pre.len();
     rpo.vertex = rpo_dfs::rebuild_vertex(&rpo.dfn, count);
+    // Under --root-paths, clone the ~2GB vertex before rpo is moved into
+    // compute_dominators; default path never clones (zero RSS change).
+    let saved_vertex: Option<Vec<u32>> = if opts.root_paths {
+        Some(rpo.vertex.clone())
+    } else {
+        None
+    };
     crate::trace::probe("main: after rebuild_vertex (post-inbound, dfn live)");
     rpo.dfn = Vec::new();
     crate::trace::trim();
@@ -353,8 +481,24 @@ fn run(
     g.idom =
         dominator::compute_dominators(g.n, rpo, &g.gc_root_indices, &inb_block_off, &inb_data)?;
     log(verbose, "dominator", t.elapsed().as_secs_f64());
-    drop(inb_block_off);
-    drop(inb_data);
+    let root_ctx: Option<RootPathCtx> = if opts.root_paths {
+        let ctx = RootPathCtx::compress(
+            &inb_block_off,
+            &inb_data,
+            saved_vertex
+                .as_deref()
+                .expect("vertex saved under root_paths"),
+        )?;
+        drop(saved_vertex);
+        drop(inb_block_off);
+        drop(inb_data);
+        Some(ctx)
+    } else {
+        // Default path: byte-identical to today — free the CSR immediately.
+        drop(inb_block_off);
+        drop(inb_data);
+        None
+    };
     crate::trace::trim();
 
     // Build the dominator-children CSR ONCE and share it across compute_retained
@@ -400,7 +544,15 @@ fn run(
     // so both can be freed immediately after it returns. depth_counts is the
     // B2 dominator-depth histogram tallied during compute_retained's DFS (no
     // separate ~2GB per-object memo scan).
-    let report = report::build_model(&g, &dc_off, &dc_tgt, leak_children_cap, &depth_counts);
+    let report = report::build_model(
+        &g,
+        &dc_off,
+        &dc_tgt,
+        leak_children_cap,
+        &depth_counts,
+        &opts,
+        root_ctx,
+    );
     crate::trace::probe("report: after build_model");
     g.has_same_class_ancestor = crate::bitset::Bitset::default(); // consumed by build_model
     drop(dc_off);
@@ -446,7 +598,7 @@ fn run(
 }
 
 fn dump_pass1_json(path: &str) -> io::Result<()> {
-    let p = Pass1::run(path)?;
+    let p = Pass1::run(path, false)?;
 
     let mut class_hist: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
     for (i, &cidx) in p.class_ids.iter().enumerate() {

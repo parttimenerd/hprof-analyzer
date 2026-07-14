@@ -87,6 +87,12 @@ pub struct Graph {
     /// resolve to indices and are distinct). Bounded by #threads (hundreds), so
     /// it never touches the per-object RSS budget on multi-GB dumps.
     pub thread_local_counts: std::collections::HashMap<u32, u64>,
+    /// Bounded per-thread sample of GC-thread-local root object indices
+    /// (thread_serial -> Vec of local object indices, capped at
+    /// `opts.thread_locals_per_thread`). ONLY populated when the opt-in
+    /// `--thread-locals` flag is set; otherwise stays empty (zero memory on the
+    /// default path). Bounded by #threads * cap, so off the per-object budget.
+    pub thread_local_samples: std::collections::HashMap<u32, Vec<u32>>,
     /// Decoded JVM system properties (java.lang.System static `props`), as
     /// (key, value) pairs sorted by key. Captured by `resolve_system_properties`
     /// via a bounded multi-pass worklist over ONE Properties/Hashtable object.
@@ -116,6 +122,15 @@ pub struct Graph {
     pub idom: Vec<u32>,
     pub retained: Vec<u64>,
     pub has_same_class_ancestor: crate::bitset::Bitset,
+    /// Per-object HPROF allocation stack-trace serial, 1:1 with objects. Only
+    /// populated when `--alloc-sites` is set (moved out of `p1` during build);
+    /// empty otherwise. Consumed by the report's alloc-site aggregation and not
+    /// needed afterward.
+    pub alloc_stack_serial: Vec<u32>,
+    /// Distinct non-zero alloc stack-trace serials pre-resolved into their frame
+    /// lines, built during `build` while the STACK_FRAME/STACK_TRACE tables are
+    /// still alive. `Some` only when `--alloc-sites` is set; `None` otherwise.
+    pub alloc_frames_by_serial: Option<std::collections::HashMap<u32, Vec<String>>>,
 }
 
 /// Deferred inbound-CSR construction. Built by `Pass2::build` with everything
@@ -631,6 +646,60 @@ fn build_thread_stacks(p1: &Pass1) -> Vec<ThreadStack> {
     }
     out.sort_by_key(|t| t.thread_serial);
     out
+}
+
+/// Pre-resolve the DISTINCT non-zero alloc stack-trace serials appearing in
+/// `p1.alloc_stack_serial` into their rendered frame lines, using the same
+/// STACK_TRACE/STACK_FRAME + string/class machinery as `build_thread_stacks`.
+/// Called only when `--alloc-sites` is on, while those tables are still alive.
+/// Bounded by the number of distinct traces (hundreds), so it stays off the
+/// per-object RSS budget. A serial with no STACK_TRACE record maps to an empty
+/// frame Vec.
+fn resolve_alloc_frames(p1: &Pass1) -> std::collections::HashMap<u32, Vec<String>> {
+    let resolve = |id: u64| -> Option<&str> { p1.strings.get(&id).map(|s| s.as_str()) };
+    let class_name_of = |serial: u32| -> Option<&str> {
+        let addr = *p1.class_serial_to_addr.get(&serial)?;
+        let ci = p1.class_map.get(&addr)?;
+        p1.strings.get(&ci.name_id).map(|s| s.as_str())
+    };
+
+    // Collect the distinct non-zero serials first (bounded, dedup via HashSet).
+    let mut distinct: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    for &s in &p1.alloc_stack_serial {
+        if s != 0 {
+            distinct.insert(s);
+        }
+    }
+
+    let mut map: std::collections::HashMap<u32, Vec<String>> =
+        std::collections::HashMap::with_capacity(distinct.len());
+    for &serial in &distinct {
+        let frames = match p1.stack_traces.get(&serial) {
+            Some(frame_ids) => {
+                let mut frames = Vec::with_capacity(frame_ids.len());
+                for &fid in frame_ids {
+                    let Some(f) = p1.stack_frames.get(&fid) else {
+                        frames.push(format!("<unknown frame {fid:#x}>"));
+                        continue;
+                    };
+                    let class = class_name_of(f.class_serial).map(pretty_binary_name);
+                    let method = resolve(f.method_name_id);
+                    let source = resolve(f.source_file_id);
+                    frames.push(render_frame(
+                        class.as_deref(),
+                        method,
+                        source,
+                        f.class_serial,
+                        f.line_number,
+                    ));
+                }
+                frames
+            }
+            None => Vec::new(),
+        };
+        map.insert(serial, frames);
+    }
+    map
 }
 
 /// Compute the absolute byte offset of one named instance field within an
@@ -1653,6 +1722,7 @@ impl Pass2 {
         path: &str,
         mut p1: Pass1,
         compress: crate::cvec::Codec,
+        opts: &crate::AnalyzeOptions,
     ) -> io::Result<(
         Graph,
         InboundBuilder,
@@ -2059,6 +2129,18 @@ impl Pass2 {
         // thread trace, off the per-object RSS budget.
         let thread_stacks = build_thread_stacks(&p1);
 
+        // When --alloc-sites is on, pre-resolve every DISTINCT non-zero alloc
+        // stack-trace serial into its frame lines while the STACK_FRAME/
+        // STACK_TRACE + string/class tables are still alive (freed just below).
+        // Bounded by the number of distinct traces (hundreds), so it stays off
+        // the per-object RSS budget. Left None when the flag is off.
+        let alloc_frames_by_serial: Option<std::collections::HashMap<u32, Vec<String>>> =
+            if opts.alloc_sites {
+                Some(resolve_alloc_frames(&p1))
+            } else {
+                None
+            };
+
         // Decode each thread's java.lang.Thread.name via a bounded 3-pass
         // worklist, while class_map/strings/id_map are still alive (freed just
         // below). All captured sets are bounded by #threads, so this stays off
@@ -2091,6 +2173,11 @@ impl Pass2 {
         // by #threads only (bounded), so it stays off the per-object RSS budget.
         let mut thread_local_counts: std::collections::HashMap<u32, u64> =
             std::collections::HashMap::new();
+        // Bounded per-thread sample of local object indices. Only populated when
+        // the opt-in `--thread-locals` flag is set; empty otherwise (zero cost on
+        // the default path).
+        let mut thread_local_samples: std::collections::HashMap<u32, Vec<u32>> =
+            std::collections::HashMap::new();
         for &(thread_serial, local_addr) in &p1.thread_local_pairs {
             let thread_obj_addr = match p1.thread_serial_to_obj_id.get(&thread_serial) {
                 Some(&a) => a,
@@ -2107,6 +2194,12 @@ impl Pass2 {
             if thread_idx != local_idx {
                 synthetic_edges.push((thread_idx, local_idx));
                 *thread_local_counts.entry(thread_serial).or_insert(0) += 1;
+                if opts.thread_locals {
+                    let sample = thread_local_samples.entry(thread_serial).or_default();
+                    if sample.len() < opts.thread_locals_per_thread {
+                        sample.push(local_idx);
+                    }
+                }
             }
         }
         // Dedup synthetic edges (same thread may reference same local multiple times)
@@ -2235,6 +2328,7 @@ impl Pass2 {
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.to_string());
 
+        let alloc_stack_serial = std::mem::take(&mut p1.alloc_stack_serial);
         let graph = Graph {
             n,
             format: p1.format,
@@ -2254,6 +2348,7 @@ impl Pass2 {
             thread_stacks,
             thread_names,
             thread_local_counts,
+            thread_local_samples,
             system_properties,
             jvm_version,
             class_obj_class_idx,
@@ -2264,6 +2359,8 @@ impl Pass2 {
             idom: Vec::new(),
             retained: Vec::new(),
             has_same_class_ancestor: crate::bitset::Bitset::default(),
+            alloc_stack_serial,
+            alloc_frames_by_serial,
         };
 
         // Package the deferred inbound-CSR construction. Moves id_map,
@@ -2960,8 +3057,14 @@ mod tests {
         if !std::path::Path::new(DUMP).exists() {
             return;
         }
-        let p1 = Pass1::run(DUMP).unwrap();
-        let (g, inbound, _sc, _ci) = Pass2::build(DUMP, p1, crate::cvec::Codec::None).unwrap();
+        let p1 = Pass1::run(DUMP, false).unwrap();
+        let (g, inbound, _sc, _ci) = Pass2::build(
+            DUMP,
+            p1,
+            crate::cvec::Codec::None,
+            &crate::AnalyzeOptions::default(),
+        )
+        .unwrap();
         assert!(!g.fwd_targets.is_empty(), "no forward edges");
         assert_eq!(g.fwd_offsets.len(), g.n + 1);
         // Identity dfn (node -> pre-order) suffices. build() now returns
@@ -2992,8 +3095,14 @@ mod tests {
         if !std::path::Path::new(DUMP).exists() {
             return;
         }
-        let p1 = Pass1::run(DUMP).unwrap();
-        let (g, _inbound, _sc, _ci) = Pass2::build(DUMP, p1, crate::cvec::Codec::None).unwrap();
+        let p1 = Pass1::run(DUMP, false).unwrap();
+        let (g, _inbound, _sc, _ci) = Pass2::build(
+            DUMP,
+            p1,
+            crate::cvec::Codec::None,
+            &crate::AnalyzeOptions::default(),
+        )
+        .unwrap();
         let fwd_edge_count: usize = g
             .fwd_offsets
             .windows(2)
@@ -3017,7 +3126,7 @@ mod tests {
         if !std::path::Path::new(DUMP).exists() {
             return;
         }
-        let p1 = Pass1::run(DUMP).unwrap();
+        let p1 = Pass1::run(DUMP, false).unwrap();
         let class_addrs: std::collections::HashSet<u64> = p1.class_map.keys().cloned().collect();
         assert!(!class_addrs.is_empty(), "expected some class objects");
         let mut class_count = 0usize;

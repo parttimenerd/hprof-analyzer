@@ -88,6 +88,28 @@ hprof-analyzer analyze heap.hprof -f json report.json  # machine-readable JSON
 
 Gzip-compressed dumps (`.hprof.gz`) are read transparently.
 
+**Opt-in heavy analyses.** Four extra analyses are available behind flags. They are off by
+default: with no flags the report is byte-for-byte what it always was, and peak memory stays
+within the bound described under [Performance](#performance). Each flag adds a section to
+every format (Markdown, md-graphs, HTML, JSON):
+
+```sh
+hprof-analyzer analyze heap.hprof --root-paths       # literal reference chain from each suspect to a GC root
+hprof-analyzer analyze heap.hprof --alloc-sites      # aggregate objects by allocation stack-trace
+hprof-analyzer analyze heap.hprof --thread-locals    # list each thread's local root objects
+hprof-analyzer analyze heap.hprof --dominator-tree   # full multi-level dominator subtree per suspect
+```
+
+Each has a cap you can tune: `--root-path-max-depth` (default 30), `--alloc-sites-top`
+(default 50), `--thread-locals-per-thread` (default 20), and `--dominator-tree-max-nodes` /
+`--dominator-tree-max-depth` (defaults 5000 / 20).
+
+Two caveats. **Memory:** under `--root-paths` or `--dominator-tree` peak RSS *may exceed* the
+default ceiling and output *may* be uncapped per-object — that is a tradeoff you opt into.
+**Allocation tracking:** `--alloc-sites` only yields real stacks if the JVM recorded
+allocation stack traces (`stack_trace_serial`); most HotSpot dumps have this off, and the
+report says so honestly rather than inventing data.
+
 **Diff against a MAT export.** Compare a MAT System Overview HTML export against our
 canonical JSON; exits non-zero on a parity failure (useful as a test gate):
 

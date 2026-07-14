@@ -4,6 +4,16 @@
   "description": "Full report data model: only bounded aggregates, never a per-object Vec.",
   "type": "object",
   "properties": {
+    "alloc_sites": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AllocSites"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "generated": {
       "type": "string"
     },
@@ -34,6 +44,64 @@
     "threads"
   ],
   "$defs": {
+    "AllocSite": {
+      "description": "One allocation site: a distinct HPROF stack-trace serial, its resolved frame\nlines, and the aggregate footprint of the objects allocated there.",
+      "type": "object",
+      "properties": {
+        "frames": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "object_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "retained_total": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "shallow_total": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "stack_serial": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "stack_serial",
+        "frames",
+        "object_count",
+        "shallow_total",
+        "retained_total"
+      ]
+    },
+    "AllocSites": {
+      "description": "Aggregate allocation-site view. `traces_present` is `false` (with an empty\n`sites`) when the dump carries no allocation stack-trace info (HotSpot\nwrites serial 0 when allocation tracking is off) — reported honestly rather\nthan faked.",
+      "type": "object",
+      "properties": {
+        "sites": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AllocSite"
+          }
+        },
+        "traces_present": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "traces_present",
+        "sites"
+      ]
+    },
     "ClassRow": {
       "description": "One row of \"Biggest Classes\".",
       "type": "object",
@@ -76,6 +144,43 @@
       "required": [
         "depth",
         "objects"
+      ]
+    },
+    "DomTreeNode": {
+      "description": "One node of the FULL multi-level dominator subtree rooted at an accumulation\npoint (`--dominator-tree`). Children are the nodes immediately dominated by\nthis one, sorted retained-desc (tie: obj index asc), bounded by the\nconfigured max-nodes / max-depth caps. Present only under the opt-in flag.",
+      "type": "object",
+      "properties": {
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DomTreeNode"
+          }
+        },
+        "display_class": {
+          "type": "string"
+        },
+        "obj_index_1based": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "retained": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "shallow": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "obj_index_1based",
+        "display_class",
+        "shallow",
+        "retained",
+        "children"
       ]
     },
     "DominatedRow": {
@@ -482,6 +587,36 @@
         "num_objects_ge_1pct"
       ]
     },
+    "RootPathStep": {
+      "description": "One hop of the literal inbound reference chain from a suspect toward a GC\nroot (`--root-paths`). The final hop carries `root_type_label` when the node\nis itself a GC root.",
+      "type": "object",
+      "properties": {
+        "display_class": {
+          "type": "string"
+        },
+        "obj_index_1based": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "retained": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "root_type_label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "obj_index_1based",
+        "display_class",
+        "retained"
+      ]
+    },
     "Suspect": {
       "description": "One leak suspect (single large object or class group).",
       "type": "object",
@@ -535,6 +670,17 @@
           "format": "uint64",
           "minimum": 0
         },
+        "dominator_tree": {
+          "description": "FULL multi-level dominator subtree rooted at the accumulation point,\npresent only under `--dominator-tree`. `None` by default (skipped in JSON\nso parity/golden output is byte-identical) and `None` when the suspect has\nno accumulation point. Bounded by the configured max-nodes / max-depth.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DomTreeNode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "instance_count": {
           "type": "integer",
           "format": "uint64",
@@ -564,6 +710,16 @@
           "type": "integer",
           "format": "uint64",
           "minimum": 0
+        },
+        "root_path": {
+          "description": "Literal inbound reference chain from this single suspect to a GC root,\npresent only under `--root-paths`. `None` by default (skipped in JSON so\nparity/golden output is byte-identical). Only populated for singles.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/RootPathStep"
+          }
         },
         "root_type_label": {
           "description": "Human label of the GC-root TYPE holding this suspect (e.g. \"Thread\",\n\"Sticky Class\", \"JNI Global\"), when the suspect's top-level dominator is\nitself an identifiable single GC root. Empty when unknown: the suspect\nis not itself a root, is held by multiple/ambiguous roots, or the root\ntype is `ROOT_UNKNOWN`. Only populated for single suspects.",
@@ -773,6 +929,16 @@
             "type": "string"
           }
         },
+        "local_objects": {
+          "description": "Bounded sample of this thread's GC-thread-local root objects (retained\ndesc). Only populated when the opt-in `--thread-locals` flag is set;\n`None` otherwise (absent from JSON). Additive: not part of MAT parity.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ThreadLocalObj"
+          }
+        },
         "local_root_count": {
           "description": "Number of GC-thread-local roots this thread holds that resolve to a live\nobject (from the dominator graph's synthetic thread→local edges). A high\ncount flags a thread pinning many objects alive. Additive field: not part\nof MAT parity comparison. Bounded (per-thread), off the per-object budget.",
           "type": "integer",
@@ -797,6 +963,36 @@
         "thread_serial",
         "frames",
         "local_root_count"
+      ]
+    },
+    "ThreadLocalObj": {
+      "description": "One sampled GC-thread-local root object held by a thread: its 1-based object\nindex, class name, and footprint. Emitted only under `--thread-locals`.",
+      "type": "object",
+      "properties": {
+        "display_class": {
+          "type": "string"
+        },
+        "obj_index_1based": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "retained": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "shallow": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "obj_index_1based",
+        "display_class",
+        "shallow",
+        "retained"
       ]
     },
     "ThreadOverview": {
