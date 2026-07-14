@@ -61,23 +61,25 @@ fn strip_views_line(s: &str) -> String {
 #[test]
 fn parity_all_fixtures() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
-    // If a dev checked out without the (large) fixtures, skip rather than fail.
-    let first = dir.join(FIXTURES[0].0);
-    if !first.exists()
-        || std::fs::metadata(&first)
-            .map(|m| m.len() < 1024)
-            .unwrap_or(true)
-    {
-        eprintln!(
-            "skipping parity: fixtures missing or unsmudged LFS pointers at {}",
-            dir.display()
-        );
-        return;
-    }
 
     let mut failures = Vec::new();
+    let mut ran = 0usize;
     for (hprof, baseline_md, baseline_graphs) in FIXTURES {
         let hprof_path = dir.join(hprof);
+        // Some dumps are too large to keep in git history and are only present
+        // on machines that have them locally. Skip a case when its dump is
+        // absent (or an unsmudged LFS pointer) rather than failing.
+        let present = std::fs::metadata(&hprof_path)
+            .map(|m| m.len() >= 1024)
+            .unwrap_or(false);
+        if !present {
+            eprintln!(
+                "skipping parity for {hprof}: dump missing at {}",
+                dir.display()
+            );
+            continue;
+        }
+        ran += 1;
         // Default `md` format (no --format flag).
         let out = Command::new(env!("CARGO_BIN_EXE_hprof-analyzer"))
             .arg("analyze")
@@ -114,4 +116,5 @@ fn parity_all_fixtures() {
         }
     }
     assert!(failures.is_empty(), "parity mismatch for: {failures:?}");
+    eprintln!("parity: ran {ran} of {} fixtures", FIXTURES.len());
 }
