@@ -1,6 +1,11 @@
-/// Iterative DFS that computes Reverse Post-Order (RPO) for a graph with a
-/// virtual root node at index `n`.  The virtual root's children are given by
-/// `roots`; all other edges come from the forward CSR (`fwd_off`, `fwd_tgt`).
+//! Iterative depth-first traversal of the object graph that assigns each
+//! reachable node a DFS pre-order number and records its DFS-tree parent.
+//! Feeds the SEMI-NCA dominator stage; the `vertex` permutation is rebuilt
+//! lazily to keep it off the RSS peak.
+
+/// Result of [`rpo_dfs`]: DFS pre-order numbering and tree structure for a
+/// graph with a virtual root at index `n` whose children are `roots`; all
+/// other edges come from the forward CSR (`fwd_off`, `fwd_tgt`).
 ///
 /// No recursion is used — real heaps have millions of nodes.
 ///
@@ -42,6 +47,9 @@ pub fn rebuild_vertex(dfn: &[u32], count: usize) -> Vec<u32> {
     vertex
 }
 
+/// Traverse the graph from the virtual root, assigning DFS pre-order numbers
+/// (`dfn`) and DFS-tree parents (`parent_pre`). `vertex` is returned empty;
+/// see [`RpoResult::vertex`] and [`rebuild_vertex`].
 pub fn rpo_dfs(n: usize, roots: &[u32], fwd_off: &[u32], fwd_tgt: &[u32]) -> RpoResult {
     let vroot = n as u32;
 

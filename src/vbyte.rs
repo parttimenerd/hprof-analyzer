@@ -1,3 +1,8 @@
+//! Variable-byte (LEB128-style) integer coding: 7 payload bits per byte with
+//! the MSB as a continuation flag. Used to delta-compress the sorted
+//! inbound-referrer CSR, cutting its footprint ~4x. Output is byte-exact and
+//! must not change.
+
 /// Variable-length integer encoding (7 bits per byte, MSB = continuation flag).
 /// Used for delta-encoding sorted inbound edge lists to reduce memory ~4x.
 pub fn encode(mut v: u32, out: &mut Vec<u8>) {
@@ -12,6 +17,7 @@ pub fn encode(mut v: u32, out: &mut Vec<u8>) {
     }
 }
 
+/// Decode one vbyte u32 from the front of `buf`, returning (value, bytes_read).
 pub fn decode_one(buf: &[u8]) -> (u32, usize) {
     let mut val = 0u32;
     let mut shift = 0u32;
@@ -25,6 +31,7 @@ pub fn decode_one(buf: &[u8]) -> (u32, usize) {
     (val, buf.len())
 }
 
+/// Decode a full vbyte u32 stream into a vector of values.
 #[allow(dead_code)]
 pub fn decode_all(buf: &[u8]) -> Vec<u32> {
     let mut result = Vec::new();

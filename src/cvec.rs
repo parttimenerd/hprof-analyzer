@@ -18,6 +18,7 @@ pub enum Codec {
 }
 
 impl Codec {
+    /// Parse a codec name (`none`, `deflate9`/`deflate`); test-only A/B helper.
     #[cfg(test)]
     pub fn parse(s: &str) -> Option<Codec> {
         match s {

@@ -87,9 +87,11 @@ pub struct SweepReport {
 }
 
 impl SweepReport {
+    /// Total FAIL count summed across every dump in the sweep.
     pub fn total_fail(&self) -> usize {
         self.dumps.iter().map(|d| d.n_fail).sum()
     }
+    /// Number of dumps that were a real (non-skipped) MAT-vs-ours comparison.
     pub fn real_comparisons(&self) -> usize {
         self.dumps.iter().filter(|d| d.is_real_comparison()).count()
     }

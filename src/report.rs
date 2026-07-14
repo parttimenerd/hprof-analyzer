@@ -1,10 +1,15 @@
 //! Report generation: system overview, leak suspects, top consumers.
 //!
-//! Rendering goes through an explicit data model: `build_model` reads the
-//! `Graph` (including the large per-object arrays) and computes only bounded
-//! aggregates into a `Report`; `render_markdown` formats a `Report` into the
-//! Markdown output. This keeps peak RSS bounded (the model never stores a
-//! per-object Vec) and makes ordering deterministic.
+//! Rendering goes through an explicit, canonical data model: `build_model` reads
+//! the `Graph` (including the large per-object arrays) and computes only bounded
+//! aggregates into a `Report` (schema_version 4, see `SCHEMA_VERSION`). The
+//! renderers then format that same model: plain Markdown (`render_markdown`),
+//! Markdown enriched with in-text graphics (`render_markdown_graphs`), and JSON
+//! (via serde on `Report`). Keeping every renderer a pure function of the
+//! model bounds peak RSS (the model never stores a per-object Vec) and makes
+//! ordering deterministic. The default (no-flags) Markdown/JSON output is
+//! byte-exact- and golden-tested, so opt-in fields are `Option<T>` +
+//! `skip_serializing_if` and absent by default to preserve parity.
 
 use crate::pass2::Graph;
 
@@ -153,6 +158,8 @@ fn format_epoch_nanos(secs: u64, nanos: u32) -> String {
     )
 }
 
+/// Human-readable byte size (`B`/`KB`/`MB`/`GB`, binary 1024 base). Used only
+/// for display; the JSON model always carries raw `u64` byte counts.
 pub fn format_bytes(n: u64) -> String {
     if n < 1024 {
         return format!("{} B", n);
@@ -166,6 +173,7 @@ pub fn format_bytes(n: u64) -> String {
     format!("{:.2} GB", n as f64 / (1024.0 * 1024.0 * 1024.0))
 }
 
+/// Group an integer into comma-separated thousands (e.g. `1234567` -> `1,234,567`).
 fn fmt_count(n: u64) -> String {
     let s = n.to_string();
     let mut result = String::new();
@@ -178,6 +186,8 @@ fn fmt_count(n: u64) -> String {
     result.chars().rev().collect()
 }
 
+/// Convert a JVM internal class descriptor to a display name: `/` -> `.`, and
+/// array descriptors (`[I`, `[Ljava/lang/String;`) into `int[]` / `java.lang.String[]`.
 pub fn pretty_class_name(raw: &str) -> String {
     if raw.is_empty() {
         return raw.to_string();
@@ -880,6 +890,11 @@ fn build_thread_overview(g: &Graph, opts: &crate::AnalyzeOptions) -> ThreadOverv
     ThreadOverview { threads }
 }
 
+/// Aggregate all "System Overview" scalars, the class histogram, and the
+/// derived breakdowns (GC-roots-by-type, heap composition, dominator-depth
+/// histogram, retention concentration, loader rollup, duplicate classes) in a
+/// bounded set of passes over the graph. Injects MAT's synthetic
+/// `<system class loader>` object where MAT counts it, so totals match bit-exactly.
 fn build_system_overview(g: &Graph, depth_counts: &[u64]) -> SystemOverview {
     let n = g.n;
     let undef = u32::MAX;
@@ -1283,6 +1298,12 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64]) -> SystemOverview {
 /// an empty `children`). No cycle guard is needed (a dominator tree is a tree),
 /// but both caps are enforced. Uses an explicit stack — never recurses — so it
 /// is safe on deep trees.
+/// Build the FULL multi-level dominator subtree rooted at `root` (`--dominator-tree`),
+/// using an explicit-stack iterative post-order walk over the dominator-children
+/// CSR (no recursion, so a deep tree cannot blow the native stack). Children are
+/// sorted retained-desc (tie: obj idx asc) and the walk is bounded by both a
+/// `max_nodes` cap (total emitted nodes) and a `max_depth` cap so the subtree
+/// stays small regardless of heap shape.
 fn build_dom_subtree(
     root: usize,
     dc_offsets: &[u32],
@@ -1370,6 +1391,13 @@ fn build_dom_subtree(
     }
 }
 
+/// Build the "Leak Suspects" model: single top-level dominators and class
+/// groups whose retained heap exceeds `THRESHOLD_PCT` of the total, each with
+/// its accumulation-point descent and bounded dominated-children detail. When
+/// `root_ctx` is present (`--root-paths`) it additionally walks literal inbound
+/// referrer edges to a GC root; when `dominator_tree` is set (`--dominator-tree`)
+/// it attaches the full dominator subtree. Both are `None` on the default path,
+/// keeping JSON/Markdown output byte-identical.
 fn build_leak_suspects(
     g: &Graph,
     dc_offsets: &[u32],
@@ -1826,6 +1854,9 @@ fn build_leak_suspects(
     }
 }
 
+/// Build the "Top Consumers" model: biggest objects (top-level dominators by
+/// retained), biggest classes, and the pruned package tree. Bounded reductions
+/// over the graph; no per-object Vec is retained.
 fn build_top_consumers(g: &Graph) -> TopConsumers {
     let n = g.n;
     let vroot = n as u32;
@@ -2303,6 +2334,8 @@ fn render_oom_triage(r: &Report, out: &mut String) {
     out.push('\n');
 }
 
+/// Render the "System Overview" section (plain Markdown): scalars, GC-roots and
+/// heap-composition breakdowns, and the full class histogram. Byte-exact-tested.
 fn render_system_overview(o: &SystemOverview, out: &mut String) {
     use crate::md::{Align, Table};
     out.push_str("## System Overview\n\n");
@@ -2571,6 +2604,10 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
     }
 }
 
+/// Render the "Leak Suspects" section (plain Markdown): per-suspect footprint,
+/// accumulation-path, and dominated-children detail. The `--root-paths` and
+/// `--dominator-tree` sub-sections are emitted only when their opt-in fields are
+/// present, so default output stays byte-identical. Byte-exact-tested.
 fn render_leak_suspects(l: &LeakSuspects, out: &mut String) {
     out.push_str("## Leak Suspects\n\n");
 
@@ -2715,6 +2752,8 @@ fn render_leak_suspects(l: &LeakSuspects, out: &mut String) {
     }
 }
 
+/// Render the "Top Consumers" section (plain Markdown): biggest objects,
+/// biggest classes, and the pruned package tree. Byte-exact-tested.
 fn render_top_consumers(t: &TopConsumers, total_shallow: u64, out: &mut String) {
     use crate::md::{Align, Table};
     out.push_str("## Top Consumers\n\n");

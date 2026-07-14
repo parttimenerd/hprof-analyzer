@@ -1,3 +1,15 @@
+//! Pass 2: the reference-graph core (RSS- and parity-critical).
+//!
+//! Reads the heap a second time to build the object reference graph: a forward
+//! CSR (`fwd_offsets`/`fwd_targets`) and a deferred, blocked+delta-encoded
+//! inbound-referrer CSR (`InboundBuilder`). It resolves real GC roots and adds
+//! synthetic system-class roots to mirror MAT's `addSystemClassRootsIfMissing`,
+//! builds thread stacks/frames and bounded thread-local / alloc-site samples,
+//! then hands off to the dominator/retained stages. This is the most
+//! memory-sensitive file in the crate (hard peak-RSS budget) and the most
+//! parity-sensitive (byte-exact, MAT-frozen counts) — most edits here should be
+//! comments, not behavior changes.
+
 use std::{
     collections::HashMap,
     io::{self, ErrorKind},
@@ -33,10 +45,19 @@ pub struct ThreadStack {
     pub frames: Vec<String>,
 }
 
+/// The complete reference graph plus all report-facing metadata produced by
+/// pass 2. Its large per-object arrays (`shallow`, `class_idx`, the forward CSR)
+/// are the dominant RSS consumers, so several are compressed/freed early during
+/// `build` — see the field docs. The dominator/retained stages fill `idom`,
+/// `retained`, and `has_same_class_ancestor` afterward.
 pub struct Graph {
+    /// Object count = number of live nodes in the graph (indexes 0..n).
     pub n: usize,
+    /// Dump format string from the HPROF header (e.g. "JAVA PROFILE 1.0.2").
     pub format: String,
+    /// Total size of the dump file in bytes.
     pub file_size: u64,
+    /// File basename the dump was opened from (see `file_path` for the full path).
     pub source_name: String,
     /// Full path/name the dump was opened from (Pass1::run's `path`). Distinct
     /// from `source_name`, which is only the file basename.
@@ -48,6 +69,9 @@ pub struct Graph {
     pub ref_size: u8,
     /// Header base timestamp (millis since Unix epoch), 0 if absent/unknown.
     pub header_timestamp_ms: u64,
+    /// Object indices that are GC roots, sorted ascending. Includes both real
+    /// HPROF roots and synthetic system-class roots (`synthetic_root_count` of
+    /// the latter).
     pub gc_root_indices: Vec<u32>,
     /// Per-root HPROF sub-tag, aligned 1:1 with `gc_root_indices` (same order).
     /// A representative type when an index has multiple root records (the
@@ -56,8 +80,15 @@ pub struct Graph {
     /// the default why-alive line, so it is carried unconditionally.
     #[allow(dead_code)]
     pub gc_root_types: Vec<u8>,
+    /// Per-object MAT shallow size in bytes, 1:1 with object indices 0..n.
+    /// Compressed + emptied early in `build` (its dense ~2GB Vec is restored
+    /// from the blob before the retained stage) to keep it off the RSS peak.
     pub shallow: Vec<u32>,
+    /// Per-object class-histogram row index, 1:1 with objects. Keyed by
+    /// CLASS-OBJECT identity (loader-distinct), so `class_names[class_idx[i]]`
+    /// is object i's class name. Also compressed/emptied early like `shallow`.
     pub class_idx: Vec<u32>,
+    /// Class-histogram row names, indexed by the values in `class_idx`.
     pub class_names: Vec<String>,
     /// Class-loader object address per histogram row, aligned 1:1 with
     /// `class_names`. 0 = boot/bootstrap loader. Synthetic rows (primitive
@@ -104,9 +135,15 @@ pub struct Graph {
     /// `java.version`, else None. Populated even when the full property table
     /// could not be decoded (both keys are extracted from `system_properties`).
     pub jvm_version: Option<String>,
+    /// Object index of a class object -> the histogram row of the class it
+    /// represents. Sparse: absent for non-class objects.
     pub class_obj_class_idx: HashMap<u32, u32>, // class-obj index -> class-histogram row (sparse; absent = not a class obj)
-    // Forward CSR
+    // Forward CSR: node i's out-edges are `fwd_targets[fwd_offsets[i]..fwd_offsets[i+1]]`.
+    /// CSR row pointers, len n+1: `fwd_offsets[i]..fwd_offsets[i+1]` slices node
+    /// i's out-edge targets in `fwd_targets`. Built via prefix-sum of out-degrees.
     pub fwd_offsets: Vec<u32>,
+    /// Flat concatenation of every node's out-edge target indices, sliced by
+    /// `fwd_offsets`. The largest single array pass2 builds (~6GB on big dumps).
     pub fwd_targets: Vec<u32>,
     /// Number of GC roots added synthetically (system class roots, etc.)
     /// Reported GC roots = gc_root_indices.len() - synthetic_root_count
@@ -118,9 +155,14 @@ pub struct Graph {
     /// `total_objects`/`total_shallow` match MAT bit-exactly. `None` = the
     /// class is absent, inject nothing.
     pub system_classloader_shallow: Option<u32>,
-    // Filled by later passes
+    // Filled by later passes (dominator / retained-size stages).
+    /// Immediate-dominator index per object (dominator tree). Empty until the
+    /// dominator stage fills it.
     pub idom: Vec<u32>,
+    /// Retained size in bytes per object. Empty until the retained-size stage.
     pub retained: Vec<u64>,
+    /// Marks objects that have an ancestor of the same class in the dominator
+    /// tree (used to suppress double-counting in class-level retained roll-ups).
     pub has_same_class_ancestor: crate::bitset::Bitset,
     /// Per-object HPROF allocation stack-trace serial, 1:1 with objects. Only
     /// populated when `--alloc-sites` is set (moved out of `p1` during build);
@@ -358,6 +400,7 @@ impl InboundBuilder {
 
 // ── Size helpers ───────────────────────────────────────────────────────────
 
+/// Round `n` up to the next multiple of `align`.
 fn align_up(n: usize, align: usize) -> usize {
     n.div_ceil(align) * align
 }
@@ -371,6 +414,7 @@ fn own_prim_bytes(ci: &ClassInfo, _ref_size: usize) -> usize {
         .sum()
 }
 
+/// Count of Object-typed (reference) fields declared by a class itself.
 fn own_obj_count(ci: &ClassInfo) -> usize {
     ci.fields
         .iter()
@@ -406,6 +450,7 @@ fn calculate_size_recursive(
     result
 }
 
+/// MAT instance shallow size: recursive body size aligned up to 8 bytes.
 fn instance_shallow_size(
     class_addr: u64,
     class_map: &HashMap<u64, ClassInfo>,
@@ -417,15 +462,19 @@ fn instance_shallow_size(
     align_up(inner, 8) as u32
 }
 
+/// MAT shallow size of an Object[] array: header + length + `num_elem` refs.
 fn obj_array_shallow(num_elem: u64, ptr_size: usize, ref_size: usize) -> u32 {
     align_up(ptr_size + ref_size + 4 + num_elem as usize * ref_size, 8) as u32
 }
 
+/// MAT shallow size of a primitive array: aligned header + `num_elem` elements.
 fn prim_array_shallow(num_elem: u64, elem_size: usize, ptr_size: usize, ref_size: usize) -> u32 {
     let header = align_up(ptr_size + ref_size + 4, ref_size);
     align_up(header + num_elem as usize * elem_size, 8) as u32
 }
 
+/// MAT shallow size of a class object (java.lang.Class): its static-field bytes
+/// only. See the inline note for the no-floor parity detail.
 fn class_obj_shallow(ci: &ClassInfo, _ptr_size: usize, ref_size: usize) -> u32 {
     // MAT parity: class-object shallow = alignUp(staticObjFields*refSize + staticPrimBytes, 8).
     // No pointer+ref floor (matClassSize in hprof-redact); classes with no statics get 0.
@@ -531,6 +580,7 @@ fn detect_ref_size(id_size: u8, array_addr_counts: &[(u64, u64)]) -> u8 {
 
 // ── Class name building ────────────────────────────────────────────────────
 
+/// JVM class descriptor for a primitive-array element type code (e.g. 10 -> `[I`).
 fn prim_array_class_name(elem_type_code: u8) -> &'static str {
     match elem_type_code {
         4 => "[Z",  // boolean
@@ -1200,9 +1250,11 @@ fn resolve_system_properties(path: &str, p1: &Pass1) -> io::Result<SystemProps> 
     Ok((pairs, jvm_version))
 }
 
-/// whose object address is in `wanted`. Mirrors the heap-record scan skeleton
-/// in `scan_heap_2a`/`fill_heap_2b` (streaming-only reader, per-segment
-/// sub-record walk). Only the wanted objects' blobs are materialized; everything
+/// Full-file sequential scan invoking `f(addr, class_id, &blob)` for each
+/// INSTANCE_DUMP whose object address is in `wanted`. Mirrors the heap-record
+/// scan skeleton in `scan_heap_2a`/`fill_heap_2b` (streaming-only reader,
+/// per-segment sub-record walk). Only the wanted objects' blobs are
+/// materialized; everything
 /// else is skipped, so RSS stays bounded by `wanted`.
 fn scan_instance_blobs<F: FnMut(u64, u64, &[u8])>(
     path: &str,
@@ -1682,6 +1734,8 @@ fn skip_class_dump(r: &mut HprofReader, id_size: u8) -> io::Result<u64> {
     }
     Ok(consumed)
 }
+
+/// Render one stack frame as `class.method (source:line)`, applying HPROF's
 /// line-number conventions (>0 = line; -1 unknown; -2 compiled; -3 native).
 /// Missing strings fall back to placeholders so a frame is always printable.
 fn render_frame(
@@ -1715,9 +1769,17 @@ fn pretty_binary_name(name: &str) -> String {
 
 // ── Pass2 main logic ───────────────────────────────────────────────────────
 
+/// Zero-sized entry point for the second parse pass; see [`Pass2::build`].
 pub struct Pass2;
 
 impl Pass2 {
+    /// Run pass 2 over the dump at `path`, consuming pass1's tables. Detects
+    /// ref size, computes MAT shallow sizes, interns the class histogram, scans
+    /// the heap twice (degree-count then forward-CSR fill), resolves real +
+    /// synthetic GC roots, and captures thread/alloc metadata. Returns the
+    /// `Graph`, a deferred `InboundBuilder` (the inbound CSR is built later to
+    /// keep its ~5.5GB off the rpo peak), and the early-compressed `shallow` /
+    /// `class_idx` blobs. `compress` selects the codec for those cold arrays.
     pub fn build(
         path: &str,
         mut p1: Pass1,
@@ -1878,7 +1940,7 @@ impl Pass2 {
         }
 
         // Free pass1 per-object arrays that are dead after Phase 0b/0c: they
-        // are only read to derive  and  above. Releasing
+        // are only read to derive `shallow` and `class_idx` above. Releasing
         // them here (~173 MB for a 11 M-object heap) shrinks peak RSS before
         // the edge-scan allocations (inb_flat / fwd_targets).
         //
@@ -2045,7 +2107,7 @@ impl Pass2 {
 
         // Ensure no zero shallow sizes for instances/arrays (fall back to minimum).
         // Class objects (kind==3) are exempt: MAT reports 0 shallow for a class
-        // whose static-field bytes sum to 0 (e.g. array classes like ), so we
+        // whose static-field bytes sum to 0 (e.g. array classes like `[I`), so we
         // must not bump those to the object minimum.
         let min_obj = align_up(ptr_size + ref_size, 8) as u32;
         for (i, s) in shallow.iter_mut().enumerate() {
@@ -2384,6 +2446,10 @@ impl Pass2 {
         Ok((graph, inbound, shallow_c, class_idx_c))
     }
 
+    /// First-scan heap walker that COUNTS out/in degrees per node and finalizes
+    /// each object's authoritative shallow size (arrays/instances use their real
+    /// element count / class blob). Produces the degree arrays that Phase 3
+    /// prefix-sums into the CSR offsets; fills no edge targets itself.
     #[allow(clippy::too_many_arguments)]
     fn scan_heap_2a(
         r: &mut HprofReader,
@@ -2574,7 +2640,11 @@ impl Pass2 {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// Second-scan heap walker that FILLS the CSR edge arrays (degrees already
+    /// counted by `scan_heap_2a`). `do_fwd`/`do_inb` select which side is being
+    /// filled: the forward pass advances `fwd_offsets` in place as write
+    /// cursors; the inbound pass writes into `inb_flat` at `in_degree` cursors,
+    /// tagging excluded (weak/finalizer) referrers with the high bit.
     #[allow(clippy::too_many_arguments)]
     fn fill_heap_2b(
         r: &mut HprofReader,
@@ -2756,6 +2826,9 @@ impl Pass2 {
         Ok(())
     }
 
+    /// FILL-phase counterpart to `count_class_dump_edges`: emits a class
+    /// object's structural edges (→ superclass, → loader, → each Object-typed
+    /// static field) into the forward and/or inbound CSR. Returns bytes consumed.
     #[allow(clippy::too_many_arguments)]
     fn fill_class_dump_edges(
         r: &mut HprofReader,
@@ -2858,6 +2931,9 @@ impl Pass2 {
 // We need a version that also counts degrees for CLASS_DUMP static fields.
 
 impl Pass2 {
+    /// COUNT-phase counterpart to `fill_class_dump_edges`: counts a class
+    /// object's structural edges (→ superclass, → loader, → each Object-typed
+    /// static field) into the degree arrays. Returns bytes consumed.
     fn count_class_dump_edges(
         r: &mut HprofReader,
         id_size: u8,
@@ -2964,6 +3040,8 @@ pub fn decode_java_string(bytes: &[u8], coder: u8) -> String {
     }
 }
 
+/// Read a big-endian object reference of `ref_size` (4 or 8) bytes from the
+/// front of `data`; returns 0 if the slice is too short.
 fn read_ref(data: &[u8], ref_size: usize) -> u64 {
     if ref_size == 4 {
         if data.len() >= 4 {
@@ -2980,6 +3058,8 @@ fn read_ref(data: &[u8], ref_size: usize) -> u64 {
     }
 }
 
+/// Read a big-endian HPROF id of `id_size` (4 or 8) bytes from the front of
+/// `chunk`; returns 0 if the slice is too short.
 fn read_id(chunk: &[u8], id_size: u8) -> u64 {
     if id_size == 4 {
         if chunk.len() >= 4 {
@@ -2996,10 +3076,13 @@ fn read_id(chunk: &[u8], id_size: u8) -> u64 {
     }
 }
 
+/// Read one id-sized reference directly from the streaming reader.
 fn read_id_from_reader(r: &mut HprofReader, _id_size: u8) -> io::Result<u64> {
     r.id()
 }
 
+/// On-disk byte width of a static/constant-pool value of the given HPROF type
+/// code (Object = `id_size`; unknown code = 0).
 fn value_size(type_code: u8, id_size: u8) -> u64 {
     match HprofType::from_code(type_code) {
         Some(HprofType::Object) => id_size as u64,

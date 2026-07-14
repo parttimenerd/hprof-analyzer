@@ -1,3 +1,12 @@
+//! Pass 1: the first scan over the heap dump. It reads STRING/LOAD_CLASS/
+//! STACK_FRAME/STACK_TRACE records and every heap-dump sub-record, building the
+//! `id_map` and one entry per object across a set of parallel per-object arrays
+//! (`class_ids`, `shallow_sizes`, `kind`, `elem_count`, and optionally
+//! `alloc_stack_serial`) that stay 1:1 aligned by index. It also records
+//! class/thread metadata and GC roots. This pass is on the peak-RSS-critical
+//! path and its output feeds byte-exact parity tests, so it is written to keep
+//! large scratch arrays from coexisting.
+
 use std::{
     collections::HashMap,
     io::{self, ErrorKind},
@@ -21,6 +30,7 @@ pub struct StackFrame {
     pub line_number: i32,
 }
 
+/// Per-class metadata gathered from LOAD_CLASS + CLASS_DUMP records.
 #[derive(Debug, Default)]
 pub struct ClassInfo {
     pub name_id: u64,
@@ -35,10 +45,16 @@ pub struct ClassInfo {
     pub static_prim_bytes: u32,
 }
 
+/// Result of pass 1: interned strings, class/thread metadata, the `id_map`, and
+/// the parallel per-object arrays (all 1:1 by index) that pass 2 consumes.
 pub struct Pass1 {
+    /// String id → decoded UTF-8 (lossy) from STRING_IN_UTF8 records.
     pub strings: HashMap<u64, String>,
+    /// Class-object address → per-class metadata.
     pub class_map: HashMap<u64, ClassInfo>,
+    /// LOAD_CLASS serial → class-object address.
     pub class_serial_to_addr: HashMap<u32, u64>,
+    /// Two-level map from object address to dense object index (unique, sorted).
     pub id_map: IdMap,
     /// Per-object class reference, u32-interned to halve this array (was
     /// Vec<u64> class addresses @514M = 4.1GB). For kind 0/1/3 it is an index
@@ -47,6 +63,7 @@ pub struct Pass1 {
     pub class_ids: Vec<u32>,
     /// Distinct class-object addresses; class_ids[i] indexes this for kind 0/1/3.
     pub class_addr_table: Vec<u64>,
+    /// Per-object shallow size in bytes (1:1 with the object arrays).
     pub shallow_sizes: Vec<u32>,
     /// Per-object HPROF allocation stack-trace serial (u4), 1:1 with the other
     /// per-object parallel arrays. Only populated when `--alloc-sites` capture
@@ -58,7 +75,9 @@ pub struct Pass1 {
     pub kind: Vec<u8>,
     /// Per-object raw element count (arrays only; 0 otherwise)
     pub elem_count: Vec<u32>,
+    /// Addresses of direct GC roots (excludes thread-local synthetic edges).
     pub gc_root_addrs: Vec<u64>,
+    /// Per-root GC-root sub-tag, 1:1 with `gc_root_addrs`.
     #[allow(dead_code)]
     pub gc_root_types: Vec<u8>,
     /// threadSerial → thread object address (from ROOT_THREAD_OBJ records)
@@ -73,20 +92,31 @@ pub struct Pass1 {
     pub stack_traces: HashMap<u32, Vec<u64>>,
     /// STACK_TRACE (0x05): stack_serial → thread_serial (0 = no thread).
     pub stack_trace_thread: HashMap<u32, u32>,
+    /// Object-id byte width from the HPROF header (typically 8).
     pub id_size: u8,
+    /// HPROF format string from the header (e.g. "JAVA PROFILE 1.0.2").
     pub format: String,
+    /// Total dump file size in bytes.
     pub file_size: u64,
     /// HPROF header base timestamp (millis since Unix epoch), 0 if absent.
     pub header_timestamp_ms: u64,
+    /// True if any ROOT_STICKY_CLASS root was seen.
     pub has_sticky_class_roots: bool,
     // Validation counters
+    /// INSTANCE_DUMP records seen.
     pub instance_count: u64,
+    /// OBJ_ARRAY_DUMP records seen.
     pub obj_array_count: u64,
+    /// PRIM_ARRAY_DUMP records seen.
     pub prim_array_count: u64,
+    /// CLASS_DUMP records seen.
     pub class_dump_count: u64,
 }
 
 impl Pass1 {
+    /// Runs pass 1 over the dump at `path`. When `capture_alloc_sites` is set,
+    /// also records each object's allocation stack-trace serial (for
+    /// --alloc-sites); otherwise `alloc_stack_serial` stays empty (zero RSS).
     pub fn run(path: &str, capture_alloc_sites: bool) -> io::Result<Self> {
         let file_size = std::fs::metadata(path)?.len();
         let mut r = HprofReader::open(path)?;
@@ -272,6 +302,8 @@ impl Pass1 {
             if a != prev_addr {
                 id_map.push_sorted_addr(a);
                 if write != rank {
+                    // Compact every parallel array by the SAME (write, rank)
+                    // shift so all payloads stay 1:1 aligned by index.
                     tmp_class_ids[write] = tmp_class_ids[rank];
                     tmp_shallow[write] = tmp_shallow[rank];
                     tmp_kind[write] = tmp_kind[rank];
@@ -339,6 +371,8 @@ impl Pass1 {
     }
 }
 
+/// Scans one HEAP_DUMP(_SEGMENT) body, appending one entry per object to the
+/// parallel `tmp_*` arrays (kept 1:1 aligned) and collecting roots/threads.
 #[allow(clippy::too_many_arguments)]
 fn scan_heap_segment(
     r: &mut HprofReader,
@@ -465,6 +499,8 @@ fn scan_heap_segment(
                 *instance_count += 1;
             }
             heap::OBJ_ARRAY_DUMP => {
+                // addr(id) + stack_serial(u4) + count(u4) + elem_class(id)
+                // + count element ids.
                 let addr = r.id()?;
                 let stack_serial = r.u4()?; // stack_trace_serial
                 if capture_alloc_sites {
@@ -473,7 +509,8 @@ fn scan_heap_segment(
                 let count = r.u4()? as u64;
                 let elem_class_id = r.id()?;
                 r.skip(count * ids)?;
-                // shallow size: use file id_size for elements (exact formula in pass2/report)
+                // shallow size: addr + stack + count + class + count*id elems
+                // (uses file id_size; exact formula in pass2/report)
                 let shallow = (ids + ids + 4 + 4 + count * ids) as u32;
                 tmp_addrs.push(addr);
                 {
@@ -491,6 +528,8 @@ fn scan_heap_segment(
                 *obj_array_count += 1;
             }
             heap::PRIM_ARRAY_DUMP => {
+                // addr(id) + stack_serial(u4) + count(u4) + elem_type(u1)
+                // + count*elem_size raw element bytes.
                 let addr = r.id()?;
                 let stack_serial = r.u4()?; // stack_trace_serial
                 if capture_alloc_sites {
@@ -502,8 +541,11 @@ fn scan_heap_segment(
                     .map(|t| t.byte_size() as u64)
                     .unwrap_or(1);
                 r.skip(count * elem_size)?;
+                // shallow: addr + stack + count + type_code + count*elem_size
                 let shallow = (ids + ids + 4 + 4 + 1 + count * elem_size) as u32;
                 tmp_addrs.push(addr);
+                // kind 2 stores the raw element type code (0-11) in class_ids,
+                // not a class_addr_table index.
                 tmp_class_ids.push(elem_type_code as u32);
                 tmp_shallow.push(shallow);
                 tmp_kind.push(2);
@@ -614,6 +656,8 @@ fn read_class_dump(
     Ok((class_addr, consumed))
 }
 
+/// Byte width of a static/constant-pool field value: object refs are `id_size`,
+/// primitives their type width, unknown codes 0.
 fn value_size(type_code: u8, id_size: u8) -> u64 {
     match HprofType::from_code(type_code) {
         Some(HprofType::Object) => id_size as u64,

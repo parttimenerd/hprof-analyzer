@@ -1,3 +1,11 @@
+//! Retained-size accumulation over the dominator tree.
+//!
+//! After the dominator tree is built, each object's retained size is the sum of
+//! shallow sizes of every object it dominates. This module folds those sums up
+//! the tree in a single post-order DFS, fused with the `hasSameClassAncestor`
+//! bitset and a dominator-depth histogram so all three fall out of one traversal
+//! (avoiding extra ~2GB per-object passes at the inbound+dominator RSS peak).
+
 /// Build the dominator-children CSR from `idom`.
 ///
 /// Returns `(child_off, child_tgt)` where `child_off` has length `n+2` (so
@@ -42,19 +50,20 @@ pub fn build_dom_children_csr(n: usize, idom: &[u32]) -> (Vec<u32>, Vec<u32>) {
     (child_off, child_tgt)
 }
 
-/// Compute retained sizes and the hasSameClassAncestor bitset.
+/// Compute retained sizes, the hasSameClassAncestor bitset, and depth histogram.
 ///
 /// # Arguments
 /// * `n`                   - number of real objects (vroot has index n)
-/// * `rpo_order`           - object indices in reverse-post-order (roots first), len = reachable
 /// * `idom`                - immediate dominator per node, len = n+1; idom[n]=n (vroot self-loop)
 /// * `shallow`             - shallow size per object, len = n
-/// * `class_idx`           - class index per object (into class_names), len = n
-/// * `class_count`         - class_names.len()
+/// * `class_idx`           - class index per object, len = n
+/// * `class_count`         - number of distinct classes (bounds class-indexed scratch)
 /// * `class_obj_class_idx` - which class each class-obj represents (sparse map; absent key = not a class obj)
+/// * `child_off`/`child_tgt` - dominator-children CSR from `build_dom_children_csr`
 ///
 /// # Returns
-/// `(retained, has_same_class_ancestor)` both of length n.
+/// `(retained, has_same_class_ancestor, depth_counts)`; `retained` and the
+/// bitset have length n, `depth_counts[d-1]` counts reachable nodes at dom depth d.
 pub fn compute_retained(
     n: usize,
     idom: &[u32],

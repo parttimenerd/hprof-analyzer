@@ -14,6 +14,9 @@ const CHUNK_LOG: usize = 26; // 2^26 u32 = 64M slots = 256 MB per chunk
 const CHUNK_LEN: usize = 1 << CHUNK_LOG;
 const CHUNK_MASK: usize = CHUNK_LEN - 1;
 
+/// Fill-then-consume u32 array split into fixed 256 MB chunks so each chunk can
+/// be freed the instant its read cursor passes it (see module docs for the RSS
+/// rationale). Empty inner `Vec`s mark already-freed chunks.
 pub struct ChunkU32 {
     chunks: Vec<Vec<u32>>,
 }
@@ -32,6 +35,7 @@ impl ChunkU32 {
         ChunkU32 { chunks }
     }
 
+    /// Store `val` at `idx` (shift/mask chunk lookup; hot scatter-fill path).
     #[inline(always)]
     pub fn set(&mut self, idx: usize, val: u32) {
         let c = idx >> CHUNK_LOG;

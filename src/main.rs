@@ -1,3 +1,14 @@
+//! CLI entry point and two-pass orchestration for the HPROF heap-dump analyzer.
+//!
+//! Subcommands: `analyze` (parse a dump and emit a report), `diff` (compare a
+//! MAT report against our JSON), `diff-reports` (cross-dump growth), `render`
+//! (re-render a saved Report JSON), and `dev` (diagnostics).
+//!
+//! The `analyze` pipeline runs: pass1 (scan) -> pass2 (build graph) -> compress
+//! cold arrays -> rpo DFS -> inbound CSR -> dominators -> retained -> build_model
+//! -> render. Allocation/free/compress ordering here is load-bearing for the
+//! peak-RSS budget on multi-GB dumps; see the inline notes before changing it.
+
 mod bitset;
 mod chunkvec;
 mod cvec;
@@ -27,9 +38,13 @@ use pass1::Pass1;
 /// Output format for the analysis report.
 #[derive(Clone, Copy, PartialEq)]
 enum OutputFormat {
+    /// Human-readable Markdown.
     Md,
+    /// Markdown with embedded graph/chart blocks.
     MdGraphs,
+    /// Canonical Report JSON (deterministic field order).
     Json,
+    /// Standalone HTML.
     Html,
 }
 
@@ -103,6 +118,7 @@ impl RootPathCtx {
 
 use clap::{Parser, Subcommand, ValueEnum};
 
+/// Top-level CLI: a single subcommand.
 #[derive(Parser)]
 #[command(
     name = "hprof-analyzer",
@@ -114,18 +130,25 @@ struct Cli {
     cmd: Cmd,
 }
 
+/// The analyzer subcommands.
 #[derive(Subcommand)]
 enum Cmd {
     /// Analyze a heap dump and write a report (Markdown or JSON)
     Analyze {
+        /// Path to the input .hprof heap dump.
         input: String,
+        /// Output path; writes to stdout when omitted.
         output: Option<String>,
+        /// Report output format.
         #[arg(short, long, value_enum, default_value_t = FormatArg::Md)]
         format: FormatArg,
+        /// Override the per-suspect dominated-children list cap.
         #[arg(long)]
         leak_children_cap: Option<usize>,
+        /// Log per-phase timing (and RSS on Linux) to stderr.
         #[arg(short, long)]
         verbose: bool,
+        /// Emit RSS probe/trim traces at pipeline checkpoints.
         #[arg(long)]
         trace_rss: bool,
         /// Add a literal reference chain from each leak suspect to a GC root
@@ -161,8 +184,11 @@ enum Cmd {
     },
     /// Compare a MAT report against our canonical JSON (exit 2 on FAIL)
     Diff {
+        /// Path to the Eclipse MAT report (HTML/text).
         mat: String,
+        /// Path to our canonical Report JSON.
         ours: String,
+        /// Diff output format.
         #[arg(short, long, value_enum, default_value_t = FormatArg::Md)]
         format: FormatArg,
     },
@@ -189,6 +215,7 @@ enum Cmd {
     },
 }
 
+/// Developer / diagnostic subcommands.
 #[derive(Subcommand)]
 enum DevCmd {
     /// Print the JSON Schema of the report model
@@ -199,11 +226,16 @@ enum DevCmd {
     DumpPass1 { input: String },
 }
 
+/// CLI mirror of `OutputFormat` (kept separate so clap owns the value-enum).
 #[derive(Clone, Copy, PartialEq, ValueEnum)]
 enum FormatArg {
+    /// Human-readable Markdown.
     Md,
+    /// Markdown with embedded graph/chart blocks.
     MdGraphs,
+    /// Canonical Report JSON.
     Json,
+    /// Standalone HTML.
     Html,
 }
 
@@ -218,6 +250,7 @@ impl From<FormatArg> for OutputFormat {
     }
 }
 
+/// Parse args and dispatch to the selected subcommand.
 fn main() {
     let cli = Cli::parse();
     match cli.cmd {
@@ -341,6 +374,7 @@ fn rss_mb() -> f64 {
     0.0
 }
 
+/// Log a phase name, elapsed seconds, and (Linux) RSS when `verbose`.
 fn log(verbose: bool, phase: &str, elapsed: f64) {
     if verbose {
         let rss = rss_mb();
@@ -352,6 +386,7 @@ fn log(verbose: bool, phase: &str, elapsed: f64) {
     }
 }
 
+/// Re-render a previously saved canonical Report JSON to the given format.
 fn render_report(path: &str, format: OutputFormat) -> io::Result<String> {
     use std::io::Read;
     let json = if path == "-" {
@@ -385,6 +420,9 @@ fn render_report(path: &str, format: OutputFormat) -> io::Result<String> {
     })
 }
 
+/// Run the full `analyze` pipeline end-to-end and write the report.
+/// Phase order and the interleaved allocation/free/compress steps are tuned
+/// for the peak-RSS budget; the inline comments flag the load-bearing points.
 fn run(
     input: &str,
     output: Option<&str>,
@@ -482,6 +520,11 @@ fn run(
         dominator::compute_dominators(g.n, rpo, &g.gc_root_indices, &inb_block_off, &inb_data)?;
     log(verbose, "dominator", t.elapsed().as_secs_f64());
     let root_ctx: Option<RootPathCtx> = if opts.root_paths {
+        // Under --root-paths we must keep the inbound CSR + vertex alive for the
+        // later leak-suspect walk, but holding them dense would blow the budget.
+        // Compress into small blobs HERE (right after dominators, the last dense
+        // consumer) and free the dense arrays immediately, so nothing carries a
+        // second live copy of the ~7.5GB CSR+vertex into the retained phase.
         let ctx = RootPathCtx::compress(
             &inb_block_off,
             &inb_data,
@@ -495,6 +538,7 @@ fn run(
         Some(ctx)
     } else {
         // Default path: byte-identical to today — free the CSR immediately.
+        // Nothing downstream reads it, so there is no compressed copy to keep.
         drop(inb_block_off);
         drop(inb_data);
         None
@@ -597,6 +641,7 @@ fn run(
     Ok(())
 }
 
+/// Emit pass-1 parse stats (counts + class histogram) as JSON to stdout.
 fn dump_pass1_json(path: &str) -> io::Result<()> {
     let p = Pass1::run(path, false)?;
 
