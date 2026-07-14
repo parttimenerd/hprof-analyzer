@@ -21,9 +21,10 @@ machine-readable **JSON**.
 ## Why you might want it
 
 - **Very large dumps at bounded memory.** It streams the dump in two passes and keeps
-  peak RSS well below the heap size. A **35.8 GB** large dump analyzes in
-  **~17.5 minutes at ~14 GB peak RSS** (see [Performance](#performance)). MAT typically
-  needs a machine with memory comparable to the dump.
+  peak RSS well below the heap size. A large dump with a **20 GB live Java heap** —
+  **35.8 GB (33.4 GiB)** as an uncompressed `.hprof` file, or **~8 GB gzip-compressed** —
+  analyzes in **~17.5 minutes at ~14 GB peak RSS** (see [Performance](#performance)). MAT
+  typically needs a machine with memory comparable to the dump.
 - **Scriptable / CI-friendly.** It is fully non-interactive. Emit JSON and diff two dumps
   to catch memory growth in a pipeline, or gate a build on retained-size regressions.
 - **Emailable output.** The HTML report is a single self-contained file — no server, no
@@ -147,15 +148,17 @@ Generated from the public
 ## Performance
 
 Measured on a large real-world heap dump. The dump itself is not included; only
-the resource numbers are reported here.
+the resource numbers are reported here. The dump holds a **20 GB
+live Java heap**; the `.hprof` file is **35.8 GB (33.4 GiB)** uncompressed, or **~8 GB
+gzip-compressed**.
 
-| Dump size | Peak RSS | Wall clock | CPU (user + sys) | Machine | Measured |
-|-----------|----------|------------|------------------|---------|----------|
-| 35.8 GB (33.4 GiB) | 14.07 GiB (14,757,272 KB) | 17 min 33.66 s | 987.45 s + 65.34 s = 1053 s | AMD Ryzen Threadripper PRO 3995WX (64c/128t), 123 GB RAM, Ubuntu 25.10 | 2026-07-13, commit `a1c0bbb` |
+| Heap (live) | Dump file | Compressed | Peak RSS | Wall clock | CPU (user + sys) | Machine | Measured |
+|-------------|-----------|------------|----------|------------|------------------|---------|----------|
+| ~20 GB | 35.8 GB (33.4 GiB) | ~8 GB (.hprof.gz) | 14.07 GiB (14,757,272 KB) | 17 min 33.66 s | 987.45 s + 65.34 s = 1053 s | AMD Ryzen Threadripper PRO 3995WX (64c/128t), 123 GB RAM, Ubuntu 25.10 | 2026-07-13, commit `a1c0bbb` |
 
-Peak RSS stays at roughly 40% of the dump size because the analyzer never holds the whole
-dump in memory — it streams the records in two passes and works over compressed,
-bounded-size index structures.
+Peak RSS stays at roughly 40% of the uncompressed dump size (and below the 20 GB live
+heap) because the analyzer never holds the whole dump in memory — it streams the records
+in two passes and works over compressed, bounded-size index structures.
 
 ## How it works
 
