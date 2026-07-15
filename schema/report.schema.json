@@ -33,6 +33,13 @@
     },
     "top": {
       "$ref": "#/$defs/TopConsumers"
+    },
+    "top_components": {
+      "description": "Eclipse-MAT-style retained-heap-by-class-loader components. Additive;\ndefaults to empty for round-trip with older JSON.",
+      "$ref": "#/$defs/TopComponents",
+      "default": {
+        "components": []
+      }
     }
   },
   "required": [
@@ -126,6 +133,58 @@
         "retained"
       ]
     },
+    "Component": {
+      "description": "One component (class loader) in the Top Components view.",
+      "type": "object",
+      "properties": {
+        "loader_label": {
+          "description": "Human-readable loader/component label (e.g. `<system class loader>`).",
+          "type": "string"
+        },
+        "pct": {
+          "description": "Retained heap as a percentage of total reachable retained heap.",
+          "type": "number",
+          "format": "double"
+        },
+        "retained": {
+          "description": "Total retained heap attributed to this component.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "top_classes": {
+          "description": "Top classes within this component by retained heap (capped).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ComponentClass"
+          }
+        }
+      },
+      "required": [
+        "loader_label",
+        "retained",
+        "pct",
+        "top_classes"
+      ]
+    },
+    "ComponentClass": {
+      "description": "One class row inside a component.",
+      "type": "object",
+      "properties": {
+        "pretty_class": {
+          "type": "string"
+        },
+        "retained": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "pretty_class",
+        "retained"
+      ]
+    },
     "DepthBucket": {
       "description": "One bucket of the dominator-depth histogram (B2): how many reachable objects\nsit exactly `depth` idom-hops below the virtual root.",
       "type": "object",
@@ -211,6 +270,110 @@
         "display_class",
         "shallow",
         "retained"
+      ]
+    },
+    "DupStringSample": {
+      "description": "One of the most-duplicated String values: its exact text (truncated to\n`MAX_STR_SAMPLE` bytes), how many String instances share the value, the\ndecoded byte length of the value, and the approximate wasted bytes.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "description": "Number of String instances sharing this value.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "len": {
+          "description": "Decoded byte length of the value (pre-truncation).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "text": {
+          "description": "Exact decoded text, truncated to at most `MAX_STR_SAMPLE` bytes on a char boundary.",
+          "type": "string"
+        },
+        "wasted_bytes": {
+          "description": "Approx wasted bytes for this value: (count - 1) * len.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "text",
+        "count",
+        "len",
+        "wasted_bytes"
+      ]
+    },
+    "DupStrings": {
+      "description": "Approximate duplicate-`java.lang.String` analysis. Each String value is\ndecoded, hashed to a 64-bit value, and only the hash + length + occurrence\ncount is retained — the decoded bytes are dropped immediately, so RSS stays\nbounded regardless of dump size. Hash collisions merge distinct values (an\naccepted approximation). The unit of dedup is the String INSTANCE: two\nString instances with the same decoded value count as a duplicate even\nthough they usually hold separate backing arrays. Opt-in via `--dup-strings`.",
+      "type": "object",
+      "properties": {
+        "approx_wasted_bytes": {
+          "description": "Approx bytes wasted by duplication: Σ over duplicated values of (count-1)*first_seen_len.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "distinct_values": {
+          "description": "Distinct decoded String values (by 64-bit hash; collisions merge — accepted approximation).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "duplicated_values": {
+          "description": "Distinct values that occur in more than one String instance.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "length_histogram": {
+          "description": "Power-of-two histogram of decoded String lengths (bytes), one entry per\ndistinct value. Sorted by `upper_len` ascending.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/StrLenBucket"
+          }
+        },
+        "length_stats": {
+          "description": "Summary stats over distinct-value lengths (bytes).",
+          "$ref": "#/$defs/StrLenStats",
+          "default": {
+            "max": 0,
+            "median": 0,
+            "min": 0,
+            "total": 0
+          }
+        },
+        "top_duplicated": {
+          "description": "Top-N most-duplicated String values with exact (truncated) text, sorted by\noccurrence count desc then text asc. Only values with count > 1.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DupStringSample"
+          }
+        },
+        "top_string_holders": {
+          "description": "Top-N owning classes by the number of `java.lang.String` instances their\ninstances reference. Sorted by `string_refs` desc then class name asc.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/StringHolder"
+          }
+        },
+        "total_string_instances": {
+          "description": "Total java.lang.String instances scanned.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "distinct_values",
+        "duplicated_values",
+        "total_string_instances",
+        "approx_wasted_bytes"
       ]
     },
     "DuplicateClass": {
@@ -306,6 +469,13 @@
             "string",
             "null"
           ]
+        },
+        "max_instance_shallow": {
+          "description": "Shallow size of the single largest instance of this class — surfaces a\nlone oversized object hiding behind a small instance count. `0` for\nsynthetic rows that have no backing object (the injected system class\nloader, leak-suspect `dominated_by_class` rows). `#[serde(default)]` so\npre-v5 reports (which lack the field) still deserialize.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
         },
         "pretty_class": {
           "type": "string"
@@ -547,6 +717,97 @@
         "value"
       ]
     },
+    "RecordCensus": {
+      "description": "Raw HPROF record-type census for the dump: top-level record counts plus a\nper-GC-root-tag breakdown. Additive metadata surfaced in System Overview;\nnot parity-compared. Populated from pass1 counters.",
+      "type": "object",
+      "properties": {
+        "class_dumps": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "gc_root_tag_counts": {
+          "description": "(root sub-tag byte, count), sorted by count desc then tag asc for stable output.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "integer",
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0
+              },
+              {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              }
+            ]
+          }
+        },
+        "heap_dump_segments": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "instance_dumps": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "load_class_records": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "obj_array_dumps": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "prim_array_dumps": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "stack_frame_records": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "stack_trace_records": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "unload_class_records": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "utf8_records": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "utf8_records",
+        "load_class_records",
+        "unload_class_records",
+        "stack_frame_records",
+        "stack_trace_records",
+        "heap_dump_segments",
+        "instance_dumps",
+        "obj_array_dumps",
+        "prim_array_dumps",
+        "class_dumps",
+        "gc_root_tag_counts"
+      ]
+    },
     "RetentionSummary": {
       "description": "B3: retention concentration over top-level dominators. Basis-point shares\n(of total reachable shallow heap) held by the top-1/10/100 objects, plus how\nmany single objects each hold >=1% of the heap. Answers \"one leak or many?\".",
       "type": "object",
@@ -615,6 +876,144 @@
         "obj_index_1based",
         "display_class",
         "retained"
+      ]
+    },
+    "SignificantFrame": {
+      "description": "One stack frame plus the significant local-variable objects it retains.\nPopulated only under `--thread-locals`.",
+      "type": "object",
+      "properties": {
+        "frame": {
+          "description": "Rendered frame line `class.method (source:line)`.",
+          "type": "string"
+        },
+        "locals": {
+          "description": "Significant local objects held at this frame, retained desc.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SignificantLocal"
+          }
+        }
+      },
+      "required": [
+        "frame",
+        "locals"
+      ]
+    },
+    "SignificantLocal": {
+      "description": "One significant local-variable object held at a frame.",
+      "type": "object",
+      "properties": {
+        "display_class": {
+          "description": "Class name of the local object.",
+          "type": "string"
+        },
+        "pct": {
+          "description": "Retained heap as a percentage of the owning thread's retained heap.",
+          "type": "number",
+          "format": "double"
+        },
+        "retained": {
+          "description": "Retained heap of the local object.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "display_class",
+        "retained",
+        "pct"
+      ]
+    },
+    "SizeBucket": {
+      "description": "One power-of-two size bucket of the top-level-dominator retained-size\ndistribution. `upper_bytes` is the inclusive upper bound (a power of two);\na dominator with retained size r falls in the smallest bucket whose\n`upper_bytes >= r`. `count` is how many top-level dominators land here.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "upper_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "upper_bytes",
+        "count"
+      ]
+    },
+    "StrLenBucket": {
+      "description": "One power-of-two bucket of the String-length histogram. `upper_len` is the\ninclusive upper bound (a power of two); a value of length `l` falls in the\nsmallest bucket whose `upper_len >= l`. `count` is the number of distinct\nString values in this bucket.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "upper_len": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "upper_len",
+        "count"
+      ]
+    },
+    "StrLenStats": {
+      "description": "Summary stats over distinct-value String lengths (bytes). `Default` = zeros.",
+      "type": "object",
+      "properties": {
+        "max": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "median": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "min": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "total": {
+          "description": "Sum of all distinct-value lengths (bytes).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "min",
+        "max",
+        "median",
+        "total"
+      ]
+    },
+    "StringHolder": {
+      "description": "One owning class and how many `java.lang.String` instances its instances\nreference (across all object-reference fields).",
+      "type": "object",
+      "properties": {
+        "class_name": {
+          "type": "string"
+        },
+        "string_refs": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "class_name",
+        "string_refs"
       ]
     },
     "Suspect": {
@@ -790,6 +1189,17 @@
             "$ref": "#/$defs/DuplicateClass"
           }
         },
+        "duplicate_strings": {
+          "description": "Approximate duplicate-String analysis, present only when `--dup-strings`\nwas passed; `None` otherwise. Additive; not parity-compared.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DupStrings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "file_path": {
           "description": "Full path the dump was opened from (superset of `source_name`).",
           "type": "string"
@@ -851,6 +1261,23 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/LoaderRollup"
+          }
+        },
+        "record_census": {
+          "description": "HPROF record census: raw record-type counts for the dump (UTF8,\nLOAD_CLASS/UNLOAD_CLASS, stack frames/traces, heap segments, per-object\ndumps, per-GC-root-tag). Additive; not parity-compared. Carried from\npass1 counters via the graph. `#[serde(default)]` so pre-v5 reports\n(which lack the field) still deserialize.",
+          "$ref": "#/$defs/RecordCensus",
+          "default": {
+            "class_dumps": 0,
+            "gc_root_tag_counts": [],
+            "heap_dump_segments": 0,
+            "instance_dumps": 0,
+            "load_class_records": 0,
+            "obj_array_dumps": 0,
+            "prim_array_dumps": 0,
+            "stack_frame_records": 0,
+            "stack_trace_records": 0,
+            "unload_class_records": 0,
+            "utf8_records": 0
           }
         },
         "retention_concentration": {
@@ -922,12 +1349,24 @@
             "null"
           ]
         },
+        "context_class_loader": {
+          "description": "Display label of the thread's `contextClassLoader` (e.g.\n`java.net.URLClassLoader @ 0x…`), or None when absent/unresolved. Additive.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "frames": {
           "description": "Stack frames, top-first, each \"class.method (source:line)\".",
           "type": "array",
           "items": {
             "type": "string"
           }
+        },
+        "is_daemon": {
+          "description": "`java.lang.Thread.daemon`. Additive.",
+          "type": "boolean",
+          "default": false
         },
         "local_objects": {
           "description": "Bounded sample of this thread's GC-thread-local root objects (retained\ndesc), bounded by the `--detail` per-thread cap. Empty vec when the\nthread has no locals. Additive: not part of MAT parity.",
@@ -945,6 +1384,13 @@
           "format": "uint64",
           "minimum": 0
         },
+        "max_local_retained": {
+          "description": "Largest retained heap among this thread's significant local variables\n(0 when frames were not computed). Mirrors MAT's \"Max. Locals' Retained\nHeap\" column. Additive.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
         "name": {
           "description": "Decoded `java.lang.Thread.name`, or None when the name could not be\nresolved (missing thread/String, JDK layout mismatch, or empty name).\nAdditive field: not part of MAT parity comparison.",
           "type": [
@@ -952,11 +1398,43 @@
             "null"
           ]
         },
+        "priority": {
+          "description": "`java.lang.Thread.priority`. Additive.",
+          "type": "integer",
+          "format": "int32",
+          "default": 0
+        },
+        "retained": {
+          "description": "Retained heap of the resolved thread object (0 when unresolved). Additive.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
+        "shallow": {
+          "description": "Shallow heap of the resolved thread object (0 when unresolved). Additive.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
+        "significant_frames": {
+          "description": "Per-frame significant local variables, interleaved top-first. Populated\nonly under the opt-in `--thread-locals` flag; empty otherwise. Additive:\nnot part of MAT parity.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SignificantFrame"
+          }
+        },
         "thread_serial": {
           "description": "HPROF thread serial (stable within the dump).",
           "type": "integer",
           "format": "uint32",
           "minimum": 0
+        },
+        "thread_state": {
+          "description": "Decoded thread state label (e.g. `[alive, runnable]`) from the raw\n`threadStatus` bits. Empty when unknown. Additive.",
+          "type": "string",
+          "default": ""
         }
       },
       "required": [
@@ -1011,6 +1489,22 @@
         "threads"
       ]
     },
+    "TopComponents": {
+      "description": "Eclipse-MAT-style \"Top Components\": retained heap grouped by class loader\n(component), with the top classes inside each. A bounded reduction over the\nper-class retained aggregation (rows <= #loaders), so RSS-safe.",
+      "type": "object",
+      "properties": {
+        "components": {
+          "description": "Components sorted by retained desc, capped to the top N.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Component"
+          }
+        }
+      },
+      "required": [
+        "components"
+      ]
+    },
     "TopConsumers": {
       "description": "Aggregates for the \"Top Consumers\" section.",
       "type": "object",
@@ -1031,6 +1525,18 @@
           "description": "Root of the pruned package tree (root name = \"\").",
           "$ref": "#/$defs/PackageNode"
         },
+        "size_distribution": {
+          "description": "Retained-size distribution over ALL top-level dominators (additive;\nnot parity-compared). Empty/zero when there are no top-level dominators.",
+          "$ref": "#/$defs/TopSizeDistribution",
+          "default": {
+            "buckets": [],
+            "count": 0,
+            "max": 0,
+            "median": 0,
+            "min": 0,
+            "total": 0
+          }
+        },
         "threshold_bp": {
           "description": "MAT 1%-of-total pruning threshold in basis points (100 bp = 1%).",
           "type": "integer",
@@ -1043,6 +1549,51 @@
         "biggest_classes",
         "threshold_bp",
         "biggest_packages"
+      ]
+    },
+    "TopSizeDistribution": {
+      "description": "Retained-size distribution over ALL top-level dominators (the biggest\nmemory contributors), bucketed by power-of-two retained size. Additive;\nnot parity-compared. `buckets` empty and stats zero when there are no\ntop-level dominators (empty heap).",
+      "type": "object",
+      "properties": {
+        "buckets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SizeBucket"
+          }
+        },
+        "count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "max": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "median": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "min": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "total": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "buckets",
+        "count",
+        "min",
+        "max",
+        "median",
+        "total"
       ]
     }
   }
