@@ -70,24 +70,34 @@ cargo build --release
 hprof-analyzer <COMMAND>
 
 Commands:
-  analyze       Analyze a heap dump and write a report (Markdown or JSON)
-  diff          Compare a MAT report against our canonical JSON (exit 2 on FAIL)
-  diff-reports  Cross-dump growth diff: compare two canonical Report JSONs
-  render        Render a saved canonical Report JSON to Markdown or JSON
-  dev           Developer / diagnostic commands
+  analyze      Analyze a heap dump and write a report
+  render       Re-render a saved canonical Report JSON to another format
+  compare      Compare reports (MAT export vs ours, or two of ours across time)
+  completions  Generate a shell completion script
+  dev          Developer / diagnostic commands
 ```
 
-**Analyze a dump.** Pick a format with `-f`; the default is plain Markdown. Output goes
-to stdout, or to a file if you pass one:
+**Analyze a dump.** Output goes to stdout, or to a file if you pass one. When you give an
+output file and no `-f`, the format is inferred from its extension (`.html`→HTML,
+`.json`/`.json.gz`→JSON, `.md`→Markdown); `-f` always overrides. Stdout defaults to plain
+Markdown:
 
 ```sh
-hprof-analyzer analyze heap.hprof                      # plain Markdown to stdout
-hprof-analyzer analyze heap.hprof -f md-graphs         # Markdown with ASCII graphs
-hprof-analyzer analyze heap.hprof -f html report.html  # self-contained HTML page
-hprof-analyzer analyze heap.hprof -f json report.json  # machine-readable JSON
+hprof-analyzer analyze heap.hprof                    # plain Markdown to stdout
+hprof-analyzer analyze heap.hprof report.html        # HTML (inferred from .html)
+hprof-analyzer analyze heap.hprof report.json        # JSON (inferred from .json)
+hprof-analyzer analyze heap.hprof report.json.gz     # gzip-compressed JSON
+hprof-analyzer analyze heap.hprof -f md-graphs       # Markdown with ASCII graphs
 ```
 
+`md-graphs` shares the `.md` extension with plain Markdown, so it is never inferred — ask
+for it explicitly with `-f md-graphs`.
+
 Gzip-compressed dumps (`.hprof.gz`) are read transparently.
+
+**Progress.** Long runs on multi-GB dumps print a live phase line to stderr when stderr is
+a terminal. Control it with `--progress auto|always|never` (default `auto`; `auto` stays
+silent when stderr is piped or when `--verbose`/`--trace-rss` are already printing phases).
 
 **Heavy analyses (always on).** Four deeper analyses run unconditionally and add a section
 to every format (Markdown, md-graphs, HTML, JSON):
@@ -121,28 +131,39 @@ tracking:** allocation sites only yield real stacks if the JVM recorded allocati
 traces (`stack_trace_serial`); most HotSpot dumps have this off, and the report says so
 honestly rather than inventing data.
 
-**Diff against a MAT export.** Compare a MAT System Overview HTML export against our
+**Compare against a MAT export.** Compare a MAT System Overview HTML export against our
 canonical JSON; exits non-zero on a parity failure (useful as a test gate):
 
 ```sh
-hprof-analyzer analyze heap.hprof -f json > ours.json
-hprof-analyzer diff mat_System_Overview.zip ours.json
+hprof-analyzer analyze heap.hprof report.json
+hprof-analyzer compare mat mat_System_Overview.zip report.json
 ```
 
-**Track growth across two dumps.** Diff an earlier report against a later one to see what
+**Track growth across two dumps.** Compare an earlier report against a later one to see what
 grew — handy for finding a leak by comparing snapshots over time:
 
 ```sh
-hprof-analyzer analyze early.hprof -f json > a.json
-hprof-analyzer analyze later.hprof -f json > b.json
-hprof-analyzer diff-reports a.json b.json
+hprof-analyzer analyze early.hprof a.json
+hprof-analyzer analyze later.hprof b.json
+hprof-analyzer compare reports a.json b.json
 ```
 
 **Re-render a saved report.** The JSON is the canonical form; re-render it to any format
-without re-parsing the dump:
+without re-parsing the dump. `render` also takes an optional output path with the same
+extension inference as `analyze`:
 
 ```sh
-hprof-analyzer render report.json -f md-graphs
+hprof-analyzer render report.json                    # Markdown to stdout
+hprof-analyzer render report.json report.html        # HTML (inferred from .html)
+hprof-analyzer render report.json -f md-graphs       # Markdown with ASCII graphs
+```
+
+**Shell completions.** Generate a completion script for your shell and install it where the
+shell looks for completions:
+
+```sh
+hprof-analyzer completions zsh  > ~/.zsh/completions/_hprof-analyzer
+hprof-analyzer completions bash > /etc/bash_completion.d/hprof-analyzer
 ```
 
 **Compressed JSON.** Write the canonical report gzip-compressed by giving the output path a
@@ -150,8 +171,8 @@ hprof-analyzer render report.json -f md-graphs
 report back transparently — it sniffs the gzip magic bytes, so it also works from stdin:
 
 ```sh
-hprof-analyzer analyze heap.hprof -f json report.json.gz   # gzip-compressed JSON
-hprof-analyzer render report.json.gz -f md-graphs          # read it back, no manual gunzip
+hprof-analyzer analyze heap.hprof report.json.gz   # gzip-compressed JSON (inferred)
+hprof-analyzer render report.json.gz -f md-graphs   # read it back, no manual gunzip
 ```
 
 ## Sample reports

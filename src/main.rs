@@ -1,8 +1,9 @@
 //! CLI entry point and two-pass orchestration for the HPROF heap-dump analyzer.
 //!
-//! Subcommands: `analyze` (parse a dump and emit a report), `diff` (compare a
-//! MAT report against our JSON), `diff-reports` (cross-dump growth), `render`
-//! (re-render a saved Report JSON), and `dev` (diagnostics).
+//! Subcommands: `analyze` (parse a dump and emit a report), `render` (re-render
+//! a saved Report JSON), `compare mat` (MAT export vs our JSON) / `compare
+//! reports` (cross-dump growth), `completions` (shell completion scripts), and
+//! `dev` (diagnostics).
 //!
 //! The `analyze` pipeline runs: pass1 (scan) -> pass2 (build graph) -> compress
 //! cold arrays -> rpo DFS -> inbound CSR -> dominators -> retained -> build_model
@@ -22,6 +23,7 @@ mod md;
 mod md_test;
 mod pass1;
 mod pass2;
+mod progress;
 mod reader;
 mod report;
 mod retained;
@@ -31,6 +33,7 @@ mod trace;
 mod types;
 mod vbyte;
 
+use std::io::IsTerminal;
 use std::{io, process, time::Instant};
 
 use pass1::Pass1;
@@ -71,14 +74,28 @@ impl Default for AnalyzeOptions {
     }
 }
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap_complete::Shell;
 
 /// Top-level CLI: a single subcommand.
 #[derive(Parser)]
 #[command(
     name = "hprof-analyzer",
     version,
-    about = "Analyze Java HPROF heap dumps (Eclipse MAT parity)"
+    about = "Analyze Java HPROF heap dumps (Eclipse MAT parity)",
+    long_about = "A fast, low-memory analyzer for Java HPROF heap dumps.\n\n\
+        It parses a dump in two streaming passes and emits static reports that \
+        replicate three Eclipse MAT views — System Overview, Leak Suspects, and \
+        Top Consumers — plus a Threads overview. Reports render as plain Markdown, \
+        Markdown with ASCII graphs, self-contained HTML, or machine-readable JSON.",
+    after_help = "EXAMPLES:\n  \
+        hprof-analyzer analyze heap.hprof                 # Markdown to stdout\n  \
+        hprof-analyzer analyze heap.hprof report.html     # HTML (format from .html)\n  \
+        hprof-analyzer analyze heap.hprof report.json     # JSON  (format from .json)\n  \
+        hprof-analyzer analyze heap.hprof -f md-graphs    # Markdown + ASCII graphs\n  \
+        hprof-analyzer render report.json report.html     # re-render saved JSON\n  \
+        hprof-analyzer compare reports old.json new.json  # cross-dump growth diff\n  \
+        hprof-analyzer completions zsh > _hprof-analyzer  # shell completions"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -88,15 +105,24 @@ struct Cli {
 /// The analyzer subcommands.
 #[derive(Subcommand)]
 enum Cmd {
-    /// Analyze a heap dump and write a report (Markdown or JSON)
+    /// Analyze a heap dump and write a report
+    #[command(after_help = "EXAMPLES:\n  \
+        hprof-analyzer analyze heap.hprof                 # Markdown to stdout\n  \
+        hprof-analyzer analyze heap.hprof report.html     # HTML (inferred from .html)\n  \
+        hprof-analyzer analyze heap.hprof report.json.gz  # gzip-compressed JSON\n  \
+        hprof-analyzer analyze heap.hprof -f md-graphs    # Markdown + ASCII graphs\n  \
+        hprof-analyzer analyze heap.hprof --detail max    # looser output caps")]
     Analyze {
-        /// Path to the input .hprof heap dump.
+        /// Path to the input .hprof heap dump (`.hprof.gz` read transparently).
         input: String,
-        /// Output path; writes to stdout when omitted.
+        /// Output path; writes to stdout when omitted. A `.gz` suffix writes
+        /// gzip-compressed. When `--format` is not given, the format is inferred
+        /// from this path's extension (.html/.htm, .json[.gz], .md).
         output: Option<String>,
-        /// Report output format.
-        #[arg(short, long, value_enum, default_value_t = FormatArg::Md)]
-        format: FormatArg,
+        /// Report output format. Overrides the extension-inferred format;
+        /// defaults to Markdown when neither is given.
+        #[arg(short, long, value_enum)]
+        format: Option<FormatArg>,
         /// Output-size detail preset. `default` reproduces the historical caps;
         /// `minimal` shrinks and `max` expands every per-analysis output cap
         /// (leak-suspect children, dominator subtree, alloc sites, thread
@@ -109,37 +135,67 @@ enum Cmd {
         /// Emit RSS probe/trim traces at pipeline checkpoints.
         #[arg(long)]
         trace_rss: bool,
+        /// Show a live progress line on stderr. `auto` (default) enables it only
+        /// when stderr is a terminal and neither --verbose nor --trace-rss is set.
+        #[arg(long, value_enum, default_value_t = ProgressWhen::Auto)]
+        progress: ProgressWhen,
     },
-    /// Compare a MAT report against our canonical JSON (exit 2 on FAIL)
-    Diff {
-        /// Path to the Eclipse MAT report (HTML/text).
-        mat: String,
-        /// Path to our canonical Report JSON.
-        ours: String,
-        /// Diff output format.
-        #[arg(short, long, value_enum, default_value_t = FormatArg::Md)]
-        format: FormatArg,
-    },
-    /// Cross-dump growth diff: compare two canonical Report JSONs (A=baseline, B=current)
-    DiffReports {
-        /// Baseline (earlier) Report JSON, or "-" for stdin
-        a: String,
-        /// Current (later) Report JSON
-        b: String,
-        #[arg(short, long, value_enum, default_value_t = FormatArg::Md)]
-        format: FormatArg,
-    },
-    /// Render a saved canonical Report JSON to Markdown or JSON
+    /// Re-render a saved canonical Report JSON to another format
+    #[command(after_help = "EXAMPLES:\n  \
+        hprof-analyzer render report.json                 # Markdown to stdout\n  \
+        hprof-analyzer render report.json report.html     # HTML (inferred from .html)\n  \
+        hprof-analyzer render report.json.gz -f md-graphs # read .gz, emit md-graphs")]
     Render {
-        /// Path to a Report JSON, or "-" for stdin
+        /// Path to a Report JSON (or `.json.gz`), or "-" for stdin.
         input: String,
-        #[arg(short, long, value_enum, default_value_t = FormatArg::Md)]
-        format: FormatArg,
+        /// Output path; writes to stdout when omitted. A `.gz` suffix writes
+        /// gzip-compressed. When `--format` is not given, the format is inferred
+        /// from this path's extension (.html/.htm, .json[.gz], .md).
+        output: Option<String>,
+        /// Report output format. Overrides the extension-inferred format;
+        /// defaults to Markdown when neither is given.
+        #[arg(short, long, value_enum)]
+        format: Option<FormatArg>,
+    },
+    /// Compare reports (MAT export vs ours, or two of ours across time)
+    Compare {
+        #[command(subcommand)]
+        cmd: CompareCmd,
+    },
+    /// Generate a shell completion script (write it to your completions dir)
+    Completions {
+        /// Target shell.
+        shell: Shell,
     },
     /// Developer / diagnostic commands
     Dev {
         #[command(subcommand)]
         cmd: DevCmd,
+    },
+}
+
+/// `compare` subcommands: MAT-parity check, or cross-dump growth.
+#[derive(Subcommand)]
+enum CompareCmd {
+    /// Compare a MAT export against our canonical JSON (exit 2 on FAIL)
+    Mat {
+        /// Path to the Eclipse MAT report (HTML/zip).
+        mat: String,
+        /// Path to our canonical Report JSON.
+        ours: String,
+        /// Diff output format (Markdown or JSON); defaults to Markdown.
+        #[arg(short, long, value_enum)]
+        format: Option<FormatArg>,
+    },
+    /// Cross-dump growth: compare two canonical Report JSONs (A=baseline, B=current)
+    Reports {
+        /// Baseline (earlier) Report JSON, or "-" for stdin.
+        a: String,
+        /// Current (later) Report JSON.
+        b: String,
+        /// Diff output format (Markdown or JSON); defaults to Markdown.
+        #[arg(short, long, value_enum)]
+        format: Option<FormatArg>,
     },
 }
 
@@ -176,6 +232,17 @@ enum DetailLevel {
     Max,
 }
 
+/// When to show the live progress line on stderr.
+#[derive(Clone, Copy, PartialEq, ValueEnum)]
+enum ProgressWhen {
+    /// Enable only when stderr is a terminal and no verbose/trace flag is set.
+    Auto,
+    /// Always emit progress lines to stderr.
+    Always,
+    /// Never emit progress lines.
+    Never,
+}
+
 impl DetailLevel {
     fn options(self) -> AnalyzeOptions {
         // (root_depth, alloc_top, thread_locals, dom_nodes, dom_depth,
@@ -208,6 +275,53 @@ impl From<FormatArg> for OutputFormat {
     }
 }
 
+/// Choose the output format: an explicit `--format` always wins; otherwise
+/// infer from the output path's extension; otherwise fall back to Markdown
+/// (the stdout default). `md-graphs` is never inferred — it shares the `.md`
+/// extension with plain Markdown, so it stays opt-in via `-f md-graphs`.
+fn resolve_format(explicit: Option<FormatArg>, out: Option<&str>) -> OutputFormat {
+    if let Some(f) = explicit {
+        return f.into();
+    }
+    if let Some(path) = out {
+        let lower = path.to_ascii_lowercase();
+        if lower.ends_with(".html") || lower.ends_with(".htm") {
+            return OutputFormat::Html;
+        }
+        if lower.ends_with(".json") || lower.ends_with(".json.gz") {
+            return OutputFormat::Json;
+        }
+        // .md / .markdown (and anything else) → plain Markdown.
+    }
+    OutputFormat::Md
+}
+
+/// Write report text to `path`, or to stdout when `path` is `None`. A `.gz`
+/// suffix is written gzip-compressed (matching how `render` reads it back).
+fn write_output(path: Option<&str>, text: &str) -> io::Result<()> {
+    match path {
+        Some(p) if p.ends_with(".gz") => {
+            use std::io::Write;
+            let f = std::fs::File::create(p).map_err(|e| io::Error::new(e.kind(), e))?;
+            let mut enc = flate2::write::GzEncoder::new(f, flate2::Compression::best());
+            enc.write_all(text.as_bytes())?;
+            enc.finish()?;
+            Ok(())
+        }
+        Some(p) => std::fs::write(p, text).map_err(|e| io::Error::new(e.kind(), e)),
+        None => {
+            print!("{text}");
+            Ok(())
+        }
+    }
+}
+
+/// Print a one-line `error:` message to stderr and exit with status 1.
+fn fail(msg: impl std::fmt::Display) -> ! {
+    eprintln!("error: {msg}");
+    process::exit(1);
+}
+
 /// Parse args and dispatch to the selected subcommand.
 fn main() {
     let cli = Cli::parse();
@@ -219,75 +333,124 @@ fn main() {
             detail,
             verbose,
             trace_rss,
+            progress,
         } => {
             if trace_rss {
                 trace::set_enabled(true);
             }
+            // Progress: `auto` shows a live line only on an interactive stderr,
+            // and never when --verbose/--trace-rss already print phase lines.
+            let show_progress = match progress {
+                ProgressWhen::Always => true,
+                ProgressWhen::Never => false,
+                ProgressWhen::Auto => !verbose && !trace_rss && std::io::stderr().is_terminal(),
+            };
+            progress::set_enabled(show_progress);
+            let fmt = resolve_format(format, output.as_deref());
             let opts = detail.options();
             if let Err(e) = run(
                 &input,
                 output.as_deref(),
-                format.into(),
+                fmt,
                 verbose,
                 cvec::Codec::Deflate9,
                 opts,
             ) {
-                eprintln!("Error: {e}");
-                process::exit(1);
+                fail(analyze_error_hint(&input, &e));
             }
         }
-        Cmd::Diff { mat, ours, format } => {
-            let json_out = OutputFormat::from(format) == OutputFormat::Json;
-            match diff::run_diff(&mat, &ours, json_out) {
-                Ok(true) => {}
-                Ok(false) => process::exit(2),
-                Err(e) => {
-                    eprintln!("Error: {e}");
-                    process::exit(1);
+        Cmd::Render {
+            input,
+            output,
+            format,
+        } => {
+            let fmt = resolve_format(format, output.as_deref());
+            match render_report(&input, fmt) {
+                Ok(text) => {
+                    if let Err(e) = write_output(output.as_deref(), &text) {
+                        fail(e);
+                    }
+                }
+                Err(e) => fail(render_error_hint(&input, &e)),
+            }
+        }
+        Cmd::Compare { cmd } => match cmd {
+            CompareCmd::Mat { mat, ours, format } => {
+                let json_out = resolve_format(format, None) == OutputFormat::Json;
+                match diff::run_diff(&mat, &ours, json_out) {
+                    Ok(true) => {}
+                    Ok(false) => process::exit(2),
+                    Err(e) => fail(e),
                 }
             }
+            CompareCmd::Reports { a, b, format } => {
+                match diff_reports::run(&a, &b, resolve_format(format, None)) {
+                    Ok(text) => print!("{text}"),
+                    Err(e) => fail(e),
+                }
+            }
+        },
+        Cmd::Completions { shell } => {
+            let mut cmd = Cli::command();
+            clap_complete::generate(shell, &mut cmd, "hprof-analyzer", &mut io::stdout());
         }
-        Cmd::DiffReports { a, b, format } => match diff_reports::run(&a, &b, format.into()) {
-            Ok(text) => print!("{text}"),
-            Err(e) => {
-                eprintln!("Error: {e}");
-                process::exit(1);
-            }
-        },
-        Cmd::Render { input, format } => match render_report(&input, format.into()) {
-            Ok(text) => print!("{text}"),
-            Err(e) => {
-                eprintln!("Error: {e}");
-                process::exit(1);
-            }
-        },
         Cmd::Dev { cmd } => match cmd {
             DevCmd::EmitSchema => {
                 let schema = schemars::schema_for!(report::Report);
                 match serde_json::to_string_pretty(&schema) {
                     Ok(js) => println!("{js}"),
-                    Err(e) => {
-                        eprintln!("Error: {e}");
-                        process::exit(1);
-                    }
+                    Err(e) => fail(e),
                 }
             }
             DevCmd::SweepAggregate { dir } => match sweep::run_aggregate(&dir) {
                 Ok(true) => {}
                 Ok(false) => process::exit(2),
-                Err(e) => {
-                    eprintln!("Error: {e}");
-                    process::exit(1);
-                }
+                Err(e) => fail(e),
             },
             DevCmd::DumpPass1 { input } => {
                 if let Err(e) = dump_pass1_json(&input) {
-                    eprintln!("Error: {e}");
-                    process::exit(1);
+                    fail(e);
                 }
             }
         },
     }
+}
+
+/// Turn an `analyze` pipeline error into an actionable message. A missing input
+/// file is the most common mistake, so name the path explicitly.
+fn analyze_error_hint(input: &str, e: &io::Error) -> String {
+    if e.kind() == io::ErrorKind::NotFound {
+        format!("cannot open '{input}': no such file or directory")
+    } else {
+        e.to_string()
+    }
+}
+
+/// Turn a `render` error into an actionable message. The classic mistake is
+/// pointing `render` at a heap dump instead of a saved Report JSON.
+fn render_error_hint(input: &str, e: &io::Error) -> String {
+    if e.kind() == io::ErrorKind::NotFound {
+        return format!("cannot open '{input}': no such file or directory");
+    }
+    if looks_like_hprof(input) {
+        return format!(
+            "'{input}' looks like a heap dump, not a Report JSON; use `analyze`, not `render`"
+        );
+    }
+    e.to_string()
+}
+
+/// True when the file at `path` begins with the HPROF magic (`JAVA PROFILE`).
+fn looks_like_hprof(path: &str) -> bool {
+    use std::io::Read;
+    if path == "-" {
+        return false;
+    }
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut head = [0u8; 12];
+    matches!(f.read_exact(&mut head), Ok(())) && head.starts_with(b"JAVA PROFILE")
 }
 
 /// Read current process RSS from /proc/self/status (Linux only).
@@ -385,6 +548,7 @@ fn run(
     let t_total = Instant::now();
 
     let t = Instant::now();
+    progress::phase("scanning dump (pass 1)");
     let p1 = pass1::Pass1::run(input)?;
     log(verbose, "pass1", t.elapsed().as_secs_f64());
 
@@ -405,6 +569,7 @@ fn run(
     }
 
     let t = Instant::now();
+    progress::phase("building object graph (pass 2)");
     let (mut g, mut inbound, shallow_c, class_idx_c, alloc_serial_c) =
         pass2::Pass2::build(input, p1, compress, &opts)?;
     log(
@@ -429,6 +594,7 @@ fn run(
     log(verbose, "compress-cold", t.elapsed().as_secs_f64());
 
     let t = Instant::now();
+    progress::phase("ordering objects (reverse post-order)");
     let rpo = rpo_dfs::rpo_dfs(g.n, &g.gc_root_indices, &g.fwd_offsets, &g.fwd_targets);
     log(verbose, "rpo", t.elapsed().as_secs_f64());
 
@@ -445,6 +611,7 @@ fn run(
     // resident) — this is the binding global peak; dropping dfn cuts ~2GB.
     let mut rpo = rpo;
     let t = Instant::now();
+    progress::phase("building inbound references");
     let (inb_block_off, inb_data) = inbound.build(&rpo.dfn)?;
     log(verbose, "inbound", t.elapsed().as_secs_f64());
     // Rebuild vertex now: dfn is still live and inbound.build (the binding-peak
@@ -457,13 +624,14 @@ fn run(
     crate::trace::trim();
 
     let t = Instant::now();
+    progress::phase("computing dominators");
     // rpo moved by value; vertex/parent_pre owned through translation. dfn
     // already freed above. No separate drop(rpo).
     g.idom =
         dominator::compute_dominators(g.n, rpo, &g.gc_root_indices, &inb_block_off, &inb_data)?;
     log(verbose, "dominator", t.elapsed().as_secs_f64());
     // The inbound (referrer) CSR is consumed by the dominator and never read
-    // again: --root-paths now derives its GC-root chains from `g.idom` (the
+    // again: root paths derive their GC-root chains from `g.idom` (the
     // dominator tree, which MAT also uses), so there is no need to preserve or
     // compress the ~7.5GB CSR + vertex map. Free it immediately for every run.
     drop(inb_block_off);
@@ -491,6 +659,7 @@ fn run(
     crate::trace::probe("main: after restore shallow/class_idx");
 
     let t = Instant::now();
+    progress::phase("computing retained sizes");
     let class_count = g.class_names.len();
     let (retained, has_same, depth_counts) = retained::compute_retained(
         g.n,
@@ -535,6 +704,7 @@ fn run(
     };
 
     let t = Instant::now();
+    progress::phase("building report");
     crate::trace::probe("report: before build_model");
     // build_model reads has_same_class_ancestor (system-overview group) and
     // dc_off/dc_tgt (leak-suspect group) and stores only bounded aggregates,
@@ -583,23 +753,10 @@ fn run(
     };
     log(verbose, "report", t.elapsed().as_secs_f64());
 
-    match output {
-        Some(path) => {
-            // An output path ending in `.gz` is written gzip-compressed (e.g.
-            // `report.json.gz`); `render` reads it back transparently. Useful
-            // for the JSON canonical form, whose repetitive text compresses well.
-            if path.ends_with(".gz") {
-                use std::io::Write;
-                let f = std::fs::File::create(path).map_err(|e| io::Error::new(e.kind(), e))?;
-                let mut enc = flate2::write::GzEncoder::new(f, flate2::Compression::best());
-                enc.write_all(out_text.as_bytes())?;
-                enc.finish()?;
-            } else {
-                std::fs::write(path, &out_text).map_err(|e| io::Error::new(e.kind(), e))?;
-            }
-        }
-        None => print!("{}", out_text),
-    }
+    // Clear the progress line before emitting output, so it does not linger on
+    // stderr next to the report (or leak into a piped tail).
+    progress::done();
+    write_output(output, &out_text)?;
 
     log(verbose, "total", t_total.elapsed().as_secs_f64());
     Ok(())

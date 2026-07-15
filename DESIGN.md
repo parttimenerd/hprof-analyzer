@@ -242,12 +242,12 @@ re-render it — **no heap access**. `render` reads `schema_version` and refuses
 to render a JSON whose version does not match this binary's `SCHEMA_VERSION`,
 rather than silently mis-rendering.
 
-### `diff <MAT> <OURS> [-f md|json]`
+### `compare mat <MAT> <OURS> [-f md|json]`
 
 The MAT↔JSON **validator**: parse a MAT-exported report and compare it
 field-by-field against our canonical JSON. Exits `2` on any FAIL. See §12. This
 is a *correctness* comparator against an external oracle — distinct from the
-(planned) cross-dump growth diff.
+cross-dump growth diff (`compare reports`).
 
 ### `dev <COMMAND>`
 
@@ -262,9 +262,9 @@ Diagnostic subcommands (not the stable user surface):
 
 ### Cross-dump growth diff
 
-- **`diff-reports A.json B.json`** — pure offline post-processing of two canonical
+- **`compare reports A.json B.json`** — pure offline post-processing of two canonical
   Report JSONs (per-class Δinstances/Δretained, new/grown suspects, growth leaders);
-  the "is it growing over time?" signal. Distinct from the `diff` MAT-comparator.
+  the "is it growing over time?" signal. Distinct from the `compare mat` comparator.
 
 ## 10. Output formats
 
@@ -365,7 +365,7 @@ New reasons require a new programmatic check — never a silent tolerance:
 
 ### 12.3 The sweep gate (`dev sweep-aggregate`, `N_MIN`)
 
-`diff` writes a per-dump `*.diff.json`; `sweep-aggregate` folds a directory of
+`compare mat` writes a per-dump `*.diff.json`; `sweep-aggregate` folds a directory of
 them into one verdict. **The gate PASSES only if BOTH hold:**
 
 - **zero FAILs** across all dumps, AND
