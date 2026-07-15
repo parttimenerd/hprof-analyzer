@@ -1,5 +1,5 @@
 import React from "react";
-import type { AllocSites, ClassRow, DomTreeNode, HistRow, ObjRow, PackageNode, Report, RootPathStep, Suspect, ThreadInfo, ThreadLocalObj } from "./types";
+import type { AllocSites, ClassRow, DomTreeNode, HistRow, ObjRow, PackageNode, Report, RootPathStep, Suspect, ThreadInfo, ThreadLocalObj, TopComponents } from "./types";
 import { fmtCount, fmtExactBytes, formatBytes, formatEpochMs, pctOf, shortLoader } from "./format";
 import {
   CompositionStackedBar,
@@ -71,7 +71,16 @@ function Nav({ report }: { report: Report }) {
     ["threads", "Threads"],
   ];
   // show the entry only when the field is present.
+  if (report.top_components?.components?.length) items.push(["top-components", "Top Components"]);
   if (report.alloc_sites) items.push(["alloc-sites", "Allocation Sites"]);
+  const rc = report.overview.retention_concentration;
+  if (rc.top1_bp > 0 || rc.num_objects_ge_1pct > 0) {
+    items.push(["retention-concentration", "Retention Concentration"]);
+  }
+  if (report.overview.dominator_depth_histogram.length > 0) {
+    items.push(["dominator-depth-distribution", "Dominator-Depth Distribution"]);
+  }
+  items.push(["glossary", "Glossary"]);
 
   const [active, setActive] = React.useState<string>("");
 
@@ -166,7 +175,7 @@ function OomTriage({ report }: { report: Report }) {
     const o = report.top.biggest_objects[0];
     lines.push(
       <>
-        <strong>Headline retainer:</strong> <code>{o.display_class}</code> (object #{o.obj_index_1based}) retains{" "}
+        <strong>Headline retainer:</strong> <code>{o.display_class}</code> retains{" "}
         {formatBytes(o.retained)} ({pctOf(o.retained, total).toFixed(1)}% of reachable heap).
       </>,
     );
@@ -569,41 +578,6 @@ function SystemOverviewSection({ report }: { report: Report }) {
         </>
       )}
 
-      {o.dominator_depth_histogram.length > 0 && (
-        <>
-          <h3>Dominator-Depth Distribution</h3>
-          <p className="subtitle">
-            How far each live object sits below a GC root, counted in dominator hops. Most objects clustering at shallow
-            depths means memory is held close to the roots; a long tail means deep, chained structures (often a sign of
-            nested collections or linked leaks).
-          </p>
-          <DepthHistogramChart data={o.dominator_depth_histogram} />
-        </>
-      )}
-
-      {(o.retention_concentration.top1_bp > 0 || o.retention_concentration.num_objects_ge_1pct > 0) && (
-        <>
-          <h3>Retention Concentration</h3>
-          <p className="subtitle">Share of the heap held by the top 1 / 10 / 100 single objects — high bars on the left mean one big leak.</p>
-          <ChartOrNote hasData={!(o.retention_concentration.top1_bp === 0 && o.retention_concentration.top10_bp === 0 && o.retention_concentration.top100_bp === 0)} note="No single-object concentration to chart; see the summary below.">
-            <ConcentrationChart rc={o.retention_concentration} />
-            <ConcentrationStackedBar rc={o.retention_concentration} />
-          </ChartOrNote>
-          <dl className="summary-grid">
-            <dt>Total retained (top-level dominators)</dt>
-            <dd>{formatBytes(o.retention_concentration.total_retained)}</dd>
-            <dt>Top-1 share</dt>
-            <dd>{(o.retention_concentration.top1_bp / 100).toFixed(2)}%</dd>
-            <dt>Top-10 share</dt>
-            <dd>{(o.retention_concentration.top10_bp / 100).toFixed(2)}%</dd>
-            <dt>Top-100 share</dt>
-            <dd>{(o.retention_concentration.top100_bp / 100).toFixed(2)}%</dd>
-            <dt>Objects each holding ≥1%</dt>
-            <dd>{fmtCount(o.retention_concentration.num_objects_ge_1pct)}</dd>
-          </dl>
-        </>
-      )}
-
       <h3>Class Histogram (by Retained Heap)</h3>
       {o.histogram_truncated_to != null && (
         <p className="subtitle">
@@ -694,7 +668,7 @@ function AccumulationPath({ s }: { s: Suspect }) {
       <ol className="accum-path">
         {s.path.map((p, i) => (
           <li key={i}>
-            <code>{p.display_class}</code> <span className="pill">obj #{p.obj_index_1based}</span>
+            <code>{p.display_class}</code>{" "}
             <span className="path-ret">retains {formatBytes(p.retained)}</span>
           </li>
         ))}
@@ -746,7 +720,7 @@ function RootPathList({ steps }: { steps: RootPathStep[] }) {
       <ol className="accum-path">
         {steps.map((p, i) => (
           <li key={i}>
-            <code>{p.display_class}</code> <span className="pill">obj #{p.obj_index_1based}</span>
+            <code>{p.display_class}</code>{" "}
             <span className="path-ret">retains {formatBytes(p.retained)}</span>
             {i === last && p.root_type_label && (
               <> — <strong>GC root: {p.root_type_label}</strong></>
@@ -765,7 +739,7 @@ function DomSubtreeNode({ node, depth }: { node: DomTreeNode; depth: number }) {
   const hasChildren = node.children.length > 0;
   const label = (
     <>
-      <code>{node.display_class}</code> <span className="pill">obj #{node.obj_index_1based}</span>
+      <code>{node.display_class}</code>{" "}
       <span className="path-ret">
         shallow {formatBytes(node.shallow)} · retained {formatBytes(node.retained)}
       </span>
@@ -841,7 +815,6 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
       {s.accumulation_class && (
         <p style={{ margin: "0.25rem 0", color: "var(--muted)", fontSize: "0.86rem" }}>
           Accumulation point: <code>{s.accumulation_class}</code>
-          {s.accumulation_obj_1based != null && <> (obj #{s.accumulation_obj_1based})</>}
           {s.accumulation_retained != null && <> retaining {formatBytes(s.accumulation_retained)}</>}.
         </p>
       )}
@@ -858,7 +831,6 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
           <table>
             <thead>
               <tr>
-                <th>Object</th>
                 <th>Class</th>
                 <th className="num">Shallow</th>
                 <th className="num">Retained</th>
@@ -867,7 +839,6 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
             <tbody>
               {s.dominated.map((d, i) => (
                 <tr key={i}>
-                  <td className="num">#{d.obj_index_1based}</td>
                   <td>
                     <code>{d.display_class}</code>
                   </td>
@@ -982,7 +953,7 @@ function TopConsumersSection({ report }: { report: Report }) {
             <tr key={i}>
               <td className="num">{i + 1}</td>
               <td>
-                <code>{o.display_class}</code> <span className="pill">obj #{o.obj_index_1based}</span>
+                <code>{o.display_class}</code>{" "}
               </td>
               <td className="num">{formatBytes(o.shallow)}</td>
               <td className="num" title={fmtExactBytes(o.retained)}>
@@ -1068,7 +1039,6 @@ function ThreadLocalsTable({ objs }: { objs: ThreadLocalObj[] }) {
         <thead>
           <tr>
             <th>Object</th>
-            <th>Class</th>
             <th className="num">Shallow</th>
             <th className="num">Retained</th>
           </tr>
@@ -1076,7 +1046,6 @@ function ThreadLocalsTable({ objs }: { objs: ThreadLocalObj[] }) {
         <tbody>
           {objs.map((o, i) => (
             <tr key={i}>
-              <td className="num">#{o.obj_index_1based}</td>
               <td>
                 <code>{o.display_class}</code>
               </td>
@@ -1093,6 +1062,7 @@ function ThreadLocalsTable({ objs }: { objs: ThreadLocalObj[] }) {
 function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
   const cls = t.class_name ?? "<unresolved>";
   const name = t.name?.trim();
+  const sig = t.significant_frames ?? [];
   return (
     <details className="thread" open={open}>
       <summary>
@@ -1121,8 +1091,82 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
           </>
         ) : null}
       </summary>
+      <dl className="thread-props">
+        <dt>Shallow Heap</dt>
+        <dd>{formatBytes(t.shallow)}</dd>
+        <dt>Retained Heap</dt>
+        <dd>{formatBytes(t.retained)}</dd>
+        <dt>Max. Locals' Retained</dt>
+        <dd>{formatBytes(t.max_local_retained)}</dd>
+        <dt>Context Class Loader</dt>
+        <dd>{t.context_class_loader ? <code>{t.context_class_loader}</code> : "—"}</dd>
+        <dt>Is Daemon</dt>
+        <dd>{t.is_daemon ? "true" : "false"}</dd>
+        <dt>Priority</dt>
+        <dd>{t.priority}</dd>
+        <dt>State</dt>
+        <dd>{t.thread_state || "—"}</dd>
+      </dl>
       {t.local_objects && <ThreadLocalsTable objs={t.local_objects} />}
-      <pre className="stack">{t.frames.join("\n")}</pre>
+      {sig.length > 0 ? (
+        <ul className="sig-frames">
+          {sig.map((sf, i) => (
+            <li key={i}>
+              <code>{sf.frame}</code>
+              {sf.locals.length > 0 && (
+                <ul>
+                  {sf.locals.map((loc, j) => (
+                    <li key={j}>
+                      <code>{loc.display_class}</code> retains {formatBytes(loc.retained)} (
+                      {loc.pct.toFixed(1)}%)
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <pre className="stack">{t.frames.join("\n")}</pre>
+      )}
+    </details>
+  );
+}
+
+// ── Thread Overview table (always-on properties, mirrors MAT columns) ──────────
+function ThreadOverviewTable({ threads }: { threads: ThreadInfo[] }) {
+  if (threads.length === 0) return null;
+  return (
+    <details className="thread-overview-detail" open>
+      <summary>Thread Overview ({fmtCount(threads.length)})</summary>
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th className="num">Shallow</th>
+            <th className="num">Retained</th>
+            <th className="num">Max. Locals' Retained</th>
+            <th>Context Class Loader</th>
+            <th>Daemon</th>
+            <th className="num">Priority</th>
+            <th>State</th>
+          </tr>
+        </thead>
+        <tbody>
+          {threads.map((t, i) => (
+            <tr key={i}>
+              <td>{t.name?.trim() || `<thread ${t.thread_serial}>`}</td>
+              <td className="num">{formatBytes(t.shallow)}</td>
+              <td className="num">{formatBytes(t.retained)}</td>
+              <td className="num">{formatBytes(t.max_local_retained)}</td>
+              <td>{t.context_class_loader ? <code>{t.context_class_loader}</code> : "—"}</td>
+              <td>{t.is_daemon ? "yes" : "no"}</td>
+              <td className="num">{t.priority}</td>
+              <td>{t.thread_state || "—"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </details>
   );
 }
@@ -1155,6 +1199,7 @@ function ThreadsSection({ report }: { report: Report }) {
         <p>No thread call stacks were recorded in this dump.</p>
       ) : (
         <>
+          <ThreadOverviewTable threads={threads} />
           <div className="tools">
             <input
               type="text"
@@ -1194,6 +1239,50 @@ function ThreadsSection({ report }: { report: Report }) {
           )}
         </>
       )}
+    </section>
+  );
+}
+
+// ── Top Components ─────────────────────────────────────────────────────────────
+// Retained heap grouped by class loader (component), mirroring Eclipse MAT's
+// Top Components view. Mirrors render_md.rs::render_top_components.
+function TopComponentsSection({ data }: { data: TopComponents }) {
+  if (!data?.components?.length) return null;
+  return (
+    <section id="top-components">
+      <h2>Top Components</h2>
+      <p className="subtitle">
+        Retained heap grouped by class loader (component); % Heap is the share of total reachable heap.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Component</th>
+            <th className="num">Retained</th>
+            <th className="num">% Heap</th>
+            <th>Top classes</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.components.map((c, i) => (
+            <tr key={i}>
+              <td>
+                <code>{c.loader_label}</code>
+              </td>
+              <td className="num">{formatBytes(c.retained)}</td>
+              <td className="num">{c.pct.toFixed(1)}%</td>
+              <td>
+                {c.top_classes.map((cc, j) => (
+                  <span key={j}>
+                    {j > 0 ? ", " : ""}
+                    <code>{cc.pretty_class}</code> ({formatBytes(cc.retained)})
+                  </span>
+                ))}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </section>
   );
 }
@@ -1244,6 +1333,38 @@ function AllocSitesSection({ data }: { data: AllocSites }) {
   );
 }
 
+// ── Glossary (end section, mirrors the Markdown glossary) ─────────────────────
+function GlossarySection() {
+  const entries: [string, React.ReactNode][] = [
+    ["Shallow size", <>the memory an object occupies by itself: its header plus its own fields (and, for an array, its elements). It does <em>not</em> include the objects it points to.</>],
+    ["Retained heap (retained size)", <>the total memory that would be freed if this object were garbage-collected: its own shallow size plus everything reachable <em>only</em> through it. This is the basis for every percentage in this report. See <a href="https://en.wikipedia.org/wiki/Dominator_(graph_theory)" target="_blank" rel="noreferrer">dominator (graph theory)</a>.</>],
+    ["Reachable heap", <>all objects the <a href="https://en.wikipedia.org/wiki/Garbage_collection_(computer_science)" target="_blank" rel="noreferrer">garbage collector</a> can still reach from a GC root. Anything unreachable is already collectible and is excluded from the totals here.</>],
+    ["GC root", <>an object the JVM keeps alive unconditionally: live thread stacks (local variables), static fields of loaded classes, <a href="https://en.wikipedia.org/wiki/Java_Native_Interface" target="_blank" rel="noreferrer">JNI</a> references, and similar. Every retained-size chain ends at a GC root.</>],
+    ["Dominator", <>object <em>A</em> dominates object <em>B</em> if every path from a GC root to <em>B</em> passes through <em>A</em>. An object's retained heap is exactly the set of objects it dominates. See <a href="https://en.wikipedia.org/wiki/Dominator_(graph_theory)" target="_blank" rel="noreferrer">dominator (graph theory)</a>.</>],
+    ["Dominator tree", <>the tree formed by linking each object to its immediate dominator. Retained sizes are computed by summing shallow sizes up this tree.</>],
+    ["Top-level dominator", <>an object whose immediate dominator is a GC root, so it sits at the top of the dominator tree. The "Biggest Objects" and "Retention Concentration" views rank these.</>],
+    ["Dominator depth", <>how many dominator-tree hops an object sits below a GC root. Shallow depth means most objects are held close to a root; deep depth means retention flows through long chains.</>],
+    ["Accumulation point", <>a single object (often a collection, cache, or map) that dominates a large number of instances of the <em>same</em> class, meaning where a <a href="https://en.wikipedia.org/wiki/Memory_leak" target="_blank" rel="noreferrer">memory leak</a> accumulates.</>],
+    ["Class loader", <>the JVM component that defined a class. The same class name loaded by two different <a href="https://en.wikipedia.org/wiki/Java_Classloader" target="_blank" rel="noreferrer">class loaders</a> is two distinct classes in the heap, so heap is attributed per (class, loader) pair.</>],
+    ["Referent", <>the object that a reference field points <em>to</em>. A <a href="https://en.wikipedia.org/wiki/Weak_reference" target="_blank" rel="noreferrer"><code>WeakReference</code></a>, for example, has a referent it does not keep alive.</>],
+    ["Instance vs. class", <>an <em>instance</em> is one object; a <em>class</em> row aggregates every instance of that type. "Largest" in the histogram is the shallow size of the single biggest instance of a class.</>],
+  ];
+  return (
+    <section id="glossary">
+      <h2>Glossary</h2>
+      <p className="subtitle">Definitions for the terms used above.</p>
+      <dl className="summary-grid">
+        {entries.map(([term, def]) => (
+          <React.Fragment key={term}>
+            <dt>{term}</dt>
+            <dd>{def}</dd>
+          </React.Fragment>
+        ))}
+      </dl>
+    </section>
+  );
+}
+
 export default function App({ report }: { report: Report }) {
   return (
     <div className="app">
@@ -1261,7 +1382,13 @@ export default function App({ report }: { report: Report }) {
       <LeakSuspectsSection report={report} />
       <TopConsumersSection report={report} />
       <ThreadsSection report={report} />
+      {report.top_components?.components?.length ? (
+        <TopComponentsSection data={report.top_components} />
+      ) : null}
       {report.alloc_sites && <AllocSitesSection data={report.alloc_sites} />}
+      <RetentionConcentrationSection report={report} />
+      <DominatorDepthSection report={report} />
+      <GlossarySection />
       <BackToTop />
     </div>
   );

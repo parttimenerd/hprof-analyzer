@@ -11,7 +11,7 @@
 ///
 /// # Indexing convention
 /// Objects are 0..n-1; the virtual root is index `n`.
-/// Mirrors the Java `RpoDfs` in hprof-redact with the root/object index
+/// Mirrors the Java `RpoDfs` in hprof-analyzer with the root/object index
 /// convention flipped.
 pub struct RpoResult {
     /// `parent_pre[i]` = pre-order number of the DFS-tree parent of the node

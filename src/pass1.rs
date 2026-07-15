@@ -18,6 +18,12 @@ use crate::{
     types::{HprofType, heap, tags},
 };
 
+/// A thread-local GC-root edge: `(threadSerial, frameNumber, localAddr)`.
+/// `frameNumber` is the 0-based stack-frame index (topmost = 0) for
+/// ROOT_JAVA_FRAME; `u32::MAX` means "no associated frame" (JNI local / native
+/// stack / thread block).
+pub type ThreadLocalRoot = (u32, u32, u64);
+
 /// One HPROF STACK_FRAME (0x04) record. String ids resolve against `strings`;
 /// `class_serial` resolves against `class_serial_to_addr` → `class_map`.
 /// `line_number` uses the HPROF conventions (>0 = line; -1 unknown; -2 compiled
@@ -82,8 +88,8 @@ pub struct Pass1 {
     pub gc_root_types: Vec<u8>,
     /// threadSerial → thread object address (from ROOT_THREAD_OBJ records)
     pub thread_serial_to_obj_id: HashMap<u32, u64>,
-    /// (threadSerial, localAddr) from JAVA_FRAME/JNI_LOCAL/NATIVE_STACK/THREAD_BLOCK
-    pub thread_local_pairs: Vec<(u32, u64)>,
+    /// Thread-local GC-root edges from JAVA_FRAME/JNI_LOCAL/NATIVE_STACK/THREAD_BLOCK.
+    pub thread_local_pairs: Vec<ThreadLocalRoot>,
     /// STACK_FRAME (0x04) records, keyed by frame_id. Small (thousands), off
     /// the per-object RSS budget.
     pub stack_frames: HashMap<u64, StackFrame>,
@@ -111,6 +117,23 @@ pub struct Pass1 {
     pub prim_array_count: u64,
     /// CLASS_DUMP records seen.
     pub class_dump_count: u64,
+    /// STRING_IN_UTF8 (0x01) records seen.
+    pub utf8_records: u64,
+    /// LOAD_CLASS (0x02) records seen.
+    pub load_class_records: u64,
+    /// UNLOAD_CLASS (0x03) records seen (previously skipped/uncounted).
+    pub unload_class_records: u64,
+    /// STACK_FRAME (0x04) records seen.
+    pub stack_frame_records: u64,
+    /// STACK_TRACE (0x05) records seen.
+    pub stack_trace_records: u64,
+    /// HEAP_DUMP + HEAP_DUMP_SEGMENT (0x0c/0x1c) top-level records seen.
+    pub heap_dump_segments: u64,
+    /// Per-GC-root-tag counts, keyed by the HPROF root sub-tag byte. Covers
+    /// every root sub-record encountered, including the thread-local ones
+    /// (ROOT_JNI_LOCAL/JAVA_FRAME/NATIVE_STACK/THREAD_BLOCK) that become
+    /// synthetic edges rather than direct GC roots.
+    pub gc_root_tag_counts: std::collections::HashMap<u8, u64>,
 }
 
 impl Pass1 {
@@ -127,15 +150,15 @@ impl Pass1 {
         // microsecond delta at `_timestamp` below).
         let header_timestamp_ms = r.timestamp_ms;
 
-        let mut strings: HashMap<u64, String> = HashMap::new();
+        let mut strings: HashMap<u64, String> = HashMap::default();
         let mut class_map: HashMap<u64, ClassInfo> = HashMap::new();
-        let mut class_serial_to_addr: HashMap<u32, u64> = HashMap::new();
+        let mut class_serial_to_addr: HashMap<u32, u64> = HashMap::default();
         let mut tmp_addrs: Vec<u64> = Vec::new();
         let mut tmp_class_ids: Vec<u32> = Vec::new();
         // Intern class addresses to u32 during scan (heaps have < 4G classes;
         // this dump ~133K). kind 2 stores the raw type code instead.
         let mut class_addr_table: Vec<u64> = Vec::new();
-        let mut class_addr_to_idx: HashMap<u64, u32> = HashMap::new();
+        let mut class_addr_to_idx: HashMap<u64, u32> = HashMap::default();
         let mut tmp_shallow: Vec<u32> = Vec::new();
         let mut tmp_kind: Vec<u8> = Vec::new();
         let mut tmp_elem_count: Vec<u32> = Vec::new();
@@ -144,16 +167,24 @@ impl Pass1 {
         let mut tmp_alloc_serial: Vec<u32> = Vec::new();
         let mut gc_root_addrs: Vec<u64> = Vec::new();
         let mut gc_root_types: Vec<u8> = Vec::new();
-        let mut thread_serial_to_obj_id: HashMap<u32, u64> = HashMap::new();
-        let mut thread_local_pairs: Vec<(u32, u64)> = Vec::new();
-        let mut stack_frames: HashMap<u64, StackFrame> = HashMap::new();
+        let mut thread_serial_to_obj_id: HashMap<u32, u64> = HashMap::default();
+        let mut thread_local_pairs: Vec<ThreadLocalRoot> = Vec::new();
+        let mut stack_frames: HashMap<u64, StackFrame> = HashMap::default();
         let mut stack_traces: HashMap<u32, Vec<u64>> = HashMap::new();
-        let mut stack_trace_thread: HashMap<u32, u32> = HashMap::new();
+        let mut stack_trace_thread: HashMap<u32, u32> = HashMap::default();
         let mut has_sticky_class_roots = false;
         let mut instance_count = 0u64;
         let mut obj_array_count = 0u64;
         let mut prim_array_count = 0u64;
         let mut class_dump_count = 0u64;
+        let mut utf8_records = 0u64;
+        let mut load_class_records = 0u64;
+        let mut unload_class_records = 0u64;
+        let mut stack_frame_records = 0u64;
+        let mut stack_trace_records = 0u64;
+        let mut heap_dump_segments = 0u64;
+        let mut gc_root_tag_counts: std::collections::HashMap<u8, u64> =
+            std::collections::HashMap::new();
 
         loop {
             let tag = match r.u1() {
@@ -165,11 +196,13 @@ impl Pass1 {
 
             match tag {
                 tags::STRING_IN_UTF8 => {
+                    utf8_records += 1;
                     let str_id = r.id()?;
                     let bytes = r.read_bytes((length - id_size as u64) as usize)?;
                     strings.insert(str_id, String::from_utf8_lossy(&bytes).into_owned());
                 }
                 tags::LOAD_CLASS => {
+                    load_class_records += 1;
                     // serial(4) + class_addr(id) + stack_serial(4) + name_id(id)
                     let serial = r.u4()?;
                     let class_addr = r.id()?;
@@ -179,6 +212,7 @@ impl Pass1 {
                     class_map.entry(class_addr).or_default().name_id = name_id;
                 }
                 tags::STACK_FRAME => {
+                    stack_frame_records += 1;
                     // frame_id(id) + method_name_id(id) + method_sig_id(id)
                     // + source_file_id(id) + class_serial(u4) + line_number(u4)
                     let frame_id = r.id()?;
@@ -198,6 +232,7 @@ impl Pass1 {
                     );
                 }
                 tags::STACK_TRACE => {
+                    stack_trace_records += 1;
                     // stack_serial(u4) + thread_serial(u4) + num_frames(u4)
                     // + frame_id[num_frames](id)
                     let stack_serial = r.u4()?;
@@ -211,6 +246,7 @@ impl Pass1 {
                     stack_trace_thread.insert(stack_serial, thread_serial);
                 }
                 tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
+                    heap_dump_segments += 1;
                     scan_heap_segment(
                         &mut r,
                         id_size,
@@ -233,9 +269,14 @@ impl Pass1 {
                         &mut obj_array_count,
                         &mut prim_array_count,
                         &mut class_dump_count,
+                        &mut gc_root_tag_counts,
                     )?;
                 }
                 tags::HEAP_DUMP_END => break,
+                tags::UNLOAD_CLASS => {
+                    unload_class_records += 1;
+                    r.skip(length)?;
+                }
                 _ => {
                     r.skip(length)?;
                 }
@@ -366,6 +407,13 @@ impl Pass1 {
             obj_array_count,
             prim_array_count,
             class_dump_count,
+            utf8_records,
+            load_class_records,
+            unload_class_records,
+            stack_frame_records,
+            stack_trace_records,
+            heap_dump_segments,
+            gc_root_tag_counts,
         })
     }
 }
@@ -389,12 +437,13 @@ fn scan_heap_segment(
     gc_root_addrs: &mut Vec<u64>,
     gc_root_types: &mut Vec<u8>,
     thread_serial_to_obj_id: &mut HashMap<u32, u64>,
-    thread_local_pairs: &mut Vec<(u32, u64)>,
+    thread_local_pairs: &mut Vec<ThreadLocalRoot>,
     has_sticky_class_roots: &mut bool,
     instance_count: &mut u64,
     obj_array_count: &mut u64,
     prim_array_count: &mut u64,
     class_dump_count: &mut u64,
+    gc_root_tag_counts: &mut HashMap<u8, u64>,
 ) -> io::Result<()> {
     let ids = id_size as u64;
 
@@ -404,38 +453,45 @@ fn scan_heap_segment(
 
         match sub_tag {
             heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED => {
+                *gc_root_tag_counts.entry(sub_tag).or_insert(0) += 1;
                 gc_root_addrs.push(r.id()?);
                 gc_root_types.push(sub_tag);
                 remaining -= ids;
             }
             heap::ROOT_JNI_GLOBAL => {
+                *gc_root_tag_counts.entry(sub_tag).or_insert(0) += 1;
                 gc_root_addrs.push(r.id()?);
                 gc_root_types.push(sub_tag);
                 r.skip(ids)?; // JNI global ref id
                 remaining -= 2 * ids;
             }
             heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME => {
+                *gc_root_tag_counts.entry(sub_tag).or_insert(0) += 1;
                 let local_id = r.id()?;
                 let thread_serial = r.u4()?;
-                r.skip(4)?; // frame_number
+                let frame_number = r.u4()?;
                 remaining -= ids + 8;
                 // NOT a direct GC root — synthetic edge from thread object (MAT parity)
-                thread_local_pairs.push((thread_serial, local_id));
+                thread_local_pairs.push((thread_serial, frame_number, local_id));
             }
             heap::ROOT_NATIVE_STACK | heap::ROOT_THREAD_BLOCK => {
+                *gc_root_tag_counts.entry(sub_tag).or_insert(0) += 1;
                 let local_id = r.id()?;
                 let thread_serial = r.u4()?;
                 remaining -= ids + 4;
-                // NOT a direct GC root — synthetic edge from thread object (MAT parity)
-                thread_local_pairs.push((thread_serial, local_id));
+                // NOT a direct GC root — synthetic edge from thread object (MAT parity).
+                // No stack-frame index in these records → sentinel u32::MAX.
+                thread_local_pairs.push((thread_serial, u32::MAX, local_id));
             }
             heap::ROOT_STICKY_CLASS => {
+                *gc_root_tag_counts.entry(sub_tag).or_insert(0) += 1;
                 gc_root_addrs.push(r.id()?);
                 gc_root_types.push(sub_tag);
                 *has_sticky_class_roots = true;
                 remaining -= ids;
             }
             heap::ROOT_THREAD_OBJ => {
+                *gc_root_tag_counts.entry(sub_tag).or_insert(0) += 1;
                 let obj_id = r.id()?;
                 let thread_serial = r.u4()?;
                 r.skip(4)?; // stack_trace_serial
@@ -449,7 +505,7 @@ fn scan_heap_segment(
                 remaining -= consumed;
                 *class_dump_count += 1;
                 // Class objects must be in id_map so GC roots referencing them resolve correctly
-                // (hprof-redact: scanClassDumpA1 calls state.appendAddress(classId))
+                // (hprof-analyzer: scanClassDumpA1 calls state.appendAddress(classId))
                 tmp_addrs.push(class_addr);
                 {
                     let idx = *class_addr_to_idx.entry(class_addr).or_insert_with(|| {
@@ -914,7 +970,7 @@ mod tests {
 
     const DUMP: &str = "tests/fixtures/dump_0_fj-kmeans.hprof";
 
-    // Ground truth from the hprof-redact `diagnose` command on dump_0_fj-kmeans.
+    // Ground truth from the hprof-analyzer `diagnose` command on dump_0_fj-kmeans.
     const EXPECTED_INSTANCES: u64 = 2_698_510;
     const EXPECTED_OBJ_ARRAYS: u64 = 504_353;
     const EXPECTED_PRIM_ARRAYS: u64 = 27_379;
@@ -936,6 +992,32 @@ mod tests {
             EXPECTED_GC_ROOTS,
             "gc roots (got {})",
             p.gc_root_addrs.len()
+        );
+
+        // Record census: per-object dump counters must mirror the validation
+        // counters exactly (same records, counted twice for cross-check).
+        assert_eq!(p.instance_count, EXPECTED_INSTANCES, "census instances");
+        assert_eq!(p.class_dump_count, EXPECTED_CLASSES, "census classes");
+        // These record types are always present in a HotSpot dump.
+        assert!(p.utf8_records > 0, "utf8 records populated");
+        assert!(p.load_class_records > 0, "load_class records populated");
+        assert!(p.stack_trace_records > 0, "stack_trace records populated");
+        assert!(p.heap_dump_segments > 0, "heap dump segments populated");
+        // LOAD_CLASS is emitted once per loaded class, so it must cover at
+        // least every CLASS_DUMP we saw.
+        assert!(
+            p.load_class_records >= p.class_dump_count,
+            "load_class ({}) >= class_dump ({})",
+            p.load_class_records,
+            p.class_dump_count
+        );
+        // The per-GC-root-tag census must total to every root sub-record seen,
+        // which equals the direct GC roots plus the thread-local synthetic ones.
+        let census_root_total: u64 = p.gc_root_tag_counts.values().sum();
+        assert_eq!(
+            census_root_total,
+            p.gc_root_addrs.len() as u64 + p.thread_local_pairs.len() as u64,
+            "gc_root_tag_counts total"
         );
     }
 

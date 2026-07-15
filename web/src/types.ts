@@ -221,10 +221,48 @@ export interface ThreadInfo {
   // bounded sample of this thread's GC-thread-local
   // root objects (retained desc). Absent by default.
   local_objects?: ThreadLocalObj[];
+  // Thread-object footprint and always-on properties (mirror MAT columns).
+  shallow: number;
+  retained: number;
+  max_local_retained: number;
+  context_class_loader?: string | null;
+  is_daemon: boolean;
+  priority: number;
+  thread_state: string;
+  // Per-frame significant locals, interleaved top-first. Empty when locals
+  // were not sampled.
+  significant_frames?: SignificantFrame[];
+}
+
+export interface SignificantFrame {
+  frame: string;
+  locals: SignificantLocal[];
+}
+
+export interface SignificantLocal {
+  display_class: string;
+  retained: number;
+  pct: number;
 }
 
 export interface ThreadOverview {
   threads: ThreadInfo[];
+}
+
+export interface ComponentClass {
+  pretty_class: string;
+  retained: number;
+}
+
+export interface Component {
+  loader_label: string;
+  retained: number;
+  pct: number;
+  top_classes: ComponentClass[];
+}
+
+export interface TopComponents {
+  components: Component[];
 }
 
 export interface Report {
@@ -234,6 +272,8 @@ export interface Report {
   leaks: LeakSuspects;
   top: TopConsumers;
   threads: ThreadOverview;
+  // retained-heap-by-class-loader components. Empty by default.
+  top_components: TopComponents;
   // aggregated allocation sites. Absent by default.
   alloc_sites?: AllocSites;
 }

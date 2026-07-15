@@ -629,6 +629,7 @@ dependencies = [
  "clap_complete",
  "flate2",
  "jsonschema",
+ "libc",
  "proptest",
  "schemars",
  "scraper",

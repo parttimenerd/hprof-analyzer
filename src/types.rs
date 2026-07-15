@@ -8,6 +8,8 @@ pub mod tags {
     pub const STRING_IN_UTF8: u8 = 0x01;
     pub const LOAD_CLASS: u8 = 0x02;
     #[allow(dead_code)]
+    pub const UNLOAD_CLASS: u8 = 0x03;
+    #[allow(dead_code)]
     pub const STACK_FRAME: u8 = 0x04;
     #[allow(dead_code)]
     pub const STACK_TRACE: u8 = 0x05;

@@ -64,6 +64,7 @@ pub struct AnalyzeOptions {
     pub dominator_tree_max_depth: usize,
     pub leak_children_cap: usize,
     pub top_consumers: usize,
+    pub dup_strings: bool,
 }
 
 #[cfg(test)]
@@ -139,6 +140,12 @@ enum Cmd {
         /// when stderr is a terminal and neither --verbose nor --trace-rss is set.
         #[arg(long, value_enum, default_value_t = ProgressWhen::Auto)]
         progress: ProgressWhen,
+        /// Compute an approximate duplicate-`java.lang.String` report (opt-in).
+        /// Decodes every String's backing array, hashes the value to 64 bits and
+        /// counts collisions — never retains the strings, so RSS stays bounded.
+        /// Adds two extra heap-file scans; off by default.
+        #[arg(long)]
+        dup_strings: bool,
     },
     /// Re-render a saved canonical Report JSON to another format
     #[command(after_help = "EXAMPLES:\n  \
@@ -260,6 +267,7 @@ impl DetailLevel {
             dominator_tree_max_depth: dd,
             leak_children_cap: lc,
             top_consumers: tc,
+            dup_strings: false,
         }
     }
 }
@@ -324,6 +332,15 @@ fn fail(msg: impl std::fmt::Display) -> ! {
 
 /// Parse args and dispatch to the selected subcommand.
 fn main() {
+    // Restore default SIGPIPE handling so `… | head` (or any reader that closes
+    // early) terminates us via the signal like a normal Unix filter, instead of
+    // Rust's default SIG_IGN turning the closed pipe into an EPIPE that panics
+    // on the next stdout write. Unix only; a no-op elsewhere.
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::Analyze {
@@ -334,6 +351,7 @@ fn main() {
             verbose,
             trace_rss,
             progress,
+            dup_strings,
         } => {
             if trace_rss {
                 trace::set_enabled(true);
@@ -348,6 +366,10 @@ fn main() {
             progress::set_enabled(show_progress);
             let fmt = resolve_format(format, output.as_deref());
             let opts = detail.options();
+            let opts = AnalyzeOptions {
+                dup_strings,
+                ..opts
+            };
             if let Err(e) = run(
                 &input,
                 output.as_deref(),
@@ -368,7 +390,8 @@ fn main() {
             match render_report(&input, fmt) {
                 Ok(text) => {
                     if let Err(e) = write_output(output.as_deref(), &text) {
-                        fail(e);
+                        let target = output.as_deref().unwrap_or("<stdout>");
+                        fail(format!("cannot write '{target}': {e}"));
                     }
                 }
                 Err(e) => fail(render_error_hint(&input, &e)),
@@ -376,6 +399,13 @@ fn main() {
         }
         Cmd::Compare { cmd } => match cmd {
             CompareCmd::Mat { mat, ours, format } => {
+                // Name a missing input up front — `run_diff` opens both files but
+                // surfaces only a bare OS error, so pre-check for a clear message.
+                for p in [&mat, &ours] {
+                    if p != "-" && !std::path::Path::new(p).exists() {
+                        fail(format!("cannot open '{p}': no such file or directory"));
+                    }
+                }
                 let json_out = resolve_format(format, None) == OutputFormat::Json;
                 match diff::run_diff(&mat, &ours, json_out) {
                     Ok(true) => {}
@@ -417,12 +447,15 @@ fn main() {
 }
 
 /// Turn an `analyze` pipeline error into an actionable message. A missing input
-/// file is the most common mistake, so name the path explicitly.
+/// file is the most common mistake, so name the path explicitly — but only when
+/// the error is a bare `NotFound` from opening the input. Output-write failures
+/// already carry a `cannot write '…'` message (see `run`), so leave those alone.
 fn analyze_error_hint(input: &str, e: &io::Error) -> String {
-    if e.kind() == io::ErrorKind::NotFound {
+    let msg = e.to_string();
+    if e.kind() == io::ErrorKind::NotFound && !msg.starts_with("cannot ") {
         format!("cannot open '{input}': no such file or directory")
     } else {
-        e.to_string()
+        msg
     }
 }
 
@@ -756,7 +789,12 @@ fn run(
     // Clear the progress line before emitting output, so it does not linger on
     // stderr next to the report (or leak into a piped tail).
     progress::done();
-    write_output(output, &out_text)?;
+    write_output(output, &out_text).map_err(|e| {
+        // Name the OUTPUT path here so the analyze error hint does not later
+        // re-attribute an output-write failure to the input file.
+        let target = output.unwrap_or("<stdout>");
+        io::Error::new(e.kind(), format!("cannot write '{target}': {e}"))
+    })?;
 
     log(verbose, "total", t_total.elapsed().as_secs_f64());
     Ok(())
