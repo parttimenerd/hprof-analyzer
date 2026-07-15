@@ -217,6 +217,51 @@ impl Pass2 {
         // We therefore keep `class_ids` alive until after that loop and free it
         // there; only the two vecs not needed by the loop are freed here.
         p1.shallow_sizes = Vec::new();
+        // ── Fold: arrays-by-size histogram ───────────────────────────────
+        // Bucket every array (kind 1=obj, 2=prim) by power-of-two element
+        // length into a per-kind BTreeMap keyed by `upper_len`, accumulating
+        // object count + shallow bytes. Zero-length arrays are tallied
+        // separately. Reuses data already in memory (`shallow` is authoritative
+        // for arrays here — Phase 0b computed it with the same MAT formulas the
+        // sub-pass 2a scan later re-derives) and runs BEFORE `p1.elem_count` is
+        // freed on the next line: no extra scan, RSS/runtime-neutral.
+        let arrays_by_size = {
+            use crate::report::{ArraysBySize, SizeHistogramBucket};
+            use std::collections::BTreeMap;
+            let mut obj: BTreeMap<u64, (u64, u64)> = BTreeMap::new();
+            let mut prim: BTreeMap<u64, (u64, u64)> = BTreeMap::new();
+            let mut zero_length_count: u64 = 0;
+            for i in 0..n {
+                let k = p1.kind[i];
+                if k != 1 && k != 2 {
+                    continue;
+                }
+                let len = p1.elem_count[i] as u64;
+                if len == 0 {
+                    zero_length_count += 1;
+                    continue;
+                }
+                let upper_len = len.next_power_of_two();
+                let map = if k == 1 { &mut obj } else { &mut prim };
+                let e = map.entry(upper_len).or_insert((0, 0));
+                e.0 += 1;
+                e.1 += shallow[i] as u64;
+            }
+            let to_vec = |m: BTreeMap<u64, (u64, u64)>| -> Vec<SizeHistogramBucket> {
+                m.into_iter()
+                    .map(|(upper_len, (objects, shallow))| SizeHistogramBucket {
+                        upper_len,
+                        objects,
+                        shallow,
+                    })
+                    .collect()
+            };
+            ArraysBySize {
+                obj_array_buckets: to_vec(obj),
+                prim_array_buckets: to_vec(prim),
+                zero_length_count,
+            }
+        };
         p1.elem_count = Vec::new();
 
         // ── Phase 1: Sub-pass 2a — count degrees ────────────────────────
@@ -709,6 +754,7 @@ impl Pass2 {
             alloc_frames_by_serial,
             record_census,
             dup_strings,
+            arrays_by_size,
         };
 
         // Package the deferred inbound-CSR construction. Moves id_map,

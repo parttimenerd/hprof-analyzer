@@ -30,6 +30,18 @@ pub struct HistRow {
     pub loader_label: Option<String>,
 }
 
+/// One row of the unreachable-objects histogram: objects that are not
+/// dominated by the virtual root (`idom == u32::MAX`), grouped by class.
+/// Additive; not parity-compared. Sorted by shallow descending, capped.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct UnreachableClassRow {
+    pub pretty_class: String,
+    pub objects: u64,
+    pub shallow: u64,
+}
+
 /// One row of the GC-roots-by-type breakdown: a human-readable root-type label
 /// and how many roots carry that HPROF type.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
@@ -164,6 +176,21 @@ pub struct ComponentClass {
     pub retained: u64,
 }
 
+/// One class-loader's contribution to a duplicated class name (see
+/// [`DuplicateClass`]). Additive; not parity-compared.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct DuplicateClassLoaderRow {
+    /// Display label for this loader (e.g. `<boot>` or an app loader), or the
+    /// synthesized `loader@0x…` fallback when no label was resolved.
+    pub loader_label: String,
+    pub loader_id: u64,
+    pub instances: u64,
+    pub shallow: u64,
+    pub retained: u64,
+}
+
 /// F2: a class name loaded under more than one class loader — a classic
 /// class-loader-leak signature (the same class re-loaded per web-app reload,
 /// per plugin, etc.). Grouped by `pretty_class`; `loaders` is capped.
@@ -176,6 +203,11 @@ pub struct DuplicateClass {
     pub loaders: Vec<String>,
     pub total_instances: u64,
     pub total_retained: u64,
+    /// Per-loader breakdown of this duplicated class (capped at the same
+    /// LOADER_CAP as `loaders`), sorted by retained descending. Additive;
+    /// `#[serde(default)]` so older JSON still deserializes.
+    #[serde(default)]
+    pub per_loader: Vec<DuplicateClassLoaderRow>,
 }
 
 /// Aggregates for the "System Overview" section.
@@ -222,6 +254,10 @@ pub struct SystemOverview {
     pub classloaders_loaded: u64,
     pub unreachable_count: u64,
     pub unreachable_shallow: u64,
+    /// Per-class histogram of unreachable objects (idom == u32::MAX), sorted by
+    /// shallow descending and capped. Additive; not parity-compared.
+    #[serde(default)]
+    pub unreachable_histogram: Vec<UnreachableClassRow>,
     pub histogram: Vec<HistRow>,
     /// Number of histogram rows the full histogram was capped to, or None when
     /// the histogram is complete (never truncated). Always None today.
@@ -297,6 +333,26 @@ pub struct DomTreeNode {
     pub children: Vec<DomTreeNode>,
 }
 
+/// One node of a "merged shortest paths to GC roots" prefix tree (Eclipse MAT
+/// "Merge Shortest Paths"): the dominator chains of all members of a class-group
+/// suspect, collapsed by class-at-each-depth. `object_count` is how many member
+/// chains pass through this node; `retained` sums those members' retained heap
+/// contribution at this node. Additive; not parity-compared.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct MergedPathNode {
+    pub display_class: String,
+    /// Number of member chains passing through this node.
+    pub object_count: u64,
+    /// Aggregate retained heap of the objects represented at this node.
+    pub retained: u64,
+    /// GC-root type label when this node is a root (the chain terminus).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_type_label: Option<String>,
+    pub children: Vec<MergedPathNode>,
+}
+
 /// One leak suspect (single large object or class group).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct Suspect {
@@ -348,6 +404,12 @@ pub struct Suspect {
     /// Bounded by the `--detail` max-nodes / max-depth caps.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dominator_tree: Option<DomTreeNode>,
+    /// F: merged shortest paths to GC roots for a class-group suspect — the
+    /// member objects' dominator chains collapsed into a class-keyed prefix
+    /// tree. `None` for single suspects (they already have `root_path`).
+    /// Bounded by the `--detail` max-nodes / max-depth caps.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merged_paths: Option<MergedPathNode>,
 }
 
 /// Aggregates for the "Leak Suspects" section.
@@ -515,6 +577,102 @@ pub struct ThreadOverview {
     pub threads: Vec<ThreadInfo>,
 }
 
+/// One power-of-two length bucket in the arrays-by-size histogram. `upper_len`
+/// is the inclusive upper bound of the bucket (a power of two): a bucket with
+/// `upper_len = 8` counts arrays whose element length is in `5..=8`. The first
+/// bucket is `1..=1` (upper_len 1); zero-length arrays are counted separately.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct SizeHistogramBucket {
+    pub upper_len: u64,
+    pub objects: u64,
+    pub shallow: u64,
+}
+
+/// Array-length histogram, split by object-arrays vs primitive-arrays, bucketed
+/// by power-of-two element length. Always-on; derived from data already in
+/// memory (no extra heap scan). Zero-length arrays are tallied separately.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct ArraysBySize {
+    pub obj_array_buckets: Vec<SizeHistogramBucket>,
+    pub prim_array_buckets: Vec<SizeHistogramBucket>,
+    pub zero_length_count: u64,
+}
+
+/// One "big drop" in the dominator tree: a dominator whose retained heap is
+/// much larger than any single child's, i.e. retention concentrates AT this
+/// node rather than flowing to one dominated child. A large drop marks a good
+/// place to start a leak investigation. Additive; not parity-compared.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct BigDropRow {
+    /// 1-based object index of the dominator node.
+    pub obj_index_1based: u64,
+    pub display_class: String,
+    /// Retained heap of the dominator node.
+    pub retained: u64,
+    /// Number of dominator-tree children of this node.
+    pub child_count: u64,
+    /// Retained heap of the single largest child (0 if no children).
+    pub largest_child_retained: u64,
+    /// display class of the largest child (empty if none).
+    pub largest_child_class: String,
+    /// retained - largest_child_retained: the heap that "drops" here.
+    pub drop_bytes: u64,
+}
+
+/// The "Big Drops" view: dominators where retained heap concentrates.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct BigDrops {
+    /// The retained-heap threshold (bytes) a dominator had to exceed to qualify.
+    pub threshold: u64,
+    /// Qualifying drops, sorted by drop_bytes descending, capped.
+    pub rows: Vec<BigDropRow>,
+}
+
+/// One row of the immediate-dominator class rollup: for each dominator class,
+/// how many objects it immediately dominates and their aggregate shallow heap.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct ImmediateDominatorRow {
+    pub dominator_class: String,
+    /// Number of distinct dominator objects of this class (with >=1 dom child).
+    pub dominator_count: u64,
+    /// Number of objects immediately dominated by objects of this class.
+    pub dominated_count: u64,
+    /// Aggregate shallow heap of those dominator objects.
+    pub dominator_shallow: u64,
+    /// Aggregate shallow heap of the dominated objects.
+    pub dominated_shallow: u64,
+}
+
+/// The "Immediate Dominators" view: dominated-object rollup keyed by the
+/// dominator's class. Additive; not parity-compared.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct ImmediateDominators {
+    /// Rows sorted by dominated_shallow descending, capped.
+    pub rows: Vec<ImmediateDominatorRow>,
+}
+
+/// Always-on dominator-tree analysis grouping Big Drops (#1) and Immediate
+/// Dominators (#2), mirroring Eclipse MAT's dominator views. Additive.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct DominatorAnalysis {
+    pub big_drops: BigDrops,
+    pub immediate_dominators: ImmediateDominators,
+}
+
 /// Schema version for the machine-readable JSON output. Bump on any
 /// breaking change to the `Report` shape; the JSON always carries this.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -555,4 +713,12 @@ pub struct Report {
     pub top_components: TopComponents,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alloc_sites: Option<AllocSites>,
+    /// Power-of-two array-length histogram (object vs primitive arrays).
+    /// Always-on; additive, defaults to empty for round-trip with older JSON.
+    #[serde(default)]
+    pub arrays_by_size: ArraysBySize,
+    /// Dominator-tree analysis: Big Drops + Immediate Dominators. Always-on;
+    /// additive, defaults to empty for round-trip with older JSON.
+    #[serde(default)]
+    pub dominator_analysis: DominatorAnalysis,
 }

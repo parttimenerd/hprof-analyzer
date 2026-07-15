@@ -187,6 +187,7 @@ mod tests {
                 ],
             },
             dup_strings: None,
+            arrays_by_size: Default::default(),
         };
         (g, dc_off, dc_tgt)
     }

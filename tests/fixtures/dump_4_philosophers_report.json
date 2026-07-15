@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated": "2026-07-15T16:28:22.779315000Z",
+  "generated": "2026-07-15T18:12:13.144452000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
     "file_path": "tests/fixtures/dump_4_philosophers.hprof",
@@ -175,6 +175,158 @@
     "classloaders_loaded": 5,
     "unreachable_count": 5970,
     "unreachable_shallow": 836392,
+    "unreachable_histogram": [
+      {
+        "pretty_class": "int[]",
+        "objects": 2142,
+        "shallow": 679064
+      },
+      {
+        "pretty_class": "byte[]",
+        "objects": 1437,
+        "shallow": 87432
+      },
+      {
+        "pretty_class": "java.lang.String",
+        "objects": 1429,
+        "shallow": 34296
+      },
+      {
+        "pretty_class": "java.lang.Object[]",
+        "objects": 181,
+        "shallow": 7752
+      },
+      {
+        "pretty_class": "java.lang.reflect.Method",
+        "objects": 80,
+        "shallow": 7040
+      },
+      {
+        "pretty_class": "java.lang.reflect.Field",
+        "objects": 79,
+        "shallow": 5688
+      },
+      {
+        "pretty_class": "java.lang.Class$ReflectionData",
+        "objects": 34,
+        "shallow": 2176
+      },
+      {
+        "pretty_class": "java.lang.Class[]",
+        "objects": 75,
+        "shallow": 1960
+      },
+      {
+        "pretty_class": "java.lang.Class",
+        "objects": 287,
+        "shallow": 1448
+      },
+      {
+        "pretty_class": "java.lang.ref.SoftReference",
+        "objects": 34,
+        "shallow": 1360
+      },
+      {
+        "pretty_class": "java.lang.invoke.MemberName",
+        "objects": 23,
+        "shallow": 920
+      },
+      {
+        "pretty_class": "java.lang.ClassValue$Entry[]",
+        "objects": 6,
+        "shallow": 864
+      },
+      {
+        "pretty_class": "java.lang.reflect.Constructor",
+        "objects": 11,
+        "shallow": 792
+      },
+      {
+        "pretty_class": "java.lang.reflect.Field[]",
+        "objects": 14,
+        "shallow": 552
+      },
+      {
+        "pretty_class": "java.lang.reflect.Method[]",
+        "objects": 12,
+        "shallow": 536
+      },
+      {
+        "pretty_class": "java.util.WeakHashMap$Entry[]",
+        "objects": 6,
+        "shallow": 480
+      },
+      {
+        "pretty_class": "java.lang.invoke.DirectMethodHandle$Constructor",
+        "objects": 9,
+        "shallow": 432
+      },
+      {
+        "pretty_class": "java.lang.ClassValue$ClassValueMap",
+        "objects": 6,
+        "shallow": 384
+      },
+      {
+        "pretty_class": "java.lang.reflect.Constructor[]",
+        "objects": 11,
+        "shallow": 264
+      },
+      {
+        "pretty_class": "java.util.HashMap$Node",
+        "objects": 7,
+        "shallow": 224
+      },
+      {
+        "pretty_class": "jdk.internal.reflect.DirectConstructorHandleAccessor",
+        "objects": 9,
+        "shallow": 216
+      },
+      {
+        "pretty_class": "java.lang.invoke.ResolvedMethodName",
+        "objects": 13,
+        "shallow": 208
+      },
+      {
+        "pretty_class": "java.lang.Thread",
+        "objects": 2,
+        "shallow": 208
+      },
+      {
+        "pretty_class": "java.lang.ref.ReferenceQueue",
+        "objects": 6,
+        "shallow": 192
+      },
+      {
+        "pretty_class": "java.util.concurrent.locks.ReentrantLock$NonfairSync",
+        "objects": 6,
+        "shallow": 192
+      },
+      {
+        "pretty_class": "java.lang.invoke.DirectMethodHandle",
+        "objects": 4,
+        "shallow": 160
+      },
+      {
+        "pretty_class": "java.lang.invoke.BoundMethodHandle$Species_L",
+        "objects": 4,
+        "shallow": 160
+      },
+      {
+        "pretty_class": "java.util.WeakHashMap$Entry",
+        "objects": 4,
+        "shallow": 160
+      },
+      {
+        "pretty_class": "java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject",
+        "objects": 6,
+        "shallow": 144
+      },
+      {
+        "pretty_class": "jdk.internal.reflect.DirectMethodHandleAccessor",
+        "objects": 4,
+        "shallow": 128
+      }
+    ],
     "histogram": [
       {
         "pretty_class": "java.lang.Object[]",
@@ -27870,7 +28022,23 @@
           "java/net/URLClassLoader"
         ],
         "total_instances": 4,
-        "total_retained": 129896
+        "total_retained": 129896,
+        "per_loader": [
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2150632736,
+            "instances": 1,
+            "shallow": 24,
+            "retained": 129112
+          },
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2390753352,
+            "instances": 3,
+            "shallow": 72,
+            "retained": 784
+          }
+        ]
       },
       {
         "pretty_class": "scala.math.BigInt$",
@@ -27880,7 +28048,23 @@
           "java/net/URLClassLoader"
         ],
         "total_instances": 2,
-        "total_retained": 16608
+        "total_retained": 16608,
+        "per_loader": [
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2390753352,
+            "instances": 1,
+            "shallow": 16,
+            "retained": 8352
+          },
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2150632736,
+            "instances": 1,
+            "shallow": 32,
+            "retained": 8256
+          }
+        ]
       },
       {
         "pretty_class": "scala.math.BigInt[]",
@@ -27890,7 +28074,23 @@
           "java/net/URLClassLoader"
         ],
         "total_instances": 2,
-        "total_retained": 16432
+        "total_retained": 16432,
+        "per_loader": [
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2150632736,
+            "instances": 1,
+            "shallow": 8216,
+            "retained": 8216
+          },
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2390753352,
+            "instances": 1,
+            "shallow": 8216,
+            "retained": 8216
+          }
+        ]
       },
       {
         "pretty_class": "scala.collection.immutable.$colon$colon",
@@ -27900,7 +28100,23 @@
           "java/net/URLClassLoader"
         ],
         "total_instances": 30,
-        "total_retained": 5976
+        "total_retained": 5976,
+        "per_loader": [
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2390753352,
+            "instances": 30,
+            "shallow": 720,
+            "retained": 5936
+          },
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2150632736,
+            "instances": 0,
+            "shallow": 0,
+            "retained": 40
+          }
+        ]
       },
       {
         "pretty_class": "scala.collection.immutable.Range",
@@ -27910,7 +28126,23 @@
           "java/net/URLClassLoader"
         ],
         "total_instances": 128,
-        "total_retained": 5672
+        "total_retained": 5672,
+        "per_loader": [
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2150632736,
+            "instances": 128,
+            "shallow": 5120,
+            "retained": 5640
+          },
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2390753352,
+            "instances": 0,
+            "shallow": 0,
+            "retained": 32
+          }
+        ]
       },
       {
         "pretty_class": "scala.collection.mutable.Buffer",
@@ -27920,7 +28152,23 @@
           "java/net/URLClassLoader"
         ],
         "total_instances": 0,
-        "total_retained": 3560
+        "total_retained": 3560,
+        "per_loader": [
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2150632736,
+            "instances": 0,
+            "shallow": 0,
+            "retained": 3368
+          },
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2390753352,
+            "instances": 0,
+            "shallow": 0,
+            "retained": 192
+          }
+        ]
       },
       {
         "pretty_class": "scala.Some",
@@ -27930,7 +28178,23 @@
           "java/net/URLClassLoader"
         ],
         "total_instances": 110,
-        "total_retained": 2128
+        "total_retained": 2128,
+        "per_loader": [
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2150632736,
+            "instances": 92,
+            "shallow": 1472,
+            "retained": 1560
+          },
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2390753352,
+            "instances": 18,
+            "shallow": 288,
+            "retained": 568
+          }
+        ]
       },
       {
         "pretty_class": "scala.collection.mutable.IndexedSeq",
@@ -27940,7 +28204,23 @@
           "java/net/URLClassLoader"
         ],
         "total_instances": 0,
-        "total_retained": 2112
+        "total_retained": 2112,
+        "per_loader": [
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2150632736,
+            "instances": 0,
+            "shallow": 0,
+            "retained": 1960
+          },
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2390753352,
+            "instances": 0,
+            "shallow": 0,
+            "retained": 152
+          }
+        ]
       },
       {
         "pretty_class": "scala.collection.IndexedSeq",
@@ -27950,7 +28230,23 @@
           "java/net/URLClassLoader"
         ],
         "total_instances": 0,
-        "total_retained": 1712
+        "total_retained": 1712,
+        "per_loader": [
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2150632736,
+            "instances": 0,
+            "shallow": 0,
+            "retained": 1560
+          },
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2390753352,
+            "instances": 0,
+            "shallow": 0,
+            "retained": 152
+          }
+        ]
       },
       {
         "pretty_class": "scala.collection.Iterable",
@@ -27960,7 +28256,23 @@
           "java/net/URLClassLoader"
         ],
         "total_instances": 0,
-        "total_retained": 1328
+        "total_retained": 1328,
+        "per_loader": [
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2150632736,
+            "instances": 0,
+            "shallow": 0,
+            "retained": 1192
+          },
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2390753352,
+            "instances": 0,
+            "shallow": 0,
+            "retained": 136
+          }
+        ]
       },
       {
         "pretty_class": "scala.collection.immutable.Vector",
@@ -27970,7 +28282,23 @@
           "java/net/URLClassLoader"
         ],
         "total_instances": 2,
-        "total_retained": 1080
+        "total_retained": 1080,
+        "per_loader": [
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2150632736,
+            "instances": 2,
+            "shallow": 112,
+            "retained": 976
+          },
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2390753352,
+            "instances": 0,
+            "shallow": 0,
+            "retained": 104
+          }
+        ]
       },
       {
         "pretty_class": "scala.Array$",
@@ -27980,7 +28308,23 @@
           "java/net/URLClassLoader"
         ],
         "total_instances": 2,
-        "total_retained": 912
+        "total_retained": 912,
+        "per_loader": [
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2150632736,
+            "instances": 1,
+            "shallow": 96,
+            "retained": 648
+          },
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2390753352,
+            "instances": 1,
+            "shallow": 16,
+            "retained": 264
+          }
+        ]
       },
       {
         "pretty_class": "scala.collection.immutable.Map",
@@ -27990,7 +28334,23 @@
           "java/net/URLClassLoader"
         ],
         "total_instances": 0,
-        "total_retained": 784
+        "total_retained": 784,
+        "per_loader": [
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2390753352,
+            "instances": 0,
+            "shallow": 0,
+            "retained": 640
+          },
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2150632736,
+            "instances": 0,
+            "shallow": 0,
+            "retained": 144
+          }
+        ]
       },
       {
         "pretty_class": "scala.collection.mutable.AbstractSeq",
@@ -28000,7 +28360,23 @@
           "java/net/URLClassLoader"
         ],
         "total_instances": 0,
-        "total_retained": 744
+        "total_retained": 744,
+        "per_loader": [
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2150632736,
+            "instances": 0,
+            "shallow": 0,
+            "retained": 696
+          },
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2390753352,
+            "instances": 0,
+            "shallow": 0,
+            "retained": 48
+          }
+        ]
       },
       {
         "pretty_class": "scala.collection.mutable.HashMap",
@@ -28010,7 +28386,23 @@
           "java/net/URLClassLoader"
         ],
         "total_instances": 3,
-        "total_retained": 744
+        "total_retained": 744,
+        "per_loader": [
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2390753352,
+            "instances": 3,
+            "shallow": 96,
+            "retained": 712
+          },
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2150632736,
+            "instances": 0,
+            "shallow": 0,
+            "retained": 32
+          }
+        ]
       },
       {
         "pretty_class": "scala.Function1",
@@ -28020,7 +28412,23 @@
           "java/net/URLClassLoader"
         ],
         "total_instances": 0,
-        "total_retained": 616
+        "total_retained": 616,
+        "per_loader": [
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2390753352,
+            "instances": 0,
+            "shallow": 0,
+            "retained": 552
+          },
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2150632736,
+            "instances": 0,
+            "shallow": 0,
+            "retained": 64
+          }
+        ]
       },
       {
         "pretty_class": "scala.Predef$",
@@ -28030,7 +28438,23 @@
           "java/net/URLClassLoader"
         ],
         "total_instances": 2,
-        "total_retained": 608
+        "total_retained": 608,
+        "per_loader": [
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2150632736,
+            "instances": 1,
+            "shallow": 48,
+            "retained": 520
+          },
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2390753352,
+            "instances": 1,
+            "shallow": 16,
+            "retained": 88
+          }
+        ]
       },
       {
         "pretty_class": "scala.collection.AbstractSeq",
@@ -28040,7 +28464,23 @@
           "java/net/URLClassLoader"
         ],
         "total_instances": 0,
-        "total_retained": 568
+        "total_retained": 568,
+        "per_loader": [
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2150632736,
+            "instances": 0,
+            "shallow": 0,
+            "retained": 528
+          },
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2390753352,
+            "instances": 0,
+            "shallow": 0,
+            "retained": 40
+          }
+        ]
       },
       {
         "pretty_class": "scala.collection.immutable.Vector$",
@@ -28050,7 +28490,23 @@
           "java/net/URLClassLoader"
         ],
         "total_instances": 2,
-        "total_retained": 472
+        "total_retained": 472,
+        "per_loader": [
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2390753352,
+            "instances": 1,
+            "shallow": 16,
+            "retained": 296
+          },
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2150632736,
+            "instances": 1,
+            "shallow": 24,
+            "retained": 176
+          }
+        ]
       },
       {
         "pretty_class": "scala.runtime.ScalaRunTime$",
@@ -28060,7 +28516,23 @@
           "java/net/URLClassLoader"
         ],
         "total_instances": 2,
-        "total_retained": 408
+        "total_retained": 408,
+        "per_loader": [
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2390753352,
+            "instances": 1,
+            "shallow": 16,
+            "retained": 224
+          },
+          {
+            "loader_label": "java/net/URLClassLoader",
+            "loader_id": 2150632736,
+            "instances": 1,
+            "shallow": 16,
+            "retained": 184
+          }
+        ]
       }
     ],
     "record_census": {
@@ -28114,7 +28586,20 @@
         "keywords": [
           "scala.concurrent.stm.ccstm.InTxnImpl"
         ],
-        "root_type_label": ""
+        "root_type_label": "",
+        "merged_paths": {
+          "display_class": "scala.concurrent.stm.ccstm.InTxnImpl",
+          "object_count": 94,
+          "retained": 2791424,
+          "children": [
+            {
+              "display_class": "scala.concurrent.stm.ccstm.InTxnImpl",
+              "object_count": 94,
+              "retained": 2791424,
+              "children": []
+            }
+          ]
+        }
       },
       {
         "is_single": true,
@@ -63485,7 +63970,20 @@
         "keywords": [
           "java.util.zip.ZipFile$Source"
         ],
-        "root_type_label": ""
+        "root_type_label": "",
+        "merged_paths": {
+          "display_class": "java.util.zip.ZipFile$Source",
+          "object_count": 19,
+          "retained": 1353616,
+          "children": [
+            {
+              "display_class": "java.util.zip.ZipFile$Source",
+              "object_count": 19,
+              "retained": 1353616,
+              "children": []
+            }
+          ]
+        }
       }
     ]
   },
@@ -87640,5 +88138,628 @@
         "retained_total": 37715520
       }
     ]
+  },
+  "arrays_by_size": {
+    "obj_array_buckets": [
+      {
+        "upper_len": 1,
+        "objects": 772,
+        "shallow": 18528
+      },
+      {
+        "upper_len": 2,
+        "objects": 593,
+        "shallow": 14232
+      },
+      {
+        "upper_len": 4,
+        "objects": 657,
+        "shallow": 21024
+      },
+      {
+        "upper_len": 8,
+        "objects": 988,
+        "shallow": 41840
+      },
+      {
+        "upper_len": 16,
+        "objects": 1002,
+        "shallow": 73784
+      },
+      {
+        "upper_len": 32,
+        "objects": 392,
+        "shallow": 46256
+      },
+      {
+        "upper_len": 64,
+        "objects": 121,
+        "shallow": 24312
+      },
+      {
+        "upper_len": 128,
+        "objects": 847,
+        "shallow": 436504
+      },
+      {
+        "upper_len": 256,
+        "objects": 26,
+        "shallow": 23800
+      },
+      {
+        "upper_len": 512,
+        "objects": 10,
+        "shallow": 15768
+      },
+      {
+        "upper_len": 1024,
+        "objects": 276,
+        "shallow": 1122712
+      },
+      {
+        "upper_len": 2048,
+        "objects": 137,
+        "shallow": 656736
+      },
+      {
+        "upper_len": 4096,
+        "objects": 6,
+        "shallow": 66912
+      },
+      {
+        "upper_len": 8192,
+        "objects": 1,
+        "shallow": 31768
+      },
+      {
+        "upper_len": 131072,
+        "objects": 1,
+        "shallow": 524304
+      }
+    ],
+    "prim_array_buckets": [
+      {
+        "upper_len": 1,
+        "objects": 336,
+        "shallow": 8064
+      },
+      {
+        "upper_len": 2,
+        "objects": 705,
+        "shallow": 16920
+      },
+      {
+        "upper_len": 4,
+        "objects": 1403,
+        "shallow": 35520
+      },
+      {
+        "upper_len": 8,
+        "objects": 2314,
+        "shallow": 57488
+      },
+      {
+        "upper_len": 16,
+        "objects": 4707,
+        "shallow": 160800
+      },
+      {
+        "upper_len": 32,
+        "objects": 6925,
+        "shallow": 327584
+      },
+      {
+        "upper_len": 64,
+        "objects": 8386,
+        "shallow": 548752
+      },
+      {
+        "upper_len": 128,
+        "objects": 1485,
+        "shallow": 160296
+      },
+      {
+        "upper_len": 256,
+        "objects": 231,
+        "shallow": 56056
+      },
+      {
+        "upper_len": 512,
+        "objects": 421,
+        "shallow": 411704
+      },
+      {
+        "upper_len": 1024,
+        "objects": 342,
+        "shallow": 1548896
+      },
+      {
+        "upper_len": 2048,
+        "objects": 17,
+        "shallow": 61752
+      },
+      {
+        "upper_len": 4096,
+        "objects": 3,
+        "shallow": 9872
+      },
+      {
+        "upper_len": 8192,
+        "objects": 32,
+        "shallow": 396272
+      },
+      {
+        "upper_len": 16384,
+        "objects": 5,
+        "shallow": 86744
+      },
+      {
+        "upper_len": 32768,
+        "objects": 6,
+        "shallow": 135856
+      },
+      {
+        "upper_len": 65536,
+        "objects": 2,
+        "shallow": 106456
+      },
+      {
+        "upper_len": 131072,
+        "objects": 1,
+        "shallow": 524272
+      },
+      {
+        "upper_len": 262144,
+        "objects": 4,
+        "shallow": 873792
+      }
+    ],
+    "zero_length_count": 2419
+  },
+  "dominator_analysis": {
+    "big_drops": {
+      "threshold": 121870,
+      "rows": [
+        {
+          "obj_index_1based": 1,
+          "display_class": "java.lang.Object[]",
+          "retained": 2621456,
+          "child_count": 131072,
+          "largest_child_retained": 16,
+          "largest_child_class": "java.lang.Object",
+          "drop_bytes": 2621440
+        },
+        {
+          "obj_index_1based": 39348,
+          "display_class": "java.util.HashMap$Node[]",
+          "retained": 591048,
+          "child_count": 2048,
+          "largest_child_retained": 1000,
+          "largest_child_class": "java.util.HashMap$Node",
+          "drop_bytes": 590048
+        },
+        {
+          "obj_index_1based": 76135,
+          "display_class": "java.util.HashMap$Node[]",
+          "retained": 525968,
+          "child_count": 1908,
+          "largest_child_retained": 1168,
+          "largest_child_class": "java.util.HashMap$Node",
+          "drop_bytes": 524800
+        },
+        {
+          "obj_index_1based": 99101,
+          "display_class": "byte[]",
+          "retained": 261208,
+          "child_count": 0,
+          "largest_child_retained": 0,
+          "largest_child_class": "",
+          "drop_bytes": 261208
+        },
+        {
+          "obj_index_1based": 70491,
+          "display_class": "byte[]",
+          "retained": 238208,
+          "child_count": 0,
+          "largest_child_retained": 0,
+          "largest_child_class": "",
+          "drop_bytes": 238208
+        },
+        {
+          "obj_index_1based": 73387,
+          "display_class": "byte[]",
+          "retained": 230000,
+          "child_count": 0,
+          "largest_child_retained": 0,
+          "largest_child_class": "",
+          "drop_bytes": 230000
+        },
+        {
+          "obj_index_1based": 182024,
+          "display_class": "java.lang.Thread",
+          "retained": 309608,
+          "child_count": 93,
+          "largest_child_retained": 140424,
+          "largest_child_class": "java.util.HashMap",
+          "drop_bytes": 169184
+        },
+        {
+          "obj_index_1based": 72656,
+          "display_class": "byte[]",
+          "retained": 144376,
+          "child_count": 0,
+          "largest_child_retained": 0,
+          "largest_child_class": "",
+          "drop_bytes": 144376
+        },
+        {
+          "obj_index_1based": 62772,
+          "display_class": "java.util.HashMap$Node[]",
+          "retained": 140344,
+          "child_count": 639,
+          "largest_child_retained": 824,
+          "largest_child_class": "java.util.HashMap$Node",
+          "drop_bytes": 139520
+        },
+        {
+          "obj_index_1based": 98083,
+          "display_class": "java.lang.Object[]",
+          "retained": 128792,
+          "child_count": 16,
+          "largest_child_retained": 8216,
+          "largest_child_class": "java.lang.String",
+          "drop_bytes": 120576
+        },
+        {
+          "obj_index_1based": 32971,
+          "display_class": "java.lang.Class",
+          "retained": 203112,
+          "child_count": 609,
+          "largest_child_retained": 121008,
+          "largest_child_class": "java.time.zone.TzdbZoneRulesProvider",
+          "drop_bytes": 82104
+        },
+        {
+          "obj_index_1based": 60393,
+          "display_class": "java.net.URLClassLoader",
+          "retained": 174528,
+          "child_count": 14,
+          "largest_child_retained": 112688,
+          "largest_child_class": "java.util.ArrayList",
+          "drop_bytes": 61840
+        },
+        {
+          "obj_index_1based": 235715,
+          "display_class": "java.lang.Class",
+          "retained": 148840,
+          "child_count": 371,
+          "largest_child_retained": 96376,
+          "largest_child_class": "byte[][]",
+          "drop_bytes": 52464
+        },
+        {
+          "obj_index_1based": 182101,
+          "display_class": "java.util.zip.ZipFile$Source",
+          "retained": 302304,
+          "child_count": 3,
+          "largest_child_retained": 261208,
+          "largest_child_class": "byte[]",
+          "drop_bytes": 41096
+        },
+        {
+          "obj_index_1based": 73254,
+          "display_class": "java.util.zip.ZipFile$Source",
+          "retained": 266816,
+          "child_count": 3,
+          "largest_child_retained": 230000,
+          "largest_child_class": "byte[]",
+          "drop_bytes": 36816
+        },
+        {
+          "obj_index_1based": 73266,
+          "display_class": "java.util.zip.ZipFile$Source",
+          "retained": 274360,
+          "child_count": 3,
+          "largest_child_retained": 238208,
+          "largest_child_class": "byte[]",
+          "drop_bytes": 36152
+        },
+        {
+          "obj_index_1based": 96323,
+          "display_class": "org.renaissance.scala.stm.RealityShowPhilosophers$CameraThread",
+          "retained": 159016,
+          "child_count": 8,
+          "largest_child_retained": 128816,
+          "largest_child_class": "scala.collection.mutable.ArrayBuffer",
+          "drop_bytes": 30200
+        },
+        {
+          "obj_index_1based": 72629,
+          "display_class": "java.util.zip.ZipFile$Source",
+          "retained": 164696,
+          "child_count": 3,
+          "largest_child_retained": 144376,
+          "largest_child_class": "byte[]",
+          "drop_bytes": 20320
+        },
+        {
+          "obj_index_1based": 75398,
+          "display_class": "java.util.jar.Manifest",
+          "retained": 534232,
+          "child_count": 2,
+          "largest_child_retained": 526016,
+          "largest_child_class": "java.util.HashMap",
+          "drop_bytes": 8216
+        },
+        {
+          "obj_index_1based": 39279,
+          "display_class": "java.util.jar.Manifest",
+          "retained": 598208,
+          "child_count": 2,
+          "largest_child_retained": 591096,
+          "largest_child_class": "java.util.HashMap",
+          "drop_bytes": 7112
+        },
+        {
+          "obj_index_1based": 146448,
+          "display_class": "java.lang.Class",
+          "retained": 2622376,
+          "child_count": 3,
+          "largest_child_retained": 2621456,
+          "largest_child_class": "java.lang.Object[]",
+          "drop_bytes": 920
+        },
+        {
+          "obj_index_1based": 39276,
+          "display_class": "java.util.jar.JarFile",
+          "retained": 598600,
+          "child_count": 3,
+          "largest_child_retained": 598248,
+          "largest_child_class": "java.lang.ref.SoftReference",
+          "drop_bytes": 352
+        },
+        {
+          "obj_index_1based": 73228,
+          "display_class": "java.util.jar.JarFile",
+          "retained": 534584,
+          "child_count": 3,
+          "largest_child_retained": 534272,
+          "largest_child_class": "java.lang.ref.SoftReference",
+          "drop_bytes": 312
+        },
+        {
+          "obj_index_1based": 62002,
+          "display_class": "java.util.HashMap",
+          "retained": 140424,
+          "child_count": 3,
+          "largest_child_retained": 140344,
+          "largest_child_class": "java.util.HashMap$Node[]",
+          "drop_bytes": 80
+        },
+        {
+          "obj_index_1based": 39347,
+          "display_class": "java.util.HashMap",
+          "retained": 591096,
+          "child_count": 1,
+          "largest_child_retained": 591048,
+          "largest_child_class": "java.util.HashMap$Node[]",
+          "drop_bytes": 48
+        }
+      ]
+    },
+    "immediate_dominators": {
+      "rows": [
+        {
+          "dominator_class": "scala.concurrent.stm.ccstm.InTxnImpl",
+          "dominator_count": 129,
+          "dominated_count": 1548,
+          "dominator_shallow": 18576,
+          "dominated_shallow": 3402504
+        },
+        {
+          "dominator_class": "java.lang.Object[]",
+          "dominator_count": 342,
+          "dominated_count": 135075,
+          "dominator_shallow": 758056,
+          "dominated_shallow": 2211232
+        },
+        {
+          "dominator_class": "java.util.zip.ZipFile$Source",
+          "dominator_count": 19,
+          "dominated_count": 57,
+          "dominator_shallow": 1520,
+          "dominated_shallow": 1352096
+        },
+        {
+          "dominator_class": "java.lang.String",
+          "dominator_count": 23215,
+          "dominated_count": 23215,
+          "dominator_shallow": 557160,
+          "dominated_shallow": 1296536
+        },
+        {
+          "dominator_class": "java.lang.Class",
+          "dominator_count": 1877,
+          "dominated_count": 4844,
+          "dominator_shallow": 32016,
+          "dominated_shallow": 776472
+        },
+        {
+          "dominator_class": "scala.concurrent.stm.skel.CallbackList",
+          "dominator_count": 774,
+          "dominated_count": 774,
+          "dominator_shallow": 18576,
+          "dominated_shallow": 408672
+        },
+        {
+          "dominator_class": "java.util.jar.Attributes",
+          "dominator_count": 5477,
+          "dominated_count": 5477,
+          "dominator_shallow": 87632,
+          "dominated_shallow": 350528
+        },
+        {
+          "dominator_class": "java.util.HashMap$Node",
+          "dominator_count": 7380,
+          "dominated_count": 15368,
+          "dominator_shallow": 236160,
+          "dominated_shallow": 345688
+        },
+        {
+          "dominator_class": "java.util.HashMap$Node[]",
+          "dominator_count": 348,
+          "dominated_count": 7542,
+          "dominator_shallow": 88992,
+          "dominated_shallow": 241512
+        },
+        {
+          "dominator_class": "java.util.concurrent.ConcurrentHashMap$Node[]",
+          "dominator_count": 91,
+          "dominated_count": 5916,
+          "dominator_shallow": 67312,
+          "dominated_shallow": 220512
+        },
+        {
+          "dominator_class": "java.util.concurrent.ConcurrentHashMap$Node",
+          "dominator_count": 5245,
+          "dominated_count": 6642,
+          "dominator_shallow": 167840,
+          "dominated_shallow": 211168
+        },
+        {
+          "dominator_class": "byte[][]",
+          "dominator_count": 1,
+          "dominated_count": 346,
+          "dominator_shallow": 1400,
+          "dominated_shallow": 94976
+        },
+        {
+          "dominator_class": "java.util.HashMap",
+          "dominator_count": 348,
+          "dominated_count": 400,
+          "dominator_shallow": 16704,
+          "dominated_shallow": 89824
+        },
+        {
+          "dominator_class": "java.util.concurrent.ConcurrentHashMap",
+          "dominator_count": 93,
+          "dominated_count": 103,
+          "dominator_shallow": 5952,
+          "dominated_shallow": 67664
+        },
+        {
+          "dominator_class": "scala.concurrent.stm.skel.SimpleRandom$",
+          "dominator_count": 1,
+          "dominated_count": 1,
+          "dominator_shallow": 24,
+          "dominated_shallow": 65552
+        },
+        {
+          "dominator_class": "java.util.LinkedHashMap",
+          "dominator_count": 47,
+          "dominated_count": 1250,
+          "dominator_shallow": 3008,
+          "dominated_shallow": 58056
+        },
+        {
+          "dominator_class": "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread",
+          "dominator_count": 128,
+          "dominated_count": 1209,
+          "dominator_shallow": 16384,
+          "dominated_shallow": 37024
+        },
+        {
+          "dominator_class": "java.io.BufferedWriter",
+          "dominator_count": 2,
+          "dominated_count": 4,
+          "dominator_shallow": 80,
+          "dominated_shallow": 32832
+        },
+        {
+          "dominator_class": "java.util.LinkedHashMap$Entry",
+          "dominator_count": 1139,
+          "dominated_count": 1166,
+          "dominator_shallow": 45560,
+          "dominated_shallow": 27984
+        },
+        {
+          "dominator_class": "jdk.internal.math.FDBigInteger",
+          "dominator_count": 341,
+          "dominated_count": 341,
+          "dominator_shallow": 10912,
+          "dominated_shallow": 24800
+        },
+        {
+          "dominator_class": "java.util.ImmutableCollections$SetN",
+          "dominator_count": 149,
+          "dominated_count": 149,
+          "dominator_shallow": 3576,
+          "dominated_shallow": 23888
+        },
+        {
+          "dominator_class": "java.lang.invoke.MethodType",
+          "dominator_count": 546,
+          "dominated_count": 784,
+          "dominator_shallow": 21840,
+          "dominated_shallow": 21728
+        },
+        {
+          "dominator_class": "java.lang.invoke.MethodTypeForm",
+          "dominator_count": 125,
+          "dominated_count": 250,
+          "dominator_shallow": 4000,
+          "dominated_shallow": 19000
+        },
+        {
+          "dominator_class": "java.io.BufferedReader",
+          "dominator_count": 1,
+          "dominated_count": 3,
+          "dominator_shallow": 48,
+          "dominated_shallow": 16440
+        },
+        {
+          "dominator_class": "java.lang.invoke.MemberName",
+          "dominator_count": 466,
+          "dominated_count": 773,
+          "dominator_shallow": 18640,
+          "dominated_shallow": 14152
+        },
+        {
+          "dominator_class": "java.util.concurrent.atomic.AtomicReferenceArray",
+          "dominator_count": 2,
+          "dominated_count": 2,
+          "dominator_shallow": 32,
+          "dominated_shallow": 12320
+        },
+        {
+          "dominator_class": "java.lang.invoke.DirectMethodHandle$Constructor",
+          "dominator_count": 123,
+          "dominated_count": 432,
+          "dominator_shallow": 5904,
+          "dominated_shallow": 11992
+        },
+        {
+          "dominator_class": "java.lang.invoke.LambdaForm",
+          "dominator_count": 128,
+          "dominated_count": 272,
+          "dominator_shallow": 6144,
+          "dominated_shallow": 11160
+        },
+        {
+          "dominator_class": "jdk.internal.math.FDBigInteger[]",
+          "dominator_count": 1,
+          "dominated_count": 341,
+          "dominator_shallow": 1376,
+          "dominated_shallow": 10880
+        },
+        {
+          "dominator_class": "java.lang.invoke.LambdaForm$Name[]",
+          "dominator_count": 126,
+          "dominated_count": 330,
+          "dominator_shallow": 5408,
+          "dominated_shallow": 10560
+        }
+      ]
+    }
   }
 }

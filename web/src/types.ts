@@ -55,12 +55,21 @@ export interface LoaderRollup {
   retained: number;
 }
 
+export interface DuplicateClassLoaderRow {
+  loader_label: string;
+  loader_id: number;
+  instances: number;
+  shallow: number;
+  retained: number;
+}
+
 export interface DuplicateClass {
   pretty_class: string;
   loader_count: number;
   loaders: string[];
   total_instances: number;
   total_retained: number;
+  per_loader?: DuplicateClassLoaderRow[];
 }
 
 export interface SystemOverview {
@@ -87,6 +96,7 @@ export interface SystemOverview {
   classloaders_loaded: number;
   unreachable_count: number;
   unreachable_shallow: number;
+  unreachable_histogram: UnreachableClassRow[];
   histogram: HistRow[];
   histogram_truncated_to: number | null;
   loader_rollup: LoaderRollup[];
@@ -124,6 +134,17 @@ export interface DomTreeNode {
   shallow: number;
   retained: number;
   children: DomTreeNode[];
+}
+
+// One node of the "merged shortest paths to GC roots" prefix tree for a
+// class-group suspect: member dominator chains collapsed by class-at-each-depth.
+// Recursive via `children`.
+export interface MergedPathNode {
+  display_class: string;
+  object_count: number;
+  retained: number;
+  root_type_label?: string;
+  children: MergedPathNode[];
 }
 
 // One sampled GC-thread-local root object held by a
@@ -174,6 +195,9 @@ export interface Suspect {
   // full multi-level dominator subtree at the
   // accumulation point. Absent by default.
   dominator_tree?: DomTreeNode;
+  // merged shortest paths to GC roots for a class-group
+  // suspect (member chains collapsed by class). Absent for single suspects.
+  merged_paths?: MergedPathNode;
 }
 
 export interface LeakSuspects {
@@ -265,6 +289,61 @@ export interface TopComponents {
   components: Component[];
 }
 
+export interface SizeHistogramBucket {
+  upper_len: number;
+  objects: number;
+  shallow: number;
+}
+
+export interface ArraysBySize {
+  obj_array_buckets: SizeHistogramBucket[];
+  prim_array_buckets: SizeHistogramBucket[];
+  zero_length_count: number;
+}
+
+// One "big drop": a dominator whose retained heap concentrates here rather
+// than flowing to one dominated child.
+export interface BigDropRow {
+  obj_index_1based: number;
+  display_class: string;
+  retained: number;
+  child_count: number;
+  largest_child_retained: number;
+  largest_child_class: string;
+  drop_bytes: number;
+}
+
+export interface BigDrops {
+  threshold: number;
+  rows: BigDropRow[];
+}
+
+// One immediate-dominator class rollup row.
+export interface ImmediateDominatorRow {
+  dominator_class: string;
+  dominator_count: number;
+  dominated_count: number;
+  dominator_shallow: number;
+  dominated_shallow: number;
+}
+
+export interface ImmediateDominators {
+  rows: ImmediateDominatorRow[];
+}
+
+// Always-on dominator-tree analysis: Big Drops + Immediate Dominators.
+export interface DominatorAnalysis {
+  big_drops: BigDrops;
+  immediate_dominators: ImmediateDominators;
+}
+
+// One row of the per-class unreachable-objects histogram (idom == u32::MAX).
+export interface UnreachableClassRow {
+  pretty_class: string;
+  objects: number;
+  shallow: number;
+}
+
 export interface Report {
   schema_version: number;
   generated: string;
@@ -276,6 +355,10 @@ export interface Report {
   top_components: TopComponents;
   // aggregated allocation sites. Absent by default.
   alloc_sites?: AllocSites;
+  // power-of-two array-length histogram (obj vs prim arrays). Always-on.
+  arrays_by_size: ArraysBySize;
+  // dominator-tree analysis: Big Drops + Immediate Dominators. Always-on.
+  dominator_analysis: DominatorAnalysis;
 }
 
 declare global {

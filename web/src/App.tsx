@@ -1,5 +1,5 @@
 import React from "react";
-import type { AllocSites, ClassRow, DomTreeNode, HistRow, ObjRow, PackageNode, Report, RootPathStep, Suspect, ThreadInfo, ThreadLocalObj, TopComponents } from "./types";
+import type { AllocSites, ArraysBySize, ClassRow, DomTreeNode, DominatorAnalysis, HistRow, MergedPathNode, ObjRow, PackageNode, Report, RootPathStep, Suspect, SystemOverview, ThreadInfo, ThreadLocalObj, TopComponents, UnreachableClassRow } from "./types";
 import { fmtCount, fmtExactBytes, formatBytes, formatEpochMs, pctOf, shortLoader } from "./format";
 import {
   CompositionStackedBar,
@@ -68,10 +68,13 @@ function Nav({ report }: { report: Report }) {
     ["overview", "System Overview"],
     ["leaks", "Leak Suspects"],
     ["top", "Top Consumers"],
+    ["dominator-analysis", "Dominator Analysis"],
     ["threads", "Threads"],
   ];
   // show the entry only when the field is present.
   if (report.top_components?.components?.length) items.push(["top-components", "Top Components"]);
+  items.push(["arrays-by-size", "Arrays by Size"]);
+  items.push(["unreachable-objects", "Unreachable Objects"]);
   if (report.alloc_sites) items.push(["alloc-sites", "Allocation Sites"]);
   const rc = report.overview.retention_concentration;
   if (rc.top1_bp > 0 || rc.num_objects_ge_1pct > 0) {
@@ -640,14 +643,46 @@ function SystemOverviewSection({ report }: { report: Report }) {
             </thead>
             <tbody>
               {o.duplicate_classes.map((d, i) => (
-                <tr key={i}>
-                  <td title={d.loaders.join(", ")}>
-                    <code>{d.pretty_class}</code>
-                  </td>
-                  <td className="num">{fmtCount(d.loader_count)}</td>
-                  <td className="num">{fmtCount(d.total_instances)}</td>
-                  <td className="num">{formatBytes(d.total_retained)}</td>
-                </tr>
+                <React.Fragment key={i}>
+                  <tr>
+                    <td title={d.loaders.join(", ")}>
+                      {d.per_loader && d.per_loader.length > 0 ? (
+                        <details>
+                          <summary>
+                            <code>{d.pretty_class}</code>
+                          </summary>
+                          <table>
+                            <thead>
+                              <tr>
+                                <th>Loader</th>
+                                <th className="num">Instances</th>
+                                <th className="num">Shallow</th>
+                                <th className="num">Retained</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {d.per_loader.map((pl, j) => (
+                                <tr key={j}>
+                                  <td>
+                                    <code>{pl.loader_label}</code>
+                                  </td>
+                                  <td className="num">{fmtCount(pl.instances)}</td>
+                                  <td className="num">{formatBytes(pl.shallow)}</td>
+                                  <td className="num">{formatBytes(pl.retained)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </details>
+                      ) : (
+                        <code>{d.pretty_class}</code>
+                      )}
+                    </td>
+                    <td className="num">{fmtCount(d.loader_count)}</td>
+                    <td className="num">{fmtCount(d.total_instances)}</td>
+                    <td className="num">{formatBytes(d.total_retained)}</td>
+                  </tr>
+                </React.Fragment>
               ))}
             </tbody>
           </table>
@@ -777,6 +812,55 @@ function DomSubtree({ node }: { node: DomTreeNode }) {
   );
 }
 
+// One node of the recursive "merged shortest paths to GC roots" prefix tree
+// (class-group suspects). Mirrors DomSubtreeNode. Each node shows the class, how
+// many member chains pass through it, and the aggregate retained heap; a
+// terminal GC-root node carries its root-type label.
+function MergedPathsNode({ node, depth }: { node: MergedPathNode; depth: number }) {
+  const hasChildren = node.children.length > 0;
+  const label = (
+    <>
+      <code>{node.display_class}</code>{" "}
+      <span className="path-ret">
+        {fmtCount(node.object_count)} object{node.object_count === 1 ? "" : "s"} · retained {formatBytes(node.retained)}
+      </span>
+      {node.root_type_label && (
+        <> — <strong>GC root: {node.root_type_label}</strong></>
+      )}
+    </>
+  );
+  if (!hasChildren) {
+    return (
+      <li style={{ paddingLeft: `${depth * 1.1}rem` }}>
+        <span className="tree-leaf">•</span> {label}
+      </li>
+    );
+  }
+  return (
+    <li>
+      <details open={depth < 1}>
+        <summary style={{ paddingLeft: `${depth * 1.1}rem` }}>{label}</summary>
+        <ul className="dom-subtree">
+          {node.children.map((c, i) => (
+            <MergedPathsNode key={i} node={c} depth={depth + 1} />
+          ))}
+        </ul>
+      </details>
+    </li>
+  );
+}
+
+function MergedPaths({ node }: { node: MergedPathNode }) {
+  return (
+    <details>
+      <summary>Merged paths to GC roots</summary>
+      <ul className="dom-subtree">
+        <MergedPathsNode node={node} depth={0} />
+      </ul>
+    </details>
+  );
+}
+
 function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: number }) {
   const share = pctOf(s.retained, total);
   return (
@@ -852,6 +936,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
       )}
       {s.root_path && <RootPathList steps={s.root_path} />}
       {s.dominator_tree && <DomSubtree node={s.dominator_tree} />}
+      {!s.is_single && s.merged_paths && <MergedPaths node={s.merged_paths} />}
     </div>
   );
 }
@@ -1287,6 +1372,183 @@ function TopComponentsSection({ data }: { data: TopComponents }) {
   );
 }
 
+// ── Arrays by Size ─────────────────────────────────────────────────────────
+// Power-of-two array-length histogram (object vs primitive arrays). Always-on;
+// mirrors render_md.rs::render_arrays_by_size.
+function ArraysBySizeSection({ data }: { data?: ArraysBySize }) {
+  const obj = data?.obj_array_buckets ?? [];
+  const prim = data?.prim_array_buckets ?? [];
+  const zero = data?.zero_length_count ?? 0;
+  const empty = obj.length === 0 && prim.length === 0 && zero === 0;
+
+  const bucketTable = (title: string, buckets: ArraysBySize["obj_array_buckets"]) => (
+    <>
+      <h3>{title}</h3>
+      {buckets.length === 0 ? (
+        <p className="subtitle">None.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th className="num">Max length</th>
+              <th className="num">Objects</th>
+              <th className="num">Shallow</th>
+            </tr>
+          </thead>
+          <tbody>
+            {buckets.map((b, i) => (
+              <tr key={i}>
+                <td className="num">&le; {fmtCount(b.upper_len)}</td>
+                <td className="num">{fmtCount(b.objects)}</td>
+                <td className="num">{formatBytes(b.shallow)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </>
+  );
+
+  return (
+    <section id="arrays-by-size">
+      <h2>Arrays by Size</h2>
+      <p className="subtitle">
+        Array-length distribution bucketed by power-of-two element length; Max length is the inclusive upper bound of
+        each bucket.
+      </p>
+      {empty ? (
+        <p className="subtitle">No arrays found.</p>
+      ) : (
+        <>
+          {bucketTable("Object arrays", obj)}
+          {bucketTable("Primitive arrays", prim)}
+          <p>Zero-length arrays: {fmtCount(zero)}</p>
+        </>
+      )}
+    </section>
+  );
+}
+
+// ── Dominator Analysis ──────────────────────────────────────────────────────
+// Two dominator-tree sub-views: Big Drops (dominators where retained heap
+// concentrates) and Immediate Dominators (dominated-object rollup by dominator
+// class). Always-on; mirrors render_md.rs::render_dominator_analysis.
+function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
+  const drops = data?.big_drops?.rows ?? [];
+  const threshold = data?.big_drops?.threshold ?? 0;
+  const thresholdMb = (threshold / (1024 * 1024)).toFixed(1);
+  const idoms = data?.immediate_dominators?.rows ?? [];
+  return (
+    <section id="dominator-analysis">
+      <h2>Dominator Analysis</h2>
+
+      <h3>Big Drops</h3>
+      <p className="subtitle">
+        Dominators where retained heap concentrates: retained heap minus the largest single child. Threshold{" "}
+        {thresholdMb} MB (1% of reachable shallow).
+      </p>
+      {drops.length === 0 ? (
+        <p className="subtitle">No significant drops.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>Object</th>
+              <th className="num">Retained</th>
+              <th>Largest Child</th>
+              <th className="num">Child Retained</th>
+              <th className="num">Drop</th>
+            </tr>
+          </thead>
+          <tbody>
+            {drops.map((r, i) => (
+              <tr key={i}>
+                <td><code>{r.display_class}</code></td>
+                <td className="num">{formatBytes(r.retained)}</td>
+                <td>{r.largest_child_class ? <code>{r.largest_child_class}</code> : "—"}</td>
+                <td className="num">{formatBytes(r.largest_child_retained)}</td>
+                <td className="num">{formatBytes(r.drop_bytes)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      <h3>Immediate Dominators</h3>
+      <p className="subtitle">
+        Objects immediately dominated, rolled up by the dominator's class; a heavy dominated shallow heap under one
+        class flags a retention hub.
+      </p>
+      {idoms.length === 0 ? (
+        <p className="subtitle">No immediate dominators.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>Dominator Class</th>
+              <th className="num">#Dominators</th>
+              <th className="num">#Dominated</th>
+              <th className="num">Dominator Shallow</th>
+              <th className="num">Dominated Shallow</th>
+            </tr>
+          </thead>
+          <tbody>
+            {idoms.map((r, i) => (
+              <tr key={i}>
+                <td><code>{r.dominator_class}</code></td>
+                <td className="num">{fmtCount(r.dominator_count)}</td>
+                <td className="num">{fmtCount(r.dominated_count)}</td>
+                <td className="num">{formatBytes(r.dominator_shallow)}</td>
+                <td className="num">{formatBytes(r.dominated_shallow)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
+// ── Unreachable Objects ─────────────────────────────────────────────────────
+// Per-class histogram of objects not dominated by the virtual root
+// (idom == u32::MAX). Always-on; mirrors render_md.rs::render_unreachable_histogram.
+function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
+  const rows: UnreachableClassRow[] = data?.unreachable_histogram ?? [];
+  return (
+    <section id="unreachable-objects">
+      <h2>Unreachable Objects</h2>
+      {rows.length === 0 ? (
+        <p className="subtitle">No unreachable objects.</p>
+      ) : (
+        <>
+          <p className="subtitle">
+            {fmtCount(data?.unreachable_count ?? 0)} unreachable objects retaining{" "}
+            {formatBytes(data?.unreachable_shallow ?? 0)} shallow (top 30 classes by shallow).
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>Class</th>
+                <th className="num">Objects</th>
+                <th className="num">Shallow</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={i}>
+                  <td><code>{r.pretty_class}</code></td>
+                  <td className="num">{fmtCount(r.objects)}</td>
+                  <td className="num">{formatBytes(r.shallow)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </section>
+  );
+}
+
 // ── Allocation Sites ──────────────────────────────────────────────────────────
 // aggregated allocation sites. Honest note when the
 // dump carried no allocation stack-trace info. Mirrors report.rs::render_alloc_sites.
@@ -1381,10 +1643,13 @@ export default function App({ report }: { report: Report }) {
       <SystemOverviewSection report={report} />
       <LeakSuspectsSection report={report} />
       <TopConsumersSection report={report} />
+      <DominatorAnalysisSection data={report.dominator_analysis} />
       <ThreadsSection report={report} />
       {report.top_components?.components?.length ? (
         <TopComponentsSection data={report.top_components} />
       ) : null}
+      <ArraysBySizeSection data={report.arrays_by_size} />
+      <UnreachableObjectsSection data={report.overview} />
       {report.alloc_sites && <AllocSitesSection data={report.alloc_sites} />}
       <RetentionConcentrationSection report={report} />
       <DominatorDepthSection report={report} />

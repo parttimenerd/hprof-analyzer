@@ -301,6 +301,10 @@ pub struct Graph {
     /// opt-in `--dup-strings` flag is set; `None` otherwise (zero extra work,
     /// zero RSS on the default path). See [`DupStrings`].
     pub dup_strings: Option<DupStrings>,
+    /// Power-of-two array-length histogram (object vs primitive arrays), folded
+    /// during pass2 from `p1.elem_count`/`p1.kind` before those arrays are freed.
+    /// Always populated; additive, not parity-compared.
+    pub arrays_by_size: crate::report::ArraysBySize,
 }
 
 /// Deferred inbound-CSR construction. Built by `Pass2::build` with everything

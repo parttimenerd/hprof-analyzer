@@ -167,8 +167,11 @@ pub fn render_markdown(r: &Report) -> String {
     render_system_overview(&r.overview, &mut out);
     render_leak_suspects(&r.leaks, &mut out);
     render_top_consumers(&r.top, r.leaks.total_shallow, &mut out);
+    render_dominator_analysis(&r.dominator_analysis, false, &mut out);
     render_threads(&r.threads, false, &mut out);
     render_top_components(&r.top_components, false, &mut out);
+    render_arrays_by_size(&r.arrays_by_size, false, &mut out);
+    render_unreachable_histogram(&r.overview, false, &mut out);
     // Allocation sites (always present; `None` only for legacy reports).
     if let Some(a) = &r.alloc_sites {
         render_alloc_sites(a, false, &mut out);
@@ -190,10 +193,13 @@ fn render_toc(r: &Report, out: &mut String) {
     out.push_str("- [System Overview](#system-overview)\n");
     out.push_str("- [Leak Suspects](#leak-suspects)\n");
     out.push_str("- [Top Consumers](#top-consumers)\n");
+    out.push_str("- [Dominator Analysis](#dominator-analysis)\n");
     out.push_str("- [Threads](#threads)\n");
     if !r.top_components.components.is_empty() {
         out.push_str("- [Top Components](#top-components)\n");
     }
+    out.push_str("- [Arrays by Size](#arrays-by-size)\n");
+    out.push_str("- [Unreachable Objects](#unreachable-objects)\n");
     if r.alloc_sites.is_some() {
         out.push_str("- [Allocation Sites](#allocation-sites)\n");
     }
@@ -819,6 +825,46 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
         }
         t.render(out);
         out.push('\n');
+
+        // Per-loader drill-down: which loader holds the most of each duplicate.
+        for d in &o.duplicate_classes {
+            if d.per_loader.is_empty() {
+                continue;
+            }
+            out.push_str(&format!("**`{}`** — per loader:\n\n", d.pretty_class));
+            let mut lt = Table::new(
+                &["Loader", "Instances", "Shallow", "Retained Heap"],
+                &[Align::Left, Align::Right, Align::Right, Align::Right],
+            );
+            // When two loaders share a display label (distinct instances of the
+            // same loader class — the leak signature), append the loader id so
+            // the rows are distinguishable.
+            let ambiguous: std::collections::HashSet<&str> = {
+                let mut seen = std::collections::HashSet::new();
+                let mut dup = std::collections::HashSet::new();
+                for pl in &d.per_loader {
+                    if !seen.insert(pl.loader_label.as_str()) {
+                        dup.insert(pl.loader_label.as_str());
+                    }
+                }
+                dup
+            };
+            for pl in &d.per_loader {
+                let label = if ambiguous.contains(pl.loader_label.as_str()) {
+                    format!("`{}` @{:#x}", pl.loader_label, pl.loader_id)
+                } else {
+                    format!("`{}`", pl.loader_label)
+                };
+                lt.row([
+                    label,
+                    fmt_count(pl.instances),
+                    format_bytes(pl.shallow),
+                    format_bytes(pl.retained),
+                ]);
+            }
+            lt.render(out);
+            out.push('\n');
+        }
     }
 }
 
@@ -963,6 +1009,12 @@ fn render_leak_suspects(l: &LeakSuspects, out: &mut String) {
         // Full multi-level dominator subtree at the accumulation point.
         if let Some(tree) = &s.dominator_tree {
             render_dom_tree_plain(tree, out);
+        }
+        // Merged shortest paths to GC roots (group suspects only).
+        if !s.is_single {
+            if let Some(root) = &s.merged_paths {
+                render_merged_paths_plain(root, out);
+            }
         }
     }
 }
@@ -1282,6 +1334,235 @@ pub(crate) fn render_top_components(tc: &TopComponents, graphs: bool, out: &mut 
     out.push('\n');
 }
 
+/// Render the always-on "Arrays by Size" section: two power-of-two length
+/// histograms (object arrays, primitive arrays) with object counts + shallow
+/// bytes, plus a zero-length tally. Shared by plain md and md-graphs; when
+/// `graphs` is set, an extra proportional bar column is appended on Objects.
+/// Emits the heading + a fallback italic line even when empty so the document
+/// structure stays stable.
+pub(crate) fn render_arrays_by_size(a: &ArraysBySize, graphs: bool, out: &mut String) {
+    use crate::md::{Align, Table, bar};
+    out.push_str("## Arrays by Size\n\n");
+    if a.obj_array_buckets.is_empty() && a.prim_array_buckets.is_empty() && a.zero_length_count == 0
+    {
+        out.push_str("*No arrays found.*\n\n");
+        return;
+    }
+    out.push_str(
+        "_Array-length distribution bucketed by power-of-two element length; \
+         `Max length` is the inclusive upper bound of each bucket._\n\n",
+    );
+
+    let render_table = |title: &str, buckets: &[SizeHistogramBucket], out: &mut String| {
+        out.push_str(&format!("### {title}\n\n"));
+        if buckets.is_empty() {
+            out.push_str("_None._\n\n");
+            return;
+        }
+        let obj_max = buckets.iter().map(|b| b.objects).max().unwrap_or(0);
+        let mut headers: Vec<&str> = vec!["Max length", "Objects", "Shallow"];
+        let mut aligns = vec![Align::Right, Align::Right, Align::Right];
+        if graphs {
+            headers.push("");
+            aligns.push(Align::Left);
+        }
+        let mut t = Table::new(&headers, &aligns);
+        for b in buckets {
+            let mut row = vec![
+                format!("≤ {}", fmt_count(b.upper_len)),
+                fmt_count(b.objects),
+                format_bytes(b.shallow),
+            ];
+            if graphs {
+                row.push(bar(b.objects, obj_max, render_graphs::GRAPH_BAR_WIDTH));
+            }
+            t.row(row);
+        }
+        t.render(out);
+        out.push('\n');
+    };
+
+    render_table("Object arrays", &a.obj_array_buckets, out);
+    render_table("Primitive arrays", &a.prim_array_buckets, out);
+    out.push_str(&format!(
+        "Zero-length arrays: {}\n\n",
+        fmt_count(a.zero_length_count)
+    ));
+}
+
+/// Render the always-on "Unreachable Objects" section: a per-class histogram of
+/// objects not dominated by the virtual root (`idom == u32::MAX`), sorted by
+/// shallow descending and capped. Shared by plain md and md-graphs; when
+/// `graphs` is set, an extra proportional bar column is appended on Objects.
+/// Emits the heading + a fallback italic line even when empty so the document
+/// structure stays stable.
+pub(crate) fn render_unreachable_histogram(o: &SystemOverview, graphs: bool, out: &mut String) {
+    use crate::md::{Align, Table, bar};
+    out.push_str("## Unreachable Objects\n\n");
+    if o.unreachable_histogram.is_empty() {
+        out.push_str("*No unreachable objects.*\n\n");
+        return;
+    }
+    out.push_str(&format!(
+        "_{} unreachable objects retaining {} shallow (top {} classes by shallow)._\n\n",
+        fmt_count(o.unreachable_count),
+        format_bytes(o.unreachable_shallow),
+        UNREACHABLE_HISTOGRAM_CAP,
+    ));
+    let obj_max = o
+        .unreachable_histogram
+        .iter()
+        .map(|r| r.objects)
+        .max()
+        .unwrap_or(0);
+    let mut headers: Vec<&str> = vec!["Class", "Objects", "Shallow"];
+    let mut aligns = vec![Align::Left, Align::Right, Align::Right];
+    if graphs {
+        headers.push("");
+        aligns.push(Align::Left);
+    }
+    let mut t = Table::new(&headers, &aligns);
+    for r in &o.unreachable_histogram {
+        let mut row = vec![
+            format!("`{}`", r.pretty_class),
+            fmt_count(r.objects),
+            format_bytes(r.shallow),
+        ];
+        if graphs {
+            row.push(bar(r.objects, obj_max, render_graphs::GRAPH_BAR_WIDTH));
+        }
+        t.row(row);
+    }
+    t.render(out);
+    out.push('\n');
+}
+
+/// Render the always-on "Dominator Analysis" section: two dominator-tree
+/// sub-views. "Big Drops" lists dominators where retained heap concentrates
+/// (retained minus the largest single child); "Immediate Dominators" rolls up
+/// the immediately-dominated objects by their dominator's class. Shared by plain
+/// md and md-graphs; when `graphs` is set, a proportional bar column is appended
+/// on Drop (big drops) and on Dominated Shallow (immediate dominators). Emits the
+/// headings + fallback italic lines even when empty so the structure stays stable.
+pub(crate) fn render_dominator_analysis(d: &DominatorAnalysis, graphs: bool, out: &mut String) {
+    use crate::md::{Align, Table, bar};
+    out.push_str("## Dominator Analysis\n\n");
+
+    // ---- Big Drops ----
+    out.push_str("### Big Drops\n\n");
+    let threshold_mb = d.big_drops.threshold as f64 / (1024.0 * 1024.0);
+    out.push_str(&format!(
+        "_Dominators where retained heap concentrates: retained heap minus the largest single child. Threshold {:.1} MB (1% of reachable shallow)._\n\n",
+        threshold_mb,
+    ));
+    if d.big_drops.rows.is_empty() {
+        out.push_str("*No significant drops.*\n\n");
+    } else {
+        let drop_max = d
+            .big_drops
+            .rows
+            .iter()
+            .map(|r| r.drop_bytes)
+            .max()
+            .unwrap_or(0);
+        let mut headers: Vec<&str> = vec![
+            "Object",
+            "Retained",
+            "Largest Child",
+            "Child Retained",
+            "Drop",
+        ];
+        let mut aligns = vec![
+            Align::Left,
+            Align::Right,
+            Align::Left,
+            Align::Right,
+            Align::Right,
+        ];
+        if graphs {
+            headers.push("");
+            aligns.push(Align::Left);
+        }
+        let mut t = Table::new(&headers, &aligns);
+        for r in &d.big_drops.rows {
+            let child = if r.largest_child_class.is_empty() {
+                "—".to_string()
+            } else {
+                format!("`{}`", r.largest_child_class)
+            };
+            let mut row = vec![
+                format!("`{}`", r.display_class),
+                format_bytes(r.retained),
+                child,
+                format_bytes(r.largest_child_retained),
+                format_bytes(r.drop_bytes),
+            ];
+            if graphs {
+                row.push(bar(r.drop_bytes, drop_max, render_graphs::GRAPH_BAR_WIDTH));
+            }
+            t.row(row);
+        }
+        t.render(out);
+        out.push('\n');
+    }
+
+    // ---- Immediate Dominators ----
+    out.push_str("### Immediate Dominators\n\n");
+    out.push_str(
+        "_Objects immediately dominated, rolled up by the dominator's class; \
+         a heavy dominated shallow heap under one class flags a retention hub._\n\n",
+    );
+    if d.immediate_dominators.rows.is_empty() {
+        out.push_str("*No immediate dominators.*\n\n");
+    } else {
+        let shallow_max = d
+            .immediate_dominators
+            .rows
+            .iter()
+            .map(|r| r.dominated_shallow)
+            .max()
+            .unwrap_or(0);
+        let mut headers: Vec<&str> = vec![
+            "Dominator Class",
+            "#Dominators",
+            "#Dominated",
+            "Dominator Shallow",
+            "Dominated Shallow",
+        ];
+        let mut aligns = vec![
+            Align::Left,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+        ];
+        if graphs {
+            headers.push("");
+            aligns.push(Align::Left);
+        }
+        let mut t = Table::new(&headers, &aligns);
+        for r in &d.immediate_dominators.rows {
+            let mut row = vec![
+                format!("`{}`", r.dominator_class),
+                fmt_count(r.dominator_count),
+                fmt_count(r.dominated_count),
+                format_bytes(r.dominator_shallow),
+                format_bytes(r.dominated_shallow),
+            ];
+            if graphs {
+                row.push(bar(
+                    r.dominated_shallow,
+                    shallow_max,
+                    render_graphs::GRAPH_BAR_WIDTH,
+                ));
+            }
+            t.row(row);
+        }
+        t.render(out);
+        out.push('\n');
+    }
+}
+
 /// The dominator chain from a
 /// suspect (first) up to its GC root (last), as a numbered list. The final step
 /// is annotated with the GC-root type when known. Shared verbatim by plain md and
@@ -1334,7 +1615,36 @@ fn render_dom_tree_plain(root: &DomTreeNode, out: &mut String) {
     out.push('\n');
 }
 
-/// Allocation-sites section: aggregated allocation sites. Honest note when
+/// Merged shortest paths to GC roots (plain md): the member objects' dominator
+/// chains collapsed into a class-keyed prefix tree, as a nested bullet list
+/// indented two spaces per level — the same visual language as
+/// `render_dom_tree_plain`. Each line shows the class, how many member chains
+/// pass through the node, and the aggregate retained; the terminal GC-root node
+/// carries its root-type label.
+fn render_merged_paths_plain(root: &MergedPathNode, out: &mut String) {
+    out.push_str("#### Merged Paths to GC Roots\n\n");
+    // Stack of (node, depth); push children reversed so pre-order pops in order.
+    let mut stack: Vec<(&MergedPathNode, usize)> = vec![(root, 0)];
+    while let Some((node, depth)) = stack.pop() {
+        let indent = "  ".repeat(depth);
+        let mut line = format!(
+            "{}- `{}` ({} objects, retained {})",
+            indent,
+            node.display_class,
+            fmt_count(node.object_count),
+            format_bytes(node.retained),
+        );
+        if let Some(label) = &node.root_type_label {
+            line.push_str(&format!(" — GC root: {label}"));
+        }
+        line.push('\n');
+        out.push_str(&line);
+        for child in node.children.iter().rev() {
+            stack.push((child, depth + 1));
+        }
+    }
+    out.push('\n');
+}
 /// the dump carried no allocation stack-trace info. `graphs` adds a proportional
 /// bar column (keyed to the max object count) in the md-graphs output.
 pub(crate) fn render_alloc_sites(a: &AllocSites, graphs: bool, out: &mut String) {

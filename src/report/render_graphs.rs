@@ -16,8 +16,11 @@ pub fn render_markdown_graphs(r: &Report) -> String {
     render_system_overview_graphs(&r.overview, &mut out);
     render_leak_suspects_graphs(&r.leaks, &mut out);
     render_top_consumers_graphs(&r.top, r.leaks.total_shallow, &mut out);
+    render_dominator_analysis(&r.dominator_analysis, true, &mut out);
     render_threads(&r.threads, true, &mut out);
     render_top_components(&r.top_components, true, &mut out);
+    render_arrays_by_size(&r.arrays_by_size, true, &mut out);
+    render_unreachable_histogram(&r.overview, true, &mut out);
     // Allocation sites (always present; `None` only for legacy reports).
     if let Some(a) = &r.alloc_sites {
         render_alloc_sites(a, true, &mut out);
@@ -38,10 +41,13 @@ fn render_toc_graphs(r: &Report, out: &mut String) {
     out.push_str("- [System Overview](#system-overview)\n");
     out.push_str("- [Leak Suspects](#leak-suspects)\n");
     out.push_str("- [Top Consumers](#top-consumers)\n");
+    out.push_str("- [Dominator Analysis](#dominator-analysis)\n");
     out.push_str("- [Threads](#threads)\n");
     if !r.top_components.components.is_empty() {
         out.push_str("- [Top Components](#top-components)\n");
     }
+    out.push_str("- [Arrays by Size](#arrays-by-size)\n");
+    out.push_str("- [Unreachable Objects](#unreachable-objects)\n");
     // The ToC bullet appears only when the alloc-sites section is present.
     if r.alloc_sites.is_some() {
         out.push_str("- [Allocation Sites](#allocation-sites)\n");
@@ -320,6 +326,53 @@ fn render_system_overview_graphs(o: &SystemOverview, out: &mut String) {
         }
         t.render(out);
         out.push('\n');
+
+        // Per-loader drill-down: which loader holds the most of each duplicate.
+        // In graphs mode, a proportional bar on Retained highlights the leader.
+        for d in &o.duplicate_classes {
+            if d.per_loader.is_empty() {
+                continue;
+            }
+            out.push_str(&format!("**`{}`** — per loader:\n\n", d.pretty_class));
+            let rmax = d.per_loader.iter().map(|pl| pl.retained).max().unwrap_or(0);
+            // Disambiguate loaders that share a display label by appending id.
+            let ambiguous: std::collections::HashSet<&str> = {
+                let mut seen = std::collections::HashSet::new();
+                let mut dup = std::collections::HashSet::new();
+                for pl in &d.per_loader {
+                    if !seen.insert(pl.loader_label.as_str()) {
+                        dup.insert(pl.loader_label.as_str());
+                    }
+                }
+                dup
+            };
+            let mut lt = Table::new(
+                &["Loader", "Instances", "Shallow", "Retained Heap", ""],
+                &[
+                    Align::Left,
+                    Align::Right,
+                    Align::Right,
+                    Align::Right,
+                    Align::Left,
+                ],
+            );
+            for pl in &d.per_loader {
+                let label = if ambiguous.contains(pl.loader_label.as_str()) {
+                    format!("`{}` @{:#x}", pl.loader_label, pl.loader_id)
+                } else {
+                    format!("`{}`", pl.loader_label)
+                };
+                lt.row([
+                    label,
+                    fmt_count(pl.instances),
+                    format_bytes(pl.shallow),
+                    format_bytes(pl.retained),
+                    bar(pl.retained, rmax, GRAPH_BAR_WIDTH),
+                ]);
+            }
+            lt.render(out);
+            out.push('\n');
+        }
     }
 }
 
@@ -586,6 +639,12 @@ fn render_leak_suspects_graphs(l: &LeakSuspects, out: &mut String) {
         if let Some(tree) = &s.dominator_tree {
             render_dom_tree_graphs(tree, out);
         }
+        // Merged shortest paths to GC roots (group suspects only): box-drawn tree.
+        if !s.is_single {
+            if let Some(root) = &s.merged_paths {
+                render_merged_paths_graphs(root, out);
+            }
+        }
     }
 }
 
@@ -810,6 +869,54 @@ fn render_dom_tree_graphs(root: &DomTreeNode, out: &mut String) {
             format_bytes(f.node.retained),
         ));
         // Push children reversed so the pre-order left-to-right order is kept.
+        let n = f.node.children.len();
+        for (i, child) in f.node.children.iter().enumerate().rev() {
+            let mut cont = f.ancestors_continue.clone();
+            cont.push(!f.is_last);
+            stack.push(Frame {
+                node: child,
+                depth: f.depth + 1,
+                is_last: i + 1 == n,
+                ancestors_continue: cont,
+            });
+        }
+    }
+    out.push_str("```\n\n");
+}
+
+/// Merged shortest paths to GC roots (graphs md): the member objects' dominator
+/// chains collapsed into a class-keyed prefix tree, drawn as a box-drawing tree
+/// — mirroring `render_dom_tree_graphs` so the visual language is consistent.
+fn render_merged_paths_graphs(root: &MergedPathNode, out: &mut String) {
+    use crate::md::tree_prefix;
+    out.push_str("#### Merged Paths to GC Roots\n\n");
+    struct Frame<'a> {
+        node: &'a MergedPathNode,
+        depth: usize,
+        is_last: bool,
+        ancestors_continue: Vec<bool>,
+    }
+    let mut stack: Vec<Frame> = vec![Frame {
+        node: root,
+        depth: 0,
+        is_last: true,
+        ancestors_continue: Vec::new(),
+    }];
+    out.push_str("```\n");
+    while let Some(f) = stack.pop() {
+        let prefix = tree_prefix(f.depth, f.is_last, &f.ancestors_continue);
+        let mut line = format!(
+            "{}{} ({} objects, retained {})",
+            prefix,
+            f.node.display_class,
+            fmt_count(f.node.object_count),
+            format_bytes(f.node.retained),
+        );
+        if let Some(label) = &f.node.root_type_label {
+            line.push_str(&format!(" — GC root: {label}"));
+        }
+        line.push('\n');
+        out.push_str(&line);
         let n = f.node.children.len();
         for (i, child) in f.node.children.iter().enumerate().rev() {
             let mut cont = f.ancestors_continue.clone();

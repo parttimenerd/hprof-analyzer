@@ -14,6 +14,28 @@
         }
       ]
     },
+    "arrays_by_size": {
+      "description": "Power-of-two array-length histogram (object vs primitive arrays).\nAlways-on; additive, defaults to empty for round-trip with older JSON.",
+      "$ref": "#/$defs/ArraysBySize",
+      "default": {
+        "obj_array_buckets": [],
+        "prim_array_buckets": [],
+        "zero_length_count": 0
+      }
+    },
+    "dominator_analysis": {
+      "description": "Dominator-tree analysis: Big Drops + Immediate Dominators. Always-on;\nadditive, defaults to empty for round-trip with older JSON.",
+      "$ref": "#/$defs/DominatorAnalysis",
+      "default": {
+        "big_drops": {
+          "rows": [],
+          "threshold": 0
+        },
+        "immediate_dominators": {
+          "rows": []
+        }
+      }
+    },
     "generated": {
       "type": "string"
     },
@@ -107,6 +129,109 @@
       "required": [
         "traces_present",
         "sites"
+      ]
+    },
+    "ArraysBySize": {
+      "description": "Array-length histogram, split by object-arrays vs primitive-arrays, bucketed\nby power-of-two element length. Always-on; derived from data already in\nmemory (no extra heap scan). Zero-length arrays are tallied separately.",
+      "type": "object",
+      "properties": {
+        "obj_array_buckets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SizeHistogramBucket"
+          }
+        },
+        "prim_array_buckets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SizeHistogramBucket"
+          }
+        },
+        "zero_length_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "obj_array_buckets",
+        "prim_array_buckets",
+        "zero_length_count"
+      ]
+    },
+    "BigDropRow": {
+      "description": "One \"big drop\" in the dominator tree: a dominator whose retained heap is\nmuch larger than any single child's, i.e. retention concentrates AT this\nnode rather than flowing to one dominated child. A large drop marks a good\nplace to start a leak investigation. Additive; not parity-compared.",
+      "type": "object",
+      "properties": {
+        "child_count": {
+          "description": "Number of dominator-tree children of this node.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "display_class": {
+          "type": "string"
+        },
+        "drop_bytes": {
+          "description": "retained - largest_child_retained: the heap that \"drops\" here.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "largest_child_class": {
+          "description": "display class of the largest child (empty if none).",
+          "type": "string"
+        },
+        "largest_child_retained": {
+          "description": "Retained heap of the single largest child (0 if no children).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "obj_index_1based": {
+          "description": "1-based object index of the dominator node.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "retained": {
+          "description": "Retained heap of the dominator node.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "obj_index_1based",
+        "display_class",
+        "retained",
+        "child_count",
+        "largest_child_retained",
+        "largest_child_class",
+        "drop_bytes"
+      ]
+    },
+    "BigDrops": {
+      "description": "The \"Big Drops\" view: dominators where retained heap concentrates.",
+      "type": "object",
+      "properties": {
+        "rows": {
+          "description": "Qualifying drops, sorted by drop_bytes descending, capped.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BigDropRow"
+          }
+        },
+        "threshold": {
+          "description": "The retained-heap threshold (bytes) a dominator had to exceed to qualify.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "threshold",
+        "rows"
       ]
     },
     "ClassRow": {
@@ -272,6 +397,22 @@
         "retained"
       ]
     },
+    "DominatorAnalysis": {
+      "description": "Always-on dominator-tree analysis grouping Big Drops (#1) and Immediate\nDominators (#2), mirroring Eclipse MAT's dominator views. Additive.",
+      "type": "object",
+      "properties": {
+        "big_drops": {
+          "$ref": "#/$defs/BigDrops"
+        },
+        "immediate_dominators": {
+          "$ref": "#/$defs/ImmediateDominators"
+        }
+      },
+      "required": [
+        "big_drops",
+        "immediate_dominators"
+      ]
+    },
     "DupStringSample": {
       "description": "One of the most-duplicated String values: its exact text (truncated to\n`MAX_STR_SAMPLE` bytes), how many String instances share the value, the\ndecoded byte length of the value, and the approximate wasted bytes.",
       "type": "object",
@@ -393,6 +534,14 @@
             "type": "string"
           }
         },
+        "per_loader": {
+          "description": "Per-loader breakdown of this duplicated class (capped at the same\nLOADER_CAP as `loaders`), sorted by retained descending. Additive;\n`#[serde(default)]` so older JSON still deserializes.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DuplicateClassLoaderRow"
+          }
+        },
         "pretty_class": {
           "type": "string"
         },
@@ -413,6 +562,43 @@
         "loaders",
         "total_instances",
         "total_retained"
+      ]
+    },
+    "DuplicateClassLoaderRow": {
+      "description": "One class-loader's contribution to a duplicated class name (see\n[`DuplicateClass`]). Additive; not parity-compared.",
+      "type": "object",
+      "properties": {
+        "instances": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "loader_id": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "loader_label": {
+          "description": "Display label for this loader (e.g. `<boot>` or an app loader), or the\nsynthesized `loader@0x…` fallback when no label was resolved.",
+          "type": "string"
+        },
+        "retained": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "shallow": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "loader_label",
+        "loader_id",
+        "instances",
+        "shallow",
+        "retained"
       ]
     },
     "GcRootTypeRow": {
@@ -497,6 +683,62 @@
         "shallow",
         "retained",
         "loader_id"
+      ]
+    },
+    "ImmediateDominatorRow": {
+      "description": "One row of the immediate-dominator class rollup: for each dominator class,\nhow many objects it immediately dominates and their aggregate shallow heap.",
+      "type": "object",
+      "properties": {
+        "dominated_count": {
+          "description": "Number of objects immediately dominated by objects of this class.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "dominated_shallow": {
+          "description": "Aggregate shallow heap of the dominated objects.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "dominator_class": {
+          "type": "string"
+        },
+        "dominator_count": {
+          "description": "Number of distinct dominator objects of this class (with >=1 dom child).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "dominator_shallow": {
+          "description": "Aggregate shallow heap of those dominator objects.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "dominator_class",
+        "dominator_count",
+        "dominated_count",
+        "dominator_shallow",
+        "dominated_shallow"
+      ]
+    },
+    "ImmediateDominators": {
+      "description": "The \"Immediate Dominators\" view: dominated-object rollup keyed by the\ndominator's class. Additive; not parity-compared.",
+      "type": "object",
+      "properties": {
+        "rows": {
+          "description": "Rows sorted by dominated_shallow descending, capped.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ImmediateDominatorRow"
+          }
+        }
+      },
+      "required": [
+        "rows"
       ]
     },
     "KindStat": {
@@ -590,6 +832,46 @@
         "instances",
         "shallow",
         "retained"
+      ]
+    },
+    "MergedPathNode": {
+      "description": "One node of a \"merged shortest paths to GC roots\" prefix tree (Eclipse MAT\n\"Merge Shortest Paths\"): the dominator chains of all members of a class-group\nsuspect, collapsed by class-at-each-depth. `object_count` is how many member\nchains pass through this node; `retained` sums those members' retained heap\ncontribution at this node. Additive; not parity-compared.",
+      "type": "object",
+      "properties": {
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MergedPathNode"
+          }
+        },
+        "display_class": {
+          "type": "string"
+        },
+        "object_count": {
+          "description": "Number of member chains passing through this node.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "retained": {
+          "description": "Aggregate retained heap of the objects represented at this node.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "root_type_label": {
+          "description": "GC-root type label when this node is a root (the chain terminus).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "display_class",
+        "object_count",
+        "retained",
+        "children"
       ]
     },
     "ObjRow": {
@@ -945,6 +1227,32 @@
         "count"
       ]
     },
+    "SizeHistogramBucket": {
+      "description": "One power-of-two length bucket in the arrays-by-size histogram. `upper_len`\nis the inclusive upper bound of the bucket (a power of two): a bucket with\n`upper_len = 8` counts arrays whose element length is in `5..=8`. The first\nbucket is `1..=1` (upper_len 1); zero-length arrays are counted separately.",
+      "type": "object",
+      "properties": {
+        "objects": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "shallow": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "upper_len": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "upper_len",
+        "objects",
+        "shallow"
+      ]
+    },
     "StrLenBucket": {
       "description": "One power-of-two bucket of the String-length histogram. `upper_len` is the\ninclusive upper bound (a power of two); a value of length `l` falls in the\nsmallest bucket whose `upper_len >= l`. `count` is the number of distinct\nString values in this bucket.",
       "type": "object",
@@ -1094,6 +1402,17 @@
           "items": {
             "type": "string"
           }
+        },
+        "merged_paths": {
+          "description": "F: merged shortest paths to GC roots for a class-group suspect — the\nmember objects' dominator chains collapsed into a class-keyed prefix\ntree. `None` for single suspects (they already have `root_path`).\nBounded by the `--detail` max-nodes / max-depth caps.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MergedPathNode"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "path": {
           "description": "Descent from the suspect object to the accumulation point (MAT\n`findAccumulationPoint`, big-drop-ratio 0.7). Non-empty only for singles.",
@@ -1308,6 +1627,14 @@
           "type": "integer",
           "format": "uint64",
           "minimum": 0
+        },
+        "unreachable_histogram": {
+          "description": "Per-class histogram of unreachable objects (idom == u32::MAX), sorted by\nshallow descending and capped. Additive; not parity-compared.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/UnreachableClassRow"
+          }
         },
         "unreachable_shallow": {
           "type": "integer",
@@ -1594,6 +1921,30 @@
         "max",
         "median",
         "total"
+      ]
+    },
+    "UnreachableClassRow": {
+      "description": "One row of the unreachable-objects histogram: objects that are not\ndominated by the virtual root (`idom == u32::MAX`), grouped by class.\nAdditive; not parity-compared. Sorted by shallow descending, capped.",
+      "type": "object",
+      "properties": {
+        "objects": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "pretty_class": {
+          "type": "string"
+        },
+        "shallow": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "pretty_class",
+        "objects",
+        "shallow"
       ]
     }
   }

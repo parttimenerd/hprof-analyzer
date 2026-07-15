@@ -19,6 +19,18 @@ const BIG_DROP_RATIO: f64 = 0.7;
 const MAX_ACCUM_DEPTH: usize = 1000;
 /// MAT 1%-of-total pruning threshold for the package tree, in basis points.
 const PACKAGE_THRESHOLD_BP: u32 = 100;
+/// Cap on the number of rows in the per-class unreachable-objects histogram
+/// (top classes by shallow). Additive section; not parity-gated.
+pub(crate) const UNREACHABLE_HISTOGRAM_CAP: usize = 30;
+/// Cap on the number of rows in the "Big Drops" dominator view.
+const BIG_DROPS_CAP: usize = 25;
+/// Cap on the number of rows in the "Immediate Dominators" class rollup.
+const IMMEDIATE_DOMINATORS_CAP: usize = 30;
+/// Cap on the TOTAL number of nodes emitted across a group suspect's merged
+/// shortest-paths-to-GC-roots prefix tree. Once reached, existing matching
+/// nodes keep accumulating counts/retained (so totals stay meaningful) but no
+/// new branches are created — deterministic, RSS-bounded.
+const MERGED_PATH_MAX_NODES: usize = 60;
 
 // ── Model construction ───────────────────────────────────────────────────────
 
@@ -60,6 +72,8 @@ pub fn build_model(
     crate::trace::probe("build_model: after thread_overview aggregates");
     let top_components = build_top_components(&overview);
     crate::trace::probe("build_model: after top_components aggregates");
+    let dominator_analysis = build_dominator_analysis(g, dc_offsets, dc_targets);
+    crate::trace::probe("build_model: after dominator_analysis aggregates");
     Report {
         schema_version: SCHEMA_VERSION,
         generated,
@@ -69,6 +83,8 @@ pub fn build_model(
         threads,
         top_components,
         alloc_sites,
+        arrays_by_size: g.arrays_by_size.clone(),
+        dominator_analysis,
     }
 }
 
@@ -148,6 +164,148 @@ fn build_top_components(overview: &SystemOverview) -> TopComponents {
     });
     components.truncate(TOP_COMPONENTS);
     TopComponents { components }
+}
+
+/// Compute the always-on "Dominator Analysis" (Big Drops + Immediate
+/// Dominators) from the already-built dominator structures. RSS-neutral: reads
+/// `g.idom`/`g.retained`/`g.shallow`/`g.class_idx` plus the dominator-children
+/// CSR passed into `build_model`; the only per-object allocation is a handful of
+/// class-indexed tallies (bounded by #classes, like the histogram) plus the
+/// capped output row Vecs.
+fn build_dominator_analysis(
+    g: &Graph,
+    dc_offsets: &[u32],
+    dc_targets: &[u32],
+) -> DominatorAnalysis {
+    let n = g.n;
+    let undef = u32::MAX;
+    let class_count = g.class_names.len();
+    let dom_children = |node: usize| -> &[u32] {
+        &dc_targets[dc_offsets[node] as usize..dc_offsets[node + 1] as usize]
+    };
+    let display_of = |i: usize| -> String {
+        let ci = g.class_idx[i] as usize;
+        if ci < class_count {
+            pretty_class_name(&g.class_names[ci])
+        } else {
+            String::new()
+        }
+    };
+
+    // Total reachable shallow, for the big-drops significance threshold (1%).
+    let total_shallow: u64 = (0..n)
+        .filter(|&i| g.idom[i] != undef)
+        .map(|i| g.shallow[i] as u64)
+        .sum();
+    const DROP_THRESHOLD_PCT: f64 = 1.0;
+    let threshold = (total_shallow as f64 * DROP_THRESHOLD_PCT / 100.0) as u64;
+
+    // ---- Big Drops (#1) ----
+    // Walk every reachable node that is itself "significant" (retained >=
+    // threshold). For each, find its largest dominator child; a big drop is
+    // where retained(node) - retained(largest_child) is large (heap
+    // concentrates here rather than flowing to one dominated child).
+    let mut drops: Vec<BigDropRow> = Vec::new();
+    for i in 0..n {
+        if g.idom[i] == undef {
+            continue;
+        }
+        if g.retained[i] < threshold {
+            continue;
+        }
+        let kids = dom_children(i);
+        let child_count = kids.len() as u64;
+        let (largest_child_retained, largest_child_idx) = kids
+            .iter()
+            .map(|&c| (g.retained[c as usize], c))
+            .max_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)))
+            .unwrap_or((0, u32::MAX));
+        let drop_bytes = g.retained[i].saturating_sub(largest_child_retained);
+        if drop_bytes == 0 {
+            continue;
+        }
+        drops.push(BigDropRow {
+            obj_index_1based: (i as u64) + 1,
+            display_class: display_of(i),
+            retained: g.retained[i],
+            child_count,
+            largest_child_retained,
+            largest_child_class: if largest_child_idx != u32::MAX {
+                display_of(largest_child_idx as usize)
+            } else {
+                String::new()
+            },
+            drop_bytes,
+        });
+    }
+    drops.sort_unstable_by(|a, b| {
+        b.drop_bytes
+            .cmp(&a.drop_bytes)
+            .then(a.obj_index_1based.cmp(&b.obj_index_1based))
+    });
+    drops.truncate(BIG_DROPS_CAP);
+    let big_drops = BigDrops {
+        threshold,
+        rows: drops,
+    };
+
+    // ---- Immediate Dominators (#2) ----
+    // For dominator node p (any reachable node with >=1 dom child), key the
+    // rollup by class_of(p). Sum dominated_count/dominated_shallow over p's
+    // children; count p once in dominator_count and add its shallow. Class
+    // keys are folded through `class_row_remap` so they match the main
+    // histogram.
+    let remap = class_row_remap(g);
+    let mut dom_count = vec![0u64; class_count]; // #dominator objects of this class
+    let mut domd_count = vec![0u64; class_count]; // #objects immediately dominated
+    let mut dom_shallow = vec![0u64; class_count];
+    let mut domd_shallow = vec![0u64; class_count];
+    for p in 0..n {
+        if g.idom[p] == undef {
+            continue;
+        }
+        let kids = dom_children(p);
+        if kids.is_empty() {
+            continue;
+        }
+        let pci = g.class_idx[p] as usize;
+        if pci >= class_count {
+            continue;
+        }
+        let pci = remap[pci] as usize;
+        dom_count[pci] += 1;
+        dom_shallow[pci] += g.shallow[p] as u64;
+        for &c in kids {
+            domd_count[pci] += 1;
+            domd_shallow[pci] += g.shallow[c as usize] as u64;
+        }
+    }
+    let mut order: Vec<usize> = (0..class_count)
+        .filter(|&ci| remap[ci] as usize == ci && dom_count[ci] > 0)
+        .collect();
+    order.sort_unstable_by(|&a, &b| {
+        domd_shallow[b]
+            .cmp(&domd_shallow[a])
+            .then(domd_count[b].cmp(&domd_count[a]))
+            .then(a.cmp(&b))
+    });
+    order.truncate(IMMEDIATE_DOMINATORS_CAP);
+    let rows: Vec<ImmediateDominatorRow> = order
+        .into_iter()
+        .map(|ci| ImmediateDominatorRow {
+            dominator_class: pretty_class_name(&g.class_names[ci]),
+            dominator_count: dom_count[ci],
+            dominated_count: domd_count[ci],
+            dominator_shallow: dom_shallow[ci],
+            dominated_shallow: domd_shallow[ci],
+        })
+        .collect();
+    let immediate_dominators = ImmediateDominators { rows };
+
+    DominatorAnalysis {
+        big_drops,
+        immediate_dominators,
+    }
 }
 
 /// Decode a raw `java.lang.Thread.threadStatus` value into a MAT-style state
@@ -509,10 +667,20 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
     let undef = u32::MAX;
 
     // Count reachable objects and total shallow; track unreachable in the same loop.
+    // Hoisted here (also used by the reachable class histogram below) so the
+    // duplicate-row remap is computed once.
+    let class_count = g.class_names.len();
+    // Fold duplicate `java/lang/Class` rows (primitive-type Class mirrors are
+    // parsed as plain instances in a separate row) into the single canonical
+    // row so histograms count by object type, matching MAT.
+    let remap = class_row_remap(g);
     let mut total_objects: u64 = 0;
     let mut total_shallow: u64 = 0;
     let mut unreachable_count: u64 = 0;
     let mut unreachable_shallow: u64 = 0;
+    // Per-class tally of unreachable objects (idom == undef), bounded by #classes.
+    let mut unreach_count: Vec<u64> = vec![0; class_count];
+    let mut unreach_shallow: Vec<u64> = vec![0; class_count];
     for i in 0..n {
         if g.idom[i] != undef {
             total_objects += 1;
@@ -520,6 +688,12 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
         } else {
             unreachable_count += 1;
             unreachable_shallow += g.shallow[i] as u64;
+            let ci = g.class_idx[i] as usize;
+            if ci < class_count {
+                let ci = remap[ci] as usize;
+                unreach_count[ci] += 1;
+                unreach_shallow[ci] += g.shallow[i] as u64;
+            }
         }
     }
 
@@ -670,16 +844,10 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
     };
 
     // Class histogram: per-class instance count, shallow total, retained total
-    let class_count = g.class_names.len();
     let mut inst_count: Vec<u64> = vec![0; class_count];
     let mut shallow_total: Vec<u64> = vec![0; class_count];
     let mut class_retained: Vec<u64> = vec![0; class_count];
     let mut max_shallow: Vec<u64> = vec![0; class_count];
-
-    // Fold duplicate `java/lang/Class` rows (primitive-type Class mirrors are
-    // parsed as plain instances in a separate row) into the single canonical
-    // row so the histogram counts by object type, matching MAT.
-    let remap = class_row_remap(g);
 
     // First pass: for all reachable objects
     for i in 0..n {
@@ -763,11 +931,35 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
         })
         .collect();
 
+    // Per-class unreachable-objects histogram: capped, shallow-desc. Only
+    // canonical rows (remap[ci] == ci) with unreachable objects are emitted.
+    let unreachable_histogram: Vec<UnreachableClassRow> = {
+        let mut order: Vec<usize> = (0..class_count)
+            .filter(|&ci| remap[ci] as usize == ci && unreach_count[ci] > 0)
+            .collect();
+        order.sort_unstable_by(|&a, &b| {
+            unreach_shallow[b]
+                .cmp(&unreach_shallow[a])
+                .then(unreach_count[b].cmp(&unreach_count[a]))
+                .then(a.cmp(&b))
+        });
+        order.truncate(UNREACHABLE_HISTOGRAM_CAP);
+        order
+            .into_iter()
+            .map(|ci| UnreachableClassRow {
+                pretty_class: pretty_class_name(&g.class_names[ci]),
+                objects: unreach_count[ci],
+                shallow: unreach_shallow[ci],
+            })
+            .collect()
+    };
+
     // F2: class-loader rollup + duplicate-class detection. Both are bounded
     // folds over `histogram` (one pass; maps keyed by loader_id / pretty_class,
     // so at most #loaders / #class-names entries — no per-object arrays).
     let (loader_rollup, duplicate_classes) = {
         use std::collections::HashMap;
+        const LOADER_CAP: usize = 8;
         // Rollup: aggregate per loader_id.
         let mut roll: HashMap<u64, LoaderRollup> = HashMap::new();
         // Duplicate detection: per pretty_class, the distinct loader ids and
@@ -777,6 +969,9 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
             loaders: Vec<String>,
             total_instances: u64,
             total_retained: u64,
+            // loader_id -> (label, instances, shallow, retained); capped at
+            // LOADER_CAP entries (an existing entry always accumulates).
+            per_loader: HashMap<u64, (String, u64, u64, u64)>,
         }
         let mut dup: HashMap<String, DupAcc> = HashMap::new();
 
@@ -801,19 +996,26 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
                     loaders: Vec::new(),
                     total_instances: 0,
                     total_retained: 0,
+                    per_loader: HashMap::new(),
                 });
-            if d.loader_ids.insert(row.loader_id) {
-                const LOADER_CAP: usize = 8;
-                if d.loaders.len() < LOADER_CAP {
-                    d.loaders.push(
-                        row.loader_label
-                            .clone()
-                            .unwrap_or_else(|| format!("loader@{:#x}", row.loader_id)),
-                    );
-                }
+            let label = row
+                .loader_label
+                .clone()
+                .unwrap_or_else(|| format!("loader@{:#x}", row.loader_id));
+            if d.loader_ids.insert(row.loader_id) && d.loaders.len() < LOADER_CAP {
+                d.loaders.push(label.clone());
             }
             d.total_instances += row.instances;
             d.total_retained += row.retained;
+            if d.per_loader.contains_key(&row.loader_id) || d.per_loader.len() < LOADER_CAP {
+                let e = d
+                    .per_loader
+                    .entry(row.loader_id)
+                    .or_insert((label, 0, 0, 0));
+                e.1 += row.instances;
+                e.2 += row.shallow;
+                e.3 += row.retained;
+            }
         }
 
         let mut rollup: Vec<LoaderRollup> = roll.into_values().collect();
@@ -827,12 +1029,42 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
         let mut dups: Vec<DuplicateClass> = dup
             .into_iter()
             .filter(|(_, d)| d.loader_ids.len() > 1)
-            .map(|(pretty_class, d)| DuplicateClass {
-                pretty_class,
-                loader_count: d.loader_ids.len() as u64,
-                loaders: d.loaders,
-                total_instances: d.total_instances,
-                total_retained: d.total_retained,
+            .map(|(pretty_class, d)| {
+                let DupAcc {
+                    loader_ids,
+                    loaders,
+                    total_instances,
+                    total_retained,
+                    per_loader,
+                } = d;
+                let mut per_loader: Vec<DuplicateClassLoaderRow> = per_loader
+                    .into_iter()
+                    .map(
+                        |(loader_id, (loader_label, instances, shallow, retained))| {
+                            DuplicateClassLoaderRow {
+                                loader_label,
+                                loader_id,
+                                instances,
+                                shallow,
+                                retained,
+                            }
+                        },
+                    )
+                    .collect();
+                per_loader.sort_unstable_by(|a, b| {
+                    b.retained
+                        .cmp(&a.retained)
+                        .then(b.instances.cmp(&a.instances))
+                        .then(a.loader_id.cmp(&b.loader_id))
+                });
+                DuplicateClass {
+                    pretty_class,
+                    loader_count: loader_ids.len() as u64,
+                    loaders,
+                    total_instances,
+                    total_retained,
+                    per_loader,
+                }
             })
             .collect();
         dups.sort_unstable_by(|a, b| {
@@ -871,6 +1103,7 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
         classloaders_loaded,
         unreachable_count,
         unreachable_shallow,
+        unreachable_histogram,
         histogram,
         histogram_truncated_to: None,
         system_properties: g
@@ -1124,6 +1357,144 @@ pub(crate) fn build_leak_suspects(
             .or_insert(ty);
     }
 
+    // Build the "merged shortest paths to GC roots" prefix tree for a class-group
+    // suspect (Eclipse MAT "Merge Shortest Paths"). Each member's dominator chain
+    // (member -> idom -> ... -> GC root, the SAME walk the single-suspect
+    // `root_path` loop performs) is grafted beneath a synthetic virtual root
+    // summarising the group. Chains are merged by the DISPLAYED class label at
+    // each depth: two hops with the same displayed class collapse into one node.
+    // Keying by the displayed class (rather than a numeric class row) matches
+    // MAT's class-keyed merge and sidesteps class-mirror/remap edge cases.
+    //
+    // Implemented as a CLOSURE (not a free fn) so it can borrow the local
+    // `display_of` / `root_type_of` closures and `g` directly — a free fn would
+    // have to thread all of them through. The closure borrows `g`, `display_of`,
+    // `root_type_of` immutably; the group loop below mutates `out` (a disjoint
+    // binding), so the borrow checker is satisfied.
+    //
+    // The tree is assembled in a flat arena (indices, not references) to avoid
+    // recursive borrows; find-or-create scans a node's `children` for a matching
+    // label, so iterating members in a deterministic (ascending index) order
+    // makes insertion order — and therefore the result — deterministic.
+    let vroot_u32 = n as u32;
+    let build_merged_paths = |members: &[u32], group_label: &str| -> Option<MergedPathNode> {
+        if members.is_empty() {
+            return None;
+        }
+        struct MNode {
+            display_class: String,
+            object_count: u64,
+            retained: u64,
+            root_type_label: Option<String>,
+            children: Vec<usize>,
+        }
+        let mut arena: Vec<MNode> = Vec::new();
+        // Synthetic virtual root summarising the whole group. Its label is the
+        // group's own class; counts/retained accumulate as members are grafted.
+        arena.push(MNode {
+            display_class: group_label.to_string(),
+            object_count: 0,
+            retained: 0,
+            root_type_label: None,
+            children: Vec::new(),
+        });
+
+        for &m in members {
+            // Collect the ordered dominator-chain hops [m, idom[m], ...], stopping
+            // at the terminal GC root (idom == vroot), an unreachable node
+            // (idom == undef), or the depth cap. The terminal root IS included,
+            // exactly mirroring the single-suspect `root_path` walk.
+            let mut chain: Vec<usize> = Vec::new();
+            let mut cur = m as usize;
+            let mut depth = 0usize;
+            loop {
+                chain.push(cur);
+                let idom = g.idom[cur];
+                if idom == vroot_u32 || idom == undef {
+                    break;
+                }
+                if depth >= root_path_max_depth {
+                    break;
+                }
+                cur = idom as usize;
+                depth += 1;
+            }
+            let last = chain.len().saturating_sub(1);
+            // Graft the chain beneath the virtual root, merging by display label.
+            let mut node = 0usize; // virtual root
+            arena[node].object_count += 1;
+            arena[node].retained += g.retained[m as usize];
+            for (hop_i, &obj) in chain.iter().enumerate() {
+                let label = display_of(obj);
+                // find-or-create a child of `node` with this label.
+                let existing = arena[node]
+                    .children
+                    .iter()
+                    .copied()
+                    .find(|&c| arena[c].display_class == label);
+                let child = match existing {
+                    Some(c) => c,
+                    None => {
+                        // Node cap: stop creating NEW nodes once reached, but keep
+                        // accumulating into existing matching nodes above.
+                        if arena.len() >= MERGED_PATH_MAX_NODES {
+                            break;
+                        }
+                        let idx = arena.len();
+                        arena.push(MNode {
+                            display_class: label,
+                            object_count: 0,
+                            retained: 0,
+                            root_type_label: None,
+                            children: Vec::new(),
+                        });
+                        arena[node].children.push(idx);
+                        idx
+                    }
+                };
+                arena[child].object_count += 1;
+                arena[child].retained += g.retained[obj];
+                // The terminal hop is the GC root; label it if not already set.
+                if hop_i == last && arena[child].root_type_label.is_none() {
+                    if let Some(&ty) = root_type_of.get(&(obj as u32)) {
+                        if let Some(lbl) = gc_root_type_label_opt(ty) {
+                            arena[child].root_type_label = Some(lbl.to_string());
+                        }
+                    }
+                }
+                node = child;
+            }
+        }
+
+        // Deterministic ordering: each node's children by retained desc, then
+        // object_count desc, then display_class asc.
+        for i in 0..arena.len() {
+            let mut kids = std::mem::take(&mut arena[i].children);
+            kids.sort_by(|&a, &b| {
+                arena[b]
+                    .retained
+                    .cmp(&arena[a].retained)
+                    .then(arena[b].object_count.cmp(&arena[a].object_count))
+                    .then(arena[a].display_class.cmp(&arena[b].display_class))
+            });
+            arena[i].children = kids;
+        }
+
+        // Convert the arena into the nested model. Depth is bounded by
+        // `root_path_max_depth`, so bounded recursion is safe here.
+        fn to_model(arena: &[MNode], idx: usize) -> MergedPathNode {
+            let node = &arena[idx];
+            MergedPathNode {
+                display_class: node.display_class.clone(),
+                object_count: node.object_count,
+                retained: node.retained,
+                root_type_label: node.root_type_label.clone(),
+                children: node.children.iter().map(|&c| to_model(arena, c)).collect(),
+            }
+        }
+        Some(to_model(&arena, 0))
+    };
+
     // Materialise into the model, resolving the accumulation point for singles
     // via MAT's findAccumulationPoint (big-drop-ratio descent) and the holding
     // GC-root type.
@@ -1310,6 +1681,7 @@ pub(crate) fn build_leak_suspects(
                 root_type_label,
                 root_path: None,
                 dominator_tree: dominator_tree_node,
+                merged_paths: None,
             }
         })
         .collect();
@@ -1355,6 +1727,27 @@ pub(crate) fn build_leak_suspects(
                 depth += 1;
             }
             out[k].root_path = Some(chain);
+        }
+    }
+
+    // For each GROUP suspect, build the merged shortest-paths-to-GC-roots prefix
+    // tree (symmetric to the single-suspect `root_path` loop above). Members are
+    // the top-level dominators (children of vroot) whose class row matches the
+    // group's class — the same member enumeration `dom_children(n)` already used
+    // twice in this fn, filtered by class. Sorted ascending for determinism.
+    {
+        for (k, s) in suspects.iter().enumerate() {
+            if s.is_single {
+                continue;
+            }
+            let mut members: Vec<u32> = dom_children(n)
+                .iter()
+                .copied()
+                .filter(|&i| g.class_idx[i as usize] as usize == s.class_idx)
+                .collect();
+            members.sort_unstable();
+            let group_label = out[k].pretty_class.clone();
+            out[k].merged_paths = build_merged_paths(&members, &group_label);
         }
     }
 
