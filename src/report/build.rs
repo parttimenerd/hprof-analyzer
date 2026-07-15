@@ -74,6 +74,8 @@ pub fn build_model(
     crate::trace::probe("build_model: after top_components aggregates");
     let dominator_analysis = build_dominator_analysis(g, dc_offsets, dc_targets);
     crate::trace::probe("build_model: after dominator_analysis aggregates");
+    let references = build_references(g);
+    crate::trace::probe("build_model: after references only-weakly-retained rollup");
     Report {
         schema_version: SCHEMA_VERSION,
         generated,
@@ -85,9 +87,78 @@ pub fn build_model(
         alloc_sites,
         arrays_by_size: g.arrays_by_size.clone(),
         dominator_analysis,
-        collections: Default::default(),
-        references: Default::default(),
+        collections: g.collections.clone(),
+        references,
     }
+}
+
+/// Pretty class-display name for object index `i`, matching the derivation used
+/// throughout the report (`build_dominator_analysis`'s `display_of`): resolve
+/// the object's class row and render it via `pretty_class_name`. Returns an
+/// empty string when the class row is out of range.
+fn class_display(g: &Graph, i: usize) -> String {
+    let ci = g.class_idx[i] as usize;
+    if ci < g.class_names.len() {
+        pretty_class_name(&g.class_names[ci])
+    } else {
+        String::new()
+    }
+}
+
+/// Build the reference-kind statistics for the report from the graph's
+/// always-on reference analysis, filling in each present kind's
+/// `only_weakly_retained` rollup.
+///
+/// A referent is "only weakly retained" iff it has NO strong dominator: because
+/// the `referent` edge is excluded from the dominator tree, `g.idom[i] == undef`
+/// means the object is reachable ONLY through the weak/soft/phantom edge. Those
+/// referents are grouped by class (objects counted, shallow summed) from the
+/// per-kind capped referent-index lists. RSS-neutral: the only new allocation is
+/// a `HashMap<String,(u64,u64)>` bounded by the number of distinct referent
+/// classes per kind.
+fn build_references(g: &Graph) -> ReferencesAnalysis {
+    use std::collections::HashMap;
+    let undef = u32::MAX;
+    let mut references = g.references.clone();
+
+    // (Option<ReferenceStats>, referent-index list) per kind: 0=Soft,1=Weak,2=Phantom.
+    let mut per_kind: [&mut Option<ReferenceStats>; 3] = [
+        &mut references.soft,
+        &mut references.weak,
+        &mut references.phantom,
+    ];
+    for (kind, stats) in per_kind.iter_mut().enumerate() {
+        let Some(stats) = stats.as_mut() else {
+            continue;
+        };
+        let mut by_class: HashMap<String, (u64, u64)> = HashMap::new();
+        for &ri in &g.reference_referent_idx[kind] {
+            let i = ri as usize;
+            if g.idom[i] != undef {
+                continue; // has a strong dominator -> not only-weakly-retained
+            }
+            let e = by_class.entry(class_display(g, i)).or_insert((0, 0));
+            e.0 += 1;
+            e.1 += g.shallow[i] as u64;
+        }
+        let mut rows: Vec<RefStatClassRow> = by_class
+            .into_iter()
+            .map(|(pretty_class, (objects, shallow))| RefStatClassRow {
+                pretty_class,
+                objects,
+                shallow,
+            })
+            .collect();
+        // Deterministic: objects desc, then pretty_class asc.
+        rows.sort_unstable_by(|a, b| {
+            b.objects
+                .cmp(&a.objects)
+                .then_with(|| a.pretty_class.cmp(&b.pretty_class))
+        });
+        stats.only_weakly_retained = rows;
+    }
+
+    references
 }
 
 /// Max components (class loaders) surfaced in the Top Components view.

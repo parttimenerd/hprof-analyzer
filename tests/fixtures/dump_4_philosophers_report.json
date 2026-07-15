@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated": "2026-07-15T21:41:45.125999000Z",
+  "generated": "2026-07-15T22:05:13.745754000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
     "file_path": "tests/fixtures/dump_4_philosophers.hprof",
@@ -88764,32 +88764,815 @@
   },
   "collections": {
     "collection_fill_ratio": {
-      "tracked": 0,
-      "total": 0,
-      "buckets": []
+      "tracked": 619,
+      "total": 5998,
+      "buckets": [
+        {
+          "lower_ratio_bp": 0,
+          "upper_ratio_bp": 1000,
+          "objects": 259,
+          "shallow": 0,
+          "wasted": 30464
+        },
+        {
+          "lower_ratio_bp": 1000,
+          "upper_ratio_bp": 2000,
+          "objects": 139,
+          "shallow": 0,
+          "wasted": 16552
+        },
+        {
+          "lower_ratio_bp": 2000,
+          "upper_ratio_bp": 3000,
+          "objects": 50,
+          "shallow": 0,
+          "wasted": 17408
+        },
+        {
+          "lower_ratio_bp": 3000,
+          "upper_ratio_bp": 4000,
+          "objects": 42,
+          "shallow": 0,
+          "wasted": 51512
+        },
+        {
+          "lower_ratio_bp": 4000,
+          "upper_ratio_bp": 5000,
+          "objects": 40,
+          "shallow": 0,
+          "wasted": 37376
+        },
+        {
+          "lower_ratio_bp": 5000,
+          "upper_ratio_bp": 6000,
+          "objects": 22,
+          "shallow": 0,
+          "wasted": 8152
+        },
+        {
+          "lower_ratio_bp": 6000,
+          "upper_ratio_bp": 7000,
+          "objects": 14,
+          "shallow": 0,
+          "wasted": 18128
+        },
+        {
+          "lower_ratio_bp": 7000,
+          "upper_ratio_bp": 8000,
+          "objects": 11,
+          "shallow": 0,
+          "wasted": 10080
+        },
+        {
+          "lower_ratio_bp": 8000,
+          "upper_ratio_bp": 9000,
+          "objects": 3,
+          "shallow": 0,
+          "wasted": 1168
+        },
+        {
+          "lower_ratio_bp": 9000,
+          "upper_ratio_bp": 10000,
+          "objects": 0,
+          "shallow": 0,
+          "wasted": 0
+        },
+        {
+          "lower_ratio_bp": 10000,
+          "upper_ratio_bp": 10000,
+          "objects": 39,
+          "shallow": 0,
+          "wasted": 0
+        }
+      ]
     },
     "collections_by_size": {
-      "tracked": 0,
-      "empty_count": 0,
-      "buckets": []
+      "tracked": 5998,
+      "empty_count": 5497,
+      "buckets": [
+        {
+          "upper_len": 1,
+          "objects": 204,
+          "shallow": 0
+        },
+        {
+          "upper_len": 2,
+          "objects": 94,
+          "shallow": 0
+        },
+        {
+          "upper_len": 4,
+          "objects": 97,
+          "shallow": 0
+        },
+        {
+          "upper_len": 8,
+          "objects": 37,
+          "shallow": 0
+        },
+        {
+          "upper_len": 16,
+          "objects": 33,
+          "shallow": 0
+        },
+        {
+          "upper_len": 32,
+          "objects": 11,
+          "shallow": 0
+        },
+        {
+          "upper_len": 64,
+          "objects": 7,
+          "shallow": 0
+        },
+        {
+          "upper_len": 128,
+          "objects": 4,
+          "shallow": 0
+        },
+        {
+          "upper_len": 256,
+          "objects": 5,
+          "shallow": 0
+        },
+        {
+          "upper_len": 512,
+          "objects": 4,
+          "shallow": 0
+        },
+        {
+          "upper_len": 1024,
+          "objects": 3,
+          "shallow": 0
+        },
+        {
+          "upper_len": 4096,
+          "objects": 2,
+          "shallow": 0
+        }
+      ]
     },
     "array_fill_ratio": {
-      "tracked": 0,
-      "buckets": []
+      "tracked": 5829,
+      "buckets": [
+        {
+          "lower_ratio_bp": 0,
+          "upper_ratio_bp": 1000,
+          "objects": 2438,
+          "shallow": 0,
+          "wasted": 0
+        },
+        {
+          "lower_ratio_bp": 1000,
+          "upper_ratio_bp": 2000,
+          "objects": 339,
+          "shallow": 0,
+          "wasted": 0
+        },
+        {
+          "lower_ratio_bp": 2000,
+          "upper_ratio_bp": 3000,
+          "objects": 92,
+          "shallow": 0,
+          "wasted": 0
+        },
+        {
+          "lower_ratio_bp": 3000,
+          "upper_ratio_bp": 4000,
+          "objects": 104,
+          "shallow": 0,
+          "wasted": 0
+        },
+        {
+          "lower_ratio_bp": 4000,
+          "upper_ratio_bp": 5000,
+          "objects": 246,
+          "shallow": 0,
+          "wasted": 0
+        },
+        {
+          "lower_ratio_bp": 5000,
+          "upper_ratio_bp": 6000,
+          "objects": 50,
+          "shallow": 0,
+          "wasted": 0
+        },
+        {
+          "lower_ratio_bp": 6000,
+          "upper_ratio_bp": 7000,
+          "objects": 40,
+          "shallow": 0,
+          "wasted": 0
+        },
+        {
+          "lower_ratio_bp": 7000,
+          "upper_ratio_bp": 8000,
+          "objects": 34,
+          "shallow": 0,
+          "wasted": 0
+        },
+        {
+          "lower_ratio_bp": 8000,
+          "upper_ratio_bp": 9000,
+          "objects": 18,
+          "shallow": 0,
+          "wasted": 0
+        },
+        {
+          "lower_ratio_bp": 9000,
+          "upper_ratio_bp": 10000,
+          "objects": 13,
+          "shallow": 0,
+          "wasted": 0
+        },
+        {
+          "lower_ratio_bp": 10000,
+          "upper_ratio_bp": 10000,
+          "objects": 2455,
+          "shallow": 0,
+          "wasted": 0
+        }
+      ]
     },
     "map_collision_ratio": {
-      "tracked": 0,
-      "total": 0,
-      "buckets": []
+      "tracked": 493,
+      "total": 5892,
+      "buckets": [
+        {
+          "lower_ratio_bp": 0,
+          "upper_ratio_bp": 1000,
+          "objects": 221,
+          "shallow": 0,
+          "wasted": 0
+        },
+        {
+          "lower_ratio_bp": 1000,
+          "upper_ratio_bp": 2000,
+          "objects": 123,
+          "shallow": 0,
+          "wasted": 0
+        },
+        {
+          "lower_ratio_bp": 2000,
+          "upper_ratio_bp": 3000,
+          "objects": 39,
+          "shallow": 0,
+          "wasted": 0
+        },
+        {
+          "lower_ratio_bp": 3000,
+          "upper_ratio_bp": 4000,
+          "objects": 48,
+          "shallow": 0,
+          "wasted": 0
+        },
+        {
+          "lower_ratio_bp": 4000,
+          "upper_ratio_bp": 5000,
+          "objects": 44,
+          "shallow": 0,
+          "wasted": 0
+        },
+        {
+          "lower_ratio_bp": 5000,
+          "upper_ratio_bp": 6000,
+          "objects": 13,
+          "shallow": 0,
+          "wasted": 0
+        },
+        {
+          "lower_ratio_bp": 6000,
+          "upper_ratio_bp": 7000,
+          "objects": 2,
+          "shallow": 0,
+          "wasted": 0
+        },
+        {
+          "lower_ratio_bp": 7000,
+          "upper_ratio_bp": 8000,
+          "objects": 3,
+          "shallow": 0,
+          "wasted": 0
+        },
+        {
+          "lower_ratio_bp": 8000,
+          "upper_ratio_bp": 9000,
+          "objects": 0,
+          "shallow": 0,
+          "wasted": 0
+        },
+        {
+          "lower_ratio_bp": 9000,
+          "upper_ratio_bp": 10000,
+          "objects": 0,
+          "shallow": 0,
+          "wasted": 0
+        },
+        {
+          "lower_ratio_bp": 10000,
+          "upper_ratio_bp": 10000,
+          "objects": 0,
+          "shallow": 0,
+          "wasted": 0
+        }
+      ]
     },
     "constant_primitive_arrays": {
-      "rows": [],
+      "rows": [
+        {
+          "array_class": "[B",
+          "length": 2,
+          "value": 49,
+          "objects": 31,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 8,
+          "value": 0,
+          "objects": 19,
+          "shallow": 0
+        },
+        {
+          "array_class": "[I",
+          "length": 2,
+          "value": 0,
+          "objects": 15,
+          "shallow": 0
+        },
+        {
+          "array_class": "[I",
+          "length": 4,
+          "value": 0,
+          "objects": 9,
+          "shallow": 0
+        },
+        {
+          "array_class": "[I",
+          "length": 10,
+          "value": 0,
+          "objects": 4,
+          "shallow": 0
+        },
+        {
+          "array_class": "[I",
+          "length": 32,
+          "value": 0,
+          "objects": 4,
+          "shallow": 0
+        },
+        {
+          "array_class": "[J",
+          "length": 32,
+          "value": 0,
+          "objects": 4,
+          "shallow": 0
+        },
+        {
+          "array_class": "[S",
+          "length": 32,
+          "value": 0,
+          "objects": 4,
+          "shallow": 0
+        },
+        {
+          "array_class": "[I",
+          "length": 6,
+          "value": 0,
+          "objects": 3,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 2,
+          "value": 76,
+          "objects": 2,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 2,
+          "value": 110,
+          "objects": 2,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 256,
+          "value": 0,
+          "objects": 2,
+          "shallow": 0
+        },
+        {
+          "array_class": "[C",
+          "length": 2,
+          "value": 83,
+          "objects": 2,
+          "shallow": 0
+        },
+        {
+          "array_class": "[C",
+          "length": 26,
+          "value": 0,
+          "objects": 2,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 2,
+          "value": 10,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 2,
+          "value": 32,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 2,
+          "value": 34,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 2,
+          "value": 37,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 2,
+          "value": 39,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 2,
+          "value": 45,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 2,
+          "value": 46,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 2,
+          "value": 47,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 2,
+          "value": 58,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 2,
+          "value": 72,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 2,
+          "value": 95,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 2,
+          "value": 101,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 2,
+          "value": 102,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 2,
+          "value": 105,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 2,
+          "value": 107,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 2,
+          "value": 112,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 2,
+          "value": 116,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 3,
+          "value": 46,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 3,
+          "value": 76,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 3,
+          "value": 88,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 3,
+          "value": 99,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 4,
+          "value": 32,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 4,
+          "value": 76,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 4,
+          "value": 90,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 5,
+          "value": 76,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 7,
+          "value": 32,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 8,
+          "value": 32,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 8,
+          "value": 48,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 10,
+          "value": 32,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 13,
+          "value": 48,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 16,
+          "value": 0,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 63,
+          "value": 48,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 512,
+          "value": 0,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[B",
+          "length": 8192,
+          "value": 0,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[C",
+          "length": 2,
+          "value": 70,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[C",
+          "length": 8192,
+          "value": 0,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[I",
+          "length": 8,
+          "value": 0,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[I",
+          "length": 12,
+          "value": 0,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[I",
+          "length": 16,
+          "value": -1881356936,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[I",
+          "length": 16,
+          "value": -1881356440,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[I",
+          "length": 16,
+          "value": -1881355944,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[I",
+          "length": 16,
+          "value": -1881004352,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[I",
+          "length": 16,
+          "value": 0,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[I",
+          "length": 48,
+          "value": 0,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[I",
+          "length": 74,
+          "value": 0,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[I",
+          "length": 550,
+          "value": 0,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[I",
+          "length": 770,
+          "value": 0,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[I",
+          "length": 802,
+          "value": 0,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[I",
+          "length": 4902,
+          "value": 0,
+          "objects": 1,
+          "shallow": 0
+        },
+        {
+          "array_class": "[I",
+          "length": 131064,
+          "value": 0,
+          "objects": 1,
+          "shallow": 0
+        }
+      ],
       "truncated": false
     }
   },
   "references": {
-    "soft": null,
-    "weak": null,
-    "phantom": null
+    "soft": {
+      "kind": "Soft",
+      "reference_instances": 223,
+      "referent_histogram": [
+        {
+          "pretty_class": "java.lang.invoke.LambdaForm$DMH+0x00007e41c023bc00",
+          "objects": 223,
+          "shallow": 0
+        }
+      ],
+      "only_weakly_retained": [
+        {
+          "pretty_class": "java.lang.Class$ReflectionData",
+          "objects": 34,
+          "shallow": 2176
+        }
+      ]
+    },
+    "weak": {
+      "kind": "Weak",
+      "reference_instances": 993,
+      "referent_histogram": [
+        {
+          "pretty_class": "java.lang.invoke.LambdaForm$DMH+0x00007e41c023bc00",
+          "objects": 986,
+          "shallow": 0
+        }
+      ],
+      "only_weakly_retained": []
+    },
+    "phantom": {
+      "kind": "Phantom",
+      "reference_instances": 67,
+      "referent_histogram": [
+        {
+          "pretty_class": "java.lang.invoke.LambdaForm$DMH+0x00007e41c023bc00",
+          "objects": 66,
+          "shallow": 0
+        }
+      ],
+      "only_weakly_retained": []
+    }
   }
 }
