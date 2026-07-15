@@ -21,6 +21,7 @@ use crate::{
     types::{HprofType, heap, tags},
 };
 
+mod fielddecode;
 mod meta;
 mod model;
 mod scan;
@@ -500,6 +501,12 @@ impl Pass2 {
         // garbage) if the layout does not match the Hashtable form.
         let (system_properties, jvm_version) = resolve_system_properties(path, &p1)?;
 
+        // Always-on field-decode views (collections, arrays, references). One
+        // shared 3-scan pass; all aggregates are capped (see fielddecode.rs), so
+        // RSS stays within the grant. Must run while class_map/strings are alive.
+        let (fd_collections, fd_references, fd_referent_idx) =
+            fielddecode::build_field_decode_views(path, &p1, ref_size)?;
+
         // class_map + strings are no longer needed; free before the large edge
         // arrays get allocated in Phase 3/4 to lower peak RSS. The STACK_FRAME/
         // STACK_TRACE maps were just consumed by build_thread_stacks and are
@@ -755,9 +762,9 @@ impl Pass2 {
             record_census,
             dup_strings,
             arrays_by_size,
-            collections: crate::report::CollectionsAnalysis::default(),
-            references: crate::report::ReferencesAnalysis::default(),
-            reference_referent_idx: [Vec::new(), Vec::new(), Vec::new()],
+            collections: fd_collections,
+            references: fd_references,
+            reference_referent_idx: fd_referent_idx,
         };
 
         // Package the deferred inbound-CSR construction. Moves id_map,

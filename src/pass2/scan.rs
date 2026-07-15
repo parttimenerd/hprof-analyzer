@@ -305,6 +305,197 @@ pub(crate) fn scan_obj_arrays<F: FnMut(u64, &[u8])>(
     Ok(())
 }
 
+/// Full-file sequential scan invoking `f(addr, elem_type_code, count, raw_bytes)`
+/// for EVERY PRIM_ARRAY_DUMP (no `wanted` filter). Mirrors [`scan_prim_arrays`]'s
+/// heap-record walking skeleton and byte accounting exactly; the only differences
+/// are that it always materializes the element bytes and passes the element type
+/// code + count to the callback. RSS stays bounded because only ONE array's bytes
+/// are held at a time (in the reused scratch).
+pub(crate) fn scan_all_prim_arrays<F: FnMut(u64, u8, u64, &[u8])>(
+    path: &str,
+    id_size: u8,
+    mut f: F,
+) -> io::Result<()> {
+    let ids = id_size as u64;
+    let mut r = HprofReader::open(path)?;
+    let mut scratch: Vec<u8> = Vec::with_capacity(256);
+    loop {
+        let tag = match r.u1() {
+            Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+            other => other?,
+        };
+        let _ts = r.u4()?;
+        let length = r.u4()? as u64;
+        match tag {
+            tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
+                let mut remaining = length;
+                while remaining > 0 {
+                    let sub_tag = r.u1()?;
+                    remaining -= 1;
+                    match sub_tag {
+                        heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED | heap::ROOT_STICKY_CLASS => {
+                            r.skip(ids)?;
+                            remaining -= ids;
+                        }
+                        heap::ROOT_JNI_GLOBAL => {
+                            r.skip(2 * ids)?;
+                            remaining -= 2 * ids;
+                        }
+                        heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME | heap::ROOT_THREAD_OBJ => {
+                            r.skip(ids + 8)?;
+                            remaining -= ids + 8;
+                        }
+                        heap::ROOT_NATIVE_STACK | heap::ROOT_THREAD_BLOCK => {
+                            r.skip(ids + 4)?;
+                            remaining -= ids + 4;
+                        }
+                        heap::HEAP_DUMP_INFO => {
+                            r.skip(4 + ids)?;
+                            remaining -= 4 + ids;
+                        }
+                        heap::CLASS_DUMP => {
+                            let consumed = skip_class_dump(&mut r, id_size)?;
+                            remaining -= consumed;
+                        }
+                        heap::INSTANCE_DUMP => {
+                            r.skip(ids + 4)?;
+                            let _class_id = r.id()?;
+                            let data_len = r.u4()? as u64;
+                            r.skip(data_len)?;
+                            remaining -= ids + 4 + ids + 4 + data_len;
+                        }
+                        heap::OBJ_ARRAY_DUMP => {
+                            r.skip(ids + 4)?;
+                            let count = r.u4()? as u64;
+                            r.skip(ids)?;
+                            let byte_len = count.saturating_mul(ids);
+                            r.skip(byte_len)?;
+                            remaining -= ids + 4 + 4 + ids + byte_len;
+                        }
+                        heap::PRIM_ARRAY_DUMP => {
+                            let addr = r.id()?;
+                            r.skip(4)?;
+                            let count = r.u4()? as u64;
+                            let elem_type = r.u1()?;
+                            let esz = HprofType::from_code(elem_type)
+                                .map(|t| t.byte_size() as u64)
+                                .unwrap_or(1);
+                            let byte_len = count * esz;
+                            remaining -= ids + 4 + 4 + 1 + byte_len;
+                            r.read_bytes_reuse(&mut scratch, byte_len as usize)?;
+                            f(addr, elem_type, count, &scratch);
+                        }
+                        other => {
+                            return Err(io::Error::new(
+                                ErrorKind::InvalidData,
+                                format!("unknown heap sub-tag 0x{other:02x} in prim-array scan"),
+                            ));
+                        }
+                    }
+                }
+            }
+            tags::HEAP_DUMP_END => break,
+            _ => r.skip(length)?,
+        }
+    }
+    Ok(())
+}
+
+/// Full-file sequential scan invoking `f(addr, count, elem_ref_bytes)` for EVERY
+/// OBJ_ARRAY_DUMP (no `wanted` filter). `elem_ref_bytes` is the raw block of
+/// `count * id_size` reference bytes (object-array element refs are id_size wide
+/// per the scanner). Mirrors [`scan_obj_arrays`]'s skeleton + byte accounting
+/// exactly; only the OBJ_ARRAY_DUMP arm differs (always materializes + passes
+/// count). RSS stays bounded because only ONE array's refs are held at a time.
+pub(crate) fn scan_all_obj_arrays<F: FnMut(u64, u64, &[u8])>(
+    path: &str,
+    id_size: u8,
+    mut f: F,
+) -> io::Result<()> {
+    let ids = id_size as u64;
+    let mut r = HprofReader::open(path)?;
+    let mut scratch: Vec<u8> = Vec::with_capacity(256);
+    loop {
+        let tag = match r.u1() {
+            Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+            other => other?,
+        };
+        let _ts = r.u4()?;
+        let length = r.u4()? as u64;
+        match tag {
+            tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
+                let mut remaining = length;
+                while remaining > 0 {
+                    let sub_tag = r.u1()?;
+                    remaining -= 1;
+                    match sub_tag {
+                        heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED | heap::ROOT_STICKY_CLASS => {
+                            r.skip(ids)?;
+                            remaining -= ids;
+                        }
+                        heap::ROOT_JNI_GLOBAL => {
+                            r.skip(2 * ids)?;
+                            remaining -= 2 * ids;
+                        }
+                        heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME | heap::ROOT_THREAD_OBJ => {
+                            r.skip(ids + 8)?;
+                            remaining -= ids + 8;
+                        }
+                        heap::ROOT_NATIVE_STACK | heap::ROOT_THREAD_BLOCK => {
+                            r.skip(ids + 4)?;
+                            remaining -= ids + 4;
+                        }
+                        heap::HEAP_DUMP_INFO => {
+                            r.skip(4 + ids)?;
+                            remaining -= 4 + ids;
+                        }
+                        heap::CLASS_DUMP => {
+                            let consumed = skip_class_dump(&mut r, id_size)?;
+                            remaining -= consumed;
+                        }
+                        heap::INSTANCE_DUMP => {
+                            r.skip(ids + 4)?;
+                            let _class_id = r.id()?;
+                            let data_len = r.u4()? as u64;
+                            r.skip(data_len)?;
+                            remaining -= ids + 4 + ids + 4 + data_len;
+                        }
+                        heap::OBJ_ARRAY_DUMP => {
+                            let addr = r.id()?;
+                            r.skip(4)?; // stack serial
+                            let count = r.u4()? as u64;
+                            r.skip(ids)?; // array class id
+                            let byte_len = count.saturating_mul(ids);
+                            remaining -= ids + 4 + 4 + ids + byte_len;
+                            r.read_bytes_reuse(&mut scratch, byte_len as usize)?;
+                            f(addr, count, &scratch);
+                        }
+                        heap::PRIM_ARRAY_DUMP => {
+                            r.skip(ids + 4)?;
+                            let count = r.u4()? as u64;
+                            let elem_type = r.u1()?;
+                            let esz = HprofType::from_code(elem_type)
+                                .map(|t| t.byte_size() as u64)
+                                .unwrap_or(1);
+                            r.skip(count * esz)?;
+                            remaining -= ids + 4 + 4 + 1 + count * esz;
+                        }
+                        other => {
+                            return Err(io::Error::new(
+                                ErrorKind::InvalidData,
+                                format!("unknown heap sub-tag 0x{other:02x} in obj-array scan"),
+                            ));
+                        }
+                    }
+                }
+            }
+            tags::HEAP_DUMP_END => break,
+            _ => r.skip(length)?,
+        }
+    }
+    Ok(())
+}
+
 /// Full-file sequential scan invoking `f(class_obj_id, &statics)` for every
 /// CLASS_DUMP sub-record, where `statics` is the captured list of static fields
 /// as `(name_id, type_code, value)`. Object-typed values are id_size-wide refs;

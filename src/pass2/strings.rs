@@ -12,8 +12,8 @@ use crate::{
 use std::io::{self, ErrorKind};
 
 use super::{
-    DupStringSample, DupStrings, StrLenBucket, StrLenStats, StringHolder, build_field_plans,
-    field_offset, read_ref, scan_prim_arrays, skip_class_dump,
+    CharArrayWaste, CharArrayWasteRow, DupStringSample, DupStrings, StrLenBucket, StrLenStats,
+    StringHolder, build_field_plans, field_offset, read_ref, scan_prim_arrays, skip_class_dump,
 };
 
 /// Max retained sample text length (bytes) for a most-duplicated String — bounds
@@ -21,6 +21,10 @@ use super::{
 pub(crate) const MAX_STR_SAMPLE: usize = 200;
 /// Top-N cutoff for both most-duplicated strings and String-holding classes.
 pub(crate) const TOP_STRINGS_N: usize = 25;
+/// Top-N cutoff for the longest DISTINCT String values (view #5 find_strings).
+pub(crate) const TOP_STRINGS_BY_LEN: usize = 25;
+/// Top-N cutoff for the most-wasteful backing arrays (view #15 char[] waste).
+pub(crate) const CHAR_ARRAY_WASTE_TOP: usize = 25;
 
 /// Full-file sequential scan invoking `f(obj_addr, class_id, blob)` for EVERY
 /// INSTANCE_DUMP record, materializing each instance's blob into a reused
@@ -225,6 +229,23 @@ pub(crate) fn resolve_duplicate_strings(path: &str, p1: &Pass1) -> io::Result<Du
     // survive, so this is bounded by #distinct arrays regardless of dump size.
     let wanted_arrays: HashSet<u64> = arr_coder.keys().copied().collect();
     let mut arr_hash: HashMap<u64, (u64, u32)> = HashMap::new();
+    // ── #15 char[]/byte[] waste, captured HERE (only place raw capacity is
+    // visible). "used" = decoded byte length the String logically holds;
+    // "capacity" = raw backing-array byte size; "wasted" = capacity - used.
+    // Modern JDKs (7u6+ / compact strings 9+) usually size the array exactly,
+    // so this is commonly 0 — but Java-8 char[] slack and any decode shrink
+    // (e.g. a UTF-16BE array whose lossy-decoded UTF-8 is shorter) show up.
+    // Retained candidates are bounded to CHAR_ARRAY_WASTE_TOP via a min-heap
+    // keyed on wasted bytes (Reverse => smallest at top for cheap eviction),
+    // so RSS stays bounded even with millions of wasteful arrays.
+    let mut arrays_examined: u64 = 0;
+    let mut wasteful_arrays: u64 = 0;
+    let mut total_wasted_bytes: u64 = 0;
+    // Heap entry ordering: (wasted, capacity, used, arr_addr). arr_addr breaks
+    // ties deterministically; wrapped in Reverse so the *smallest* wasted is the
+    // heap root and is evicted first.
+    let mut waste_heap: std::collections::BinaryHeap<std::cmp::Reverse<(u64, u64, u64, u64)>> =
+        std::collections::BinaryHeap::new();
     scan_prim_arrays(path, id_size, &wanted_arrays, |addr, bytes| {
         let coder = arr_coder.get(&addr).copied().unwrap_or(1);
         let decoded = decode_java_string(bytes, coder);
@@ -233,8 +254,60 @@ pub(crate) fn resolve_duplicate_strings(path: &str, p1: &Pass1) -> io::Result<Du
         let hv = h.finish();
         let len = decoded.len() as u32;
         arr_hash.insert(addr, (hv, len));
+
+        // #15 waste bookkeeping (bounded top-K).
+        arrays_examined += 1;
+        let capacity_bytes = bytes.len() as u64;
+        let used_bytes = decoded.len() as u64;
+        let wasted = capacity_bytes.saturating_sub(used_bytes);
+        if wasted > 0 {
+            wasteful_arrays += 1;
+            total_wasted_bytes += wasted;
+            waste_heap.push(std::cmp::Reverse((
+                wasted,
+                capacity_bytes,
+                used_bytes,
+                addr,
+            )));
+            if waste_heap.len() > CHAR_ARRAY_WASTE_TOP {
+                waste_heap.pop(); // evict the smallest-wasted entry
+            }
+        }
     })?;
 
+    // Materialize the #15 waste report from the bounded heap. Sort the retained
+    // candidates by wasted DESC, tie-break array_obj_1based ASC (total order).
+    let char_array_waste: Option<CharArrayWaste> = if arrays_examined == 0 {
+        None
+    } else {
+        let mut rows: Vec<CharArrayWasteRow> = waste_heap
+            .into_iter()
+            .map(
+                |std::cmp::Reverse((wasted, capacity_bytes, used_bytes, arr_addr))| {
+                    // Dense 1-based object index; 0 if the addr somehow isn't mapped.
+                    let array_obj_1based = p1.id_map.index_of(arr_addr).map(|i| i + 1).unwrap_or(0);
+                    CharArrayWasteRow {
+                        array_obj_1based,
+                        length: capacity_bytes,
+                        used: used_bytes,
+                        wasted_bytes: wasted,
+                    }
+                },
+            )
+            .collect();
+        rows.sort_unstable_by(|a, b| {
+            b.wasted_bytes
+                .cmp(&a.wasted_bytes)
+                .then(a.array_obj_1based.cmp(&b.array_obj_1based))
+        });
+        rows.truncate(CHAR_ARRAY_WASTE_TOP);
+        Some(CharArrayWaste {
+            arrays_examined,
+            wasteful_arrays,
+            total_wasted_bytes,
+            top: rows,
+        })
+    };
     // ── Fold: count per String INSTANCE by its array's value hash ────────────
     // dup_map: value_hash -> (count, len). hash_arr: value_hash -> one
     // representative array address (for later exact-text recovery of winners).
@@ -296,9 +369,28 @@ pub(crate) fn resolve_duplicate_strings(path: &str, p1: &Pass1) -> io::Result<Du
         .collect();
     ranked.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     ranked.truncate(TOP_STRINGS_N);
+
+    // ── #5 Select the LONGEST distinct values (len desc, hash asc). Unlike the
+    // duplicate ranking this is NOT filtered by count>1 — the longest Strings
+    // are interesting even when unique. Captured here (before the drops below)
+    // so their representative arrays ride along in the single Pass-C scan.
+    let mut ranked_by_len: Vec<(u64, u32, u32)> = dup_map
+        .iter()
+        .map(|(&hv, &(count, len))| (hv, count, len))
+        .collect();
+    ranked_by_len.sort_unstable_by(|a, b| b.2.cmp(&a.2).then(a.0.cmp(&b.0)));
+    ranked_by_len.truncate(TOP_STRINGS_BY_LEN);
+
     // Map each winner's representative array address → its (hash, count, len).
     let mut winner_arr_meta: HashMap<u64, (u64, u32, u32)> = HashMap::new();
     for &(hv, count, len) in &ranked {
+        if let Some(&arr_addr) = hash_arr.get(&hv) {
+            winner_arr_meta.insert(arr_addr, (hv, count, len));
+        }
+    }
+    // Fold the length-winners into the SAME recovery set so Pass C's one scan
+    // recovers text for both rankings (no extra full-file scan).
+    for &(hv, count, len) in &ranked_by_len {
         if let Some(&arr_addr) = hash_arr.get(&hv) {
             winner_arr_meta.insert(arr_addr, (hv, count, len));
         }
@@ -332,6 +424,17 @@ pub(crate) fn resolve_duplicate_strings(path: &str, p1: &Pass1) -> io::Result<Du
             wasted_bytes: (count as u64 - 1) * len as u64,
         })
         .collect();
+    // #5: same text-recovery pattern, from the length ranking. wasted_bytes uses
+    // the same (count-1)*len formula (0 for unique values, where count==1).
+    let top_by_length: Vec<DupStringSample> = ranked_by_len
+        .iter()
+        .map(|&(hv, count, len)| DupStringSample {
+            text: hash_text.get(&hv).cloned().unwrap_or_default(),
+            count: count as u64,
+            len,
+            wasted_bytes: (count as u64).saturating_sub(1) * len as u64,
+        })
+        .collect();
     drop(hash_text);
 
     // ── Pass D: classes holding the most Strings ─────────────────────────────
@@ -351,8 +454,8 @@ pub(crate) fn resolve_duplicate_strings(path: &str, p1: &Pass1) -> io::Result<Du
         length_histogram,
         length_stats,
         top_string_holders,
-        top_by_length: Vec::new(),
-        char_array_waste: None,
+        top_by_length,
+        char_array_waste,
     })
 }
 
