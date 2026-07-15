@@ -147,7 +147,7 @@
       ]
     },
     "DomTreeNode": {
-      "description": "One node of the FULL multi-level dominator subtree rooted at an accumulation\npoint (`--dominator-tree`). Children are the nodes immediately dominated by\nthis one, sorted retained-desc (tie: obj index asc), bounded by the\nconfigured max-nodes / max-depth caps. Present only under the opt-in flag.",
+      "description": "One node of the FULL multi-level dominator subtree rooted at an accumulation\npoint. Children are the nodes immediately dominated by\nthis one, sorted retained-desc (tie: obj index asc), bounded by the\n`--detail` max-nodes / max-depth caps.",
       "type": "object",
       "properties": {
         "children": {
@@ -588,7 +588,7 @@
       ]
     },
     "RootPathStep": {
-      "description": "One hop of the literal inbound reference chain from a suspect toward a GC\nroot (`--root-paths`). The final hop carries `root_type_label` when the node\nis itself a GC root.",
+      "description": "One hop of the dominator chain from a suspect up toward its GC\nroot. The final hop carries `root_type_label` when the node\nis itself a GC root.",
       "type": "object",
       "properties": {
         "display_class": {
@@ -671,7 +671,7 @@
           "minimum": 0
         },
         "dominator_tree": {
-          "description": "FULL multi-level dominator subtree rooted at the accumulation point,\npresent only under `--dominator-tree`. `None` by default (skipped in JSON\nso parity/golden output is byte-identical) and `None` when the suspect has\nno accumulation point. Bounded by the configured max-nodes / max-depth.",
+          "description": "FULL multi-level dominator subtree rooted at the accumulation point.\n`None` when the suspect has no accumulation point (skipped in JSON).\nBounded by the `--detail` max-nodes / max-depth caps.",
           "anyOf": [
             {
               "$ref": "#/$defs/DomTreeNode"
@@ -712,7 +712,7 @@
           "minimum": 0
         },
         "root_path": {
-          "description": "Literal inbound reference chain from this single suspect to a GC root,\npresent only under `--root-paths`. `None` by default (skipped in JSON so\nparity/golden output is byte-identical). Only populated for singles.",
+          "description": "Dominator chain from this single suspect up to its GC root. Only\npopulated for single suspects; `None` for group suspects (skipped in\nJSON). Bounded by the `--detail` root-path max-depth cap.",
           "type": [
             "array",
             "null"
@@ -930,7 +930,7 @@
           }
         },
         "local_objects": {
-          "description": "Bounded sample of this thread's GC-thread-local root objects (retained\ndesc). Only populated when the opt-in `--thread-locals` flag is set;\n`None` otherwise (absent from JSON). Additive: not part of MAT parity.",
+          "description": "Bounded sample of this thread's GC-thread-local root objects (retained\ndesc), bounded by the `--detail` per-thread cap. Empty vec when the\nthread has no locals. Additive: not part of MAT parity.",
           "type": [
             "array",
             "null"
@@ -966,7 +966,7 @@
       ]
     },
     "ThreadLocalObj": {
-      "description": "One sampled GC-thread-local root object held by a thread: its 1-based object\nindex, class name, and footprint. Emitted only under `--thread-locals`.",
+      "description": "One sampled GC-thread-local root object held by a thread: its 1-based object\nindex, class name, and footprint.",
       "type": "object",
       "properties": {
         "display_class": {

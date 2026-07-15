@@ -42,18 +42,6 @@ fn deflate_decompress(blob: &[u8], cap: usize) -> io::Result<Vec<u8>> {
     Ok(out)
 }
 
-/// Deflate raw bytes at max level (Deflate9). Public thin wrapper so other
-/// modules (e.g. `RootPathCtx`) can hold arbitrary byte blobs compressed with
-/// the same codec used for the cold per-object arrays.
-pub fn deflate_bytes(raw: &[u8]) -> io::Result<Vec<u8>> {
-    deflate_compress(raw)
-}
-
-/// Inflate a `deflate_bytes` blob back to raw bytes; `cap` pre-sizes the output.
-pub fn inflate_bytes(blob: &[u8], cap: usize) -> io::Result<Vec<u8>> {
-    deflate_decompress(blob, cap)
-}
-
 /// A `Vec<u32>` held compressed across the peak window, restorable losslessly.
 ///
 /// With `Codec::None` this keeps the live `Vec<u32>` unchanged (no free); with
@@ -107,6 +95,66 @@ impl CompressedU32 {
                     .chunks_exact(4)
                     .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                     .collect())
+            }
+        }
+    }
+
+    /// Stream the decompressed `u32` sequence through `f` WITHOUT ever holding
+    /// the full decompressed buffer. Deflate output is read into a fixed 64 KiB
+    /// scratch buffer and decoded 4 bytes at a time, so the transient is O(64
+    /// KiB) rather than the ~2 GB of `restore()`. This keeps
+    /// the big-dump alloc-serial aggregation well under the binding RSS peak.
+    /// A 1-3 byte tail can straddle buffer refills, so a small carry holds
+    /// leftover bytes between reads. For `Codec::None` the live `Vec<u32>` is
+    /// iterated directly (tiny/no-compress paths only).
+    pub fn for_each_u32<F: FnMut(u32)>(&self, mut f: F) -> io::Result<()> {
+        match self.codec {
+            Codec::None => {
+                for &x in &self.raw {
+                    f(x);
+                }
+                Ok(())
+            }
+            Codec::Deflate9 => {
+                let mut d = flate2::read::DeflateDecoder::new(&self.blob[..]);
+                let mut buf = [0u8; 64 * 1024];
+                let mut carry: [u8; 4] = [0; 4];
+                let mut carry_len = 0usize;
+                loop {
+                    let n = d.read(&mut buf)?;
+                    if n == 0 {
+                        break;
+                    }
+                    let mut i = 0usize;
+                    // Complete a partial u32 left over from the previous read.
+                    while carry_len > 0 && i < n {
+                        carry[carry_len] = buf[i];
+                        carry_len += 1;
+                        i += 1;
+                        if carry_len == 4 {
+                            f(u32::from_le_bytes(carry));
+                            carry_len = 0;
+                        }
+                    }
+                    // Whole u32s inside this buffer.
+                    while i + 4 <= n {
+                        f(u32::from_le_bytes([
+                            buf[i],
+                            buf[i + 1],
+                            buf[i + 2],
+                            buf[i + 3],
+                        ]));
+                        i += 4;
+                    }
+                    // Stash a 1-3 byte tail for the next read.
+                    while i < n {
+                        carry[carry_len] = buf[i];
+                        carry_len += 1;
+                        i += 1;
+                    }
+                }
+                debug_assert_eq!(carry_len, 0);
+                Ok(())
             }
         }
     }
@@ -169,6 +217,28 @@ mod tests {
         for codec in [Codec::None, Codec::Deflate9] {
             let c = CompressedU32::compress(&v, codec).unwrap();
             assert_eq!(c.restore().unwrap(), v);
+        }
+    }
+
+    #[test]
+    fn for_each_u32_matches_restore() {
+        // for_each_u32 must yield the same u32 sequence as restore(), for both
+        // codecs, across a length that forces multiple 64 KiB buffer refills so
+        // the carry (partial-u32-across-reads) path is exercised.
+        let mut v: Vec<u32> = Vec::with_capacity(100_000);
+        let mut state = 0x9e3779b9u32;
+        for _ in 0..100_000 {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            v.push(state);
+        }
+        v.extend_from_slice(&[0, u32::MAX, 1, 0]);
+        for codec in [Codec::None, Codec::Deflate9] {
+            let c = CompressedU32::compress(&v, codec).unwrap();
+            let mut got: Vec<u32> = Vec::with_capacity(v.len());
+            c.for_each_u32(|x| got.push(x)).unwrap();
+            assert_eq!(got, v, "codec {codec:?}");
         }
     }
 

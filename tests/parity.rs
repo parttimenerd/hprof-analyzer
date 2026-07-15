@@ -8,6 +8,13 @@ use std::process::Command;
 /// The `_ours.md` baselines cover the default `md` format; the `_mdgraphs.md`
 /// baselines cover the `md-graphs` format (same numbers, plus ASCII bars,
 /// sparkline, and tree-drawn packages).
+///
+/// These baselines assert that our Markdown output is *stable across runs* under
+/// `--detail default`. They are NOT byte-identical to MAT: our output includes
+/// ours-only sections (path-to-GC-root chains, dominator subtree, per-thread
+/// local objects, allocation sites) that MAT does not emit. Regenerate a
+/// baseline with `analyze <dump>.hprof` (md) / `--format md-graphs` when the
+/// output legitimately changes.
 const FIXTURES: &[(&str, &str, &str)] = &[
     (
         "dump_0_fj-kmeans.hprof",

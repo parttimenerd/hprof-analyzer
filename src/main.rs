@@ -48,71 +48,26 @@ enum OutputFormat {
     Html,
 }
 
-/// Opt-in heavy-analysis toggles and their per-analysis caps. All disabled by
-/// default; the cap defaults (30/50/20/5000/20) come from clap `default_value_t`
-/// on the CLI args, not from `Default` (which zeros the caps).
-#[derive(Clone, Copy, Default)]
+/// Always-applied per-analysis caps, populated from `--detail`. All four heavy
+/// analyses (root paths, alloc sites, thread locals, dominator tree) now run
+/// unconditionally; these caps bound their output size. `--detail default`
+/// reproduces the historical cap values so MAT/golden parity is unchanged.
+#[derive(Clone, Copy)]
 pub struct AnalyzeOptions {
-    pub root_paths: bool,
-    pub root_path_max_depth: usize, // default 30
-    pub alloc_sites: bool,
-    pub alloc_sites_top: usize, // default 50
-    pub thread_locals: bool,
-    pub thread_locals_per_thread: usize, // default 20
-    pub dominator_tree: bool,
-    pub dominator_tree_max_nodes: usize, // default 5000
-    pub dominator_tree_max_depth: usize, // default 20
+    pub root_path_max_depth: usize,
+    pub alloc_sites_top: usize,
+    pub thread_locals_per_thread: usize,
+    pub dominator_tree_max_nodes: usize,
+    pub dominator_tree_max_depth: usize,
+    pub leak_children_cap: usize,
+    pub top_consumers: usize,
 }
 
-/// Referrer-graph context preserved (compressed) only under `--root-paths`, so
-/// the leak-suspect builder can walk literal inbound edges to GC roots. Holds
-/// the inbound CSR (`inb_block_off`/`inb_data`) and the pre-order->node `vertex`
-/// map deflated; `restore_*` rebuild the live arrays just-in-time for the
-/// bounded per-suspect walk, which drops them immediately after.
-pub struct RootPathCtx {
-    inb_block_off: Vec<u8>, // deflate of the u64 LE bytes
-    inb_block_off_len: usize,
-    inb_data: Vec<u8>, // deflate of the raw bytes
-    vertex: crate::cvec::CompressedU32,
-}
-
-impl RootPathCtx {
-    /// Compress the three referrer-walk arrays for low-RSS hold across the rest
-    /// of the pipeline. Only ever called under `--root-paths`.
-    fn compress(inb_block_off: &[u64], inb_data: &[u8], vertex: &[u32]) -> std::io::Result<Self> {
-        let mut block_off_bytes = Vec::with_capacity(inb_block_off.len() * 8);
-        for &x in inb_block_off {
-            block_off_bytes.extend_from_slice(&x.to_le_bytes());
-        }
-        let block_off_blob = crate::cvec::deflate_bytes(&block_off_bytes)?;
-        let data_blob = crate::cvec::deflate_bytes(inb_data)?;
-        let vertex_c = crate::cvec::CompressedU32::compress(vertex, cvec::Codec::Deflate9)?;
-        Ok(Self {
-            inb_block_off: block_off_blob,
-            inb_block_off_len: inb_block_off.len(),
-            inb_data: data_blob,
-            vertex: vertex_c,
-        })
-    }
-
-    /// Rebuild the inbound CSR block-offset array (byte-identical to input).
-    pub fn restore_inb_block_off(&self) -> std::io::Result<Vec<u64>> {
-        let bytes = crate::cvec::inflate_bytes(&self.inb_block_off, self.inb_block_off_len * 8)?;
-        Ok(bytes
-            .chunks_exact(8)
-            .map(|c| u64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]))
-            .collect())
-    }
-
-    /// Rebuild the inbound CSR data blob (byte-identical to input).
-    pub fn restore_inb_data(&self) -> std::io::Result<Vec<u8>> {
-        // Deflate stores no length; inflate reads to EOF (cap only pre-sizes).
-        crate::cvec::inflate_bytes(&self.inb_data, self.inb_data.len())
-    }
-
-    /// Rebuild the pre-order->node `vertex` map (byte-identical to input).
-    pub fn restore_vertex(&self) -> std::io::Result<Vec<u32>> {
-        self.vertex.restore()
+#[cfg(test)]
+impl Default for AnalyzeOptions {
+    /// Test-only default: the `--detail default` preset (historical cap values).
+    fn default() -> Self {
+        DetailLevel::Default.options()
     }
 }
 
@@ -142,45 +97,18 @@ enum Cmd {
         /// Report output format.
         #[arg(short, long, value_enum, default_value_t = FormatArg::Md)]
         format: FormatArg,
-        /// Override the per-suspect dominated-children list cap.
-        #[arg(long)]
-        leak_children_cap: Option<usize>,
+        /// Output-size detail preset. `default` reproduces the historical caps;
+        /// `minimal` shrinks and `max` expands every per-analysis output cap
+        /// (leak-suspect children, dominator subtree, alloc sites, thread
+        /// locals, top consumers).
+        #[arg(long, value_enum, default_value_t = DetailLevel::Default)]
+        detail: DetailLevel,
         /// Log per-phase timing (and RSS on Linux) to stderr.
         #[arg(short, long)]
         verbose: bool,
         /// Emit RSS probe/trim traces at pipeline checkpoints.
         #[arg(long)]
         trace_rss: bool,
-        /// Add a literal reference chain from each leak suspect to a GC root
-        /// (opt-in; may raise peak memory well above the default ceiling).
-        #[arg(long)]
-        root_paths: bool,
-        /// Max hops to walk when building a root path.
-        #[arg(long, default_value_t = 30)]
-        root_path_max_depth: usize,
-        /// Aggregate objects by allocation stack-trace serial (opt-in). Reports
-        /// nothing useful unless the JVM ran with allocation tracking enabled.
-        #[arg(long)]
-        alloc_sites: bool,
-        /// Keep only the top-N allocation sites by object count.
-        #[arg(long, default_value_t = 50)]
-        alloc_sites_top: usize,
-        /// List a bounded sample of each thread's local root objects (opt-in).
-        #[arg(long)]
-        thread_locals: bool,
-        /// Max local objects to list per thread.
-        #[arg(long, default_value_t = 20)]
-        thread_locals_per_thread: usize,
-        /// Emit the full multi-level dominator subtree per accumulation point
-        /// (opt-in; output can be large and may raise peak memory).
-        #[arg(long)]
-        dominator_tree: bool,
-        /// Cap total nodes in a dominator subtree (heaviest kept first).
-        #[arg(long, default_value_t = 5000)]
-        dominator_tree_max_nodes: usize,
-        /// Cap dominator-subtree depth.
-        #[arg(long, default_value_t = 20)]
-        dominator_tree_max_depth: usize,
     },
     /// Compare a MAT report against our canonical JSON (exit 2 on FAIL)
     Diff {
@@ -239,6 +167,36 @@ enum FormatArg {
     Html,
 }
 
+/// Output-size preset. `Default` reproduces the historical cap values so
+/// MAT/golden parity is unchanged; `Minimal`/`Max` scale the caps down/up.
+#[derive(Clone, Copy, PartialEq, ValueEnum)]
+enum DetailLevel {
+    Minimal,
+    Default,
+    Max,
+}
+
+impl DetailLevel {
+    fn options(self) -> AnalyzeOptions {
+        // (root_depth, alloc_top, thread_locals, dom_nodes, dom_depth,
+        //  leak_children, top_consumers)
+        let (rd, at, tl, dn, dd, lc, tc) = match self {
+            DetailLevel::Minimal => (10, 15, 5, 500, 10, 15, 10),
+            DetailLevel::Default => (30, 50, 20, 5000, 20, 50, 20),
+            DetailLevel::Max => (200, 500, 100, 100_000, 50, 500, 100),
+        };
+        AnalyzeOptions {
+            root_path_max_depth: rd,
+            alloc_sites_top: at,
+            thread_locals_per_thread: tl,
+            dominator_tree_max_nodes: dn,
+            dominator_tree_max_depth: dd,
+            leak_children_cap: lc,
+            top_consumers: tc,
+        }
+    }
+}
+
 impl From<FormatArg> for OutputFormat {
     fn from(f: FormatArg) -> Self {
         match f {
@@ -258,41 +216,20 @@ fn main() {
             input,
             output,
             format,
-            leak_children_cap,
+            detail,
             verbose,
             trace_rss,
-            root_paths,
-            root_path_max_depth,
-            alloc_sites,
-            alloc_sites_top,
-            thread_locals,
-            thread_locals_per_thread,
-            dominator_tree,
-            dominator_tree_max_nodes,
-            dominator_tree_max_depth,
         } => {
             if trace_rss {
                 trace::set_enabled(true);
             }
-            let cap = leak_children_cap.unwrap_or(report::DOMINATED_CAP);
-            let opts = AnalyzeOptions {
-                root_paths,
-                root_path_max_depth,
-                alloc_sites,
-                alloc_sites_top,
-                thread_locals,
-                thread_locals_per_thread,
-                dominator_tree,
-                dominator_tree_max_nodes,
-                dominator_tree_max_depth,
-            };
+            let opts = detail.options();
             if let Err(e) = run(
                 &input,
                 output.as_deref(),
                 format.into(),
                 verbose,
                 cvec::Codec::Deflate9,
-                cap,
                 opts,
             ) {
                 eprintln!("Error: {e}");
@@ -443,13 +380,12 @@ fn run(
     format: OutputFormat,
     verbose: bool,
     compress: cvec::Codec,
-    leak_children_cap: usize,
     opts: AnalyzeOptions,
 ) -> io::Result<()> {
     let t_total = Instant::now();
 
     let t = Instant::now();
-    let p1 = pass1::Pass1::run(input, opts.alloc_sites)?;
+    let p1 = pass1::Pass1::run(input)?;
     log(verbose, "pass1", t.elapsed().as_secs_f64());
 
     // The entire analysis works in u32 pre-order / node-index space (dfn,
@@ -469,7 +405,7 @@ fn run(
     }
 
     let t = Instant::now();
-    let (mut g, mut inbound, shallow_c, class_idx_c) =
+    let (mut g, mut inbound, shallow_c, class_idx_c, alloc_serial_c) =
         pass2::Pass2::build(input, p1, compress, &opts)?;
     log(
         verbose,
@@ -516,13 +452,6 @@ fn run(
     // vertex = invert(dfn) is a pure O(n) pass; the dominator reads it next.
     let count = rpo.parent_pre.len();
     rpo.vertex = rpo_dfs::rebuild_vertex(&rpo.dfn, count);
-    // Under --root-paths, clone the ~2GB vertex before rpo is moved into
-    // compute_dominators; default path never clones (zero RSS change).
-    let saved_vertex: Option<Vec<u32>> = if opts.root_paths {
-        Some(rpo.vertex.clone())
-    } else {
-        None
-    };
     crate::trace::probe("main: after rebuild_vertex (post-inbound, dfn live)");
     rpo.dfn = Vec::new();
     crate::trace::trim();
@@ -533,30 +462,12 @@ fn run(
     g.idom =
         dominator::compute_dominators(g.n, rpo, &g.gc_root_indices, &inb_block_off, &inb_data)?;
     log(verbose, "dominator", t.elapsed().as_secs_f64());
-    let root_ctx: Option<RootPathCtx> = if opts.root_paths {
-        // Under --root-paths we must keep the inbound CSR + vertex alive for the
-        // later leak-suspect walk, but holding them dense would blow the budget.
-        // Compress into small blobs HERE (right after dominators, the last dense
-        // consumer) and free the dense arrays immediately, so nothing carries a
-        // second live copy of the ~7.5GB CSR+vertex into the retained phase.
-        let ctx = RootPathCtx::compress(
-            &inb_block_off,
-            &inb_data,
-            saved_vertex
-                .as_deref()
-                .expect("vertex saved under root_paths"),
-        )?;
-        drop(saved_vertex);
-        drop(inb_block_off);
-        drop(inb_data);
-        Some(ctx)
-    } else {
-        // Default path: byte-identical to today — free the CSR immediately.
-        // Nothing downstream reads it, so there is no compressed copy to keep.
-        drop(inb_block_off);
-        drop(inb_data);
-        None
-    };
+    // The inbound (referrer) CSR is consumed by the dominator and never read
+    // again: --root-paths now derives its GC-root chains from `g.idom` (the
+    // dominator tree, which MAT also uses), so there is no need to preserve or
+    // compress the ~7.5GB CSR + vertex map. Free it immediately for every run.
+    drop(inb_block_off);
+    drop(inb_data);
     crate::trace::trim();
 
     // Build the dominator-children CSR ONCE and share it across compute_retained
@@ -595,6 +506,34 @@ fn run(
     g.has_same_class_ancestor = has_same;
     log(verbose, "retained", t.elapsed().as_secs_f64());
 
+    // Restore + aggregate + free the alloc stack serials in a bounded window
+    // right after compute_retained (needs g.shallow + g.retained, both live
+    // now). RSS here is well below the rpo/inbound/dominator binding peak, so
+    // the transient decode buffer stays under it. We decompress to the raw
+    // u32-byte buffer and aggregate by STREAMING over it (no second ~2GB
+    // Vec<u32>): restore() would hold both the decompressed bytes AND the
+    // collected Vec (~4GB transient — the spike that defeated the naive
+    // placement). Only the KB-scale AllocSites summary is carried into
+    // build_model, so the report phase never holds the per-object array.
+    let alloc_sites = if let Some(c) = alloc_serial_c {
+        // Stream the deflate blob through a 64 KiB scratch buffer, feeding each
+        // serial into the accumulator in index order. Never materialises the
+        // ~2GB decompressed byte buffer OR a collected Vec<u32> — the transient
+        // is O(64 KiB), well under the binding rpo peak.
+        let mut agg = report::AllocAgg::new(&g, opts.alloc_sites_top);
+        c.for_each_u32(|serial| agg.push(serial))?;
+        let a = agg.finish();
+        g.alloc_frames_by_serial = None;
+        crate::trace::trim();
+        Some(a)
+    } else {
+        // Codec::None path (never taken on the big dump): aggregate directly.
+        let a = report::build_alloc_sites(&g, opts.alloc_sites_top);
+        g.alloc_stack_serial = Vec::new();
+        g.alloc_frames_by_serial = None;
+        Some(a)
+    };
+
     let t = Instant::now();
     crate::trace::probe("report: before build_model");
     // build_model reads has_same_class_ancestor (system-overview group) and
@@ -606,10 +545,10 @@ fn run(
         &g,
         &dc_off,
         &dc_tgt,
-        leak_children_cap,
+        opts.leak_children_cap,
         &depth_counts,
         &opts,
-        root_ctx,
+        alloc_sites,
     );
     crate::trace::probe("report: after build_model");
     g.has_same_class_ancestor = crate::bitset::Bitset::default(); // consumed by build_model
@@ -668,7 +607,7 @@ fn run(
 
 /// Emit pass-1 parse stats (counts + class histogram) as JSON to stdout.
 fn dump_pass1_json(path: &str) -> io::Result<()> {
-    let p = Pass1::run(path, false)?;
+    let p = Pass1::run(path)?;
 
     let mut class_hist: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
     for (i, &cidx) in p.class_ids.iter().enumerate() {

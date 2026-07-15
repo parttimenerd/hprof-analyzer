@@ -70,7 +70,7 @@ function Nav({ report }: { report: Report }) {
     ["top", "Top Consumers"],
     ["threads", "Threads"],
   ];
-  // Opt-in (`--alloc-sites`): show the entry only when the field is present.
+  // show the entry only when the field is present.
   if (report.alloc_sites) items.push(["alloc-sites", "Allocation Sites"]);
 
   const [active, setActive] = React.useState<string>("");
@@ -734,15 +734,15 @@ function DominatedByClass({ rows }: { rows: HistRow[] }) {
   );
 }
 
-// Opt-in (`--root-paths`): the literal inbound reference chain from a suspect
-// (first) to a GC root (last), as a numbered list. The final step is annotated
+// the dominator chain from a suspect
+// (first) up to its GC root (last), as a numbered list. The final step is annotated
 // with the GC-root type when known. Mirrors report.rs::render_root_path.
 function RootPathList({ steps }: { steps: RootPathStep[] }) {
   if (steps.length === 0) return null;
   const last = steps.length - 1;
   return (
     <details>
-      <summary>Reference chain to GC root ({steps.length} step{steps.length === 1 ? "" : "s"})</summary>
+      <summary>Path to GC root · dominator chain ({steps.length} step{steps.length === 1 ? "" : "s"})</summary>
       <ol className="accum-path">
         {steps.map((p, i) => (
           <li key={i}>
@@ -758,7 +758,7 @@ function RootPathList({ steps }: { steps: RootPathStep[] }) {
   );
 }
 
-// Opt-in (`--dominator-tree`): one node of the recursive dominator subtree, as a
+// One node of the recursive dominator subtree, as a
 // collapsible <details>/<summary> tree (modeled on PackageTreeRow). Children are
 // rendered nested; leaves are non-collapsible. Mirrors report.rs::render_dom_tree.
 function DomSubtreeNode({ node, depth }: { node: DomTreeNode; depth: number }) {
@@ -1057,7 +1057,7 @@ function TopConsumersSection({ report }: { report: Report }) {
 // One collapsible block per thread; frames rendered verbatim in a monospace
 // <pre>. A filter box keeps large thread sets (hundreds) navigable. Preserves
 // the upstream (thread_serial-sorted) order for determinism.
-// Opt-in (`--thread-locals`): a small table of a thread's GC-thread-local root
+// a small table of a thread's GC-thread-local root
 // objects. Renders nothing for an empty list. Mirrors report.rs::render_thread_locals.
 function ThreadLocalsTable({ objs }: { objs: ThreadLocalObj[] }) {
   if (objs.length === 0) return null;
@@ -1199,7 +1199,7 @@ function ThreadsSection({ report }: { report: Report }) {
 }
 
 // ── Allocation Sites ──────────────────────────────────────────────────────────
-// Opt-in (`--alloc-sites`): aggregated allocation sites. Honest note when the
+// aggregated allocation sites. Honest note when the
 // dump carried no allocation stack-trace info. Mirrors report.rs::render_alloc_sites.
 function AllocSitesSection({ data }: { data: AllocSites }) {
   return (

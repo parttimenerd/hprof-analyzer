@@ -1790,6 +1790,7 @@ impl Pass2 {
         InboundBuilder,
         crate::cvec::CompressedU32,
         crate::cvec::CompressedU32,
+        Option<crate::cvec::CompressedU32>,
     )> {
         let n = p1.id_map.len();
         let id_size = p1.id_size;
@@ -2191,17 +2192,12 @@ impl Pass2 {
         // thread trace, off the per-object RSS budget.
         let thread_stacks = build_thread_stacks(&p1);
 
-        // When --alloc-sites is on, pre-resolve every DISTINCT non-zero alloc
-        // stack-trace serial into its frame lines while the STACK_FRAME/
-        // STACK_TRACE + string/class tables are still alive (freed just below).
-        // Bounded by the number of distinct traces (hundreds), so it stays off
-        // the per-object RSS budget. Left None when the flag is off.
+        // Pre-resolve every DISTINCT non-zero alloc stack-trace serial into its
+        // frame lines while the STACK_FRAME/STACK_TRACE + string/class tables
+        // are still alive (freed just below). Bounded by the number of distinct
+        // traces (hundreds), so it stays off the per-object RSS budget.
         let alloc_frames_by_serial: Option<std::collections::HashMap<u32, Vec<String>>> =
-            if opts.alloc_sites {
-                Some(resolve_alloc_frames(&p1))
-            } else {
-                None
-            };
+            Some(resolve_alloc_frames(&p1));
 
         // Decode each thread's java.lang.Thread.name via a bounded 3-pass
         // worklist, while class_map/strings/id_map are still alive (freed just
@@ -2256,11 +2252,9 @@ impl Pass2 {
             if thread_idx != local_idx {
                 synthetic_edges.push((thread_idx, local_idx));
                 *thread_local_counts.entry(thread_serial).or_insert(0) += 1;
-                if opts.thread_locals {
-                    let sample = thread_local_samples.entry(thread_serial).or_default();
-                    if sample.len() < opts.thread_locals_per_thread {
-                        sample.push(local_idx);
-                    }
+                let sample = thread_local_samples.entry(thread_serial).or_default();
+                if sample.len() < opts.thread_locals_per_thread {
+                    sample.push(local_idx);
                 }
             }
         }
@@ -2297,6 +2291,22 @@ impl Pass2 {
         if compress != crate::cvec::Codec::None {
             class_idx = Vec::new();
         }
+        // Compress the per-object alloc stack serials (~2GB dense u32 under
+        // alloc-sites) at the SAME point, before fwd_targets alloc: pass1
+        // touched every element (faulting all pages), so even a mostly-zero
+        // array occupies ~2GB real RSS through the fwd_targets + rpo + inbound
+        // binding peak. It is read only once, by the report's alloc-site
+        // aggregation, long after that peak. main.rs holds the blob and streams
+        // it back post-retained (see build_alloc_sites_from). None only under
+        // Codec::None (the raw array is kept for the direct-aggregate path).
+        // Graph.alloc_stack_serial stays empty.
+        let alloc_serial_c = if compress != crate::cvec::Codec::None {
+            let c = crate::cvec::CompressedU32::compress(&p1.alloc_stack_serial, compress)?;
+            p1.alloc_stack_serial = Vec::new();
+            Some(c)
+        } else {
+            None
+        };
         crate::trace::probe("pass2: after early-compress shallow/class_idx");
 
         // ── Phase 3: Build forward-CSR offsets (prefix sum only) ────────
@@ -2443,7 +2453,7 @@ impl Pass2 {
             synthetic_edges,
         };
 
-        Ok((graph, inbound, shallow_c, class_idx_c))
+        Ok((graph, inbound, shallow_c, class_idx_c, alloc_serial_c))
     }
 
     /// First-scan heap walker that COUNTS out/in degrees per node and finalizes
@@ -3140,8 +3150,8 @@ mod tests {
         if !std::path::Path::new(DUMP).exists() {
             return;
         }
-        let p1 = Pass1::run(DUMP, false).unwrap();
-        let (g, inbound, _sc, _ci) = Pass2::build(
+        let p1 = Pass1::run(DUMP).unwrap();
+        let (g, inbound, _sc, _ci, _as) = Pass2::build(
             DUMP,
             p1,
             crate::cvec::Codec::None,
@@ -3178,8 +3188,8 @@ mod tests {
         if !std::path::Path::new(DUMP).exists() {
             return;
         }
-        let p1 = Pass1::run(DUMP, false).unwrap();
-        let (g, _inbound, _sc, _ci) = Pass2::build(
+        let p1 = Pass1::run(DUMP).unwrap();
+        let (g, _inbound, _sc, _ci, _as) = Pass2::build(
             DUMP,
             p1,
             crate::cvec::Codec::None,
@@ -3209,7 +3219,7 @@ mod tests {
         if !std::path::Path::new(DUMP).exists() {
             return;
         }
-        let p1 = Pass1::run(DUMP, false).unwrap();
+        let p1 = Pass1::run(DUMP).unwrap();
         let class_addrs: std::collections::HashSet<u64> = p1.class_map.keys().cloned().collect();
         assert!(!class_addrs.is_empty(), "expected some class objects");
         let mut class_count = 0usize;

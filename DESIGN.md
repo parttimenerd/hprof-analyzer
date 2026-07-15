@@ -200,11 +200,40 @@ Parse a dump and emit the report. Writes to `OUTPUT` if given, else stdout.
 
 | Option | Values | Default | Meaning |
 |---|---|---|---|
-| `-f, --format` | `md`, `json` | `md` | Output format. `md` is the byte-exact MAT-parity path; `json` is the canonical model. |
-| `-c, --compress` | `none`, `deflate9` | `deflate9` | Internal cold-array codec used to hold peak RSS down during analysis. Does **not** affect output bytes; `none` is faster but uses more RAM. |
-| `--leak-children-cap <N>` | usize | internal `DOMINATED_CAP` | Caps dominated children materialized per leak suspect. |
+| `-f, --format` | `md`, `md-graphs`, `html`, `json` | `md` | Output format. `md` is the byte-exact MAT-parity path; `md-graphs` adds ASCII bars/sparklines/trees; `html` is a self-contained page; `json` is the canonical model. |
+| `--detail <LEVEL>` | `minimal`, `default`, `max` | `default` | Output-size preset controlling seven caps (see below). `default` reproduces the historical cap values. |
 | `-v, --verbose` | flag | off | Per-phase timing + RSS to stderr. |
 | `--trace-rss` | flag | off | Enable the RSS-probe instrumentation. |
+
+The internal cold-array codec is hardwired to Deflate9 (the former `-c/--compress`
+switch was removed: `none` defeated the pass-2 early-compress and cost ~4 GB RSS on
+the big dump, so it is no longer selectable).
+
+**Heavy analyses (always on).** Four analyses run unconditionally and each adds an
+additive `Option<T>` section to every format:
+
+| Analysis | Produces |
+|---|---|
+| Root paths | Dominator chain from each single-object suspect up to its GC root (the same dominator-based "path to the accumulation point" MAT's Leak Suspects report shows). |
+| Allocation sites | Objects aggregated by allocation stack-trace serial; honest empty note when the JVM recorded none. |
+| Thread locals | Each thread's local-root object sample. |
+| Dominator subtree | Full multi-level dominator subtree per accumulation point. |
+
+**`--detail` preset.** A single flag scales seven output-size caps. `default` reproduces
+the historical cap values (so the JSON/golden snapshots and internal cap behavior match
+what the individual cap flags produced before they were removed):
+
+| `--detail` | root depth | alloc top | thread locals | dom nodes | dom depth | leak children | top consumers |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `minimal` | 10 | 15 | 5 | 500 | 10 | 15 | 10 |
+| `default` | 30 | 50 | 20 | 5,000 | 20 | 50 | 20 |
+| `max` | 200 | 500 | 100 | 100,000 | 50 | 500 | 100 |
+
+`--detail max` raises the dominator-tree cap to 100k nodes, which may push peak RSS above
+the default ceiling on very large dumps — a deliberate, documented trade-off (§14). The
+Markdown MAT-parity view is unaffected by the removal of the flags: `--detail default`
+reproduces the historical cap values, and the ours-only sections (root paths, dominator
+subtree, thread locals, allocation sites) now always appear in the Markdown output.
 
 ### `render <INPUT> [-f md|json]`
 
@@ -231,18 +260,11 @@ Diagnostic subcommands (not the stable user surface):
 - `dump-pass1 <INPUT>` — dump pass-1 parse stats (counts, class histogram) as
   JSON, for diagnostics.
 
-### Planned / reserved CLI
+### Cross-dump growth diff
 
-- **Cross-dump growth diff** (`diff-reports A.json B.json`) — pure offline
-  post-processing of two canonical Report JSONs (per-class Δinstances/Δretained,
-  new/grown suspects, growth leaders); the "is it growing over time?" signal.
-  Implemented on a feature branch, not yet merged into the default binary.
-  Distinct from the `diff` MAT-comparator.
-- **`--root-paths`** *(planned)* — literal GC-root reference chains via a
-  bounded, compressed reference CSR + edge-name metadata. **This flag raises peak
-  RAM above the ~14369 MB default ceiling; RAM is uncapped under this flag — a
-  deliberate, user-accepted trade-off** for literal reference chains. The
-  measured flag-ON big-dump peak must be documented here when it ships.
+- **`diff-reports A.json B.json`** — pure offline post-processing of two canonical
+  Report JSONs (per-class Δinstances/Δretained, new/grown suspects, growth leaders);
+  the "is it growing over time?" signal. Distinct from the `diff` MAT-comparator.
 
 ## 10. Output formats
 
@@ -396,13 +418,25 @@ and is guarded by the byte-exact parity test.
 - No threading, no mmap, no spilling in-memory data to disk to cut RSS — RSS is
   reduced structurally.
 - Report-phase features (JSON, OOM triage, validation, docs) do **not** touch the
-  analysis pipeline and carry no analysis-RSS impact. The planned `--root-paths`
-  reference CSR is the sole exception and is explicitly uncapped and opt-in (§9).
+  analysis pipeline and carry no analysis-RSS impact. The four always-on heavy analyses
+  (§9) add bounded per-object capture (allocation sites / thread locals) or reuse
+  already-resident structures (root paths walk the `idom` array, the dominator subtree
+  reuses the dominator-children CSR), so none preserves an extra large array across the
+  peak — the ceiling still holds with all four running.
+- **Big-dump peak (all four analyses on):** on the 35.8 GB reference dump the root-path
+  chain is derived from the dominator tree (the same basis as MAT's Leak Suspects path),
+  so it needs no inbound-referrer CSR preserved past the dominator phase — the earlier
+  literal-referrer design decompressed the full ~6.4 GB CSR just to walk a few hundred
+  nodes, spiking peak to 25.46 GiB. The current always-on path measured 14.21 GiB, under
+  the ceiling. `--detail max` raises the dominator-tree node cap to 100k, which can push
+  peak higher — a documented trade-off.
 
 ## 15. Testing strategy (summary)
 
-- **Parity** — 8 dumps, byte-exact Markdown vs committed baselines
-  (`tests/parity.rs`); only the `Generated by` line excluded.
+- **Parity** — 8 dumps, Markdown output compared against committed baselines
+  (`tests/parity.rs`); only the `Generated by` line excluded. Asserts output
+  stability under `--detail default` (the baselines include the ours-only
+  always-on sections, so they are no longer byte-identical to MAT).
 - **Structural integration** — Markdown heading/section/table structure
   (`tests/integration.rs`).
 - **MAT↔JSON sweep** — the §12 zero-tolerance classifier + `N_MIN` gate; the
@@ -423,8 +457,8 @@ and is guarded by the byte-exact parity test.
 - **Phase E — new-pass parsing:** class loaders, allocation stacks (TRACE/FRAME),
   threads, system properties, per-loader Top Components. Populates the currently-
   absent optional sections. Touches the parse pipeline → RSS must be measured.
-- **Phase F — `--root-paths`:** bounded compressed reference CSR + edge names for
-  literal GC-root paths, referrer-diversity, reference-type reachability stats.
-  Opt-in; uncapped RAM (§9).
+- **Phase F — literal reference paths:** bounded compressed reference CSR + edge
+  names for literal GC-root paths (not the dominator-based approximation shipped
+  today), referrer-diversity, reference-type reachability stats. Uncapped RAM (§9).
 - **Phase H — HTML report:** a self-contained single-file HTML report (charts,
   offline); the committed JS bundle is rebuilt + size-checked in CI.

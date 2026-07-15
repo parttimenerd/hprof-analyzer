@@ -114,10 +114,10 @@ pub struct Pass1 {
 }
 
 impl Pass1 {
-    /// Runs pass 1 over the dump at `path`. When `capture_alloc_sites` is set,
-    /// also records each object's allocation stack-trace serial (for
-    /// --alloc-sites); otherwise `alloc_stack_serial` stays empty (zero RSS).
-    pub fn run(path: &str, capture_alloc_sites: bool) -> io::Result<Self> {
+    /// Runs pass 1 over the dump at `path`. Always records each object's
+    /// allocation stack-trace serial (for the always-on alloc-sites report);
+    /// serials are 0 unless the JVM ran with allocation tracking enabled.
+    pub fn run(path: &str) -> io::Result<Self> {
         let file_size = std::fs::metadata(path)?.len();
         let mut r = HprofReader::open(path)?;
         let id_size = r.id_size;
@@ -224,7 +224,6 @@ impl Pass1 {
                         &mut tmp_kind,
                         &mut tmp_elem_count,
                         &mut tmp_alloc_serial,
-                        capture_alloc_sites,
                         &mut gc_root_addrs,
                         &mut gc_root_types,
                         &mut thread_serial_to_obj_id,
@@ -387,7 +386,6 @@ fn scan_heap_segment(
     tmp_kind: &mut Vec<u8>,
     tmp_elem_count: &mut Vec<u32>,
     tmp_alloc_serial: &mut Vec<u32>,
-    capture_alloc_sites: bool,
     gc_root_addrs: &mut Vec<u64>,
     gc_root_types: &mut Vec<u8>,
     thread_serial_to_obj_id: &mut HashMap<u32, u64>,
@@ -465,17 +463,13 @@ fn scan_heap_segment(
                 tmp_kind.push(3);
                 tmp_elem_count.push(0);
                 // CLASS_DUMP has no per-object alloc serial; push 0 so the array
-                // stays 1:1 with the object ordering when capturing.
-                if capture_alloc_sites {
-                    tmp_alloc_serial.push(0);
-                }
+                // stays 1:1 with the object ordering.
+                tmp_alloc_serial.push(0);
             }
             heap::INSTANCE_DUMP => {
                 let addr = r.id()?;
                 let stack_serial = r.u4()?; // stack_trace_serial(u4)
-                if capture_alloc_sites {
-                    tmp_alloc_serial.push(stack_serial);
-                }
+                tmp_alloc_serial.push(stack_serial);
                 let class_id = r.id()?;
                 let data_len = r.u4()? as u64;
                 r.skip(data_len)?;
@@ -503,9 +497,7 @@ fn scan_heap_segment(
                 // + count element ids.
                 let addr = r.id()?;
                 let stack_serial = r.u4()?; // stack_trace_serial
-                if capture_alloc_sites {
-                    tmp_alloc_serial.push(stack_serial);
-                }
+                tmp_alloc_serial.push(stack_serial);
                 let count = r.u4()? as u64;
                 let elem_class_id = r.id()?;
                 r.skip(count * ids)?;
@@ -532,9 +524,7 @@ fn scan_heap_segment(
                 // + count*elem_size raw element bytes.
                 let addr = r.id()?;
                 let stack_serial = r.u4()?; // stack_trace_serial
-                if capture_alloc_sites {
-                    tmp_alloc_serial.push(stack_serial);
-                }
+                tmp_alloc_serial.push(stack_serial);
                 let count = r.u4()? as u64;
                 let elem_type_code = r.u1()?;
                 let elem_size = HprofType::from_code(elem_type_code)
@@ -936,7 +926,7 @@ mod tests {
         if !std::path::Path::new(DUMP).exists() {
             return;
         }
-        let p = Pass1::run(DUMP, false).unwrap();
+        let p = Pass1::run(DUMP).unwrap();
         assert_eq!(p.instance_count, EXPECTED_INSTANCES, "instances");
         assert_eq!(p.obj_array_count, EXPECTED_OBJ_ARRAYS, "obj arrays");
         assert_eq!(p.prim_array_count, EXPECTED_PRIM_ARRAYS, "prim arrays");
@@ -954,7 +944,7 @@ mod tests {
         if !std::path::Path::new(DUMP).exists() {
             return;
         }
-        let p = Pass1::run(DUMP, false).unwrap();
+        let p = Pass1::run(DUMP).unwrap();
         // id_map now includes class objects (from CLASS_DUMP records) in addition to instances/arrays
         let expected =
             EXPECTED_INSTANCES + EXPECTED_OBJ_ARRAYS + EXPECTED_PRIM_ARRAYS + p.class_dump_count;
@@ -971,7 +961,7 @@ mod tests {
         if !std::path::Path::new(DUMP).exists() {
             return;
         }
-        let p = Pass1::run(DUMP, false).unwrap();
+        let p = Pass1::run(DUMP).unwrap();
         assert_eq!(p.id_map.len(), p.class_ids.len(), "class_ids len");
         assert_eq!(p.id_map.len(), p.shallow_sizes.len(), "shallow_sizes len");
     }
@@ -981,7 +971,7 @@ mod tests {
         if !std::path::Path::new(DUMP).exists() {
             return;
         }
-        let p = Pass1::run(DUMP, false).unwrap();
+        let p = Pass1::run(DUMP).unwrap();
         assert_eq!(p.id_size, 8);
         assert!(p.format.starts_with("JAVA PROFILE"));
         assert!(p.has_sticky_class_roots);
@@ -993,7 +983,7 @@ mod tests {
         if !std::path::Path::new(DUMP).exists() {
             return;
         }
-        let p = Pass1::run(DUMP, false).unwrap();
+        let p = Pass1::run(DUMP).unwrap();
         // Every class in class_map should have a name_id, and that name_id should be in strings
         let mut resolved = 0usize;
         for ci in p.class_map.values() {

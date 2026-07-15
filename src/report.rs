@@ -343,11 +343,10 @@ fn package_path(name: &str) -> String {
 // ── Data model ──────────────────────────────────────────────────────────────
 
 const THRESHOLD_PCT: f64 = 10.0;
-const TOP_N: usize = 20;
 /// Default per-suspect cap on the "accumulated objects" lists (immediately
-/// dominated children + by-class histogram). MAT uses 20; we default higher
-/// so more of the retained tail is visible. Overridable via
-/// `--leak-children-cap=N`.
+/// dominated children + by-class histogram), used as the `leak_children_cap`
+/// value in unit tests. In production this is supplied by the `--detail` preset.
+#[cfg(test)]
 pub const DOMINATED_CAP: usize = 50;
 /// MAT `FindLeaksQuery.big_drop_ratio`: descend the dominator tree while the
 /// largest child retains at least this fraction of its parent; stop (parent is
@@ -546,8 +545,8 @@ pub struct PathStep {
     pub retained: u64,
 }
 
-/// One hop of the literal inbound reference chain from a suspect toward a GC
-/// root (`--root-paths`). The final hop carries `root_type_label` when the node
+/// One hop of the dominator chain from a suspect up toward its GC
+/// root. The final hop carries `root_type_label` when the node
 /// is itself a GC root.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct RootPathStep {
@@ -569,9 +568,9 @@ pub struct DominatedRow {
 }
 
 /// One node of the FULL multi-level dominator subtree rooted at an accumulation
-/// point (`--dominator-tree`). Children are the nodes immediately dominated by
+/// point. Children are the nodes immediately dominated by
 /// this one, sorted retained-desc (tie: obj index asc), bounded by the
-/// configured max-nodes / max-depth caps. Present only under the opt-in flag.
+/// `--detail` max-nodes / max-depth caps.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct DomTreeNode {
     pub obj_index_1based: usize,
@@ -622,15 +621,14 @@ pub struct Suspect {
     /// is not itself a root, is held by multiple/ambiguous roots, or the root
     /// type is `ROOT_UNKNOWN`. Only populated for single suspects.
     pub root_type_label: String,
-    /// Literal inbound reference chain from this single suspect to a GC root,
-    /// present only under `--root-paths`. `None` by default (skipped in JSON so
-    /// parity/golden output is byte-identical). Only populated for singles.
+    /// Dominator chain from this single suspect up to its GC root. Only
+    /// populated for single suspects; `None` for group suspects (skipped in
+    /// JSON). Bounded by the `--detail` root-path max-depth cap.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub root_path: Option<Vec<RootPathStep>>,
-    /// FULL multi-level dominator subtree rooted at the accumulation point,
-    /// present only under `--dominator-tree`. `None` by default (skipped in JSON
-    /// so parity/golden output is byte-identical) and `None` when the suspect has
-    /// no accumulation point. Bounded by the configured max-nodes / max-depth.
+    /// FULL multi-level dominator subtree rooted at the accumulation point.
+    /// `None` when the suspect has no accumulation point (skipped in JSON).
+    /// Bounded by the `--detail` max-nodes / max-depth caps.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dominator_tree: Option<DomTreeNode>,
 }
@@ -718,14 +716,14 @@ pub struct ThreadInfo {
     /// of MAT parity comparison. Bounded (per-thread), off the per-object budget.
     pub local_root_count: u64,
     /// Bounded sample of this thread's GC-thread-local root objects (retained
-    /// desc). Only populated when the opt-in `--thread-locals` flag is set;
-    /// `None` otherwise (absent from JSON). Additive: not part of MAT parity.
+    /// desc), bounded by the `--detail` per-thread cap. Empty vec when the
+    /// thread has no locals. Additive: not part of MAT parity.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub local_objects: Option<Vec<ThreadLocalObj>>,
 }
 
 /// One sampled GC-thread-local root object held by a thread: its 1-based object
-/// index, class name, and footprint. Emitted only under `--thread-locals`.
+/// index, class name, and footprint.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct ThreadLocalObj {
     pub obj_index_1based: usize,
@@ -797,33 +795,26 @@ pub fn build_model(
     leak_children_cap: usize,
     depth_counts: &[u64],
     opts: &crate::AnalyzeOptions,
-    root_ctx: Option<crate::RootPathCtx>,
+    alloc_sites: Option<AllocSites>,
 ) -> Report {
     let generated = now_iso8601();
     crate::trace::probe("build_model: before system_overview aggregates");
-    let overview = build_system_overview(g, depth_counts);
+    let overview = build_system_overview(g, depth_counts, opts.top_consumers);
     crate::trace::probe("build_model: after system_overview aggregates");
     let leaks = build_leak_suspects(
         g,
         dc_offsets,
         dc_targets,
         leak_children_cap,
-        root_ctx,
         opts.root_path_max_depth,
-        opts.dominator_tree,
         opts.dominator_tree_max_nodes,
         opts.dominator_tree_max_depth,
     );
     crate::trace::probe("build_model: after leak_suspects aggregates");
-    let top = build_top_consumers(g);
+    let top = build_top_consumers(g, opts.top_consumers);
     crate::trace::probe("build_model: after top_consumers aggregates");
-    let threads = build_thread_overview(g, opts);
+    let threads = build_thread_overview(g);
     crate::trace::probe("build_model: after thread_overview aggregates");
-    let alloc_sites = if opts.alloc_sites {
-        Some(build_alloc_sites(g, opts.alloc_sites_top))
-    } else {
-        None
-    };
     Report {
         schema_version: SCHEMA_VERSION,
         generated,
@@ -841,65 +832,113 @@ pub fn build_model(
 /// Otherwise sorts by object count desc (tie-break retained_total desc, then
 /// stack_serial asc), keeps the top `top_n`, and resolves frame lines from
 /// `g.alloc_frames_by_serial`.
-fn build_alloc_sites(g: &Graph, top_n: usize) -> AllocSites {
+pub(crate) fn build_alloc_sites(g: &Graph, top_n: usize) -> AllocSites {
+    build_alloc_sites_from(g, top_n, g.alloc_stack_serial.iter().copied())
+}
+
+/// Streaming accumulator for alloc-site aggregation. Objects are fed one serial
+/// at a time in index order via [`AllocAgg::push`]; [`AllocAgg::finish`] produces
+/// the top-N `AllocSites`. This lets the big-dump path feed serials as they are
+/// stream-decompressed from a deflate blob (via `CompressedU32::for_each_u32`),
+/// never materialising a second ~2GB buffer alongside the decompressed bytes.
+pub(crate) struct AllocAgg<'g> {
+    g: &'g Graph,
+    top_n: usize,
+    idx: usize,
     // (object_count, shallow_total, retained_total) keyed by stack serial.
-    let mut agg: std::collections::HashMap<u32, (u64, u64, u64)> = std::collections::HashMap::new();
-    for (i, &serial) in g.alloc_stack_serial.iter().enumerate() {
-        if serial == 0 {
-            continue;
+    agg: std::collections::HashMap<u32, (u64, u64, u64)>,
+}
+
+impl<'g> AllocAgg<'g> {
+    pub(crate) fn new(g: &'g Graph, top_n: usize) -> Self {
+        Self {
+            g,
+            top_n,
+            idx: 0,
+            agg: std::collections::HashMap::new(),
         }
-        let e = agg.entry(serial).or_insert((0, 0, 0));
-        e.0 += 1;
-        e.1 += g.shallow[i] as u64;
-        e.2 += g.retained[i];
-    }
-    if agg.is_empty() {
-        return AllocSites {
-            traces_present: false,
-            sites: vec![],
-        };
     }
 
-    let empty_frames: Vec<String> = Vec::new();
-    let mut sites: Vec<AllocSite> = agg
-        .into_iter()
-        .map(
-            |(stack_serial, (object_count, shallow_total, retained_total))| {
-                let frames = g
-                    .alloc_frames_by_serial
-                    .as_ref()
-                    .and_then(|m| m.get(&stack_serial))
-                    .cloned()
-                    .unwrap_or_else(|| empty_frames.clone());
-                AllocSite {
-                    stack_serial,
-                    frames,
-                    object_count,
-                    shallow_total,
-                    retained_total,
-                }
-            },
-        )
-        .collect();
-    // Deterministic ordering: object_count desc, then retained_total desc, then
-    // stack_serial asc.
-    sites.sort_by(|a, b| {
-        b.object_count
-            .cmp(&a.object_count)
-            .then_with(|| b.retained_total.cmp(&a.retained_total))
-            .then_with(|| a.stack_serial.cmp(&b.stack_serial))
-    });
-    sites.truncate(top_n);
-    AllocSites {
-        traces_present: true,
-        sites,
+    /// Feed the serial for the next object index (in index order).
+    pub(crate) fn push(&mut self, serial: u32) {
+        let i = self.idx;
+        self.idx += 1;
+        if serial == 0 {
+            return;
+        }
+        let e = self.agg.entry(serial).or_insert((0, 0, 0));
+        e.0 += 1;
+        e.1 += self.g.shallow[i] as u64;
+        e.2 += self.g.retained[i];
     }
+
+    pub(crate) fn finish(self) -> AllocSites {
+        if self.agg.is_empty() {
+            return AllocSites {
+                traces_present: false,
+                sites: vec![],
+            };
+        }
+        let empty_frames: Vec<String> = Vec::new();
+        let mut sites: Vec<AllocSite> = self
+            .agg
+            .into_iter()
+            .map(
+                |(stack_serial, (object_count, shallow_total, retained_total))| {
+                    let frames = self
+                        .g
+                        .alloc_frames_by_serial
+                        .as_ref()
+                        .and_then(|m| m.get(&stack_serial))
+                        .cloned()
+                        .unwrap_or_else(|| empty_frames.clone());
+                    AllocSite {
+                        stack_serial,
+                        frames,
+                        object_count,
+                        shallow_total,
+                        retained_total,
+                    }
+                },
+            )
+            .collect();
+        // Deterministic ordering: object_count desc, then retained_total desc,
+        // then stack_serial asc.
+        sites.sort_by(|a, b| {
+            b.object_count
+                .cmp(&a.object_count)
+                .then_with(|| b.retained_total.cmp(&a.retained_total))
+                .then_with(|| a.stack_serial.cmp(&b.stack_serial))
+        });
+        sites.truncate(self.top_n);
+        AllocSites {
+            traces_present: true,
+            sites,
+        }
+    }
+}
+
+/// Core alloc-site aggregation, parameterised by the per-object serial source
+/// (`serials` yields one serial per object index, in index order). This lets the
+/// caller feed serials either from the dense `g.alloc_stack_serial` Vec or by
+/// streaming them out of a decompressed byte buffer — avoiding materialising a
+/// second ~2GB `Vec<u32>` alongside the decompressed bytes on the big dump.
+pub(crate) fn build_alloc_sites_from<I: Iterator<Item = u32>>(
+    g: &Graph,
+    top_n: usize,
+    serials: I,
+) -> AllocSites {
+    let mut agg = AllocAgg::new(g, top_n);
+    for serial in serials {
+        agg.push(serial);
+    }
+    agg.finish()
 }
 
 /// Resolve each thread stack into a `ThreadInfo`. The thread's class name is
 /// looked up via its object index (`u32::MAX` = unresolved). Small: one entry
 /// per stack trace.
-fn build_thread_overview(g: &Graph, opts: &crate::AnalyzeOptions) -> ThreadOverview {
+fn build_thread_overview(g: &Graph) -> ThreadOverview {
     let threads = g
         .thread_stacks
         .iter()
@@ -912,36 +951,37 @@ fn build_thread_overview(g: &Graph, opts: &crate::AnalyzeOptions) -> ThreadOverv
                     .and_then(|&ci| g.class_names.get(ci as usize))
                     .cloned()
             };
-            let local_objects = if opts.thread_locals {
-                g.thread_local_samples.get(&t.thread_serial).map(|idxs| {
-                    let mut objs: Vec<ThreadLocalObj> = idxs
-                        .iter()
-                        .map(|&li| {
-                            let display_class = g
-                                .class_idx
-                                .get(li as usize)
-                                .and_then(|&ci| g.class_names.get(ci as usize))
-                                .cloned()
-                                .unwrap_or_else(|| "<unknown>".to_string());
-                            ThreadLocalObj {
-                                obj_index_1based: li as usize + 1,
-                                display_class,
-                                shallow: g.shallow[li as usize] as u64,
-                                retained: g.retained[li as usize],
-                            }
-                        })
-                        .collect();
-                    // Retained desc; tie-break on 1-based index asc for determinism.
-                    objs.sort_by(|a, b| {
-                        b.retained
-                            .cmp(&a.retained)
-                            .then(a.obj_index_1based.cmp(&b.obj_index_1based))
-                    });
-                    objs
-                })
-            } else {
-                None
-            };
+            let local_objects = Some(
+                g.thread_local_samples
+                    .get(&t.thread_serial)
+                    .map(|idxs| {
+                        let mut objs: Vec<ThreadLocalObj> = idxs
+                            .iter()
+                            .map(|&li| {
+                                let display_class = g
+                                    .class_idx
+                                    .get(li as usize)
+                                    .and_then(|&ci| g.class_names.get(ci as usize))
+                                    .cloned()
+                                    .unwrap_or_else(|| "<unknown>".to_string());
+                                ThreadLocalObj {
+                                    obj_index_1based: li as usize + 1,
+                                    display_class,
+                                    shallow: g.shallow[li as usize] as u64,
+                                    retained: g.retained[li as usize],
+                                }
+                            })
+                            .collect();
+                        // Retained desc; tie-break on 1-based index asc for determinism.
+                        objs.sort_by(|a, b| {
+                            b.retained
+                                .cmp(&a.retained)
+                                .then(a.obj_index_1based.cmp(&b.obj_index_1based))
+                        });
+                        objs
+                    })
+                    .unwrap_or_default(),
+            );
             ThreadInfo {
                 thread_serial: t.thread_serial,
                 name: g.thread_names.get(&t.thread_serial).cloned(),
@@ -964,7 +1004,7 @@ fn build_thread_overview(g: &Graph, opts: &crate::AnalyzeOptions) -> ThreadOverv
 /// histogram, retention concentration, loader rollup, duplicate classes) in a
 /// bounded set of passes over the graph. Injects MAT's synthetic
 /// `<system class loader>` object where MAT counts it, so totals match bit-exactly.
-fn build_system_overview(g: &Graph, depth_counts: &[u64]) -> SystemOverview {
+fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> SystemOverview {
     let n = g.n;
     let undef = u32::MAX;
 
@@ -1293,7 +1333,7 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64]) -> SystemOverview {
                 .cmp(&a.retained)
                 .then(a.loader_id.cmp(&b.loader_id))
         });
-        rollup.truncate(TOP_N);
+        rollup.truncate(top_n);
 
         let mut dups: Vec<DuplicateClass> = dup
             .into_iter()
@@ -1311,7 +1351,7 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64]) -> SystemOverview {
                 .cmp(&a.total_retained)
                 .then_with(|| a.pretty_class.cmp(&b.pretty_class))
         });
-        dups.truncate(TOP_N);
+        dups.truncate(top_n);
         (rollup, dups)
     };
 
@@ -1367,7 +1407,7 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64]) -> SystemOverview {
 /// an empty `children`). No cycle guard is needed (a dominator tree is a tree),
 /// but both caps are enforced. Uses an explicit stack — never recurses — so it
 /// is safe on deep trees.
-/// Build the FULL multi-level dominator subtree rooted at `root` (`--dominator-tree`),
+/// Build the FULL multi-level dominator subtree rooted at `root`,
 /// using an explicit-stack iterative post-order walk over the dominator-children
 /// CSR (no recursion, so a deep tree cannot blow the native stack). Children are
 /// sorted retained-desc (tie: obj idx asc) and the walk is bounded by both a
@@ -1462,19 +1502,16 @@ fn build_dom_subtree(
 
 /// Build the "Leak Suspects" model: single top-level dominators and class
 /// groups whose retained heap exceeds `THRESHOLD_PCT` of the total, each with
-/// its accumulation-point descent and bounded dominated-children detail. When
-/// `root_ctx` is present (`--root-paths`) it additionally walks literal inbound
-/// referrer edges to a GC root; when `dominator_tree` is set (`--dominator-tree`)
-/// it attaches the full dominator subtree. Both are `None` on the default path,
-/// keeping JSON/Markdown output byte-identical.
+/// its accumulation-point descent and bounded dominated-children detail. Always
+/// walks the dominator chain (via `idom`) from each single suspect up to its GC
+/// root (bounded by `root_path_max_depth`) and attaches the full dominator
+/// subtree (bounded by `dom_max_nodes`/`dom_max_depth`).
 fn build_leak_suspects(
     g: &Graph,
     dc_offsets: &[u32],
     dc_targets: &[u32],
     cap: usize,
-    root_ctx: Option<crate::RootPathCtx>,
     root_path_max_depth: usize,
-    dominator_tree: bool,
     dom_max_nodes: usize,
     dom_max_depth: usize,
 ) -> LeakSuspects {
@@ -1746,28 +1783,22 @@ fn build_leak_suspects(
 
             let dominated_len_captured = dominated.len() as u64;
 
-            // --dominator-tree: build the FULL multi-level dominator subtree
-            // rooted at the accumulation point, bounded by dom_max_nodes /
-            // dom_max_depth. Off by default (leaves `dominator_tree = None` so
-            // parity/golden output is byte-identical). Explicit-stack walk to
-            // avoid recursion blowing the stack on deep trees; heaviest
-            // children are expanded first so a node-cap cutoff keeps the
-            // largest subtrees.
-            let dominator_tree_node: Option<DomTreeNode> = if dominator_tree {
-                accumulation.map(|ap| {
-                    build_dom_subtree(
-                        ap,
-                        dc_offsets,
-                        dc_targets,
-                        &display_of,
-                        g,
-                        dom_max_nodes,
-                        dom_max_depth,
-                    )
-                })
-            } else {
-                None
-            };
+            // Build the FULL multi-level dominator subtree rooted at the
+            // accumulation point, bounded by dom_max_nodes / dom_max_depth.
+            // Explicit-stack walk to avoid recursion blowing the stack on deep
+            // trees; heaviest children are expanded first so a node-cap cutoff
+            // keeps the largest subtrees.
+            let dominator_tree_node: Option<DomTreeNode> = accumulation.map(|ap| {
+                build_dom_subtree(
+                    ap,
+                    dc_offsets,
+                    dc_targets,
+                    &display_of,
+                    g,
+                    dom_max_nodes,
+                    dom_max_depth,
+                )
+            });
 
             Suspect {
                 is_single: s.is_single,
@@ -1791,130 +1822,48 @@ fn build_leak_suspects(
         })
         .collect();
 
-    // --root-paths: for each SINGLE suspect, walk LITERAL inbound (referrer)
-    // edges from the suspect object up toward a GC root, emitting a bounded
-    // reference chain. Only runs when the referrer-walk context is preserved
-    // (opt-in flag); the default path leaves every `root_path` as `None`
-    // (skipped in JSON), so parity/golden output is byte-identical.
-    if let Some(ctx) = root_ctx {
-        // Restore the compressed inbound CSR + pre-order->node map just-in-time.
-        // The restore is infallible in practice (we deflated these exact bytes
-        // moments ago) and only reached under an explicit opt-in flag, so a
-        // decode failure is a hard bug rather than a recoverable condition.
-        let inb_block_off = ctx
-            .restore_inb_block_off()
-            .expect("restore root-path inbound block offsets");
-        let inb_data = ctx
-            .restore_inb_data()
-            .expect("restore root-path inbound CSR data");
-        let vertex = ctx.restore_vertex().expect("restore root-path vertex map");
-
-        // Decode a single node's predecessor NODE indices from the inbound CSR.
-        // Mirrors dominator.rs phase1's seek+decode: seek to the node's block,
-        // scan-skip preceding nodes in the block, then decode this node's
-        // vbyte(count) + count vbyte DELTAS of sorted PRE-ORDER values, mapping
-        // each pre-order back to a node index via `vertex`. Pre-order 0 is the
-        // virtual root and is skipped.
-        fn preds_of(
-            node: usize,
-            inb_block_off: &[u64],
-            inb_data: &[u8],
-            vertex: &[u32],
-        ) -> Vec<u32> {
-            let block = node / crate::pass2::INB_BLOCK;
-            let mut pos = inb_block_off[block] as usize;
-            for _ in (block * crate::pass2::INB_BLOCK)..node {
-                let (cnt, c0) = crate::vbyte::decode_one(&inb_data[pos..]);
-                pos += c0;
-                for _ in 0..cnt {
-                    let (_, c1) = crate::vbyte::decode_one(&inb_data[pos..]);
-                    pos += c1;
-                }
-            }
-            let (cnt_w, c0) = crate::vbyte::decode_one(&inb_data[pos..]);
-            pos += c0;
-            let mut prev: u32 = 0;
-            let mut out = Vec::with_capacity(cnt_w as usize);
-            for _ in 0..cnt_w {
-                let (delta, consumed) = crate::vbyte::decode_one(&inb_data[pos..]);
-                pos += consumed;
-                let pred_pre = prev.wrapping_add(delta);
-                prev = pred_pre;
-                // Skip the virtual root (pre-order 0) and any out-of-range map.
-                if pred_pre == 0 {
-                    continue;
-                }
-                if let Some(&pn) = vertex.get(pred_pre as usize) {
-                    out.push(pn);
-                }
-            }
-            out
-        }
-
+    // For each SINGLE suspect, walk the DOMINATOR chain from the
+    // suspect object up toward the GC root, emitting a bounded reference chain.
+    // This mirrors MAT's Leak Suspects "path to the accumulation point", which is
+    // itself dominator-based: `idom[node]` is the object that must be released for
+    // `node` to become collectable, so the chain suspect -> idom -> ... -> root is
+    // exactly "what is keeping this alive". It reuses the already-resident `idom`
+    // array (no inbound-CSR preservation, no decompression, no extra RSS).
+    {
+        let vroot = n as u32;
         for (k, s) in suspects.iter().enumerate() {
             if !s.is_single {
                 continue;
             }
-            let start = s.obj_idx as usize;
             let mut chain: Vec<RootPathStep> = Vec::new();
-            let mut visited: std::collections::HashSet<usize> = std::collections::HashSet::new();
-            let mut cur = start;
+            let mut cur = s.obj_idx as usize;
             let mut depth = 0usize;
             loop {
-                visited.insert(cur);
-                let root_ty = root_type_of.get(&(cur as u32)).copied();
-                let root_type_label =
-                    root_ty.and_then(|ty| gc_root_type_label_opt(ty).map(|l| l.to_string()));
-                let is_root = root_type_label.is_some();
+                // A node dominated directly by the virtual root (idom == vroot) is
+                // a GC root; label it and terminate. `undef` guards unreachable
+                // nodes (should not occur for a reachable suspect, but is cheap).
+                let idom = g.idom[cur];
+                let is_root = idom == vroot;
+                let root_type_label = root_type_of
+                    .get(&(cur as u32))
+                    .and_then(|&ty| gc_root_type_label_opt(ty).map(|l| l.to_string()));
                 chain.push(RootPathStep {
                     obj_index_1based: cur + 1,
                     display_class: display_of(cur),
                     retained: g.retained[cur],
                     root_type_label,
                 });
-                if is_root {
-                    // Reached an identifiable GC root: chain terminates here.
+                if is_root || idom == undef {
                     break;
                 }
                 if depth >= root_path_max_depth {
                     break;
                 }
-                // Gather literal predecessors (node indices), skipping the
-                // current node, already-visited nodes, and (implicitly) the
-                // virtual root (dropped in preds_of).
-                let preds = preds_of(cur, &inb_block_off, &inb_data, &vertex);
-                // Prefer a predecessor that is itself a GC root; otherwise the
-                // unvisited predecessor with the largest retained heap.
-                let mut root_pred: Option<usize> = None;
-                let mut best: Option<usize> = None;
-                let mut best_ret: u64 = 0;
-                for &p in &preds {
-                    let pi = p as usize;
-                    if pi == cur || visited.contains(&pi) {
-                        continue;
-                    }
-                    if root_type_of.contains_key(&p) && root_pred.is_none() {
-                        root_pred = Some(pi);
-                    }
-                    let r = g.retained[pi];
-                    if best.is_none() || r > best_ret {
-                        best = Some(pi);
-                        best_ret = r;
-                    }
-                }
-                let next = root_pred.or(best);
-                match next {
-                    Some(nx) => {
-                        cur = nx;
-                        depth += 1;
-                    }
-                    None => break,
-                }
+                cur = idom as usize;
+                depth += 1;
             }
             out[k].root_path = Some(chain);
         }
-        // inb_block_off / inb_data / vertex drop here, releasing RSS before the
-        // rest of build_model continues.
     }
 
     LeakSuspects {
@@ -1926,7 +1875,7 @@ fn build_leak_suspects(
 /// Build the "Top Consumers" model: biggest objects (top-level dominators by
 /// retained), biggest classes, and the pruned package tree. Bounded reductions
 /// over the graph; no per-object Vec is retained.
-fn build_top_consumers(g: &Graph) -> TopConsumers {
+fn build_top_consumers(g: &Graph, top_n: usize) -> TopConsumers {
     let n = g.n;
     let vroot = n as u32;
     let undef = u32::MAX;
@@ -1958,7 +1907,7 @@ fn build_top_consumers(g: &Graph) -> TopConsumers {
     // Biggest Objects
     let biggest_objects: Vec<ObjRow> = sorted_top
         .iter()
-        .take(TOP_N)
+        .take(top_n)
         .map(|&i| {
             let idx = i as usize;
             let ci = g.class_idx[idx] as usize;
@@ -2026,7 +1975,7 @@ fn build_top_consumers(g: &Graph) -> TopConsumers {
         .sort_unstable_by(|&a, &b| class_retained[b].cmp(&class_retained[a]).then(a.cmp(&b)));
     let biggest_classes: Vec<ClassRow> = class_order
         .iter()
-        .take(TOP_N)
+        .take(top_n)
         .map(|&ci| ClassRow {
             pretty_class: pretty_class_name(&g.class_names[ci]),
             instances: class_count_map[ci],
@@ -2148,7 +2097,7 @@ pub fn render_markdown(r: &Report) -> String {
     render_leak_suspects(&r.leaks, &mut out);
     render_top_consumers(&r.top, r.leaks.total_shallow, &mut out);
     render_threads(&r.threads, &mut out);
-    // Opt-in (`--alloc-sites`): `None` on the default path ⇒ zero bytes.
+    // Allocation sites (always present; `None` only for legacy reports).
     if let Some(a) = &r.alloc_sites {
         render_alloc_sites(a, false, &mut out);
     }
@@ -2169,7 +2118,7 @@ pub fn render_markdown_graphs(r: &Report) -> String {
     render_leak_suspects_graphs(&r.leaks, &mut out);
     render_top_consumers_graphs(&r.top, r.leaks.total_shallow, &mut out);
     render_threads(&r.threads, &mut out);
-    // Opt-in (`--alloc-sites`): `None` on the default path ⇒ zero bytes.
+    // Allocation sites (always present; `None` only for legacy reports).
     if let Some(a) = &r.alloc_sites {
         render_alloc_sites(a, true, &mut out);
     }
@@ -2187,8 +2136,7 @@ fn render_toc_graphs(r: &Report, out: &mut String) {
     out.push_str("- [Leak Suspects](#leak-suspects)\n");
     out.push_str("- [Top Consumers](#top-consumers)\n");
     out.push_str("- [Threads](#threads)\n");
-    // Opt-in (`--alloc-sites`): the ToC bullet appears only when the section
-    // is present, so default md-graphs output stays byte-identical.
+    // The ToC bullet appears only when the alloc-sites section is present.
     if r.alloc_sites.is_some() {
         out.push_str("- [Allocation Sites](#allocation-sites)\n");
     }
@@ -2681,9 +2629,10 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
 }
 
 /// Render the "Leak Suspects" section (plain Markdown): per-suspect footprint,
-/// accumulation-path, and dominated-children detail. The `--root-paths` and
-/// `--dominator-tree` sub-sections are emitted only when their opt-in fields are
-/// present, so default output stays byte-identical. Byte-exact-tested.
+/// accumulation-path, and dominated-children detail. The root-path and
+/// dominator-subtree sub-sections are emitted when their fields are present
+/// (root path only for single suspects; subtree only when an accumulation point
+/// exists). Byte-exact-tested.
 fn render_leak_suspects(l: &LeakSuspects, out: &mut String) {
     out.push_str("## Leak Suspects\n\n");
 
@@ -2815,13 +2764,11 @@ fn render_leak_suspects(l: &LeakSuspects, out: &mut String) {
             out.push('\n');
         }
 
-        // Opt-in (`--root-paths`): literal reference chain to a GC root. `None`
-        // on the default path ⇒ zero bytes emitted (byte-exact parity).
+        // Dominator chain to a GC root (single suspects only).
         if let Some(path) = &s.root_path {
             render_root_path(path, out);
         }
-        // Opt-in (`--dominator-tree`): full multi-level dominator subtree at the
-        // accumulation point. `None` on the default path ⇒ zero bytes.
+        // Full multi-level dominator subtree at the accumulation point.
         if let Some(tree) = &s.dominator_tree {
             render_dom_tree_plain(tree, out);
         }
@@ -3434,11 +3381,11 @@ fn render_leak_suspects_graphs(l: &LeakSuspects, out: &mut String) {
             out.push('\n');
         }
 
-        // Opt-in (`--root-paths`): identical numbered list as plain md.
+        // Dominator chain to a GC root: identical numbered list as plain md.
         if let Some(path) = &s.root_path {
             render_root_path(path, out);
         }
-        // Opt-in (`--dominator-tree`): box-drawn tree in the graphs report.
+        // Full dominator subtree: box-drawn tree in the graphs report.
         if let Some(tree) = &s.dominator_tree {
             render_dom_tree_graphs(tree, out);
         }
@@ -3626,8 +3573,8 @@ fn render_threads(t: &ThreadOverview, out: &mut String) {
                 fmt_count(th.local_root_count)
             ));
         }
-        // Opt-in (`--thread-locals`): a bounded table of this thread's local
-        // root objects. `None` on the default path ⇒ zero bytes emitted.
+        // A bounded table of this thread's local root objects (empty for
+        // threads with no resolved locals ⇒ nothing emitted).
         if let Some(objs) = &th.local_objects {
             render_thread_locals(objs, out);
         }
@@ -3638,9 +3585,9 @@ fn render_threads(t: &ThreadOverview, out: &mut String) {
     }
 }
 
-/// Opt-in `--thread-locals` detail: a small table of a thread's local root
-/// objects. Emits nothing for an empty list so a thread with no resolved
-/// locals adds no clutter. Shared by plain md and md-graphs (no bars).
+/// A small table of a thread's local root objects. Emits nothing for an empty
+/// list so a thread with no resolved locals adds no clutter. Shared by plain md
+/// and md-graphs (no bars).
 fn render_thread_locals(objs: &[ThreadLocalObj], out: &mut String) {
     if objs.is_empty() {
         return;
@@ -3662,15 +3609,15 @@ fn render_thread_locals(objs: &[ThreadLocalObj], out: &mut String) {
     out.push('\n');
 }
 
-/// Opt-in `--root-paths` detail: the literal inbound reference chain from a
-/// suspect (first) to a GC root (last), as a numbered list. The final step is
-/// annotated with the GC-root type when known. Shared verbatim by plain md and
+/// The dominator chain from a
+/// suspect (first) up to its GC root (last), as a numbered list. The final step
+/// is annotated with the GC-root type when known. Shared verbatim by plain md and
 /// md-graphs (a numbered list needs no bars).
 fn render_root_path(path: &[RootPathStep], out: &mut String) {
     if path.is_empty() {
         return;
     }
-    out.push_str("**Reference chain to GC root:**\n\n");
+    out.push_str("**Path to GC root (dominator chain):**\n\n");
     let last = path.len() - 1;
     for (i, step) in path.iter().enumerate() {
         let mut line = format!(
@@ -3691,7 +3638,7 @@ fn render_root_path(path: &[RootPathStep], out: &mut String) {
     out.push('\n');
 }
 
-/// Opt-in `--dominator-tree` detail (plain md): the full multi-level dominator
+/// Dominator subtree (plain md): the full multi-level dominator
 /// subtree at the accumulation point, as a nested bullet list indented two
 /// spaces per level. Uses an explicit stack (the tree can be deep) and emits
 /// nodes in the pre-order the `children` Vecs already carry (retained-desc).
@@ -3716,7 +3663,7 @@ fn render_dom_tree_plain(root: &DomTreeNode, out: &mut String) {
     out.push('\n');
 }
 
-/// Opt-in `--dominator-tree` detail (md-graphs): the same subtree drawn with
+/// Dominator subtree (md-graphs): the same subtree drawn with
 /// box-drawing connectors via `md::tree_prefix`. Explicit-stack pre-order walk
 /// tracking `is_last` + the per-ancestor "continue" flags the prefix needs.
 fn render_dom_tree_graphs(root: &DomTreeNode, out: &mut String) {
@@ -3763,7 +3710,7 @@ fn render_dom_tree_graphs(root: &DomTreeNode, out: &mut String) {
     out.push_str("```\n\n");
 }
 
-/// Opt-in `--alloc-sites` section: aggregated allocation sites. Honest note when
+/// Allocation-sites section: aggregated allocation sites. Honest note when
 /// the dump carried no allocation stack-trace info. `graphs` adds a proportional
 /// bar column (keyed to the max object count) in the md-graphs output.
 fn render_alloc_sites(a: &AllocSites, graphs: bool, out: &mut String) {
@@ -4688,17 +4635,7 @@ mod tests {
             vec![0, 4],
             0,
         );
-        let l = build_leak_suspects(
-            &g,
-            &dc_off,
-            &dc_tgt,
-            DOMINATED_CAP,
-            None,
-            30,
-            false,
-            5000,
-            20,
-        );
+        let l = build_leak_suspects(&g, &dc_off, &dc_tgt, DOMINATED_CAP, 30, 5000, 20);
         // Two singles: A (1000) then E (800), retained-desc.
         assert_eq!(l.suspects.len(), 2);
         let a = &l.suspects[0];
@@ -4743,23 +4680,13 @@ mod tests {
             0,
         );
         // cap = 1 -> only the largest dominated child is listed.
-        let l1 = build_leak_suspects(&g, &dc_off, &dc_tgt, 1, None, 30, false, 5000, 20);
+        let l1 = build_leak_suspects(&g, &dc_off, &dc_tgt, 1, 30, 5000, 20);
         assert_eq!(l1.suspects.len(), 1);
         assert_eq!(l1.suspects[0].accumulation_obj_1based, Some(1)); // A itself
         assert_eq!(l1.suspects[0].dominated.len(), 1);
         assert_eq!(l1.suspects[0].dominated[0].obj_index_1based, 2); // B, largest
         // Default cap -> all three children listed.
-        let l2 = build_leak_suspects(
-            &g,
-            &dc_off,
-            &dc_tgt,
-            DOMINATED_CAP,
-            None,
-            30,
-            false,
-            5000,
-            20,
-        );
+        let l2 = build_leak_suspects(&g, &dc_off, &dc_tgt, DOMINATED_CAP, 30, 5000, 20);
         assert_eq!(l2.suspects[0].dominated.len(), 3);
     }
 
@@ -5070,7 +4997,7 @@ mod tests {
                 frames: vec!["x.y (Unknown Source)".to_string()],
             },
         ];
-        let ov = build_thread_overview(&g, &crate::AnalyzeOptions::default());
+        let ov = build_thread_overview(&g);
         assert_eq!(ov.threads.len(), 2);
         assert_eq!(ov.threads[0].thread_serial, 7);
         assert_eq!(

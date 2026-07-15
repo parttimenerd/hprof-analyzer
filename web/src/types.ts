@@ -107,8 +107,8 @@ export interface DominatedRow {
   retained: number;
 }
 
-// Opt-in (`--root-paths`): one hop of the literal inbound reference chain from a
-// suspect toward a GC root. The final hop carries `root_type_label`.
+// One hop of the dominator chain from a
+// suspect up toward its GC root. The final hop carries `root_type_label`.
 export interface RootPathStep {
   obj_index_1based: number;
   display_class: string;
@@ -116,7 +116,7 @@ export interface RootPathStep {
   root_type_label?: string;
 }
 
-// Opt-in (`--dominator-tree`): one node of the full multi-level dominator subtree
+// One node of the full multi-level dominator subtree
 // rooted at an accumulation point. Recursive via `children`.
 export interface DomTreeNode {
   obj_index_1based: number;
@@ -126,7 +126,7 @@ export interface DomTreeNode {
   children: DomTreeNode[];
 }
 
-// Opt-in (`--thread-locals`): one sampled GC-thread-local root object held by a
+// One sampled GC-thread-local root object held by a
 // thread.
 export interface ThreadLocalObj {
   obj_index_1based: number;
@@ -135,7 +135,7 @@ export interface ThreadLocalObj {
   retained: number;
 }
 
-// Opt-in (`--alloc-sites`): one aggregated allocation site (a distinct HPROF
+// One aggregated allocation site (a distinct HPROF
 // stack-trace serial and the footprint of the objects allocated there).
 export interface AllocSite {
   stack_serial: number;
@@ -145,7 +145,7 @@ export interface AllocSite {
   retained_total: number;
 }
 
-// Opt-in (`--alloc-sites`): aggregate allocation-site view. `traces_present` is
+// aggregate allocation-site view. `traces_present` is
 // false (with empty `sites`) when the dump carried no allocation stack-trace info.
 export interface AllocSites {
   traces_present: boolean;
@@ -168,10 +168,10 @@ export interface Suspect {
   dominated_by_class: HistRow[];
   keywords: string[];
   root_type_label: string;
-  // Opt-in (`--root-paths`): literal inbound reference chain suspect→…→GC-root.
+  // dominator chain suspect→…→GC-root.
   // Absent by default.
   root_path?: RootPathStep[];
-  // Opt-in (`--dominator-tree`): full multi-level dominator subtree at the
+  // full multi-level dominator subtree at the
   // accumulation point. Absent by default.
   dominator_tree?: DomTreeNode;
 }
@@ -218,7 +218,7 @@ export interface ThreadInfo {
   // Count of GC-thread-local roots this thread holds that resolve to a live
   // object; a high count flags a thread pinning many objects alive.
   local_root_count: number;
-  // Opt-in (`--thread-locals`): bounded sample of this thread's GC-thread-local
+  // bounded sample of this thread's GC-thread-local
   // root objects (retained desc). Absent by default.
   local_objects?: ThreadLocalObj[];
 }
@@ -234,7 +234,7 @@ export interface Report {
   leaks: LeakSuspects;
   top: TopConsumers;
   threads: ThreadOverview;
-  // Opt-in (`--alloc-sites`): aggregated allocation sites. Absent by default.
+  // aggregated allocation sites. Absent by default.
   alloc_sites?: AllocSites;
 }
 

@@ -89,27 +89,37 @@ hprof-analyzer analyze heap.hprof -f json report.json  # machine-readable JSON
 
 Gzip-compressed dumps (`.hprof.gz`) are read transparently.
 
-**Opt-in heavy analyses.** Four extra analyses are available behind flags. They are off by
-default: with no flags the report is byte-for-byte what it always was, and peak memory stays
-within the bound described under [Performance](#performance). Each flag adds a section to
-every format (Markdown, md-graphs, HTML, JSON):
+**Heavy analyses (always on).** Four deeper analyses run unconditionally and add a section
+to every format (Markdown, md-graphs, HTML, JSON):
+
+- **Root paths** — dominator chain from each single-object suspect up to its GC root (MAT-style).
+- **Allocation sites** — objects aggregated by allocation stack-trace serial.
+- **Thread locals** — each thread's local root objects.
+- **Dominator subtree** — full multi-level dominator subtree per accumulation point.
+
+**`--detail` preset.** A single flag scales the output-size caps for these sections (plus the
+top-consumer / leak-suspect lists):
 
 ```sh
-hprof-analyzer analyze heap.hprof --root-paths       # literal reference chain from each suspect to a GC root
-hprof-analyzer analyze heap.hprof --alloc-sites      # aggregate objects by allocation stack-trace
-hprof-analyzer analyze heap.hprof --thread-locals    # list each thread's local root objects
-hprof-analyzer analyze heap.hprof --dominator-tree   # full multi-level dominator subtree per suspect
+hprof-analyzer analyze heap.hprof --detail minimal   # smaller report, tighter caps
+hprof-analyzer analyze heap.hprof --detail default   # the default; historical cap values
+hprof-analyzer analyze heap.hprof --detail max        # larger report, looser caps
 ```
 
-Each has a cap you can tune: `--root-path-max-depth` (default 30), `--alloc-sites-top`
-(default 50), `--thread-locals-per-thread` (default 20), and `--dominator-tree-max-nodes` /
-`--dominator-tree-max-depth` (defaults 5000 / 20).
+The preset controls seven caps — root-path max depth, alloc-sites top-N, thread-locals per
+thread, dominator-tree max nodes / max depth, leak-children cap, and top-consumers count:
 
-Two caveats. **Memory:** under `--root-paths` or `--dominator-tree` peak RSS *may exceed* the
-default ceiling and output *may* be uncapped per-object — that is a tradeoff you opt into.
-**Allocation tracking:** `--alloc-sites` only yields real stacks if the JVM recorded
-allocation stack traces (`stack_trace_serial`); most HotSpot dumps have this off, and the
-report says so honestly rather than inventing data.
+| `--detail`  | root depth | alloc top | thread locals | dom nodes | dom depth | leak children | top consumers |
+| ----------- | ---------: | --------: | ------------: | --------: | --------: | ------------: | ------------: |
+| `minimal`   |         10 |        15 |             5 |       500 |        10 |            15 |            10 |
+| `default`   |         30 |        50 |            20 |     5,000 |        20 |            50 |            20 |
+| `max`       |        200 |       500 |           100 |   100,000 |        50 |           500 |           100 |
+
+Two caveats. **Memory:** `--detail max` can raise the dominator-tree cap to 100k nodes and
+push peak RSS higher on very large dumps — that is the documented tradeoff. **Allocation
+tracking:** allocation sites only yield real stacks if the JVM recorded allocation stack
+traces (`stack_trace_serial`); most HotSpot dumps have this off, and the report says so
+honestly rather than inventing data.
 
 **Diff against a MAT export.** Compare a MAT System Overview HTML export against our
 canonical JSON; exits non-zero on a parity failure (useful as a test gate):
