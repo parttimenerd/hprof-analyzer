@@ -188,6 +188,9 @@ mod tests {
             },
             dup_strings: None,
             arrays_by_size: Default::default(),
+            collections: crate::report::CollectionsAnalysis::default(),
+            references: crate::report::ReferencesAnalysis::default(),
+            reference_referent_idx: [Vec::new(), Vec::new(), Vec::new()],
         };
         (g, dc_off, dc_tgt)
     }
@@ -436,6 +439,8 @@ mod tests {
                 class_name: "com.example.Config".to_string(),
                 string_refs: 55,
             }],
+            top_by_length: vec![],
+            char_array_waste: None,
         });
         render_duplicate_strings(&mut out, &d, false);
         assert!(

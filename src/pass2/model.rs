@@ -105,6 +105,14 @@ pub struct DupStrings {
     /// instances reference. Sorted by `string_refs` desc then class name asc.
     #[serde(default)]
     pub top_string_holders: Vec<StringHolder>,
+    /// Top-N longest distinct String values by decoded byte length, sorted by
+    /// len desc then text asc. Only populated with `--dup-strings`.
+    #[serde(default)]
+    pub top_by_length: Vec<DupStringSample>,
+    /// Wasted space in char[]/byte[] arrays backing Strings. `None` unless
+    /// `--dup-strings` computed it.
+    #[serde(default)]
+    pub char_array_waste: Option<CharArrayWaste>,
 }
 
 /// One of the most-duplicated String values: its exact text (truncated to
@@ -122,6 +130,30 @@ pub struct DupStringSample {
     pub len: u32,
     /// Approx wasted bytes for this value: (count - 1) * len.
     pub wasted_bytes: u64,
+}
+
+/// One wasteful char[] backing a String (String uses fewer bytes than the
+/// array length). Additive.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct CharArrayWasteRow {
+    pub array_obj_1based: usize,
+    pub length: u64,
+    pub used: u64,
+    pub wasted_bytes: u64,
+}
+
+/// Waste in char[]/byte[] arrays backing Strings. `top` sorted by
+/// wasted_bytes desc, capped. Additive.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct CharArrayWaste {
+    pub arrays_examined: u64,
+    pub wasteful_arrays: u64,
+    pub total_wasted_bytes: u64,
+    pub top: Vec<CharArrayWasteRow>,
 }
 
 /// One power-of-two bucket of the String-length histogram. `upper_len` is the
@@ -305,6 +337,19 @@ pub struct Graph {
     /// during pass2 from `p1.elem_count`/`p1.kind` before those arrays are freed.
     /// Always populated; additive, not parity-compared.
     pub arrays_by_size: crate::report::ArraysBySize,
+    /// Field-decode collection & array analysis. Always populated; additive,
+    /// not parity-compared. See [`crate::report::CollectionsAnalysis`].
+    #[allow(dead_code)]
+    pub collections: crate::report::CollectionsAnalysis,
+    /// Soft/weak/phantom reference statistics. Always populated; additive, not
+    /// parity-compared. See [`crate::report::ReferencesAnalysis`].
+    #[allow(dead_code)]
+    pub references: crate::report::ReferencesAnalysis,
+    /// Capped referent object indices per reference kind [soft, weak, phantom],
+    /// consumed and cleared in `build_model` to compute `only_weakly_retained`
+    /// via `idom`. Not serialized (runtime-only helper).
+    #[allow(dead_code)]
+    pub reference_referent_idx: [Vec<u32>; 3],
 }
 
 /// Deferred inbound-CSR construction. Built by `Pass2::build` with everything

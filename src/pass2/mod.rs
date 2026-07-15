@@ -755,6 +755,9 @@ impl Pass2 {
             record_census,
             dup_strings,
             arrays_by_size,
+            collections: crate::report::CollectionsAnalysis::default(),
+            references: crate::report::ReferencesAnalysis::default(),
+            reference_referent_idx: [Vec::new(), Vec::new(), Vec::new()],
         };
 
         // Package the deferred inbound-CSR construction. Moves id_map,

@@ -23,6 +23,35 @@
         "zero_length_count": 0
       }
     },
+    "collections": {
+      "description": "Field-decode collection & array analysis (fill ratios, size histogram,\nmap collisions, constant primitive arrays). Always-on; additive,\ndefaults to empty for round-trip with older JSON.",
+      "$ref": "#/$defs/CollectionsAnalysis",
+      "default": {
+        "array_fill_ratio": {
+          "buckets": [],
+          "tracked": 0
+        },
+        "collection_fill_ratio": {
+          "buckets": [],
+          "total": 0,
+          "tracked": 0
+        },
+        "collections_by_size": {
+          "buckets": [],
+          "empty_count": 0,
+          "tracked": 0
+        },
+        "constant_primitive_arrays": {
+          "rows": [],
+          "truncated": false
+        },
+        "map_collision_ratio": {
+          "buckets": [],
+          "total": 0,
+          "tracked": 0
+        }
+      }
+    },
     "dominator_analysis": {
       "description": "Dominator-tree analysis: Big Drops + Immediate Dominators. Always-on;\nadditive, defaults to empty for round-trip with older JSON.",
       "$ref": "#/$defs/DominatorAnalysis",
@@ -44,6 +73,15 @@
     },
     "overview": {
       "$ref": "#/$defs/SystemOverview"
+    },
+    "references": {
+      "description": "Soft/weak/phantom reference statistics. Always-on; additive, defaults to\nempty for round-trip with older JSON.",
+      "$ref": "#/$defs/ReferencesAnalysis",
+      "default": {
+        "phantom": null,
+        "soft": null,
+        "weak": null
+      }
     },
     "schema_version": {
       "type": "integer",
@@ -129,6 +167,27 @@
       "required": [
         "traces_present",
         "sites"
+      ]
+    },
+    "ArrayFillRatio": {
+      "description": "Fill ratio of raw object arrays (non-null slots / length). Additive.",
+      "type": "object",
+      "properties": {
+        "buckets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FillRatioBucket"
+          }
+        },
+        "tracked": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "tracked",
+        "buckets"
       ]
     },
     "ArraysBySize": {
@@ -234,6 +293,71 @@
         "rows"
       ]
     },
+    "CharArrayWaste": {
+      "description": "Waste in char[]/byte[] arrays backing Strings. `top` sorted by\nwasted_bytes desc, capped. Additive.",
+      "type": "object",
+      "properties": {
+        "arrays_examined": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "top": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CharArrayWasteRow"
+          }
+        },
+        "total_wasted_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "wasteful_arrays": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "arrays_examined",
+        "wasteful_arrays",
+        "total_wasted_bytes",
+        "top"
+      ]
+    },
+    "CharArrayWasteRow": {
+      "description": "One wasteful char[] backing a String (String uses fewer bytes than the\narray length). Additive.",
+      "type": "object",
+      "properties": {
+        "array_obj_1based": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "length": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "used": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "wasted_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "array_obj_1based",
+        "length",
+        "used",
+        "wasted_bytes"
+      ]
+    },
     "ClassRow": {
       "description": "One row of \"Biggest Classes\".",
       "type": "object",
@@ -256,6 +380,104 @@
         "pretty_class",
         "instances",
         "retained"
+      ]
+    },
+    "CollectionFillRatio": {
+      "description": "How full collections are (size vs backing-array capacity). `tracked` =\ncollections actually sampled; `total` = all collections seen (tracked <=\ntotal when a cap was hit). Additive.",
+      "type": "object",
+      "properties": {
+        "buckets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FillRatioBucket"
+          }
+        },
+        "total": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "tracked": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "tracked",
+        "total",
+        "buckets"
+      ]
+    },
+    "CollectionsAnalysis": {
+      "description": "Groups the five collection/array views. Additive.",
+      "type": "object",
+      "properties": {
+        "array_fill_ratio": {
+          "$ref": "#/$defs/ArrayFillRatio",
+          "default": {
+            "buckets": [],
+            "tracked": 0
+          }
+        },
+        "collection_fill_ratio": {
+          "$ref": "#/$defs/CollectionFillRatio",
+          "default": {
+            "buckets": [],
+            "total": 0,
+            "tracked": 0
+          }
+        },
+        "collections_by_size": {
+          "$ref": "#/$defs/CollectionsBySize",
+          "default": {
+            "buckets": [],
+            "empty_count": 0,
+            "tracked": 0
+          }
+        },
+        "constant_primitive_arrays": {
+          "$ref": "#/$defs/ConstantPrimitiveArrays",
+          "default": {
+            "rows": [],
+            "truncated": false
+          }
+        },
+        "map_collision_ratio": {
+          "$ref": "#/$defs/MapCollisionRatio",
+          "default": {
+            "buckets": [],
+            "total": 0,
+            "tracked": 0
+          }
+        }
+      }
+    },
+    "CollectionsBySize": {
+      "description": "Histogram of collection element counts (reuses SizeHistogramBucket).\n`empty_count` = collections with size 0. Additive.",
+      "type": "object",
+      "properties": {
+        "buckets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SizeHistogramBucket"
+          }
+        },
+        "empty_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "tracked": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "tracked",
+        "empty_count",
+        "buckets"
       ]
     },
     "Component": {
@@ -308,6 +530,60 @@
       "required": [
         "pretty_class",
         "retained"
+      ]
+    },
+    "ConstantArrayRow": {
+      "description": "One group of primitive arrays that all hold a single repeated value.\nAdditive.",
+      "type": "object",
+      "properties": {
+        "array_class": {
+          "type": "string"
+        },
+        "length": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "objects": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "shallow": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "value": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "array_class",
+        "length",
+        "value",
+        "objects",
+        "shallow"
+      ]
+    },
+    "ConstantPrimitiveArrays": {
+      "description": "Primitive arrays whose every element is the same constant. `truncated` =\ntrue when the distinct-group cap was hit and remaining groups were folded\ninto one \"other\" row. Additive.",
+      "type": "object",
+      "properties": {
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConstantArrayRow"
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "rows",
+        "truncated"
       ]
     },
     "DepthBucket": {
@@ -457,6 +733,18 @@
           "format": "uint64",
           "minimum": 0
         },
+        "char_array_waste": {
+          "description": "Wasted space in char[]/byte[] arrays backing Strings. `None` unless\n`--dup-strings` computed it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CharArrayWaste"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "distinct_values": {
           "description": "Distinct decoded String values (by 64-bit hash; collisions merge — accepted approximation).",
           "type": "integer",
@@ -485,6 +773,14 @@
             "median": 0,
             "min": 0,
             "total": 0
+          }
+        },
+        "top_by_length": {
+          "description": "Top-N longest distinct String values by decoded byte length, sorted by\nlen desc then text asc. Only populated with `--dup-strings`.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DupStringSample"
           }
         },
         "top_duplicated": {
@@ -599,6 +895,44 @@
         "instances",
         "shallow",
         "retained"
+      ]
+    },
+    "FillRatioBucket": {
+      "description": "One bucket of a fill-ratio (used/capacity) histogram. Ratio expressed in\nbasis points (0..=10000). Additive.",
+      "type": "object",
+      "properties": {
+        "lower_ratio_bp": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "objects": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "shallow": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "upper_ratio_bp": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "wasted": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "lower_ratio_bp",
+        "upper_ratio_bp",
+        "objects",
+        "shallow",
+        "wasted"
       ]
     },
     "GcRootTypeRow": {
@@ -832,6 +1166,33 @@
         "instances",
         "shallow",
         "retained"
+      ]
+    },
+    "MapCollisionRatio": {
+      "description": "Hash-map collision proxy (occupied slots vs size); `wasted` in its buckets\nis always 0. Additive.",
+      "type": "object",
+      "properties": {
+        "buckets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FillRatioBucket"
+          }
+        },
+        "total": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "tracked": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "tracked",
+        "total",
+        "buckets"
       ]
     },
     "MergedPathNode": {
@@ -1089,6 +1450,101 @@
         "class_dumps",
         "gc_root_tag_counts"
       ]
+    },
+    "RefStatClassRow": {
+      "description": "One class row in a reference-statistics histogram. Additive.",
+      "type": "object",
+      "properties": {
+        "objects": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "pretty_class": {
+          "type": "string"
+        },
+        "shallow": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "pretty_class",
+        "objects",
+        "shallow"
+      ]
+    },
+    "ReferenceStats": {
+      "description": "Statistics for one reference kind (Soft/Weak/Phantom). `kind` is the\nlabel. `referent_histogram` = classes of referents grouped/counted.\n`only_weakly_retained` = referent classes reachable ONLY through the weak\nedge (idom == u32::MAX). Additive.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "only_weakly_retained": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RefStatClassRow"
+          }
+        },
+        "reference_instances": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "referent_histogram": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RefStatClassRow"
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "reference_instances",
+        "referent_histogram",
+        "only_weakly_retained"
+      ]
+    },
+    "ReferencesAnalysis": {
+      "description": "The three reference views, each optional (None when that kind is absent).\nAdditive.",
+      "type": "object",
+      "properties": {
+        "phantom": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReferenceStats"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "soft": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReferenceStats"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "weak": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReferenceStats"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      }
     },
     "RetentionSummary": {
       "description": "B3: retention concentration over top-level dominators. Basis-point shares\n(of total reachable shallow heap) held by the top-1/10/100 objects, plus how\nmany single objects each hold >=1% of the heap. Answers \"one leak or many?\".",

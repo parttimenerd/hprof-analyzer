@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated": "2026-07-15T18:12:13.144452000Z",
+  "generated": "2026-07-15T21:41:45.125999000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
     "file_path": "tests/fixtures/dump_4_philosophers.hprof",
@@ -88761,5 +88761,35 @@
         }
       ]
     }
+  },
+  "collections": {
+    "collection_fill_ratio": {
+      "tracked": 0,
+      "total": 0,
+      "buckets": []
+    },
+    "collections_by_size": {
+      "tracked": 0,
+      "empty_count": 0,
+      "buckets": []
+    },
+    "array_fill_ratio": {
+      "tracked": 0,
+      "buckets": []
+    },
+    "map_collision_ratio": {
+      "tracked": 0,
+      "total": 0,
+      "buckets": []
+    },
+    "constant_primitive_arrays": {
+      "rows": [],
+      "truncated": false
+    }
+  },
+  "references": {
+    "soft": null,
+    "weak": null,
+    "phantom": null
   }
 }

@@ -351,6 +351,8 @@ pub(crate) fn resolve_duplicate_strings(path: &str, p1: &Pass1) -> io::Result<Du
         length_histogram,
         length_stats,
         top_string_holders,
+        top_by_length: Vec::new(),
+        char_array_waste: None,
     })
 }
 

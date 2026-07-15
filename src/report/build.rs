@@ -85,6 +85,8 @@ pub fn build_model(
         alloc_sites,
         arrays_by_size: g.arrays_by_size.clone(),
         dominator_analysis,
+        collections: Default::default(),
+        references: Default::default(),
     }
 }
 

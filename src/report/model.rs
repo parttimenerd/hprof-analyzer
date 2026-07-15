@@ -673,6 +673,141 @@ pub struct DominatorAnalysis {
     pub immediate_dominators: ImmediateDominators,
 }
 
+/// One bucket of a fill-ratio (used/capacity) histogram. Ratio expressed in
+/// basis points (0..=10000). Additive.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct FillRatioBucket {
+    pub lower_ratio_bp: u32,
+    pub upper_ratio_bp: u32,
+    pub objects: u64,
+    pub shallow: u64,
+    pub wasted: u64,
+}
+
+/// How full collections are (size vs backing-array capacity). `tracked` =
+/// collections actually sampled; `total` = all collections seen (tracked <=
+/// total when a cap was hit). Additive.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct CollectionFillRatio {
+    pub tracked: u64,
+    pub total: u64,
+    pub buckets: Vec<FillRatioBucket>,
+}
+
+/// Histogram of collection element counts (reuses SizeHistogramBucket).
+/// `empty_count` = collections with size 0. Additive.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct CollectionsBySize {
+    pub tracked: u64,
+    pub empty_count: u64,
+    pub buckets: Vec<SizeHistogramBucket>,
+}
+
+/// Fill ratio of raw object arrays (non-null slots / length). Additive.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct ArrayFillRatio {
+    pub tracked: u64,
+    pub buckets: Vec<FillRatioBucket>,
+}
+
+/// Hash-map collision proxy (occupied slots vs size); `wasted` in its buckets
+/// is always 0. Additive.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct MapCollisionRatio {
+    pub tracked: u64,
+    pub total: u64,
+    pub buckets: Vec<FillRatioBucket>,
+}
+
+/// One group of primitive arrays that all hold a single repeated value.
+/// Additive.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct ConstantArrayRow {
+    pub array_class: String,
+    pub length: u64,
+    pub value: i64,
+    pub objects: u64,
+    pub shallow: u64,
+}
+
+/// Primitive arrays whose every element is the same constant. `truncated` =
+/// true when the distinct-group cap was hit and remaining groups were folded
+/// into one "other" row. Additive.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct ConstantPrimitiveArrays {
+    pub rows: Vec<ConstantArrayRow>,
+    pub truncated: bool,
+}
+
+/// Groups the five collection/array views. Additive.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct CollectionsAnalysis {
+    #[serde(default)]
+    pub collection_fill_ratio: CollectionFillRatio,
+    #[serde(default)]
+    pub collections_by_size: CollectionsBySize,
+    #[serde(default)]
+    pub array_fill_ratio: ArrayFillRatio,
+    #[serde(default)]
+    pub map_collision_ratio: MapCollisionRatio,
+    #[serde(default)]
+    pub constant_primitive_arrays: ConstantPrimitiveArrays,
+}
+
+/// One class row in a reference-statistics histogram. Additive.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct RefStatClassRow {
+    pub pretty_class: String,
+    pub objects: u64,
+    pub shallow: u64,
+}
+
+/// Statistics for one reference kind (Soft/Weak/Phantom). `kind` is the
+/// label. `referent_histogram` = classes of referents grouped/counted.
+/// `only_weakly_retained` = referent classes reachable ONLY through the weak
+/// edge (idom == u32::MAX). Additive.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct ReferenceStats {
+    pub kind: String,
+    pub reference_instances: u64,
+    pub referent_histogram: Vec<RefStatClassRow>,
+    pub only_weakly_retained: Vec<RefStatClassRow>,
+}
+
+/// The three reference views, each optional (None when that kind is absent).
+/// Additive.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct ReferencesAnalysis {
+    #[serde(default)]
+    pub soft: Option<ReferenceStats>,
+    #[serde(default)]
+    pub weak: Option<ReferenceStats>,
+    #[serde(default)]
+    pub phantom: Option<ReferenceStats>,
+}
+
 /// Schema version for the machine-readable JSON output. Bump on any
 /// breaking change to the `Report` shape; the JSON always carries this.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -721,4 +856,13 @@ pub struct Report {
     /// additive, defaults to empty for round-trip with older JSON.
     #[serde(default)]
     pub dominator_analysis: DominatorAnalysis,
+    /// Field-decode collection & array analysis (fill ratios, size histogram,
+    /// map collisions, constant primitive arrays). Always-on; additive,
+    /// defaults to empty for round-trip with older JSON.
+    #[serde(default)]
+    pub collections: CollectionsAnalysis,
+    /// Soft/weak/phantom reference statistics. Always-on; additive, defaults to
+    /// empty for round-trip with older JSON.
+    #[serde(default)]
+    pub references: ReferencesAnalysis,
 }

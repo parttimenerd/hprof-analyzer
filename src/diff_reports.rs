@@ -622,6 +622,8 @@ mod tests {
             alloc_sites: None,
             arrays_by_size: Default::default(),
             dominator_analysis: Default::default(),
+            collections: Default::default(),
+            references: Default::default(),
         }
     }
 
