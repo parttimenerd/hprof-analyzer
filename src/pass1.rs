@@ -157,10 +157,12 @@ impl Pass1 {
         let mut tmp_class_ids: Vec<u32> = Vec::new();
         // Intern class addresses to u32 during scan (heaps have < 4G classes;
         // this dump ~133K). kind 2 stores the raw type code instead.
+        // kind (2 bits, values 0-3) is packed into bits 30-31 of tmp_class_ids
+        // to eliminate a separate 512 MB Vec<u8> from the sort-peak window.
+        // CLASS_MASK strips those bits when accessing the class index or type code.
         let mut class_addr_table: Vec<u64> = Vec::new();
         let mut class_addr_to_idx: HashMap<u64, u32> = HashMap::default();
         let mut tmp_shallow: Vec<u32> = Vec::new();
-        let mut tmp_kind: Vec<u8> = Vec::new();
         let mut tmp_elem_count: Vec<u32> = Vec::new();
         // Per-object alloc stack-trace serial. Only grown when capturing; stays
         // empty (zero RSS) on the default path.
@@ -257,7 +259,6 @@ impl Pass1 {
                         &mut class_addr_table,
                         &mut class_addr_to_idx,
                         &mut tmp_shallow,
-                        &mut tmp_kind,
                         &mut tmp_elem_count,
                         &mut tmp_alloc_serial,
                         &mut gc_root_addrs,
@@ -285,10 +286,13 @@ impl Pass1 {
 
         crate::trace::probe("pass1: after scan loop (all tmp_* grown)");
         // Fix up shallow sizes where class wasn't yet seen at scan time.
-        // tmp_class_ids holds interned indices; resolve to addr for kinds that
-        // reference a class (0=instance, 3=class-obj). kind 1/2 (arrays) skip.
-        for (i, &cidx) in tmp_class_ids.iter().enumerate() {
-            if tmp_shallow[i] == 0 && (tmp_kind[i] == 0 || tmp_kind[i] == 3) {
+        // tmp_class_ids holds kind (bits 30-31) + interned class index (bits 0-29).
+        // kind 1/2 (arrays) skip; kinds 0/3 reference a class for shallow lookup.
+        const CLASS_MASK: u32 = 0x3FFF_FFFF;
+        for (i, &cidx_packed) in tmp_class_ids.iter().enumerate() {
+            let kind = (cidx_packed >> 30) as u8;
+            if tmp_shallow[i] == 0 && (kind == 0 || kind == 3) {
+                let cidx = cidx_packed & CLASS_MASK;
                 let addr = class_addr_table[cidx as usize];
                 if let Some(ci) = class_map.get(&addr) {
                     tmp_shallow[i] = ci.instance_size;
@@ -304,13 +308,15 @@ impl Pass1 {
         // before building the id_map offsets and deduping — so `order`,
         // `tmp_addrs`, and `id_map.offsets` never coexist (that 3-way overlap
         // was the ~14.9 GB peak).
+        // Note: tmp_kind is eliminated — kind bits are packed into tmp_class_ids
+        // upper 2 bits, saving ~512 MB during the sort window.
         let n = tmp_addrs.len();
         let mut order: Vec<u32> = (0..n as u32).collect();
         crate::trace::probe("pass1: before order.sort_unstable_by_key");
         order.sort_unstable_by_key(|&i| tmp_addrs[i as usize]);
         crate::trace::probe("pass1: after order.sort_unstable_by_key");
 
-        // Permute all five parallel arrays into address-sorted order in place
+        // Permute all four parallel arrays into address-sorted order in place
         // (no output allocation). `order` is consumed as scratch (top-bit
         // marker) and dropped immediately after — freeing 2 GB before the
         // dedup/offsets pass below.
@@ -318,7 +324,6 @@ impl Pass1 {
             tmp_addrs.swap(x, y);
             tmp_class_ids.swap(x, y);
             tmp_shallow.swap(x, y);
-            tmp_kind.swap(x, y);
             tmp_elem_count.swap(x, y);
             // Only permute the alloc-serial array when it was actually captured
             // (1:1 with the others). Empty on the default path — leave untouched.
@@ -346,7 +351,6 @@ impl Pass1 {
                     // shift so all payloads stay 1:1 aligned by index.
                     tmp_class_ids[write] = tmp_class_ids[rank];
                     tmp_shallow[write] = tmp_shallow[rank];
-                    tmp_kind[write] = tmp_kind[rank];
                     tmp_elem_count[write] = tmp_elem_count[rank];
                     if !tmp_alloc_serial.is_empty() {
                         tmp_alloc_serial[write] = tmp_alloc_serial[rank];
@@ -368,15 +372,20 @@ impl Pass1 {
         // their prefix [0, m); truncate and reuse them directly as outputs.
         tmp_class_ids.truncate(m);
         tmp_shallow.truncate(m);
-        tmp_kind.truncate(m);
         tmp_elem_count.truncate(m);
         // Only truncate the alloc-serial array when captured (else it is empty).
         if !tmp_alloc_serial.is_empty() {
             tmp_alloc_serial.truncate(m);
         }
+        // Unpack kind (bits 30-31) from tmp_class_ids and strip to clean class index.
+        // Done after dedup/truncate so the extraction is over the final m unique objects.
+        let mut kind: Vec<u8> = Vec::with_capacity(m);
+        for c in &mut tmp_class_ids {
+            kind.push((*c >> 30) as u8);
+            *c &= CLASS_MASK;
+        }
         let class_ids = tmp_class_ids;
         let shallow_sizes = tmp_shallow;
-        let kind = tmp_kind;
         let elem_count = tmp_elem_count;
         let alloc_stack_serial = tmp_alloc_serial;
 
@@ -431,7 +440,6 @@ fn scan_heap_segment(
     class_addr_table: &mut Vec<u64>,
     class_addr_to_idx: &mut HashMap<u64, u32>,
     tmp_shallow: &mut Vec<u32>,
-    tmp_kind: &mut Vec<u8>,
     tmp_elem_count: &mut Vec<u32>,
     tmp_alloc_serial: &mut Vec<u32>,
     gc_root_addrs: &mut Vec<u64>,
@@ -513,10 +521,9 @@ fn scan_heap_segment(
                         class_addr_table.push(class_addr);
                         n
                     });
-                    tmp_class_ids.push(idx); // class-of-class resolved later in pass2
+                    tmp_class_ids.push(idx | (3u32 << 30)); // class-of-class resolved later in pass2
                 }
                 tmp_shallow.push(0); // pass2 recalculates shallow size for class objects
-                tmp_kind.push(3);
                 tmp_elem_count.push(0);
                 // CLASS_DUMP has no per-object alloc serial; push 0 so the array
                 // stays 1:1 with the object ordering.
@@ -540,10 +547,9 @@ fn scan_heap_segment(
                         class_addr_table.push(class_id);
                         n
                     });
-                    tmp_class_ids.push(idx);
+                    tmp_class_ids.push(idx); // kind=0, bits 30-31 = 0
                 }
                 tmp_shallow.push(shallow);
-                tmp_kind.push(0);
                 tmp_elem_count.push(0);
                 remaining -= ids + 4 + ids + 4 + data_len;
                 *instance_count += 1;
@@ -567,10 +573,9 @@ fn scan_heap_segment(
                         class_addr_table.push(elem_class_id);
                         n
                     });
-                    tmp_class_ids.push(idx);
+                    tmp_class_ids.push(idx | (1u32 << 30)); // kind=1 object array
                 }
                 tmp_shallow.push(shallow);
-                tmp_kind.push(1);
                 tmp_elem_count.push(count as u32);
                 remaining -= ids + 4 + 4 + ids + count * ids;
                 *obj_array_count += 1;
@@ -590,11 +595,10 @@ fn scan_heap_segment(
                 // shallow: addr + stack + count + type_code + count*elem_size
                 let shallow = (ids + ids + 4 + 4 + 1 + count * elem_size) as u32;
                 tmp_addrs.push(addr);
-                // kind 2 stores the raw element type code (0-11) in class_ids,
-                // not a class_addr_table index.
-                tmp_class_ids.push(elem_type_code as u32);
+                // kind 2 stores the raw element type code (0-11) in class_ids bits 0-29,
+                // with kind=2 packed into bits 30-31.
+                tmp_class_ids.push((2u32 << 30) | elem_type_code as u32);
                 tmp_shallow.push(shallow);
-                tmp_kind.push(2);
                 tmp_elem_count.push(count as u32);
                 remaining -= ids + 4 + 4 + 1 + count * elem_size;
                 *prim_array_count += 1;
