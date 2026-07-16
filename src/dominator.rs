@@ -174,13 +174,40 @@ pub fn compute_dominators(
     let mut idom = vec![UNDEFINED; n + 1];
     crate::trace::probe("dominator: after idom alloc");
     idom[n] = vroot; // virtual root dominates itself
+    // Prefetch rpo.vertex[idom_pre[i+PF_TR]] ahead to hide the DRAM latency of
+    // the random rpo.vertex[dom_pre] read. idom_pre[i] is sequential (hardware-
+    // prefetched), but dom_pre is random, so rpo.vertex[dom_pre] is a DRAM miss.
+    const PF_TR: usize = 64;
+    let vertex_ptr = rpo.vertex.as_ptr();
+    let vertex_len = rpo.vertex.len();
+    let idom_pre_ptr = idom_pre.as_ptr();
+    let idom_pre_len = idom_pre.len();
     for i in 1..count {
+        if i + PF_TR < idom_pre_len {
+            let pf_dom_pre = unsafe { *idom_pre_ptr.add(i + PF_TR) } as usize;
+            if pf_dom_pre < vertex_len {
+                unsafe {
+                    let ptr = vertex_ptr.add(pf_dom_pre) as *const i8;
+                    #[cfg(target_arch = "x86_64")]
+                    core::arch::x86_64::_mm_prefetch::<
+                        { core::arch::x86_64::_MM_HINT_T0 },
+                    >(ptr);
+                    #[cfg(target_arch = "aarch64")]
+                    core::arch::asm!(
+                        "prfm pldl1keep, [{p}]",
+                        p = in(reg) ptr,
+                        options(nostack, readonly)
+                    );
+                }
+            }
+        }
         let node = rpo.vertex[i] as usize;
         let dom_pre = idom_pre[i];
         let dom_node = rpo.vertex[dom_pre as usize];
         // If the dominator is the virtual root (pre-order 0), store vroot (= n)
         idom[node] = if dom_pre == 0 { vroot } else { dom_node };
     }
+    let _ = (vertex_ptr, idom_pre_ptr); // suppress unused-ptr warnings on non-x86/aarch64
 
     Ok(idom)
 }
