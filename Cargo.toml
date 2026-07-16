@@ -43,3 +43,8 @@ needless_range_loop = "allow"
 ptr_arg = "allow"
 collapsible_if = "allow"
 too_many_arguments = "allow"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
