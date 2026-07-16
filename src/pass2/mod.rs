@@ -504,8 +504,13 @@ impl Pass2 {
         // Always-on field-decode views (collections, arrays, references). One
         // shared 3-scan pass; all aggregates are capped (see fielddecode.rs), so
         // RSS stays within the grant. Must run while class_map/strings are alive.
-        let (fd_collections, fd_references, fd_referent_idx) =
-            fielddecode::build_field_decode_views(path, &p1, &shallow, opts.collections)?;
+        let (
+            fd_collections,
+            fd_references,
+            fd_referent_idx,
+            fd_attribution_raw,
+            fd_attribution_trunc,
+        ) = fielddecode::build_field_decode_views(path, &p1, &shallow, opts.collections)?;
 
         // class_map + strings are no longer needed; free before the large edge
         // arrays get allocated in Phase 3/4 to lower peak RSS. The STACK_FRAME/
@@ -765,6 +770,8 @@ impl Pass2 {
             collections: fd_collections,
             references: fd_references,
             reference_referent_idx: fd_referent_idx,
+            collection_attribution_raw: fd_attribution_raw,
+            collection_attribution_truncated: fd_attribution_trunc,
         };
 
         // Package the deferred inbound-CSR construction. Moves id_map,

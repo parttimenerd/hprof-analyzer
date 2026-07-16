@@ -22,8 +22,8 @@ use crate::{
 };
 
 use super::{
-    field_offset, prim_array_class_name, read_ref, scan_all_instances, scan_all_obj_arrays,
-    scan_all_prim_arrays,
+    AttributionRaw, field_offset, prim_array_class_name, read_ref, scan_all_instances,
+    scan_all_obj_arrays, scan_all_prim_arrays,
 };
 
 // ── Caps (bound every aggregate) ─────────────────────────────────────────────
@@ -40,6 +40,14 @@ const CONST_ARRAY_CAP: usize = 100_000;
 const REFERENT_CAP: usize = 1_000_000;
 /// Max distinct referent classes retained per reference kind's histogram.
 const REFERENT_HIST_CAP: usize = 200;
+
+/// Max holder→pointee edges collected under --collections (16 B each → 160 MB).
+const FIELD_REF_CAP: usize = 10_000_000;
+/// Max container records collected under --collections (~32 B each → ~48 MB).
+const CONTAINER_CAP: usize = 1_500_000;
+/// Fixed top-N for both attribution rankings (documented, used by AREA C).
+#[allow(dead_code)]
+pub(crate) const ATTRIBUTION_TOP_N: usize = 25;
 
 // ── Collection descriptor table ──────────────────────────────────────────────
 
@@ -586,6 +594,97 @@ fn obj_array_name_of_key(array_class_id: u64, p1: &Pass1) -> String {
     pretty_name(array_class_id, p1)
 }
 
+/// One holder→pointee edge collected under `--collections`: a non-null object
+/// field of some instance. Names are INTERNED by key to keep each edge at 16
+/// bytes. Joined post-scan against [`ContainerRecord`]s.
+struct HolderEdge {
+    pointee: u64,
+    holder_class_key: u32,
+    field_key: u32,
+}
+
+/// A container (collection/obj-array/prim-array) seen under `--collections`,
+/// keyed by its address; carries its dense object index + element count + kind
+/// (0=collection, 1=object array, 2=primitive array) + resolved class name.
+struct ContainerRecord {
+    container_idx: u32,
+    elements: u64,
+    kind: u8,
+    container_class: String,
+}
+
+/// Join holder edges against container records: for each edge whose `pointee`
+/// matches a container's address, emit one [`AttributionRaw`] (resolving the
+/// interned holder-class/field keys to owned Strings). Retained size is NOT set
+/// here — build_model fills it via `container_idx`.
+fn join_attribution(
+    edges: &[HolderEdge],
+    container_records: &HashMap<u64, ContainerRecord>,
+    holder_class_names: &[String],
+    field_names: &[String],
+) -> Vec<AttributionRaw> {
+    let mut out: Vec<AttributionRaw> = Vec::new();
+    for e in edges {
+        if let Some(rec) = container_records.get(&e.pointee) {
+            out.push(AttributionRaw {
+                container_idx: rec.container_idx,
+                holder_class: holder_class_names[e.holder_class_key as usize].clone(),
+                field: field_names[e.field_key as usize].clone(),
+                container_kind: rec.kind,
+                container_class: rec.container_class.clone(),
+                elements: rec.elements,
+            });
+        }
+    }
+    out
+}
+
+/// Enumerate every Object-type instance field of `class_id`, returning
+/// `(field_name_id, byte_offset)` for each. The layout mirrors
+/// [`build_field_plans`]/[`field_offset`]: walk the super-chain CHILD-FIRST (as
+/// collected, NOT reversed — HPROF stores instance field VALUES subclass-first),
+/// accumulating byte offsets where Object fields are `obj_ref_width` wide and
+/// primitives use `t.byte_size()`. Used by the `--collections` holder-edge scan
+/// (memoized per class) and unit-tested directly.
+fn enumerate_object_fields(
+    class_id: u64,
+    class_map: &HashMap<u64, crate::pass1::ClassInfo>,
+    obj_ref_width: usize,
+) -> Vec<(u64, u32)> {
+    // Collect the super-chain child-first.
+    let mut chain: Vec<u64> = Vec::new();
+    let mut cur = class_id;
+    loop {
+        match class_map.get(&cur) {
+            None => break,
+            Some(ci) => {
+                chain.push(cur);
+                if ci.super_id == 0 {
+                    break;
+                }
+                cur = ci.super_id;
+            }
+        }
+    }
+    let mut out: Vec<(u64, u32)> = Vec::new();
+    let mut byte_offset = 0usize;
+    for &caddr in chain.iter() {
+        let ci = match class_map.get(&caddr) {
+            Some(c) => c,
+            None => break,
+        };
+        for &(fname_id, t) in &ci.fields {
+            if t == HprofType::Object {
+                out.push((fname_id, byte_offset as u32));
+                byte_offset += obj_ref_width;
+            } else {
+                byte_offset += t.byte_size();
+            }
+        }
+    }
+    out
+}
+
 /// Format a pretty class name (HPROF `/`-separated → `.`-separated).
 fn pretty_name(class_id: u64, p1: &Pass1) -> String {
     p1.class_map
@@ -611,6 +710,17 @@ fn class_name_of_index(i: usize, p1: &Pass1) -> String {
 
 // ── Main entry point ─────────────────────────────────────────────────────────
 
+/// Return type of [`build_field_decode_views`]: the collection & reference
+/// views, the per-kind referent indices, the optional raw attribution records
+/// (`Some` only under `--collections`), and a truncation flag.
+type FieldDecodeViews = (
+    CollectionsAnalysis,
+    ReferencesAnalysis,
+    [Vec<u32>; 3],
+    Option<Vec<AttributionRaw>>,
+    bool,
+);
+
 /// Compute the collection/array/reference views in exactly THREE full-file
 /// scans. Returns `(collections, references, reference_referent_idx)`; the
 /// caller computes `only_weakly_retained` later from the referent indices +
@@ -620,8 +730,7 @@ pub(crate) fn build_field_decode_views(
     p1: &Pass1,
     shallow: &[u32],
     collect_attribution: bool,
-) -> std::io::Result<(CollectionsAnalysis, ReferencesAnalysis, [Vec<u32>; 3])> {
-    let _ = collect_attribution; // AREA B will use this
+) -> std::io::Result<FieldDecodeViews> {
     let id_size = p1.id_size;
     // Instance-blob object references are id_size wide (compressed OOPs only
     // narrows object-ARRAY elements). Both instance fields and obj-array
@@ -656,6 +765,19 @@ pub(crate) fn build_field_decode_views(
     let mut top_prim = TopArrayAcc::default();
     let mut top_obj = TopArrayAcc::default();
 
+    // ── Attribution state (only allocated / touched under --collections) ──────
+    let mut edges: Vec<HolderEdge> = Vec::new();
+    let mut edges_truncated = false;
+    // Interning: class_id → key (holder class names) and field name_id → key.
+    let mut holder_class_names: Vec<String> = Vec::new();
+    let mut holder_class_map: HashMap<u64, u32> = HashMap::new();
+    let mut field_names: Vec<String> = Vec::new();
+    let mut field_name_map: HashMap<u64, u32> = HashMap::new();
+    // Memoized per-class object-field layout: class_id → [(field_name_key, off)].
+    let mut obj_field_layout: HashMap<u64, Vec<(u32, u32)>> = HashMap::new();
+    let mut container_records: HashMap<u64, ContainerRecord> = HashMap::new();
+    let mut containers_truncated = false;
+
     // ── Scan 1: every INSTANCE_DUMP ──────────────────────────────────────────
     scan_all_instances(path, id_size, |addr, class_id, blob| {
         let role = role_cache
@@ -683,6 +805,26 @@ pub(crate) fn build_field_decode_views(
                     coll_total += 1;
                     if is_map {
                         map_total += 1;
+                    }
+                }
+                // Attribution: record this collection as a container (kind 0).
+                // elements = the read size (0 when the collection has no plain
+                // size field, e.g. ConcurrentHashMap — documented limitation).
+                if collect_attribution {
+                    if let Some(cidx) = p1.id_map.index_of(addr) {
+                        if container_records.len() < CONTAINER_CAP {
+                            container_records.insert(
+                                addr,
+                                ContainerRecord {
+                                    container_idx: cidx as u32,
+                                    elements: size.unwrap_or(0),
+                                    kind: 0,
+                                    container_class: pretty_name(class_id, p1),
+                                },
+                            );
+                        } else {
+                            containers_truncated = true;
+                        }
                     }
                 }
                 // Read backing-array address, defer fill ratio to scan 3.
@@ -733,9 +875,58 @@ pub(crate) fn build_field_decode_views(
                 }
             }
         }
-    })?;
 
-    // ── Scan 2: every PRIM_ARRAY_DUMP — constant-array detection ──────────────
+        // Attribution: record a holder edge for every non-null object field of
+        // this instance. Kept in its OWN block (role match already released) so
+        // the interner/layout borrows don't fight the existing borrows.
+        if collect_attribution && edges.len() < FIELD_REF_CAP {
+            // Build the class's object-field layout once (memoized). The
+            // or_insert_with closure interns field names into
+            // field_names/field_name_map — distinct maps from obj_field_layout,
+            // so the borrows don't conflict.
+            obj_field_layout.entry(class_id).or_insert_with(|| {
+                let raw = enumerate_object_fields(class_id, class_map, obj_ref_width);
+                let mut layout: Vec<(u32, u32)> = Vec::with_capacity(raw.len());
+                for (fname_id, off) in raw {
+                    let field_key = *field_name_map.entry(fname_id).or_insert_with(|| {
+                        let key = field_names.len() as u32;
+                        let fname = strings
+                            .get(&fname_id)
+                            .map(|s| s.to_string())
+                            .unwrap_or_default();
+                        field_names.push(fname);
+                        key
+                    });
+                    layout.push((field_key, off));
+                }
+                layout
+            });
+            // Intern the holder-class key once per instance (not per field).
+            let holder_class_key = *holder_class_map.entry(class_id).or_insert_with(|| {
+                let key = holder_class_names.len() as u32;
+                holder_class_names.push(pretty_name(class_id, p1));
+                key
+            });
+            let layout = &obj_field_layout[&class_id];
+            for &(field_key, offset) in layout {
+                if edges.len() >= FIELD_REF_CAP {
+                    edges_truncated = true;
+                    break;
+                }
+                let o = offset as usize;
+                if o + obj_ref_width <= blob.len() {
+                    let pointee = read_ref(&blob[o..], obj_ref_width);
+                    if pointee != 0 {
+                        edges.push(HolderEdge {
+                            pointee,
+                            holder_class_key,
+                            field_key,
+                        });
+                    }
+                }
+            }
+        }
+    })?;
     // group (type_code, len, value) → (objects, shallow). Capped; overflow folds
     // to "other".
     let mut const_groups: HashMap<(u8, u64, i64), (u64, u64)> = HashMap::new();
@@ -750,6 +941,22 @@ pub(crate) fn build_field_decode_views(
         };
         if idx != u32::MAX {
             top_prim.add(idx, elem_type as u64, count, sh);
+        }
+        // Attribution: record this primitive array as a container (kind 2).
+        if collect_attribution && idx != u32::MAX {
+            if container_records.len() < CONTAINER_CAP {
+                container_records.insert(
+                    addr,
+                    ContainerRecord {
+                        container_idx: idx,
+                        elements: count,
+                        kind: 2,
+                        container_class: prim_array_class_name(elem_type).to_string(),
+                    },
+                );
+            } else {
+                containers_truncated = true;
+            }
         }
         if count < 2 {
             return;
@@ -820,6 +1027,23 @@ pub(crate) fn build_field_decode_views(
                 top_obj.add(arr_idx, array_class_id, count, arr_shallow);
             }
 
+            // Attribution: record this object array as a container (kind 1).
+            if collect_attribution && arr_idx != u32::MAX {
+                if container_records.len() < CONTAINER_CAP {
+                    container_records.insert(
+                        addr,
+                        ContainerRecord {
+                            container_idx: arr_idx,
+                            elements: count,
+                            kind: 1,
+                            container_class: pretty_name(array_class_id, p1),
+                        },
+                    );
+                } else {
+                    containers_truncated = true;
+                }
+            }
+
             // If this is a tracked collection backing array, fold #9 / #13.
             if let Some(want) = wanted_arrays.get(&addr) {
                 // ConcurrentHashMap has no plain size: approximate size as non-null
@@ -843,6 +1067,21 @@ pub(crate) fn build_field_decode_views(
             }
         },
     )?;
+
+    // ── Attribution join: match each holder edge's pointee against a container
+    // record, emitting one AttributionRaw per hit (resolving interned names to
+    // owned Strings while class_map/strings are still alive). ─────────────────
+    let attribution_raw = if collect_attribution {
+        Some(join_attribution(
+            &edges,
+            &container_records,
+            &holder_class_names,
+            &field_names,
+        ))
+    } else {
+        None
+    };
+    let attribution_truncated = edges_truncated || containers_truncated;
 
     // ── Assemble collection views ─────────────────────────────────────────────
     let collections = CollectionsAnalysis {
@@ -877,7 +1116,13 @@ pub(crate) fn build_field_decode_views(
         phantom: assemble_ref_stats("Phantom", ref_instances[2], &ref_hist[2], ref_hist_other[2]),
     };
 
-    Ok((collections, references, referent_idx))
+    Ok((
+        collections,
+        references,
+        referent_idx,
+        attribution_raw,
+        attribution_truncated,
+    ))
 }
 
 /// Size-histogram accumulator (power-of-two upper bounds + empty count).
@@ -1281,5 +1526,78 @@ mod tests {
         // by_class aggregated ALL candidates (not just the kept ones).
         let (objects, _) = acc.by_class[&0];
         assert_eq!(objects, TOP_ARRAYS_N as u64 + 5);
+    }
+
+    /// Resolve field name_id → name via the fixture strings for readable asserts.
+    fn resolve_layout(
+        class_id: u64,
+        class_map: &HashMap<u64, ClassInfo>,
+        strings: &HashMap<u64, String>,
+    ) -> Vec<(String, u32)> {
+        enumerate_object_fields(class_id, class_map, 8)
+            .into_iter()
+            .map(|(name_id, off)| (strings.get(&name_id).cloned().unwrap_or_default(), off))
+            .collect()
+    }
+
+    #[test]
+    fn enumerate_object_fields_hashmap() {
+        let (class_map, strings) = fixture();
+        // HashMap@0x20: size(Int)@0, table(Object)@4 → only the Object field.
+        let layout = resolve_layout(0x20, &class_map, &strings);
+        assert_eq!(layout, vec![("table".to_string(), 4)]);
+    }
+
+    #[test]
+    fn enumerate_object_fields_subclass_super_chain() {
+        let (class_map, strings) = fixture();
+        // MyList@0x40 extends ArrayList: own extra(Int)@0, then inherited
+        // size(Int)@4, elementData(Object)@8. Only elementData is an Object field.
+        let layout = resolve_layout(0x40, &class_map, &strings);
+        assert_eq!(layout, vec![("elementData".to_string(), 8)]);
+    }
+
+    #[test]
+    fn join_matches_edge_to_container() {
+        // One container at address 0x1000 (dense idx 7, kind 1, "java.util.X",
+        // 42 elements) and two edges: one hits it, one points elsewhere.
+        let holder_class_names = vec!["com.example.Holder".to_string()];
+        let field_names = vec!["items".to_string()];
+        let edges = vec![
+            HolderEdge {
+                pointee: 0x1000,
+                holder_class_key: 0,
+                field_key: 0,
+            },
+            HolderEdge {
+                pointee: 0x2000, // no matching container
+                holder_class_key: 0,
+                field_key: 0,
+            },
+        ];
+        let mut container_records: HashMap<u64, ContainerRecord> = HashMap::new();
+        container_records.insert(
+            0x1000,
+            ContainerRecord {
+                container_idx: 7,
+                elements: 42,
+                kind: 1,
+                container_class: "java.util.X".to_string(),
+            },
+        );
+        let out = join_attribution(
+            &edges,
+            &container_records,
+            &holder_class_names,
+            &field_names,
+        );
+        assert_eq!(out.len(), 1);
+        let row = &out[0];
+        assert_eq!(row.container_idx, 7);
+        assert_eq!(row.holder_class, "com.example.Holder");
+        assert_eq!(row.field, "items");
+        assert_eq!(row.container_kind, 1);
+        assert_eq!(row.container_class, "java.util.X");
+        assert_eq!(row.elements, 42);
     }
 }

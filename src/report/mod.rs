@@ -191,6 +191,8 @@ mod tests {
             collections: crate::report::CollectionsAnalysis::default(),
             references: crate::report::ReferencesAnalysis::default(),
             reference_referent_idx: [Vec::new(), Vec::new(), Vec::new()],
+            collection_attribution_raw: None,
+            collection_attribution_truncated: false,
         };
         (g, dc_off, dc_tgt)
     }

@@ -195,6 +195,24 @@ pub struct StringHolder {
 /// are the dominant RSS consumers, so several are compressed/freed early during
 /// `build` — see the field docs. The dominator/retained stages fill `idom`,
 /// `retained`, and `has_same_class_ancestor` afterward.
+/// One raw container-attribution record produced by field-decode under
+/// `--collections`. Carries the DENSE object index (retained size is filled
+/// later and looked up in build_model) plus pre-resolved owned name Strings
+/// (class_map/strings die right after field-decode). Runtime-only, not serialized.
+///
+/// Every field is consumed by build_model's attribution aggregation; the allow
+/// bridges the gap until that consumer lands.
+#[derive(Clone)]
+#[allow(dead_code)]
+pub struct AttributionRaw {
+    pub container_idx: u32,
+    pub holder_class: String,
+    pub field: String,
+    pub container_kind: u8,
+    pub container_class: String,
+    pub elements: u64,
+}
+
 pub struct Graph {
     /// Object count = number of live nodes in the graph (indexes 0..n).
     pub n: usize,
@@ -347,6 +365,15 @@ pub struct Graph {
     /// consumed in `build_model` to compute `only_weakly_retained` via `idom`.
     /// Not serialized (runtime-only helper).
     pub reference_referent_idx: [Vec<u32>; 3],
+    /// Raw container-attribution records from field-decode under `--collections`;
+    /// `None` when the flag was off. Consumed in build_model to attach retained
+    /// sizes and aggregate. Not serialized.
+    #[allow(dead_code)]
+    pub collection_attribution_raw: Option<Vec<AttributionRaw>>,
+    /// True when the holder-edge or container-record cap was hit (attribution
+    /// data is a bounded sample). Not serialized.
+    #[allow(dead_code)]
+    pub collection_attribution_truncated: bool,
 }
 
 /// Deferred inbound-CSR construction. Built by `Pass2::build` with everything
