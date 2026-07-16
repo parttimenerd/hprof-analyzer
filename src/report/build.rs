@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::pass2::Graph;
-use crate::pass2::{AttributionRaw, ATTRIBUTION_TOP_N};
+use crate::pass2::{ATTRIBUTION_TOP_N, AttributionRaw};
 
 const THRESHOLD_PCT: f64 = 10.0;
 /// Default per-suspect cap on the "accumulated objects" lists (immediately
@@ -134,9 +134,7 @@ fn build_leak_indicators(g: &Graph) -> LeakIndicators {
         let end = g.fwd_offsets[i + 1] as usize;
         let mut edge_buf: Vec<u32> = Vec::new();
         g.fwd_targets.copy_range(start, end, &mut edge_buf);
-        let has_live_referent = edge_buf
-            .iter()
-            .any(|&t| (t & 0x7FFF_FFFF) != 0);
+        let has_live_referent = edge_buf.iter().any(|&t| (t & 0x7FFF_FFFF) != 0);
         if !has_live_referent {
             thread_local_null_key_count += 1;
         }
@@ -2516,7 +2514,7 @@ mod leak_indicator_tests {
         assert!(is_anonymous_class("com/example/Foo$$Lambda$42/0x1234")); // lambda
         assert!(is_anonymous_class("com/example/Foo$Proxy1")); // proxy
         assert!(is_anonymous_class("com/example/$$Anon")); // anon
-                                                           // These should NOT match:
+        // These should NOT match:
         assert!(!is_anonymous_class("com/example/Foo$Bar")); // named inner
         assert!(!is_anonymous_class("java/lang/String")); // plain class
     }

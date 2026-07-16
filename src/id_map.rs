@@ -93,8 +93,7 @@ fn search_offsets(slice: &[u32], d: u32) -> Option<usize> {
         // Interpolation probe. Cast to u64 to avoid overflow.
         // Formula: lo + floor(range * (d - lo_v) / (hi_v - lo_v))
         // Clamped to [lo+1, hi-1] so we always make progress.
-        let offset = ((range as u64 * (d as u64 - lo_v) / (hi_v - lo_v)) as usize)
-            .min(range - 1);
+        let offset = ((range as u64 * (d as u64 - lo_v) / (hi_v - lo_v)) as usize).min(range - 1);
         let mid = (lo + offset).max(lo + 1).min(hi - 1);
         let mid_v = unsafe { *slice.get_unchecked(mid) };
         if mid_v == d {
@@ -335,10 +334,8 @@ impl IdMap {
                 let blob = if codec == Codec::Zstd3 {
                     zstd::encode_all(&vb[..], 3).map_err(io::Error::other)?
                 } else {
-                    let mut e = flate2::write::DeflateEncoder::new(
-                        Vec::new(),
-                        flate2::Compression::best(),
-                    );
+                    let mut e =
+                        flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());
                     e.write_all(&vb)?;
                     e.finish()?
                 };
@@ -445,7 +442,11 @@ impl IndexCache {
         let k = unsafe { *self.keys.get_unchecked(slot) };
         if k == addr {
             let v = unsafe { *self.vals.get_unchecked(slot) };
-            return if v == u32::MAX { None } else { Some(v as usize) };
+            return if v == u32::MAX {
+                None
+            } else {
+                Some(v as usize)
+            };
         }
         // Miss: call through and populate the slot.
         let result = id_map.index_of(addr);

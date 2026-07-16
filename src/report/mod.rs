@@ -1103,7 +1103,7 @@ mod tests {
         assert_eq!(l1.suspects[0].accumulation_obj_1based, Some(1)); // A itself
         assert_eq!(l1.suspects[0].dominated.len(), 1);
         assert_eq!(l1.suspects[0].dominated[0].obj_index_1based, 2); // B, largest
-                                                                     // Default cap -> all three children listed.
+        // Default cap -> all three children listed.
         let l2 = build_leak_suspects(&g, &dc_off, &dc_tgt, DOMINATED_CAP, 30, 5000, 20);
         assert_eq!(l2.suspects[0].dominated.len(), 3);
     }
@@ -1245,10 +1245,11 @@ mod tests {
             Some(3)
         );
         // Class Histogram lives inside System Overview's body.
-        assert!(doc
-            .section("System Overview")
-            .unwrap()
-            .body_contains("### Class Histogram (by Retained Heap)"));
+        assert!(
+            doc.section("System Overview")
+                .unwrap()
+                .body_contains("### Class Histogram (by Retained Heap)")
+        );
     }
 
     #[test]

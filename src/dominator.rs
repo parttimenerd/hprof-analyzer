@@ -340,7 +340,13 @@ fn build_exact_offsets(n: usize, inb_data: &[u8]) -> std::io::Result<Vec<u64>> {
 /// eval(v): find the vertex on the path v..root (in the union-find forest)
 /// with the minimum semi value, applying path compression.
 /// Returns the label (pre-order index) of that minimum-semi vertex.
-fn eval(v: u32, ancestor: &mut [u32], label: &mut [u32], semi: &[u32], chain: &mut Vec<u32>) -> u32 {
+fn eval(
+    v: u32,
+    ancestor: &mut [u32],
+    label: &mut [u32],
+    semi: &[u32],
+    chain: &mut Vec<u32>,
+) -> u32 {
     if ancestor[v as usize] == UNDEFINED {
         return label[v as usize];
     }

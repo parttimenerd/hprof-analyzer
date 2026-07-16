@@ -291,7 +291,7 @@ impl Pass2 {
             .max()
             .map(|m| m as usize + 1)
             .unwrap_or(0);
-let mut field_plans_dense: Vec<FieldPlan> = vec![Vec::new(); n_dense_classes];
+        let mut field_plans_dense: Vec<FieldPlan> = vec![Vec::new(); n_dense_classes];
         for (&class_addr, &hidx) in &class_addr_to_hist {
             if let Some(plan) = field_plans.get(&class_addr) {
                 if !plan.is_empty() {
