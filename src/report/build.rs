@@ -54,6 +54,16 @@ pub fn build_model(
     alloc_sites: Option<AllocSites>,
 ) -> Report {
     let generated = now_iso8601();
+
+    // Compute raw_total_shallow once: sum of shallow[i] for all reachable nodes
+    // (idom[i] != undef). Three downstream functions each needed this O(n) sum;
+    // compute it here and pass it in to avoid redundant scans.
+    let undef_u32 = u32::MAX;
+    let raw_total_shallow: u64 = (0..g.n)
+        .filter(|&i| g.idom[i] != undef_u32)
+        .map(|i| g.shallow[i] as u64)
+        .sum();
+
     crate::trace::probe("build_model: before system_overview aggregates");
     let overview = build_system_overview(g, depth_counts, opts.top_consumers);
     crate::trace::probe("build_model: after system_overview aggregates");
@@ -65,15 +75,16 @@ pub fn build_model(
         opts.root_path_max_depth,
         opts.dominator_tree_max_nodes,
         opts.dominator_tree_max_depth,
+        raw_total_shallow,
     );
     crate::trace::probe("build_model: after leak_suspects aggregates");
-    let top = build_top_consumers(g, opts.top_consumers);
+    let top = build_top_consumers(g, opts.top_consumers, raw_total_shallow);
     crate::trace::probe("build_model: after top_consumers aggregates");
     let threads = build_thread_overview(g);
     crate::trace::probe("build_model: after thread_overview aggregates");
     let top_components = build_top_components(&overview);
     crate::trace::probe("build_model: after top_components aggregates");
-    let dominator_analysis = build_dominator_analysis(g, dc_offsets, dc_targets);
+    let dominator_analysis = build_dominator_analysis(g, dc_offsets, dc_targets, raw_total_shallow);
     crate::trace::probe("build_model: after dominator_analysis aggregates");
     let references = build_references(g);
     crate::trace::probe("build_model: after references only-weakly-retained rollup");
@@ -491,6 +502,7 @@ fn build_dominator_analysis(
     g: &Graph,
     dc_offsets: &[u32],
     dc_targets: &[u32],
+    raw_total_shallow: u64,
 ) -> DominatorAnalysis {
     let n = g.n;
     let undef = u32::MAX;
@@ -508,10 +520,7 @@ fn build_dominator_analysis(
     };
 
     // Total reachable shallow, for the big-drops significance threshold (1%).
-    let total_shallow: u64 = (0..n)
-        .filter(|&i| g.idom[i] != undef)
-        .map(|i| g.shallow[i] as u64)
-        .sum();
+    let total_shallow = raw_total_shallow;
     const DROP_THRESHOLD_PCT: f64 = 1.0;
     let threshold = (total_shallow as f64 * DROP_THRESHOLD_PCT / 100.0) as u64;
 
@@ -1615,17 +1624,15 @@ pub(crate) fn build_leak_suspects(
     root_path_max_depth: usize,
     dom_max_nodes: usize,
     dom_max_depth: usize,
+    raw_total_shallow: u64,
 ) -> LeakSuspects {
     let n = g.n;
     let undef = u32::MAX;
 
-    // Total shallow heap of reachable objects
-    let mut total_shallow: u64 = (0..n)
-        .filter(|&i| g.idom[i] != undef)
-        .map(|i| g.shallow[i] as u64)
-        .sum();
+    // Total shallow heap of reachable objects (pre-computed by build_model).
     // Include MAT's synthetic <system class loader> object for internal
     // consistency with build_system_overview's total_shallow.
+    let mut total_shallow = raw_total_shallow;
     if let Some(sz) = g.system_classloader_shallow {
         total_shallow += sz as u64;
     }
@@ -2172,21 +2179,20 @@ pub(crate) fn build_size_distribution(retained_desc: &[u64]) -> TopSizeDistribut
 /// Build the "Top Consumers" model: biggest objects (top-level dominators by
 /// retained), biggest classes, and the pruned package tree. Bounded reductions
 /// over the graph; no per-object Vec is retained.
-fn build_top_consumers(g: &Graph, top_n: usize) -> TopConsumers {
+fn build_top_consumers(g: &Graph, top_n: usize, raw_total_shallow: u64) -> TopConsumers {
     let n = g.n;
     let vroot = n as u32;
     let undef = u32::MAX;
     let class_count = g.class_names.len();
 
-    // Collect top-level dominators and sum total shallow in a single pass.
+    // Collect top-level dominators in a single pass; total_shallow is pre-computed.
     let mut top_level: Vec<u32> = Vec::new();
-    let mut total_shallow: u64 = 0;
+    let total_shallow = raw_total_shallow;
     for i in 0..n {
         let id = g.idom[i];
         if id == undef {
             continue;
         }
-        total_shallow += g.shallow[i] as u64;
         if id == vroot {
             top_level.push(i as u32);
         }

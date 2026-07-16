@@ -1053,7 +1053,8 @@ mod tests {
             vec![0, 4],
             0,
         );
-        let l = build_leak_suspects(&g, &dc_off, &dc_tgt, DOMINATED_CAP, 30, 5000, 20);
+        let raw_ts: u64 = (0..g.n).filter(|&i| g.idom[i] != u32::MAX).map(|i| g.shallow[i] as u64).sum();
+        let l = build_leak_suspects(&g, &dc_off, &dc_tgt, DOMINATED_CAP, 30, 5000, 20, raw_ts);
         // Two singles: A (1000) then E (800), retained-desc.
         assert_eq!(l.suspects.len(), 2);
         let a = &l.suspects[0];
@@ -1097,14 +1098,15 @@ mod tests {
             vec![0],
             0,
         );
+        let raw_ts1: u64 = (0..g.n).filter(|&i| g.idom[i] != u32::MAX).map(|i| g.shallow[i] as u64).sum();
         // cap = 1 -> only the largest dominated child is listed.
-        let l1 = build_leak_suspects(&g, &dc_off, &dc_tgt, 1, 30, 5000, 20);
+        let l1 = build_leak_suspects(&g, &dc_off, &dc_tgt, 1, 30, 5000, 20, raw_ts1);
         assert_eq!(l1.suspects.len(), 1);
         assert_eq!(l1.suspects[0].accumulation_obj_1based, Some(1)); // A itself
         assert_eq!(l1.suspects[0].dominated.len(), 1);
         assert_eq!(l1.suspects[0].dominated[0].obj_index_1based, 2); // B, largest
         // Default cap -> all three children listed.
-        let l2 = build_leak_suspects(&g, &dc_off, &dc_tgt, DOMINATED_CAP, 30, 5000, 20);
+        let l2 = build_leak_suspects(&g, &dc_off, &dc_tgt, DOMINATED_CAP, 30, 5000, 20, raw_ts1);
         assert_eq!(l2.suspects[0].dominated.len(), 3);
     }
 
