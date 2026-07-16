@@ -63,50 +63,61 @@ function ThemeToggle() {
 // thousands of histogram rows) stay navigable — MAT's report has an equivalent
 // left-hand section index.
 function Nav({ report }: { report: Report }) {
-  const items: [string, string][] = [
-    ["triage", "OOM Triage"],
-    ["overview", "System Overview"],
+  // [id, label, group?] — group is set only on the first link of each group.
+  const items: [string, string, string?][] = [];
+
+  // ── Overview group ──
+  items.push(
+    ["triage",        "OOM Triage",          "Overview"],
+    ["overview",      "System Overview"],
     ["record-census", "HPROF Record Census"],
-    ["leaks", "Leak Suspects"],
-    ["top", "Top Consumers"],
-    ["dominator-analysis", "Dominator Analysis"],
-    ["threads", "Threads"],
-  ];
-  // show the entry only when the field is present.
+  );
+
+  // ── Analysis group ──
+  items.push(["leaks",              "Leak Suspects",    "Analysis"]);
+  items.push(["top",                "Top Consumers"]);
+  items.push(["dominator-analysis", "Dominator Analysis"]);
+  items.push(["threads",            "Threads"]);
   if (report.top.size_distribution.count > 0) items.push(["size-distribution", "Size Distribution"]);
-  if (report.overview.duplicate_strings) items.push(["duplicate-strings", "Duplicate Strings"]);
-  if (report.top_components?.components?.length) items.push(["top-components", "Top Components"]);
-  items.push(["arrays-by-size", "Arrays by Size"]);
-  items.push(["collections", "Collections"]);
-  if (report.collection_attribution) items.push(["container-attribution", "Container Attribution"]);
-  items.push(["references", "References"]);
-  items.push(["unreachable-objects", "Unreachable Objects"]);
-  if (report.alloc_sites) items.push(["alloc-sites", "Allocation Sites"]);
+
+  // ── Data group ──
+  let dataGroupSet = false;
+  const addData = (id: string, label: string) => {
+    if (!dataGroupSet) { items.push([id, label, "Data"]); dataGroupSet = true; }
+    else items.push([id, label]);
+  };
+  if (report.overview.duplicate_strings) addData("duplicate-strings", "Duplicate Strings");
+  if (report.top_components?.components?.length) addData("top-components", "Top Components");
+  addData("arrays-by-size", "Arrays by Size");
+  addData("collections", "Collections");
+  if (report.collection_attribution) addData("container-attribution", "Container Attribution");
+  addData("references", "References");
+  addData("unreachable-objects", "Unreachable Objects");
+  if (report.alloc_sites) addData("alloc-sites", "Allocation Sites");
+
+  // ── Distribution group ──
+  let distGroupSet = false;
+  const addDist = (id: string, label: string) => {
+    if (!distGroupSet) { items.push([id, label, "Distribution"]); distGroupSet = true; }
+    else items.push([id, label]);
+  };
   const rc = report.overview.retention_concentration;
-  if (rc.top1_bp > 0 || rc.num_objects_ge_1pct > 0) {
-    items.push(["retention-concentration", "Retention Concentration"]);
-  }
-  if (report.overview.dominator_depth_histogram.length > 0) {
-    items.push(["dominator-depth-distribution", "Dominator-Depth Distribution"]);
-  }
+  if (rc.top1_bp > 0 || rc.num_objects_ge_1pct > 0) addDist("retention-concentration", "Retention Concentration");
+  if (report.overview.dominator_depth_histogram.length > 0) addDist("dominator-depth-distribution", "Dominator-Depth Distribution");
   const li = report.leak_indicators;
   if (li && (li.anonymous_class_count > 0 || li.thread_local_null_key_count > 0 || li.direct_byte_buffer_capacity_sum > 0)) {
-    items.push(["leak-indicators", "Leak Indicators"]);
+    addDist("leak-indicators", "Leak Indicators");
   }
-  items.push(["glossary", "Glossary"]);
+  addDist("glossary", "Glossary");
 
   const [active, setActive] = React.useState<string>("");
 
   React.useEffect(() => {
-    // rootMargin shrinks the detection zone to the top-center of the viewport
-    // so a section activates when it's clearly in focus, not just barely on-screen.
     const observer = new IntersectionObserver(
       (entries) => {
-        // Update a shared map of which sections are intersecting.
         entries.forEach((e) => {
           intersecting.set(e.target.id, e.isIntersecting);
         });
-        // Pick the topmost intersecting section; if none, pick the last one above fold.
         const ids = items.map(([id]) => id);
         let chosen = "";
         let lowestAbove = -Infinity;
@@ -114,34 +125,25 @@ function Nav({ report }: { report: Report }) {
           const el = document.getElementById(id);
           if (!el) continue;
           const top = el.getBoundingClientRect().top;
-          if (intersecting.get(id)) {
-            chosen = id;
-            break; // items are in DOM order; first intersecting = topmost
-          }
-          if (top < 0 && top > lowestAbove) {
-            lowestAbove = top;
-            chosen = id;
-          }
+          if (intersecting.get(id)) { chosen = id; break; }
+          if (top < 0 && top > lowestAbove) { lowestAbove = top; chosen = id; }
         }
         setActive(chosen);
       },
       { rootMargin: "-40% 0px -55% 0px" },
     );
-
     const intersecting = new Map<string, boolean>();
-    items.forEach(([id]) => {
-      const el = document.getElementById(id);
-      if (el) observer.observe(el);
-    });
+    items.forEach(([id]) => { const el = document.getElementById(id); if (el) observer.observe(el); });
     return () => observer.disconnect();
-  }, []); // ids are static — runs once on mount
+  }, []);
 
   return (
     <nav className="toc">
-      {items.map(([id, label]) => (
-        <a key={id} href={`#${id}`} className={id === active ? "active" : ""}>
-          {label}
-        </a>
+      {items.map(([id, label, group]) => (
+        <React.Fragment key={id}>
+          {group && <span className="toc-group">{group}</span>}
+          <a href={`#${id}`} className={id === active ? "active" : ""}>{label}</a>
+        </React.Fragment>
       ))}
     </nav>
   );
