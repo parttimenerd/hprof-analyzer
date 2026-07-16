@@ -617,14 +617,18 @@ impl TopArrayAcc {
 /// Resolve a primitive-array class name from an element type code (the
 /// `class_key` used by the primitive [`TopArrayAcc`]).
 fn prim_array_name_of_key(elem_type: u64, _p1: &Pass1) -> String {
-    prim_array_class_name(elem_type as u8).to_string()
+    crate::report::pretty_class_name(prim_array_class_name(elem_type as u8))
 }
 
 /// Resolve an object-array class name from its array-class object id (the
 /// `class_key` used by the object [`TopArrayAcc`]). `class_map`/`strings` are
 /// still alive at assembly time.
 fn obj_array_name_of_key(array_class_id: u64, p1: &Pass1) -> String {
-    pretty_name(array_class_id, p1)
+    p1.class_map
+        .get(&array_class_id)
+        .and_then(|ci| p1.strings.get(&ci.name_id))
+        .map(|raw| crate::report::pretty_class_name(raw))
+        .unwrap_or_else(|| format!("0x{array_class_id:x}"))
 }
 
 /// One holder→pointee edge collected under `--collections`: a non-null object
@@ -1291,7 +1295,7 @@ fn assemble_const_arrays(
         .into_iter()
         .map(
             |((elem_type, length, value), (objects, shallow))| ConstantArrayRow {
-                array_class: prim_array_class_name(elem_type).to_string(),
+                array_class: crate::report::pretty_class_name(prim_array_class_name(elem_type)),
                 length,
                 value,
                 objects,

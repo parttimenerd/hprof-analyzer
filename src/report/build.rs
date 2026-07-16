@@ -314,7 +314,7 @@ fn aggregate_collection_attribution(
         {
             b.elements = rec.elements;
             b.retained = retained_bytes;
-            b.container_class = rec.container_class.clone();
+            b.container_class = crate::report::pretty_class_name(&rec.container_class);
         }
     }
 
@@ -2412,7 +2412,7 @@ mod attribution_tests {
         // biggest_single mirrors the ordering.
         assert_eq!(ca.biggest_single[0].holder_class, "com/foo/Big");
         assert_eq!(ca.biggest_single[0].elements, 100);
-        assert_eq!(ca.biggest_single[0].container_class, "java/util/ArrayList");
+        assert_eq!(ca.biggest_single[0].container_class, "java.util.ArrayList");
         assert!(!ca.truncated);
     }
 

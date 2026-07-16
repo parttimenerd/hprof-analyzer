@@ -1,9 +1,9 @@
 {
   "schema_version": 2,
-  "generated": "2026-07-16T10:49:30.297348000Z",
+  "generated": "2026-07-16T14:08:09.799133000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
-    "file_path": "/Users/i560383_1/code/experiments/hprof-analyzer/tests/fixtures/dump_4_philosophers.hprof",
+    "file_path": "tests/fixtures/dump_4_philosophers.hprof",
     "format": "JAVA PROFILE 1.0.2",
     "file_size": 23731997,
     "identifier_size_bits": 64,
@@ -89104,448 +89104,448 @@
     "constant_primitive_arrays": {
       "rows": [
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 2,
           "value": 49,
           "objects": 31,
           "shallow": 744
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 8,
           "value": 0,
           "objects": 19,
           "shallow": 456
         },
         {
-          "array_class": "[I",
+          "array_class": "int[]",
           "length": 2,
           "value": 0,
           "objects": 15,
           "shallow": 360
         },
         {
-          "array_class": "[I",
+          "array_class": "int[]",
           "length": 4,
           "value": 0,
           "objects": 9,
           "shallow": 288
         },
         {
-          "array_class": "[I",
+          "array_class": "int[]",
           "length": 10,
           "value": 0,
           "objects": 4,
           "shallow": 224
         },
         {
-          "array_class": "[I",
+          "array_class": "int[]",
           "length": 32,
           "value": 0,
           "objects": 4,
           "shallow": 576
         },
         {
-          "array_class": "[J",
+          "array_class": "long[]",
           "length": 32,
           "value": 0,
           "objects": 4,
           "shallow": 1088
         },
         {
-          "array_class": "[S",
+          "array_class": "short[]",
           "length": 32,
           "value": 0,
           "objects": 4,
           "shallow": 320
         },
         {
-          "array_class": "[I",
+          "array_class": "int[]",
           "length": 6,
           "value": 0,
           "objects": 3,
           "shallow": 120
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 2,
           "value": 76,
           "objects": 2,
           "shallow": 48
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 2,
           "value": 110,
           "objects": 2,
           "shallow": 48
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 256,
           "value": 0,
           "objects": 2,
           "shallow": 544
         },
         {
-          "array_class": "[C",
+          "array_class": "char[]",
           "length": 2,
           "value": 83,
           "objects": 2,
           "shallow": 48
         },
         {
-          "array_class": "[C",
+          "array_class": "char[]",
           "length": 26,
           "value": 0,
           "objects": 2,
           "shallow": 144
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 2,
           "value": 10,
           "objects": 1,
           "shallow": 24
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 2,
           "value": 32,
           "objects": 1,
           "shallow": 24
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 2,
           "value": 34,
           "objects": 1,
           "shallow": 24
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 2,
           "value": 37,
           "objects": 1,
           "shallow": 24
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 2,
           "value": 39,
           "objects": 1,
           "shallow": 24
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 2,
           "value": 45,
           "objects": 1,
           "shallow": 24
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 2,
           "value": 46,
           "objects": 1,
           "shallow": 24
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 2,
           "value": 47,
           "objects": 1,
           "shallow": 24
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 2,
           "value": 58,
           "objects": 1,
           "shallow": 24
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 2,
           "value": 72,
           "objects": 1,
           "shallow": 24
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 2,
           "value": 95,
           "objects": 1,
           "shallow": 24
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 2,
           "value": 101,
           "objects": 1,
           "shallow": 24
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 2,
           "value": 102,
           "objects": 1,
           "shallow": 24
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 2,
           "value": 105,
           "objects": 1,
           "shallow": 24
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 2,
           "value": 107,
           "objects": 1,
           "shallow": 24
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 2,
           "value": 112,
           "objects": 1,
           "shallow": 24
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 2,
           "value": 116,
           "objects": 1,
           "shallow": 24
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 3,
           "value": 46,
           "objects": 1,
           "shallow": 24
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 3,
           "value": 76,
           "objects": 1,
           "shallow": 24
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 3,
           "value": 88,
           "objects": 1,
           "shallow": 24
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 3,
           "value": 99,
           "objects": 1,
           "shallow": 24
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 4,
           "value": 32,
           "objects": 1,
           "shallow": 24
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 4,
           "value": 76,
           "objects": 1,
           "shallow": 24
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 4,
           "value": 90,
           "objects": 1,
           "shallow": 24
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 5,
           "value": 76,
           "objects": 1,
           "shallow": 24
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 7,
           "value": 32,
           "objects": 1,
           "shallow": 24
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 8,
           "value": 32,
           "objects": 1,
           "shallow": 24
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 8,
           "value": 48,
           "objects": 1,
           "shallow": 24
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 10,
           "value": 32,
           "objects": 1,
           "shallow": 32
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 13,
           "value": 48,
           "objects": 1,
           "shallow": 32
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 16,
           "value": 0,
           "objects": 1,
           "shallow": 32
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 63,
           "value": 48,
           "objects": 1,
           "shallow": 80
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 512,
           "value": 0,
           "objects": 1,
           "shallow": 528
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 8192,
           "value": 0,
           "objects": 1,
           "shallow": 8208
         },
         {
-          "array_class": "[C",
+          "array_class": "char[]",
           "length": 2,
           "value": 70,
           "objects": 1,
           "shallow": 24
         },
         {
-          "array_class": "[C",
+          "array_class": "char[]",
           "length": 8192,
           "value": 0,
           "objects": 1,
           "shallow": 16400
         },
         {
-          "array_class": "[I",
+          "array_class": "int[]",
           "length": 8,
           "value": 0,
           "objects": 1,
           "shallow": 48
         },
         {
-          "array_class": "[I",
+          "array_class": "int[]",
           "length": 12,
           "value": 0,
           "objects": 1,
           "shallow": 64
         },
         {
-          "array_class": "[I",
+          "array_class": "int[]",
           "length": 16,
           "value": -1881356936,
           "objects": 1,
           "shallow": 80
         },
         {
-          "array_class": "[I",
+          "array_class": "int[]",
           "length": 16,
           "value": -1881356440,
           "objects": 1,
           "shallow": 80
         },
         {
-          "array_class": "[I",
+          "array_class": "int[]",
           "length": 16,
           "value": -1881355944,
           "objects": 1,
           "shallow": 80
         },
         {
-          "array_class": "[I",
+          "array_class": "int[]",
           "length": 16,
           "value": -1881004352,
           "objects": 1,
           "shallow": 80
         },
         {
-          "array_class": "[I",
+          "array_class": "int[]",
           "length": 16,
           "value": 0,
           "objects": 1,
           "shallow": 80
         },
         {
-          "array_class": "[I",
+          "array_class": "int[]",
           "length": 48,
           "value": 0,
           "objects": 1,
           "shallow": 208
         },
         {
-          "array_class": "[I",
+          "array_class": "int[]",
           "length": 74,
           "value": 0,
           "objects": 1,
           "shallow": 312
         },
         {
-          "array_class": "[I",
+          "array_class": "int[]",
           "length": 550,
           "value": 0,
           "objects": 1,
           "shallow": 2216
         },
         {
-          "array_class": "[I",
+          "array_class": "int[]",
           "length": 770,
           "value": 0,
           "objects": 1,
           "shallow": 3096
         },
         {
-          "array_class": "[I",
+          "array_class": "int[]",
           "length": 802,
           "value": 0,
           "objects": 1,
           "shallow": 3224
         },
         {
-          "array_class": "[I",
+          "array_class": "int[]",
           "length": 4902,
           "value": 0,
           "objects": 1,
           "shallow": 19624
         },
         {
-          "array_class": "[I",
+          "array_class": "int[]",
           "length": 131064,
           "value": 0,
           "objects": 1,
@@ -89557,61 +89557,61 @@
     "top_prim_arrays": {
       "top_individual": [
         {
-          "array_class": "[I",
+          "array_class": "int[]",
           "length": 131064,
           "shallow": 524272,
           "obj_index_1based": 2
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 261187,
           "shallow": 261208,
           "obj_index_1based": 99101
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 238192,
           "shallow": 238208,
           "obj_index_1based": 70491
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 229980,
           "shallow": 230000,
           "obj_index_1based": 73387
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 144353,
           "shallow": 144376,
           "obj_index_1based": 72656
         },
         {
-          "array_class": "[J",
+          "array_class": "long[]",
           "length": 8192,
           "shallow": 65552,
           "obj_index_1based": 72680
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 60231,
           "shallow": 60248,
           "obj_index_1based": 182193
         },
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "length": 46187,
           "shallow": 46208,
           "obj_index_1based": 99154
         },
         {
-          "array_class": "[I",
+          "array_class": "int[]",
           "length": 8781,
           "shallow": 35144,
           "obj_index_1based": 182113
         },
         {
-          "array_class": "[I",
+          "array_class": "int[]",
           "length": 7863,
           "shallow": 31472,
           "obj_index_1based": 76083
@@ -89619,42 +89619,42 @@
       ],
       "top_by_class": [
         {
-          "array_class": "[B",
+          "array_class": "byte[]",
           "objects": 25515,
           "shallow": 2762064
         },
         {
-          "array_class": "[I",
+          "array_class": "int[]",
           "objects": 3488,
           "shallow": 1576024
         },
         {
-          "array_class": "[J",
+          "array_class": "long[]",
           "objects": 173,
           "shallow": 1146072
         },
         {
-          "array_class": "[C",
+          "array_class": "char[]",
           "objects": 225,
           "shallow": 73496
         },
         {
-          "array_class": "[Z",
+          "array_class": "boolean[]",
           "objects": 10,
           "shallow": 1952
         },
         {
-          "array_class": "[D",
+          "array_class": "double[]",
           "objects": 8,
           "shallow": 688
         },
         {
-          "array_class": "[S",
+          "array_class": "short[]",
           "objects": 7,
           "shallow": 368
         },
         {
-          "array_class": "[F",
+          "array_class": "float[]",
           "objects": 4,
           "shallow": 112
         }
@@ -89663,61 +89663,61 @@
     "top_obj_arrays": {
       "top_individual": [
         {
-          "array_class": "[Ljava.lang.Object;",
+          "array_class": "java.lang.Object[]",
           "length": 131072,
           "shallow": 524304,
           "obj_index_1based": 1
         },
         {
-          "array_class": "[Ljava.lang.Object;",
+          "array_class": "java.lang.Object[]",
           "length": 7937,
           "shallow": 31768,
           "obj_index_1based": 236822
         },
         {
-          "array_class": "[Ljava.util.HashMap$Node;",
+          "array_class": "java.util.HashMap$Node[]",
           "length": 4096,
           "shallow": 16400,
           "obj_index_1based": 39348
         },
         {
-          "array_class": "[Ljava.util.HashMap$Node;",
+          "array_class": "java.util.HashMap$Node[]",
           "length": 4096,
           "shallow": 16400,
           "obj_index_1based": 76135
         },
         {
-          "array_class": "[Ljava.lang.Object;",
+          "array_class": "java.lang.Object[]",
           "length": 2285,
           "shallow": 9160,
           "obj_index_1based": 70448
         },
         {
-          "array_class": "[Ljava.lang.Object;",
+          "array_class": "java.lang.Object[]",
           "length": 2126,
           "shallow": 8520,
           "obj_index_1based": 187292
         },
         {
-          "array_class": "[Lscala.math.BigInt;",
+          "array_class": "scala.math.BigInt[]",
           "length": 2049,
           "shallow": 8216,
           "obj_index_1based": 74058
         },
         {
-          "array_class": "[Lscala.math.BigInt;",
+          "array_class": "scala.math.BigInt[]",
           "length": 2049,
           "shallow": 8216,
           "obj_index_1based": 146904
         },
         {
-          "array_class": "[Ljava.lang.Object;",
+          "array_class": "java.lang.Object[]",
           "length": 2048,
           "shallow": 8208,
           "obj_index_1based": 91191
         },
         {
-          "array_class": "[Ljava.util.concurrent.ConcurrentHashMap$Node;",
+          "array_class": "java.util.concurrent.ConcurrentHashMap$Node[]",
           "length": 2048,
           "shallow": 8208,
           "obj_index_1based": 240798
@@ -89725,52 +89725,52 @@
       ],
       "top_by_class": [
         {
-          "array_class": "[Ljava.lang.Object;",
+          "array_class": "java.lang.Object[]",
           "objects": 2397,
           "shallow": 1353600
         },
         {
-          "array_class": "[Lscala.concurrent.stm.ccstm.Handle;",
+          "array_class": "scala.concurrent.stm.ccstm.Handle[]",
           "objects": 283,
           "shallow": 1062696
         },
         {
-          "array_class": "[Lscala.Function1;",
+          "array_class": "scala.Function1[]",
           "objects": 774,
           "shallow": 408672
         },
         {
-          "array_class": "[Ljava.util.HashMap$Node;",
+          "array_class": "java.util.HashMap$Node[]",
           "objects": 396,
           "shallow": 99072
         },
         {
-          "array_class": "[Ljava.util.concurrent.ConcurrentHashMap$Node;",
+          "array_class": "java.util.concurrent.ConcurrentHashMap$Node[]",
           "objects": 93,
           "shallow": 67472
         },
         {
-          "array_class": "[Ljava.lang.ref.SoftReference;",
+          "array_class": "java.lang.ref.SoftReference[]",
           "objects": 250,
           "shallow": 19000
         },
         {
-          "array_class": "[Ljava.lang.Class;",
+          "array_class": "java.lang.Class[]",
           "objects": 593,
           "shallow": 17200
         },
         {
-          "array_class": "[Ljava.lang.String;",
+          "array_class": "java.lang.String[]",
           "objects": 208,
           "shallow": 13568
         },
         {
-          "array_class": "[Ljava.lang.ThreadLocal$ThreadLocalMap$Entry;",
+          "array_class": "java.lang.ThreadLocal$ThreadLocalMap$Entry[]",
           "objects": 130,
           "shallow": 10400
         },
         {
-          "array_class": "[Lscala.math.BigInt;",
+          "array_class": "scala.math.BigInt[]",
           "objects": 1,
           "shallow": 8216
         }
