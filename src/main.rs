@@ -69,7 +69,7 @@ pub struct AnalyzeOptions {
     pub dup_strings: bool,
     pub collections: bool,
     pub collection_config: Option<std::path::PathBuf>,
-    pub coll_descs: Vec<crate::pass2::CollDesc>,
+    pub(crate) coll_descs: Vec<crate::pass2::CollDesc>,
 }
 
 #[cfg(test)]
@@ -291,7 +291,7 @@ impl DetailLevel {
             dup_strings: false,
             collections: false,
             collection_config: None,
-            coll_descs: crate::collection_config::load_collection_descs(None),
+            coll_descs: Vec::new(),
         }
     }
 }
