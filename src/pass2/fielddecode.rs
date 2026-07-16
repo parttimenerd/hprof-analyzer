@@ -195,6 +195,29 @@ enum ClassRole {
     },
 }
 
+/// Walk `class_id`'s super-chain (child-first) and return the first non-None
+/// result of `f` applied to each class's HPROF name, or None if the chain is
+/// exhausted. Shared by the collection- and reference-class matchers.
+fn walk_superchain<T>(
+    class_id: u64,
+    class_map: &HashMap<u64, crate::pass1::ClassInfo>,
+    strings: &HashMap<u64, String>,
+    mut f: impl FnMut(&str) -> Option<T>,
+) -> Option<T> {
+    let mut cur = class_id;
+    loop {
+        let ci = class_map.get(&cur)?;
+        let cname = strings.get(&ci.name_id).map(|s| s.as_str()).unwrap_or("");
+        if let Some(hit) = f(cname) {
+            return Some(hit);
+        }
+        if ci.super_id == 0 {
+            return None;
+        }
+        cur = ci.super_id;
+    }
+}
+
 /// Walk `class_id`'s super-chain (child-first) and return the index of the
 /// FIRST COLL_DESC whose class_name matches a class in the chain, or None.
 fn match_coll_desc(
@@ -202,18 +225,9 @@ fn match_coll_desc(
     class_map: &HashMap<u64, crate::pass1::ClassInfo>,
     strings: &HashMap<u64, String>,
 ) -> Option<usize> {
-    let mut cur = class_id;
-    loop {
-        let ci = class_map.get(&cur)?;
-        let cname = strings.get(&ci.name_id).map(|s| s.as_str()).unwrap_or("");
-        if let Some(idx) = COLL_DESCS.iter().position(|d| d.class_name == cname) {
-            return Some(idx);
-        }
-        if ci.super_id == 0 {
-            return None;
-        }
-        cur = ci.super_id;
-    }
+    walk_superchain(class_id, class_map, strings, |cname| {
+        COLL_DESCS.iter().position(|d| d.class_name == cname)
+    })
 }
 
 /// Walk `class_id`'s super-chain (child-first) and return the ref-kind index
@@ -224,18 +238,9 @@ fn match_ref_kind(
     class_map: &HashMap<u64, crate::pass1::ClassInfo>,
     strings: &HashMap<u64, String>,
 ) -> Option<usize> {
-    let mut cur = class_id;
-    loop {
-        let ci = class_map.get(&cur)?;
-        let cname = strings.get(&ci.name_id).map(|s| s.as_str()).unwrap_or("");
-        if let Some(idx) = REF_CLASSES.iter().position(|&r| r == cname) {
-            return Some(idx);
-        }
-        if ci.super_id == 0 {
-            return None;
-        }
-        cur = ci.super_id;
-    }
+    walk_superchain(class_id, class_map, strings, |cname| {
+        REF_CLASSES.iter().position(|&r| r == cname)
+    })
 }
 
 /// Classify a class-object address once, resolving the field offsets it needs.
@@ -411,7 +416,6 @@ pub(crate) fn build_field_decode_views(
     path: &str,
     p1: &Pass1,
     shallow: &[u32],
-    _ref_size: usize,
 ) -> std::io::Result<(CollectionsAnalysis, ReferencesAnalysis, [Vec<u32>; 3])> {
     let id_size = p1.id_size;
     // Instance-blob object references are id_size wide (compressed OOPs only
