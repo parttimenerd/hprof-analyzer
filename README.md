@@ -54,17 +54,19 @@ in the top-right to see it formatted. Prefer the raw files? They live here:
 ## Get a report in 30 seconds
 
 ```sh
-hprof-analyzer analyze heap.hprof report.html
+hprof-analyzer heap.hprof report.html
 ```
 
 Open `report.html` in a browser — that's the whole workflow. To read it in the
 terminal instead, drop the output path and you get Markdown on stdout:
 
 ```sh
-hprof-analyzer analyze heap.hprof
+hprof-analyzer heap.hprof
 ```
 
-Gzip-compressed dumps (`.hprof.gz`) are read transparently.
+There is no subcommand to remember: hand the tool a `.hprof` dump and it
+analyzes it; hand it a saved report JSON and it re-renders it. Gzip-compressed
+dumps (`.hprof.gz`) are read transparently.
 
 ## Why you might want it
 
@@ -119,11 +121,14 @@ cargo build --release
 ## Usage
 
 ```
-hprof-analyzer <COMMAND>
+hprof-analyzer <INPUT> [OUTPUT] [OPTIONS]
 
-Commands:
-  analyze      Analyze a heap dump and write a report
-  render       Re-render a saved canonical Report JSON to another format
+Give it a path and it does the right thing:
+
+  <INPUT>   a .hprof[.gz] heap dump  → analyze it and write a report
+            a saved report .json[.gz] → re-render it to another format
+
+Named subcommands:
   compare      Compare reports (MAT export vs ours, or two of ours across time)
   completions  Generate a shell completion script
   dev          Developer / diagnostic commands
@@ -137,11 +142,11 @@ file and no `-f`, the format is inferred from its extension (`.html` → HTML,
 defaults to plain Markdown.
 
 ```sh
-hprof-analyzer analyze heap.hprof                    # plain Markdown to stdout
-hprof-analyzer analyze heap.hprof report.html        # HTML (inferred from .html)
-hprof-analyzer analyze heap.hprof report.json        # JSON (inferred from .json)
-hprof-analyzer analyze heap.hprof report.json.gz     # gzip-compressed JSON
-hprof-analyzer analyze heap.hprof -f md-graphs       # Markdown with ASCII graphs
+hprof-analyzer heap.hprof                    # plain Markdown to stdout
+hprof-analyzer heap.hprof report.html        # HTML (inferred from .html)
+hprof-analyzer heap.hprof report.json        # JSON (inferred from .json)
+hprof-analyzer heap.hprof report.json.gz     # gzip-compressed JSON
+hprof-analyzer heap.hprof -f md-graphs       # Markdown with ASCII graphs
 ```
 
 `md-graphs` shares the `.md` extension with plain Markdown, so it is never
@@ -152,7 +157,7 @@ section (see [What you get](#what-you-get)). It adds two extra scans of the heap
 file, so it is off by default:
 
 ```sh
-hprof-analyzer analyze heap.hprof report.html --dup-strings
+hprof-analyzer heap.hprof report.html --dup-strings
 ```
 
 **Progress.** Long runs on multi-GB dumps print a live phase line to stderr when
@@ -175,9 +180,9 @@ One flag scales the output-size caps for these sections (and the top-consumer /
 leak-suspect lists):
 
 ```sh
-hprof-analyzer analyze heap.hprof --detail minimal   # smaller report, tighter caps
-hprof-analyzer analyze heap.hprof --detail default   # the default
-hprof-analyzer analyze heap.hprof --detail max       # larger report, looser caps
+hprof-analyzer heap.hprof --detail minimal   # smaller report, tighter caps
+hprof-analyzer heap.hprof --detail default   # the default
+hprof-analyzer heap.hprof --detail max       # larger report, looser caps
 ```
 
 The preset controls seven caps:
@@ -200,7 +205,7 @@ Compare a MAT System Overview HTML export against our canonical JSON; exits
 non-zero on a parity failure (useful as a test gate):
 
 ```sh
-hprof-analyzer analyze heap.hprof report.json
+hprof-analyzer heap.hprof report.json
 hprof-analyzer compare mat mat_System_Overview.zip report.json
 ```
 
@@ -210,33 +215,39 @@ Compare an earlier report against a later one to see what grew — handy for
 finding a leak by comparing snapshots over time:
 
 ```sh
-hprof-analyzer analyze early.hprof a.json
-hprof-analyzer analyze later.hprof b.json
+hprof-analyzer early.hprof a.json
+hprof-analyzer later.hprof b.json
 hprof-analyzer compare reports a.json b.json
 ```
 
 ### Re-render a saved report
 
 The JSON is the canonical form; re-render it to any format without re-parsing
-the dump. `render` takes an optional output path with the same extension
-inference as `analyze`:
+the dump. Just pass the report path as the input — the tool sees it is a saved
+report, not a dump, and re-renders it. It takes an optional output path with the
+same extension inference:
 
 ```sh
-hprof-analyzer render report.json                    # Markdown to stdout
-hprof-analyzer render report.json report.html        # HTML (inferred from .html)
-hprof-analyzer render report.json -f md-graphs       # Markdown with ASCII graphs
+hprof-analyzer report.json                    # Markdown to stdout
+hprof-analyzer report.json report.html        # HTML (inferred from .html)
+hprof-analyzer report.json -f md-graphs       # Markdown with ASCII graphs
 ```
+
+The analyze-only flags (`--dup-strings`, `--collections`, non-default
+`--detail`) have no effect when re-rendering — those sections are baked into the
+JSON at analyze time — so passing one on a report input is an error with a hint
+to re-run on the `.hprof` dump.
 
 ### Compressed JSON
 
 Write the canonical report gzip-compressed by giving the output path a `.gz`
-suffix (the JSON is repetitive and typically shrinks ~20×). `render` reads a
-`.gz` report back transparently — it sniffs the gzip magic bytes, so it also
-works from stdin:
+suffix (the JSON is repetitive and typically shrinks ~20×). A `.gz` report reads
+back transparently — the tool sniffs the gzip magic bytes, so it also works from
+stdin:
 
 ```sh
-hprof-analyzer analyze heap.hprof report.json.gz    # gzip-compressed JSON (inferred)
-hprof-analyzer render report.json.gz -f md-graphs   # read it back, no manual gunzip
+hprof-analyzer heap.hprof report.json.gz    # gzip-compressed JSON (inferred)
+hprof-analyzer report.json.gz -f md-graphs  # read it back, no manual gunzip
 ```
 
 ### Shell completions
