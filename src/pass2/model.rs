@@ -392,7 +392,7 @@ pub struct InboundBuilder {
     /// Compressed id_map (blob, element_count); set by `compress_id_map`.
     pub(crate) id_map_c: Option<(Vec<u8>, usize)>,
     pub(crate) id_map_codec: crate::cvec::Codec,
-    pub(crate) class_idx_arr: Vec<u32>,
+    pub(crate) class_addr_to_hist: HashMap<u64, u32>,
     pub(crate) field_plans_dense: Vec<super::FieldPlan>,
     /// Prefix-summed inbound start cursors (in_degree after prefix-sum), len n.
     pub(crate) in_cursors: Vec<u32>,
@@ -441,14 +441,14 @@ impl InboundBuilder {
             // free the id_map (~4 GB) before the inb_flat alloc.
             id_map,
             id_map_c,
-            class_idx_arr,
+            class_addr_to_hist,
             field_plans_dense,
             ..
         } = self;
 
         drop(id_map);
         drop(id_map_c);
-        drop(class_idx_arr);
+        drop(class_addr_to_hist);
         drop(field_plans_dense);
 
         // Allocate the flat inbound array.
@@ -496,7 +496,7 @@ impl InboundBuilder {
             id_map,
             id_map_c,
             id_map_codec,
-            class_idx_arr,
+            class_addr_to_hist,
             field_plans_dense,
             mut in_cursors,
             total_inb,
@@ -548,7 +548,7 @@ impl InboundBuilder {
                             id_size,
                             length,
                             &id_map,
-                            &class_idx_arr,
+                            &class_addr_to_hist,
                             &field_plans_dense,
                             false,
                             true,
@@ -567,11 +567,11 @@ impl InboundBuilder {
             }
         }
 
-        // id_map / class_idx_arr / field_plans_dense are consumed only by the 2b scan
+        // id_map / class_addr_to_hist / field_plans_dense are consumed only by the 2b scan
         // above. Free them now (id_map alone is ~4.1 GB at 514M objects) before
         // the Phase-4 encode allocates inb_data, trimming the global RSS peak.
         drop(id_map);
-        drop(class_idx_arr);
+        drop(class_addr_to_hist);
         drop(field_plans_dense);
 
         // Synthetic thread->local INBOUND edges.

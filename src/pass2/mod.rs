@@ -322,7 +322,7 @@ let mut field_plans_dense: Vec<FieldPlan> = vec![Vec::new(); n_dense_classes];
                             id_size,
                             length,
                             &p1.id_map,
-                            &class_idx,
+                            &class_addr_to_hist,
                             &field_plans_dense,
                             &mut out_degree,
                             &mut in_degree,
@@ -627,9 +627,9 @@ let mut field_plans_dense: Vec<FieldPlan> = vec![Vec::new(); n_dense_classes];
             shallow = Vec::new();
         }
         let class_idx_c = crate::cvec::CompressedU32::compress(&class_idx, compress)?;
-        // NOTE: class_idx is NOT cleared here yet — fill_heap_2b (Phase 3b) still
-        // needs it to look up field_plans_dense by histogram class index.
-        // It is cleared immediately after the forward-fill loop below.
+        if compress != crate::cvec::Codec::None {
+            class_idx = Vec::new();
+        }
         // Compress the per-object alloc stack serials (~2GB dense u32 under
         // alloc-sites) at the SAME point, before fwd_targets alloc: pass1
         // touched every element (faulting all pages), so even a mostly-zero
@@ -686,7 +686,7 @@ let mut field_plans_dense: Vec<FieldPlan> = vec![Vec::new(); n_dense_classes];
                             id_size,
                             length,
                             &p1.id_map,
-                            &class_idx,
+                            &class_addr_to_hist,
                             &field_plans_dense,
                             true,
                             false,
@@ -703,10 +703,6 @@ let mut field_plans_dense: Vec<FieldPlan> = vec![Vec::new(); n_dense_classes];
                     }
                 }
             }
-        }
-        // class_idx was kept alive through the forward fill above; free it now.
-        if compress != crate::cvec::Codec::None {
-            class_idx = Vec::new();
         }
         // Synthetic thread->local FORWARD edges. Their degrees were added to
         // out_degree above, so each fits within its node's slice.
@@ -817,7 +813,7 @@ let mut field_plans_dense: Vec<FieldPlan> = vec![Vec::new(); n_dense_classes];
             id_map_c: None,
             id_map_codec: crate::cvec::Codec::None,
             // build_from_fwd drops these immediately; build() (file-scan path) is unused.
-            class_idx_arr: Vec::new(),
+            class_addr_to_hist: HashMap::new(),
             field_plans_dense: Vec::new(),
             in_cursors,
             total_inb,
@@ -837,7 +833,7 @@ let mut field_plans_dense: Vec<FieldPlan> = vec![Vec::new(); n_dense_classes];
         id_size: u8,
         mut remaining: u64,
         id_map: &crate::id_map::IdMap,
-        class_idx: &[u32],
+        class_addr_to_hist: &HashMap<u64, u32>,
         field_plans_dense: &[FieldPlan],
         out_degree: &mut Vec<u32>,
         in_degree: &mut Vec<u32>,
@@ -924,15 +920,16 @@ let mut field_plans_dense: Vec<FieldPlan> = vec![Vec::new(); n_dense_classes];
 
                     // Edges from Object-type fields (dense Vec by class histogram idx,
                     // no HashMap lookup — Phase 0b already precomputed the per-class plan).
-                    let cidx = class_idx[src_idx] as usize;
-                    for &(off, _excluded) in &field_plans_dense[cidx] {
-                        let off = off as usize;
-                        if off + id_size as usize <= scratch.len() {
-                            let ref_val = read_ref(&scratch[off..], id_size as usize);
-                            if ref_val != 0 {
-                                if let Some(dst) = cache.index_of(id_map, ref_val) {
-                                    out_degree[src_idx] += 1;
-                                    in_degree[dst] += 1;
+                    if let Some(&cidx) = class_addr_to_hist.get(&class_id) {
+                        for &(off, _excluded) in &field_plans_dense[cidx as usize] {
+                            let off = off as usize;
+                            if off + id_size as usize <= scratch.len() {
+                                let ref_val = read_ref(&scratch[off..], id_size as usize);
+                                if ref_val != 0 {
+                                    if let Some(dst) = cache.index_of(id_map, ref_val) {
+                                        out_degree[src_idx] += 1;
+                                        in_degree[dst] += 1;
+                                    }
                                 }
                             }
                         }
@@ -1008,7 +1005,7 @@ let mut field_plans_dense: Vec<FieldPlan> = vec![Vec::new(); n_dense_classes];
         id_size: u8,
         mut remaining: u64,
         id_map: &crate::id_map::IdMap,
-        class_idx: &[u32],
+        class_addr_to_hist: &HashMap<u64, u32>,
         field_plans_dense: &[FieldPlan],
         do_fwd: bool,
         do_inb: bool,
@@ -1121,12 +1118,13 @@ let mut field_plans_dense: Vec<FieldPlan> = vec![Vec::new(); n_dense_classes];
                     add_edge!(src_idx, class_id, false);
 
                     // Edges from Object-type fields (dense Vec by class histogram idx)
-                    let cidx = class_idx[src_idx] as usize;
-                    for &(off, excluded) in &field_plans_dense[cidx] {
-                        let off = off as usize;
-                        if off + id_size as usize <= scratch.len() {
-                            let ref_val = read_ref(&scratch[off..], id_size as usize);
-                            add_edge!(src_idx, ref_val, excluded);
+                    if let Some(&cidx) = class_addr_to_hist.get(&class_id) {
+                        for &(off, excluded) in &field_plans_dense[cidx as usize] {
+                            let off = off as usize;
+                            if off + id_size as usize <= scratch.len() {
+                                let ref_val = read_ref(&scratch[off..], id_size as usize);
+                                add_edge!(src_idx, ref_val, excluded);
+                            }
                         }
                     }
                 }
