@@ -906,8 +906,25 @@ impl Pass2 {
                             "array too large",
                         ));
                     }
-                    r.read_bytes_reuse(scratch, data_len as usize)?;
                     checked_sub!(remaining, ids + 4 + ids + 4 + data_len);
+
+                    // Skip reading field data when there are no reference-type
+                    // instance fields: the only edge is instance→class, which
+                    // doesn't need the field bytes. Saves a memcpy for all-primitive
+                    // classes (e.g. java.lang.Integer, primitive wrappers, etc.).
+                    let field_plan = class_addr_to_hist.get(&class_id).and_then(|&cidx| {
+                        let plan = &field_plans_dense[cidx as usize];
+                        if plan.is_empty() {
+                            None
+                        } else {
+                            Some((cidx, plan))
+                        }
+                    });
+                    if field_plan.is_some() {
+                        r.read_bytes_reuse(scratch, data_len as usize)?;
+                    } else {
+                        r.skip(data_len)?;
+                    }
 
                     let src_idx = match id_map.index_of(addr) {
                         Some(i) => i,
@@ -919,8 +936,8 @@ impl Pass2 {
 
                     // Edges from Object-type fields (dense Vec by class histogram idx,
                     // no HashMap lookup — Phase 0b already precomputed the per-class plan).
-                    if let Some(&cidx) = class_addr_to_hist.get(&class_id) {
-                        for &(off, _excluded) in &field_plans_dense[cidx as usize] {
+                    if let Some((_cidx, plan)) = field_plan {
+                        for &(off, _excluded) in plan {
                             let off = off as usize;
                             if off + id_size as usize <= scratch.len() {
                                 let ref_val = read_ref(&scratch[off..], id_size as usize);
@@ -1105,8 +1122,21 @@ impl Pass2 {
                             "array too large",
                         ));
                     }
-                    r.read_bytes_reuse(scratch, data_len as usize)?;
                     checked_sub!(remaining, ids + 4 + ids + 4 + data_len);
+
+                    let field_plan = class_addr_to_hist.get(&class_id).and_then(|&cidx| {
+                        let plan = &field_plans_dense[cidx as usize];
+                        if plan.is_empty() {
+                            None
+                        } else {
+                            Some((cidx, plan))
+                        }
+                    });
+                    if field_plan.is_some() {
+                        r.read_bytes_reuse(scratch, data_len as usize)?;
+                    } else {
+                        r.skip(data_len)?;
+                    }
 
                     let src_idx = match id_map.index_of(addr) {
                         Some(i) => i,
@@ -1117,8 +1147,8 @@ impl Pass2 {
                     add_edge!(src_idx, class_id, false);
 
                     // Edges from Object-type fields (dense Vec by class histogram idx)
-                    if let Some(&cidx) = class_addr_to_hist.get(&class_id) {
-                        for &(off, excluded) in &field_plans_dense[cidx as usize] {
+                    if let Some((_cidx, plan)) = field_plan {
+                        for &(off, excluded) in plan {
                             let off = off as usize;
                             if off + id_size as usize <= scratch.len() {
                                 let ref_val = read_ref(&scratch[off..], id_size as usize);
