@@ -247,19 +247,24 @@ fn phase1(
     // Avoids a per-call Vec allocation in the hot loop (514M+ iterations on large dumps).
     let mut chain: Vec<u32> = Vec::new();
 
-    // Prefetch depth for inb_block_off[w_node / INB_BLOCK]: the block index
-    // depends on w_node = vertex[i], which is random. Prefetching the block
-    // offset PF_DOM iterations ahead hides the ~100 ns DRAM latency on the
-    // 514 MB inb_block_off table. vertex[] access is sequential (reverse i)
-    // so the hardware prefetcher handles it; we only need to issue the
-    // inb_block_off prefetch explicitly.
+    // Two-level prefetch for the inbound CSR decode:
+    //   Level 1 (PF_DOM=64):  prefetch inb_block_off[future_block] to bring the
+    //                          8-byte offset into L1 before we need it.
+    //   Level 2 (PF_DOM2=32): once inb_block_off[mid_block] is warm (we issued
+    //                          its prefetch 32 iters ago), load its value and
+    //                          prefetch inb_data[offset] to hide the ~4 GB
+    //                          random-access penalty on the actual CSR bytes.
+    //   vertex[] access is sequential (reverse i), so the hardware prefetcher
+    //   covers it; only inb_block_off and inb_data need explicit prefetches.
     const PF_DOM: usize = 64;
+    const PF_DOM2: usize = 32; // second level: inb_block_off now warm, fetch data
     let ibo_ptr = inb_block_off.as_ptr();
     let ibo_len = inb_block_off.len();
+    let ibd_ptr = inb_data.as_ptr();
+    let ibd_len = inb_data.len();
 
     for i in (1..count).rev() {
-        // Issue a prefetch for the inb_block_off slot we'll need PF_DOM iterations from now.
-        // vertex[i] is already in cache (sequential); look up vertex[i - PF_DOM] cheaply.
+        // Level 1: prefetch the inb_block_off slot PF_DOM iters from now.
         if i >= 1 + PF_DOM {
             let pf_i = i - PF_DOM;
             let pf_w_node = rpo.vertex[pf_i] as usize;
@@ -277,6 +282,33 @@ fn phase1(
                         p = in(reg) ptr,
                         options(nostack, readonly)
                     );
+                }
+            }
+        }
+        // Level 2: inb_block_off[mid_block] is now warm; read the offset and
+        // prefetch the corresponding inb_data byte (hides the 4 GB random read).
+        if i >= 1 + PF_DOM2 && i < count - (PF_DOM - PF_DOM2) {
+            let pf2_i = i - PF_DOM2;
+            let pf2_w_node = rpo.vertex[pf2_i] as usize;
+            let pf2_block = pf2_w_node / crate::pass2::INB_BLOCK;
+            if pf2_block < ibo_len {
+                // inb_block_off[pf2_block] should be in L1 now (we prefetched
+                // it PF_DOM - PF_DOM2 = 32 iterations ago).
+                let data_off = unsafe { *ibo_ptr.add(pf2_block) } as usize;
+                if data_off < ibd_len {
+                    unsafe {
+                        let ptr = ibd_ptr.add(data_off) as *const i8;
+                        #[cfg(target_arch = "x86_64")]
+                        core::arch::x86_64::_mm_prefetch::<
+                            { core::arch::x86_64::_MM_HINT_T0 },
+                        >(ptr);
+                        #[cfg(target_arch = "aarch64")]
+                        core::arch::asm!(
+                            "prfm pldl1keep, [{p}]",
+                            p = in(reg) ptr,
+                            options(nostack, readonly)
+                        );
+                    }
                 }
             }
         }
