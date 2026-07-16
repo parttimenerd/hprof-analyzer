@@ -2221,19 +2221,22 @@ fn build_top_consumers(g: &Graph, top_n: usize, raw_total_shallow: u64) -> TopCo
             let ci = g.class_idx[idx] as usize;
             // For class objects, show the class they represent (MAT parity: no
             // "class " prefix)
-            let display_class = if class_obj_repr(g, idx) != undef {
-                let repr = class_obj_repr(g, idx) as usize;
-                if repr < g.class_names.len() {
-                    pretty_class_name(&g.class_names[repr])
+            let display_class = {
+                let repr = class_obj_repr(g, idx);
+                if repr != undef {
+                    let repr_usize = repr as usize;
+                    if repr_usize < g.class_names.len() {
+                        pretty_class_name(&g.class_names[repr_usize])
+                    } else if ci < g.class_names.len() {
+                        pretty_class_name(&g.class_names[ci])
+                    } else {
+                        String::from("?")
+                    }
                 } else if ci < g.class_names.len() {
                     pretty_class_name(&g.class_names[ci])
                 } else {
                     String::from("?")
                 }
-            } else if ci < g.class_names.len() {
-                pretty_class_name(&g.class_names[ci])
-            } else {
-                String::from("?")
             };
 
             let pct = if total_shallow > 0 {
@@ -2315,10 +2318,20 @@ fn build_top_consumers(g: &Graph, top_n: usize, raw_total_shallow: u64) -> TopCo
     for &i in &top_level {
         let idx = i as usize;
         // Use the class the object represents (for class objects), else own class.
-        let raw_name = if class_obj_repr(g, idx) != undef {
-            let repr = class_obj_repr(g, idx) as usize;
-            if repr < g.class_names.len() {
-                &g.class_names[repr]
+        let raw_name = {
+            let repr = class_obj_repr(g, idx);
+            if repr != undef {
+                let repr_usize = repr as usize;
+                if repr_usize < g.class_names.len() {
+                    &g.class_names[repr_usize]
+                } else {
+                    let ci = g.class_idx[idx] as usize;
+                    if ci < g.class_names.len() {
+                        &g.class_names[ci]
+                    } else {
+                        continue;
+                    }
+                }
             } else {
                 let ci = g.class_idx[idx] as usize;
                 if ci < g.class_names.len() {
@@ -2326,13 +2339,6 @@ fn build_top_consumers(g: &Graph, top_n: usize, raw_total_shallow: u64) -> TopCo
                 } else {
                     continue;
                 }
-            }
-        } else {
-            let ci = g.class_idx[idx] as usize;
-            if ci < g.class_names.len() {
-                &g.class_names[ci]
-            } else {
-                continue;
             }
         };
         let retained = g.retained[idx];
