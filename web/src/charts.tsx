@@ -159,22 +159,44 @@ function VBar({
 }) {
   const max = yMaxPct ?? data.reduce((m, d) => Math.max(m, d.value), 0);
   if (max <= 0) return null;
+  const t = themeColors();
+  const chartData = {
+    labels: data.map((d) => d.label),
+    datasets: [
+      {
+        data: data.map((d) => d.value),
+        backgroundColor: color(barColor ?? 0),
+        borderRadius: 3,
+      },
+    ],
+  };
+  const options = {
+    responsive: true,
+    maintainAspectRatio: false,
+    scales: {
+      x: {
+        ticks: { color: t.muted, font: { size: 10 } },
+        grid: { display: false },
+      },
+      y: {
+        min: 0,
+        max: yMaxPct,
+        ticks: { color: t.muted, callback: (v: number | string) => fmt(Number(v)) },
+        grid: { color: t.border },
+      },
+    },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        callbacks: {
+          label: (ctx: { dataIndex: number }) => `${data[ctx.dataIndex].label}: ${fmt(data[ctx.dataIndex].value)}`,
+        },
+      },
+    },
+  };
   return (
-    <div className="chart-wrap" style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 200, borderLeft: "1px solid var(--border)", borderBottom: "1px solid var(--border)", padding: "0 4px" }}>
-      {data.map((d, i) => (
-        <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: "100%", minWidth: 4 }} title={`${d.label}: ${fmt(d.value)}`}>
-          <span
-            style={{
-              width: "100%",
-              maxWidth: 40,
-              height: `${(d.value / max) * 100}%`,
-              background: color(barColor ?? 0),
-              borderRadius: "2px 2px 0 0",
-            }}
-          />
-          <span style={{ fontSize: "0.62rem", color: "var(--muted)", marginTop: 2, whiteSpace: "nowrap" }}>{d.label}</span>
-        </div>
-      ))}
+    <div className="chart-wrap" style={{ position: "relative", height: 200, maxWidth: 720 }}>
+      <ChartBar data={chartData} options={options} />
     </div>
   );
 }
