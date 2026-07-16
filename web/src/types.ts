@@ -529,3 +529,48 @@ declare global {
     hprofDecodeText?: (b64: string) => Promise<string>;
   }
 }
+
+// ── N-way cross-dump time-series diff (mirrors src/diff_reports.rs) ───────────
+
+// One joined class row across N reports. `retained`/`instances` are length N,
+// index 0 = first (baseline), N-1 = last (current); 0 where the class is absent.
+export interface SeriesClassRow {
+  pretty_class: string;
+  retained: number[];
+  instances: number[];
+  delta_retained: number;
+  delta_instances: number;
+}
+
+// One joined leak-suspect row across N reports.
+export interface SeriesSuspectRow {
+  pretty_class: string;
+  retained: number[];
+  delta_retained: number;
+  is_new: boolean;
+  is_gone: boolean;
+}
+
+// The machine-readable N-way cross-dump diff. Every value is an integer; every
+// list is deterministically sorted by the Rust engine.
+export interface SeriesDiffResult {
+  labels: string[];
+  total_objects: number[];
+  total_shallow: number[];
+  delta_total_objects: number;
+  delta_total_shallow: number;
+  net_delta_retained: number;
+  growth_leaders: SeriesClassRow[];
+  new_classes: SeriesClassRow[];
+  removed_classes: SeriesClassRow[];
+  grown_suspects: SeriesSuspectRow[];
+  shrunk_suspects: SeriesSuspectRow[];
+  gone_suspects: SeriesSuspectRow[];
+}
+
+// Tagged envelope embedded by the HTML diff view so the shared bundle can tell
+// a diff payload apart from a single-dump Report (which has no `kind` field).
+export interface SeriesDiffEnvelope {
+  kind: "series-diff";
+  diff: SeriesDiffResult;
+}

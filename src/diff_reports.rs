@@ -21,48 +21,6 @@ use crate::report::{self, Report};
 /// lists. Suspects are uncapped (there are only ever a handful).
 const TOP_N: usize = 25;
 
-/// One joined class row: how instances/retained changed from A to B.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
-pub struct ClassDelta {
-    pub pretty_class: String,
-    pub delta_instances: i64,
-    pub delta_retained: i64,
-    pub a_retained: u64,
-    pub b_retained: u64,
-}
-
-/// One joined leak-suspect row: how a suspect's retained heap changed, or that
-/// it is entirely new in B, or that it disappeared (present in A, absent in B).
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
-pub struct SuspectDelta {
-    pub pretty_class: String,
-    pub a_retained: u64,
-    pub b_retained: u64,
-    pub delta_retained: i64,
-    pub is_new: bool,
-    /// Present in A, absent from B — the suspect no longer retains anything.
-    #[serde(default)]
-    pub is_gone: bool,
-}
-
-/// The machine-readable cross-dump diff. INTERNAL to this module — it is not
-/// part of the committed `Report` model or JSON schema.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
-pub struct DiffReportsResult {
-    pub delta_total_objects: i64,
-    pub delta_total_shallow: i64,
-    pub net_delta_retained: i64,
-    pub growth_leaders: Vec<ClassDelta>,
-    pub new_classes: Vec<ClassDelta>,
-    /// Classes present in A but absent from B (dropped out of the heap).
-    pub removed_classes: Vec<ClassDelta>,
-    pub grown_suspects: Vec<SuspectDelta>,
-    /// Suspects present in both dumps whose retained heap fell.
-    pub shrunk_suspects: Vec<SuspectDelta>,
-    /// Suspects present in A but absent from B (no longer a suspect).
-    pub gone_suspects: Vec<SuspectDelta>,
-}
-
 /// Load a canonical `Report` from a path (or stdin for "-"), rejecting a
 /// schema-version mismatch. Mirrors `render_report` in main.rs.
 fn load_report(path: &str) -> io::Result<Report> {
@@ -93,185 +51,10 @@ fn load_report(path: &str) -> io::Result<Report> {
     Ok(report)
 }
 
-/// Compute the cross-dump growth diff. Pure and testable: joins A's and B's
-/// class histograms by name, then their leak suspects by `pretty_class`.
-pub fn diff(a: &Report, b: &Report) -> DiffReportsResult {
-    // Join histograms by class name. Value = (a_row, b_row); either may be
-    // absent. Using a BTreeMap gives deterministic iteration (name-sorted),
-    // so no HashMap ordering ever leaks into the output.
-    #[derive(Default, Clone, Copy)]
-    struct Pair {
-        a_inst: u64,
-        a_ret: u64,
-        a_present: bool,
-        b_inst: u64,
-        b_ret: u64,
-        b_present: bool,
-    }
-    let mut joined: BTreeMap<&str, Pair> = BTreeMap::new();
-    for row in &a.overview.histogram {
-        let e = joined.entry(row.pretty_class.as_str()).or_default();
-        e.a_inst = row.instances;
-        e.a_ret = row.retained;
-        e.a_present = true;
-    }
-    for row in &b.overview.histogram {
-        let e = joined.entry(row.pretty_class.as_str()).or_default();
-        e.b_inst = row.instances;
-        e.b_ret = row.retained;
-        e.b_present = true;
-    }
-
-    let mut all_deltas: Vec<ClassDelta> = Vec::with_capacity(joined.len());
-    let mut new_classes: Vec<ClassDelta> = Vec::new();
-    let mut removed_classes: Vec<ClassDelta> = Vec::new();
-    let mut net_delta_retained: i64 = 0;
-    for (name, p) in &joined {
-        let delta_instances = p.b_inst as i64 - p.a_inst as i64;
-        let delta_retained = p.b_ret as i64 - p.a_ret as i64;
-        net_delta_retained += delta_retained;
-        let cd = ClassDelta {
-            pretty_class: (*name).to_string(),
-            delta_instances,
-            delta_retained,
-            a_retained: p.a_ret,
-            b_retained: p.b_ret,
-        };
-        // A class is "new" iff present in B and absent from A; "removed" iff the
-        // reverse. Both are mutually exclusive with each other.
-        if p.b_present && !p.a_present {
-            new_classes.push(cd.clone());
-        } else if p.a_present && !p.b_present {
-            removed_classes.push(cd.clone());
-        }
-        all_deltas.push(cd);
-    }
-
-    // Growth leaders: classes with the largest POSITIVE Δretained, descending.
-    // Non-positive deltas are excluded (they did not grow). Tie-break on class
-    // name ascending for a stable, deterministic order.
-    let mut growth_leaders: Vec<ClassDelta> = all_deltas
-        .into_iter()
-        .filter(|c| c.delta_retained > 0)
-        .collect();
-    growth_leaders.sort_by(|x, y| {
-        y.delta_retained
-            .cmp(&x.delta_retained)
-            .then_with(|| x.pretty_class.cmp(&y.pretty_class))
-    });
-    growth_leaders.truncate(TOP_N);
-
-    // New classes: sorted by B.retained descending, then name ascending.
-    new_classes.sort_by(|x, y| {
-        y.b_retained
-            .cmp(&x.b_retained)
-            .then_with(|| x.pretty_class.cmp(&y.pretty_class))
-    });
-    new_classes.truncate(TOP_N);
-
-    // Removed classes: sorted by A.retained descending (biggest thing that
-    // dropped out first), then name ascending.
-    removed_classes.sort_by(|x, y| {
-        y.a_retained
-            .cmp(&x.a_retained)
-            .then_with(|| x.pretty_class.cmp(&y.pretty_class))
-    });
-    removed_classes.truncate(TOP_N);
-
-    // Suspects: join by pretty_class. Report suspects that are new in B or whose
-    // retained grew vs the same-named suspect in A. If a report has duplicate
-    // suspect names (rare), keep the max retained as that side's value for a
-    // conservative "grew" test.
-    let mut a_best: BTreeMap<&str, u64> = BTreeMap::new();
-    for s in &a.leaks.suspects {
-        let e = a_best.entry(s.pretty_class.as_str()).or_insert(0);
-        *e = (*e).max(s.retained);
-    }
-    let mut b_best: BTreeMap<&str, u64> = BTreeMap::new();
-    for s in &b.leaks.suspects {
-        let e = b_best.entry(s.pretty_class.as_str()).or_insert(0);
-        *e = (*e).max(s.retained);
-    }
-    let mut grown_suspects: Vec<SuspectDelta> = Vec::new();
-    let mut shrunk_suspects: Vec<SuspectDelta> = Vec::new();
-    for (name, &b_ret) in &b_best {
-        let a_ret_opt = a_best.get(name).copied();
-        let is_new = a_ret_opt.is_none();
-        let a_ret = a_ret_opt.unwrap_or(0);
-        let delta_retained = b_ret as i64 - a_ret as i64;
-        // New in B or grown → growth list; present in both but shrank → shrink list.
-        if is_new || delta_retained > 0 {
-            grown_suspects.push(SuspectDelta {
-                pretty_class: (*name).to_string(),
-                a_retained: a_ret,
-                b_retained: b_ret,
-                delta_retained,
-                is_new,
-                is_gone: false,
-            });
-        } else if !is_new && delta_retained < 0 {
-            shrunk_suspects.push(SuspectDelta {
-                pretty_class: (*name).to_string(),
-                a_retained: a_ret,
-                b_retained: b_ret,
-                delta_retained,
-                is_new: false,
-                is_gone: false,
-            });
-        }
-    }
-    grown_suspects.sort_by(|x, y| {
-        y.b_retained
-            .cmp(&x.b_retained)
-            .then_with(|| x.pretty_class.cmp(&y.pretty_class))
-    });
-    // Shrunk suspects: most-negative delta first (biggest reduction), then name.
-    shrunk_suspects.sort_by(|x, y| {
-        x.delta_retained
-            .cmp(&y.delta_retained)
-            .then_with(|| x.pretty_class.cmp(&y.pretty_class))
-    });
-
-    // Gone suspects: present in A, absent from B — no longer retaining anything.
-    let mut gone_suspects: Vec<SuspectDelta> = Vec::new();
-    for (name, &a_ret) in &a_best {
-        if !b_best.contains_key(name) {
-            gone_suspects.push(SuspectDelta {
-                pretty_class: (*name).to_string(),
-                a_retained: a_ret,
-                b_retained: 0,
-                delta_retained: -(a_ret as i64),
-                is_new: false,
-                is_gone: true,
-            });
-        }
-    }
-    gone_suspects.sort_by(|x, y| {
-        y.a_retained
-            .cmp(&x.a_retained)
-            .then_with(|| x.pretty_class.cmp(&y.pretty_class))
-    });
-
-    DiffReportsResult {
-        delta_total_objects: b.overview.total_objects as i64 - a.overview.total_objects as i64,
-        delta_total_shallow: b.overview.total_shallow as i64 - a.overview.total_shallow as i64,
-        net_delta_retained,
-        growth_leaders,
-        new_classes,
-        removed_classes,
-        grown_suspects,
-        shrunk_suspects,
-        gone_suspects,
-    }
-}
-
 // ── N-way time-series diff ──────────────────────────────────────────────────
 
 /// One joined class row across N reports: its instances/retained at each report
 /// (index 0 = first, N−1 = last), plus the first→last deltas.
-// Engine-only for now: renderers/CLI wire these in later. Until then the
-// public items are only exercised by unit tests, so silence dead_code.
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct SeriesClassRow {
     pub pretty_class: String,
@@ -286,7 +69,6 @@ pub struct SeriesClassRow {
 }
 
 /// One joined leak-suspect row across N reports.
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct SeriesSuspectRow {
     pub pretty_class: String,
@@ -303,7 +85,6 @@ pub struct SeriesSuspectRow {
 /// The machine-readable N-way cross-dump time-series diff. INTERNAL to this
 /// module — not part of the committed `Report` model or JSON schema. Every
 /// value is an integer; every list is deterministically sorted.
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct SeriesDiffResult {
     /// One label per report, in input order (from `source_name`, len N).
@@ -336,7 +117,6 @@ pub struct SeriesDiffResult {
 /// `BTreeMap` (name-sorted iteration), then builds each list sorted by an
 /// explicit key with a `pretty_class` tie-break. "first" = report 0, "last" =
 /// report N−1. When N == 2 the first→last numbers match the pairwise `diff`.
-#[allow(dead_code)]
 pub fn diff_series(reports: &[Report]) -> SeriesDiffResult {
     let n = reports.len();
     let last = n.saturating_sub(1);
@@ -558,15 +338,17 @@ fn fmt_delta_count(n: i64) -> String {
 }
 
 /// A one-line, plain-language verdict for the top of the cross-dump report.
-/// `a_total_shallow` is the baseline's reachable heap. The grew/shrank magnitude
-/// uses the change in *total shallow heap* (the real, bounded heap size) as its
-/// basis — net retained sums per-class retention, which overlaps and can exceed
-/// the heap, so it is unsuitable as a percentage denominator. The largest
-/// *retained* driver is still named, as it best explains the change. Pure and
-/// deterministic — integers and a single rounded percentage only.
-fn verdict(d: &DiffReportsResult, a_total_shallow: u64) -> String {
-    let pct = if a_total_shallow > 0 {
-        d.delta_total_shallow as f64 / a_total_shallow as f64 * 100.0
+/// The grew/shrank magnitude uses the change in *total shallow heap* (the real,
+/// bounded heap size) from the first to the last report as its basis — net
+/// retained sums per-class retention, which overlaps and can exceed the heap,
+/// so it is unsuitable as a percentage denominator. The denominator is the
+/// FIRST report's total shallow heap. The largest *retained* driver is still
+/// named, as it best explains the change. Pure and deterministic — integers and
+/// a single rounded percentage only (the only f64 in the whole renderer).
+fn verdict(d: &SeriesDiffResult) -> String {
+    let first_shallow = d.total_shallow.first().copied().unwrap_or(0);
+    let pct = if first_shallow > 0 {
+        d.delta_total_shallow as f64 / first_shallow as f64 * 100.0
     } else {
         0.0
     };
@@ -605,27 +387,64 @@ fn verdict(d: &DiffReportsResult, a_total_shallow: u64) -> String {
     line
 }
 
-/// Render the diff as human-readable Markdown.
-pub fn render_md(d: &DiffReportsResult, a_total_shallow: u64) -> String {
+/// The per-report column headers `r1`..`rN` for the N value columns.
+fn report_col_headers(n: usize) -> Vec<String> {
+    (1..=n).map(|i| format!("r{i}")).collect()
+}
+
+/// Build a per-report `Table` for a class/suspect section: `label | r1 … rN |
+/// Δ(first→last)`. The first column is left-aligned; every value/Δ column is
+/// right-aligned. `n` is the report count.
+fn series_table(label: &str, n: usize) -> Table {
+    let mut headers: Vec<String> = vec![label.to_string()];
+    headers.extend(report_col_headers(n));
+    headers.push("Δ(r1→rN)".to_string());
+    let mut aligns: Vec<Align> = vec![Align::Left];
+    aligns.extend(std::iter::repeat_n(Align::Right, n + 1));
+    let header_refs: Vec<&str> = headers.iter().map(String::as_str).collect();
+    Table::new(&header_refs, &aligns)
+}
+
+/// One row of retained bytes across N reports plus a signed Δ column.
+fn retained_row(pretty_class: &str, retained: &[u64], delta_retained: i64) -> Vec<String> {
+    let mut cells: Vec<String> = vec![format!("`{pretty_class}`")];
+    for &r in retained {
+        cells.push(report::format_bytes(r));
+    }
+    cells.push(fmt_delta_bytes(delta_retained));
+    cells
+}
+
+/// Render the N-way time-series diff as human-readable Markdown.
+pub fn render_md(d: &SeriesDiffResult) -> String {
+    let n = d.labels.len();
     let mut out = String::new();
     out.push_str("## Cross-Dump Growth\n\n");
     out.push_str(
-        "_How the reachable heap grew from the baseline (A) to the current (B) dump._\n\n",
+        "_How the reachable heap grew across a time series of dumps of the same application \
+         (first = baseline, last = current)._\n\n",
     );
 
-    out.push_str(&format!("**Verdict:** {}\n\n", verdict(d, a_total_shallow)));
+    // Legend: map each rN column to its report label so the tables are readable.
+    out.push_str("### Reports\n\n");
+    for (i, label) in d.labels.iter().enumerate() {
+        out.push_str(&format!("- `r{}` = {}\n", i + 1, label));
+    }
+    out.push('\n');
+
+    out.push_str(&format!("**Verdict:** {}\n\n", verdict(d)));
 
     out.push_str("### Headline Totals\n\n");
     out.push_str(&format!(
-        "- **Δ Objects:** {}\n",
+        "- **Δ Objects (r1→rN):** {}\n",
         fmt_delta_count(d.delta_total_objects)
     ));
     out.push_str(&format!(
-        "- **Δ Shallow heap:** {}\n",
+        "- **Δ Shallow heap (r1→rN):** {}\n",
         fmt_delta_bytes(d.delta_total_shallow)
     ));
     out.push_str(&format!(
-        "- **Net Δ Retained (all classes):** {}\n\n",
+        "- **Net Δ Retained (all classes, r1→rN):** {}\n\n",
         fmt_delta_bytes(d.net_delta_retained)
     ));
 
@@ -633,17 +452,9 @@ pub fn render_md(d: &DiffReportsResult, a_total_shallow: u64) -> String {
     if d.growth_leaders.is_empty() {
         out.push_str("No class grew in retained heap.\n\n");
     } else {
-        let mut t = Table::new(
-            &["Class", "Δ Instances", "Δ Retained", "Retained (B)"],
-            &[Align::Left, Align::Right, Align::Right, Align::Right],
-        );
+        let mut t = series_table("Class", n);
         for c in &d.growth_leaders {
-            t.row([
-                format!("`{}`", c.pretty_class),
-                fmt_delta_count(c.delta_instances),
-                fmt_delta_bytes(c.delta_retained),
-                report::format_bytes(c.b_retained),
-            ]);
+            t.row(retained_row(&c.pretty_class, &c.retained, c.delta_retained));
         }
         t.render(&mut out);
         out.push('\n');
@@ -653,16 +464,9 @@ pub fn render_md(d: &DiffReportsResult, a_total_shallow: u64) -> String {
     if d.new_classes.is_empty() {
         out.push_str("No classes are new in the current dump.\n\n");
     } else {
-        let mut t = Table::new(
-            &["Class", "Instances (B)", "Retained (B)"],
-            &[Align::Left, Align::Right, Align::Right],
-        );
+        let mut t = series_table("Class", n);
         for c in &d.new_classes {
-            t.row([
-                format!("`{}`", c.pretty_class),
-                fmt_delta_count(c.delta_instances),
-                report::format_bytes(c.b_retained),
-            ]);
+            t.row(retained_row(&c.pretty_class, &c.retained, c.delta_retained));
         }
         t.render(&mut out);
         out.push('\n');
@@ -672,17 +476,9 @@ pub fn render_md(d: &DiffReportsResult, a_total_shallow: u64) -> String {
     if d.removed_classes.is_empty() {
         out.push_str("No classes dropped out of the current dump.\n\n");
     } else {
-        let mut t = Table::new(
-            &["Class", "Instances (A)", "Retained (A)"],
-            &[Align::Left, Align::Right, Align::Right],
-        );
+        let mut t = series_table("Class", n);
         for c in &d.removed_classes {
-            // A-side instance count = |delta| here (b_inst is 0 for removed).
-            t.row([
-                format!("`{}`", c.pretty_class),
-                fmt_delta_count(-c.delta_instances),
-                report::format_bytes(c.a_retained),
-            ]);
+            t.row(retained_row(&c.pretty_class, &c.retained, c.delta_retained));
         }
         t.render(&mut out);
         out.push('\n');
@@ -692,34 +488,24 @@ pub fn render_md(d: &DiffReportsResult, a_total_shallow: u64) -> String {
     if d.grown_suspects.is_empty() {
         out.push_str("No leak suspect is new or grew in the current dump.\n\n");
     } else {
-        let mut t = Table::new(
-            &[
-                "Suspect",
-                "Retained (A)",
-                "Retained (B)",
-                "Δ Retained",
-                "New?",
-            ],
-            &[
-                Align::Left,
-                Align::Right,
-                Align::Right,
-                Align::Right,
-                Align::Left,
-            ],
-        );
+        // Suspects add a trailing "New?" flag column after the Δ column.
+        let mut headers: Vec<String> = vec!["Suspect".to_string()];
+        headers.extend(report_col_headers(n));
+        headers.push("Δ(r1→rN)".to_string());
+        headers.push("New?".to_string());
+        let mut aligns: Vec<Align> = vec![Align::Left];
+        aligns.extend(std::iter::repeat_n(Align::Right, n + 1));
+        aligns.push(Align::Left);
+        let header_refs: Vec<&str> = headers.iter().map(String::as_str).collect();
+        let mut t = Table::new(&header_refs, &aligns);
         for s in &d.grown_suspects {
-            t.row([
-                format!("`{}`", s.pretty_class),
-                report::format_bytes(s.a_retained),
-                report::format_bytes(s.b_retained),
-                fmt_delta_bytes(s.delta_retained),
-                if s.is_new {
-                    "yes".to_string()
-                } else {
-                    String::new()
-                },
-            ]);
+            let mut cells = retained_row(&s.pretty_class, &s.retained, s.delta_retained);
+            cells.push(if s.is_new {
+                "yes".to_string()
+            } else {
+                String::new()
+            });
+            t.row(cells);
         }
         t.render(&mut out);
         out.push('\n');
@@ -729,17 +515,9 @@ pub fn render_md(d: &DiffReportsResult, a_total_shallow: u64) -> String {
     if d.shrunk_suspects.is_empty() {
         out.push_str("No leak suspect shrank in the current dump.\n\n");
     } else {
-        let mut t = Table::new(
-            &["Suspect", "Retained (A)", "Retained (B)", "Δ Retained"],
-            &[Align::Left, Align::Right, Align::Right, Align::Right],
-        );
+        let mut t = series_table("Suspect", n);
         for s in &d.shrunk_suspects {
-            t.row([
-                format!("`{}`", s.pretty_class),
-                report::format_bytes(s.a_retained),
-                report::format_bytes(s.b_retained),
-                fmt_delta_bytes(s.delta_retained),
-            ]);
+            t.row(retained_row(&s.pretty_class, &s.retained, s.delta_retained));
         }
         t.render(&mut out);
         out.push('\n');
@@ -749,12 +527,9 @@ pub fn render_md(d: &DiffReportsResult, a_total_shallow: u64) -> String {
     if d.gone_suspects.is_empty() {
         out.push_str("No leak suspect disappeared in the current dump.\n\n");
     } else {
-        let mut t = Table::new(&["Suspect", "Retained (A)"], &[Align::Left, Align::Right]);
+        let mut t = series_table("Suspect", n);
         for s in &d.gone_suspects {
-            t.row([
-                format!("`{}`", s.pretty_class),
-                report::format_bytes(s.a_retained),
-            ]);
+            t.row(retained_row(&s.pretty_class, &s.retained, s.delta_retained));
         }
         t.render(&mut out);
         out.push('\n');
@@ -763,17 +538,18 @@ pub fn render_md(d: &DiffReportsResult, a_total_shallow: u64) -> String {
     out
 }
 
-/// Thin wrapper: load both reports (version-checked), diff, and render.
-pub fn run(a_path: &str, b_path: &str, format: OutputFormat) -> io::Result<String> {
-    let a = load_report(a_path)?;
-    let b = load_report(b_path)?;
-    let result = diff(&a, &b);
+/// Thin wrapper: load every report path (version-checked, "-" = stdin), compute
+/// the N-way time-series diff, and render it in the requested format.
+pub fn run(paths: &[String], format: OutputFormat) -> io::Result<String> {
+    let mut reports: Vec<Report> = Vec::with_capacity(paths.len());
+    for p in paths {
+        reports.push(load_report(p)?);
+    }
+    let result = diff_series(&reports);
     Ok(match format {
         OutputFormat::Json => serde_json::to_string_pretty(&result).map_err(io::Error::other)?,
-        // The cross-dump diff has no HTML/graphics view; fall back to Markdown.
-        OutputFormat::Md | OutputFormat::MdGraphs | OutputFormat::Html => {
-            render_md(&result, a.overview.total_shallow)
-        }
+        OutputFormat::Html => crate::html::render_diff_html(&result),
+        OutputFormat::Md | OutputFormat::MdGraphs => render_md(&result),
     })
 }
 
@@ -890,129 +666,6 @@ mod tests {
     }
 
     #[test]
-    fn class_delta_join_grew_shrank_new_removed() {
-        // A: grew (100->300), shrank (500->200), removed (present in A only).
-        let a = base_report(
-            0,
-            0,
-            vec![
-                hist("Grew", 1, 10, 100),
-                hist("Shrank", 5, 50, 500),
-                hist("Removed", 2, 20, 200),
-            ],
-            vec![],
-        );
-        // B: grew, shrank, new (present in B only).
-        let b = base_report(
-            0,
-            0,
-            vec![
-                hist("Grew", 3, 30, 300),
-                hist("Shrank", 2, 20, 200),
-                hist("NewClass", 4, 40, 400),
-            ],
-            vec![],
-        );
-        let d = diff(&a, &b);
-
-        // Growth leaders: only positive Δretained. Grew (+200) and NewClass
-        // (+400, since A absent = 0). Sorted desc: NewClass then Grew.
-        assert_eq!(d.growth_leaders.len(), 2);
-        assert_eq!(d.growth_leaders[0].pretty_class, "NewClass");
-        assert_eq!(d.growth_leaders[0].delta_retained, 400);
-        assert_eq!(d.growth_leaders[1].pretty_class, "Grew");
-        assert_eq!(d.growth_leaders[1].delta_retained, 200);
-        assert_eq!(d.growth_leaders[1].delta_instances, 2);
-        // Shrank (-300) and Removed (-200) must NOT appear.
-        assert!(
-            !d.growth_leaders
-                .iter()
-                .any(|c| c.pretty_class == "Shrank" || c.pretty_class == "Removed")
-        );
-
-        // Sorted strictly descending by delta_retained.
-        for w in d.growth_leaders.windows(2) {
-            assert!(w[0].delta_retained >= w[1].delta_retained);
-        }
-    }
-
-    #[test]
-    fn new_class_appears_once() {
-        let a = base_report(0, 0, vec![hist("Old", 1, 10, 100)], vec![]);
-        let b = base_report(
-            0,
-            0,
-            vec![hist("Old", 1, 10, 100), hist("Fresh", 7, 70, 700)],
-            vec![],
-        );
-        let d = diff(&a, &b);
-        assert_eq!(d.new_classes.len(), 1);
-        assert_eq!(d.new_classes[0].pretty_class, "Fresh");
-        assert_eq!(d.new_classes[0].b_retained, 700);
-        // 0 -> 7 instances.
-        assert_eq!(d.new_classes[0].delta_instances, 7);
-        assert_eq!(d.new_classes[0].a_retained, 0);
-        // "Old" (unchanged) is not new.
-        assert!(!d.new_classes.iter().any(|c| c.pretty_class == "Old"));
-    }
-
-    #[test]
-    fn suspect_delta_new_and_grown_sorted() {
-        let a = base_report(
-            0,
-            0,
-            vec![],
-            vec![
-                suspect("GrownSuspect", 10, 1_000),
-                suspect("Stable", 5, 500),
-            ],
-        );
-        let b = base_report(
-            0,
-            0,
-            vec![],
-            vec![
-                suspect("GrownSuspect", 20, 3_000), // grew +2000
-                suspect("Stable", 5, 500),          // unchanged -> excluded
-                suspect("BrandNew", 8, 5_000),      // new
-            ],
-        );
-        let d = diff(&a, &b);
-        // BrandNew (5000, new) and GrownSuspect (3000, grew); Stable excluded.
-        assert_eq!(d.grown_suspects.len(), 2);
-        // Sorted by b_retained desc: BrandNew (5000) then GrownSuspect (3000).
-        assert_eq!(d.grown_suspects[0].pretty_class, "BrandNew");
-        assert!(d.grown_suspects[0].is_new);
-        assert_eq!(d.grown_suspects[0].a_retained, 0);
-        assert_eq!(d.grown_suspects[1].pretty_class, "GrownSuspect");
-        assert!(!d.grown_suspects[1].is_new);
-        assert_eq!(d.grown_suspects[1].delta_retained, 2_000);
-        assert!(!d.grown_suspects.iter().any(|s| s.pretty_class == "Stable"));
-    }
-
-    #[test]
-    fn headline_totals_including_negative() {
-        // B smaller objects, larger shallow, mixed retained.
-        let a = base_report(
-            100,
-            5_000,
-            vec![hist("A", 1, 10, 1_000), hist("B", 1, 10, 2_000)],
-            vec![],
-        );
-        let b = base_report(
-            80, // objects shrank
-            7_500,
-            vec![hist("A", 1, 10, 500), hist("B", 1, 10, 4_000)],
-            vec![],
-        );
-        let d = diff(&a, &b);
-        assert_eq!(d.delta_total_objects, -20);
-        assert_eq!(d.delta_total_shallow, 2_500);
-        // net retained: A -500, B +2000 => +1500.
-        assert_eq!(d.net_delta_retained, 1_500);
-    }
-
-    #[test]
     fn schema_version_mismatch_is_err() {
         let mut a = base_report(0, 0, vec![], vec![]);
         a.schema_version = SCHEMA_VERSION + 1;
@@ -1039,9 +692,13 @@ mod tests {
             vec![hist("Foo", 5, 50, 900)],
             vec![suspect("com.example.Leaky", 3, 9_999)],
         );
-        let d = diff(&a, &b);
-        let md = render_md(&d, a.overview.total_shallow);
+        let d = diff_series(&[a, b]);
+        let md = render_md(&d);
         assert!(md.contains("## Cross-Dump Growth"));
+        // The legend maps r1/r2 to their labels.
+        assert!(md.contains("### Reports"));
+        assert!(md.contains("`r1` ="));
+        assert!(md.contains("`r2` ="));
         assert!(md.contains("**Verdict:**"));
         assert!(md.contains("### Headline Totals"));
         assert!(md.contains("### Growth Leaders (by Δ retained)"));
@@ -1050,6 +707,8 @@ mod tests {
         assert!(md.contains("### New / Grown Leak Suspects"));
         assert!(md.contains("### Shrunk Leak Suspects"));
         assert!(md.contains("### Disappeared Leak Suspects"));
+        // Per-report + Δ columns are present.
+        assert!(md.contains("Δ(r1→rN)"));
         // The grown class row is present.
         assert!(md.contains("`Foo`"));
         // The new suspect row is present.
@@ -1057,46 +716,32 @@ mod tests {
     }
 
     #[test]
-    fn removed_class_and_shrunk_gone_suspects() {
-        let a = base_report(
-            0,
-            10_000,
-            vec![hist("Keep", 1, 10, 100), hist("Dropped", 4, 40, 400)],
-            vec![suspect("Shrinks", 10, 3_000), suspect("Vanishes", 5, 2_000)],
-        );
-        let b = base_report(
-            0,
-            0,
-            vec![hist("Keep", 1, 10, 100)],
-            vec![suspect("Shrinks", 4, 1_000)], // 3000 -> 1000
-        );
-        let d = diff(&a, &b);
-
-        // "Dropped" is present in A only.
-        assert_eq!(d.removed_classes.len(), 1);
-        assert_eq!(d.removed_classes[0].pretty_class, "Dropped");
-        assert_eq!(d.removed_classes[0].a_retained, 400);
-
-        // "Shrinks" fell 3000 -> 1000.
-        assert_eq!(d.shrunk_suspects.len(), 1);
-        assert_eq!(d.shrunk_suspects[0].pretty_class, "Shrinks");
-        assert_eq!(d.shrunk_suspects[0].delta_retained, -2_000);
-        assert!(!d.shrunk_suspects[0].is_new);
-        assert!(!d.shrunk_suspects[0].is_gone);
-
-        // "Vanishes" is present in A only.
-        assert_eq!(d.gone_suspects.len(), 1);
-        assert_eq!(d.gone_suspects[0].pretty_class, "Vanishes");
-        assert_eq!(d.gone_suspects[0].a_retained, 2_000);
-        assert_eq!(d.gone_suspects[0].b_retained, 0);
-        assert!(d.gone_suspects[0].is_gone);
-        // A shrunk suspect must not also appear as gone or grown.
-        assert!(!d.grown_suspects.iter().any(|s| s.pretty_class == "Shrinks"));
+    fn render_md_n3_has_three_value_columns() {
+        let r1 = named_report("d1", 0, 0, vec![hist("Foo", 1, 10, 100)], vec![]);
+        let r2 = named_report("d2", 0, 0, vec![hist("Foo", 2, 20, 200)], vec![]);
+        let r3 = named_report("d3", 0, 0, vec![hist("Foo", 3, 30, 300)], vec![]);
+        let d = diff_series(&[r1, r2, r3]);
+        let md = render_md(&d);
+        // Three report labels in the legend.
+        assert!(md.contains("`r1` = d1"));
+        assert!(md.contains("`r2` = d2"));
+        assert!(md.contains("`r3` = d3"));
+        // Growth-leaders header has r1|r2|r3 value columns + a Δ column.
+        // The Table pads cells, so match on a padding-agnostic header line.
+        let header = md
+            .lines()
+            .find(|l| l.contains("Class") && l.contains("Δ(r1→rN)"))
+            .expect("a header row with the class + Δ columns");
+        let r1 = header.find(" r1 ").expect("r1 column");
+        let r2 = header.find(" r2 ").expect("r2 column");
+        let r3 = header.find(" r3 ").expect("r3 column");
+        let delta = header.find("Δ(r1→rN)").expect("Δ column");
+        assert!(r1 < r2 && r2 < r3 && r3 < delta, "header order: {header}");
     }
 
     #[test]
     fn verdict_grew_names_driver() {
-        // A: shallow 1000; B: shallow 2000 (grew 100%). Retained driver `Big`.
+        // r1: shallow 1000; r2: shallow 2000 (grew 100%). Driver `Big`.
         let a = base_report(0, 1_000, vec![hist("Big", 1, 10, 1_000)], vec![]);
         let b = base_report(
             0,
@@ -1104,8 +749,8 @@ mod tests {
             vec![hist("Big", 5, 50, 2_000)],
             vec![suspect("NewLeak", 3, 500)],
         );
-        let d = diff(&a, &b);
-        let v = verdict(&d, a.overview.total_shallow);
+        let d = diff_series(&[a, b]);
+        let v = verdict(&d);
         // total shallow +1000 on a 1000-byte baseline = 100%.
         assert!(v.starts_with("Heap grew 100.0%"), "got: {v}");
         assert!(v.contains("largest driver `Big`"), "got: {v}");
@@ -1114,31 +759,14 @@ mod tests {
 
     #[test]
     fn verdict_shrank() {
-        // A: shallow 2000; B: shallow 500 (shrank 75%).
+        // r1: shallow 2000; r2: shallow 500 (shrank 75%).
         let a = base_report(0, 2_000, vec![hist("Big", 5, 50, 2_000)], vec![]);
         let b = base_report(0, 500, vec![hist("Big", 1, 10, 500)], vec![]);
-        let d = diff(&a, &b);
-        let v = verdict(&d, a.overview.total_shallow);
+        let d = diff_series(&[a, b]);
+        let v = verdict(&d);
         // total shallow -1500 on a 2000-byte baseline = 75% shrink.
         assert!(v.starts_with("Heap shrank 75.0%"), "got: {v}");
         assert!(v.contains("no net growth"), "got: {v}");
-    }
-
-    #[test]
-    fn all_same_is_all_zero() {
-        let a = base_report(
-            10,
-            1_000,
-            vec![hist("X", 2, 20, 200)],
-            vec![suspect("S", 1, 100)],
-        );
-        let d = diff(&a, &a);
-        assert_eq!(d.delta_total_objects, 0);
-        assert_eq!(d.delta_total_shallow, 0);
-        assert_eq!(d.net_delta_retained, 0);
-        assert!(d.growth_leaders.is_empty());
-        assert!(d.new_classes.is_empty());
-        assert!(d.grown_suspects.is_empty());
     }
 
     // Give a report a distinct source_name so we can assert the derived labels.

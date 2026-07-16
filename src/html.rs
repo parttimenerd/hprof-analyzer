@@ -21,8 +21,8 @@ use std::io::Write;
 use base64::Engine as _;
 use flate2::{Compression, write::DeflateEncoder};
 
+use crate::diff_reports::SeriesDiffResult;
 use crate::report::Report;
-
 /// The built React bundle (minified JS + inlined CSS), produced by `web/`'s
 /// esbuild build. It is a GENERATED artifact at `web/dist/bundle.js`
 /// (git-ignored) that `build.rs` regenerates before every compile.
@@ -78,6 +78,55 @@ html, body {{ margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemF
 </head>
 <body>
 <div id="root"><div id="hprof-fallback">Loading heap dump report&hellip;</div></div>
+<script type="application/octet-stream" id="report-data">{data_b64}</script>
+<script type="application/octet-stream" id="app-bundle">{bundle_b64}</script>
+<script>{bootstrap}</script>
+</body>
+</html>
+"#,
+        title = title,
+        data_b64 = data_b64,
+        bundle_b64 = bundle_b64,
+        bootstrap = BOOTSTRAP_JS,
+    )
+}
+
+/// Render an N-way cross-dump `SeriesDiffResult` to a single self-contained
+/// HTML document. Reuses the SAME embedded React bundle and bootstrap as
+/// `render_html`; the ONLY difference is the payload placed in `#report-data`.
+///
+/// Where a single-dump report embeds the RAW report JSON, this embeds a tagged
+/// envelope `{"kind":"series-diff","diff": <SeriesDiffResult>}` so the shared
+/// bundle can dispatch report-vs-diff at boot. A real single-dump `Report` has
+/// no `kind` field, so the branch is unambiguous and backward-compatible.
+///
+/// Deterministic: for a given diff the output is byte-identical across runs.
+pub fn render_diff_html(d: &SeriesDiffResult) -> String {
+    // Tagged envelope so the shared bundle can tell a diff from a report.
+    let envelope = serde_json::json!({ "kind": "series-diff", "diff": d });
+    let json = serde_json::to_string(&envelope).expect("diff envelope serializes to JSON");
+    let data_b64 = deflate_b64(json.as_bytes());
+    let bundle_b64 = deflate_b64(BUNDLE_JS.as_bytes());
+
+    let title = format!("Heap Dump Comparison ({} reports)", d.labels.len());
+    let title = html_escape(&title);
+
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title}</title>
+<style>
+:root {{ color-scheme: light dark; }}
+html, body {{ margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }}
+#root {{ padding: 0; }}
+#hprof-fallback {{ padding: 1rem; }}
+</style>
+</head>
+<body>
+<div id="root"><div id="hprof-fallback">Loading heap dump comparison&hellip;</div></div>
 <script type="application/octet-stream" id="report-data">{data_b64}</script>
 <script type="application/octet-stream" id="app-bundle">{bundle_b64}</script>
 <script>{bootstrap}</script>

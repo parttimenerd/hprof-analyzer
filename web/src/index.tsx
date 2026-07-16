@@ -7,8 +7,8 @@
 // We decode + inflate + JSON.parse the report data, then render.
 import React from "react";
 import { createRoot } from "react-dom/client";
-import App from "./App";
-import type { Report } from "./types";
+import App, { DiffApp } from "./App";
+import type { Report, SeriesDiffEnvelope } from "./types";
 import css from "./styles.css";
 
 function fail(msg: string): void {
@@ -29,10 +29,10 @@ async function boot(): Promise<void> {
     fail("Report bootstrap missing (hprofDecodeText).");
     return;
   }
-  let report: Report;
+  let parsed: Report | SeriesDiffEnvelope;
   try {
     const json = await decode(b64);
-    report = JSON.parse(json) as Report;
+    parsed = JSON.parse(json) as Report | SeriesDiffEnvelope;
   } catch (e) {
     fail("Failed to parse report data: " + e);
     return;
@@ -44,9 +44,19 @@ async function boot(): Promise<void> {
     return;
   }
   el.textContent = "";
+  // A single-dump Report has no `kind` field; the diff view wraps its payload
+  // in a {"kind":"series-diff", diff} envelope so we can dispatch here.
+  const isDiff =
+    parsed != null &&
+    typeof parsed === "object" &&
+    (parsed as SeriesDiffEnvelope).kind === "series-diff";
   createRoot(el).render(
     <React.StrictMode>
-      <App report={report} />
+      {isDiff ? (
+        <DiffApp diff={(parsed as SeriesDiffEnvelope).diff} />
+      ) : (
+        <App report={parsed as Report} />
+      )}
     </React.StrictMode>,
   );
 }

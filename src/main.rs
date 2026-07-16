@@ -106,7 +106,7 @@ use clap_complete::Shell;
         hprof-analyzer heap.hprof report.json             # JSON (format from .json)\n  \
         hprof-analyzer heap.hprof -f md-graphs            # Markdown + ASCII graphs\n  \
         hprof-analyzer report.json report.html            # re-render saved JSON to HTML\n  \
-        hprof-analyzer compare reports old.json new.json  # cross-dump growth diff\n  \
+        hprof-analyzer compare reports r1.json r2.json [r3.json …]  # cross-dump growth diff\n  \
         hprof-analyzer completions zsh > _hprof-analyzer  # shell completions\n\n\
         Install zsh completions:\n  \
         hprof-analyzer completions zsh > \"${fpath[1]}/_hprof-analyzer\"",
@@ -207,15 +207,14 @@ enum CompareCmd {
         #[arg(short, long, value_enum)]
         format: Option<FormatArg>,
     },
-    /// Cross-dump growth: compare two canonical Report JSONs (A=baseline, B=current)
+    /// Cross-dump growth: compare 2+ canonical Report JSONs as a time series
+    /// (first = baseline, last = current)
     Reports {
-        /// Baseline (earlier) Report JSON, or "-" for stdin.
-        #[arg(value_hint = ValueHint::FilePath)]
-        a: String,
-        /// Current (later) Report JSON.
-        #[arg(value_hint = ValueHint::FilePath)]
-        b: String,
-        /// Diff output format (Markdown or JSON); defaults to Markdown.
+        /// Report JSON paths in time order (first = baseline). Two or more are
+        /// required; use "-" for stdin (at most one).
+        #[arg(value_hint = ValueHint::FilePath, num_args = 2..)]
+        reports: Vec<String>,
+        /// Diff output format (Markdown, JSON, or HTML); defaults to Markdown.
         #[arg(short, long, value_enum)]
         format: Option<FormatArg>,
     },
@@ -384,8 +383,15 @@ fn main() {
                     Err(e) => fail(e),
                 }
             }
-            CompareCmd::Reports { a, b, format } => {
-                match diff_reports::run(&a, &b, resolve_format(format, None)) {
+            CompareCmd::Reports { reports, format } => {
+                // Name a missing input up front for a clear error, mirroring the
+                // MAT arm. Skip "-" (stdin) — it has no filesystem path.
+                for p in &reports {
+                    if p != "-" && !std::path::Path::new(p).exists() {
+                        fail(format!("cannot open '{p}': no such file or directory"));
+                    }
+                }
+                match diff_reports::run(&reports, resolve_format(format, None)) {
                     Ok(text) => print!("{text}"),
                     Err(e) => fail(e),
                 }
@@ -455,7 +461,7 @@ fn run_default(cli: Cli) {
             cli.output.as_deref(),
             fmt,
             cli.verbose,
-            cvec::Codec::Deflate9,
+            cvec::Codec::Zstd3,
             opts,
         ) {
             fail(analyze_error_hint(&input, &e));
@@ -705,25 +711,27 @@ fn run(
     let rpo = rpo_dfs::rpo_dfs(g.n, &g.gc_root_indices, &g.fwd_offsets, &g.fwd_targets);
     log(verbose, "rpo", t.elapsed().as_secs_f64());
 
-    // Free forward CSR (no longer needed after DFS)
+    // Build the inbound CSR by transposing the forward CSR, avoiding a third
+    // full-file scan. The fwd CSR and rpo.dfn are both still alive here:
+    // dfn is needed for node→pre-order translation in Phase 4 of the encode.
+    // After the transpose the fwd CSR and id_map (inside InboundBuilder) are
+    // freed; vertex is rebuilt once inb_flat encoding is done so it never
+    // coexists with the large inb_flat intermediate.
+    let mut rpo = rpo;
+    let t = Instant::now();
+    progress::phase("building inbound references");
+    let (inb_block_off, inb_data) =
+        inbound.build_from_fwd(&g.fwd_offsets, &g.fwd_targets, &rpo.dfn)?;
+    log(verbose, "inbound", t.elapsed().as_secs_f64());
+
+    // Free forward CSR: no longer needed now that inbound has been built.
     g.fwd_offsets = Vec::new();
     g.fwd_targets = Vec::new();
     crate::trace::trim();
 
-    // Build the inbound CSR now that rpo has freed its arrays — keeps the
-    // ~5.5GB inbound CSR off the rpo-phase RSS peak.
-    // build() translates inbound predecessors into pre-order space using dfn,
-    // so dominator Phase 1 no longer needs dfn. Free dfn immediately after,
-    // BEFORE dominator's Phase-1 peak (semi/ancestor/label + rpo + inbound all
-    // resident) — this is the binding global peak; dropping dfn cuts ~2GB.
-    let mut rpo = rpo;
-    let t = Instant::now();
-    progress::phase("building inbound references");
-    let (inb_block_off, inb_data) = inbound.build(&rpo.dfn)?;
-    log(verbose, "inbound", t.elapsed().as_secs_f64());
-    // Rebuild vertex now: dfn is still live and inbound.build (the binding-peak
-    // 2b scan) has returned, so the 1.96GB vertex never coexists with inb_flat.
-    // vertex = invert(dfn) is a pure O(n) pass; the dominator reads it next.
+    // Rebuild vertex: dfn is still live and the inbound encode has returned,
+    // so the ~2 GB vertex never coexists with inb_flat. vertex = invert(dfn)
+    // is a pure O(n) pass; the dominator reads it next.
     let count = rpo.parent_pre.len();
     rpo.vertex = rpo_dfs::rebuild_vertex(&rpo.dfn, count);
     crate::trace::probe("main: after rebuild_vertex (post-inbound, dfn live)");

@@ -1,5 +1,5 @@
 import React from "react";
-import type { AllocSites, ArraysBySize, ClassRow, CollectionAttribution, CollectionsAnalysis, DomTreeNode, DominatorAnalysis, FillRatioBucket, HistRow, LeakIndicators, MergedPathNode, ObjRow, PackageNode, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, Suspect, SystemOverview, ThreadInfo, ThreadLocalObj, TopArrays, TopComponents, UnreachableClassRow } from "./types";
+import type { AllocSites, ArraysBySize, ClassRow, CollectionAttribution, CollectionsAnalysis, DomTreeNode, DominatorAnalysis, FillRatioBucket, HistRow, LeakIndicators, MergedPathNode, ObjRow, PackageNode, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalObj, TopArrays, TopComponents, UnreachableClassRow } from "./types";
 import { fmtCount, fmtExactBytes, formatBytes, formatEpochMs, pctOf, shortLoader } from "./format";
 import {
   CompositionStackedBar,
@@ -2191,6 +2191,231 @@ function GlossarySection() {
         ))}
       </dl>
     </section>
+  );
+}
+
+// ── Cross-dump time-series diff view ─────────────────────────────────────────
+// Renders a SeriesDiffResult: a legend (r1..rN → labels), headline totals, and
+// one sortable N-column table per section. The HTML diff view embeds a tagged
+// {"kind":"series-diff","diff":…} envelope in #report-data; index.tsx dispatches
+// to this component when it sees that discriminator.
+
+const MINUS = "−"; // typographic minus, matching the Markdown renderer.
+
+// Signed byte delta, e.g. "+1.2 MB" / "−340 KB" / "0 B".
+function fmtDeltaBytes(n: number): string {
+  if (n === 0) return "0 B";
+  const sign = n > 0 ? "+" : MINUS;
+  return sign + formatBytes(Math.abs(n));
+}
+
+// Signed count delta with thousands separators, e.g. "+1,024" / "−17" / "0".
+function fmtDeltaCount(n: number): string {
+  if (n === 0) return "0";
+  const sign = n > 0 ? "+" : MINUS;
+  return sign + Math.abs(n).toLocaleString("en-US");
+}
+
+// A sortable, N-column class/suspect table. Columns: name | r1 … rN | Δ.
+// Sorting is descending by the chosen numeric key: any per-report column
+// (its retained value) or the Δ column. Copies before sorting so the model
+// is never mutated.
+function SeriesTable({
+  nameLabel,
+  labels,
+  rows,
+  showNew,
+}: {
+  nameLabel: string;
+  labels: string[];
+  rows: (SeriesClassRow | SeriesSuspectRow)[];
+  showNew?: boolean;
+}) {
+  const n = labels.length;
+  // Sort key: -1 = Δ column (default), 0..n-1 = a per-report retained column.
+  const [sortCol, setSortCol] = React.useState<number>(-1);
+  const sorted = React.useMemo(() => {
+    const keyed = [...rows];
+    keyed.sort((a, b) => {
+      const av = sortCol < 0 ? a.delta_retained : (a.retained[sortCol] ?? 0);
+      const bv = sortCol < 0 ? b.delta_retained : (b.retained[sortCol] ?? 0);
+      if (bv !== av) return bv - av;
+      return a.pretty_class.localeCompare(b.pretty_class);
+    });
+    return keyed;
+  }, [rows, sortCol]);
+
+  const th = (label: string, col: number, title: string) => {
+    const active = sortCol === col;
+    return (
+      <th
+        key={col}
+        className={"num sortable" + (active ? " active" : "")}
+        onClick={() => setSortCol(col)}
+        title={`Sort by ${title} (descending)`}
+      >
+        {label} {active ? "▾" : ""}
+      </th>
+    );
+  };
+
+  return (
+    <table className="data">
+      <thead>
+        <tr>
+          <th>{nameLabel}</th>
+          {labels.map((lbl, i) => th(`r${i + 1}`, i, `${lbl} retained`))}
+          {th("Δ(r1→rN)", -1, "Δ retained (first→last)")}
+          {showNew ? <th>New?</th> : null}
+        </tr>
+      </thead>
+      <tbody>
+        {sorted.map((row) => (
+          <tr key={row.pretty_class}>
+            <td><code>{row.pretty_class}</code></td>
+            {Array.from({ length: n }, (_, i) => (
+              <td key={i} className="num">{formatBytes(row.retained[i] ?? 0)}</td>
+            ))}
+            <td className="num">{fmtDeltaBytes(row.delta_retained)}</td>
+            {showNew ? (
+              <td>{"is_new" in row && row.is_new ? "yes" : ""}</td>
+            ) : null}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+// One diff section: a heading, and either the sortable table or an empty note.
+function DiffSection({
+  title,
+  nameLabel,
+  labels,
+  rows,
+  emptyNote,
+  showNew,
+}: {
+  title: string;
+  nameLabel: string;
+  labels: string[];
+  rows: (SeriesClassRow | SeriesSuspectRow)[];
+  emptyNote: string;
+  showNew?: boolean;
+}) {
+  return (
+    <section className="diff-section">
+      <h2>{title}</h2>
+      {rows.length === 0 ? (
+        <p>{emptyNote}</p>
+      ) : (
+        <SeriesTable nameLabel={nameLabel} labels={labels} rows={rows} showNew={showNew} />
+      )}
+    </section>
+  );
+}
+
+// The verdict line: mirrors the Markdown verdict (the sole percentage).
+function diffVerdict(diff: SeriesDiffResult): string {
+  const firstShallow = diff.total_shallow[0] ?? 0;
+  const pct = firstShallow > 0 ? (diff.delta_total_shallow / firstShallow) * 100 : 0;
+  const newSuspects = diff.grown_suspects.filter((s) => s.is_new).length;
+  let line: string;
+  if (diff.delta_total_shallow > 0) {
+    const lead = diff.growth_leaders[0];
+    const driver = lead
+      ? `; largest driver ${lead.pretty_class} (${fmtDeltaBytes(lead.delta_retained)} retained)`
+      : "";
+    line = `Heap grew ${pct.toFixed(1)}% (${fmtDeltaBytes(diff.delta_total_shallow)} shallow)${driver}.`;
+  } else if (diff.delta_total_shallow < 0) {
+    line = `Heap shrank ${Math.abs(pct).toFixed(1)}% (${fmtDeltaBytes(diff.delta_total_shallow)} shallow); no net growth.`;
+  } else {
+    line = "Heap size is unchanged.";
+  }
+  if (newSuspects > 0) {
+    line += ` ${newSuspects} new suspect${newSuspects === 1 ? "" : "s"}.`;
+  }
+  return line;
+}
+
+export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
+  const { labels } = diff;
+  return (
+    <div className="app">
+      <h1>Heap Dump Comparison ({labels.length} reports)</h1>
+      <p className="subtitle">
+        Cross-dump growth across a time series (first = baseline, last = current).
+      </p>
+      <div className="theme-toggle-wrap">
+        <ThemeToggle />
+      </div>
+
+      <section className="diff-section">
+        <h2>Reports</h2>
+        <ol className="diff-legend">
+          {labels.map((lbl, i) => (
+            <li key={i}>
+              <code>r{i + 1}</code> = {lbl}
+            </li>
+          ))}
+        </ol>
+      </section>
+
+      <section className="diff-section">
+        <h2>Headline Totals</h2>
+        <p><strong>Verdict:</strong> {diffVerdict(diff)}</p>
+        <ul>
+          <li><strong>Δ Objects (r1→rN):</strong> {fmtDeltaCount(diff.delta_total_objects)}</li>
+          <li><strong>Δ Shallow heap (r1→rN):</strong> {fmtDeltaBytes(diff.delta_total_shallow)}</li>
+          <li><strong>Net Δ Retained (all classes, r1→rN):</strong> {fmtDeltaBytes(diff.net_delta_retained)}</li>
+        </ul>
+      </section>
+
+      <DiffSection
+        title="Growth Leaders (by Δ retained)"
+        nameLabel="Class"
+        labels={labels}
+        rows={diff.growth_leaders}
+        emptyNote="No class grew in retained heap."
+      />
+      <DiffSection
+        title="New Classes"
+        nameLabel="Class"
+        labels={labels}
+        rows={diff.new_classes}
+        emptyNote="No classes are new in the current dump."
+      />
+      <DiffSection
+        title="Removed Classes"
+        nameLabel="Class"
+        labels={labels}
+        rows={diff.removed_classes}
+        emptyNote="No classes dropped out of the current dump."
+      />
+      <DiffSection
+        title="New / Grown Leak Suspects"
+        nameLabel="Suspect"
+        labels={labels}
+        rows={diff.grown_suspects}
+        emptyNote="No leak suspect is new or grew in the current dump."
+        showNew
+      />
+      <DiffSection
+        title="Shrunk Leak Suspects"
+        nameLabel="Suspect"
+        labels={labels}
+        rows={diff.shrunk_suspects}
+        emptyNote="No leak suspect shrank in the current dump."
+      />
+      <DiffSection
+        title="Disappeared Leak Suspects"
+        nameLabel="Suspect"
+        labels={labels}
+        rows={diff.gone_suspects}
+        emptyNote="No leak suspect disappeared in the current dump."
+      />
+      <BackToTop />
+    </div>
   );
 }
 
