@@ -202,6 +202,45 @@ const CONCENTRATION_PCT: f64 = 50.0;
 
 // ── Rendering ────────────────────────────────────────────────────────────────
 
+/// Render the "Leak Indicators" section (plain Markdown): scalar counters for
+/// anonymous classes, ThreadLocal null-key entries, and DirectByteBuffer total
+/// capacity. Only emitted when at least one indicator is non-zero.
+pub(crate) fn render_leak_indicators(li: &crate::report::LeakIndicators, out: &mut String) {
+    if li.anonymous_class_count == 0
+        && li.thread_local_null_key_count == 0
+        && li.direct_byte_buffer_capacity_sum == 0
+    {
+        return;
+    }
+    use crate::md::{Align, Table};
+    out.push_str("## Leak Indicators\n\n");
+    out.push_str(
+        "_Scalar signals for common Java leak patterns. Non-zero values here \
+         are worth investigating.\n\n",
+    );
+    let mut t = Table::new(&["Indicator", "Value"], &[Align::Left, Align::Right]);
+    if li.anonymous_class_count > 0 {
+        t.row([
+            "Anonymous/generated classes".into(),
+            fmt_count(li.anonymous_class_count),
+        ]);
+    }
+    if li.thread_local_null_key_count > 0 {
+        t.row([
+            "ThreadLocal null-key entries (cleared referent)".into(),
+            fmt_count(li.thread_local_null_key_count),
+        ]);
+    }
+    if li.direct_byte_buffer_capacity_sum > 0 {
+        t.row([
+            "DirectByteBuffer total capacity".into(),
+            format_bytes(li.direct_byte_buffer_capacity_sum),
+        ]);
+    }
+    t.render(out);
+    out.push('\n');
+}
+
 /// Render a `Report` into Markdown. Byte-identical to the previous
 /// `system_overview` + `leak_suspects` + `top_consumers` concatenation.
 pub fn render_markdown(r: &Report) -> String {
@@ -227,6 +266,7 @@ pub fn render_markdown(r: &Report) -> String {
     }
     render_retention_concentration(&r.overview, &mut out);
     render_dominator_depth(&r.overview, &mut out);
+    render_leak_indicators(&r.leak_indicators, &mut out);
     render_glossary(&mut out);
     out
 }
@@ -695,6 +735,18 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
                 fmt_count(o.unreachable_count),
                 format_bytes(o.unreachable_shallow),
             ),
+        ]);
+    }
+    if o.heap_fragmentation_ratio > 0.0 {
+        summary.row([
+            "Heap fragmentation".into(),
+            format!("{:.1}%", o.heap_fragmentation_ratio * 100.0),
+        ]);
+    }
+    if o.top_class_concentration_bp > 0 {
+        summary.row([
+            "Top-class retained concentration".into(),
+            format!("{:.1}%", o.top_class_concentration_bp as f64 / 100.0),
         ]);
     }
     summary.render(out);

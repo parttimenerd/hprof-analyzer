@@ -30,6 +30,7 @@ pub fn render_markdown_graphs(r: &Report) -> String {
     }
     render_retention_concentration_graphs(&r.overview, &mut out);
     render_dominator_depth_graphs(&r.overview, &mut out);
+    render_leak_indicators(&r.leak_indicators, &mut out);
     render_glossary(&mut out);
     out
 }
@@ -121,6 +122,18 @@ fn render_system_overview_graphs(o: &SystemOverview, out: &mut String) {
                 fmt_count(o.unreachable_count),
                 format_bytes(o.unreachable_shallow),
             ),
+        ]);
+    }
+    if o.heap_fragmentation_ratio > 0.0 {
+        summary.row([
+            "Heap fragmentation".into(),
+            format!("{:.1}%", o.heap_fragmentation_ratio * 100.0),
+        ]);
+    }
+    if o.top_class_concentration_bp > 0 {
+        summary.row([
+            "Top-class retained concentration".into(),
+            format!("{:.1}%", o.top_class_concentration_bp as f64 / 100.0),
         ]);
     }
     summary.render(out);

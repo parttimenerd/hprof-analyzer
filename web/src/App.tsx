@@ -1,5 +1,5 @@
 import React from "react";
-import type { AllocSites, ArraysBySize, ClassRow, CollectionAttribution, CollectionsAnalysis, DomTreeNode, DominatorAnalysis, FillRatioBucket, HistRow, MergedPathNode, ObjRow, PackageNode, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, Suspect, SystemOverview, ThreadInfo, ThreadLocalObj, TopArrays, TopComponents, UnreachableClassRow } from "./types";
+import type { AllocSites, ArraysBySize, ClassRow, CollectionAttribution, CollectionsAnalysis, DomTreeNode, DominatorAnalysis, FillRatioBucket, HistRow, LeakIndicators, MergedPathNode, ObjRow, PackageNode, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, Suspect, SystemOverview, ThreadInfo, ThreadLocalObj, TopArrays, TopComponents, UnreachableClassRow } from "./types";
 import { fmtCount, fmtExactBytes, formatBytes, formatEpochMs, pctOf, shortLoader } from "./format";
 import {
   CompositionStackedBar,
@@ -85,6 +85,10 @@ function Nav({ report }: { report: Report }) {
   }
   if (report.overview.dominator_depth_histogram.length > 0) {
     items.push(["dominator-depth-distribution", "Dominator-Depth Distribution"]);
+  }
+  const li = report.leak_indicators;
+  if (li && (li.anonymous_class_count > 0 || li.thread_local_null_key_count > 0 || li.direct_byte_buffer_capacity_sum > 0)) {
+    items.push(["leak-indicators", "Leak Indicators"]);
   }
   items.push(["glossary", "Glossary"]);
 
@@ -498,6 +502,18 @@ function SystemOverviewSection({ report }: { report: Report }) {
               <dd>
                 {fmtCount(o.unreachable_count)} ({formatBytes(o.unreachable_shallow)})
               </dd>
+            </>
+          )}
+          {(o.heap_fragmentation_ratio ?? 0) > 0 && (
+            <>
+              <dt>Heap fragmentation</dt>
+              <dd>{((o.heap_fragmentation_ratio ?? 0) * 100).toFixed(1)}%</dd>
+            </>
+          )}
+          {(o.top_class_concentration_bp ?? 0) > 0 && (
+            <>
+              <dt>Top-class retained concentration</dt>
+              <dd>{((o.top_class_concentration_bp ?? 0) / 100).toFixed(1)}%</dd>
             </>
           )}
         </dl>
@@ -1958,6 +1974,161 @@ function AllocSitesSection({ data }: { data: AllocSites }) {
   );
 }
 
+// ── Retention Concentration ─────────────────────────────────────────────────
+// How much of the heap the few biggest top-level dominators hold. Mirrors
+// render_md.rs::render_retention_concentration.
+function RetentionConcentrationSection({ report }: { report: Report }) {
+  const rc = report.overview.retention_concentration;
+  if (!rc || (rc.top1_bp === 0 && rc.top10_bp === 0 && rc.top100_bp === 0 && rc.num_objects_ge_1pct === 0)) {
+    return null;
+  }
+  return (
+    <section id="retention-concentration">
+      <h2>Retention Concentration</h2>
+      <p className="subtitle">
+        Share of the reachable heap retained by the few largest top-level dominators. If{" "}
+        <strong>Top 1</strong> is already high, freeing that one object reclaims most memory; if
+        the share only climbs as you widen to <strong>Top 10</strong> / <strong>Top 100</strong>,
+        the leak is spread across many peers.
+      </p>
+      <ConcentrationChart data={rc} />
+      <ConcentrationStackedBar data={rc} />
+      <table>
+        <thead>
+          <tr>
+            <th>Scope</th>
+            <th className="num">Retained Share</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Top 1 object</td>
+            <td className="num">{(rc.top1_bp / 100).toFixed(1)}%</td>
+          </tr>
+          <tr>
+            <td>Top 10 objects</td>
+            <td className="num">{(rc.top10_bp / 100).toFixed(1)}%</td>
+          </tr>
+          <tr>
+            <td>Top 100 objects</td>
+            <td className="num">{(rc.top100_bp / 100).toFixed(1)}%</td>
+          </tr>
+          <tr>
+            <td>Objects each &ge;1%</td>
+            <td className="num">{fmtCount(rc.num_objects_ge_1pct)}</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+// ── Dominator-Depth Distribution ─────────────────────────────────────────────
+// Objects per idom-hop below a GC root. Mirrors render_md.rs::render_dominator_depth.
+function DominatorDepthSection({ report }: { report: Report }) {
+  const hist = report.overview.dominator_depth_histogram;
+  if (!hist || hist.length === 0) return null;
+
+  const totalObjs = hist.reduce((s, b) => s + b.objects, 0);
+  const maxDepth = hist.reduce((m, b) => Math.max(m, b.depth), 0);
+
+  // Compute cumulative percentage for each bucket.
+  type DepthRow = { depth: number; objects: number; pct: number; cum: number };
+  const rows: DepthRow[] = [];
+  let cumSum = 0;
+  for (const b of hist) {
+    cumSum += b.objects;
+    rows.push({
+      depth: b.depth,
+      objects: b.objects,
+      pct: totalObjs > 0 ? (b.objects / totalObjs) * 100 : 0,
+      cum: totalObjs > 0 ? (cumSum / totalObjs) * 100 : 0,
+    });
+  }
+
+  return (
+    <section id="dominator-depth-distribution">
+      <h2>Dominator-Depth Distribution</h2>
+      <p className="subtitle">
+        Objects per idom-hop below a GC root. Shallow depth means most objects are held close to a
+        root; deep depth means retention flows through long chains (nested collections, linked
+        structures). Max depth: {maxDepth}.
+      </p>
+      <DepthHistogramChart data={hist} />
+      <details>
+        <summary>Full depth table ({fmtCount(hist.length)} buckets)</summary>
+        <table>
+          <thead>
+            <tr>
+              <th className="num">Depth</th>
+              <th className="num">Objects</th>
+              <th className="num">% Objects</th>
+              <th className="num">Cumulative %</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i}>
+                <td className="num">{r.depth}</td>
+                <td className="num">{fmtCount(r.objects)}</td>
+                <td className="num">{r.pct.toFixed(2)}%</td>
+                <td className="num">{r.cum.toFixed(2)}%</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </details>
+    </section>
+  );
+}
+
+// ── Leak Indicators ─────────────────────────────────────────────────────────
+// Scalar signals for common Java leak patterns. Only rendered when at least
+// one indicator is non-zero. Mirrors render_md.rs::render_leak_indicators.
+function LeakIndicatorsSection({ data }: { data?: LeakIndicators }) {
+  if (!data) return null;
+  const { anonymous_class_count, thread_local_null_key_count, direct_byte_buffer_capacity_sum } = data;
+  if (anonymous_class_count === 0 && thread_local_null_key_count === 0 && direct_byte_buffer_capacity_sum === 0) {
+    return null;
+  }
+  return (
+    <section id="leak-indicators">
+      <h2>Leak Indicators</h2>
+      <p className="subtitle">
+        Scalar signals for common Java leak patterns. Non-zero values here are worth investigating.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Indicator</th>
+            <th className="num">Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          {anonymous_class_count > 0 && (
+            <tr>
+              <td>Anonymous/generated classes</td>
+              <td className="num">{fmtCount(anonymous_class_count)}</td>
+            </tr>
+          )}
+          {thread_local_null_key_count > 0 && (
+            <tr>
+              <td>ThreadLocal null-key entries (cleared referent)</td>
+              <td className="num">{fmtCount(thread_local_null_key_count)}</td>
+            </tr>
+          )}
+          {direct_byte_buffer_capacity_sum > 0 && (
+            <tr>
+              <td>DirectByteBuffer total capacity</td>
+              <td className="num">{formatBytes(direct_byte_buffer_capacity_sum)}</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
 // ── Glossary (end section, mirrors the Markdown glossary) ─────────────────────
 function GlossarySection() {
   const entries: [string, React.ReactNode][] = [
@@ -2021,6 +2192,7 @@ export default function App({ report }: { report: Report }) {
       {report.alloc_sites && <AllocSitesSection data={report.alloc_sites} />}
       <RetentionConcentrationSection report={report} />
       <DominatorDepthSection report={report} />
+      <LeakIndicatorsSection data={report.leak_indicators} />
       <GlossarySection />
       <BackToTop />
     </div>

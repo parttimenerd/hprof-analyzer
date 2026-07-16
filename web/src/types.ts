@@ -18,6 +18,13 @@ export interface GcRootTypeRow {
   count: number;
 }
 
+// One row of the GC-root retained-by-type table (new in Task 6+).
+export interface GcRootRetainedRow {
+  root_type: string;
+  count: number;
+  retained: number;
+}
+
 export interface KindStat {
   kind: string;
   objects: number;
@@ -101,6 +108,12 @@ export interface SystemOverview {
   histogram_truncated_to: number | null;
   loader_rollup: LoaderRollup[];
   duplicate_classes: DuplicateClass[];
+  // Ratio of unreachable shallow heap to total heap (reachable + unreachable). Range [0, 1].
+  heap_fragmentation_ratio?: number;
+  // Retained heap share of the single largest class, in integer basis points (100 bp = 1%).
+  top_class_concentration_bp?: number;
+  // Retained heap grouped by GC root type.
+  gc_roots_retained_by_type?: GcRootRetainedRow[];
 }
 
 export interface PathStep {
@@ -463,6 +476,13 @@ export interface ReferencesAnalysis {
   phantom?: ReferenceStats;
 }
 
+// Scalar indicators of common Java leak patterns.
+export interface LeakIndicators {
+  anonymous_class_count: number;
+  thread_local_null_key_count: number;
+  direct_byte_buffer_capacity_sum: number;
+}
+
 export interface Report {
   schema_version: number;
   generated: string;
@@ -484,6 +504,8 @@ export interface Report {
   collection_attribution?: CollectionAttribution;
   // soft/weak/phantom reference referent analysis. Always-on.
   references: ReferencesAnalysis;
+  // Scalar leak-pattern indicators. Always-on; zero fields omitted.
+  leak_indicators?: LeakIndicators;
 }
 
 declare global {
