@@ -285,6 +285,12 @@ impl Pass1 {
         }
 
         crate::trace::probe("pass1: after scan loop (all tmp_* grown)");
+        // Free the reader buffer and no-longer-needed intern map before the
+        // sort to trim the working set as much as possible before allocating order.
+        drop(r);
+        drop(class_addr_to_idx);
+        crate::trace::trim(); // return allocator free-list to OS before sort peak
+
         // Fix up shallow sizes where class wasn't yet seen at scan time.
         // tmp_class_ids holds kind (bits 30-31) + interned class index (bits 0-29).
         // kind 1/2 (arrays) skip; kinds 0/3 reference a class for shallow lookup.
