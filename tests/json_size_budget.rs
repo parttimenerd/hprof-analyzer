@@ -93,7 +93,6 @@ fn json_size_budget() {
     }
 
     let out = Command::new(env!("CARGO_BIN_EXE_hprof-analyzer"))
-        .arg("analyze")
         .arg(&hprof)
         .arg("--format")
         .arg("json")

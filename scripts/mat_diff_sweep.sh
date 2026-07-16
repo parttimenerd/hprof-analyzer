@@ -3,7 +3,7 @@
 #
 # For every dump that has BOTH a local `.hprof` AND a MAT `_System_Overview.zip`
 # reference, this script:
-#   (1) runs `analyze <dump> --format json` on the dump    -> <name>.ours.json
+#   (1) runs `<dump> --format json` on the dump    -> <name>.ours.json
 #   (2) runs `diff <zip> <ours.json> --format json`         -> <name>.diff.json
 # then aggregates every per-dump diff into a single gate report via the
 # `dev sweep-aggregate <dir>` subcommand (per-dump table, real-comparison
@@ -87,7 +87,7 @@ for zip in "$MAT_ZIP_DIR"/*_System_Overview.zip; do
   diff="$WORK/$name.diff.json"
 
   echo "RUN  $name : analyzing dump ..."
-  if ! "$BIN" analyze "$hprof" --format json >"$ours" 2>"$WORK/$name.analyze.err"; then
+  if ! "$BIN" "$hprof" --format json >"$ours" 2>"$WORK/$name.analyze.err"; then
     echo "SKIP $name : analyzer failed (see $WORK/$name.analyze.err)"
     n_skip=$((n_skip + 1))
     continue
