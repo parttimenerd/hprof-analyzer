@@ -86,31 +86,66 @@ pub fn rpo_dfs(
         };
 
         let mut pushed = false;
-        while *cursor < child_count {
-            let child: u32 = if top == vroot {
-                roots[*cursor]
+        if top == vroot {
+            // Virtual root's children come from the `roots` slice directly.
+            while *cursor < child_count {
+                let child = roots[*cursor];
+                *cursor += 1;
+                if child as usize > n {
+                    continue;
+                }
+                if dfn[child as usize] == u32::MAX {
+                    dfn[child as usize] = dfs_count;
+                    parent_pre.push(dfn[top as usize]);
+                    dfs_count += 1;
+                    node_stack.push(child);
+                    cursor_stack.push(0);
+                    pushed = true;
+                    break;
+                }
+            }
+        } else {
+            let v = top as usize;
+            let lo = fwd_off[v] as usize;
+            let hi = fwd_off[v + 1] as usize;
+            let parent_dfn = dfn[top as usize];
+            // Fast path: adjacency list fits in one chunk — iterate the slice
+            // directly without per-element shift/mask overhead.
+            if let Some(adj) = fwd_tgt.range_slice(lo + *cursor, hi) {
+                for &child in adj {
+                    *cursor += 1;
+                    if child as usize > n {
+                        continue;
+                    }
+                    if dfn[child as usize] == u32::MAX {
+                        dfn[child as usize] = dfs_count;
+                        parent_pre.push(parent_dfn);
+                        dfs_count += 1;
+                        node_stack.push(child);
+                        cursor_stack.push(0);
+                        pushed = true;
+                        break;
+                    }
+                }
             } else {
-                let v = top as usize;
-                fwd_tgt.get((fwd_off[v] as usize) + *cursor)
-            };
-            *cursor += 1;
-
-            // Bounds check
-            if child as usize > n {
-                continue;
+                // Cross-chunk fallback: use individual get() calls.
+                while *cursor < child_count {
+                    let child = fwd_tgt.get(lo + *cursor);
+                    *cursor += 1;
+                    if child as usize > n {
+                        continue;
+                    }
+                    if dfn[child as usize] == u32::MAX {
+                        dfn[child as usize] = dfs_count;
+                        parent_pre.push(parent_dfn);
+                        dfs_count += 1;
+                        node_stack.push(child);
+                        cursor_stack.push(0);
+                        pushed = true;
+                        break;
+                    }
+                }
             }
-
-            if dfn[child as usize] == u32::MAX {
-                // Unvisited: push onto stack, assign pre-order number
-                dfn[child as usize] = dfs_count;
-                parent_pre.push(dfn[top as usize]);
-                dfs_count += 1;
-                node_stack.push(child);
-                cursor_stack.push(0);
-                pushed = true;
-                break;
-            }
-            // Already visited (in-progress or finished): skip
         }
 
         if !pushed {

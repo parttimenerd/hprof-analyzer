@@ -107,4 +107,27 @@ impl ChunkU32 {
             i += take;
         }
     }
+
+    /// Return a direct slice for `[start, end)` when the range lies entirely
+    /// within a single chunk. Returns `None` when the range straddles a boundary
+    /// (caller must fall back to `get` or `copy_range`). Zero-cost for the
+    /// common case where a node's adjacency list fits inside one 256 MB chunk.
+    #[inline(always)]
+    pub fn range_slice(&self, start: usize, end: usize) -> Option<&[u32]> {
+        if start >= end {
+            return Some(&[]);
+        }
+        let c0 = start >> CHUNK_LOG;
+        let c1 = (end - 1) >> CHUNK_LOG;
+        if c0 == c1 {
+            let o0 = start & CHUNK_MASK;
+            let o1 = end & CHUNK_MASK;
+            // end is exclusive; if end falls exactly on a chunk boundary, o1==0
+            // which means the slice ends at the chunk's last element.
+            let end_off = if o1 == 0 { CHUNK_LEN } else { o1 };
+            Some(&self.chunks[c0][o0..end_off])
+        } else {
+            None
+        }
+    }
 }
