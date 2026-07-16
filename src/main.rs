@@ -1,11 +1,12 @@
 //! CLI entry point and two-pass orchestration for the HPROF heap-dump analyzer.
 //!
-//! Subcommands: `analyze` (parse a dump and emit a report), `render` (re-render
-//! a saved Report JSON), `compare mat` (MAT export vs our JSON) / `compare
-//! reports` (cross-dump growth), `completions` (shell completion scripts), and
-//! `dev` (diagnostics).
+//! The default (no-subcommand) form sniffs the positional input: a `.hprof[.gz]`
+//! dump (or HPROF magic) runs the analyze pipeline, anything else is re-rendered
+//! as a saved Report JSON. Named subcommands: `compare mat` (MAT export vs our
+//! JSON) / `compare reports` (cross-dump growth), `completions` (shell completion
+//! scripts), and `dev` (diagnostics).
 //!
-//! The `analyze` pipeline runs: pass1 (scan) -> pass2 (build graph) -> compress
+//! The analyze pipeline runs: pass1 (scan) -> pass2 (build graph) -> compress
 //! cold arrays -> rpo DFS -> inbound CSR -> dominators -> retained -> build_model
 //! -> render. Allocation/free/compress ordering here is load-bearing for the
 //! peak-RSS budget on multi-GB dumps; see the inline notes before changing it.
@@ -76,99 +77,96 @@ impl Default for AnalyzeOptions {
     }
 }
 
-use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum, ValueHint};
 use clap_complete::Shell;
 
-/// Top-level CLI: a single subcommand.
+/// Analyze a heap dump or re-render a saved report. The input is sniffed:
+/// a `.hprof[.gz]` dump (or any file starting with the HPROF magic) runs the
+/// full analysis pipeline; anything else is treated as a saved Report JSON and
+/// re-rendered.
 #[derive(Parser)]
 #[command(
     name = "hprof-analyzer",
     version,
     about = "Analyze Java HPROF heap dumps (Eclipse MAT parity)",
     long_about = "A fast, low-memory analyzer for Java HPROF heap dumps.\n\n\
-        It parses a dump in a few streaming passes and emits static reports that \
-        replicate three Eclipse MAT views: System Overview, Leak Suspects, and \
-        Top Consumers, plus a Threads overview and some extended collection views. \
-        Reports render as plain Markdown, \
-        Markdown with ASCII graphs, self-contained HTML, or machine-readable JSON.",
+        Give it a heap dump and it parses the dump in a few streaming passes and \
+        emits static reports that replicate three Eclipse MAT views: System \
+        Overview, Leak Suspects, and Top Consumers, plus a Threads overview and \
+        some extended collection views. Give it a saved Report JSON instead and \
+        it re-renders that report without re-parsing the dump. Reports render as \
+        plain Markdown, Markdown with ASCII graphs, self-contained HTML, or \
+        machine-readable JSON.",
     after_help = "EXAMPLES:\n  \
-        hprof-analyzer analyze heap.hprof                 # Markdown to stdout\n  \
-        hprof-analyzer analyze heap.hprof report.html     # HTML (format from .html)\n  \
-        hprof-analyzer analyze heap.hprof report.json     # JSON  (format from .json)\n  \
-        hprof-analyzer analyze heap.hprof -f md-graphs    # Markdown + ASCII graphs\n  \
-        hprof-analyzer render report.json report.html     # re-render saved JSON\n  \
+        hprof-analyzer heap.hprof                         # Markdown to stdout\n  \
+        hprof-analyzer heap.hprof report.html             # HTML (format from .html)\n  \
+        hprof-analyzer heap.hprof report.json             # JSON (format from .json)\n  \
+        hprof-analyzer heap.hprof -f md-graphs            # Markdown + ASCII graphs\n  \
+        hprof-analyzer report.json report.html            # re-render saved JSON to HTML\n  \
         hprof-analyzer compare reports old.json new.json  # cross-dump growth diff\n  \
-        hprof-analyzer completions zsh > _hprof-analyzer  # shell completions"
+        hprof-analyzer completions zsh > _hprof-analyzer  # shell completions\n\n\
+        Install zsh completions:\n  \
+        hprof-analyzer completions zsh > \"${fpath[1]}/_hprof-analyzer\"",
+    args_conflicts_with_subcommands = true
 )]
 struct Cli {
     #[command(subcommand)]
-    cmd: Cmd,
+    cmd: Option<Cmd>,
+
+    /// A `.hprof[.gz]` heap dump to analyze, or a saved Report JSON (or
+    /// `.json.gz`, or `-` for stdin) to re-render. Required when no subcommand
+    /// is given.
+    #[arg(value_hint = ValueHint::FilePath)]
+    input: Option<String>,
+
+    /// Output path; writes to stdout when omitted. A `.gz` suffix writes
+    /// gzip-compressed. When `--format` is not given, the format is inferred
+    /// from this path's extension (.html/.htm, .json[.gz], .md).
+    #[arg(value_hint = ValueHint::AnyPath)]
+    output: Option<String>,
+
+    /// Report output format. Overrides the extension-inferred format;
+    /// defaults to Markdown when neither is given.
+    #[arg(short, long, value_enum)]
+    format: Option<FormatArg>,
+
+    /// Output-size detail preset. `default` reproduces the historical caps;
+    /// `minimal` shrinks and `max` expands every per-analysis output cap
+    /// (leak-suspect children, dominator subtree, alloc sites, thread
+    /// locals, top consumers). Ignored when re-rendering a saved report.
+    #[arg(long, value_enum, default_value_t = DetailLevel::Default)]
+    detail: DetailLevel,
+
+    /// Log per-phase timing (and RSS on Linux) to stderr.
+    #[arg(short, long)]
+    verbose: bool,
+
+    /// Emit RSS probe/trim traces at pipeline checkpoints.
+    #[arg(long)]
+    trace_rss: bool,
+
+    /// Show a live progress line on stderr. `auto` (default) enables it only
+    /// when stderr is a terminal and neither --verbose nor --trace-rss is set.
+    #[arg(long, value_enum, default_value_t = ProgressWhen::Auto)]
+    progress: ProgressWhen,
+
+    /// Compute an approximate duplicate-`java.lang.String` report (opt-in).
+    /// Decodes every String's backing array, hashes the value to 64 bits and
+    /// counts collisions — never retains the strings, so RSS stays bounded.
+    /// Adds two extra heap-file scans; off by default. Analyze-only.
+    #[arg(long)]
+    dup_strings: bool,
+
+    /// Compute container attribution by holder Class#field (opt-in; adds
+    /// ~300MB peak RSS). Analyze-only.
+    #[arg(long)]
+    collections: bool,
 }
 
-/// The analyzer subcommands.
+/// Named subcommands. The default (no subcommand) analyzes or re-renders the
+/// positional input; see `Cli`.
 #[derive(Subcommand)]
 enum Cmd {
-    /// Analyze a heap dump and write a report
-    #[command(after_help = "EXAMPLES:\n  \
-        hprof-analyzer analyze heap.hprof                 # Markdown to stdout\n  \
-        hprof-analyzer analyze heap.hprof report.html     # HTML (inferred from .html)\n  \
-        hprof-analyzer analyze heap.hprof report.json.gz  # gzip-compressed JSON\n  \
-        hprof-analyzer analyze heap.hprof -f md-graphs    # Markdown + ASCII graphs\n  \
-        hprof-analyzer analyze heap.hprof --detail max    # looser output caps")]
-    Analyze {
-        /// Path to the input .hprof heap dump (`.hprof.gz` read transparently).
-        input: String,
-        /// Output path; writes to stdout when omitted. A `.gz` suffix writes
-        /// gzip-compressed. When `--format` is not given, the format is inferred
-        /// from this path's extension (.html/.htm, .json[.gz], .md).
-        output: Option<String>,
-        /// Report output format. Overrides the extension-inferred format;
-        /// defaults to Markdown when neither is given.
-        #[arg(short, long, value_enum)]
-        format: Option<FormatArg>,
-        /// Output-size detail preset. `default` reproduces the historical caps;
-        /// `minimal` shrinks and `max` expands every per-analysis output cap
-        /// (leak-suspect children, dominator subtree, alloc sites, thread
-        /// locals, top consumers).
-        #[arg(long, value_enum, default_value_t = DetailLevel::Default)]
-        detail: DetailLevel,
-        /// Log per-phase timing (and RSS on Linux) to stderr.
-        #[arg(short, long)]
-        verbose: bool,
-        /// Emit RSS probe/trim traces at pipeline checkpoints.
-        #[arg(long)]
-        trace_rss: bool,
-        /// Show a live progress line on stderr. `auto` (default) enables it only
-        /// when stderr is a terminal and neither --verbose nor --trace-rss is set.
-        #[arg(long, value_enum, default_value_t = ProgressWhen::Auto)]
-        progress: ProgressWhen,
-        /// Compute an approximate duplicate-`java.lang.String` report (opt-in).
-        /// Decodes every String's backing array, hashes the value to 64 bits and
-        /// counts collisions — never retains the strings, so RSS stays bounded.
-        /// Adds two extra heap-file scans; off by default.
-        #[arg(long)]
-        dup_strings: bool,
-        /// Compute container attribution by holder Class#field (opt-in; adds ~300MB peak RSS).
-        #[arg(long)]
-        collections: bool,
-    },
-    /// Re-render a saved canonical Report JSON to another format
-    #[command(after_help = "EXAMPLES:\n  \
-        hprof-analyzer render report.json                 # Markdown to stdout\n  \
-        hprof-analyzer render report.json report.html     # HTML (inferred from .html)\n  \
-        hprof-analyzer render report.json.gz -f md-graphs # read .gz, emit md-graphs")]
-    Render {
-        /// Path to a Report JSON (or `.json.gz`), or "-" for stdin.
-        input: String,
-        /// Output path; writes to stdout when omitted. A `.gz` suffix writes
-        /// gzip-compressed. When `--format` is not given, the format is inferred
-        /// from this path's extension (.html/.htm, .json[.gz], .md).
-        output: Option<String>,
-        /// Report output format. Overrides the extension-inferred format;
-        /// defaults to Markdown when neither is given.
-        #[arg(short, long, value_enum)]
-        format: Option<FormatArg>,
-    },
     /// Compare reports (MAT export vs ours, or two of ours across time)
     Compare {
         #[command(subcommand)]
@@ -192,8 +190,10 @@ enum CompareCmd {
     /// Compare a MAT export against our canonical JSON (exit 2 on FAIL)
     Mat {
         /// Path to the Eclipse MAT report (HTML/zip).
+        #[arg(value_hint = ValueHint::FilePath)]
         mat: String,
         /// Path to our canonical Report JSON.
+        #[arg(value_hint = ValueHint::FilePath)]
         ours: String,
         /// Diff output format (Markdown or JSON); defaults to Markdown.
         #[arg(short, long, value_enum)]
@@ -202,8 +202,10 @@ enum CompareCmd {
     /// Cross-dump growth: compare two canonical Report JSONs (A=baseline, B=current)
     Reports {
         /// Baseline (earlier) Report JSON, or "-" for stdin.
+        #[arg(value_hint = ValueHint::FilePath)]
         a: String,
         /// Current (later) Report JSON.
+        #[arg(value_hint = ValueHint::FilePath)]
         b: String,
         /// Diff output format (Markdown or JSON); defaults to Markdown.
         #[arg(short, long, value_enum)]
@@ -217,9 +219,15 @@ enum DevCmd {
     /// Print the JSON Schema of the report model
     EmitSchema,
     /// Aggregate per-dump *.diff.json files into a gate report (exit 2 on gate-fail)
-    SweepAggregate { dir: String },
+    SweepAggregate {
+        #[arg(value_hint = ValueHint::DirPath)]
+        dir: String,
+    },
     /// Dump pass-1 parse stats as JSON
-    DumpPass1 { input: String },
+    DumpPass1 {
+        #[arg(value_hint = ValueHint::FilePath)]
+        input: String,
+    },
 }
 
 /// CLI mirror of `OutputFormat` (kept separate so clap owns the value-enum).
@@ -349,63 +357,8 @@ fn main() {
 
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Analyze {
-            input,
-            output,
-            format,
-            detail,
-            verbose,
-            trace_rss,
-            progress,
-            dup_strings,
-            collections,
-        } => {
-            if trace_rss {
-                trace::set_enabled(true);
-            }
-            // Progress: `auto` shows a live line only on an interactive stderr,
-            // and never when --verbose/--trace-rss already print phase lines.
-            let show_progress = match progress {
-                ProgressWhen::Always => true,
-                ProgressWhen::Never => false,
-                ProgressWhen::Auto => !verbose && !trace_rss && std::io::stderr().is_terminal(),
-            };
-            progress::set_enabled(show_progress);
-            let fmt = resolve_format(format, output.as_deref());
-            let opts = detail.options();
-            let opts = AnalyzeOptions {
-                dup_strings,
-                collections,
-                ..opts
-            };
-            if let Err(e) = run(
-                &input,
-                output.as_deref(),
-                fmt,
-                verbose,
-                cvec::Codec::Deflate9,
-                opts,
-            ) {
-                fail(analyze_error_hint(&input, &e));
-            }
-        }
-        Cmd::Render {
-            input,
-            output,
-            format,
-        } => {
-            let fmt = resolve_format(format, output.as_deref());
-            match render_report(&input, fmt) {
-                Ok(text) => {
-                    if let Err(e) = write_output(output.as_deref(), &text) {
-                        let target = output.as_deref().unwrap_or("<stdout>");
-                        fail(format!("cannot write '{target}': {e}"));
-                    }
-                }
-                Err(e) => fail(render_error_hint(&input, &e)),
-            }
-        }
-        Cmd::Compare { cmd } => match cmd {
+        None => run_default(cli),
+        Some(Cmd::Compare { cmd }) => match cmd {
             CompareCmd::Mat { mat, ours, format } => {
                 // Name a missing input up front — `run_diff` opens both files but
                 // surfaces only a bare OS error, so pre-check for a clear message.
@@ -428,11 +381,11 @@ fn main() {
                 }
             }
         },
-        Cmd::Completions { shell } => {
+        Some(Cmd::Completions { shell }) => {
             let mut cmd = Cli::command();
             clap_complete::generate(shell, &mut cmd, "hprof-analyzer", &mut io::stdout());
         }
-        Cmd::Dev { cmd } => match cmd {
+        Some(Cmd::Dev { cmd }) => match cmd {
             DevCmd::EmitSchema => {
                 let schema = schemars::schema_for!(report::Report);
                 match serde_json::to_string_pretty(&schema) {
@@ -454,6 +407,93 @@ fn main() {
     }
 }
 
+/// The default (no-subcommand) command: sniff the input and either run the
+/// full analyze pipeline (HPROF) or re-render a saved Report JSON.
+fn run_default(cli: Cli) {
+    let Some(input) = cli.input else {
+        // No subcommand and no input: show help and exit like a usage error.
+        let mut cmd = Cli::command();
+        let _ = cmd.print_help();
+        println!();
+        process::exit(2);
+    };
+
+    if input_is_hprof(&input) {
+        if cli.trace_rss {
+            trace::set_enabled(true);
+        }
+        let show_progress = match cli.progress {
+            ProgressWhen::Always => true,
+            ProgressWhen::Never => false,
+            ProgressWhen::Auto => !cli.verbose && !cli.trace_rss && std::io::stderr().is_terminal(),
+        };
+        progress::set_enabled(show_progress);
+        let fmt = resolve_format(cli.format, cli.output.as_deref());
+        let opts = cli.detail.options();
+        let opts = AnalyzeOptions {
+            dup_strings: cli.dup_strings,
+            collections: cli.collections,
+            ..opts
+        };
+        if let Err(e) = run(
+            &input,
+            cli.output.as_deref(),
+            fmt,
+            cli.verbose,
+            cvec::Codec::Deflate9,
+            opts,
+        ) {
+            fail(analyze_error_hint(&input, &e));
+        }
+    } else {
+        // Re-render path. Analyze-only flags have no effect here — refuse them
+        // with a hint rather than silently ignoring them.
+        if cli.collections {
+            fail(
+                "--collections has no effect when re-rendering a saved report; \
+                  re-run on the .hprof dump to include it",
+            );
+        }
+        if cli.dup_strings {
+            fail(
+                "--dup-strings has no effect when re-rendering a saved report; \
+                  re-run on the .hprof dump to include it",
+            );
+        }
+        if cli.detail != DetailLevel::Default {
+            fail(
+                "--detail has no effect when re-rendering a saved report; \
+                  re-run on the .hprof dump to change output caps",
+            );
+        }
+        let fmt = resolve_format(cli.format, cli.output.as_deref());
+        match render_report(&input, fmt) {
+            Ok(text) => {
+                if let Err(e) = write_output(cli.output.as_deref(), &text) {
+                    let target = cli.output.as_deref().unwrap_or("<stdout>");
+                    fail(format!("cannot write '{target}': {e}"));
+                }
+            }
+            Err(e) => fail(render_error_hint(&input, &e)),
+        }
+    }
+}
+
+/// Decide whether `input` should run the analyze pipeline. True when the path
+/// has a `.hprof` / `.hprof.gz` extension OR the file begins with the HPROF
+/// magic (`JAVA PROFILE`). `-` (stdin) is never HPROF: a non-seekable pipe of a
+/// dump was never supported, and the render path handles `-`.
+fn input_is_hprof(input: &str) -> bool {
+    if input == "-" {
+        return false;
+    }
+    let lower = input.to_ascii_lowercase();
+    if lower.ends_with(".hprof") || lower.ends_with(".hprof.gz") {
+        return true;
+    }
+    looks_like_hprof(input)
+}
+
 /// Turn an `analyze` pipeline error into an actionable message. A missing input
 /// file is the most common mistake, so name the path explicitly — but only when
 /// the error is a bare `NotFound` from opening the input. Output-write failures
@@ -467,16 +507,10 @@ fn analyze_error_hint(input: &str, e: &io::Error) -> String {
     }
 }
 
-/// Turn a `render` error into an actionable message. The classic mistake is
-/// pointing `render` at a heap dump instead of a saved Report JSON.
+/// Turn a `render` error into an actionable message.
 fn render_error_hint(input: &str, e: &io::Error) -> String {
     if e.kind() == io::ErrorKind::NotFound {
         return format!("cannot open '{input}': no such file or directory");
-    }
-    if looks_like_hprof(input) {
-        return format!(
-            "'{input}' looks like a heap dump, not a Report JSON; use `analyze`, not `render`"
-        );
     }
     e.to_string()
 }
