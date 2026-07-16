@@ -23,6 +23,17 @@
         "zero_length_count": 0
       }
     },
+    "collection_attribution": {
+      "description": "Container attribution by holder `Class#field`, present only when\n`--collections` was passed; `None` otherwise. Additive; not parity-compared.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CollectionAttribution"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "collections": {
       "description": "Field-decode collection & array analysis (fill ratios, size histogram,\nmap collisions, constant primitive arrays). Always-on; additive,\ndefaults to empty for round-trip with older JSON.",
       "$ref": "#/$defs/CollectionsAnalysis",
@@ -388,6 +399,32 @@
         "pretty_class",
         "instances",
         "retained"
+      ]
+    },
+    "CollectionAttribution": {
+      "description": "Container attribution by holder `Class#field`, present only when `--collections` was passed.",
+      "type": "object",
+      "properties": {
+        "biggest_single": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FieldAttributionBiggestRow"
+          }
+        },
+        "most_overall": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FieldAttributionRow"
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "most_overall",
+        "biggest_single",
+        "truncated"
       ]
     },
     "CollectionFillRatio": {
@@ -917,6 +954,76 @@
         "instances",
         "shallow",
         "retained"
+      ]
+    },
+    "FieldAttributionBiggestRow": {
+      "description": "One holder `Class#field` whose single largest container is ranked by element count.",
+      "type": "object",
+      "properties": {
+        "container_class": {
+          "type": "string"
+        },
+        "elements": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "field": {
+          "type": "string"
+        },
+        "holder_class": {
+          "type": "string"
+        },
+        "retained": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "holder_class",
+        "field",
+        "container_class",
+        "elements",
+        "retained"
+      ]
+    },
+    "FieldAttributionRow": {
+      "description": "One holder `Class#field` ranked by total elements across every container it points at.",
+      "type": "object",
+      "properties": {
+        "container_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "container_kind": {
+          "type": "string"
+        },
+        "field": {
+          "type": "string"
+        },
+        "holder_class": {
+          "type": "string"
+        },
+        "total_elements": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "total_retained": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "holder_class",
+        "field",
+        "container_kind",
+        "total_elements",
+        "total_retained",
+        "container_count"
       ]
     },
     "FillRatioBucket": {

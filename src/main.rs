@@ -65,6 +65,7 @@ pub struct AnalyzeOptions {
     pub leak_children_cap: usize,
     pub top_consumers: usize,
     pub dup_strings: bool,
+    pub collections: bool,
 }
 
 #[cfg(test)]
@@ -85,9 +86,10 @@ use clap_complete::Shell;
     version,
     about = "Analyze Java HPROF heap dumps (Eclipse MAT parity)",
     long_about = "A fast, low-memory analyzer for Java HPROF heap dumps.\n\n\
-        It parses a dump in two streaming passes and emits static reports that \
-        replicate three Eclipse MAT views — System Overview, Leak Suspects, and \
-        Top Consumers — plus a Threads overview. Reports render as plain Markdown, \
+        It parses a dump in a few streaming passes and emits static reports that \
+        replicate three Eclipse MAT views: System Overview, Leak Suspects, and \
+        Top Consumers, plus a Threads overview and some extended collection views. \
+        Reports render as plain Markdown, \
         Markdown with ASCII graphs, self-contained HTML, or machine-readable JSON.",
     after_help = "EXAMPLES:\n  \
         hprof-analyzer analyze heap.hprof                 # Markdown to stdout\n  \
@@ -146,6 +148,9 @@ enum Cmd {
         /// Adds two extra heap-file scans; off by default.
         #[arg(long)]
         dup_strings: bool,
+        /// Compute container attribution by holder Class#field (opt-in; adds ~300MB peak RSS).
+        #[arg(long)]
+        collections: bool,
     },
     /// Re-render a saved canonical Report JSON to another format
     #[command(after_help = "EXAMPLES:\n  \
@@ -268,6 +273,7 @@ impl DetailLevel {
             leak_children_cap: lc,
             top_consumers: tc,
             dup_strings: false,
+            collections: false,
         }
     }
 }
@@ -352,6 +358,7 @@ fn main() {
             trace_rss,
             progress,
             dup_strings,
+            collections,
         } => {
             if trace_rss {
                 trace::set_enabled(true);
@@ -368,6 +375,7 @@ fn main() {
             let opts = detail.options();
             let opts = AnalyzeOptions {
                 dup_strings,
+                collections,
                 ..opts
             };
             if let Err(e) = run(

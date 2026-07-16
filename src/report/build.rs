@@ -89,6 +89,7 @@ pub fn build_model(
         dominator_analysis,
         collections: g.collections.clone(),
         references,
+        collection_attribution: None,
     }
 }
 

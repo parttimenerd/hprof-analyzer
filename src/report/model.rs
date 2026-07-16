@@ -807,6 +807,41 @@ pub struct CollectionsAnalysis {
     pub top_obj_arrays: TopArrays,
 }
 
+/// One holder `Class#field` ranked by total elements across every container it points at.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct FieldAttributionRow {
+    pub holder_class: String,
+    pub field: String,
+    pub container_kind: String,
+    pub total_elements: u64,
+    pub total_retained: u64,
+    pub container_count: u64,
+}
+
+/// One holder `Class#field` whose single largest container is ranked by element count.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct FieldAttributionBiggestRow {
+    pub holder_class: String,
+    pub field: String,
+    pub container_class: String,
+    pub elements: u64,
+    pub retained: u64,
+}
+
+/// Container attribution by holder `Class#field`, present only when `--collections` was passed.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct CollectionAttribution {
+    pub most_overall: Vec<FieldAttributionRow>,
+    pub biggest_single: Vec<FieldAttributionBiggestRow>,
+    pub truncated: bool,
+}
+
 /// One class row in a reference-statistics histogram. Additive.
 #[derive(
     Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
@@ -902,4 +937,8 @@ pub struct Report {
     /// empty for round-trip with older JSON.
     #[serde(default)]
     pub references: ReferencesAnalysis,
+    /// Container attribution by holder `Class#field`, present only when
+    /// `--collections` was passed; `None` otherwise. Additive; not parity-compared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collection_attribution: Option<CollectionAttribution>,
 }

@@ -107,6 +107,7 @@ mod tests {
             dominator_analysis: Default::default(),
             collections: Default::default(),
             references: Default::default(),
+            collection_attribution: None,
         }
     }
 

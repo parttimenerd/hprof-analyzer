@@ -619,7 +619,9 @@ pub(crate) fn build_field_decode_views(
     path: &str,
     p1: &Pass1,
     shallow: &[u32],
+    collect_attribution: bool,
 ) -> std::io::Result<(CollectionsAnalysis, ReferencesAnalysis, [Vec<u32>; 3])> {
+    let _ = collect_attribution; // AREA B will use this
     let id_size = p1.id_size;
     // Instance-blob object references are id_size wide (compressed OOPs only
     // narrows object-ARRAY elements). Both instance fields and obj-array
