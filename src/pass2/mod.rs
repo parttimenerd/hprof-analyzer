@@ -977,7 +977,7 @@ impl Pass2 {
                     edge_if_valid!(src_idx, elem_class_id, false);
 
                     // Edges: array → non-null elements
-                    for chunk in scratch.chunks(ids as usize) {
+                    for chunk in scratch.chunks_exact(ids as usize) {
                         let ref_val = read_id(chunk, id_size);
                         if ref_val != 0 {
                             if let Some(dst) = cache.index_of(id_map, ref_val) {
@@ -1181,7 +1181,7 @@ impl Pass2 {
                     add_edge!(src_idx, elem_class_id, false);
 
                     // Edges to elements
-                    for chunk in scratch.chunks(ids as usize) {
+                    for chunk in scratch.chunks_exact(ids as usize) {
                         let ref_val = read_id(chunk, id_size);
                         add_edge!(src_idx, ref_val, false);
                     }

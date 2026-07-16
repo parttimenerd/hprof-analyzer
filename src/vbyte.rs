@@ -5,7 +5,13 @@
 
 /// Variable-length integer encoding (7 bits per byte, MSB = continuation flag).
 /// Used for delta-encoding sorted inbound edge lists to reduce memory ~4x.
+#[inline]
 pub fn encode(mut v: u32, out: &mut Vec<u8>) {
+    // Fast path: the vast majority of values (counts, small deltas) fit in 1 byte.
+    if v < 128 {
+        out.push(v as u8);
+        return;
+    }
     loop {
         let b = (v & 0x7f) as u8;
         v >>= 7;
@@ -18,7 +24,14 @@ pub fn encode(mut v: u32, out: &mut Vec<u8>) {
 }
 
 /// Decode one vbyte u32 from the front of `buf`, returning (value, bytes_read).
+#[inline]
 pub fn decode_one(buf: &[u8]) -> (u32, usize) {
+    // Fast path: most values in the inbound CSR are small (0..127) → single byte.
+    if let Some(&b0) = buf.first() {
+        if b0 & 0x80 == 0 {
+            return (b0 as u32, 1);
+        }
+    }
     let mut val = 0u32;
     let mut shift = 0u32;
     for (i, &b) in buf.iter().enumerate() {
@@ -82,7 +95,12 @@ pub fn encoded_len(mut v: u32) -> usize {
 }
 
 /// Variable-length encode a u64 (7 bits per byte, MSB = continuation).
+#[inline]
 pub fn encode_u64(mut v: u64, out: &mut Vec<u8>) {
+    if v < 128 {
+        out.push(v as u8);
+        return;
+    }
     loop {
         let b = (v & 0x7f) as u8;
         v >>= 7;
@@ -95,7 +113,13 @@ pub fn encode_u64(mut v: u64, out: &mut Vec<u8>) {
 }
 
 /// Decode one vbyte u64 from the front of `buf`, returning (value, bytes_read).
+#[inline]
 pub fn decode_one_u64(buf: &[u8]) -> (u64, usize) {
+    if let Some(&b0) = buf.first() {
+        if b0 & 0x80 == 0 {
+            return (b0 as u64, 1);
+        }
+    }
     let mut val = 0u64;
     let mut shift = 0u32;
     for (i, &b) in buf.iter().enumerate() {
