@@ -120,3 +120,84 @@ fn help_has_no_analyze_or_render_subcommands() {
         "completions missing from help"
     );
 }
+
+/// Analyze a fixture to canonical JSON and write it to `dest`. Panics on failure.
+fn analyze_to_json(hprof: &str, dest: &std::path::Path) {
+    let json = Command::new(BIN)
+        .arg(hprof)
+        .args(["--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        json.status.success(),
+        "setup analyze→json failed: {}",
+        String::from_utf8_lossy(&json.stderr)
+    );
+    std::fs::write(dest, &json.stdout).unwrap();
+}
+
+/// Stdin (`-`) is treated as a saved report JSON and re-rendered.
+#[test]
+fn stdin_dash_rerenders_json() {
+    let Some(hprof) = philosophers() else { return };
+    let tmp = std::env::temp_dir().join(format!("hprof_cli_stdin_{}.json", std::process::id()));
+    analyze_to_json(&hprof, &tmp);
+
+    let json = std::fs::File::open(&tmp).unwrap();
+    let out = Command::new(BIN)
+        .arg("-")
+        .stdin(json)
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&tmp);
+    assert!(
+        out.status.success(),
+        "stdin re-render failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let md = String::from_utf8_lossy(&out.stdout);
+    assert!(md.contains("## System Overview"), "stdin re-render missing sections");
+}
+
+/// A saved report JSON misnamed with a `.hprof` extension is routed to analyze
+/// on its extension; analysis fails, and the error hints that it may be a report.
+#[test]
+fn misnamed_json_dot_hprof_hints() {
+    let Some(hprof) = philosophers() else { return };
+    // A .hprof-named file whose bytes are actually report JSON.
+    let tmp = std::env::temp_dir().join(format!("hprof_cli_misnamed_{}.hprof", std::process::id()));
+    analyze_to_json(&hprof, &tmp);
+
+    let out = Command::new(BIN).arg(&tmp).output().unwrap();
+    let _ = std::fs::remove_file(&tmp);
+    assert!(!out.status.success(), "misnamed .hprof JSON should fail to analyze");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("does not start with the HPROF magic"),
+        "missing misnamed-report hint, got: {err}"
+    );
+}
+
+/// A `.hprof.gz` path is routed to analyze on its extension (the pipeline reads
+/// gzip transparently), producing a Markdown report.
+#[test]
+fn bare_path_hprof_gz_analyzes() {
+    use flate2::{write::GzEncoder, Compression};
+    use std::io::Write;
+    let Some(hprof) = philosophers() else { return };
+    let raw = std::fs::read(&hprof).unwrap();
+    let tmp = std::env::temp_dir().join(format!("hprof_cli_{}.hprof.gz", std::process::id()));
+    let mut enc = GzEncoder::new(Vec::new(), Compression::fast());
+    enc.write_all(&raw).unwrap();
+    std::fs::write(&tmp, enc.finish().unwrap()).unwrap();
+
+    let out = Command::new(BIN).arg(&tmp).output().unwrap();
+    let _ = std::fs::remove_file(&tmp);
+    assert!(
+        out.status.success(),
+        "bare-path .hprof.gz analyze failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let md = String::from_utf8_lossy(&out.stdout);
+    assert!(md.contains("## System Overview"), "gz analyze missing System Overview");
+}

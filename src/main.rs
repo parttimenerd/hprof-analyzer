@@ -520,13 +520,21 @@ fn input_is_hprof(input: &str) -> bool {
 /// file is the most common mistake, so name the path explicitly — but only when
 /// the error is a bare `NotFound` from opening the input. Output-write failures
 /// already carry a `cannot write '…'` message (see `run`), so leave those alone.
+/// A file routed here on its `.hprof` extension but lacking the HPROF magic is
+/// almost certainly a saved report JSON misnamed as a dump — say so.
 fn analyze_error_hint(input: &str, e: &io::Error) -> String {
     let msg = e.to_string();
     if e.kind() == io::ErrorKind::NotFound && !msg.starts_with("cannot ") {
-        format!("cannot open '{input}': no such file or directory")
-    } else {
-        msg
+        return format!("cannot open '{input}': no such file or directory");
     }
+    if !looks_like_hprof(input) && std::fs::metadata(input).is_ok() {
+        return format!(
+            "{msg}\n(hint: '{input}' does not start with the HPROF magic; if it \
+             is a saved report JSON, rename it without the .hprof extension to \
+             re-render it)"
+        );
+    }
+    msg
 }
 
 /// Turn a `render` error into an actionable message.
