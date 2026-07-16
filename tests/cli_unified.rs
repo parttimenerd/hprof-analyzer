@@ -42,7 +42,11 @@ fn bare_path_json_rerenders() {
         .args(["--format", "json"])
         .output()
         .unwrap();
-    assert!(json.status.success());
+    assert!(
+        json.status.success(),
+        "setup analyze→json failed: {}",
+        String::from_utf8_lossy(&json.stderr)
+    );
     let tmp = std::env::temp_dir().join(format!("hprof_cli_{}.json", std::process::id()));
     std::fs::write(&tmp, &json.stdout).unwrap();
 
@@ -70,7 +74,11 @@ fn analyze_flag_on_json_errors() {
         .args(["--format", "json"])
         .output()
         .unwrap();
-    assert!(json.status.success());
+    assert!(
+        json.status.success(),
+        "setup analyze→json failed: {}",
+        String::from_utf8_lossy(&json.stderr)
+    );
     let tmp = std::env::temp_dir().join(format!("hprof_cli_flag_{}.json", std::process::id()));
     std::fs::write(&tmp, &json.stdout).unwrap();
 
