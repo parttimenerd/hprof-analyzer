@@ -1177,8 +1177,8 @@ pub(crate) fn build_field_decode_views(
             array_fill.add(non_null, count, arr_shallow, 0);
 
             // Top object arrays: fold EVERY object array. The per-class key is the
-            // array class id read from the record — class_ids has been freed by now,
-            // so we resolve names later via obj_array_name_of_key.
+            // array class id read from the record; names resolved later via
+            // obj_array_name_of_key (no class_ids needed at assembly time).
             if arr_idx != u32::MAX {
                 top_obj.add(arr_idx, array_class_id, count, arr_shallow);
             }

@@ -226,33 +226,15 @@ fn phase1(
     label: &mut [u32],
 ) -> Result<(), DesyncErr> {
     let cnt_u32 = count as u32;
+    // Reused scratch buffer for path compression in eval/compress.
+    // Avoids a per-call Vec allocation in the hot loop (514M+ iterations on large dumps).
+    let mut chain: Vec<u32> = Vec::new();
     for i in (1..count).rev() {
         let w_node = rpo.vertex[i] as usize;
 
-        let process_pred = |pv: u32,
-                            semi: &mut [u32],
-                            ancestor: &mut [u32],
-                            label: &mut [u32]|
-         -> Result<(), DesyncErr> {
-            // Guard: a valid predecessor pre-order is < count. A garbage
-            // value here is the exact class of bug that previously indexed
-            // the work arrays out of bounds.
-            if pv >= cnt_u32 {
-                return Err(DesyncErr {
-                    at: i,
-                    why: "predecessor pre-order out of range",
-                });
-            }
-            let u = eval(pv, ancestor, label, semi);
-            if semi[u as usize] < semi[i] {
-                semi[i] = semi[u as usize];
-            }
-            Ok(())
-        };
-
         // Implicit virtual-root predecessor for GC roots
         if vr_adjacent.get(w_node) {
-            let u = eval(0, ancestor, label, semi);
+            let u = eval(0, ancestor, label, semi, &mut chain);
             if semi[u as usize] < semi[i] {
                 semi[i] = semi[u as usize];
             }
@@ -294,9 +276,19 @@ fn phase1(
                 why: "delta ran off end",
             })?;
             pos += consumed;
-            let pred_pre = prev.wrapping_add(delta);
-            prev = pred_pre;
-            process_pred(pred_pre, semi, ancestor, label)?;
+            let pv = prev.wrapping_add(delta);
+            prev = pv;
+            // Guard: a valid predecessor pre-order is < count.
+            if pv >= cnt_u32 {
+                return Err(DesyncErr {
+                    at: i,
+                    why: "predecessor pre-order out of range",
+                });
+            }
+            let u = eval(pv, ancestor, label, semi, &mut chain);
+            if semi[u as usize] < semi[i] {
+                semi[i] = semi[u as usize];
+            }
         }
 
         link(i as u32, rpo.parent_pre[i], ancestor);
@@ -348,19 +340,20 @@ fn build_exact_offsets(n: usize, inb_data: &[u8]) -> std::io::Result<Vec<u64>> {
 /// eval(v): find the vertex on the path v..root (in the union-find forest)
 /// with the minimum semi value, applying path compression.
 /// Returns the label (pre-order index) of that minimum-semi vertex.
-fn eval(v: u32, ancestor: &mut [u32], label: &mut [u32], semi: &[u32]) -> u32 {
+fn eval(v: u32, ancestor: &mut [u32], label: &mut [u32], semi: &[u32], chain: &mut Vec<u32>) -> u32 {
     if ancestor[v as usize] == UNDEFINED {
         return label[v as usize];
     }
-    compress(v, ancestor, label, semi);
+    compress(v, ancestor, label, semi, chain);
     label[v as usize]
 }
 
 /// Iterative path compression: collect the path to the root, then update
 /// labels/ancestors from the top down.  No recursion (heaps have millions of nodes).
-fn compress(v: u32, ancestor: &mut [u32], label: &mut [u32], semi: &[u32]) {
+/// `chain` is a reused scratch buffer to avoid repeated allocations.
+fn compress(v: u32, ancestor: &mut [u32], label: &mut [u32], semi: &[u32], chain: &mut Vec<u32>) {
     // Collect chain v → ancestor[v] → ... while ancestor != UNDEFINED
-    let mut chain: Vec<u32> = Vec::new();
+    chain.clear();
     let mut x = v;
     while ancestor[ancestor[x as usize] as usize] != UNDEFINED {
         chain.push(x);

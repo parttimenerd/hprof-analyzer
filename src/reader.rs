@@ -9,7 +9,7 @@ use std::{
     io::{self, BufReader, Read},
 };
 
-const BUF_CAP: usize = 1 << 20; // 1 MiB refill chunk
+const BUF_CAP: usize = 8 << 20; // 8 MiB refill chunk
 
 /// Streaming HPROF reader with a large internal buffer.
 ///

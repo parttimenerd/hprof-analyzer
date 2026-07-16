@@ -7,7 +7,7 @@ use std::{
 
 use crate::{reader::HprofReader, types::tags, vbyte};
 
-use super::{FieldPlan, Pass2};
+use super::Pass2;
 
 /// Inbound CSR block size: one sampled byte-offset per INB_BLOCK nodes.
 /// Each node's predecessor slice is count-prefixed so it is self-delimiting;
@@ -382,18 +382,18 @@ pub struct Graph {
 /// Deferred inbound-CSR construction. Built by `Pass2::build` with everything
 /// needed to run the inbound scan + delta-encode later (after rpo frees its
 /// arrays), keeping the ~5.5GB inbound CSR off the rpo-phase RSS peak.
+#[allow(dead_code)]
 pub struct InboundBuilder {
     pub(crate) path: String,
     pub(crate) id_size: u8,
-    pub(crate) ref_size: usize,
     pub(crate) n: usize,
     /// Live id_map as constructed by `build`; taken by `compress_id_map`.
     pub(crate) id_map: Option<crate::id_map::IdMap>,
     /// Compressed id_map (blob, element_count); set by `compress_id_map`.
     pub(crate) id_map_c: Option<(Vec<u8>, usize)>,
     pub(crate) id_map_codec: crate::cvec::Codec,
-    pub(crate) class_addrs: std::collections::HashSet<u64>,
-    pub(crate) field_plans: HashMap<u64, FieldPlan>,
+    pub(crate) class_idx_arr: Vec<u32>,
+    pub(crate) field_plans_dense: Vec<super::FieldPlan>,
     /// Prefix-summed inbound start cursors (in_degree after prefix-sum), len n.
     pub(crate) in_cursors: Vec<u32>,
     pub(crate) total_inb: u64,
@@ -416,18 +416,88 @@ impl InboundBuilder {
         Ok(())
     }
 
+    /// Build the inbound CSR by transposing the already-computed forward CSR,
+    /// avoiding a third full-file scan. Requires the forward CSR
+    /// (fwd_offsets/fwd_targets) and dfn (pre-order) to still be alive.
+    /// id_map, class_addrs, and field_plans stored in self are no longer needed
+    /// and are freed before the Phase-4 encode.
+    ///
+    /// Memory peak: fwd_offsets + fwd_targets + inb_flat + in_cursors + dfn.
+    /// On a 34 GB dump this is ~17 GB, well within the thinkstation's budget
+    /// but higher than the old deferred-scan path (~9 GB). The trade-off is
+    /// eliminating the ~234 s fourth full-file scan entirely.
+    pub fn build_from_fwd(
+        self,
+        fwd_offsets: &[u32],
+        fwd_targets: &[u32],
+        dfn: &[u32],
+    ) -> io::Result<(Vec<u64>, Vec<u8>)> {
+        let InboundBuilder {
+            n,
+            mut in_cursors,
+            total_inb,
+            synthetic_edges: _,
+            // The rest are only needed by the file-scan path; drop them early to
+            // free the id_map (~4 GB) before the inb_flat alloc.
+            id_map,
+            id_map_c,
+            class_idx_arr,
+            field_plans_dense,
+            ..
+        } = self;
+
+        drop(id_map);
+        drop(id_map_c);
+        drop(class_idx_arr);
+        drop(field_plans_dense);
+
+        // Allocate the flat inbound array.
+        let mut inb_flat = crate::chunkvec::ChunkU32::zeroed(total_inb as usize);
+        if crate::trace::enabled() {
+            eprintln!(
+                "[trace-rss] inbound (fwd-transpose): total_inb={} edges, inb_flat={} MB",
+                total_inb,
+                (total_inb as usize * 4) / (1024 * 1024)
+            );
+        }
+        crate::trace::probe("inbound fwd-transpose: after inb_flat alloc");
+
+        // Transpose the forward CSR: for each src and each of its fwd targets
+        // dst, write src into inb_flat at in_cursors[dst] and advance the cursor.
+        // `in_cursors[i]` starts as the cumulative prefix-sum START for node i
+        // and advances to the END as edges are written.
+        let n_nodes = fwd_offsets.len().saturating_sub(1);
+        for src in 0..n_nodes {
+            let lo = fwd_offsets[src] as usize;
+            let hi = fwd_offsets[src + 1] as usize;
+            for &dst in &fwd_targets[lo..hi] {
+                let dst = dst as usize;
+                inb_flat.set(in_cursors[dst] as usize, src as u32);
+                in_cursors[dst] += 1;
+            }
+        }
+        crate::trace::probe("inbound fwd-transpose: after transpose loop");
+
+        // Synthetic edges are already included in fwd_targets (they were
+        // appended before the B3 restore in pass2b), so we must NOT add them
+        // again here — doing so would double-count them and overflow in_cursors.
+
+        crate::trace::probe("inbound: before Phase-4 (after fwd-transpose)");
+        Self::encode_phase4(n, in_cursors, inb_flat, dfn)
+    }
+
     /// Run the inbound scan + Phase-4 encode. Returns (inb_offsets, inb_data).
+    #[allow(dead_code)]
     pub fn build(self, dfn: &[u32]) -> io::Result<(Vec<u64>, Vec<u8>)> {
         let InboundBuilder {
             path,
             id_size,
-            ref_size,
             n,
             id_map,
             id_map_c,
             id_map_codec,
-            class_addrs,
-            field_plans,
+            class_idx_arr,
+            field_plans_dense,
             mut in_cursors,
             total_inb,
             synthetic_edges,
@@ -476,11 +546,10 @@ impl InboundBuilder {
                         Pass2::fill_heap_2b(
                             &mut r,
                             id_size,
-                            ref_size,
                             length,
                             &id_map,
-                            &class_addrs,
-                            &field_plans,
+                            &class_idx_arr,
+                            &field_plans_dense,
                             false,
                             true,
                             &mut fwd_t_stub,
@@ -498,12 +567,12 @@ impl InboundBuilder {
             }
         }
 
-        // id_map / class_addrs / field_plans are consumed only by the 2b scan
+        // id_map / class_idx_arr / field_plans_dense are consumed only by the 2b scan
         // above. Free them now (id_map alone is ~4.1 GB at 514M objects) before
         // the Phase-4 encode allocates inb_data, trimming the global RSS peak.
         drop(id_map);
-        drop(class_addrs);
-        drop(field_plans);
+        drop(class_idx_arr);
+        drop(field_plans_dense);
 
         // Synthetic thread->local INBOUND edges.
         for &(src, dst) in &synthetic_edges {
@@ -512,6 +581,19 @@ impl InboundBuilder {
         }
 
         crate::trace::probe("inbound: before Phase-4 (after 2b scan + drops)");
+        Self::encode_phase4(n, in_cursors, inb_flat, dfn)
+    }
+
+    /// Phase 4: translate node indices to pre-order numbers via `dfn`, sort,
+    /// dedup, and delta-encode into the blocked inbound CSR. Shared by both
+    /// the file-scan path (`build`) and the fwd-transpose path (`build_from_fwd`).
+    fn encode_phase4(
+        n: usize,
+        in_cursors: Vec<u32>,
+        mut inb_flat: crate::chunkvec::ChunkU32,
+        dfn: &[u32],
+    ) -> io::Result<(Vec<u64>, Vec<u8>)> {
+        let in_cursors = in_cursors;
         // -- Phase 4: Build inbound CSR (blocked offsets + count-prefixed data) --
         // inb_block_off[b] = byte offset where node (b*INB_BLOCK)'s slice begins.
         // Each node's slice = vbyte(count) then `count` vbyte pre-order deltas.

@@ -16,7 +16,7 @@ use std::{
 };
 
 use crate::{
-    pass1::{ClassInfo, Pass1},
+    pass1::Pass1,
     reader::HprofReader,
     types::{HprofType, heap, tags},
 };
@@ -158,6 +158,9 @@ impl Pass2 {
 
         // Build class_idx array
         let mut class_idx: Vec<u32> = vec![0u32; n];
+        // class_addr_to_hist: class object address → histogram idx, for instances
+        // (and object arrays). Used to build field_plans_dense after the closure drops.
+        let mut class_addr_to_hist: HashMap<u64, u32> = HashMap::new();
 
         // First pass: populate class_idx for all objects (kind-driven, no heuristics)
         for i in 0..n {
@@ -191,6 +194,7 @@ impl Pass2 {
                         },
                         &|| p1.class_map.get(&addr).map(|ci| ci.loader_id).unwrap_or(0),
                     );
+                    class_addr_to_hist.entry(addr).or_insert(class_idx[i]);
                 }
                 _ => {
                     // Instance: cid indexes the class-object address (loader-distinct).
@@ -205,6 +209,7 @@ impl Pass2 {
                         },
                         &|| p1.class_map.get(&addr).map(|ci| ci.loader_id).unwrap_or(0),
                     );
+                    class_addr_to_hist.entry(addr).or_insert(class_idx[i]);
                 }
             }
         }
@@ -276,6 +281,26 @@ impl Pass2 {
         // Borrowed immutably in the hot scan loop — no per-instance allocation.
         let field_plans = build_field_plans(&p1.class_map, &p1.strings, id_size as usize);
 
+        // Dense field_plans indexed by histogram class idx — replaces per-object HashMap
+        // lookups in the hot scan loops. Sized by the max instance-class histogram index
+        // (built from class_addr_to_hist, which is independent of the get_or_insert_class
+        // closure so we don't need to borrow class_names or class_key_to_idx here).
+        let n_dense_classes = class_idx
+            .iter()
+            .copied()
+            .max()
+            .map(|m| m as usize + 1)
+            .unwrap_or(0);
+let mut field_plans_dense: Vec<FieldPlan> = vec![Vec::new(); n_dense_classes];
+        for (&class_addr, &hidx) in &class_addr_to_hist {
+            if let Some(plan) = field_plans.get(&class_addr) {
+                if !plan.is_empty() {
+                    field_plans_dense[hidx as usize] = plan.clone();
+                }
+            }
+        }
+        drop(field_plans);
+
         // ── Sub-pass 2a scan ─────────────────────────────────────────────
         {
             let mut r = HprofReader::open(path)?;
@@ -295,18 +320,12 @@ impl Pass2 {
                         Self::scan_heap_2a(
                             &mut r,
                             id_size,
-                            ref_size,
-                            ptr_size,
                             length,
                             &p1.id_map,
-                            &p1.class_map,
-                            &p1.strings,
-                            &p1.kind,
-                            &field_plans,
-                            &mut size_cache,
+                            &class_idx,
+                            &field_plans_dense,
                             &mut out_degree,
                             &mut in_degree,
-                            &mut shallow,
                             &mut scratch,
                         )?;
                     }
@@ -378,11 +397,6 @@ impl Pass2 {
                 }
             }
         }
-
-        // Now free `class_ids` (see the free block above): the loader-label
-        // loop was its last reader, so releasing it here keeps peak RSS low
-        // before the edge-scan allocations.
-        p1.class_ids = Vec::new();
 
         // Ensure no zero shallow sizes for instances/arrays (fall back to minimum).
         // Class objects (kind==3) are exempt: MAT reports 0 shallow for a class
@@ -521,6 +535,11 @@ impl Pass2 {
             &opts.coll_descs,
         )?;
 
+        // Free class_ids now: build_field_decode_views was its last reader
+        // (class_name_of_index uses it for referent class lookups). Releasing
+        // here keeps peak RSS low before the edge-scan allocations.
+        p1.class_ids = Vec::new();
+
         // class_map + strings are no longer needed; free before the large edge
         // arrays get allocated in Phase 3/4 to lower peak RSS. The STACK_FRAME/
         // STACK_TRACE maps were just consumed by build_thread_stacks and are
@@ -608,9 +627,9 @@ impl Pass2 {
             shallow = Vec::new();
         }
         let class_idx_c = crate::cvec::CompressedU32::compress(&class_idx, compress)?;
-        if compress != crate::cvec::Codec::None {
-            class_idx = Vec::new();
-        }
+        // NOTE: class_idx is NOT cleared here yet — fill_heap_2b (Phase 3b) still
+        // needs it to look up field_plans_dense by histogram class index.
+        // It is cleared immediately after the forward-fill loop below.
         // Compress the per-object alloc stack serials (~2GB dense u32 under
         // alloc-sites) at the SAME point, before fwd_targets alloc: pass1
         // touched every element (faulting all pages), so even a mostly-zero
@@ -665,11 +684,10 @@ impl Pass2 {
                         Self::fill_heap_2b(
                             &mut r,
                             id_size,
-                            ref_size,
                             length,
                             &p1.id_map,
-                            &class_addrs,
-                            &field_plans,
+                            &class_idx,
+                            &field_plans_dense,
                             true,
                             false,
                             &mut fwd_targets,
@@ -685,6 +703,10 @@ impl Pass2 {
                     }
                 }
             }
+        }
+        // class_idx was kept alive through the forward fill above; free it now.
+        if compress != crate::cvec::Codec::None {
+            class_idx = Vec::new();
         }
         // Synthetic thread->local FORWARD edges. Their degrees were added to
         // out_degree above, so each fits within its node's slice.
@@ -790,13 +812,13 @@ impl Pass2 {
         let inbound = InboundBuilder {
             path: path.to_string(),
             id_size,
-            ref_size,
             n,
             id_map: Some(p1.id_map),
             id_map_c: None,
             id_map_codec: crate::cvec::Codec::None,
-            class_addrs,
-            field_plans,
+            // build_from_fwd drops these immediately; build() (file-scan path) is unused.
+            class_idx_arr: Vec::new(),
+            field_plans_dense: Vec::new(),
             in_cursors,
             total_inb,
             synthetic_edges,
@@ -813,26 +835,21 @@ impl Pass2 {
     fn scan_heap_2a(
         r: &mut HprofReader,
         id_size: u8,
-        ref_size: usize,
-        ptr_size: usize,
         mut remaining: u64,
         id_map: &crate::id_map::IdMap,
-        class_map: &HashMap<u64, ClassInfo>,
-        _strings: &std::collections::HashMap<u64, String>,
-        kind: &[u8],
-        field_plans: &HashMap<u64, FieldPlan>,
-        size_cache: &mut HashMap<u64, usize>,
+        class_idx: &[u32],
+        field_plans_dense: &[FieldPlan],
         out_degree: &mut Vec<u32>,
         in_degree: &mut Vec<u32>,
-        shallow: &mut Vec<u32>,
         scratch: &mut Vec<u8>,
     ) -> io::Result<()> {
         let ids = id_size as u64;
+        let mut cache = crate::id_map::IndexCache::new();
 
         macro_rules! edge_if_valid {
             ($src:expr, $dst_addr:expr, $excl:expr) => {
                 if $dst_addr != 0 {
-                    if let Some(dst) = id_map.index_of($dst_addr) {
+                    if let Some(dst) = cache.index_of(id_map, $dst_addr) {
                         let src = $src as usize;
                         out_degree[src] += 1;
                         in_degree[dst] += 1;
@@ -902,31 +919,20 @@ impl Pass2 {
                         None => continue,
                     };
 
-                    // Recalculate MAT shallow size for instances (fix #3: reuse size_cache).
-                    // kind[src_idx] == 3 marks class objects (pass1); equivalent
-                    // to the old class_addrs.contains(addr) hash probe but reuses
-                    // the already-computed src_idx (no per-instance hash lookup).
-                    if kind[src_idx] != 3 {
-                        let sz = instance_shallow_size(
-                            class_id, class_map, ptr_size, ref_size, size_cache,
-                        );
-                        shallow[src_idx] = sz;
-                    }
-
                     // Edge: instance → class object
                     edge_if_valid!(src_idx, class_id, false);
 
-                    // Edges from Object-type fields (precomputed plan, immutable borrow)
-                    if let Some(plan) = field_plans.get(&class_id) {
-                        for &(off, _excluded) in plan {
-                            let off = off as usize;
-                            if off + id_size as usize <= scratch.len() {
-                                let ref_val = read_ref(&scratch[off..], id_size as usize);
-                                if ref_val != 0 {
-                                    if let Some(dst) = id_map.index_of(ref_val) {
-                                        out_degree[src_idx] += 1;
-                                        in_degree[dst] += 1;
-                                    }
+                    // Edges from Object-type fields (dense Vec by class histogram idx,
+                    // no HashMap lookup — Phase 0b already precomputed the per-class plan).
+                    let cidx = class_idx[src_idx] as usize;
+                    for &(off, _excluded) in &field_plans_dense[cidx] {
+                        let off = off as usize;
+                        if off + id_size as usize <= scratch.len() {
+                            let ref_val = read_ref(&scratch[off..], id_size as usize);
+                            if ref_val != 0 {
+                                if let Some(dst) = cache.index_of(id_map, ref_val) {
+                                    out_degree[src_idx] += 1;
+                                    in_degree[dst] += 1;
                                 }
                             }
                         }
@@ -952,10 +958,7 @@ impl Pass2 {
                         None => continue,
                     };
 
-                    // Fix shallow size for object arrays
-                    shallow[src_idx] = obj_array_shallow(count, ptr_size, ref_size);
-
-                    // class_idx[src_idx] already set by identity in Phase 0c.
+                    // Shallow size already correct from Phase 0b; class_idx set by Phase 0c.
 
                     // Edge: array → element class object
                     edge_if_valid!(src_idx, elem_class_id, false);
@@ -964,7 +967,7 @@ impl Pass2 {
                     for chunk in scratch.chunks(ids as usize) {
                         let ref_val = read_id(chunk, id_size);
                         if ref_val != 0 {
-                            if let Some(dst) = id_map.index_of(ref_val) {
+                            if let Some(dst) = cache.index_of(id_map, ref_val) {
                                 out_degree[src_idx] += 1;
                                 in_degree[dst] += 1;
                             }
@@ -972,7 +975,7 @@ impl Pass2 {
                     }
                 }
                 heap::PRIM_ARRAY_DUMP => {
-                    let addr = r.id()?;
+                    let _addr = r.id()?;
                     r.skip(4)?;
                     let count = r.u4()? as u64;
                     let elem_type = r.u1()?;
@@ -981,12 +984,7 @@ impl Pass2 {
                         .unwrap_or(1);
                     r.skip(count * esz)?;
                     checked_sub!(remaining, ids + 4 + 4 + 1 + count * esz);
-
-                    if let Some(src_idx) = id_map.index_of(addr) {
-                        // Fix shallow size (class_idx set by identity in Phase 0c)
-                        shallow[src_idx] =
-                            prim_array_shallow(count, esz as usize, ptr_size, ref_size);
-                    }
+                    // No object edges; shallow already set by Phase 0b.
                 }
                 other => {
                     return Err(io::Error::new(
@@ -1008,11 +1006,10 @@ impl Pass2 {
     fn fill_heap_2b(
         r: &mut HprofReader,
         id_size: u8,
-        _ref_size: usize,
         mut remaining: u64,
         id_map: &crate::id_map::IdMap,
-        _class_addrs: &std::collections::HashSet<u64>,
-        field_plans: &HashMap<u64, FieldPlan>,
+        class_idx: &[u32],
+        field_plans_dense: &[FieldPlan],
         do_fwd: bool,
         do_inb: bool,
         fwd_targets: &mut Vec<u32>,
@@ -1022,11 +1019,12 @@ impl Pass2 {
         scratch: &mut Vec<u8>,
     ) -> io::Result<()> {
         let ids = id_size as u64;
+        let mut cache = crate::id_map::IndexCache::new();
 
         macro_rules! add_edge {
             ($src:expr, $dst_addr:expr, $excluded:expr) => {
                 if $dst_addr != 0 {
-                    if let Some(dst) = id_map.index_of($dst_addr) {
+                    if let Some(dst) = cache.index_of(id_map, $dst_addr) {
                         let src = $src as usize;
                         if do_fwd {
                             // fwd_offsets[src] is the in-place write cursor.
@@ -1122,14 +1120,13 @@ impl Pass2 {
                     // Edge: instance → class object
                     add_edge!(src_idx, class_id, false);
 
-                    // Edges from Object-type fields (precomputed plan, immutable borrow)
-                    if let Some(plan) = field_plans.get(&class_id) {
-                        for &(off, excluded) in plan {
-                            let off = off as usize;
-                            if off + id_size as usize <= scratch.len() {
-                                let ref_val = read_ref(&scratch[off..], id_size as usize);
-                                add_edge!(src_idx, ref_val, excluded);
-                            }
+                    // Edges from Object-type fields (dense Vec by class histogram idx)
+                    let cidx = class_idx[src_idx] as usize;
+                    for &(off, excluded) in &field_plans_dense[cidx] {
+                        let off = off as usize;
+                        if off + id_size as usize <= scratch.len() {
+                            let ref_val = read_ref(&scratch[off..], id_size as usize);
+                            add_edge!(src_idx, ref_val, excluded);
                         }
                     }
                 }
@@ -1378,7 +1375,7 @@ impl Pass2 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pass1::Pass1;
+    use crate::pass1::{ClassInfo, Pass1};
 
     const DUMP: &str = "tests/fixtures/dump_0_fj-kmeans.hprof";
 

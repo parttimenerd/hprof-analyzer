@@ -2,9 +2,8 @@
 //! class_idx) that sit idle in RAM across the rpo -> inbound -> dominator peak
 //! window. Compress right after they are built, hold the small blob across the
 //! peak, and restore the full `Vec<u32>` only when a consumer needs random
-//! access. deflate9 (flate2) is used: on the 34 GB dump it frees ~all of each
-//! 2 GB array (blob ~33 MB) in ~32 s; higher-ratio codecs shrink the blob by a
-//! further <0.1 % of the peak for 5-10x the compress time (see plan Step 0).
+//! access. Zstd level 3 is used by default: on large dumps it frees each ~2 GB
+//! array (blob ~33 MB) in ~5 s; deflate9 (flate2) is kept as a fallback codec.
 
 use std::io::{self, Read, Write};
 
@@ -15,15 +14,18 @@ pub enum Codec {
     None,
     /// deflate at max level (flate2 Compression::best()).
     Deflate9,
+    /// zstd at level 3 — fast compress, good ratio, fast decompress.
+    Zstd3,
 }
 
 impl Codec {
-    /// Parse a codec name (`none`, `deflate9`/`deflate`); test-only A/B helper.
+    /// Parse a codec name; test-only A/B helper.
     #[cfg(test)]
     pub fn parse(s: &str) -> Option<Codec> {
         match s {
             "none" => Some(Codec::None),
             "deflate9" | "deflate" => Some(Codec::Deflate9),
+            "zstd" | "zstd3" => Some(Codec::Zstd3),
             _ => None,
         }
     }
@@ -42,23 +44,32 @@ fn deflate_decompress(blob: &[u8], cap: usize) -> io::Result<Vec<u8>> {
     Ok(out)
 }
 
+fn zstd_compress(raw: &[u8]) -> io::Result<Vec<u8>> {
+    zstd::encode_all(raw, 3).map_err(io::Error::other)
+}
+
+fn zstd_decompress(blob: &[u8], cap: usize) -> io::Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(cap);
+    zstd::stream::copy_decode(blob, &mut out).map_err(io::Error::other)?;
+    Ok(out)
+}
+
 /// A `Vec<u32>` held compressed across the peak window, restorable losslessly.
 ///
 /// With `Codec::None` this keeps the live `Vec<u32>` unchanged (no free); with
-/// `Codec::Deflate9` it holds only a deflate blob of the LE bytes and the
-/// original element count.
+/// `Codec::Deflate9`/`Codec::Zstd3` it holds only a compressed blob of the LE
+/// bytes and the original element count.
 pub struct CompressedU32 {
     codec: Codec,
-    /// deflate blob (Deflate9) or raw LE bytes are NOT stored here for None.
+    /// Compressed blob (Deflate9/Zstd3) or empty (None).
     blob: Vec<u8>,
-    /// Live copy for the None codec (empty for Deflate9).
+    /// Live copy for the None codec (empty for compressed codecs).
     raw: Vec<u32>,
     len: usize,
 }
 
 impl CompressedU32 {
-    /// Compress `v` under `codec`. For `None`, takes ownership-free copy is
-    /// avoided by cloning only when needed; callers empty the source Vec after.
+    /// Compress `v` under `codec`.
     pub fn compress(v: &[u32], codec: Codec) -> io::Result<Self> {
         let len = v.len();
         match codec {
@@ -68,12 +79,16 @@ impl CompressedU32 {
                 raw: v.to_vec(),
                 len,
             }),
-            Codec::Deflate9 => {
+            Codec::Deflate9 | Codec::Zstd3 => {
                 let mut bytes = Vec::with_capacity(len * 4);
                 for &x in v {
                     bytes.extend_from_slice(&x.to_le_bytes());
                 }
-                let blob = deflate_compress(&bytes)?;
+                let blob = if codec == Codec::Zstd3 {
+                    zstd_compress(&bytes)?
+                } else {
+                    deflate_compress(&bytes)?
+                };
                 Ok(Self {
                     codec,
                     blob,
@@ -96,17 +111,20 @@ impl CompressedU32 {
                     .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                     .collect())
             }
+            Codec::Zstd3 => {
+                let bytes = zstd_decompress(&self.blob, self.len * 4)?;
+                debug_assert_eq!(bytes.len(), self.len * 4);
+                Ok(bytes
+                    .chunks_exact(4)
+                    .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                    .collect())
+            }
         }
     }
 
     /// Stream the decompressed `u32` sequence through `f` WITHOUT ever holding
-    /// the full decompressed buffer. Deflate output is read into a fixed 64 KiB
-    /// scratch buffer and decoded 4 bytes at a time, so the transient is O(64
-    /// KiB) rather than the ~2 GB of `restore()`. This keeps
-    /// the big-dump alloc-serial aggregation well under the binding RSS peak.
-    /// A 1-3 byte tail can straddle buffer refills, so a small carry holds
-    /// leftover bytes between reads. For `Codec::None` the live `Vec<u32>` is
-    /// iterated directly (tiny/no-compress paths only).
+    /// the full decompressed buffer. Keeps the transient O(64 KiB) rather than
+    /// O(n). For `Codec::None` the live `Vec<u32>` is iterated directly.
     pub fn for_each_u32<F: FnMut(u32)>(&self, mut f: F) -> io::Result<()> {
         match self.codec {
             Codec::None => {
@@ -116,57 +134,61 @@ impl CompressedU32 {
                 Ok(())
             }
             Codec::Deflate9 => {
-                let mut d = flate2::read::DeflateDecoder::new(&self.blob[..]);
-                let mut buf = [0u8; 64 * 1024];
-                let mut carry: [u8; 4] = [0; 4];
-                let mut carry_len = 0usize;
-                loop {
-                    let n = d.read(&mut buf)?;
-                    if n == 0 {
-                        break;
-                    }
-                    let mut i = 0usize;
-                    // Complete a partial u32 left over from the previous read.
-                    while carry_len > 0 && i < n {
-                        carry[carry_len] = buf[i];
-                        carry_len += 1;
-                        i += 1;
-                        if carry_len == 4 {
-                            f(u32::from_le_bytes(carry));
-                            carry_len = 0;
-                        }
-                    }
-                    // Whole u32s inside this buffer.
-                    while i + 4 <= n {
-                        f(u32::from_le_bytes([
-                            buf[i],
-                            buf[i + 1],
-                            buf[i + 2],
-                            buf[i + 3],
-                        ]));
-                        i += 4;
-                    }
-                    // Stash a 1-3 byte tail for the next read.
-                    while i < n {
-                        carry[carry_len] = buf[i];
-                        carry_len += 1;
-                        i += 1;
-                    }
-                }
-                debug_assert_eq!(carry_len, 0);
-                Ok(())
+                stream_u32s(flate2::read::DeflateDecoder::new(&self.blob[..]), &mut f)
+            }
+            Codec::Zstd3 => {
+                let decoder = zstd::stream::Decoder::new(&self.blob[..])?;
+                stream_u32s(decoder, &mut f)
             }
         }
     }
 
-    /// Bytes currently held (blob for Deflate9, raw*4 for None).
+    /// Bytes currently held (blob for compressed codecs, raw*4 for None).
     #[allow(dead_code)]
     pub fn held_bytes(&self) -> usize {
         match self.codec {
             Codec::None => self.raw.len() * 4,
-            Codec::Deflate9 => self.blob.len(),
+            Codec::Deflate9 | Codec::Zstd3 => self.blob.len(),
         }
     }
+}
+
+/// Decode a stream of LE u32s from `r`, calling `f` for each one.
+/// Uses a fixed 64 KiB buffer so the transient is O(64 KiB).
+fn stream_u32s<R: Read, F: FnMut(u32)>(mut r: R, f: &mut F) -> io::Result<()> {
+    let mut buf = [0u8; 64 * 1024];
+    let mut carry: [u8; 4] = [0; 4];
+    let mut carry_len = 0usize;
+    loop {
+        let n = r.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        let mut i = 0usize;
+        // Complete a partial u32 left over from the previous read.
+        while carry_len > 0 && i < n {
+            carry[carry_len] = buf[i];
+            carry_len += 1;
+            i += 1;
+            if carry_len == 4 {
+                f(u32::from_le_bytes(carry));
+                carry_len = 0;
+            }
+        }
+        // Whole u32s inside this buffer.
+        while i + 4 <= n {
+            f(u32::from_le_bytes([buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]));
+            i += 4;
+        }
+        // Stash a 1-3 byte tail for the next read.
+        while i < n {
+            carry[carry_len] = buf[i];
+            carry_len += 1;
+            i += 1;
+        }
+    }
+    debug_assert_eq!(carry_len, 0);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -175,7 +197,6 @@ mod tests {
 
     #[test]
     fn roundtrip_repetitive_deflate() {
-        // Long runs of identical values (like class_idx/shallow).
         let mut v: Vec<u32> = Vec::new();
         for k in 0..1000u32 {
             for _ in 0..500 {
@@ -184,7 +205,19 @@ mod tests {
         }
         let c = CompressedU32::compress(&v, Codec::Deflate9).unwrap();
         assert_eq!(c.restore().unwrap(), v);
-        // Repetitive data must compress well below raw.
+        assert!(c.held_bytes() < v.len() * 4);
+    }
+
+    #[test]
+    fn roundtrip_repetitive_zstd() {
+        let mut v: Vec<u32> = Vec::new();
+        for k in 0..1000u32 {
+            for _ in 0..500 {
+                v.push(k);
+            }
+        }
+        let c = CompressedU32::compress(&v, Codec::Zstd3).unwrap();
+        assert_eq!(c.restore().unwrap(), v);
         assert!(c.held_bytes() < v.len() * 4);
     }
 
@@ -193,13 +226,26 @@ mod tests {
         let mut v: Vec<u32> = Vec::with_capacity(10_000);
         let mut state = 0x12345678u32;
         for _ in 0..10_000 {
-            // xorshift PRNG (deterministic)
             state ^= state << 13;
             state ^= state >> 17;
             state ^= state << 5;
             v.push(state);
         }
         let c = CompressedU32::compress(&v, Codec::Deflate9).unwrap();
+        assert_eq!(c.restore().unwrap(), v);
+    }
+
+    #[test]
+    fn roundtrip_random_zstd() {
+        let mut v: Vec<u32> = Vec::with_capacity(10_000);
+        let mut state = 0x12345678u32;
+        for _ in 0..10_000 {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            v.push(state);
+        }
+        let c = CompressedU32::compress(&v, Codec::Zstd3).unwrap();
         assert_eq!(c.restore().unwrap(), v);
     }
 
@@ -214,7 +260,7 @@ mod tests {
     #[test]
     fn empty() {
         let v: Vec<u32> = Vec::new();
-        for codec in [Codec::None, Codec::Deflate9] {
+        for codec in [Codec::None, Codec::Deflate9, Codec::Zstd3] {
             let c = CompressedU32::compress(&v, codec).unwrap();
             assert_eq!(c.restore().unwrap(), v);
         }
@@ -222,9 +268,6 @@ mod tests {
 
     #[test]
     fn for_each_u32_matches_restore() {
-        // for_each_u32 must yield the same u32 sequence as restore(), for both
-        // codecs, across a length that forces multiple 64 KiB buffer refills so
-        // the carry (partial-u32-across-reads) path is exercised.
         let mut v: Vec<u32> = Vec::with_capacity(100_000);
         let mut state = 0x9e3779b9u32;
         for _ in 0..100_000 {
@@ -234,7 +277,7 @@ mod tests {
             v.push(state);
         }
         v.extend_from_slice(&[0, u32::MAX, 1, 0]);
-        for codec in [Codec::None, Codec::Deflate9] {
+        for codec in [Codec::None, Codec::Deflate9, Codec::Zstd3] {
             let c = CompressedU32::compress(&v, codec).unwrap();
             let mut got: Vec<u32> = Vec::with_capacity(v.len());
             c.for_each_u32(|x| got.push(x)).unwrap();
@@ -247,6 +290,7 @@ mod tests {
         assert_eq!(Codec::parse("none"), Some(Codec::None));
         assert_eq!(Codec::parse("deflate9"), Some(Codec::Deflate9));
         assert_eq!(Codec::parse("deflate"), Some(Codec::Deflate9));
-        assert_eq!(Codec::parse("zstd"), None);
+        assert_eq!(Codec::parse("zstd"), Some(Codec::Zstd3));
+        assert_eq!(Codec::parse("zstd3"), Some(Codec::Zstd3));
     }
 }

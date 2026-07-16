@@ -37,53 +37,121 @@ pub struct IdMap {
 
 const BLOCK_SPAN: u64 = 1u64 << 32;
 
-/// Branchless prefetching search over a strictly-ascending, unique `u32` slice
-/// (the per-block invariant `sort_and_dedup`/`push_sorted_addr` guarantee).
-/// Returns `Some(i)` such that `slice[i] == d`, or `None` if absent — the exact
-/// result of `slice.binary_search(&d).ok()`.
+/// Interpolation search over a strictly-ascending, unique `u32` slice.
+/// Returns `Some(i)` such that `slice[i] == d`, or `None` if absent.
 ///
-/// `offsets` is ~2 GB on a 500M-object dump, so each probe of a plain
-/// `binary_search` is a cache miss and `index_of` is DRAM-latency bound (23%
-/// self-time in profiles). This variant computes the two possible next probe
-/// addresses and issues `_mm_prefetch` for both before the current comparison
-/// resolves which half is taken, overlapping the miss with the compare. The
-/// loop is the classic Khuong–Morin branchless bisection: it narrows to a
-/// single candidate index, then one equality check decides hit vs. miss.
+/// JVM heap addresses within a block are allocated quasi-linearly, so the
+/// sorted offsets array is nearly uniformly spaced. Interpolation search
+/// uses `pos ≈ lo + (hi-lo)*(d-slice[lo])/(slice[hi]-slice[lo])` to land
+/// in 1-3 probes vs. ~29 for binary search. After a few interpolation steps
+/// we fall back to branchless binary search once the range is small enough
+/// to fit in cache.
+///
+/// The fallback binary search is the Khuong-Morin branchless bisection with
+/// prefetching for the final narrowing.
 #[inline]
 fn search_offsets(slice: &[u32], d: u32) -> Option<usize> {
     let n = slice.len();
     if n == 0 {
         return None;
     }
+    // Fast path for single-element slice.
+    if n == 1 {
+        return if unsafe { *slice.get_unchecked(0) } == d {
+            Some(0)
+        } else {
+            None
+        };
+    }
+
+    let mut lo = 0usize;
+    let mut hi = n - 1;
+
+    // Bounds check: d outside [slice[lo], slice[hi]] → absent.
+    // SAFETY: lo < hi < n so both indices are valid.
+    let lo_val = unsafe { *slice.get_unchecked(lo) };
+    let hi_val = unsafe { *slice.get_unchecked(hi) };
+    if d < lo_val || d > hi_val {
+        return None;
+    }
+
+    // Interpolation phase: up to 4 probes. Each probe narrows the range
+    // dramatically on uniformly-distributed data (typical JVM allocation).
+    // We stop when the range is ≤ 128 entries (fits in a few cache lines)
+    // and hand off to branchless binary search.
+    for _ in 0..4 {
+        let range = hi - lo;
+        if range <= 128 {
+            break;
+        }
+        // SAFETY: lo and hi are both < n throughout.
+        let lo_v = unsafe { *slice.get_unchecked(lo) } as u64;
+        let hi_v = unsafe { *slice.get_unchecked(hi) } as u64;
+        if hi_v == lo_v {
+            break; // all remaining elements equal — can't interpolate
+        }
+        // Interpolation probe. Cast to u64 to avoid overflow.
+        // Formula: lo + floor(range * (d - lo_v) / (hi_v - lo_v))
+        // Clamped to [lo+1, hi-1] so we always make progress.
+        let offset = ((range as u64 * (d as u64 - lo_v) / (hi_v - lo_v)) as usize)
+            .min(range - 1);
+        let mid = (lo + offset).max(lo + 1).min(hi - 1);
+        let mid_v = unsafe { *slice.get_unchecked(mid) };
+        if mid_v == d {
+            return Some(mid);
+        } else if mid_v < d {
+            lo = mid + 1;
+        } else {
+            hi = mid.saturating_sub(1);
+        }
+        if lo > hi {
+            return None;
+        }
+        // Re-check bounds after narrowing.
+        let lv = unsafe { *slice.get_unchecked(lo) };
+        let hv = unsafe { *slice.get_unchecked(hi) };
+        if d < lv || d > hv {
+            return None;
+        }
+    }
+
+    // Branchless binary search (Khuong-Morin) with prefetching over [lo, hi].
+    // At most 128 elements remain so we issue at most 7 iterations.
+    let sub = &slice[lo..=hi];
+    let sub_n = sub.len();
     let mut base = 0usize;
-    let mut len = n;
+    let mut len = sub_n;
     while len > 1 {
         let half = len / 2;
         let mid = base + half;
+        let q = (len - half) / 2;
+        let ptr = sub.as_ptr();
         #[cfg(target_arch = "x86_64")]
         unsafe {
             use core::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
-            // The next iteration probes the midpoint of whichever half is
-            // taken; prefetch both candidates now so the load for the next
-            // compare is already in flight.
-            let q = (len - half) / 2;
-            let ptr = slice.as_ptr();
             _mm_prefetch(ptr.add(base + q) as *const i8, _MM_HINT_T0);
             _mm_prefetch(ptr.add(mid + q) as *const i8, _MM_HINT_T0);
         }
-        // Branchless: advance base into the upper half iff slice[mid] < d.
-        // SAFETY: mid = base + half < base + len <= n, so mid is in bounds.
-        let take_upper = unsafe { *slice.get_unchecked(mid) } < d;
+        #[cfg(target_arch = "aarch64")]
+        unsafe {
+            core::arch::asm!(
+                "prfm pldl1keep, [{p}]",
+                p = in(reg) ptr.add(base + q),
+                options(nostack, readonly)
+            );
+            core::arch::asm!(
+                "prfm pldl1keep, [{p}]",
+                p = in(reg) ptr.add(mid + q),
+                options(nostack, readonly)
+            );
+        }
+        let take_upper = unsafe { *sub.get_unchecked(mid) } < d;
         base = if take_upper { mid } else { base };
         len -= half;
     }
-    // The loop leaves `base` at the greatest index with slice[base] < d, or 0
-    // if none. The lower-bound (first index >= d) is base + (slice[base] < d).
-    // Since the slice is unique+ascending, an exact hit is lower-bound == d.
-    // SAFETY: base < n throughout; pos <= n and is only dereferenced when < n.
-    let pos = base + (unsafe { *slice.get_unchecked(base) } < d) as usize;
-    if pos < n && unsafe { *slice.get_unchecked(pos) } == d {
-        Some(pos)
+    let pos = base + (unsafe { *sub.get_unchecked(base) } < d) as usize;
+    if pos < sub_n && unsafe { *sub.get_unchecked(pos) } == d {
+        Some(lo + pos)
     } else {
         None
     }
@@ -233,8 +301,8 @@ impl IdMap {
     }
 
     /// Compress the sorted addrs into a self-describing blob (same format as the
-    /// prior single-Vec layout: absolute addrs, delta-vbyte then deflate for
-    /// Deflate9, or raw LE u64 for None), returning (blob, element_count).
+    /// prior single-Vec layout: absolute addrs, delta-vbyte then compressed for
+    /// Deflate9/Zstd3, or raw LE u64 for None), returning (blob, element_count).
     pub fn compress(&self, codec: Codec) -> io::Result<(Vec<u8>, usize)> {
         let len = self.len();
         match codec {
@@ -245,7 +313,7 @@ impl IdMap {
                 }
                 Ok((out, len))
             }
-            Codec::Deflate9 => {
+            Codec::Deflate9 | Codec::Zstd3 => {
                 // Stream the sorted absolute addrs directly out of the block
                 // structure and delta-vbyte-encode on the fly. Walking the
                 // blocks in order yields the exact same globally-sorted address
@@ -264,10 +332,16 @@ impl IdMap {
                         prev = addr;
                     }
                 }
-                let mut e =
-                    flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());
-                e.write_all(&vb)?;
-                let blob = e.finish()?;
+                let blob = if codec == Codec::Zstd3 {
+                    zstd::encode_all(&vb[..], 3).map_err(io::Error::other)?
+                } else {
+                    let mut e = flate2::write::DeflateEncoder::new(
+                        Vec::new(),
+                        flate2::Compression::best(),
+                    );
+                    e.write_all(&vb)?;
+                    e.finish()?
+                };
                 Ok((blob, len))
             }
         }
@@ -292,13 +366,18 @@ impl IdMap {
                     m.push_sorted_addr(addr);
                 }
             }
-            Codec::Deflate9 => {
-                // The deflate output is the vbyte-delta stream (small relative
+            Codec::Deflate9 | Codec::Zstd3 => {
+                // The compressed output is the vbyte-delta stream (small relative
                 // to the 4.1GB decoded addresses). Walk it delta-by-delta and
                 // accumulate the running absolute address.
-                let mut d = flate2::read::DeflateDecoder::new(blob);
-                let mut vb = Vec::new();
-                d.read_to_end(&mut vb)?;
+                let vb = if codec == Codec::Zstd3 {
+                    zstd::decode_all(blob).map_err(io::Error::other)?
+                } else {
+                    let mut d = flate2::read::DeflateDecoder::new(blob);
+                    let mut vb = Vec::new();
+                    d.read_to_end(&mut vb)?;
+                    vb
+                };
                 let mut prev = 0u64;
                 let mut i = 0usize;
                 let mut pushed = 0usize;
@@ -318,6 +397,67 @@ impl IdMap {
 }
 
 impl Default for IdMap {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ── Direct-mapped index cache ──────────────────────────────────────────────
+
+/// Capacity: 16384 slots. 16384 × (8 + 4) = 192 KB — fits in L2/L3.
+const IC_BITS: usize = 14;
+const IC_SIZE: usize = 1 << IC_BITS;
+
+/// Direct-mapped cache over [`IdMap::index_of`] for hot scanning loops.
+///
+/// Heap graphs have high temporal locality on class-object addresses (one per
+/// class, referenced by every instance of that class), so a tiny cache
+/// eliminates most of the random-DRAM penalty on the dominant object-edge
+/// workload. Miss → call `id_map.index_of` and store; hit → return cached.
+///
+/// The slot is selected by `(addr ^ (addr >> 20)) & (IC_SIZE - 1)`, mixing
+/// high and low bits to distribute nearby addresses across slots.
+/// Sentinel: `key == 0` means empty (valid HPROF addrs are always non-zero).
+pub struct IndexCache {
+    keys: Box<[u64; IC_SIZE]>,
+    /// `u32::MAX` encodes `None` (absent from IdMap); otherwise the dense idx.
+    vals: Box<[u32; IC_SIZE]>,
+}
+
+impl IndexCache {
+    /// Allocate a zeroed cache (all slots empty — key 0 = sentinel).
+    pub fn new() -> Self {
+        Self {
+            keys: Box::new([0u64; IC_SIZE]),
+            vals: Box::new([0u32; IC_SIZE]),
+        }
+    }
+
+    /// Lookup `addr` in `id_map`, consulting the cache first.
+    /// Returns `Some(dense_index)` or `None` (absent).
+    #[inline(always)]
+    pub fn index_of(&mut self, id_map: &IdMap, addr: u64) -> Option<usize> {
+        if addr == 0 {
+            return None;
+        }
+        let slot = ((addr ^ (addr >> 20)) as usize) & (IC_SIZE - 1);
+        // SAFETY: slot < IC_SIZE by construction.
+        let k = unsafe { *self.keys.get_unchecked(slot) };
+        if k == addr {
+            let v = unsafe { *self.vals.get_unchecked(slot) };
+            return if v == u32::MAX { None } else { Some(v as usize) };
+        }
+        // Miss: call through and populate the slot.
+        let result = id_map.index_of(addr);
+        unsafe {
+            *self.keys.get_unchecked_mut(slot) = addr;
+            *self.vals.get_unchecked_mut(slot) = result.map(|i| i as u32).unwrap_or(u32::MAX);
+        }
+        result
+    }
+}
+
+impl Default for IndexCache {
     fn default() -> Self {
         Self::new()
     }

@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::pass2::Graph;
-use crate::pass2::{ATTRIBUTION_TOP_N, AttributionRaw};
+use crate::pass2::{AttributionRaw, ATTRIBUTION_TOP_N};
 
 const THRESHOLD_PCT: f64 = 10.0;
 /// Default per-suspect cap on the "accumulated objects" lists (immediately
@@ -999,7 +999,6 @@ fn compute_top_class_concentration_bp(
 /// `<system class loader>` object where MAT counts it, so totals match bit-exactly.
 fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> SystemOverview {
     let n = g.n;
-    let undef = u32::MAX;
 
     // Count reachable objects and total shallow; track unreachable in the same loop.
     // Hoisted here (also used by the reachable class histogram below) so the
@@ -1180,11 +1179,6 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
         .collect();
     // B3: retention concentration over top-level dominators (idom == vroot).
     let retention_concentration = {
-        let vroot = n as u32;
-        let mut tops: Vec<u64> = (0..n)
-            .filter(|&i| g.idom[i] == vroot)
-            .map(|i| g.retained[i])
-            .collect();
         tops.sort_unstable_by(|a, b| b.cmp(a)); // retained desc
         let denom = total_shallow.max(1);
         let bp = |sum: u64| -> u32 { ((sum as u128 * 10_000) / denom as u128) as u32 };
@@ -1200,67 +1194,6 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
             num_objects_ge_1pct,
         }
     };
-    // Count reachable class-dump objects (objects that ARE Java classes, with defined idom)
-    let undef_u32 = u32::MAX;
-    let classes_loaded = (0..n)
-        .filter(|&i| class_obj_repr(g, i) != u32::MAX && g.idom[i] != undef_u32)
-        .count() as u64;
-
-    // Distinct class loaders among the reachable class objects counted above.
-    // Each reachable class object maps to its histogram row via
-    // class_obj_class_idx, and the row carries the loader address. Mirrors the
-    // classes_loaded domain so the two scalars agree on "which classes".
-    let classloaders_loaded = {
-        let mut set: std::collections::HashSet<u64> = std::collections::HashSet::new();
-        for i in 0..n {
-            if class_obj_repr(g, i) != u32::MAX && g.idom[i] != undef_u32 {
-                let lid = g
-                    .class_obj_class_idx
-                    .get(&(i as u32))
-                    .and_then(|&row| g.class_loader_id.get(row as usize).copied())
-                    .unwrap_or(0);
-                set.insert(lid);
-            }
-        }
-        set.len() as u64
-    };
-
-    // Class histogram: per-class instance count, shallow total, retained total
-    let mut inst_count: Vec<u64> = vec![0; class_count];
-    let mut shallow_total: Vec<u64> = vec![0; class_count];
-    let mut class_retained: Vec<u64> = vec![0; class_count];
-    let mut max_shallow: Vec<u64> = vec![0; class_count];
-
-    // Single reachable-object walk. First the histogram tally keyed on the
-    // object's own class; then the class-object contribution keyed on the class
-    // it represents. Both fold into class_retained (order-independent sums), so
-    // merging the two former passes is byte-identical.
-    for i in 0..n {
-        if g.idom[i] == undef {
-            continue;
-        }
-        let ci = g.class_idx[i] as usize;
-        if ci < class_count {
-            let ci = remap[ci] as usize;
-            inst_count[ci] += 1;
-            shallow_total[ci] += g.shallow[i] as u64;
-            max_shallow[ci] = max_shallow[ci].max(g.shallow[i] as u64);
-            // MAT top-ancestor semantics: only count retained of objects with no
-            // same-class (or class-object) ancestor in the dominator tree.
-            if !g.has_same_class_ancestor.get(i) {
-                class_retained[ci] += g.retained[i];
-            }
-        }
-        // For each class object, add its retained to the class it represents.
-        let repr = class_obj_repr(g, i);
-        if repr != undef {
-            let ci = repr as usize;
-            if ci < class_count {
-                let ci = remap[ci] as usize;
-                class_retained[ci] += g.retained[i];
-            }
-        }
-    }
 
     // Inject the synthetic <system class loader> object into its class row so
     // the histogram totals also match MAT. Find the canonical row whose pretty
@@ -2581,7 +2514,7 @@ mod leak_indicator_tests {
         assert!(is_anonymous_class("com/example/Foo$$Lambda$42/0x1234")); // lambda
         assert!(is_anonymous_class("com/example/Foo$Proxy1")); // proxy
         assert!(is_anonymous_class("com/example/$$Anon")); // anon
-        // These should NOT match:
+                                                           // These should NOT match:
         assert!(!is_anonymous_class("com/example/Foo$Bar")); // named inner
         assert!(!is_anonymous_class("java/lang/String")); // plain class
     }
