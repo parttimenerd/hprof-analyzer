@@ -419,6 +419,29 @@ export interface CollectionsAnalysis {
   top_obj_arrays?: TopArrays;
 }
 
+// Container Attribution (Class#field): which holder field points at the most
+// container memory. Absent when --collections was off.
+export interface FieldAttributionRow {
+  holder_class: string;
+  field: string;
+  container_kind: string;
+  total_elements: number;
+  total_retained: number;
+  container_count: number;
+}
+export interface FieldAttributionBiggestRow {
+  holder_class: string;
+  field: string;
+  container_class: string;
+  elements: number;
+  retained: number;
+}
+export interface CollectionAttribution {
+  most_overall: FieldAttributionRow[];
+  biggest_single: FieldAttributionBiggestRow[];
+  truncated: boolean;
+}
+
 // One class row of a reference referent/only-weakly-retained histogram.
 export interface RefStatClassRow {
   pretty_class: string;
@@ -457,6 +480,8 @@ export interface Report {
   dominator_analysis: DominatorAnalysis;
   // collection/array occupancy analysis. Always-on.
   collections: CollectionsAnalysis;
+  // container attribution (Class#field). Absent when --collections was off.
+  collection_attribution?: CollectionAttribution;
   // soft/weak/phantom reference referent analysis. Always-on.
   references: ReferencesAnalysis;
 }

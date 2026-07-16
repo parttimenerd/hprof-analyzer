@@ -218,6 +218,7 @@ pub fn render_markdown(r: &Report) -> String {
     render_top_components(&r.top_components, false, &mut out);
     render_arrays_by_size(&r.arrays_by_size, false, &mut out);
     render_collections(&r.collections, false, &mut out);
+    render_collection_attribution(&r.collection_attribution, false, &mut out);
     render_references(&r.references, false, &mut out);
     render_unreachable_histogram(&r.overview, false, &mut out);
     // Allocation sites (always present; `None` only for legacy reports).
@@ -248,6 +249,11 @@ fn render_toc(r: &Report, out: &mut String) {
     }
     out.push_str("- [Arrays by Size](#arrays-by-size)\n");
     out.push_str("- [Collections](#collections)\n");
+    if r.collection_attribution.is_some() {
+        out.push_str(
+            "- [Container Attribution (Class#field)](#container-attribution-classfield)\n",
+        );
+    }
     out.push_str("- [References](#references)\n");
     out.push_str("- [Unreachable Objects](#unreachable-objects)\n");
     if r.alloc_sites.is_some() {
@@ -1719,6 +1725,122 @@ fn render_top_arrays(t: &TopArrays, kind: &str, graphs: bool, out: &mut String) 
         }
         tbl.render(out);
         out.push('\n');
+    }
+}
+
+/// Render the Container Attribution (Class#field) section: which holder
+/// `Class#field` points at the most container memory. Two rankings — total
+/// across all containers reached through a field, and the single largest
+/// container per field. Shared by plain md and md-graphs; when `graphs` is set
+/// a proportional bar column is appended on the element counts. Absent
+/// entirely when `--collections` was off (`a` is `None`).
+pub(crate) fn render_collection_attribution(
+    a: &Option<CollectionAttribution>,
+    graphs: bool,
+    out: &mut String,
+) {
+    use crate::md::{Align, Table, bar};
+    let Some(a) = a else {
+        return;
+    };
+
+    out.push_str("## Container Attribution (Class#field)\n\n");
+    out.push_str(
+        "_Which holder Class#field points at the most container memory. Two rankings: total \
+         across all containers reached through a field, and the single largest container per \
+         field._\n\n",
+    );
+
+    // ── Most Overall ─────────────────────────────────────────────────────────
+    out.push_str("### Most Overall\n\n");
+    if a.most_overall.is_empty() {
+        out.push_str("_None._\n\n");
+    } else {
+        let el_max = a
+            .most_overall
+            .iter()
+            .map(|r| r.total_elements)
+            .max()
+            .unwrap_or(0);
+        let mut headers: Vec<&str> = vec![
+            "Class#field",
+            "Kind",
+            "Containers",
+            "Total Elements",
+            "Total Retained",
+        ];
+        let mut aligns = vec![
+            Align::Left,
+            Align::Left,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+        ];
+        if graphs {
+            headers.push("");
+            aligns.push(Align::Left);
+        }
+        let mut t = Table::new(&headers, &aligns);
+        for r in &a.most_overall {
+            let mut row = vec![
+                format!("`{}#{}`", r.holder_class, r.field),
+                r.container_kind.clone(),
+                fmt_count(r.container_count),
+                fmt_count(r.total_elements),
+                format_bytes(r.total_retained),
+            ];
+            if graphs {
+                row.push(bar(
+                    r.total_elements,
+                    el_max,
+                    render_graphs::GRAPH_BAR_WIDTH,
+                ));
+            }
+            t.row(row);
+        }
+        t.render(out);
+        out.push('\n');
+    }
+
+    // ── Biggest Single ───────────────────────────────────────────────────────
+    out.push_str("### Biggest Single\n\n");
+    if a.biggest_single.is_empty() {
+        out.push_str("_None._\n\n");
+    } else {
+        let el_max = a
+            .biggest_single
+            .iter()
+            .map(|r| r.elements)
+            .max()
+            .unwrap_or(0);
+        let mut headers: Vec<&str> = vec!["Class#field", "Container Class", "Elements", "Retained"];
+        let mut aligns = vec![Align::Left, Align::Left, Align::Right, Align::Right];
+        if graphs {
+            headers.push("");
+            aligns.push(Align::Left);
+        }
+        let mut t = Table::new(&headers, &aligns);
+        for r in &a.biggest_single {
+            let mut row = vec![
+                format!("`{}#{}`", r.holder_class, r.field),
+                format!("`{}`", r.container_class),
+                fmt_count(r.elements),
+                format_bytes(r.retained),
+            ];
+            if graphs {
+                row.push(bar(r.elements, el_max, render_graphs::GRAPH_BAR_WIDTH));
+            }
+            t.row(row);
+        }
+        t.render(out);
+        out.push('\n');
+    }
+
+    if a.truncated {
+        out.push_str(
+            "_Attribution data was truncated (holder-edge or container-record cap hit); \
+             rankings are a bounded sample._\n\n",
+        );
     }
 }
 /// referent histograms plus (where present) an approximate only-weakly-retained

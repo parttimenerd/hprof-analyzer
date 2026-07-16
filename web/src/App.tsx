@@ -1,5 +1,5 @@
 import React from "react";
-import type { AllocSites, ArraysBySize, ClassRow, CollectionsAnalysis, DomTreeNode, DominatorAnalysis, FillRatioBucket, HistRow, MergedPathNode, ObjRow, PackageNode, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, Suspect, SystemOverview, ThreadInfo, ThreadLocalObj, TopArrays, TopComponents, UnreachableClassRow } from "./types";
+import type { AllocSites, ArraysBySize, ClassRow, CollectionAttribution, CollectionsAnalysis, DomTreeNode, DominatorAnalysis, FillRatioBucket, HistRow, MergedPathNode, ObjRow, PackageNode, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, Suspect, SystemOverview, ThreadInfo, ThreadLocalObj, TopArrays, TopComponents, UnreachableClassRow } from "./types";
 import { fmtCount, fmtExactBytes, formatBytes, formatEpochMs, pctOf, shortLoader } from "./format";
 import {
   CompositionStackedBar,
@@ -75,6 +75,7 @@ function Nav({ report }: { report: Report }) {
   if (report.top_components?.components?.length) items.push(["top-components", "Top Components"]);
   items.push(["arrays-by-size", "Arrays by Size"]);
   items.push(["collections", "Collections"]);
+  if (report.collection_attribution) items.push(["container-attribution", "Container Attribution"]);
   items.push(["references", "References"]);
   items.push(["unreachable-objects", "Unreachable Objects"]);
   if (report.alloc_sites) items.push(["alloc-sites", "Allocation Sites"]);
@@ -1656,6 +1657,86 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
   );
 }
 
+// ── Container Attribution (Class#field) ──────────────────────────────────────
+// Which holder Class#field points at the most container memory. Absent when
+// --collections was off (data undefined → section not rendered). Mirrors
+// render_md.rs::render_collection_attribution (HTML has no bar columns).
+function CollectionAttributionSection({ data }: { data?: CollectionAttribution }) {
+  if (!data) return null;
+  const mostOverall = data.most_overall ?? [];
+  const biggestSingle = data.biggest_single ?? [];
+  return (
+    <section id="container-attribution">
+      <h2>Container Attribution (Class#field)</h2>
+      <p className="subtitle">
+        Which holder Class#field points at the most container memory. Two rankings: total across
+        all containers reached through a field, and the single largest container per field.
+      </p>
+
+      <h3>Most Overall</h3>
+      {mostOverall.length === 0 ? (
+        <p className="subtitle">None.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>Class#field</th>
+              <th>Kind</th>
+              <th className="num">Containers</th>
+              <th className="num">Total Elements</th>
+              <th className="num">Total Retained</th>
+            </tr>
+          </thead>
+          <tbody>
+            {mostOverall.map((r, i) => (
+              <tr key={i}>
+                <td><code>{r.holder_class}#{r.field}</code></td>
+                <td>{r.container_kind}</td>
+                <td className="num">{fmtCount(r.container_count)}</td>
+                <td className="num">{fmtCount(r.total_elements)}</td>
+                <td className="num">{formatBytes(r.total_retained)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      <h3>Biggest Single</h3>
+      {biggestSingle.length === 0 ? (
+        <p className="subtitle">None.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>Class#field</th>
+              <th>Container Class</th>
+              <th className="num">Elements</th>
+              <th className="num">Retained</th>
+            </tr>
+          </thead>
+          <tbody>
+            {biggestSingle.map((r, i) => (
+              <tr key={i}>
+                <td><code>{r.holder_class}#{r.field}</code></td>
+                <td><code>{r.container_class}</code></td>
+                <td className="num">{fmtCount(r.elements)}</td>
+                <td className="num">{formatBytes(r.retained)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {data.truncated && (
+        <p className="subtitle">
+          Attribution data was truncated (holder-edge or container-record cap hit); rankings are a
+          bounded sample.
+        </p>
+      )}
+    </section>
+  );
+}
+
 // ── References ──────────────────────────────────────────────────────────────
 // Soft/weak/phantom reference referents (what they point at). Always-on;
 // mirrors render_md.rs::render_references.
@@ -1932,6 +2013,9 @@ export default function App({ report }: { report: Report }) {
       ) : null}
       <ArraysBySizeSection data={report.arrays_by_size} />
       <CollectionsSection data={report.collections} />
+      {report.collection_attribution && (
+        <CollectionAttributionSection data={report.collection_attribution} />
+      )}
       <ReferencesSection data={report.references} />
       <UnreachableObjectsSection data={report.overview} />
       {report.alloc_sites && <AllocSitesSection data={report.alloc_sites} />}

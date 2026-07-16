@@ -21,6 +21,7 @@ pub fn render_markdown_graphs(r: &Report) -> String {
     render_top_components(&r.top_components, true, &mut out);
     render_arrays_by_size(&r.arrays_by_size, true, &mut out);
     render_collections(&r.collections, true, &mut out);
+    render_collection_attribution(&r.collection_attribution, true, &mut out);
     render_references(&r.references, true, &mut out);
     render_unreachable_histogram(&r.overview, true, &mut out);
     // Allocation sites (always present; `None` only for legacy reports).
@@ -50,6 +51,11 @@ fn render_toc_graphs(r: &Report, out: &mut String) {
     }
     out.push_str("- [Arrays by Size](#arrays-by-size)\n");
     out.push_str("- [Collections](#collections)\n");
+    if r.collection_attribution.is_some() {
+        out.push_str(
+            "- [Container Attribution (Class#field)](#container-attribution-classfield)\n",
+        );
+    }
     out.push_str("- [References](#references)\n");
     out.push_str("- [Unreachable Objects](#unreachable-objects)\n");
     // The ToC bullet appears only when the alloc-sites section is present.
