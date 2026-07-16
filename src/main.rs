@@ -411,10 +411,11 @@ fn main() {
 /// full analyze pipeline (HPROF) or re-render a saved Report JSON.
 fn run_default(cli: Cli) {
     let Some(input) = cli.input else {
-        // No subcommand and no input: show help and exit like a usage error.
+        // No subcommand and no input: this is a usage error, so write help to
+        // stderr (not stdout) and exit 2, matching clap's own missing-arg path.
         let mut cmd = Cli::command();
-        let _ = cmd.print_help();
-        println!();
+        let _ = cmd.write_help(&mut io::stderr());
+        eprintln!();
         process::exit(2);
     };
 
@@ -466,6 +467,9 @@ fn run_default(cli: Cli) {
                   re-run on the .hprof dump to change output caps",
             );
         }
+        // --verbose / --trace-rss / --progress are analyze-pipeline diagnostics;
+        // they are harmless no-ops on the fast re-render path, so we accept them
+        // silently rather than refuse them (unlike the data-affecting flags above).
         let fmt = resolve_format(cli.format, cli.output.as_deref());
         match render_report(&input, fmt) {
             Ok(text) => {
