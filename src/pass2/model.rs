@@ -512,7 +512,28 @@ impl InboundBuilder {
                 fwd_targets.copy_range(lo, hi, &mut buf);
                 &buf
             };
-            for &dst in targets {
+            // Prefetch in_cursors[dst] a few iterations ahead to hide
+            // random-DRAM latency on the scatter-write transpose.
+            const TPF: usize = 8;
+            for (k, &dst) in targets.iter().enumerate() {
+                if k + TPF < targets.len() {
+                    let pf_dst = targets[k + TPF] as usize;
+                    if pf_dst < in_cursors.len() {
+                        unsafe {
+                            let ptr = in_cursors.as_ptr().add(pf_dst) as *const i8;
+                            #[cfg(target_arch = "x86_64")]
+                            core::arch::x86_64::_mm_prefetch::<
+                                { core::arch::x86_64::_MM_HINT_T0 },
+                            >(ptr);
+                            #[cfg(target_arch = "aarch64")]
+                            core::arch::asm!(
+                                "prfm pldl1keep, [{p}]",
+                                p = in(reg) ptr,
+                                options(nostack, readonly)
+                            );
+                        }
+                    }
+                }
                 let dst = dst as usize;
                 inb_flat.set(in_cursors[dst] as usize, src as u32);
                 in_cursors[dst] += 1;
