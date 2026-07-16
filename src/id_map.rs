@@ -292,6 +292,59 @@ impl IdMap {
         search_offsets(&self.offsets[lo..hi], d).map(|pos| lo + pos)
     }
 
+    /// Issue a software prefetch for the `offsets` cache line that `index_of(addr)`
+    /// will most likely access, without performing the full lookup. Call this as
+    /// early as possible (right after `addr` is known) to overlap computation with
+    /// the DRAM latency. Uses interpolation to approximate the target slot.
+    ///
+    /// For the dominant single-block case this is O(1): no partition_point, just
+    /// one interpolation and one prefetch instruction.
+    #[inline]
+    pub fn prefetch_index_of(&self, addr: u64) {
+        if self.block_base.is_empty() {
+            return;
+        }
+        // Single-block fast path (most heaps fit in one 4 GB span).
+        let b = if self.block_base.len() == 1 {
+            0
+        } else {
+            self.block_base.partition_point(|&base| base <= addr).saturating_sub(1)
+        };
+        if b >= self.block_base.len() {
+            return;
+        }
+        let delta = addr.wrapping_sub(self.block_base[b]);
+        if delta >= BLOCK_SPAN {
+            return;
+        }
+        let d = delta as u32;
+        let lo = self.block_start[b] as usize;
+        let hi = self.block_start[b + 1] as usize;
+        if lo >= hi {
+            return;
+        }
+        let lo_v = unsafe { *self.offsets.get_unchecked(lo) } as u64;
+        let hi_v = unsafe { *self.offsets.get_unchecked(hi - 1) } as u64;
+        let range = (hi - lo) as u64;
+        let approx = if hi_v > lo_v {
+            let off = range.saturating_mul(d as u64 - lo_v) / (hi_v - lo_v);
+            lo + off.min(range - 1) as usize
+        } else {
+            lo
+        };
+        unsafe {
+            let ptr = self.offsets.as_ptr().add(approx) as *const i8;
+            #[cfg(target_arch = "x86_64")]
+            core::arch::x86_64::_mm_prefetch::<{ core::arch::x86_64::_MM_HINT_T0 }>(ptr);
+            #[cfg(target_arch = "aarch64")]
+            core::arch::asm!(
+                "prfm pldl1keep, [{p}]",
+                p = in(reg) ptr,
+                options(nostack, readonly)
+            );
+        }
+    }
+
     /// Reconstruct the address stored at dense index `i` (inverse of `index_of`).
     pub fn addr_at(&self, i: usize) -> u64 {
         // Block whose start index is the greatest <= i.

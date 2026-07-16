@@ -981,6 +981,10 @@ impl Pass2 {
                 }
                 heap::INSTANCE_DUMP => {
                     let addr = r.id()?;
+                    // Issue a prefetch for the id_map offsets slot we'll soon need.
+                    // The skip(4) + id() + u4() reads below give the memory system
+                    // ~16 bytes of parsing time (~2 ns) to start the DRAM fetch.
+                    id_map.prefetch_index_of(addr);
                     r.skip(4)?;
                     let class_id = r.id()?;
                     let data_len = r.u4()? as u64;
@@ -1026,6 +1030,8 @@ impl Pass2 {
                 }
                 heap::OBJ_ARRAY_DUMP => {
                     let addr = r.id()?;
+                    // Issue a prefetch for the id_map offsets slot before further reads.
+                    id_map.prefetch_index_of(addr);
                     r.skip(4)?;
                     let count = r.u4()? as u64;
                     let elem_class_id = r.id()?;
