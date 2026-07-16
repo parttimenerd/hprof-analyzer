@@ -1668,12 +1668,13 @@ const COMPONENT_COLS: { key: ComponentKey; label: string }[] = [
 ];
 
 function TopComponentsSection({ data }: { data: TopComponents }) {
-  if (!data?.components?.length) return null;
   const [sortKey, setSortKey] = React.useState<ComponentKey>("retained");
+  const components = data?.components ?? [];
   const sorted = React.useMemo(
-    () => [...data.components].sort((a, b) => b[sortKey] - a[sortKey]),
-    [data.components, sortKey],
+    () => [...components].sort((a, b) => b[sortKey] - a[sortKey]),
+    [components, sortKey],
   );
+  if (components.length === 0) return null;
   return (
     <section id="top-components">
       <h2>Top Components</h2>
@@ -1681,7 +1682,7 @@ function TopComponentsSection({ data }: { data: TopComponents }) {
         Retained heap grouped by class loader (component); % Heap is the share of total reachable heap.
       </p>
       <details open>
-        <summary>Components by retained heap ({fmtCount(data.components.length)} rows)</summary>
+        <summary>Components by retained heap ({fmtCount(components.length)} rows)</summary>
         <table>
           <thead>
             <tr>
