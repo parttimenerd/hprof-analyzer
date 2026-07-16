@@ -617,6 +617,17 @@ let mut field_plans_dense: Vec<FieldPlan> = vec![Vec::new(); n_dense_classes];
             .map(|idx| root_type_of.get(idx).copied().unwrap_or(heap::ROOT_UNKNOWN))
             .collect();
 
+        // ── Phase 3: Build forward-CSR offsets (prefix sum only) ────────
+        // Done BEFORE compress-cold so out_degree (2 GB) is freed before the
+        // compression transients, lowering the binding peak by ~2 GB.
+        let mut fwd_offsets: Vec<u32> = Vec::with_capacity(n + 1);
+        fwd_offsets.push(0u32);
+        for i in 0..n {
+            let next = fwd_offsets[i] + out_degree[i];
+            fwd_offsets.push(next);
+        }
+        drop(out_degree); // dead after prefix sum
+
         // Compress the two cold per-object arrays (shallow, class_idx) NOW,
         // before the forward-CSR fwd_targets (~6GB) is allocated. Both are
         // final here and idle until the retained phase, so freeing their dense
@@ -647,15 +658,6 @@ let mut field_plans_dense: Vec<FieldPlan> = vec![Vec::new(); n_dense_classes];
             None
         };
         crate::trace::probe("pass2: after early-compress shallow/class_idx");
-
-        // ── Phase 3: Build forward-CSR offsets (prefix sum only) ────────
-        let mut fwd_offsets: Vec<u32> = Vec::with_capacity(n + 1);
-        fwd_offsets.push(0u32);
-        for i in 0..n {
-            let next = fwd_offsets[i] + out_degree[i];
-            fwd_offsets.push(next);
-        }
-        drop(out_degree); // dead after prefix sum
         crate::trace::probe("pass2: after fwd_offsets prefix-sum (out_degree freed)");
 
         // ── Phase 3b: Build forward CSR ──────────────────────────────────

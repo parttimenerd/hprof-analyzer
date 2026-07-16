@@ -475,6 +475,9 @@ impl InboundBuilder {
         for src in 0..n_nodes {
             let lo = fwd_offsets[src] as usize;
             let hi = fwd_offsets[src + 1] as usize;
+            if lo == hi {
+                continue; // no out-edges — skip copy_range + buf iteration
+            }
             // Free fully-consumed fwd_targets chunks as the lo pointer advances.
             if lo >= next_fwd_free {
                 fwd_targets.free_below(lo);
@@ -499,7 +502,7 @@ impl InboundBuilder {
         // again here — doing so would double-count them and overflow in_cursors.
 
         crate::trace::probe("inbound: before Phase-4 (after fwd-transpose)");
-        Self::encode_phase4(n, in_cursors, inb_flat, dfn)
+        Self::encode_phase4(n, total_inb, in_cursors, inb_flat, dfn)
     }
 
     /// Run the inbound scan + Phase-4 encode. Returns (inb_offsets, inb_data).
@@ -597,7 +600,7 @@ impl InboundBuilder {
         }
 
         crate::trace::probe("inbound: before Phase-4 (after 2b scan + drops)");
-        Self::encode_phase4(n, in_cursors, inb_flat, dfn)
+        Self::encode_phase4(n, total_inb, in_cursors, inb_flat, dfn)
     }
 
     /// Phase 4: translate node indices to pre-order numbers via `dfn`, sort,
@@ -605,6 +608,7 @@ impl InboundBuilder {
     /// the file-scan path (`build`) and the fwd-transpose path (`build_from_fwd`).
     fn encode_phase4(
         n: usize,
+        total_inb: u64,
         in_cursors: Vec<u32>,
         mut inb_flat: crate::chunkvec::ChunkU32,
         dfn: &[u32],
@@ -615,6 +619,15 @@ impl InboundBuilder {
         // Each node's slice = vbyte(count) then `count` vbyte pre-order deltas.
         let mut inb_block_off: Vec<u64> = Vec::with_capacity(n / INB_BLOCK + 2);
         let mut inb_data: Vec<u8> = Vec::new();
+        // Pre-allocate inb_data to ~2.5 bytes/edge (observed: 4173 MB / 1653 M
+        // edges ≈ 2.53 B/edge on the 34 GB benchmark dump) to avoid doubling
+        // past 2× the true size. Without this the Vec doubles from ~4 GB to an
+        // 8 GB capacity, wasting ~4 GB of RSS through Phase 4.
+        // Cap at 6 GB so we don't over-commit on small dumps.
+        let inb_data_cap = ((total_inb as usize).saturating_mul(5) / 2)
+            .min(6 * 1024 * 1024 * 1024);
+        inb_data.reserve(inb_data_cap);
+
         // CSR is contiguous: start[i] = end of node i-1 = in_cursors[i-1] after fill.
         let mut start = 0usize;
         // Reusable per-node scratch: copy each node's inbound slice out of the
@@ -624,7 +637,31 @@ impl InboundBuilder {
         let mut next_free_at: usize = 1 << 26;
         for i in 0..n {
             let end = in_cursors[i] as usize; // in_cursors[i] = end offset after fill
+
+            // Record a sampled block offset at each block boundary (BEFORE the
+            // count-prefix), so a lookup for any node in the block can seek here
+            // and scan-skip forward to the target node.
+            if i % INB_BLOCK == 0 {
+                inb_block_off.push(inb_data.len() as u64);
+            }
+
+            let count = end - start;
+            if count == 0 {
+                // No predecessors: emit vbyte(0) and move on — skip copy/sort/dfn.
+                vbyte::encode(0, &mut inb_data);
+                start = end;
+                if start >= next_free_at {
+                    inb_flat.free_below(start);
+                    next_free_at = start + (1 << 26);
+                }
+                if i == n / 2 {
+                    crate::trace::probe("inbound Phase-4: midpoint (inb_flat+inb_data coexist)");
+                }
+                continue;
+            }
+
             inb_flat.copy_range(start, end, &mut nb);
+
             // Translate each stripped predecessor NODE -> its pre-order number
             // (dfn); drop unreachable predecessors (dfn == UNDEFINED). Storing
             // pre-order values here means dominator Phase 1 never needs dfn, so
@@ -639,30 +676,26 @@ impl InboundBuilder {
                     w += 1;
                 }
             }
-            // Sort by pre-order and dedup (two distinct nodes cannot share a
-            // pre-order, so this preserves the node-level dedup done at fill).
-            let pre_slice = &mut nb[..w];
-            pre_slice.sort_unstable();
-            let unique_end = {
-                if pre_slice.is_empty() {
-                    0
-                } else {
-                    let mut write = 1usize;
-                    for read in 1..pre_slice.len() {
-                        if pre_slice[read] != pre_slice[write - 1] {
-                            pre_slice[write] = pre_slice[read];
-                            write += 1;
-                        }
+
+            // Sort by pre-order and dedup. Short-circuit for 0/1 translated
+            // entries — the overwhelming majority of nodes in a heap graph have
+            // at most one live predecessor, so this saves hundreds of millions of
+            // sort calls.
+            let unique_end = if w <= 1 {
+                w
+            } else {
+                let pre_slice = &mut nb[..w];
+                pre_slice.sort_unstable();
+                let mut write = 1usize;
+                for read in 1..pre_slice.len() {
+                    if pre_slice[read] != pre_slice[write - 1] {
+                        pre_slice[write] = pre_slice[read];
+                        write += 1;
                     }
-                    write
                 }
+                write
             };
-            // Record a sampled block offset at each block boundary (BEFORE the
-            // count-prefix), so a lookup for any node in the block can seek here
-            // and scan-skip forward to the target node.
-            if i % INB_BLOCK == 0 {
-                inb_block_off.push(inb_data.len() as u64);
-            }
+
             // Count-prefix makes each node's slice self-delimiting.
             vbyte::encode(unique_end as u32, &mut inb_data);
             // Delta-encode pre-order values.
