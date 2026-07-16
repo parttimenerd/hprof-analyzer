@@ -502,8 +502,15 @@ impl InboundBuilder {
                 }
                 next_off_dontneed = pages_end + 1024; // advance by one page
             }
-            fwd_targets.copy_range(lo, hi, &mut buf);
-            for &dst in &buf {
+            // Use range_slice for zero-copy access when the range fits in one
+            // chunk; fall back to copy_range for cross-chunk adjacency lists.
+            let targets: &[u32] = if let Some(sl) = fwd_targets.range_slice(lo, hi) {
+                sl
+            } else {
+                fwd_targets.copy_range(lo, hi, &mut buf);
+                &buf
+            };
+            for &dst in targets {
                 let dst = dst as usize;
                 inb_flat.set(in_cursors[dst] as usize, src as u32);
                 in_cursors[dst] += 1;
