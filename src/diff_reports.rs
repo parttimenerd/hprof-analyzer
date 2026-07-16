@@ -265,6 +265,263 @@ pub fn diff(a: &Report, b: &Report) -> DiffReportsResult {
     }
 }
 
+// ── N-way time-series diff ──────────────────────────────────────────────────
+
+/// One joined class row across N reports: its instances/retained at each report
+/// (index 0 = first, N−1 = last), plus the first→last deltas.
+// Engine-only for now: renderers/CLI wire these in later. Until then the
+// public items are only exercised by unit tests, so silence dead_code.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct SeriesClassRow {
+    pub pretty_class: String,
+    /// Retained heap per report, len N. `0` where the class is absent.
+    pub retained: Vec<u64>,
+    /// Instance count per report, len N. `0` where the class is absent.
+    pub instances: Vec<u64>,
+    /// last − first retained.
+    pub delta_retained: i64,
+    /// last − first instances.
+    pub delta_instances: i64,
+}
+
+/// One joined leak-suspect row across N reports.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct SeriesSuspectRow {
+    pub pretty_class: String,
+    /// Retained heap per report, len N. `0` where absent in that report.
+    pub retained: Vec<u64>,
+    /// last − first retained.
+    pub delta_retained: i64,
+    /// Absent in the first report, present in the last.
+    pub is_new: bool,
+    /// Present in the first report, absent in the last.
+    pub is_gone: bool,
+}
+
+/// The machine-readable N-way cross-dump time-series diff. INTERNAL to this
+/// module — not part of the committed `Report` model or JSON schema. Every
+/// value is an integer; every list is deterministically sorted.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct SeriesDiffResult {
+    /// One label per report, in input order (from `source_name`, len N).
+    pub labels: Vec<String>,
+    /// Total reachable objects per report, len N.
+    pub total_objects: Vec<u64>,
+    /// Total shallow heap per report, len N.
+    pub total_shallow: Vec<u64>,
+    /// last − first total objects.
+    pub delta_total_objects: i64,
+    /// last − first total shallow.
+    pub delta_total_shallow: i64,
+    /// Sum over classes of (last − first) retained.
+    pub net_delta_retained: i64,
+    pub growth_leaders: Vec<SeriesClassRow>,
+    /// Classes absent in the first report, present in the last.
+    pub new_classes: Vec<SeriesClassRow>,
+    /// Classes present in the first report, absent in the last.
+    pub removed_classes: Vec<SeriesClassRow>,
+    /// Suspects new-in-last OR grown first→last.
+    pub grown_suspects: Vec<SeriesSuspectRow>,
+    /// Suspects present at both ends whose retained fell.
+    pub shrunk_suspects: Vec<SeriesSuspectRow>,
+    /// Suspects present in the first report, absent in the last.
+    pub gone_suspects: Vec<SeriesSuspectRow>,
+}
+
+/// Compute the N-way cross-dump time-series diff. Pure and deterministic:
+/// joins ALL reports' histograms and leak suspects by `pretty_class` via
+/// `BTreeMap` (name-sorted iteration), then builds each list sorted by an
+/// explicit key with a `pretty_class` tie-break. "first" = report 0, "last" =
+/// report N−1. When N == 2 the first→last numbers match the pairwise `diff`.
+#[allow(dead_code)]
+pub fn diff_series(reports: &[Report]) -> SeriesDiffResult {
+    let n = reports.len();
+    let last = n.saturating_sub(1);
+
+    // Labels: source_name, falling back to a 1-based positional name.
+    let labels: Vec<String> = reports
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            if r.overview.source_name.is_empty() {
+                format!("report {}", i + 1)
+            } else {
+                r.overview.source_name.clone()
+            }
+        })
+        .collect();
+
+    let total_objects: Vec<u64> = reports.iter().map(|r| r.overview.total_objects).collect();
+    let total_shallow: Vec<u64> = reports.iter().map(|r| r.overview.total_shallow).collect();
+    let delta_total_objects = if n == 0 {
+        0
+    } else {
+        total_objects[last] as i64 - total_objects[0] as i64
+    };
+    let delta_total_shallow = if n == 0 {
+        0
+    } else {
+        total_shallow[last] as i64 - total_shallow[0] as i64
+    };
+
+    // Join histograms by class name across all N reports. Each value is a len-N
+    // vector of Option<(instances, retained)>; None = class absent in that report.
+    let mut joined: BTreeMap<&str, Vec<Option<(u64, u64)>>> = BTreeMap::new();
+    for (i, r) in reports.iter().enumerate() {
+        for row in &r.overview.histogram {
+            let e = joined
+                .entry(row.pretty_class.as_str())
+                .or_insert_with(|| vec![None; n]);
+            e[i] = Some((row.instances, row.retained));
+        }
+    }
+
+    let mut all_rows: Vec<SeriesClassRow> = Vec::with_capacity(joined.len());
+    let mut new_classes: Vec<SeriesClassRow> = Vec::new();
+    let mut removed_classes: Vec<SeriesClassRow> = Vec::new();
+    let mut net_delta_retained: i64 = 0;
+    for (name, cells) in &joined {
+        let instances: Vec<u64> = cells.iter().map(|c| c.map_or(0, |(i, _)| i)).collect();
+        let retained: Vec<u64> = cells.iter().map(|c| c.map_or(0, |(_, r)| r)).collect();
+        let first_present = n > 0 && cells[0].is_some();
+        let last_present = n > 0 && cells[last].is_some();
+        let delta_retained = if n == 0 {
+            0
+        } else {
+            retained[last] as i64 - retained[0] as i64
+        };
+        let delta_instances = if n == 0 {
+            0
+        } else {
+            instances[last] as i64 - instances[0] as i64
+        };
+        net_delta_retained += delta_retained;
+        let row = SeriesClassRow {
+            pretty_class: (*name).to_string(),
+            retained,
+            instances,
+            delta_retained,
+            delta_instances,
+        };
+        // "new" iff present in last and absent in first; "removed" iff reverse.
+        if last_present && !first_present {
+            new_classes.push(row.clone());
+        } else if first_present && !last_present {
+            removed_classes.push(row.clone());
+        }
+        all_rows.push(row);
+    }
+
+    // Growth leaders: largest POSITIVE first→last Δretained, desc, name tie-break.
+    let mut growth_leaders: Vec<SeriesClassRow> = all_rows
+        .into_iter()
+        .filter(|c| c.delta_retained > 0)
+        .collect();
+    growth_leaders.sort_by(|x, y| {
+        y.delta_retained
+            .cmp(&x.delta_retained)
+            .then_with(|| x.pretty_class.cmp(&y.pretty_class))
+    });
+    growth_leaders.truncate(TOP_N);
+
+    // New classes: sorted by last retained desc, then name asc.
+    new_classes.sort_by(|x, y| {
+        y.retained[last]
+            .cmp(&x.retained[last])
+            .then_with(|| x.pretty_class.cmp(&y.pretty_class))
+    });
+    new_classes.truncate(TOP_N);
+
+    // Removed classes: sorted by first retained desc, then name asc.
+    removed_classes.sort_by(|x, y| {
+        y.retained[0]
+            .cmp(&x.retained[0])
+            .then_with(|| x.pretty_class.cmp(&y.pretty_class))
+    });
+    removed_classes.truncate(TOP_N);
+
+    // Suspects: join by pretty_class across all N reports, keeping the MAX
+    // retained where a report has duplicate suspect names (as pairwise does).
+    let mut suspects: BTreeMap<&str, Vec<Option<u64>>> = BTreeMap::new();
+    for (i, r) in reports.iter().enumerate() {
+        for s in &r.leaks.suspects {
+            let e = suspects
+                .entry(s.pretty_class.as_str())
+                .or_insert_with(|| vec![None; n]);
+            e[i] = Some(e[i].map_or(s.retained, |cur| cur.max(s.retained)));
+        }
+    }
+
+    let mut grown_suspects: Vec<SeriesSuspectRow> = Vec::new();
+    let mut shrunk_suspects: Vec<SeriesSuspectRow> = Vec::new();
+    let mut gone_suspects: Vec<SeriesSuspectRow> = Vec::new();
+    for (name, cells) in &suspects {
+        let retained: Vec<u64> = cells.iter().map(|c| c.unwrap_or(0)).collect();
+        let first_present = n > 0 && cells[0].is_some();
+        let last_present = n > 0 && cells[last].is_some();
+        let delta_retained = if n == 0 {
+            0
+        } else {
+            retained[last] as i64 - retained[0] as i64
+        };
+        let is_new = last_present && !first_present;
+        let is_gone = first_present && !last_present;
+        let row = SeriesSuspectRow {
+            pretty_class: (*name).to_string(),
+            retained,
+            delta_retained,
+            is_new,
+            is_gone,
+        };
+        if is_gone {
+            gone_suspects.push(row);
+        } else if is_new || delta_retained > 0 {
+            // Only classify present-in-last suspects into grown; gone handled above.
+            if last_present {
+                grown_suspects.push(row);
+            }
+        } else if last_present && first_present && delta_retained < 0 {
+            shrunk_suspects.push(row);
+        }
+    }
+    // Grown: by last retained desc, then name asc.
+    grown_suspects.sort_by(|x, y| {
+        y.retained[last]
+            .cmp(&x.retained[last])
+            .then_with(|| x.pretty_class.cmp(&y.pretty_class))
+    });
+    // Shrunk: most-negative delta first, then name asc.
+    shrunk_suspects.sort_by(|x, y| {
+        x.delta_retained
+            .cmp(&y.delta_retained)
+            .then_with(|| x.pretty_class.cmp(&y.pretty_class))
+    });
+    // Gone: by first retained desc, then name asc.
+    gone_suspects.sort_by(|x, y| {
+        y.retained[0]
+            .cmp(&x.retained[0])
+            .then_with(|| x.pretty_class.cmp(&y.pretty_class))
+    });
+
+    SeriesDiffResult {
+        labels,
+        total_objects,
+        total_shallow,
+        delta_total_objects,
+        delta_total_shallow,
+        net_delta_retained,
+        growth_leaders,
+        new_classes,
+        removed_classes,
+        grown_suspects,
+        shrunk_suspects,
+        gone_suspects,
+    }
+}
+
 // ── Formatting helpers ─────────────────────────────────────────────────────
 
 /// Unicode minus sign (U+2212), matching the report style's preference for a
@@ -882,5 +1139,179 @@ mod tests {
         assert!(d.growth_leaders.is_empty());
         assert!(d.new_classes.is_empty());
         assert!(d.grown_suspects.is_empty());
+    }
+
+    // Give a report a distinct source_name so we can assert the derived labels.
+    fn named_report(
+        name: &str,
+        total_objects: u64,
+        total_shallow: u64,
+        histogram: Vec<HistRow>,
+        suspects: Vec<Suspect>,
+    ) -> Report {
+        let mut r = base_report(total_objects, total_shallow, histogram, suspects);
+        r.overview.source_name = name.to_string();
+        r
+    }
+
+    #[test]
+    fn series_n2_matches_pairwise_diff() {
+        // Same inputs as class_delta_join_grew_shrank_new_removed, but through
+        // the N-way engine with N==2 — the first→last numbers must match.
+        let a = base_report(
+            0,
+            0,
+            vec![
+                hist("Grew", 1, 10, 100),
+                hist("Shrank", 5, 50, 500),
+                hist("Removed", 2, 20, 200),
+            ],
+            vec![],
+        );
+        let b = base_report(
+            0,
+            0,
+            vec![
+                hist("Grew", 3, 30, 300),
+                hist("Shrank", 2, 20, 200),
+                hist("NewClass", 4, 40, 400),
+            ],
+            vec![],
+        );
+        let s = diff_series(&[a, b]);
+
+        // Growth leaders: NewClass (+400) then Grew (+200), same as pairwise.
+        assert_eq!(s.growth_leaders.len(), 2);
+        assert_eq!(s.growth_leaders[0].pretty_class, "NewClass");
+        assert_eq!(s.growth_leaders[0].delta_retained, 400);
+        assert_eq!(s.growth_leaders[0].retained, vec![0, 400]);
+        assert_eq!(s.growth_leaders[1].pretty_class, "Grew");
+        assert_eq!(s.growth_leaders[1].delta_retained, 200);
+        assert_eq!(s.growth_leaders[1].delta_instances, 2);
+        assert_eq!(s.growth_leaders[1].retained, vec![100, 300]);
+        assert!(
+            !s.growth_leaders
+                .iter()
+                .any(|c| c.pretty_class == "Shrank" || c.pretty_class == "Removed")
+        );
+
+        // New class: NewClass, retained [0, 400].
+        assert_eq!(s.new_classes.len(), 1);
+        assert_eq!(s.new_classes[0].pretty_class, "NewClass");
+        assert_eq!(s.new_classes[0].retained, vec![0, 400]);
+
+        // Removed class: Removed, retained [200, 0].
+        assert_eq!(s.removed_classes.len(), 1);
+        assert_eq!(s.removed_classes[0].pretty_class, "Removed");
+        assert_eq!(s.removed_classes[0].retained, vec![200, 0]);
+
+        // Two reports => two labels, in input order.
+        assert_eq!(s.labels.len(), 2);
+    }
+
+    #[test]
+    fn series_n2_suspects_match_pairwise() {
+        // Mirror suspect_delta_new_and_grown_sorted through the N-way engine.
+        let a = base_report(
+            0,
+            0,
+            vec![],
+            vec![
+                suspect("GrownSuspect", 10, 1_000),
+                suspect("Stable", 5, 500),
+            ],
+        );
+        let b = base_report(
+            0,
+            0,
+            vec![],
+            vec![
+                suspect("GrownSuspect", 20, 3_000),
+                suspect("Stable", 5, 500),
+                suspect("BrandNew", 8, 5_000),
+            ],
+        );
+        let s = diff_series(&[a, b]);
+        assert_eq!(s.grown_suspects.len(), 2);
+        assert_eq!(s.grown_suspects[0].pretty_class, "BrandNew");
+        assert!(s.grown_suspects[0].is_new);
+        assert_eq!(s.grown_suspects[0].retained, vec![0, 5_000]);
+        assert_eq!(s.grown_suspects[1].pretty_class, "GrownSuspect");
+        assert!(!s.grown_suspects[1].is_new);
+        assert_eq!(s.grown_suspects[1].delta_retained, 2_000);
+        assert!(!s.grown_suspects.iter().any(|s| s.pretty_class == "Stable"));
+    }
+
+    #[test]
+    fn series_n3_time_series() {
+        // r1 < r2 < r3 for "Climber"; "OnlyR3" new in r3; "OnlyR1" in r1 only.
+        // Suspect "LateLeak" new in r3; suspect "EarlyLeak" gone by r3.
+        let r1 = named_report(
+            "dump1.hprof",
+            10,
+            1_000,
+            vec![hist("Climber", 1, 10, 100), hist("OnlyR1", 2, 20, 250)],
+            vec![suspect("EarlyLeak", 3, 900)],
+        );
+        let r2 = named_report(
+            "dump2.hprof",
+            20,
+            2_000,
+            vec![hist("Climber", 2, 20, 200)],
+            vec![suspect("EarlyLeak", 3, 900)],
+        );
+        let r3 = named_report(
+            "dump3.hprof",
+            30,
+            3_000,
+            vec![hist("Climber", 3, 30, 300), hist("OnlyR3", 5, 50, 700)],
+            vec![suspect("LateLeak", 4, 1_500)],
+        );
+        let s = diff_series(&[r1, r2, r3]);
+
+        // Labels derived from source_name, in input order.
+        assert_eq!(s.labels, vec!["dump1.hprof", "dump2.hprof", "dump3.hprof"]);
+        // Headline series len N, first->last deltas.
+        assert_eq!(s.total_objects, vec![10, 20, 30]);
+        assert_eq!(s.total_shallow, vec![1_000, 2_000, 3_000]);
+        assert_eq!(s.delta_total_objects, 20);
+        assert_eq!(s.delta_total_shallow, 2_000);
+
+        // Climber grows monotonically and leads growth (Δ = 300 - 100 = 200).
+        let climber = s
+            .growth_leaders
+            .iter()
+            .find(|c| c.pretty_class == "Climber")
+            .expect("Climber is a growth leader");
+        assert_eq!(climber.retained, vec![100, 200, 300]);
+        assert_eq!(climber.instances, vec![1, 2, 3]);
+        assert_eq!(climber.delta_retained, 200);
+        assert_eq!(climber.delta_instances, 2);
+
+        // OnlyR3 is new (absent in first, present in last), retained [0,0,700].
+        assert_eq!(s.new_classes.len(), 1);
+        assert_eq!(s.new_classes[0].pretty_class, "OnlyR3");
+        assert_eq!(s.new_classes[0].retained, vec![0, 0, 700]);
+
+        // OnlyR1 is removed (present in first, absent in last), retained [250,0,0].
+        assert_eq!(s.removed_classes.len(), 1);
+        assert_eq!(s.removed_classes[0].pretty_class, "OnlyR1");
+        assert_eq!(s.removed_classes[0].retained, vec![250, 0, 0]);
+
+        // LateLeak is a new-in-last suspect.
+        let late = s
+            .grown_suspects
+            .iter()
+            .find(|s| s.pretty_class == "LateLeak")
+            .expect("LateLeak is a grown/new suspect");
+        assert!(late.is_new);
+        assert!(!late.is_gone);
+        assert_eq!(late.retained, vec![0, 0, 1_500]);
+
+        // EarlyLeak is gone by r3 (present in first, absent in last).
+        assert_eq!(s.gone_suspects.len(), 1);
+        assert_eq!(s.gone_suspects[0].pretty_class, "EarlyLeak");
+        assert!(s.gone_suspects[0].is_gone);
+        assert_eq!(s.gone_suspects[0].retained, vec![900, 900, 0]);
     }
 }
