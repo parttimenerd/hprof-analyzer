@@ -50,7 +50,7 @@ pub(crate) fn render_duplicate_strings(
     d: &Option<crate::pass2::DupStrings>,
     graphs: bool,
 ) {
-    use crate::md::{Align, Table, bar, sparkline};
+    use crate::md::{bar, sparkline, Align, Table};
     out.push_str("### Duplicate Strings (approximate)\n\n");
     let d = match d {
         None => {
@@ -1299,8 +1299,9 @@ pub(crate) fn render_threads(t: &ThreadOverview, graphs: bool, out: &mut String)
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| format!("<thread {}>", th.thread_serial));
         let ctx = th.context_class_loader.as_deref().unwrap_or("—");
+        let name_link = format!("[{}](#thread-{})", name, th.thread_serial);
         let mut row = vec![
-            name,
+            name_link,
             format_bytes(th.shallow),
             format_bytes(th.retained),
             format_bytes(th.max_local_retained),
@@ -1328,6 +1329,7 @@ pub(crate) fn render_threads(t: &ThreadOverview, graphs: bool, out: &mut String)
     // ── Per-thread call stacks + significant-frame interleave ───────────────
     for th in &t.threads {
         let class = th.class_name.as_deref().unwrap_or("<unresolved>");
+        out.push_str(&format!("<a id=\"thread-{}\"></a>\n\n", th.thread_serial));
         match &th.name {
             Some(name) if !name.is_empty() => out.push_str(&format!(
                 "### Thread {} \"{}\" ({})\n\n",
@@ -1449,7 +1451,7 @@ pub(crate) fn render_top_components(tc: &TopComponents, graphs: bool, out: &mut 
 /// Emits the heading + a fallback italic line even when empty so the document
 /// structure stays stable.
 pub(crate) fn render_arrays_by_size(a: &ArraysBySize, graphs: bool, out: &mut String) {
-    use crate::md::{Align, Table, bar};
+    use crate::md::{bar, Align, Table};
     out.push_str("## Arrays by Size\n\n");
     if a.obj_array_buckets.is_empty() && a.prim_array_buckets.is_empty() && a.zero_length_count == 0
     {
@@ -1525,7 +1527,7 @@ fn render_fill_ratio_table(
     graphs: bool,
     out: &mut String,
 ) {
-    use crate::md::{Align, Table, bar};
+    use crate::md::{bar, Align, Table};
     if buckets.is_empty() {
         out.push_str("_None._\n\n");
         return;
@@ -1561,12 +1563,64 @@ fn render_fill_ratio_table(
 }
 
 pub(crate) fn render_collections(c: &CollectionsAnalysis, graphs: bool, out: &mut String) {
-    use crate::md::{Align, Table, bar};
+    use crate::md::{bar, Align, Table};
     out.push_str("## Collections\n\n");
     out.push_str(
         "_Collection and array occupancy: how full collections are, how big they get, \
          and constant primitive arrays._\n\n",
     );
+
+    // ── Collections by Kind ──────────────────────────────────────────────────
+    out.push_str("### Collections by Kind\n\n");
+    if c.kind_summary.kinds.is_empty() {
+        out.push_str("_None._\n\n");
+    } else {
+        let elem_max = c
+            .kind_summary
+            .kinds
+            .iter()
+            .map(|s| s.total_elements)
+            .max()
+            .unwrap_or(0);
+        let mut headers: Vec<&str> = vec![
+            "Kind",
+            "Count",
+            "Total Elements",
+            "Max Elements",
+            "Total Shallow",
+        ];
+        let mut aligns = vec![
+            Align::Left,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+        ];
+        if graphs {
+            headers.push("");
+            aligns.push(Align::Left);
+        }
+        let mut t = Table::new(&headers, &aligns);
+        for s in &c.kind_summary.kinds {
+            let mut row = vec![
+                s.kind.clone(),
+                fmt_count(s.count),
+                fmt_count(s.total_elements),
+                fmt_count(s.max_elements),
+                format_bytes(s.total_shallow),
+            ];
+            if graphs {
+                row.push(bar(
+                    s.total_elements,
+                    elem_max,
+                    render_graphs::GRAPH_BAR_WIDTH,
+                ));
+            }
+            t.row(row);
+        }
+        t.render(out);
+        out.push('\n');
+    }
 
     // ── Collection Fill Ratio ────────────────────────────────────────────────
     out.push_str("### Collection Fill Ratio\n\n");
@@ -1712,7 +1766,7 @@ pub(crate) fn render_collections(c: &CollectionsAnalysis, graphs: bool, out: &mu
 /// md-graphs; when `graphs` is set an extra proportional bar column is appended
 /// on Shallow.
 fn render_top_arrays(t: &TopArrays, kind: &str, graphs: bool, out: &mut String) {
-    use crate::md::{Align, Table, bar};
+    use crate::md::{bar, Align, Table};
 
     out.push_str(&format!("### Top Arrays ({kind})\n\n"));
     out.push_str(&format!(
@@ -1791,7 +1845,7 @@ pub(crate) fn render_collection_attribution(
     graphs: bool,
     out: &mut String,
 ) {
-    use crate::md::{Align, Table, bar};
+    use crate::md::{bar, Align, Table};
     let Some(a) = a else {
         return;
     };
@@ -1818,12 +1872,14 @@ pub(crate) fn render_collection_attribution(
             "Class#field",
             "Kind",
             "Containers",
+            "Holder Instances",
             "Total Elements",
             "Total Retained",
         ];
         let mut aligns = vec![
             Align::Left,
             Align::Left,
+            Align::Right,
             Align::Right,
             Align::Right,
             Align::Right,
@@ -1838,6 +1894,7 @@ pub(crate) fn render_collection_attribution(
                 format!("`{}#{}`", r.holder_class, r.field),
                 r.container_kind.clone(),
                 fmt_count(r.container_count),
+                fmt_count(r.holder_instances),
                 fmt_count(r.total_elements),
                 format_bytes(r.total_retained),
             ];
@@ -1865,8 +1922,20 @@ pub(crate) fn render_collection_attribution(
             .map(|r| r.elements)
             .max()
             .unwrap_or(0);
-        let mut headers: Vec<&str> = vec!["Class#field", "Container Class", "Elements", "Retained"];
-        let mut aligns = vec![Align::Left, Align::Left, Align::Right, Align::Right];
+        let mut headers: Vec<&str> = vec![
+            "Class#field",
+            "Container Class",
+            "Elements",
+            "Capacity",
+            "Retained",
+        ];
+        let mut aligns = vec![
+            Align::Left,
+            Align::Left,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+        ];
         if graphs {
             headers.push("");
             aligns.push(Align::Left);
@@ -1877,6 +1946,7 @@ pub(crate) fn render_collection_attribution(
                 format!("`{}#{}`", r.holder_class, r.field),
                 format!("`{}`", r.container_class),
                 fmt_count(r.elements),
+                fmt_count(r.capacity),
                 format_bytes(r.retained),
             ];
             if graphs {
@@ -1901,7 +1971,7 @@ pub(crate) fn render_collection_attribution(
 /// fallback line even when no references are present so the structure stays
 /// stable.
 pub(crate) fn render_references(rf: &ReferencesAnalysis, graphs: bool, out: &mut String) {
-    use crate::md::{Align, Table, bar};
+    use crate::md::{bar, Align, Table};
     out.push_str("## References\n\n");
     out.push_str("_Soft/weak/phantom reference referents (what they point at)._\n\n");
 
@@ -1956,7 +2026,7 @@ pub(crate) fn render_references(rf: &ReferencesAnalysis, graphs: bool, out: &mut
 /// Emits the heading + a fallback italic line even when empty so the document
 /// structure stays stable.
 pub(crate) fn render_unreachable_histogram(o: &SystemOverview, graphs: bool, out: &mut String) {
-    use crate::md::{Align, Table, bar};
+    use crate::md::{bar, Align, Table};
     out.push_str("## Unreachable Objects\n\n");
     if o.unreachable_histogram.is_empty() {
         out.push_str("*No unreachable objects.*\n\n");
@@ -2004,7 +2074,7 @@ pub(crate) fn render_unreachable_histogram(o: &SystemOverview, graphs: bool, out
 /// on Drop (big drops) and on Dominated Shallow (immediate dominators). Emits the
 /// headings + fallback italic lines even when empty so the structure stays stable.
 pub(crate) fn render_dominator_analysis(d: &DominatorAnalysis, graphs: bool, out: &mut String) {
-    use crate::md::{Align, Table, bar};
+    use crate::md::{bar, Align, Table};
     out.push_str("## Dominator Analysis\n\n");
 
     // ---- Big Drops ----
@@ -2214,7 +2284,7 @@ pub(crate) fn render_alloc_sites(a: &AllocSites, graphs: bool, out: &mut String)
         );
         return;
     }
-    use crate::md::{Align, Table, bar};
+    use crate::md::{bar, Align, Table};
     let max = a.sites.iter().map(|s| s.object_count).max().unwrap_or(0);
     let mut t = if graphs {
         Table::new(

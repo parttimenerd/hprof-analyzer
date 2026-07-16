@@ -430,6 +430,19 @@ export interface CollectionsAnalysis {
   constant_primitive_arrays: ConstantPrimitiveArrays;
   top_prim_arrays?: TopArrays;
   top_obj_arrays?: TopArrays;
+  kind_summary?: CollectionKindSummary;
+}
+
+// Per-kind rollup over all classified collections.
+export interface CollectionKindStat {
+  kind: string;
+  count: number;
+  total_elements: number;
+  total_shallow: number;
+  max_elements: number;
+}
+export interface CollectionKindSummary {
+  kinds: CollectionKindStat[];
 }
 
 // Container Attribution (Class#field): which holder field points at the most
@@ -441,12 +454,14 @@ export interface FieldAttributionRow {
   total_elements: number;
   total_retained: number;
   container_count: number;
+  holder_instances: number;
 }
 export interface FieldAttributionBiggestRow {
   holder_class: string;
   field: string;
   container_class: string;
   elements: number;
+  capacity: number;
   retained: number;
 }
 export interface CollectionAttribution {

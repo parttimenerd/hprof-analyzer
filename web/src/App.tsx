@@ -1168,7 +1168,7 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
   const name = t.name?.trim();
   const sig = t.significant_frames ?? [];
   return (
-    <details className="thread" open={open}>
+    <details className="thread" open={open} id={`thread-${t.thread_serial}`}>
       <summary>
         {name ? (
           <>
@@ -1259,7 +1259,7 @@ function ThreadOverviewTable({ threads }: { threads: ThreadInfo[] }) {
         <tbody>
           {threads.map((t, i) => (
             <tr key={i}>
-              <td>{t.name?.trim() || `<thread ${t.thread_serial}>`}</td>
+              <td><a href={`#thread-${t.thread_serial}`}>{t.name?.trim() || `<thread ${t.thread_serial}>`}</a></td>
               <td className="num">{formatBytes(t.shallow)}</td>
               <td className="num">{formatBytes(t.retained)}</td>
               <td className="num">{formatBytes(t.max_local_retained)}</td>
@@ -1554,6 +1554,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
   const afrBuckets = afr?.buckets ?? [];
   const mcrBuckets = mcr?.buckets ?? [];
   const cpaRows = cpa?.rows ?? [];
+  const kindRows = data?.kind_summary?.kinds ?? [];
 
   return (
     <section id="collections">
@@ -1561,6 +1562,34 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
       <p className="subtitle">
         Collection and array occupancy: how full collections are, how big they get, and constant primitive arrays.
       </p>
+
+      <h3>Collections by Kind</h3>
+      {kindRows.length === 0 ? (
+        <p className="subtitle">None.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>Kind</th>
+              <th className="num">Count</th>
+              <th className="num">Total Elements</th>
+              <th className="num">Max Elements</th>
+              <th className="num">Total Shallow</th>
+            </tr>
+          </thead>
+          <tbody>
+            {kindRows.map((s, i) => (
+              <tr key={i}>
+                <td>{s.kind}</td>
+                <td className="num">{fmtCount(s.count)}</td>
+                <td className="num">{fmtCount(s.total_elements)}</td>
+                <td className="num">{fmtCount(s.max_elements)}</td>
+                <td className="num">{formatBytes(s.total_shallow)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
 
       <h3>Collection Fill Ratio</h3>
       <p className="subtitle">
@@ -1699,6 +1728,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
               <th>Class#field</th>
               <th>Kind</th>
               <th className="num">Containers</th>
+              <th className="num">Holder Instances</th>
               <th className="num">Total Elements</th>
               <th className="num">Total Retained</th>
             </tr>
@@ -1709,6 +1739,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
                 <td><code>{r.holder_class}#{r.field}</code></td>
                 <td>{r.container_kind}</td>
                 <td className="num">{fmtCount(r.container_count)}</td>
+                <td className="num">{fmtCount(r.holder_instances)}</td>
                 <td className="num">{fmtCount(r.total_elements)}</td>
                 <td className="num">{formatBytes(r.total_retained)}</td>
               </tr>
@@ -1727,6 +1758,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
               <th>Class#field</th>
               <th>Container Class</th>
               <th className="num">Elements</th>
+              <th className="num">Capacity</th>
               <th className="num">Retained</th>
             </tr>
           </thead>
@@ -1736,6 +1768,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
                 <td><code>{r.holder_class}#{r.field}</code></td>
                 <td><code>{r.container_class}</code></td>
                 <td className="num">{fmtCount(r.elements)}</td>
+                <td className="num">{fmtCount(r.capacity)}</td>
                 <td className="num">{formatBytes(r.retained)}</td>
               </tr>
             ))}
