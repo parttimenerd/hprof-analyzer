@@ -14,9 +14,10 @@ import { Pie as ChartPie, Bar as ChartBar } from "react-chartjs-2";
 import { themeColors } from "./chartSetup";
 import "./chartSetup";
 
-// Dependency-free SVG charts (kept lib-free to stay well under the bundle
-// budget). Each chart renders ONLY when its backing data is present; the
-// paired table in App.tsx is the accessibility fallback.
+// Chart.js-based charts (via react-chartjs-2, over the tree-shaken chart.js
+// core registered in chartSetup.ts). Each chart renders ONLY when its backing
+// data is present; the paired table in App.tsx is the accessibility fallback.
+// TreemapBar is intentionally kept as a bespoke non-Chart.js flex-div bar.
 
 const PALETTE = [
   "#2563eb",
@@ -38,10 +39,6 @@ const color = (i: number) => PALETTE[i % PALETTE.length];
 interface Slice {
   name: string;
   value: number;
-}
-
-function polar(cx: number, cy: number, r: number, ang: number): [number, number] {
-  return [cx + r * Math.cos(ang), cy + r * Math.sin(ang)];
 }
 
 function Pie({ data, fmt, donut, titles, onSlice }: { data: Slice[]; fmt: (n: number) => string; donut?: boolean; titles?: string[]; onSlice?: (i: number) => void }) {
@@ -87,7 +84,7 @@ function Pie({ data, fmt, donut, titles, onSlice }: { data: Slice[]; fmt: (n: nu
     },
   };
   return (
-    <div className="chart-wrap" style={{ position: "relative", height: 240, maxWidth: 520 }}>
+    <div className="chart-wrap" role="img" aria-label="Pie chart" style={{ position: "relative", height: 240, maxWidth: 520 }}>
       <ChartPie data={chartData} options={options} />
     </div>
   );
@@ -139,7 +136,7 @@ function HBar({ data, fmt, barColor, titles, onBar }: { data: Slice[]; fmt: (n: 
   };
   const height = Math.max(140, data.length * 26 + 40);
   return (
-    <div className="chart-wrap" style={{ position: "relative", height, maxWidth: 720 }}>
+    <div className="chart-wrap" role="img" aria-label="Horizontal bar chart" style={{ position: "relative", height, maxWidth: 720 }}>
       <ChartBar data={chartData} options={options} />
     </div>
   );
@@ -195,7 +192,7 @@ function VBar({
     },
   };
   return (
-    <div className="chart-wrap" style={{ position: "relative", height: 200, maxWidth: 720 }}>
+    <div className="chart-wrap" role="img" aria-label="Bar chart" style={{ position: "relative", height: 200, maxWidth: 720 }}>
       <ChartBar data={chartData} options={options} />
     </div>
   );
@@ -320,29 +317,48 @@ function StackedBar({ segments, fmt }: {
 }) {
   const total = segments.reduce((s, x) => s + x.value, 0);
   if (total <= 0) return null;
+  const t = themeColors();
+  const chartData = {
+    labels: [""],
+    datasets: segments.map((s, i) => ({
+      label: s.label,
+      data: [s.value],
+      backgroundColor: color(s.colorIdx ?? i),
+    })),
+  };
+  const options = {
+    indexAxis: "y" as const,
+    responsive: true,
+    maintainAspectRatio: false,
+    scales: {
+      x: {
+        stacked: true,
+        ticks: { color: t.muted, callback: (v: number | string) => fmt(Number(v)) },
+        grid: { color: t.border },
+      },
+      y: {
+        stacked: true,
+        ticks: { display: false },
+        grid: { display: false },
+      },
+    },
+    plugins: {
+      legend: {
+        display: true,
+        position: "bottom" as const,
+        labels: { color: t.fg, boxWidth: 12, font: { size: 12 } },
+      },
+      tooltip: {
+        callbacks: {
+          label: (ctx: { dataset: { label?: string }; parsed: { x: number } }) =>
+            `${ctx.dataset.label}: ${fmt(ctx.parsed.x)} (${((ctx.parsed.x / total) * 100).toFixed(1)}%)`,
+        },
+      },
+    },
+  };
   return (
-    <div className="chart-wrap">
-      <div style={{ display: "flex", width: "100%", height: 22, borderRadius: 4, overflow: "hidden", border: "1px solid var(--border)" }}>
-        {segments.map((s, i) => {
-          const pct = (s.value / total) * 100;
-          if (pct <= 0) return null;
-          return (
-            <div
-              key={i}
-              style={{ width: `${pct}%`, background: color(s.colorIdx ?? i), minWidth: pct > 0 ? 1 : 0 }}
-              title={`${s.label}: ${fmt(s.value)} (${pct.toFixed(1)}%)`}
-            />
-          );
-        })}
-      </div>
-      <ul style={{ listStyle: "none", padding: 0, margin: "0.4rem 0 0", display: "flex", flexWrap: "wrap", gap: "0.75rem", fontSize: "0.8rem" }}>
-        {segments.map((s, i) => (
-          <li key={i} style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
-            <span style={{ width: 12, height: 12, background: color(s.colorIdx ?? i), display: "inline-block", borderRadius: 2 }} />
-            <span>{s.label} — {fmt(s.value)} ({((s.value / total) * 100).toFixed(1)}%)</span>
-          </li>
-        ))}
-      </ul>
+    <div className="chart-wrap" role="img" aria-label="Stacked bar chart" style={{ position: "relative", height: 90, maxWidth: 720 }}>
+      <ChartBar data={chartData} options={options} />
     </div>
   );
 }
