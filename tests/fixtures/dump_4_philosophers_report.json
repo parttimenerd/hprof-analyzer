@@ -1,9 +1,9 @@
 {
-  "schema_version": 1,
-  "generated": "2026-07-16T07:03:20.210209000Z",
+  "schema_version": 2,
+  "generated": "2026-07-16T10:49:30.297348000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
-    "file_path": "tests/fixtures/dump_4_philosophers.hprof",
+    "file_path": "/Users/i560383_1/code/experiments/hprof-analyzer/tests/fixtures/dump_4_philosophers.hprof",
     "format": "JAVA PROFILE 1.0.2",
     "file_size": 23731997,
     "identifier_size_bits": 64,
@@ -175,6 +175,30 @@
     "classloaders_loaded": 5,
     "unreachable_count": 5970,
     "unreachable_shallow": 836392,
+    "heap_fragmentation_ratio": 0.06422193050942514,
+    "top_class_concentration_bp": 3193,
+    "gc_roots_retained_by_type": [
+      {
+        "root_type": "Thread",
+        "count": 136,
+        "retained": 1560416
+      },
+      {
+        "root_type": "Sticky Class",
+        "count": 1436,
+        "retained": 888664
+      },
+      {
+        "root_type": "JNI Global",
+        "count": 109,
+        "retained": 130408
+      },
+      {
+        "root_type": "System Class",
+        "count": 8,
+        "retained": 0
+      }
+    ],
     "unreachable_histogram": [
       {
         "pretty_class": "int[]",
@@ -89796,5 +89820,10 @@
       ],
       "only_weakly_retained": []
     }
+  },
+  "leak_indicators": {
+    "anonymous_class_count": 204,
+    "thread_local_null_key_count": 0,
+    "direct_byte_buffer_capacity_sum": 140862014
   }
 }

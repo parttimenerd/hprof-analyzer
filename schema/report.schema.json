@@ -87,6 +87,15 @@
     "generated": {
       "type": "string"
     },
+    "leak_indicators": {
+      "description": "Always-computed scalar leak indicators. Additive; defaults to zero for\nround-trip with older JSON.",
+      "$ref": "#/$defs/LeakIndicators",
+      "default": {
+        "anonymous_class_count": 0,
+        "direct_byte_buffer_capacity_sum": 0,
+        "thread_local_null_key_count": 0
+      }
+    },
     "leaks": {
       "$ref": "#/$defs/LeakSuspects"
     },
@@ -1064,6 +1073,30 @@
         "wasted"
       ]
     },
+    "GcRootRetainedRow": {
+      "description": "One row of the GC-root-retained-by-type table.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "retained": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "root_type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "root_type",
+        "count",
+        "retained"
+      ]
+    },
     "GcRootTypeRow": {
       "description": "One row of the GC-roots-by-type breakdown: a human-readable root-type label\nand how many roots carry that HPROF type.",
       "type": "object",
@@ -1227,6 +1260,35 @@
         "kind",
         "objects",
         "shallow_heap"
+      ]
+    },
+    "LeakIndicators": {
+      "description": "Scalar indicators of common Java leak patterns. All fields are always\ncomputed; zero when the corresponding objects are absent.",
+      "type": "object",
+      "properties": {
+        "anonymous_class_count": {
+          "description": "Count of anonymous/generated class definitions (names matching `$\\d+`,\n`$$Lambda$`, `$$Anon`, or `$Proxy` patterns).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "direct_byte_buffer_capacity_sum": {
+          "description": "Sum of `capacity` fields across all live `DirectByteBuffer` instances,\nrepresenting total off-heap memory tracked by live NIO buffers.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "thread_local_null_key_count": {
+          "description": "Count of `ThreadLocal$ThreadLocalMap$Entry` instances whose referent\n(the ThreadLocal key) has been cleared — the classic thread-local leak signal.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "anonymous_class_count",
+        "thread_local_null_key_count",
+        "direct_byte_buffer_capacity_sum"
       ]
     },
     "LeakSuspects": {
@@ -2128,9 +2190,23 @@
             "$ref": "#/$defs/GcRootTypeRow"
           }
         },
+        "gc_roots_retained_by_type": {
+          "description": "Retained heap grouped by GC root type. Additive; empty when no roots.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/GcRootRetainedRow"
+          }
+        },
         "heap_composition": {
           "description": "B5: reachable-heap composition by object kind. Always present; empty\nonly for an empty heap.",
           "$ref": "#/$defs/HeapComposition"
+        },
+        "heap_fragmentation_ratio": {
+          "description": "Ratio of unreachable shallow heap to total heap (reachable + unreachable).\nRange [0.0, 1.0]. 0.0 for an empty heap.",
+          "type": "number",
+          "format": "double",
+          "default": 0.0
         },
         "histogram": {
           "type": "array",
@@ -2197,6 +2273,13 @@
           "items": {
             "$ref": "#/$defs/PropEntry"
           }
+        },
+        "top_class_concentration_bp": {
+          "description": "Retained heap share of the single largest class, in integer basis points (100 bp = 1%).\n0 for an empty heap.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
         },
         "total_objects": {
           "type": "integer",
