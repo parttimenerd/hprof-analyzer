@@ -216,7 +216,7 @@ pub(crate) fn render_leak_indicators(li: &crate::report::LeakIndicators, out: &m
     out.push_str("## Leak Indicators\n\n");
     out.push_str(
         "_Scalar signals for common Java leak patterns. Non-zero values here \
-         are worth investigating.\n\n",
+         are worth investigating._\n\n",
     );
     let mut t = Table::new(&["Indicator", "Value"], &[Align::Left, Align::Right]);
     if li.anonymous_class_count > 0 {
