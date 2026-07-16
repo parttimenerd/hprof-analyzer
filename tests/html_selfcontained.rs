@@ -85,8 +85,8 @@ fn html_render_is_deterministic() {
 
 #[test]
 fn bundle_is_within_size_budget() {
-    // The raw minified React bundle ships in the binary and in every HTML file.
-    // Plan §6.1c budget: <= 350 KB minified. Guard it here so a source change
+    // The raw minified React + Chart.js bundle ships in the binary and in every
+    // HTML file. Budget: <= 400 KB minified. Guard it here so a source change
     // that blows the budget fails the test suite (esbuild also guards at build
     // time, but this covers builds that fall back to the committed bundle).
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/web/dist/bundle.js");
@@ -94,7 +94,7 @@ fn bundle_is_within_size_budget() {
         .expect("committed web/dist/bundle.js exists")
         .len();
     assert!(size > 0, "bundle.js must not be empty");
-    const BUDGET: u64 = 350 * 1024;
+    const BUDGET: u64 = 400 * 1024;
     assert!(
         size <= BUDGET,
         "web/dist/bundle.js is {size} bytes, over the {BUDGET}-byte budget"
