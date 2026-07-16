@@ -607,7 +607,9 @@ pub(crate) fn build_field_decode_views(
             // unused slots' worth of refs (capacity - used) clamped >=0. shallow
             // attributes the COLLECTION instance (backing-array bytes already
             // counted under array_fill).
-            let wasted = count.saturating_sub(used.min(count)) * obj_ref_width as u64;
+            let wasted = count
+                .saturating_sub(used.min(count))
+                .saturating_mul(obj_ref_width as u64);
             coll_fill.add(used, count, want.coll_shallow, wasted);
             coll_fill_tracked += 1;
             if want.is_map {
