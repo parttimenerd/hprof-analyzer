@@ -1643,9 +1643,84 @@ pub(crate) fn render_collections(c: &CollectionsAnalysis, graphs: bool, out: &mu
         t.render(out);
         out.push('\n');
     }
+
+    // ── Top Arrays ───────────────────────────────────────────────────────────
+    render_top_arrays(&c.top_prim_arrays, "primitive", graphs, out);
+    render_top_arrays(&c.top_obj_arrays, "object", graphs, out);
 }
 
-/// Render the always-on "References" section: soft/weak/phantom reference
+/// Render the two Top Arrays tables (largest individual arrays + largest array
+/// classes by aggregate shallow) for one category. Shared by plain md and
+/// md-graphs; when `graphs` is set an extra proportional bar column is appended
+/// on Shallow.
+fn render_top_arrays(t: &TopArrays, kind: &str, graphs: bool, out: &mut String) {
+    use crate::md::{Align, Table, bar};
+
+    out.push_str(&format!("### Top Arrays ({kind})\n\n"));
+    out.push_str(&format!(
+        "_The largest {kind} arrays by shallow size, individually and aggregated by array class._\n\n"
+    ));
+
+    // Largest individual arrays.
+    if t.top_individual.is_empty() {
+        out.push_str("_None._\n\n");
+    } else {
+        let sh_max = t
+            .top_individual
+            .iter()
+            .map(|r| r.shallow)
+            .max()
+            .unwrap_or(0);
+        let mut headers: Vec<&str> = vec!["Array class", "Length", "Shallow"];
+        let mut aligns = vec![Align::Left, Align::Right, Align::Right];
+        if graphs {
+            headers.push("");
+            aligns.push(Align::Left);
+        }
+        let mut tbl = Table::new(&headers, &aligns);
+        for r in &t.top_individual {
+            let mut row = vec![
+                format!("`{}`", r.array_class),
+                fmt_count(r.length),
+                format_bytes(r.shallow),
+            ];
+            if graphs {
+                row.push(bar(r.shallow, sh_max, render_graphs::GRAPH_BAR_WIDTH));
+            }
+            tbl.row(row);
+        }
+        tbl.render(out);
+        out.push('\n');
+    }
+
+    // Largest array classes by aggregate shallow.
+    out.push_str(&format!("#### Top Array Classes ({kind})\n\n"));
+    if t.top_by_class.is_empty() {
+        out.push_str("_None._\n\n");
+    } else {
+        let sh_max = t.top_by_class.iter().map(|r| r.shallow).max().unwrap_or(0);
+        let mut headers: Vec<&str> = vec!["Array class", "Instances", "Shallow"];
+        let mut aligns = vec![Align::Left, Align::Right, Align::Right];
+        if graphs {
+            headers.push("");
+            aligns.push(Align::Left);
+        }
+        let mut tbl = Table::new(&headers, &aligns);
+        for r in &t.top_by_class {
+            let mut row = vec![
+                format!("`{}`", r.array_class),
+                fmt_count(r.objects),
+                format_bytes(r.shallow),
+            ];
+            if graphs {
+                row.push(bar(r.shallow, sh_max, render_graphs::GRAPH_BAR_WIDTH));
+            }
+            tbl.row(row);
+        }
+        tbl.render(out);
+        out.push('\n');
+    }
+}
 /// referent histograms plus (where present) an approximate only-weakly-retained
 /// breakdown. Shared by plain md and md-graphs; when `graphs` is set an extra
 /// proportional bar column is appended on Objects. Emits the heading + a

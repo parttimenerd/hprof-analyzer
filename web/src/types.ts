@@ -390,6 +390,24 @@ export interface ConstantPrimitiveArrays {
   truncated: boolean;
 }
 
+export interface TopArrayRow {
+  array_class: string;
+  length: number;
+  shallow: number;
+  obj_index_1based: number;
+}
+
+export interface TopArrayClassRow {
+  array_class: string;
+  objects: number;
+  shallow: number;
+}
+
+export interface TopArrays {
+  top_individual: TopArrayRow[];
+  top_by_class: TopArrayClassRow[];
+}
+
 // Always-on collection/array occupancy analysis.
 export interface CollectionsAnalysis {
   collection_fill_ratio: CollectionFillRatio;
@@ -397,6 +415,8 @@ export interface CollectionsAnalysis {
   array_fill_ratio: ArrayFillRatio;
   map_collision_ratio: MapCollisionRatio;
   constant_primitive_arrays: ConstantPrimitiveArrays;
+  top_prim_arrays?: TopArrays;
+  top_obj_arrays?: TopArrays;
 }
 
 // One class row of a reference referent/only-weakly-retained histogram.

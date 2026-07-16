@@ -1,5 +1,5 @@
 import React from "react";
-import type { AllocSites, ArraysBySize, ClassRow, CollectionsAnalysis, DomTreeNode, DominatorAnalysis, FillRatioBucket, HistRow, MergedPathNode, ObjRow, PackageNode, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, Suspect, SystemOverview, ThreadInfo, ThreadLocalObj, TopComponents, UnreachableClassRow } from "./types";
+import type { AllocSites, ArraysBySize, ClassRow, CollectionsAnalysis, DomTreeNode, DominatorAnalysis, FillRatioBucket, HistRow, MergedPathNode, ObjRow, PackageNode, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, Suspect, SystemOverview, ThreadInfo, ThreadLocalObj, TopArrays, TopComponents, UnreachableClassRow } from "./types";
 import { fmtCount, fmtExactBytes, formatBytes, formatEpochMs, pctOf, shortLoader } from "./format";
 import {
   CompositionStackedBar,
@@ -1441,6 +1441,69 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
   const afr = data?.array_fill_ratio;
   const mcr = data?.map_collision_ratio;
   const cpa = data?.constant_primitive_arrays;
+  const topPrim = data?.top_prim_arrays;
+  const topObj = data?.top_obj_arrays;
+
+  // The two Top Arrays tables (largest individual arrays + largest array
+  // classes by aggregate shallow) for one category. Mirrors
+  // render_md.rs::render_top_arrays.
+  const topArraysBlock = (t: TopArrays | undefined, kind: string) => {
+    const individual = t?.top_individual ?? [];
+    const byClass = t?.top_by_class ?? [];
+    return (
+      <>
+        <h3>Top Arrays ({kind})</h3>
+        <p className="subtitle">
+          The largest {kind} arrays by shallow size, individually and aggregated by array class.
+        </p>
+        {individual.length === 0 ? (
+          <p className="subtitle">None.</p>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>Array class</th>
+                <th className="num">Length</th>
+                <th className="num">Shallow</th>
+              </tr>
+            </thead>
+            <tbody>
+              {individual.map((r, i) => (
+                <tr key={i}>
+                  <td><code>{r.array_class}</code></td>
+                  <td className="num">{fmtCount(r.length)}</td>
+                  <td className="num">{formatBytes(r.shallow)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <h4>Top Array Classes ({kind})</h4>
+        {byClass.length === 0 ? (
+          <p className="subtitle">None.</p>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>Array class</th>
+                <th className="num">Instances</th>
+                <th className="num">Shallow</th>
+              </tr>
+            </thead>
+            <tbody>
+              {byClass.map((r, i) => (
+                <tr key={i}>
+                  <td><code>{r.array_class}</code></td>
+                  <td className="num">{fmtCount(r.objects)}</td>
+                  <td className="num">{formatBytes(r.shallow)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </>
+    );
+  };
 
   // Format a basis-point fill/load range as a percent label (e.g. "0–10%").
   const ratioLabel = (b: FillRatioBucket) => `${b.lower_ratio_bp / 100}–${b.upper_ratio_bp / 100}%`;
@@ -1586,6 +1649,9 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
           </tbody>
         </table>
       )}
+
+      {topArraysBlock(topPrim, "primitive")}
+      {topArraysBlock(topObj, "object")}
     </section>
   );
 }
