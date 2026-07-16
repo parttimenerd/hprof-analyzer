@@ -91,6 +91,7 @@ pub fn build_model(
         collections: g.collections.clone(),
         references,
         collection_attribution: build_collection_attribution(g),
+        leak_indicators: Default::default(),
     }
 }
 
@@ -1346,6 +1347,9 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
         duplicate_classes,
         record_census: g.record_census.clone(),
         duplicate_strings: g.dup_strings.clone(),
+        heap_fragmentation_ratio: 0.0,
+        top_class_concentration_bp: 0,
+        gc_roots_retained_by_type: vec![],
     }
 }
 

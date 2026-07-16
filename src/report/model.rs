@@ -50,6 +50,14 @@ pub struct GcRootTypeRow {
     pub count: u64,
 }
 
+/// One row of the GC-root-retained-by-type table.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct GcRootRetainedRow {
+    pub root_type: String,
+    pub count: u64,
+    pub retained: u64,
+}
+
 /// One kind-bucket of the heap-composition breakdown (B5).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct KindStat {
@@ -254,6 +262,17 @@ pub struct SystemOverview {
     pub classloaders_loaded: u64,
     pub unreachable_count: u64,
     pub unreachable_shallow: u64,
+    /// Ratio of unreachable shallow heap to total heap (reachable + unreachable).
+    /// Range [0.0, 1.0]. 0.0 for an empty heap.
+    #[serde(default)]
+    pub heap_fragmentation_ratio: f64,
+    /// Retained heap share of the single largest class, in integer basis points (100 bp = 1%).
+    /// 0 for an empty heap.
+    #[serde(default)]
+    pub top_class_concentration_bp: u32,
+    /// Retained heap grouped by GC root type. Additive; empty when no roots.
+    #[serde(default)]
+    pub gc_roots_retained_by_type: Vec<GcRootRetainedRow>,
     /// Per-class histogram of unreachable objects (idom == u32::MAX), sorted by
     /// shallow descending and capped. Additive; not parity-compared.
     #[serde(default)]
@@ -880,9 +899,25 @@ pub struct ReferencesAnalysis {
     pub phantom: Option<ReferenceStats>,
 }
 
+/// Scalar indicators of common Java leak patterns. All fields are always
+/// computed; zero when the corresponding objects are absent.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize,
+         schemars::JsonSchema)]
+pub struct LeakIndicators {
+    /// Count of anonymous/generated class definitions (names matching `$\d+`,
+    /// `$$Lambda$`, `$$Anon`, or `$Proxy` patterns).
+    pub anonymous_class_count: u64,
+    /// Count of `ThreadLocal$ThreadLocalMap$Entry` instances whose referent
+    /// (the ThreadLocal key) has been cleared — the classic thread-local leak signal.
+    pub thread_local_null_key_count: u64,
+    /// Sum of `capacity` fields across all live `DirectByteBuffer` instances,
+    /// representing total off-heap memory tracked by live NIO buffers.
+    pub direct_byte_buffer_capacity_sum: u64,
+}
+
 /// Schema version for the machine-readable JSON output. Bump on any
 /// breaking change to the `Report` shape; the JSON always carries this.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// One allocation site: a distinct HPROF stack-trace serial, its resolved frame
 /// lines, and the aggregate footprint of the objects allocated there.
@@ -941,4 +976,8 @@ pub struct Report {
     /// `--collections` was passed; `None` otherwise. Additive; not parity-compared.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collection_attribution: Option<CollectionAttribution>,
+    /// Always-computed scalar leak indicators. Additive; defaults to zero for
+    /// round-trip with older JSON.
+    #[serde(default)]
+    pub leak_indicators: LeakIndicators,
 }
