@@ -525,6 +525,9 @@ impl Pass2 {
             |rec| {
                 match rec {
                     crate::pass2::scan::Record::Instance(addr, class_id, blob) => {
+                        // Prefetch the id_map slot for `addr` as early as possible in
+                        // the handler so the cidx/plan lookups can overlap the DRAM fetch.
+                        p1.id_map.prefetch_index_of(addr);
                         let cidx = deg_cls_cache.get(&class_addr_to_hist, class_id);
                         let field_plan = if cidx != u32::MAX {
                             let plan = &field_plans_dense[cidx as usize];
@@ -558,6 +561,8 @@ impl Pass2 {
                         }
                     }
                     crate::pass2::scan::Record::ObjArray(addr, elem_class_id, _count, elem_bytes) => {
+                        // Prefetch the id_map slot for `addr` before further work.
+                        p1.id_map.prefetch_index_of(addr);
                         let src_idx = match deg_idx_cache.index_of(&p1.id_map, addr) {
                             Some(i) => i,
                             None => return,
