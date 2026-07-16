@@ -523,11 +523,12 @@ pub(crate) fn build_field_decode_views(
     })?;
 
     // ── Scan 2: every PRIM_ARRAY_DUMP — constant-array detection ──────────────
-    // group (type_code, len, value) → objects. Capped; overflow folds to "other".
-    let mut const_groups: HashMap<(u8, u64, i64), u64> = HashMap::new();
-    let mut const_other_objects: u64 = 0;
+    // group (type_code, len, value) → (objects, shallow). Capped; overflow folds
+    // to "other".
+    let mut const_groups: HashMap<(u8, u64, i64), (u64, u64)> = HashMap::new();
+    let mut const_other: (u64, u64) = (0, 0);
     let mut const_truncated = false;
-    scan_all_prim_arrays(path, id_size, |_addr, elem_type, count, bytes| {
+    scan_all_prim_arrays(path, id_size, |addr, elem_type, count, bytes| {
         if count < 2 {
             return;
         }
@@ -547,13 +548,21 @@ pub(crate) fn build_field_decode_views(
         if !all_equal {
             return;
         }
+        let sh = p1
+            .id_map
+            .index_of(addr)
+            .map(|i| shallow[i] as u64)
+            .unwrap_or(0);
         let value = decode_prim_value(elem_type, first);
         let key = (elem_type, count, value);
         if const_groups.contains_key(&key) || const_groups.len() < CONST_ARRAY_CAP {
-            *const_groups.entry(key).or_insert(0) += 1;
+            let e = const_groups.entry(key).or_insert((0, 0));
+            e.0 += 1;
+            e.1 += sh;
         } else {
             const_truncated = true;
-            const_other_objects += 1;
+            const_other.0 += 1;
+            const_other.1 += sh;
         }
     })?;
 
@@ -625,7 +634,7 @@ pub(crate) fn build_field_decode_views(
         },
         constant_primitive_arrays: assemble_const_arrays(
             const_groups,
-            const_other_objects,
+            const_other,
             const_truncated,
         ),
     };
@@ -689,19 +698,21 @@ impl FillAcc {
 /// (objects desc, then array_class asc, then length asc) and appending an
 /// "other" fold row when the cap was hit.
 fn assemble_const_arrays(
-    groups: HashMap<(u8, u64, i64), u64>,
-    other_objects: u64,
+    groups: HashMap<(u8, u64, i64), (u64, u64)>,
+    other: (u64, u64),
     truncated: bool,
 ) -> ConstantPrimitiveArrays {
     let mut rows: Vec<ConstantArrayRow> = groups
         .into_iter()
-        .map(|((elem_type, length, value), objects)| ConstantArrayRow {
-            array_class: prim_array_class_name(elem_type).to_string(),
-            length,
-            value,
-            objects,
-            shallow: 0,
-        })
+        .map(
+            |((elem_type, length, value), (objects, shallow))| ConstantArrayRow {
+                array_class: prim_array_class_name(elem_type).to_string(),
+                length,
+                value,
+                objects,
+                shallow,
+            },
+        )
         .collect();
     rows.sort_by(|a, b| {
         b.objects
@@ -710,13 +721,13 @@ fn assemble_const_arrays(
             .then(a.length.cmp(&b.length))
             .then(a.value.cmp(&b.value))
     });
-    if truncated && other_objects > 0 {
+    if truncated && other.0 > 0 {
         rows.push(ConstantArrayRow {
             array_class: "<other>".to_string(),
             length: 0,
             value: 0,
-            objects: other_objects,
-            shallow: 0,
+            objects: other.0,
+            shallow: other.1,
         });
     }
     ConstantPrimitiveArrays { rows, truncated }

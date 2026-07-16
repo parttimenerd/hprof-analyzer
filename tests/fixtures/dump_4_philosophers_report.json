@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated": "2026-07-16T03:09:06.403203000Z",
+  "generated": "2026-07-16T03:26:53.460896000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
     "file_path": "tests/fixtures/dump_4_philosophers.hprof",
@@ -89084,448 +89084,448 @@
           "length": 2,
           "value": 49,
           "objects": 31,
-          "shallow": 0
+          "shallow": 744
         },
         {
           "array_class": "[B",
           "length": 8,
           "value": 0,
           "objects": 19,
-          "shallow": 0
+          "shallow": 456
         },
         {
           "array_class": "[I",
           "length": 2,
           "value": 0,
           "objects": 15,
-          "shallow": 0
+          "shallow": 360
         },
         {
           "array_class": "[I",
           "length": 4,
           "value": 0,
           "objects": 9,
-          "shallow": 0
+          "shallow": 288
         },
         {
           "array_class": "[I",
           "length": 10,
           "value": 0,
           "objects": 4,
-          "shallow": 0
+          "shallow": 224
         },
         {
           "array_class": "[I",
           "length": 32,
           "value": 0,
           "objects": 4,
-          "shallow": 0
+          "shallow": 576
         },
         {
           "array_class": "[J",
           "length": 32,
           "value": 0,
           "objects": 4,
-          "shallow": 0
+          "shallow": 1088
         },
         {
           "array_class": "[S",
           "length": 32,
           "value": 0,
           "objects": 4,
-          "shallow": 0
+          "shallow": 320
         },
         {
           "array_class": "[I",
           "length": 6,
           "value": 0,
           "objects": 3,
-          "shallow": 0
+          "shallow": 120
         },
         {
           "array_class": "[B",
           "length": 2,
           "value": 76,
           "objects": 2,
-          "shallow": 0
+          "shallow": 48
         },
         {
           "array_class": "[B",
           "length": 2,
           "value": 110,
           "objects": 2,
-          "shallow": 0
+          "shallow": 48
         },
         {
           "array_class": "[B",
           "length": 256,
           "value": 0,
           "objects": 2,
-          "shallow": 0
+          "shallow": 544
         },
         {
           "array_class": "[C",
           "length": 2,
           "value": 83,
           "objects": 2,
-          "shallow": 0
+          "shallow": 48
         },
         {
           "array_class": "[C",
           "length": 26,
           "value": 0,
           "objects": 2,
-          "shallow": 0
+          "shallow": 144
         },
         {
           "array_class": "[B",
           "length": 2,
           "value": 10,
           "objects": 1,
-          "shallow": 0
+          "shallow": 24
         },
         {
           "array_class": "[B",
           "length": 2,
           "value": 32,
           "objects": 1,
-          "shallow": 0
+          "shallow": 24
         },
         {
           "array_class": "[B",
           "length": 2,
           "value": 34,
           "objects": 1,
-          "shallow": 0
+          "shallow": 24
         },
         {
           "array_class": "[B",
           "length": 2,
           "value": 37,
           "objects": 1,
-          "shallow": 0
+          "shallow": 24
         },
         {
           "array_class": "[B",
           "length": 2,
           "value": 39,
           "objects": 1,
-          "shallow": 0
+          "shallow": 24
         },
         {
           "array_class": "[B",
           "length": 2,
           "value": 45,
           "objects": 1,
-          "shallow": 0
+          "shallow": 24
         },
         {
           "array_class": "[B",
           "length": 2,
           "value": 46,
           "objects": 1,
-          "shallow": 0
+          "shallow": 24
         },
         {
           "array_class": "[B",
           "length": 2,
           "value": 47,
           "objects": 1,
-          "shallow": 0
+          "shallow": 24
         },
         {
           "array_class": "[B",
           "length": 2,
           "value": 58,
           "objects": 1,
-          "shallow": 0
+          "shallow": 24
         },
         {
           "array_class": "[B",
           "length": 2,
           "value": 72,
           "objects": 1,
-          "shallow": 0
+          "shallow": 24
         },
         {
           "array_class": "[B",
           "length": 2,
           "value": 95,
           "objects": 1,
-          "shallow": 0
+          "shallow": 24
         },
         {
           "array_class": "[B",
           "length": 2,
           "value": 101,
           "objects": 1,
-          "shallow": 0
+          "shallow": 24
         },
         {
           "array_class": "[B",
           "length": 2,
           "value": 102,
           "objects": 1,
-          "shallow": 0
+          "shallow": 24
         },
         {
           "array_class": "[B",
           "length": 2,
           "value": 105,
           "objects": 1,
-          "shallow": 0
+          "shallow": 24
         },
         {
           "array_class": "[B",
           "length": 2,
           "value": 107,
           "objects": 1,
-          "shallow": 0
+          "shallow": 24
         },
         {
           "array_class": "[B",
           "length": 2,
           "value": 112,
           "objects": 1,
-          "shallow": 0
+          "shallow": 24
         },
         {
           "array_class": "[B",
           "length": 2,
           "value": 116,
           "objects": 1,
-          "shallow": 0
+          "shallow": 24
         },
         {
           "array_class": "[B",
           "length": 3,
           "value": 46,
           "objects": 1,
-          "shallow": 0
+          "shallow": 24
         },
         {
           "array_class": "[B",
           "length": 3,
           "value": 76,
           "objects": 1,
-          "shallow": 0
+          "shallow": 24
         },
         {
           "array_class": "[B",
           "length": 3,
           "value": 88,
           "objects": 1,
-          "shallow": 0
+          "shallow": 24
         },
         {
           "array_class": "[B",
           "length": 3,
           "value": 99,
           "objects": 1,
-          "shallow": 0
+          "shallow": 24
         },
         {
           "array_class": "[B",
           "length": 4,
           "value": 32,
           "objects": 1,
-          "shallow": 0
+          "shallow": 24
         },
         {
           "array_class": "[B",
           "length": 4,
           "value": 76,
           "objects": 1,
-          "shallow": 0
+          "shallow": 24
         },
         {
           "array_class": "[B",
           "length": 4,
           "value": 90,
           "objects": 1,
-          "shallow": 0
+          "shallow": 24
         },
         {
           "array_class": "[B",
           "length": 5,
           "value": 76,
           "objects": 1,
-          "shallow": 0
+          "shallow": 24
         },
         {
           "array_class": "[B",
           "length": 7,
           "value": 32,
           "objects": 1,
-          "shallow": 0
+          "shallow": 24
         },
         {
           "array_class": "[B",
           "length": 8,
           "value": 32,
           "objects": 1,
-          "shallow": 0
+          "shallow": 24
         },
         {
           "array_class": "[B",
           "length": 8,
           "value": 48,
           "objects": 1,
-          "shallow": 0
+          "shallow": 24
         },
         {
           "array_class": "[B",
           "length": 10,
           "value": 32,
           "objects": 1,
-          "shallow": 0
+          "shallow": 32
         },
         {
           "array_class": "[B",
           "length": 13,
           "value": 48,
           "objects": 1,
-          "shallow": 0
+          "shallow": 32
         },
         {
           "array_class": "[B",
           "length": 16,
           "value": 0,
           "objects": 1,
-          "shallow": 0
+          "shallow": 32
         },
         {
           "array_class": "[B",
           "length": 63,
           "value": 48,
           "objects": 1,
-          "shallow": 0
+          "shallow": 80
         },
         {
           "array_class": "[B",
           "length": 512,
           "value": 0,
           "objects": 1,
-          "shallow": 0
+          "shallow": 528
         },
         {
           "array_class": "[B",
           "length": 8192,
           "value": 0,
           "objects": 1,
-          "shallow": 0
+          "shallow": 8208
         },
         {
           "array_class": "[C",
           "length": 2,
           "value": 70,
           "objects": 1,
-          "shallow": 0
+          "shallow": 24
         },
         {
           "array_class": "[C",
           "length": 8192,
           "value": 0,
           "objects": 1,
-          "shallow": 0
+          "shallow": 16400
         },
         {
           "array_class": "[I",
           "length": 8,
           "value": 0,
           "objects": 1,
-          "shallow": 0
+          "shallow": 48
         },
         {
           "array_class": "[I",
           "length": 12,
           "value": 0,
           "objects": 1,
-          "shallow": 0
+          "shallow": 64
         },
         {
           "array_class": "[I",
           "length": 16,
           "value": -1881356936,
           "objects": 1,
-          "shallow": 0
+          "shallow": 80
         },
         {
           "array_class": "[I",
           "length": 16,
           "value": -1881356440,
           "objects": 1,
-          "shallow": 0
+          "shallow": 80
         },
         {
           "array_class": "[I",
           "length": 16,
           "value": -1881355944,
           "objects": 1,
-          "shallow": 0
+          "shallow": 80
         },
         {
           "array_class": "[I",
           "length": 16,
           "value": -1881004352,
           "objects": 1,
-          "shallow": 0
+          "shallow": 80
         },
         {
           "array_class": "[I",
           "length": 16,
           "value": 0,
           "objects": 1,
-          "shallow": 0
+          "shallow": 80
         },
         {
           "array_class": "[I",
           "length": 48,
           "value": 0,
           "objects": 1,
-          "shallow": 0
+          "shallow": 208
         },
         {
           "array_class": "[I",
           "length": 74,
           "value": 0,
           "objects": 1,
-          "shallow": 0
+          "shallow": 312
         },
         {
           "array_class": "[I",
           "length": 550,
           "value": 0,
           "objects": 1,
-          "shallow": 0
+          "shallow": 2216
         },
         {
           "array_class": "[I",
           "length": 770,
           "value": 0,
           "objects": 1,
-          "shallow": 0
+          "shallow": 3096
         },
         {
           "array_class": "[I",
           "length": 802,
           "value": 0,
           "objects": 1,
-          "shallow": 0
+          "shallow": 3224
         },
         {
           "array_class": "[I",
           "length": 4902,
           "value": 0,
           "objects": 1,
-          "shallow": 0
+          "shallow": 19624
         },
         {
           "array_class": "[I",
           "length": 131064,
           "value": 0,
           "objects": 1,
-          "shallow": 0
+          "shallow": 524272
         }
       ],
       "truncated": false
