@@ -246,7 +246,41 @@ fn phase1(
     // Reused scratch buffer for path compression in eval/compress.
     // Avoids a per-call Vec allocation in the hot loop (514M+ iterations on large dumps).
     let mut chain: Vec<u32> = Vec::new();
+
+    // Prefetch depth for inb_block_off[w_node / INB_BLOCK]: the block index
+    // depends on w_node = vertex[i], which is random. Prefetching the block
+    // offset PF_DOM iterations ahead hides the ~100 ns DRAM latency on the
+    // 514 MB inb_block_off table. vertex[] access is sequential (reverse i)
+    // so the hardware prefetcher handles it; we only need to issue the
+    // inb_block_off prefetch explicitly.
+    const PF_DOM: usize = 64;
+    let ibo_ptr = inb_block_off.as_ptr();
+    let ibo_len = inb_block_off.len();
+
     for i in (1..count).rev() {
+        // Issue a prefetch for the inb_block_off slot we'll need PF_DOM iterations from now.
+        // vertex[i] is already in cache (sequential); look up vertex[i - PF_DOM] cheaply.
+        if i >= 1 + PF_DOM {
+            let pf_i = i - PF_DOM;
+            let pf_w_node = rpo.vertex[pf_i] as usize;
+            let pf_block = pf_w_node / crate::pass2::INB_BLOCK;
+            if pf_block < ibo_len {
+                unsafe {
+                    let ptr = ibo_ptr.add(pf_block) as *const i8;
+                    #[cfg(target_arch = "x86_64")]
+                    core::arch::x86_64::_mm_prefetch::<
+                        { core::arch::x86_64::_MM_HINT_T0 },
+                    >(ptr);
+                    #[cfg(target_arch = "aarch64")]
+                    core::arch::asm!(
+                        "prfm pldl1keep, [{p}]",
+                        p = in(reg) ptr,
+                        options(nostack, readonly)
+                    );
+                }
+            }
+        }
+
         let w_node = rpo.vertex[i] as usize;
 
         // Implicit virtual-root predecessor for GC roots
