@@ -1059,8 +1059,21 @@ impl Pass2 {
                     add_edge!(src_idx, elem_class_id, false);
 
                     // Edges to elements
-                    for chunk in scratch.chunks_exact(ids as usize) {
-                        let ref_val = read_id(chunk, id_size);
+                    // Prefetch the id_map slot for each element address PF_ELEM
+                    // positions ahead so the IndexCache miss path lands from
+                    // cache instead of DRAM.  Element references are unique so
+                    // the IndexCache can't help; the prefetch does.
+                    const PF_ELEM: usize = 16;
+                    let ids_us = ids as usize;
+                    let total_elems = scratch.len() / ids_us;
+                    for k in 0..total_elems {
+                        if k + PF_ELEM < total_elems {
+                            let pf_ref = read_id(&scratch[(k + PF_ELEM) * ids_us..], id_size);
+                            if pf_ref != 0 {
+                                id_map.prefetch_index_of(pf_ref);
+                            }
+                        }
+                        let ref_val = read_id(&scratch[k * ids_us..], id_size);
                         add_edge!(src_idx, ref_val, false);
                     }
                 }
