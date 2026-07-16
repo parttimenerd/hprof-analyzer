@@ -18,7 +18,6 @@ fn end_to_end_dump0() {
         _ => return,
     }
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_hprof-analyzer"))
-        .arg("analyze")
         .arg(path)
         .output()
         .expect("failed to run hprof-analyzer");
@@ -132,7 +131,6 @@ fn json_golden_snapshot() {
     }
 
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_hprof-analyzer"))
-        .arg("analyze")
         .arg(&hprof)
         .arg("--format")
         .arg("json")
@@ -186,7 +184,6 @@ fn json_gzip_roundtrip() {
 
     // Emit gzip-compressed JSON to a .json.gz path.
     let status = std::process::Command::new(bin)
-        .arg("analyze")
         .arg(&hprof)
         .arg("--format")
         .arg("json")
@@ -205,7 +202,6 @@ fn json_gzip_roundtrip() {
 
     // Render the .json.gz back to JSON (transparent decompress).
     let out = std::process::Command::new(bin)
-        .arg("render")
         .arg(&gz_path)
         .arg("--format")
         .arg("json")
@@ -221,7 +217,6 @@ fn json_gzip_roundtrip() {
 
     // Compare against a plain JSON analyze of the same dump.
     let plain = std::process::Command::new(bin)
-        .arg("analyze")
         .arg(&hprof)
         .arg("--format")
         .arg("json")

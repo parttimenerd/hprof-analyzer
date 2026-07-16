@@ -89,7 +89,6 @@ fn parity_all_fixtures() {
         ran += 1;
         // Default `md` format (no --format flag).
         let out = Command::new(env!("CARGO_BIN_EXE_hprof-analyzer"))
-            .arg("analyze")
             .arg(&hprof_path)
             .output()
             .unwrap_or_else(|e| panic!("failed to run analyzer on {hprof}: {e}"));
@@ -106,7 +105,6 @@ fn parity_all_fixtures() {
 
         // `md-graphs` format.
         let out = Command::new(env!("CARGO_BIN_EXE_hprof-analyzer"))
-            .arg("analyze")
             .arg(&hprof_path)
             .args(["--format", "md-graphs"])
             .output()

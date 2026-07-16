@@ -18,12 +18,11 @@ fn fixture_path() -> String {
 
 fn render_html() -> String {
     let out = Command::new(env!("CARGO_BIN_EXE_hprof-analyzer"))
-        .arg("render")
         .arg(fixture_path())
         .arg("--format")
         .arg("html")
         .output()
-        .expect("failed to run hprof-analyzer render --format html");
+        .expect("failed to run hprof-analyzer --format html");
     assert!(
         out.status.success(),
         "render failed: {}",
