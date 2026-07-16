@@ -512,6 +512,7 @@ impl Pass2 {
             fd_referent_idx,
             fd_attribution_raw,
             fd_attribution_trunc,
+            fd_dbb_capacity_sum,
         ) = fielddecode::build_field_decode_views(
             path,
             &p1,
@@ -780,6 +781,7 @@ impl Pass2 {
             reference_referent_idx: fd_referent_idx,
             collection_attribution_raw: fd_attribution_raw,
             collection_attribution_truncated: fd_attribution_trunc,
+            direct_byte_buffer_capacity_sum: fd_dbb_capacity_sum,
         };
 
         // Package the deferred inbound-CSR construction. Moves id_map,

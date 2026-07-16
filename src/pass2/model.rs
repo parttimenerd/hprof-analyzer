@@ -368,6 +368,11 @@ pub struct Graph {
     /// True when the holder-edge or container-record cap was hit (attribution
     /// data is a bounded sample). Not serialized.
     pub collection_attribution_truncated: bool,
+    /// Sum of `capacity` fields across all live `java/nio/DirectByteBuffer`
+    /// instances. 0 when no such instances are found or the field cannot be
+    /// resolved. Computed unconditionally during the pass2 field-decode scan.
+    #[allow(dead_code)]
+    pub direct_byte_buffer_capacity_sum: u64,
 }
 
 /// Deferred inbound-CSR construction. Built by `Pass2::build` with everything

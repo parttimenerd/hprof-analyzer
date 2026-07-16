@@ -193,6 +193,7 @@ mod tests {
             reference_referent_idx: [Vec::new(), Vec::new(), Vec::new()],
             collection_attribution_raw: None,
             collection_attribution_truncated: false,
+            direct_byte_buffer_capacity_sum: 0,
         };
         (g, dc_off, dc_tgt)
     }

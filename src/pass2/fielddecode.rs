@@ -220,7 +220,6 @@ pub(crate) fn builtin_coll_descs() -> Vec<CollDesc> {
             size: ("size0", "scala/collection/mutable/ArrayBuffer"),
             arr:  ("array", "scala/collection/mutable/ArrayBuffer"),
             CollKind::List),
-
         // ── Eclipse Collections ───────────────────────────────────────────────
         cd!("org/eclipse/collections/impl/map/mutable/UnifiedMap",
             size: ("occupied", "org/eclipse/collections/impl/map/mutable/UnifiedMap"),
@@ -234,7 +233,6 @@ pub(crate) fn builtin_coll_descs() -> Vec<CollDesc> {
             size: ("occupied", "org/eclipse/collections/impl/set/mutable/UnifiedSet"),
             arr:  ("table",    "org/eclipse/collections/impl/set/mutable/UnifiedSet"),
             CollKind::Set),
-
         // ── Trove (modern gnu/trove/{map,set}/hash/* layout) ─────────────────
         // _size is the element count; _set is the backing Object[] for hash containers.
         cd!("gnu/trove/map/hash/THashMap",
@@ -249,7 +247,6 @@ pub(crate) fn builtin_coll_descs() -> Vec<CollDesc> {
             size: ("_size",   "gnu/trove/impl/hash/THash"),
             arr:  ("_values", "gnu/trove/map/hash/TIntObjectHashMap"),
             CollKind::Map),
-
         // ── Trove (legacy flat gnu/trove/* layout) ────────────────────────────
         cd!("gnu/trove/THashMap",
             size: ("_size", "gnu/trove/THash"),
@@ -259,7 +256,6 @@ pub(crate) fn builtin_coll_descs() -> Vec<CollDesc> {
             size: ("_size", "gnu/trove/THash"),
             arr:  ("_set",  "gnu/trove/TObjectHash"),
             CollKind::Set),
-
         // ── Guava ─────────────────────────────────────────────────────────────
         cd!("com/google/common/collect/ImmutableList",
             arr: ("array", "com/google/common/collect/ImmutableList"),
@@ -270,8 +266,7 @@ pub(crate) fn builtin_coll_descs() -> Vec<CollDesc> {
         cd!("com/google/common/collect/ImmutableSet",
             arr: ("elements", "com/google/common/collect/ImmutableSet"),
             CollKind::Set),
-        cd!("com/google/common/collect/ImmutableMultimap",
-            CollKind::Map),
+        cd!("com/google/common/collect/ImmutableMultimap", CollKind::Map),
         cd!("com/google/common/collect/ArrayListMultimap",
             nested: ("map", "com/google/common/collect/ArrayListMultimap"),
             CollKind::Map),
@@ -751,13 +746,15 @@ fn class_name_of_index(i: usize, p1: &Pass1) -> String {
 
 /// Return type of [`build_field_decode_views`]: the collection & reference
 /// views, the per-kind referent indices, the optional raw attribution records
-/// (`Some` only under `--collections`), and a truncation flag.
+/// (`Some` only under `--collections`), a truncation flag, and the sum of
+/// `capacity` fields across all `java/nio/DirectByteBuffer` instances.
 type FieldDecodeViews = (
     CollectionsAnalysis,
     ReferencesAnalysis,
     [Vec<u32>; 3],
     Option<Vec<AttributionRaw>>,
     bool,
+    u64, // direct_byte_buffer_capacity_sum
 );
 
 /// Compute the collection/array/reference views in exactly THREE full-file
@@ -818,8 +815,46 @@ pub(crate) fn build_field_decode_views(
     let mut container_records: HashMap<u64, ContainerRecord> = HashMap::new();
     let mut containers_truncated = false;
 
+    // ── DirectByteBuffer capacity sum ────────────────────────────────────────
+    // Resolve once before scan 1: find the class-object address for
+    // java/nio/DirectByteBuffer and the byte-offset of the `capacity` field
+    // declared on java/nio/Buffer. Both lookups use class_map/strings, which
+    // are alive through the end of build_field_decode_views.
+    let target_dbb_class = "java/nio/DirectByteBuffer";
+    let dbb_class_addr_opt: Option<u64> = p1.class_map.iter()
+        .find(|(_, ci)| {
+            p1.strings.get(&ci.name_id).map(|s| s.as_str()).unwrap_or("") == target_dbb_class
+        })
+        .map(|(addr, _)| *addr);
+    let dbb_cap_off_opt: Option<u32> = dbb_class_addr_opt.and_then(|class_addr| {
+        field_offset(
+            class_addr,
+            "capacity",
+            "java/nio/Buffer",
+            class_map,
+            strings,
+            obj_ref_width,
+        )
+        .map(|(off, _ty)| off)
+    });
+    let mut dbb_capacity_sum: u64 = 0;
+
     // ── Scan 1: every INSTANCE_DUMP ──────────────────────────────────────────
     scan_all_instances(path, id_size, |addr, class_id, blob| {
+        // ── DirectByteBuffer capacity accumulation ────────────────────────
+        // Check before the role dispatch so it runs even when the class is
+        // otherwise Plain. Uses the pre-resolved class address and field offset.
+        if let (Some(dbb_addr), Some(cap_off)) = (dbb_class_addr_opt, dbb_cap_off_opt) {
+            if class_id == dbb_addr {
+                let o = cap_off as usize;
+                // `capacity` is declared as `int` on java/nio/Buffer.
+                if o + 4 <= blob.len() {
+                    let v = i32::from_be_bytes([blob[o], blob[o + 1], blob[o + 2], blob[o + 3]]);
+                    dbb_capacity_sum += v.max(0) as u64;
+                }
+            }
+        }
+        let _ = addr; // addr used above only; suppress unused warning if roles don't use it
         let role = role_cache
             .entry(class_id)
             .or_insert_with(|| classify(class_id, class_map, strings, obj_ref_width, descs))
@@ -1162,6 +1197,7 @@ pub(crate) fn build_field_decode_views(
         referent_idx,
         attribution_raw,
         attribution_truncated,
+        dbb_capacity_sum,
     ))
 }
 
