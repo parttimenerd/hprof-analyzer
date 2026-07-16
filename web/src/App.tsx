@@ -259,7 +259,7 @@ function OomTriage({ report }: { report: Report }) {
   }
 
   return (
-    <div className="oom" id="triage">
+    <div className="oom" id="triage" tabIndex={-1}>
       <h2>OOM Triage</h2>
       <p className="subtitle">Where the reachable heap is concentrated, at a glance.</p>
       <ul>
