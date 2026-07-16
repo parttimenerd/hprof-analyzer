@@ -305,20 +305,47 @@ pub(crate) fn scan_obj_arrays<F: FnMut(u64, &[u8])>(
     Ok(())
 }
 
-/// Full-file sequential scan invoking `f(addr, elem_type_code, count, raw_bytes)`
-/// for EVERY PRIM_ARRAY_DUMP (no `wanted` filter). Mirrors [`scan_prim_arrays`]'s
-/// heap-record walking skeleton and byte accounting exactly; the only differences
-/// are that it always materializes the element bytes and passes the element type
-/// code + count to the callback. RSS stays bounded because only ONE array's bytes
-/// are held at a time (in the reused scratch).
-pub(crate) fn scan_all_prim_arrays<F: FnMut(u64, u8, u64, &[u8])>(
-    path: &str,
-    id_size: u8,
-    mut f: F,
-) -> io::Result<()> {
+/// A single materialized heap object record, passed to the [`scan_all_records`]
+/// callback. Borrows the reused scratch buffer, so it is valid only for the
+/// duration of one callback invocation.
+pub(crate) enum Record<'a> {
+    /// INSTANCE_DUMP: `(obj_addr, class_id, &blob)`.
+    Instance(u64, u64, &'a [u8]),
+    /// PRIM_ARRAY_DUMP: `(addr, elem_type_code, count, &raw_bytes)`.
+    PrimArray(u64, u8, u64, &'a [u8]),
+    /// OBJ_ARRAY_DUMP: `(addr, array_class_id, count, &elem_ref_bytes)`.
+    ObjArray(u64, u64, u64, &'a [u8]),
+}
+
+/// Single full-file sequential scan over all heap object records. For every
+/// INSTANCE_DUMP / PRIM_ARRAY_DUMP / OBJ_ARRAY_DUMP sub-record it invokes `f`
+/// once with the matching [`Record`] variant. Fuses what were three separate
+/// full-file scans (instances, primitive arrays, object arrays) into ONE read.
+///
+/// A single callback (rather than three) is deliberate: the three fused scan
+/// bodies mutate overlapping accumulator state, and three separate `FnMut`
+/// arguments cannot each hold a `&mut` to the same variable at once.
+///
+/// The skip skeleton + byte accounting are identical to the three single-record
+/// scanners; only ONE record's bytes are materialized at a time (three separate
+/// reused scratch buffers, each holding one record), so peak RSS is unchanged
+/// versus running the three scans back-to-back — but the file is read ONCE
+/// instead of three times.
+///
+/// Callers that have a cross-record ordering dependency (e.g. an obj-array whose
+/// owning collection instance may appear later in the file) must NOT resolve it
+/// inline here; collect the raw per-record data and resolve it in a cheap
+/// in-memory post-pass. HPROF gives no record-ordering guarantee.
+pub(crate) fn scan_all_records<F>(path: &str, id_size: u8, mut f: F) -> io::Result<()>
+where
+    F: FnMut(Record<'_>),
+{
     let ids = id_size as u64;
     let mut r = HprofReader::open(path)?;
-    let mut scratch: Vec<u8> = Vec::with_capacity(256);
+    // One reused scratch per record kind; only one is live at any instant.
+    let mut inst_scratch: Vec<u8> = Vec::with_capacity(256);
+    let mut prim_scratch: Vec<u8> = Vec::with_capacity(256);
+    let mut obj_scratch: Vec<u8> = Vec::with_capacity(256);
     loop {
         let tag = match r.u1() {
             Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
@@ -358,19 +385,23 @@ pub(crate) fn scan_all_prim_arrays<F: FnMut(u64, u8, u64, &[u8])>(
                             remaining -= consumed;
                         }
                         heap::INSTANCE_DUMP => {
-                            r.skip(ids + 4)?;
-                            let _class_id = r.id()?;
+                            let addr = r.id()?;
+                            r.skip(4)?;
+                            let class_id = r.id()?;
                             let data_len = r.u4()? as u64;
-                            r.skip(data_len)?;
                             remaining -= ids + 4 + ids + 4 + data_len;
+                            r.read_bytes_reuse(&mut inst_scratch, data_len as usize)?;
+                            f(Record::Instance(addr, class_id, &inst_scratch));
                         }
                         heap::OBJ_ARRAY_DUMP => {
-                            r.skip(ids + 4)?;
+                            let addr = r.id()?;
+                            r.skip(4)?; // stack serial
                             let count = r.u4()? as u64;
-                            r.skip(ids)?;
+                            let array_class_id = r.id()?; // array class id
                             let byte_len = count.saturating_mul(ids);
-                            r.skip(byte_len)?;
                             remaining -= ids + 4 + 4 + ids + byte_len;
+                            r.read_bytes_reuse(&mut obj_scratch, byte_len as usize)?;
+                            f(Record::ObjArray(addr, array_class_id, count, &obj_scratch));
                         }
                         heap::PRIM_ARRAY_DUMP => {
                             let addr = r.id()?;
@@ -382,110 +413,13 @@ pub(crate) fn scan_all_prim_arrays<F: FnMut(u64, u8, u64, &[u8])>(
                                 .unwrap_or(1);
                             let byte_len = count * esz;
                             remaining -= ids + 4 + 4 + 1 + byte_len;
-                            r.read_bytes_reuse(&mut scratch, byte_len as usize)?;
-                            f(addr, elem_type, count, &scratch);
+                            r.read_bytes_reuse(&mut prim_scratch, byte_len as usize)?;
+                            f(Record::PrimArray(addr, elem_type, count, &prim_scratch));
                         }
                         other => {
                             return Err(io::Error::new(
                                 ErrorKind::InvalidData,
-                                format!("unknown heap sub-tag 0x{other:02x} in prim-array scan"),
-                            ));
-                        }
-                    }
-                }
-            }
-            tags::HEAP_DUMP_END => break,
-            _ => r.skip(length)?,
-        }
-    }
-    Ok(())
-}
-
-/// Full-file sequential scan invoking `f(addr, array_class_id, count,
-/// elem_ref_bytes)` for EVERY OBJ_ARRAY_DUMP (no `wanted` filter).
-/// `array_class_id` is the array-class object id from the record (resolve via
-/// `class_map`/`strings`). `elem_ref_bytes` is the raw block of `count * id_size`
-/// reference bytes (object-array element refs are id_size wide per the scanner).
-/// Mirrors [`scan_obj_arrays`]'s skeleton + byte accounting exactly; only the
-/// OBJ_ARRAY_DUMP arm differs (always materializes + passes count). RSS stays
-/// bounded because only ONE array's refs are held at a time.
-pub(crate) fn scan_all_obj_arrays<F: FnMut(u64, u64, u64, &[u8])>(
-    path: &str,
-    id_size: u8,
-    mut f: F,
-) -> io::Result<()> {
-    let ids = id_size as u64;
-    let mut r = HprofReader::open(path)?;
-    let mut scratch: Vec<u8> = Vec::with_capacity(256);
-    loop {
-        let tag = match r.u1() {
-            Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
-            other => other?,
-        };
-        let _ts = r.u4()?;
-        let length = r.u4()? as u64;
-        match tag {
-            tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
-                let mut remaining = length;
-                while remaining > 0 {
-                    let sub_tag = r.u1()?;
-                    remaining -= 1;
-                    match sub_tag {
-                        heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED | heap::ROOT_STICKY_CLASS => {
-                            r.skip(ids)?;
-                            remaining -= ids;
-                        }
-                        heap::ROOT_JNI_GLOBAL => {
-                            r.skip(2 * ids)?;
-                            remaining -= 2 * ids;
-                        }
-                        heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME | heap::ROOT_THREAD_OBJ => {
-                            r.skip(ids + 8)?;
-                            remaining -= ids + 8;
-                        }
-                        heap::ROOT_NATIVE_STACK | heap::ROOT_THREAD_BLOCK => {
-                            r.skip(ids + 4)?;
-                            remaining -= ids + 4;
-                        }
-                        heap::HEAP_DUMP_INFO => {
-                            r.skip(4 + ids)?;
-                            remaining -= 4 + ids;
-                        }
-                        heap::CLASS_DUMP => {
-                            let consumed = skip_class_dump(&mut r, id_size)?;
-                            remaining -= consumed;
-                        }
-                        heap::INSTANCE_DUMP => {
-                            r.skip(ids + 4)?;
-                            let _class_id = r.id()?;
-                            let data_len = r.u4()? as u64;
-                            r.skip(data_len)?;
-                            remaining -= ids + 4 + ids + 4 + data_len;
-                        }
-                        heap::OBJ_ARRAY_DUMP => {
-                            let addr = r.id()?;
-                            r.skip(4)?; // stack serial
-                            let count = r.u4()? as u64;
-                            let array_class_id = r.id()?; // array class id
-                            let byte_len = count.saturating_mul(ids);
-                            remaining -= ids + 4 + 4 + ids + byte_len;
-                            r.read_bytes_reuse(&mut scratch, byte_len as usize)?;
-                            f(addr, array_class_id, count, &scratch);
-                        }
-                        heap::PRIM_ARRAY_DUMP => {
-                            r.skip(ids + 4)?;
-                            let count = r.u4()? as u64;
-                            let elem_type = r.u1()?;
-                            let esz = HprofType::from_code(elem_type)
-                                .map(|t| t.byte_size() as u64)
-                                .unwrap_or(1);
-                            r.skip(count * esz)?;
-                            remaining -= ids + 4 + 4 + 1 + count * esz;
-                        }
-                        other => {
-                            return Err(io::Error::new(
-                                ErrorKind::InvalidData,
-                                format!("unknown heap sub-tag 0x{other:02x} in obj-array scan"),
+                                format!("unknown heap sub-tag 0x{other:02x} in fused record scan"),
                             ));
                         }
                     }
