@@ -1,5 +1,5 @@
 import React from "react";
-import type { AllocSites, ArraysBySize, ClassRow, DomTreeNode, DominatorAnalysis, HistRow, MergedPathNode, ObjRow, PackageNode, Report, RootPathStep, Suspect, SystemOverview, ThreadInfo, ThreadLocalObj, TopComponents, UnreachableClassRow } from "./types";
+import type { AllocSites, ArraysBySize, ClassRow, CollectionsAnalysis, DomTreeNode, DominatorAnalysis, FillRatioBucket, HistRow, MergedPathNode, ObjRow, PackageNode, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, Suspect, SystemOverview, ThreadInfo, ThreadLocalObj, TopComponents, UnreachableClassRow } from "./types";
 import { fmtCount, fmtExactBytes, formatBytes, formatEpochMs, pctOf, shortLoader } from "./format";
 import {
   CompositionStackedBar,
@@ -74,6 +74,8 @@ function Nav({ report }: { report: Report }) {
   // show the entry only when the field is present.
   if (report.top_components?.components?.length) items.push(["top-components", "Top Components"]);
   items.push(["arrays-by-size", "Arrays by Size"]);
+  items.push(["collections", "Collections"]);
+  items.push(["references", "References"]);
   items.push(["unreachable-objects", "Unreachable Objects"]);
   if (report.alloc_sites) items.push(["alloc-sites", "Allocation Sites"]);
   const rc = report.overview.retention_concentration;
@@ -1429,6 +1431,220 @@ function ArraysBySizeSection({ data }: { data?: ArraysBySize }) {
   );
 }
 
+// ── Collections ─────────────────────────────────────────────────────────────
+// Collection/array occupancy: fill ratios, size distribution, map collision
+// (load) ratio, and constant primitive arrays. Always-on; mirrors
+// render_md.rs::render_collections.
+function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
+  const cfr = data?.collection_fill_ratio;
+  const cbs = data?.collections_by_size;
+  const afr = data?.array_fill_ratio;
+  const mcr = data?.map_collision_ratio;
+  const cpa = data?.constant_primitive_arrays;
+
+  // Format a basis-point fill/load range as a percent label (e.g. "0–10%").
+  const ratioLabel = (b: FillRatioBucket) => `${b.lower_ratio_bp / 100}–${b.upper_ratio_bp / 100}%`;
+
+  // A fill/wasted table (Collection Fill Ratio, Array Fill Ratio) sharing 4 cols.
+  const fillTable = (label: string, itemsHeader: string, buckets: FillRatioBucket[]) => (
+    <table>
+      <thead>
+        <tr>
+          <th className="num">{label}</th>
+          <th className="num">{itemsHeader}</th>
+          <th className="num">Shallow</th>
+          <th className="num">Wasted</th>
+        </tr>
+      </thead>
+      <tbody>
+        {buckets.map((b, i) => (
+          <tr key={i}>
+            <td className="num">{ratioLabel(b)}</td>
+            <td className="num">{fmtCount(b.objects)}</td>
+            <td className="num">{formatBytes(b.shallow)}</td>
+            <td className="num">{formatBytes(b.wasted)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+
+  const cfrBuckets = cfr?.buckets ?? [];
+  const cbsBuckets = cbs?.buckets ?? [];
+  const afrBuckets = afr?.buckets ?? [];
+  const mcrBuckets = mcr?.buckets ?? [];
+  const cpaRows = cpa?.rows ?? [];
+
+  return (
+    <section id="collections">
+      <h2>Collections</h2>
+      <p className="subtitle">
+        Collection and array occupancy: how full collections are, how big they get, and constant primitive arrays.
+      </p>
+
+      <h3>Collection Fill Ratio</h3>
+      <p className="subtitle">
+        {fmtCount(cfr?.tracked ?? 0)} tracked of {fmtCount(cfr?.total ?? 0)} collections.
+      </p>
+      {cfrBuckets.length === 0 ? (
+        <p className="subtitle">None.</p>
+      ) : (
+        fillTable("Fill %", "Collections", cfrBuckets)
+      )}
+
+      <h3>Collections by Size</h3>
+      <p className="subtitle">
+        {fmtCount(cbs?.tracked ?? 0)} tracked; {fmtCount(cbs?.empty_count ?? 0)} empty.
+      </p>
+      {cbsBuckets.length === 0 ? (
+        <p className="subtitle">None.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th className="num">Size &le;</th>
+              <th className="num">Collections</th>
+              <th className="num">Shallow</th>
+            </tr>
+          </thead>
+          <tbody>
+            {cbsBuckets.map((b, i) => (
+              <tr key={i}>
+                <td className="num">&le; {fmtCount(b.upper_len)}</td>
+                <td className="num">{fmtCount(b.objects)}</td>
+                <td className="num">{formatBytes(b.shallow)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      <h3>Array Fill Ratio</h3>
+      <p className="subtitle">{fmtCount(afr?.tracked ?? 0)} tracked object arrays.</p>
+      {afrBuckets.length === 0 ? (
+        <p className="subtitle">None.</p>
+      ) : (
+        fillTable("Fill %", "Arrays", afrBuckets)
+      )}
+
+      <h3>Map Collision Ratio</h3>
+      <p className="subtitle">
+        {fmtCount(mcr?.tracked ?? 0)} tracked of {fmtCount(mcr?.total ?? 0)} maps (occupied slots ÷ size; lower is
+        worse).
+      </p>
+      {mcrBuckets.length === 0 ? (
+        <p className="subtitle">None.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th className="num">Load %</th>
+              <th className="num">Maps</th>
+              <th className="num">Shallow</th>
+            </tr>
+          </thead>
+          <tbody>
+            {mcrBuckets.map((b, i) => (
+              <tr key={i}>
+                <td className="num">{ratioLabel(b)}</td>
+                <td className="num">{fmtCount(b.objects)}</td>
+                <td className="num">{formatBytes(b.shallow)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      <h3>Constant Primitive Arrays</h3>
+      <p className="subtitle">
+        Primitive arrays whose every element is identical.
+        {cpa?.truncated ? " (list truncated; remaining groups folded into one row)." : ""}
+      </p>
+      {cpaRows.length === 0 ? (
+        <p className="subtitle">None.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>Array class</th>
+              <th className="num">Length</th>
+              <th className="num">Value</th>
+              <th className="num">Objects</th>
+              <th className="num">Shallow</th>
+            </tr>
+          </thead>
+          <tbody>
+            {cpaRows.map((r, i) => (
+              <tr key={i}>
+                <td><code>{r.array_class}</code></td>
+                <td className="num">{fmtCount(r.length)}</td>
+                <td className="num">{String(r.value)}</td>
+                <td className="num">{fmtCount(r.objects)}</td>
+                <td className="num">{formatBytes(r.shallow)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
+// ── References ──────────────────────────────────────────────────────────────
+// Soft/weak/phantom reference referents (what they point at). Always-on;
+// mirrors render_md.rs::render_references.
+function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
+  const kinds: ReferenceStats[] = [data?.soft, data?.weak, data?.phantom].filter(
+    (s): s is ReferenceStats => s != null,
+  );
+
+  const classTable = (rows: RefStatClassRow[]) => (
+    <table>
+      <thead>
+        <tr>
+          <th>Class</th>
+          <th className="num">Objects</th>
+          <th className="num">Shallow</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r, i) => (
+          <tr key={i}>
+            <td><code>{r.pretty_class}</code></td>
+            <td className="num">{fmtCount(r.objects)}</td>
+            <td className="num">{formatBytes(r.shallow)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+
+  return (
+    <section id="references">
+      <h2>References</h2>
+      <p className="subtitle">Soft/weak/phantom reference referents (what they point at).</p>
+      {kinds.length === 0 ? (
+        <p className="subtitle">No soft, weak, or phantom references found.</p>
+      ) : (
+        kinds.map((stats) => (
+          <React.Fragment key={stats.kind}>
+            <h3>{stats.kind} References</h3>
+            <p className="subtitle">{fmtCount(stats.reference_instances)} reference instances.</p>
+            <h4>Referent classes</h4>
+            {classTable(stats.referent_histogram ?? [])}
+            {(stats.only_weakly_retained ?? []).length > 0 && (
+              <>
+                <h4>Only-weakly retained (approximate)</h4>
+                {classTable(stats.only_weakly_retained)}
+              </>
+            )}
+          </React.Fragment>
+        ))
+      )}
+    </section>
+  );
+}
+
 // ── Dominator Analysis ──────────────────────────────────────────────────────
 // Two dominator-tree sub-views: Big Drops (dominators where retained heap
 // concentrates) and Immediate Dominators (dominated-object rollup by dominator
@@ -1649,6 +1865,8 @@ export default function App({ report }: { report: Report }) {
         <TopComponentsSection data={report.top_components} />
       ) : null}
       <ArraysBySizeSection data={report.arrays_by_size} />
+      <CollectionsSection data={report.collections} />
+      <ReferencesSection data={report.references} />
       <UnreachableObjectsSection data={report.overview} />
       {report.alloc_sites && <AllocSitesSection data={report.alloc_sites} />}
       <RetentionConcentrationSection report={report} />

@@ -373,6 +373,9 @@ impl FillAcc {
 struct ArrayWant {
     size: u64,
     is_map: bool,
+    /// Shallow size of the COLLECTION instance (not the backing array), carried
+    /// from scan 1 so scan 3 can attribute it to the collection fill views.
+    coll_shallow: u64,
 }
 
 /// Format a pretty class name (HPROF `/`-separated → `.`-separated).
@@ -407,6 +410,7 @@ fn class_name_of_index(i: usize, p1: &Pass1) -> String {
 pub(crate) fn build_field_decode_views(
     path: &str,
     p1: &Pass1,
+    shallow: &[u32],
     _ref_size: usize,
 ) -> std::io::Result<(CollectionsAnalysis, ReferencesAnalysis, [Vec<u32>; 3])> {
     let id_size = p1.id_size;
@@ -431,13 +435,16 @@ pub(crate) fn build_field_decode_views(
 
     // Reference views.
     let mut ref_instances = [0u64; 3];
-    // kind → (class name → objects). Capped at REFERENT_HIST_CAP distinct classes.
-    let mut ref_hist: [HashMap<String, u64>; 3] = [HashMap::new(), HashMap::new(), HashMap::new()];
-    let mut ref_hist_other = [0u64; 3];
+    // kind → (class name → (objects, shallow)). Capped at REFERENT_HIST_CAP
+    // distinct classes.
+    let mut ref_hist: [HashMap<String, (u64, u64)>; 3] =
+        [HashMap::new(), HashMap::new(), HashMap::new()];
+    // kind → (objects, shallow) folded into the "<other>" row past the cap.
+    let mut ref_hist_other = [(0u64, 0u64); 3];
     let mut referent_idx: [Vec<u32>; 3] = [Vec::new(), Vec::new(), Vec::new()];
 
     // ── Scan 1: every INSTANCE_DUMP ──────────────────────────────────────────
-    scan_all_instances(path, id_size, |_addr, class_id, blob| {
+    scan_all_instances(path, id_size, |addr, class_id, blob| {
         let role = role_cache
             .entry(class_id)
             .or_insert_with(|| classify(class_id, class_map, strings, obj_ref_width))
@@ -450,10 +457,16 @@ pub(crate) fn build_field_decode_views(
                 array_off,
             } => {
                 let is_map = COLL_DESCS[desc_idx].kind == CollKind::Map;
+                // Shallow size of THIS collection instance (precomputed vec).
+                let coll_shallow = p1
+                    .id_map
+                    .index_of(addr)
+                    .map(|i| shallow[i] as u64)
+                    .unwrap_or(0);
                 // Read size (if this collection exposes a plain size field).
                 let size = size_off.and_then(|(off, ty)| read_int_field(blob, off, ty));
                 if let Some(size) = size {
-                    coll_size_acc.add(size);
+                    coll_size_acc.add(size, coll_shallow);
                     coll_total += 1;
                     if is_map {
                         map_total += 1;
@@ -470,6 +483,7 @@ pub(crate) fn build_field_decode_views(
                                 ArrayWant {
                                     size: size.unwrap_or(0),
                                     is_map,
+                                    coll_shallow,
                                 },
                             );
                         }
@@ -488,11 +502,15 @@ pub(crate) fn build_field_decode_views(
                     if referent != 0 {
                         if let Some(ridx) = p1.id_map.index_of(referent) {
                             let name = class_name_of_index(ridx, p1);
+                            let sh = shallow[ridx] as u64;
                             let hist = &mut ref_hist[kind_idx];
                             if hist.contains_key(&name) || hist.len() < REFERENT_HIST_CAP {
-                                *hist.entry(name).or_insert(0) += 1;
+                                let e = hist.entry(name).or_insert((0, 0));
+                                e.0 += 1;
+                                e.1 += sh;
                             } else {
-                                ref_hist_other[kind_idx] += 1;
+                                ref_hist_other[kind_idx].0 += 1;
+                                ref_hist_other[kind_idx].1 += sh;
                             }
                             if referent_idx[kind_idx].len() < REFERENT_CAP {
                                 referent_idx[kind_idx].push(ridx as u32);
@@ -558,8 +576,14 @@ pub(crate) fn build_field_decode_views(
                 non_null += 1;
             }
         }
-        // #11 array fill ratio over ALL object arrays.
-        array_fill.add(non_null, count, 0, 0);
+        // #11 array fill ratio over ALL object arrays. Attribute THIS array's
+        // own shallow size.
+        let arr_shallow = p1
+            .id_map
+            .index_of(addr)
+            .map(|i| shallow[i] as u64)
+            .unwrap_or(0);
+        array_fill.add(non_null, count, arr_shallow, 0);
 
         // If this is a tracked collection backing array, fold #9 / #13.
         if let Some(want) = wanted_arrays.get(&addr) {
@@ -567,14 +591,16 @@ pub(crate) fn build_field_decode_views(
             // slot count (want.size stays 0 in that case).
             let used = if want.size > 0 { want.size } else { non_null };
             // #9 collection fill ratio: used / capacity(=count). wasted = the
-            // unused slots' worth of refs (capacity - used) clamped >=0.
+            // unused slots' worth of refs (capacity - used) clamped >=0. shallow
+            // attributes the COLLECTION instance (backing-array bytes already
+            // counted under array_fill).
             let wasted = count.saturating_sub(used.min(count)) * obj_ref_width as u64;
-            coll_fill.add(used, count, 0, wasted);
+            coll_fill.add(used, count, want.coll_shallow, wasted);
             coll_fill_tracked += 1;
             if want.is_map {
                 // #13 map-collision proxy = occupied slots / capacity. A high
                 // occupancy vs. size disparity hints at collisions/chaining.
-                map_collision.add(non_null, count, 0, 0);
+                map_collision.add(non_null, count, want.coll_shallow, 0);
                 map_collision_tracked += 1;
             }
         }
@@ -619,28 +645,30 @@ pub(crate) fn build_field_decode_views(
 struct SizeHistAcc {
     tracked: u64,
     empty: u64,
-    /// upper_len → objects.
-    buckets: std::collections::BTreeMap<u64, u64>,
+    /// upper_len → (objects, shallow).
+    buckets: std::collections::BTreeMap<u64, (u64, u64)>,
 }
 
 impl SizeHistAcc {
-    fn add(&mut self, size: u64) {
+    fn add(&mut self, size: u64, shallow: u64) {
         self.tracked += 1;
         if size == 0 {
             self.empty += 1;
             return;
         }
         let upper = size_hist_upper(size);
-        *self.buckets.entry(upper).or_insert(0) += 1;
+        let e = self.buckets.entry(upper).or_insert((0, 0));
+        e.0 += 1;
+        e.1 += shallow;
     }
     fn into_by_size(self) -> CollectionsBySize {
         let buckets = self
             .buckets
             .into_iter()
-            .map(|(upper_len, objects)| SizeHistogramBucket {
+            .map(|(upper_len, (objects, shallow))| SizeHistogramBucket {
                 upper_len,
                 objects,
-                shallow: 0,
+                shallow,
             })
             .collect();
         CollectionsBySize {
@@ -699,18 +727,18 @@ fn assemble_const_arrays(
 fn assemble_ref_stats(
     kind: &str,
     instances: u64,
-    hist: &HashMap<String, u64>,
-    other: u64,
+    hist: &HashMap<String, (u64, u64)>,
+    other: (u64, u64),
 ) -> Option<ReferenceStats> {
     if instances == 0 {
         return None;
     }
     let mut rows: Vec<RefStatClassRow> = hist
         .iter()
-        .map(|(name, &objects)| RefStatClassRow {
+        .map(|(name, &(objects, shallow))| RefStatClassRow {
             pretty_class: name.clone(),
             objects,
-            shallow: 0,
+            shallow,
         })
         .collect();
     rows.sort_by(|a, b| {
@@ -718,11 +746,11 @@ fn assemble_ref_stats(
             .cmp(&a.objects)
             .then(a.pretty_class.cmp(&b.pretty_class))
     });
-    if other > 0 {
+    if other.0 > 0 {
         rows.push(RefStatClassRow {
             pretty_class: "<other>".to_string(),
-            objects: other,
-            shallow: 0,
+            objects: other.0,
+            shallow: other.1,
         });
     }
     Some(ReferenceStats {

@@ -505,7 +505,7 @@ impl Pass2 {
         // shared 3-scan pass; all aggregates are capped (see fielddecode.rs), so
         // RSS stays within the grant. Must run while class_map/strings are alive.
         let (fd_collections, fd_references, fd_referent_idx) =
-            fielddecode::build_field_decode_views(path, &p1, ref_size)?;
+            fielddecode::build_field_decode_views(path, &p1, &shallow, ref_size)?;
 
         // class_map + strings are no longer needed; free before the large edge
         // arrays get allocated in Phase 3/4 to lower peak RSS. The STACK_FRAME/

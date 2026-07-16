@@ -20,6 +20,8 @@ pub fn render_markdown_graphs(r: &Report) -> String {
     render_threads(&r.threads, true, &mut out);
     render_top_components(&r.top_components, true, &mut out);
     render_arrays_by_size(&r.arrays_by_size, true, &mut out);
+    render_collections(&r.collections, true, &mut out);
+    render_references(&r.references, true, &mut out);
     render_unreachable_histogram(&r.overview, true, &mut out);
     // Allocation sites (always present; `None` only for legacy reports).
     if let Some(a) = &r.alloc_sites {
@@ -47,6 +49,8 @@ fn render_toc_graphs(r: &Report, out: &mut String) {
         out.push_str("- [Top Components](#top-components)\n");
     }
     out.push_str("- [Arrays by Size](#arrays-by-size)\n");
+    out.push_str("- [Collections](#collections)\n");
+    out.push_str("- [References](#references)\n");
     out.push_str("- [Unreachable Objects](#unreachable-objects)\n");
     // The ToC bullet appears only when the alloc-sites section is present.
     if r.alloc_sites.is_some() {

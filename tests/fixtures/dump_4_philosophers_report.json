@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated": "2026-07-15T22:05:13.745754000Z",
+  "generated": "2026-07-16T03:09:06.403203000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
     "file_path": "tests/fixtures/dump_4_philosophers.hprof",
@@ -88771,63 +88771,63 @@
           "lower_ratio_bp": 0,
           "upper_ratio_bp": 1000,
           "objects": 259,
-          "shallow": 0,
+          "shallow": 12032,
           "wasted": 30464
         },
         {
           "lower_ratio_bp": 1000,
           "upper_ratio_bp": 2000,
           "objects": 139,
-          "shallow": 0,
+          "shallow": 6592,
           "wasted": 16552
         },
         {
           "lower_ratio_bp": 2000,
           "upper_ratio_bp": 3000,
           "objects": 50,
-          "shallow": 0,
+          "shallow": 2368,
           "wasted": 17408
         },
         {
           "lower_ratio_bp": 3000,
           "upper_ratio_bp": 4000,
           "objects": 42,
-          "shallow": 0,
+          "shallow": 2376,
           "wasted": 51512
         },
         {
           "lower_ratio_bp": 4000,
           "upper_ratio_bp": 5000,
           "objects": 40,
-          "shallow": 0,
+          "shallow": 2160,
           "wasted": 37376
         },
         {
           "lower_ratio_bp": 5000,
           "upper_ratio_bp": 6000,
           "objects": 22,
-          "shallow": 0,
+          "shallow": 1168,
           "wasted": 8152
         },
         {
           "lower_ratio_bp": 6000,
           "upper_ratio_bp": 7000,
           "objects": 14,
-          "shallow": 0,
+          "shallow": 776,
           "wasted": 18128
         },
         {
           "lower_ratio_bp": 7000,
           "upper_ratio_bp": 8000,
           "objects": 11,
-          "shallow": 0,
+          "shallow": 448,
           "wasted": 10080
         },
         {
           "lower_ratio_bp": 8000,
           "upper_ratio_bp": 9000,
           "objects": 3,
-          "shallow": 0,
+          "shallow": 72,
           "wasted": 1168
         },
         {
@@ -88841,7 +88841,7 @@
           "lower_ratio_bp": 10000,
           "upper_ratio_bp": 10000,
           "objects": 39,
-          "shallow": 0,
+          "shallow": 936,
           "wasted": 0
         }
       ]
@@ -88853,62 +88853,62 @@
         {
           "upper_len": 1,
           "objects": 204,
-          "shallow": 0
+          "shallow": 9256
         },
         {
           "upper_len": 2,
           "objects": 94,
-          "shallow": 0
+          "shallow": 3720
         },
         {
           "upper_len": 4,
           "objects": 97,
-          "shallow": 0
+          "shallow": 4128
         },
         {
           "upper_len": 8,
           "objects": 37,
-          "shallow": 0
+          "shallow": 1904
         },
         {
           "upper_len": 16,
           "objects": 33,
-          "shallow": 0
+          "shallow": 1592
         },
         {
           "upper_len": 32,
           "objects": 11,
-          "shallow": 0
+          "shallow": 480
         },
         {
           "upper_len": 64,
           "objects": 7,
-          "shallow": 0
+          "shallow": 368
         },
         {
           "upper_len": 128,
           "objects": 4,
-          "shallow": 0
+          "shallow": 224
         },
         {
           "upper_len": 256,
           "objects": 5,
-          "shallow": 0
+          "shallow": 304
         },
         {
           "upper_len": 512,
           "objects": 4,
-          "shallow": 0
+          "shallow": 144
         },
         {
           "upper_len": 1024,
           "objects": 3,
-          "shallow": 0
+          "shallow": 144
         },
         {
           "upper_len": 4096,
           "objects": 2,
-          "shallow": 0
+          "shallow": 96
         }
       ]
     },
@@ -88919,77 +88919,77 @@
           "lower_ratio_bp": 0,
           "upper_ratio_bp": 1000,
           "objects": 2438,
-          "shallow": 0,
+          "shallow": 2191024,
           "wasted": 0
         },
         {
           "lower_ratio_bp": 1000,
           "upper_ratio_bp": 2000,
           "objects": 339,
-          "shallow": 0,
+          "shallow": 39192,
           "wasted": 0
         },
         {
           "lower_ratio_bp": 2000,
           "upper_ratio_bp": 3000,
           "objects": 92,
-          "shallow": 0,
+          "shallow": 17064,
           "wasted": 0
         },
         {
           "lower_ratio_bp": 3000,
           "upper_ratio_bp": 4000,
           "objects": 104,
-          "shallow": 0,
+          "shallow": 53248,
           "wasted": 0
         },
         {
           "lower_ratio_bp": 4000,
           "upper_ratio_bp": 5000,
           "objects": 246,
-          "shallow": 0,
+          "shallow": 102288,
           "wasted": 0
         },
         {
           "lower_ratio_bp": 5000,
           "upper_ratio_bp": 6000,
           "objects": 50,
-          "shallow": 0,
+          "shallow": 11408,
           "wasted": 0
         },
         {
           "lower_ratio_bp": 6000,
           "upper_ratio_bp": 7000,
           "objects": 40,
-          "shallow": 0,
+          "shallow": 5280,
           "wasted": 0
         },
         {
           "lower_ratio_bp": 7000,
           "upper_ratio_bp": 8000,
           "objects": 34,
-          "shallow": 0,
+          "shallow": 4520,
           "wasted": 0
         },
         {
           "lower_ratio_bp": 8000,
           "upper_ratio_bp": 9000,
           "objects": 18,
-          "shallow": 0,
+          "shallow": 6664,
           "wasted": 0
         },
         {
           "lower_ratio_bp": 9000,
           "upper_ratio_bp": 10000,
           "objects": 13,
-          "shallow": 0,
+          "shallow": 37048,
           "wasted": 0
         },
         {
           "lower_ratio_bp": 10000,
           "upper_ratio_bp": 10000,
           "objects": 2455,
-          "shallow": 0,
+          "shallow": 650744,
           "wasted": 0
         }
       ]
@@ -89002,56 +89002,56 @@
           "lower_ratio_bp": 0,
           "upper_ratio_bp": 1000,
           "objects": 221,
-          "shallow": 0,
+          "shallow": 11264,
           "wasted": 0
         },
         {
           "lower_ratio_bp": 1000,
           "upper_ratio_bp": 2000,
           "objects": 123,
-          "shallow": 0,
+          "shallow": 6256,
           "wasted": 0
         },
         {
           "lower_ratio_bp": 2000,
           "upper_ratio_bp": 3000,
           "objects": 39,
-          "shallow": 0,
+          "shallow": 2224,
           "wasted": 0
         },
         {
           "lower_ratio_bp": 3000,
           "upper_ratio_bp": 4000,
           "objects": 48,
-          "shallow": 0,
+          "shallow": 2704,
           "wasted": 0
         },
         {
           "lower_ratio_bp": 4000,
           "upper_ratio_bp": 5000,
           "objects": 44,
-          "shallow": 0,
+          "shallow": 2400,
           "wasted": 0
         },
         {
           "lower_ratio_bp": 5000,
           "upper_ratio_bp": 6000,
           "objects": 13,
-          "shallow": 0,
+          "shallow": 768,
           "wasted": 0
         },
         {
           "lower_ratio_bp": 6000,
           "upper_ratio_bp": 7000,
           "objects": 2,
-          "shallow": 0,
+          "shallow": 128,
           "wasted": 0
         },
         {
           "lower_ratio_bp": 7000,
           "upper_ratio_bp": 8000,
           "objects": 3,
-          "shallow": 0,
+          "shallow": 160,
           "wasted": 0
         },
         {
@@ -89539,7 +89539,7 @@
         {
           "pretty_class": "java.lang.invoke.LambdaForm$DMH+0x00007e41c023bc00",
           "objects": 223,
-          "shallow": 0
+          "shallow": 10408
         }
       ],
       "only_weakly_retained": [
@@ -89557,7 +89557,7 @@
         {
           "pretty_class": "java.lang.invoke.LambdaForm$DMH+0x00007e41c023bc00",
           "objects": 986,
-          "shallow": 0
+          "shallow": 32624
         }
       ],
       "only_weakly_retained": []
@@ -89569,7 +89569,7 @@
         {
           "pretty_class": "java.lang.invoke.LambdaForm$DMH+0x00007e41c023bc00",
           "objects": 66,
-          "shallow": 0
+          "shallow": 3664
         }
       ],
       "only_weakly_retained": []

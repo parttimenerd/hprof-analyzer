@@ -99,6 +99,25 @@ pub(crate) fn render_duplicate_strings(
         out.push('\n');
     }
 
+    // ── Longest distinct string values (exact, truncated text) ───────────────
+    if !d.top_by_length.is_empty() {
+        out.push_str("#### Longest Values\n\n");
+        let mut t = Table::new(
+            &["#", "Length", "Count", "Value"],
+            &[Align::Right, Align::Right, Align::Right, Align::Left],
+        );
+        for (i, s) in d.top_by_length.iter().enumerate() {
+            t.row([
+                format!("{}", i + 1),
+                fmt_count(s.len as u64),
+                fmt_count(s.count),
+                format!("`{}`", escape_string_cell(&s.text)),
+            ]);
+        }
+        t.render(out);
+        out.push('\n');
+    }
+
     // ── String-length histogram ──────────────────────────────────────────────
     if !d.length_histogram.is_empty() {
         out.push_str("#### String Length Distribution\n\n");
@@ -148,6 +167,33 @@ pub(crate) fn render_duplicate_strings(
         t.render(out);
         out.push('\n');
     }
+
+    // ── Char[] backing-array waste ───────────────────────────────────────────
+    if let Some(w) = &d.char_array_waste {
+        out.push_str("#### Char[] Waste\n\n");
+        out.push_str(&format!(
+            "_{} arrays examined, {} wasteful, {} total wasted._\n\n",
+            fmt_count(w.arrays_examined),
+            fmt_count(w.wasteful_arrays),
+            format_bytes(w.total_wasted_bytes),
+        ));
+        if !w.top.is_empty() {
+            let mut t = Table::new(
+                &["Array #", "Length", "Used", "Wasted"],
+                &[Align::Right, Align::Right, Align::Right, Align::Right],
+            );
+            for r in &w.top {
+                t.row([
+                    fmt_count(r.array_obj_1based as u64),
+                    fmt_count(r.length),
+                    format_bytes(r.used),
+                    format_bytes(r.wasted_bytes),
+                ]);
+            }
+            t.render(out);
+            out.push('\n');
+        }
+    }
 }
 
 /// If the single largest suspect retains at least this share of the reachable
@@ -171,6 +217,8 @@ pub fn render_markdown(r: &Report) -> String {
     render_threads(&r.threads, false, &mut out);
     render_top_components(&r.top_components, false, &mut out);
     render_arrays_by_size(&r.arrays_by_size, false, &mut out);
+    render_collections(&r.collections, false, &mut out);
+    render_references(&r.references, false, &mut out);
     render_unreachable_histogram(&r.overview, false, &mut out);
     // Allocation sites (always present; `None` only for legacy reports).
     if let Some(a) = &r.alloc_sites {
@@ -199,6 +247,8 @@ fn render_toc(r: &Report, out: &mut String) {
         out.push_str("- [Top Components](#top-components)\n");
     }
     out.push_str("- [Arrays by Size](#arrays-by-size)\n");
+    out.push_str("- [Collections](#collections)\n");
+    out.push_str("- [References](#references)\n");
     out.push_str("- [Unreachable Objects](#unreachable-objects)\n");
     if r.alloc_sites.is_some() {
         out.push_str("- [Allocation Sites](#allocation-sites)\n");
@@ -1388,6 +1438,290 @@ pub(crate) fn render_arrays_by_size(a: &ArraysBySize, graphs: bool, out: &mut St
         "Zero-length arrays: {}\n\n",
         fmt_count(a.zero_length_count)
     ));
+}
+
+/// Format a `FillRatioBucket`'s label as a percent range from basis points
+/// (0..=10000), e.g. `0–10%` (en-dash), matching the range style used
+/// elsewhere in the report.
+fn fill_ratio_label(b: &FillRatioBucket) -> String {
+    let lo = b.lower_ratio_bp as f64 / 100.0;
+    let hi = b.upper_ratio_bp as f64 / 100.0;
+    format!("{lo:.0}–{hi:.0}%")
+}
+
+/// Render the always-on "Collections" section: five collection/array sub-views
+/// (fill ratio, size histogram, object-array fill ratio, map collision ratio,
+/// and constant primitive arrays). Shared by plain md and md-graphs; when
+/// `graphs` is set, an extra proportional bar column is appended on the object
+/// count of each table. Emits the heading + fallback italic lines even when
+/// empty so the document structure stays stable.
+pub(crate) fn render_collections(c: &CollectionsAnalysis, graphs: bool, out: &mut String) {
+    use crate::md::{Align, Table, bar};
+    out.push_str("## Collections\n\n");
+    out.push_str(
+        "_Collection and array occupancy: how full collections are, how big they get, \
+         and constant primitive arrays._\n\n",
+    );
+
+    // ── Collection Fill Ratio ────────────────────────────────────────────────
+    out.push_str("### Collection Fill Ratio\n\n");
+    out.push_str(&format!(
+        "_{} tracked of {} collections._\n\n",
+        fmt_count(c.collection_fill_ratio.tracked),
+        fmt_count(c.collection_fill_ratio.total),
+    ));
+    if c.collection_fill_ratio.buckets.is_empty() {
+        out.push_str("_None._\n\n");
+    } else {
+        let obj_max = c
+            .collection_fill_ratio
+            .buckets
+            .iter()
+            .map(|b| b.objects)
+            .max()
+            .unwrap_or(0);
+        let mut headers: Vec<&str> = vec!["Fill %", "Collections", "Shallow", "Wasted"];
+        let mut aligns = vec![Align::Right, Align::Right, Align::Right, Align::Right];
+        if graphs {
+            headers.push("");
+            aligns.push(Align::Left);
+        }
+        let mut t = Table::new(&headers, &aligns);
+        for b in &c.collection_fill_ratio.buckets {
+            let mut row = vec![
+                fill_ratio_label(b),
+                fmt_count(b.objects),
+                format_bytes(b.shallow),
+                format_bytes(b.wasted),
+            ];
+            if graphs {
+                row.push(bar(b.objects, obj_max, render_graphs::GRAPH_BAR_WIDTH));
+            }
+            t.row(row);
+        }
+        t.render(out);
+        out.push('\n');
+    }
+
+    // ── Collections by Size ──────────────────────────────────────────────────
+    out.push_str("### Collections by Size\n\n");
+    out.push_str(&format!(
+        "_{} tracked; {} empty._\n\n",
+        fmt_count(c.collections_by_size.tracked),
+        fmt_count(c.collections_by_size.empty_count),
+    ));
+    if c.collections_by_size.buckets.is_empty() {
+        out.push_str("_None._\n\n");
+    } else {
+        let obj_max = c
+            .collections_by_size
+            .buckets
+            .iter()
+            .map(|b| b.objects)
+            .max()
+            .unwrap_or(0);
+        let mut headers: Vec<&str> = vec!["Size ≤", "Collections", "Shallow"];
+        let mut aligns = vec![Align::Right, Align::Right, Align::Right];
+        if graphs {
+            headers.push("");
+            aligns.push(Align::Left);
+        }
+        let mut t = Table::new(&headers, &aligns);
+        for b in &c.collections_by_size.buckets {
+            let mut row = vec![
+                format!("≤ {}", fmt_count(b.upper_len)),
+                fmt_count(b.objects),
+                format_bytes(b.shallow),
+            ];
+            if graphs {
+                row.push(bar(b.objects, obj_max, render_graphs::GRAPH_BAR_WIDTH));
+            }
+            t.row(row);
+        }
+        t.render(out);
+        out.push('\n');
+    }
+
+    // ── Array Fill Ratio ─────────────────────────────────────────────────────
+    out.push_str("### Array Fill Ratio\n\n");
+    out.push_str(&format!(
+        "_{} tracked object arrays._\n\n",
+        fmt_count(c.array_fill_ratio.tracked),
+    ));
+    if c.array_fill_ratio.buckets.is_empty() {
+        out.push_str("_None._\n\n");
+    } else {
+        let obj_max = c
+            .array_fill_ratio
+            .buckets
+            .iter()
+            .map(|b| b.objects)
+            .max()
+            .unwrap_or(0);
+        let mut headers: Vec<&str> = vec!["Fill %", "Arrays", "Shallow", "Wasted"];
+        let mut aligns = vec![Align::Right, Align::Right, Align::Right, Align::Right];
+        if graphs {
+            headers.push("");
+            aligns.push(Align::Left);
+        }
+        let mut t = Table::new(&headers, &aligns);
+        for b in &c.array_fill_ratio.buckets {
+            let mut row = vec![
+                fill_ratio_label(b),
+                fmt_count(b.objects),
+                format_bytes(b.shallow),
+                format_bytes(b.wasted),
+            ];
+            if graphs {
+                row.push(bar(b.objects, obj_max, render_graphs::GRAPH_BAR_WIDTH));
+            }
+            t.row(row);
+        }
+        t.render(out);
+        out.push('\n');
+    }
+
+    // ── Map Collision Ratio ──────────────────────────────────────────────────
+    out.push_str("### Map Collision Ratio\n\n");
+    out.push_str(&format!(
+        "_{} tracked of {} maps (occupied slots ÷ size; lower is worse)._\n\n",
+        fmt_count(c.map_collision_ratio.tracked),
+        fmt_count(c.map_collision_ratio.total),
+    ));
+    if c.map_collision_ratio.buckets.is_empty() {
+        out.push_str("_None._\n\n");
+    } else {
+        let obj_max = c
+            .map_collision_ratio
+            .buckets
+            .iter()
+            .map(|b| b.objects)
+            .max()
+            .unwrap_or(0);
+        let mut headers: Vec<&str> = vec!["Load %", "Maps", "Shallow"];
+        let mut aligns = vec![Align::Right, Align::Right, Align::Right];
+        if graphs {
+            headers.push("");
+            aligns.push(Align::Left);
+        }
+        let mut t = Table::new(&headers, &aligns);
+        for b in &c.map_collision_ratio.buckets {
+            let mut row = vec![
+                fill_ratio_label(b),
+                fmt_count(b.objects),
+                format_bytes(b.shallow),
+            ];
+            if graphs {
+                row.push(bar(b.objects, obj_max, render_graphs::GRAPH_BAR_WIDTH));
+            }
+            t.row(row);
+        }
+        t.render(out);
+        out.push('\n');
+    }
+
+    // ── Constant Primitive Arrays ────────────────────────────────────────────
+    out.push_str("### Constant Primitive Arrays\n\n");
+    let mut note = String::from("_Primitive arrays whose every element is identical._");
+    if c.constant_primitive_arrays.truncated {
+        note.push_str(" _(list truncated; remaining groups folded into one row)._");
+    }
+    out.push_str(&note);
+    out.push_str("\n\n");
+    if c.constant_primitive_arrays.rows.is_empty() {
+        out.push_str("_None._\n\n");
+    } else {
+        let obj_max = c
+            .constant_primitive_arrays
+            .rows
+            .iter()
+            .map(|r| r.objects)
+            .max()
+            .unwrap_or(0);
+        let mut headers: Vec<&str> = vec!["Array class", "Length", "Value", "Objects", "Shallow"];
+        let mut aligns = vec![
+            Align::Left,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+        ];
+        if graphs {
+            headers.push("");
+            aligns.push(Align::Left);
+        }
+        let mut t = Table::new(&headers, &aligns);
+        for r in &c.constant_primitive_arrays.rows {
+            let mut row = vec![
+                format!("`{}`", r.array_class),
+                fmt_count(r.length),
+                format!("{}", r.value),
+                fmt_count(r.objects),
+                format_bytes(r.shallow),
+            ];
+            if graphs {
+                row.push(bar(r.objects, obj_max, render_graphs::GRAPH_BAR_WIDTH));
+            }
+            t.row(row);
+        }
+        t.render(out);
+        out.push('\n');
+    }
+}
+
+/// Render the always-on "References" section: soft/weak/phantom reference
+/// referent histograms plus (where present) an approximate only-weakly-retained
+/// breakdown. Shared by plain md and md-graphs; when `graphs` is set an extra
+/// proportional bar column is appended on Objects. Emits the heading + a
+/// fallback line even when no references are present so the structure stays
+/// stable.
+pub(crate) fn render_references(rf: &ReferencesAnalysis, graphs: bool, out: &mut String) {
+    use crate::md::{Align, Table, bar};
+    out.push_str("## References\n\n");
+    out.push_str("_Soft/weak/phantom reference referents (what they point at)._\n\n");
+
+    if rf.soft.is_none() && rf.weak.is_none() && rf.phantom.is_none() {
+        out.push_str("_No soft, weak, or phantom references found._\n\n");
+        return;
+    }
+
+    let render_class_table = |rows: &[RefStatClassRow], out: &mut String| {
+        let obj_max = rows.iter().map(|r| r.objects).max().unwrap_or(0);
+        let mut headers: Vec<&str> = vec!["Class", "Objects", "Shallow"];
+        let mut aligns = vec![Align::Left, Align::Right, Align::Right];
+        if graphs {
+            headers.push("");
+            aligns.push(Align::Left);
+        }
+        let mut t = Table::new(&headers, &aligns);
+        for r in rows {
+            let mut row = vec![
+                format!("`{}`", r.pretty_class),
+                fmt_count(r.objects),
+                format_bytes(r.shallow),
+            ];
+            if graphs {
+                row.push(bar(r.objects, obj_max, render_graphs::GRAPH_BAR_WIDTH));
+            }
+            t.row(row);
+        }
+        t.render(out);
+        out.push('\n');
+    };
+
+    for stats in [&rf.soft, &rf.weak, &rf.phantom].into_iter().flatten() {
+        out.push_str(&format!("### {} References\n\n", stats.kind));
+        out.push_str(&format!(
+            "_{} reference instances._\n\n",
+            fmt_count(stats.reference_instances),
+        ));
+        out.push_str("#### Referent classes\n\n");
+        render_class_table(&stats.referent_histogram, out);
+        if !stats.only_weakly_retained.is_empty() {
+            out.push_str("#### Only-weakly retained _(approximate)_\n\n");
+            render_class_table(&stats.only_weakly_retained, out);
+        }
+    }
 }
 
 /// Render the always-on "Unreachable Objects" section: a per-class histogram of

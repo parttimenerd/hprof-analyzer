@@ -344,6 +344,82 @@ export interface UnreachableClassRow {
   shallow: number;
 }
 
+// One fill-ratio bucket (basis-point range) for collections/arrays/maps.
+export interface FillRatioBucket {
+  lower_ratio_bp: number;
+  upper_ratio_bp: number;
+  objects: number;
+  shallow: number;
+  wasted: number;
+}
+
+export interface CollectionFillRatio {
+  tracked: number;
+  total: number;
+  buckets: FillRatioBucket[];
+}
+
+export interface CollectionsBySize {
+  tracked: number;
+  empty_count: number;
+  buckets: SizeHistogramBucket[];
+}
+
+export interface ArrayFillRatio {
+  tracked: number;
+  buckets: FillRatioBucket[];
+}
+
+export interface MapCollisionRatio {
+  tracked: number;
+  total: number;
+  buckets: FillRatioBucket[];
+}
+
+// One group of primitive arrays whose every element is identical.
+export interface ConstantArrayRow {
+  array_class: string;
+  length: number;
+  value: number;
+  objects: number;
+  shallow: number;
+}
+
+export interface ConstantPrimitiveArrays {
+  rows: ConstantArrayRow[];
+  truncated: boolean;
+}
+
+// Always-on collection/array occupancy analysis.
+export interface CollectionsAnalysis {
+  collection_fill_ratio: CollectionFillRatio;
+  collections_by_size: CollectionsBySize;
+  array_fill_ratio: ArrayFillRatio;
+  map_collision_ratio: MapCollisionRatio;
+  constant_primitive_arrays: ConstantPrimitiveArrays;
+}
+
+// One class row of a reference referent/only-weakly-retained histogram.
+export interface RefStatClassRow {
+  pretty_class: string;
+  objects: number;
+  shallow: number;
+}
+
+export interface ReferenceStats {
+  kind: string;
+  reference_instances: number;
+  referent_histogram: RefStatClassRow[];
+  only_weakly_retained: RefStatClassRow[];
+}
+
+// Soft/weak/phantom reference referent analysis. Each kind may be absent.
+export interface ReferencesAnalysis {
+  soft?: ReferenceStats;
+  weak?: ReferenceStats;
+  phantom?: ReferenceStats;
+}
+
 export interface Report {
   schema_version: number;
   generated: string;
@@ -359,6 +435,10 @@ export interface Report {
   arrays_by_size: ArraysBySize;
   // dominator-tree analysis: Big Drops + Immediate Dominators. Always-on.
   dominator_analysis: DominatorAnalysis;
+  // collection/array occupancy analysis. Always-on.
+  collections: CollectionsAnalysis;
+  // soft/weak/phantom reference referent analysis. Always-on.
+  references: ReferencesAnalysis;
 }
 
 declare global {
