@@ -401,13 +401,15 @@ pub(crate) fn scan_all_prim_arrays<F: FnMut(u64, u8, u64, &[u8])>(
     Ok(())
 }
 
-/// Full-file sequential scan invoking `f(addr, count, elem_ref_bytes)` for EVERY
-/// OBJ_ARRAY_DUMP (no `wanted` filter). `elem_ref_bytes` is the raw block of
-/// `count * id_size` reference bytes (object-array element refs are id_size wide
-/// per the scanner). Mirrors [`scan_obj_arrays`]'s skeleton + byte accounting
-/// exactly; only the OBJ_ARRAY_DUMP arm differs (always materializes + passes
-/// count). RSS stays bounded because only ONE array's refs are held at a time.
-pub(crate) fn scan_all_obj_arrays<F: FnMut(u64, u64, &[u8])>(
+/// Full-file sequential scan invoking `f(addr, array_class_id, count,
+/// elem_ref_bytes)` for EVERY OBJ_ARRAY_DUMP (no `wanted` filter).
+/// `array_class_id` is the array-class object id from the record (resolve via
+/// `class_map`/`strings`). `elem_ref_bytes` is the raw block of `count * id_size`
+/// reference bytes (object-array element refs are id_size wide per the scanner).
+/// Mirrors [`scan_obj_arrays`]'s skeleton + byte accounting exactly; only the
+/// OBJ_ARRAY_DUMP arm differs (always materializes + passes count). RSS stays
+/// bounded because only ONE array's refs are held at a time.
+pub(crate) fn scan_all_obj_arrays<F: FnMut(u64, u64, u64, &[u8])>(
     path: &str,
     id_size: u8,
     mut f: F,
@@ -464,11 +466,11 @@ pub(crate) fn scan_all_obj_arrays<F: FnMut(u64, u64, &[u8])>(
                             let addr = r.id()?;
                             r.skip(4)?; // stack serial
                             let count = r.u4()? as u64;
-                            r.skip(ids)?; // array class id
+                            let array_class_id = r.id()?; // array class id
                             let byte_len = count.saturating_mul(ids);
                             remaining -= ids + 4 + 4 + ids + byte_len;
                             r.read_bytes_reuse(&mut scratch, byte_len as usize)?;
-                            f(addr, count, &scratch);
+                            f(addr, array_class_id, count, &scratch);
                         }
                         heap::PRIM_ARRAY_DUMP => {
                             r.skip(ids + 4)?;

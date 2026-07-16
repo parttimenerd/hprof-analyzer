@@ -166,6 +166,84 @@ static COLL_DESCS: &[CollDesc] = &[
         nested_map_field: None,
         kind: CollKind::List,
     },
+    // Kotlin's standard collections (kotlin.collections.ArrayList / HashMap /
+    // LinkedHashMap) are thin aliases for the JDK types and match via the
+    // super-chain entries above — no dedicated rows are needed here.
+    // Eclipse Collections.
+    CollDesc {
+        class_name: "org/eclipse/collections/impl/map/mutable/UnifiedMap",
+        size_field: Some((
+            "occupied",
+            "org/eclipse/collections/impl/map/mutable/UnifiedMap",
+        )),
+        array_field: Some((
+            "table",
+            "org/eclipse/collections/impl/map/mutable/UnifiedMap",
+        )),
+        nested_map_field: None,
+        kind: CollKind::Map,
+    },
+    CollDesc {
+        class_name: "org/eclipse/collections/impl/list/mutable/FastList",
+        size_field: Some(("size", "org/eclipse/collections/impl/list/mutable/FastList")),
+        array_field: Some((
+            "items",
+            "org/eclipse/collections/impl/list/mutable/FastList",
+        )),
+        nested_map_field: None,
+        kind: CollKind::List,
+    },
+    CollDesc {
+        class_name: "org/eclipse/collections/impl/set/mutable/UnifiedSet",
+        size_field: Some((
+            "occupied",
+            "org/eclipse/collections/impl/set/mutable/UnifiedSet",
+        )),
+        array_field: Some((
+            "table",
+            "org/eclipse/collections/impl/set/mutable/UnifiedSet",
+        )),
+        nested_map_field: None,
+        kind: CollKind::Set,
+    },
+    // Trove (both the modern gnu/trove/{map,set}/hash/* layout and the legacy
+    // flat gnu/trove/* layout). _size is the element count; _set is the backing
+    // Object[] for the hash-based containers.
+    CollDesc {
+        class_name: "gnu/trove/map/hash/THashMap",
+        size_field: Some(("_size", "gnu/trove/impl/hash/THash")),
+        array_field: Some(("_set", "gnu/trove/impl/hash/TObjectHash")),
+        nested_map_field: None,
+        kind: CollKind::Map,
+    },
+    CollDesc {
+        class_name: "gnu/trove/THashMap",
+        size_field: Some(("_size", "gnu/trove/THash")),
+        array_field: Some(("_set", "gnu/trove/TObjectHash")),
+        nested_map_field: None,
+        kind: CollKind::Map,
+    },
+    CollDesc {
+        class_name: "gnu/trove/set/hash/THashSet",
+        size_field: Some(("_size", "gnu/trove/impl/hash/THash")),
+        array_field: Some(("_set", "gnu/trove/impl/hash/TObjectHash")),
+        nested_map_field: None,
+        kind: CollKind::Set,
+    },
+    CollDesc {
+        class_name: "gnu/trove/THashSet",
+        size_field: Some(("_size", "gnu/trove/THash")),
+        array_field: Some(("_set", "gnu/trove/TObjectHash")),
+        nested_map_field: None,
+        kind: CollKind::Set,
+    },
+    CollDesc {
+        class_name: "gnu/trove/map/hash/TIntObjectHashMap",
+        size_field: Some(("_size", "gnu/trove/impl/hash/THash")),
+        array_field: Some(("_values", "gnu/trove/map/hash/TIntObjectHashMap")),
+        nested_map_field: None,
+        kind: CollKind::Map,
+    },
 ];
 
 /// Reference class names, indexed 0=soft, 1=weak, 2=phantom.
@@ -383,6 +461,131 @@ struct ArrayWant {
     coll_shallow: u64,
 }
 
+/// Number of individual arrays and array classes surfaced per category.
+const TOP_ARRAYS_N: usize = 10;
+
+/// One candidate for the individual top-arrays min-heap. Ordered by shallow so
+/// the heap's smallest (via `Reverse`) is the eviction target. `class_key` is
+/// the array's class identity (elem type code for prim, array-class object id
+/// for obj) so names can be resolved at assembly WITHOUT the freed `class_ids`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct TopArrayCand {
+    shallow: u64,
+    obj_index: u32,
+    length: u64,
+    class_key: u64,
+}
+impl PartialOrd for TopArrayCand {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for TopArrayCand {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Order by shallow, then obj_index for a total, deterministic order.
+        self.shallow
+            .cmp(&other.shallow)
+            .then(self.obj_index.cmp(&other.obj_index))
+    }
+}
+
+/// Accumulates the top individual arrays (bounded min-heap) and per-class
+/// aggregates (map keyed by the array class identity, bounded by #array
+/// classes) for one array category (primitive OR object). No per-object Vec is
+/// retained.
+#[derive(Default)]
+struct TopArrayAcc {
+    /// Min-heap of the largest arrays by shallow; capped at TOP_ARRAYS_N.
+    heap: std::collections::BinaryHeap<std::cmp::Reverse<TopArrayCand>>,
+    /// class identity → (objects, aggregate shallow).
+    by_class: HashMap<u64, (u64, u64)>,
+}
+impl TopArrayAcc {
+    fn add(&mut self, obj_index: u32, class_key: u64, length: u64, shallow: u64) {
+        let e = self.by_class.entry(class_key).or_insert((0, 0));
+        e.0 += 1;
+        e.1 += shallow;
+
+        let cand = TopArrayCand {
+            shallow,
+            obj_index,
+            length,
+            class_key,
+        };
+        if self.heap.len() < TOP_ARRAYS_N {
+            self.heap.push(std::cmp::Reverse(cand));
+        } else if let Some(std::cmp::Reverse(min)) = self.heap.peek() {
+            if cand > *min {
+                self.heap.pop();
+                self.heap.push(std::cmp::Reverse(cand));
+            }
+        }
+    }
+    /// `name_of(class_key, p1)` resolves the array class name — differs for
+    /// primitive vs object arrays (see call sites).
+    fn into_top_arrays(
+        self,
+        p1: &Pass1,
+        name_of: impl Fn(u64, &Pass1) -> String,
+    ) -> crate::report::TopArrays {
+        // Individual: drain heap, resolve names, sort shallow desc / class asc /
+        // index asc.
+        let mut individual: Vec<crate::report::TopArrayRow> = self
+            .heap
+            .into_iter()
+            .map(|std::cmp::Reverse(c)| crate::report::TopArrayRow {
+                array_class: name_of(c.class_key, p1),
+                length: c.length,
+                shallow: c.shallow,
+                obj_index_1based: c.obj_index as u64 + 1,
+            })
+            .collect();
+        individual.sort_by(|a, b| {
+            b.shallow
+                .cmp(&a.shallow)
+                .then_with(|| a.array_class.cmp(&b.array_class))
+                .then_with(|| a.obj_index_1based.cmp(&b.obj_index_1based))
+        });
+
+        // By class: resolve names, sort shallow desc / class asc, keep top-N.
+        let mut by_class: Vec<crate::report::TopArrayClassRow> = self
+            .by_class
+            .into_iter()
+            .map(
+                |(key, (objects, shallow))| crate::report::TopArrayClassRow {
+                    array_class: name_of(key, p1),
+                    objects,
+                    shallow,
+                },
+            )
+            .collect();
+        by_class.sort_by(|a, b| {
+            b.shallow
+                .cmp(&a.shallow)
+                .then_with(|| a.array_class.cmp(&b.array_class))
+        });
+        by_class.truncate(TOP_ARRAYS_N);
+
+        crate::report::TopArrays {
+            top_individual: individual,
+            top_by_class: by_class,
+        }
+    }
+}
+
+/// Resolve a primitive-array class name from an element type code (the
+/// `class_key` used by the primitive [`TopArrayAcc`]).
+fn prim_array_name_of_key(elem_type: u64, _p1: &Pass1) -> String {
+    prim_array_class_name(elem_type as u8).to_string()
+}
+
+/// Resolve an object-array class name from its array-class object id (the
+/// `class_key` used by the object [`TopArrayAcc`]). `class_map`/`strings` are
+/// still alive at assembly time.
+fn obj_array_name_of_key(array_class_id: u64, p1: &Pass1) -> String {
+    pretty_name(array_class_id, p1)
+}
+
 /// Format a pretty class name (HPROF `/`-separated → `.`-separated).
 fn pretty_name(class_id: u64, p1: &Pass1) -> String {
     p1.class_map
@@ -446,6 +649,10 @@ pub(crate) fn build_field_decode_views(
     // kind → (objects, shallow) folded into the "<other>" row past the cap.
     let mut ref_hist_other = [(0u64, 0u64); 3];
     let mut referent_idx: [Vec<u32>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+
+    // Top arrays (individual + per-class), one per array category.
+    let mut top_prim = TopArrayAcc::default();
+    let mut top_obj = TopArrayAcc::default();
 
     // ── Scan 1: every INSTANCE_DUMP ──────────────────────────────────────────
     scan_all_instances(path, id_size, |addr, class_id, blob| {
@@ -533,6 +740,15 @@ pub(crate) fn build_field_decode_views(
     let mut const_other: (u64, u64) = (0, 0);
     let mut const_truncated = false;
     scan_all_prim_arrays(path, id_size, |addr, elem_type, count, bytes| {
+        // Top prim arrays: fold EVERY primitive array (not just constant ones).
+        // Key on the element type code; the name resolves without `class_ids`.
+        let (idx, sh) = match p1.id_map.index_of(addr) {
+            Some(i) => (i as u32, shallow[i] as u64),
+            None => (u32::MAX, 0),
+        };
+        if idx != u32::MAX {
+            top_prim.add(idx, elem_type as u64, count, sh);
+        }
         if count < 2 {
             return;
         }
@@ -552,11 +768,6 @@ pub(crate) fn build_field_decode_views(
         if !all_equal {
             return;
         }
-        let sh = p1
-            .id_map
-            .index_of(addr)
-            .map(|i| shallow[i] as u64)
-            .unwrap_or(0);
         let value = decode_prim_value(elem_type, first);
         let key = (elem_type, count, value);
         if const_groups.contains_key(&key) || const_groups.len() < CONST_ARRAY_CAP {
@@ -574,52 +785,62 @@ pub(crate) fn build_field_decode_views(
     let mut array_fill = FillAcc::default();
     let mut coll_fill_tracked: u64 = 0;
     let mut map_collision_tracked: u64 = 0;
-    scan_all_obj_arrays(path, id_size, |addr, count, elem_ref_bytes| {
-        if count == 0 {
-            return;
-        }
-        // Non-null slots: count nonzero id_size-wide refs.
-        let mut non_null: u64 = 0;
-        for slot in 0..count as usize {
-            let off = slot * obj_ref_width;
-            if off + obj_ref_width > elem_ref_bytes.len() {
-                break;
+    scan_all_obj_arrays(
+        path,
+        id_size,
+        |addr, array_class_id, count, elem_ref_bytes| {
+            if count == 0 {
+                return;
             }
-            if read_ref(&elem_ref_bytes[off..], obj_ref_width) != 0 {
-                non_null += 1;
+            // Non-null slots: count nonzero id_size-wide refs.
+            let mut non_null: u64 = 0;
+            for slot in 0..count as usize {
+                let off = slot * obj_ref_width;
+                if off + obj_ref_width > elem_ref_bytes.len() {
+                    break;
+                }
+                if read_ref(&elem_ref_bytes[off..], obj_ref_width) != 0 {
+                    non_null += 1;
+                }
             }
-        }
-        // #11 array fill ratio over ALL object arrays. Attribute THIS array's
-        // own shallow size.
-        let arr_shallow = p1
-            .id_map
-            .index_of(addr)
-            .map(|i| shallow[i] as u64)
-            .unwrap_or(0);
-        array_fill.add(non_null, count, arr_shallow, 0);
+            // #11 array fill ratio over ALL object arrays. Attribute THIS array's
+            // own shallow size.
+            let (arr_idx, arr_shallow) = match p1.id_map.index_of(addr) {
+                Some(i) => (i as u32, shallow[i] as u64),
+                None => (u32::MAX, 0),
+            };
+            array_fill.add(non_null, count, arr_shallow, 0);
 
-        // If this is a tracked collection backing array, fold #9 / #13.
-        if let Some(want) = wanted_arrays.get(&addr) {
-            // ConcurrentHashMap has no plain size: approximate size as non-null
-            // slot count (want.size stays 0 in that case).
-            let used = if want.size > 0 { want.size } else { non_null };
-            // #9 collection fill ratio: used / capacity(=count). wasted = the
-            // unused slots' worth of refs (capacity - used) clamped >=0. shallow
-            // attributes the COLLECTION instance (backing-array bytes already
-            // counted under array_fill).
-            let wasted = count
-                .saturating_sub(used.min(count))
-                .saturating_mul(obj_ref_width as u64);
-            coll_fill.add(used, count, want.coll_shallow, wasted);
-            coll_fill_tracked += 1;
-            if want.is_map {
-                // #13 map-collision proxy = occupied slots / capacity. A high
-                // occupancy vs. size disparity hints at collisions/chaining.
-                map_collision.add(non_null, count, want.coll_shallow, 0);
-                map_collision_tracked += 1;
+            // Top object arrays: fold EVERY object array. The per-class key is the
+            // array class id read from the record — class_ids has been freed by now,
+            // so we resolve names later via obj_array_name_of_key.
+            if arr_idx != u32::MAX {
+                top_obj.add(arr_idx, array_class_id, count, arr_shallow);
             }
-        }
-    })?;
+
+            // If this is a tracked collection backing array, fold #9 / #13.
+            if let Some(want) = wanted_arrays.get(&addr) {
+                // ConcurrentHashMap has no plain size: approximate size as non-null
+                // slot count (want.size stays 0 in that case).
+                let used = if want.size > 0 { want.size } else { non_null };
+                // #9 collection fill ratio: used / capacity(=count). wasted = the
+                // unused slots' worth of refs (capacity - used) clamped >=0. shallow
+                // attributes the COLLECTION instance (backing-array bytes already
+                // counted under array_fill).
+                let wasted = count
+                    .saturating_sub(used.min(count))
+                    .saturating_mul(obj_ref_width as u64);
+                coll_fill.add(used, count, want.coll_shallow, wasted);
+                coll_fill_tracked += 1;
+                if want.is_map {
+                    // #13 map-collision proxy = occupied slots / capacity. A high
+                    // occupancy vs. size disparity hints at collisions/chaining.
+                    map_collision.add(non_null, count, want.coll_shallow, 0);
+                    map_collision_tracked += 1;
+                }
+            }
+        },
+    )?;
 
     // ── Assemble collection views ─────────────────────────────────────────────
     let collections = CollectionsAnalysis {
@@ -643,8 +864,8 @@ pub(crate) fn build_field_decode_views(
             const_other,
             const_truncated,
         ),
-        top_prim_arrays: Default::default(),
-        top_obj_arrays: Default::default(),
+        top_prim_arrays: top_prim.into_top_arrays(p1, prim_array_name_of_key),
+        top_obj_arrays: top_obj.into_top_arrays(p1, obj_array_name_of_key),
     };
 
     // ── Assemble reference views ──────────────────────────────────────────────
@@ -1010,5 +1231,53 @@ mod tests {
         assert_eq!(size_hist_upper(3), 4);
         assert_eq!(size_hist_upper(8), 8);
         assert_eq!(size_hist_upper(9), 16);
+    }
+
+    #[test]
+    fn new_descriptors_match_by_name() {
+        // COLL_DESCS carries the Eclipse/Trove rows with the expected kinds.
+        for (name, kind) in [
+            (
+                "org/eclipse/collections/impl/list/mutable/FastList",
+                CollKind::List,
+            ),
+            (
+                "org/eclipse/collections/impl/map/mutable/UnifiedMap",
+                CollKind::Map,
+            ),
+            (
+                "org/eclipse/collections/impl/set/mutable/UnifiedSet",
+                CollKind::Set,
+            ),
+            ("gnu/trove/map/hash/THashMap", CollKind::Map),
+            ("gnu/trove/set/hash/THashSet", CollKind::Set),
+            ("gnu/trove/map/hash/TIntObjectHashMap", CollKind::Map),
+        ] {
+            let idx = COLL_DESCS
+                .iter()
+                .position(|d| d.class_name == name)
+                .unwrap_or_else(|| panic!("{name} missing from COLL_DESCS"));
+            assert_eq!(COLL_DESCS[idx].kind, kind, "{name} kind");
+        }
+    }
+
+    #[test]
+    fn top_array_heap_keeps_largest_by_shallow() {
+        let mut acc = TopArrayAcc::default();
+        // Feed more than TOP_ARRAYS_N candidates with increasing shallow; the
+        // heap must retain only the TOP_ARRAYS_N largest.
+        for i in 0..(TOP_ARRAYS_N as u32 + 5) {
+            acc.add(i, 0, i as u64, (i as u64) * 100);
+        }
+        assert_eq!(acc.heap.len(), TOP_ARRAYS_N);
+        // The retained candidates are the TOP_ARRAYS_N largest shallows.
+        let mut shallows: Vec<u64> = acc.heap.iter().map(|r| r.0.shallow).collect();
+        shallows.sort_unstable();
+        let smallest_kept = shallows[0];
+        // Anything with shallow < smallest_kept was evicted; the top N are 5..=14.
+        assert_eq!(smallest_kept, 5 * 100);
+        // by_class aggregated ALL candidates (not just the kept ones).
+        let (objects, _) = acc.by_class[&0];
+        assert_eq!(objects, TOP_ARRAYS_N as u64 + 5);
     }
 }

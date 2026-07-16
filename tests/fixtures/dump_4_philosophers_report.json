@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated": "2026-07-16T06:51:38.574065000Z",
+  "generated": "2026-07-16T07:03:20.210209000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
     "file_path": "tests/fixtures/dump_4_philosophers.hprof",
@@ -89531,12 +89531,226 @@
       "truncated": false
     },
     "top_prim_arrays": {
-      "top_individual": [],
-      "top_by_class": []
+      "top_individual": [
+        {
+          "array_class": "[I",
+          "length": 131064,
+          "shallow": 524272,
+          "obj_index_1based": 2
+        },
+        {
+          "array_class": "[B",
+          "length": 261187,
+          "shallow": 261208,
+          "obj_index_1based": 99101
+        },
+        {
+          "array_class": "[B",
+          "length": 238192,
+          "shallow": 238208,
+          "obj_index_1based": 70491
+        },
+        {
+          "array_class": "[B",
+          "length": 229980,
+          "shallow": 230000,
+          "obj_index_1based": 73387
+        },
+        {
+          "array_class": "[B",
+          "length": 144353,
+          "shallow": 144376,
+          "obj_index_1based": 72656
+        },
+        {
+          "array_class": "[J",
+          "length": 8192,
+          "shallow": 65552,
+          "obj_index_1based": 72680
+        },
+        {
+          "array_class": "[B",
+          "length": 60231,
+          "shallow": 60248,
+          "obj_index_1based": 182193
+        },
+        {
+          "array_class": "[B",
+          "length": 46187,
+          "shallow": 46208,
+          "obj_index_1based": 99154
+        },
+        {
+          "array_class": "[I",
+          "length": 8781,
+          "shallow": 35144,
+          "obj_index_1based": 182113
+        },
+        {
+          "array_class": "[I",
+          "length": 7863,
+          "shallow": 31472,
+          "obj_index_1based": 76083
+        }
+      ],
+      "top_by_class": [
+        {
+          "array_class": "[B",
+          "objects": 25515,
+          "shallow": 2762064
+        },
+        {
+          "array_class": "[I",
+          "objects": 3488,
+          "shallow": 1576024
+        },
+        {
+          "array_class": "[J",
+          "objects": 173,
+          "shallow": 1146072
+        },
+        {
+          "array_class": "[C",
+          "objects": 225,
+          "shallow": 73496
+        },
+        {
+          "array_class": "[Z",
+          "objects": 10,
+          "shallow": 1952
+        },
+        {
+          "array_class": "[D",
+          "objects": 8,
+          "shallow": 688
+        },
+        {
+          "array_class": "[S",
+          "objects": 7,
+          "shallow": 368
+        },
+        {
+          "array_class": "[F",
+          "objects": 4,
+          "shallow": 112
+        }
+      ]
     },
     "top_obj_arrays": {
-      "top_individual": [],
-      "top_by_class": []
+      "top_individual": [
+        {
+          "array_class": "[Ljava.lang.Object;",
+          "length": 131072,
+          "shallow": 524304,
+          "obj_index_1based": 1
+        },
+        {
+          "array_class": "[Ljava.lang.Object;",
+          "length": 7937,
+          "shallow": 31768,
+          "obj_index_1based": 236822
+        },
+        {
+          "array_class": "[Ljava.util.HashMap$Node;",
+          "length": 4096,
+          "shallow": 16400,
+          "obj_index_1based": 39348
+        },
+        {
+          "array_class": "[Ljava.util.HashMap$Node;",
+          "length": 4096,
+          "shallow": 16400,
+          "obj_index_1based": 76135
+        },
+        {
+          "array_class": "[Ljava.lang.Object;",
+          "length": 2285,
+          "shallow": 9160,
+          "obj_index_1based": 70448
+        },
+        {
+          "array_class": "[Ljava.lang.Object;",
+          "length": 2126,
+          "shallow": 8520,
+          "obj_index_1based": 187292
+        },
+        {
+          "array_class": "[Lscala.math.BigInt;",
+          "length": 2049,
+          "shallow": 8216,
+          "obj_index_1based": 74058
+        },
+        {
+          "array_class": "[Lscala.math.BigInt;",
+          "length": 2049,
+          "shallow": 8216,
+          "obj_index_1based": 146904
+        },
+        {
+          "array_class": "[Ljava.lang.Object;",
+          "length": 2048,
+          "shallow": 8208,
+          "obj_index_1based": 91191
+        },
+        {
+          "array_class": "[Ljava.util.concurrent.ConcurrentHashMap$Node;",
+          "length": 2048,
+          "shallow": 8208,
+          "obj_index_1based": 240798
+        }
+      ],
+      "top_by_class": [
+        {
+          "array_class": "[Ljava.lang.Object;",
+          "objects": 2397,
+          "shallow": 1353600
+        },
+        {
+          "array_class": "[Lscala.concurrent.stm.ccstm.Handle;",
+          "objects": 283,
+          "shallow": 1062696
+        },
+        {
+          "array_class": "[Lscala.Function1;",
+          "objects": 774,
+          "shallow": 408672
+        },
+        {
+          "array_class": "[Ljava.util.HashMap$Node;",
+          "objects": 396,
+          "shallow": 99072
+        },
+        {
+          "array_class": "[Ljava.util.concurrent.ConcurrentHashMap$Node;",
+          "objects": 93,
+          "shallow": 67472
+        },
+        {
+          "array_class": "[Ljava.lang.ref.SoftReference;",
+          "objects": 250,
+          "shallow": 19000
+        },
+        {
+          "array_class": "[Ljava.lang.Class;",
+          "objects": 593,
+          "shallow": 17200
+        },
+        {
+          "array_class": "[Ljava.lang.String;",
+          "objects": 208,
+          "shallow": 13568
+        },
+        {
+          "array_class": "[Ljava.lang.ThreadLocal$ThreadLocalMap$Entry;",
+          "objects": 130,
+          "shallow": 10400
+        },
+        {
+          "array_class": "[Lscala.math.BigInt;",
+          "objects": 1,
+          "shallow": 8216
+        }
+      ]
     }
   },
   "references": {
