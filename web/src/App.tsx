@@ -2799,6 +2799,7 @@ export default function App({ report }: { report: Report }) {
 
   return (
     <div className="app">
+      <a href="#triage" className="skip-link">Skip to content</a>
       <h1>
         Heap Dump Analysis: <code>{report.overview.source_name}</code>
       </h1>

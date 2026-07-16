@@ -88,6 +88,8 @@ summary { cursor: pointer; color: var(--accent); font-size: 0.85rem; }
 .toc a.active { color: var(--accent); border-color: var(--accent); }
 .toc-group { font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); opacity: 0.6; padding: 0 0.15rem; margin-left: 0.5rem; white-space: nowrap; }
 .toc-group:first-child { margin-left: 0; }
+.skip-link { position: absolute; left: -9999px; top: 1rem; z-index: 100; background: var(--accent); color: #fff; padding: 0.5rem 1rem; border-radius: 6px; font-size: 0.9rem; text-decoration: none; }
+.skip-link:focus { left: 1rem; }
 
 /* Fixed back-to-top button, visible after scrolling down. */
 .back-to-top { position: fixed; right: 1rem; bottom: 1rem; z-index: 10; background: var(--card); color: var(--accent); border: 1px solid var(--border); border-radius: 999px; padding: 0.5rem 0.7rem; cursor: pointer; font-size: 1rem; line-height: 1; }

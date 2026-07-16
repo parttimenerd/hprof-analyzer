@@ -51,16 +51,14 @@ fn html_is_self_contained_no_network() {
     );
 
     // No external src=/href= that points outside the document. The app injects
-    // scripts via textContent (not src), so asserting there is no `src="` or
-    // `href="` attribute at all is the strictest form of the offline guarantee.
+    // scripts via textContent (not src), so asserting there is no `src="` is
+    // the strictest form of the offline guarantee for scripts/images.
     assert!(
         !html.contains("src=\""),
         "HTML must not contain any src=\"...\" attribute (external resource)"
     );
-    assert!(
-        !html.contains("href=\""),
-        "HTML must not contain any href=\"...\" attribute (external resource)"
-    );
+    // Internal fragment hrefs (#...) are allowed — they don't fetch any resource.
+    // Only external hrefs (http/https) are forbidden; those are checked above.
 
     // The embedded data + bundle blobs are present.
     assert!(
