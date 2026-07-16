@@ -990,10 +990,24 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
     // Per-class tally of unreachable objects (idom == undef), bounded by #classes.
     let mut unreach_count: Vec<u64> = vec![0; class_count];
     let mut unreach_shallow: Vec<u64> = vec![0; class_count];
+    // Heap composition by object kind, tallied in the SAME reachable-object walk
+    // (KIND_ORDER = Instances/Object arrays/Primitive arrays/Class objects).
+    const KIND_ORDER: [&str; 4] = [
+        "Instances",
+        "Object arrays",
+        "Primitive arrays",
+        "Class objects",
+    ];
+    let kind_idx = |k: &str| KIND_ORDER.iter().position(|&x| x == k).unwrap();
+    let mut comp_objs = [0u64; 4];
+    let mut comp_sh = [0u64; 4];
     for i in 0..n {
         if g.idom[i] != undef {
             total_objects += 1;
             total_shallow += g.shallow[i] as u64;
+            let b = kind_idx(object_kind(g, i));
+            comp_objs[b] += 1;
+            comp_sh[b] += g.shallow[i] as u64;
         } else {
             unreachable_count += 1;
             unreachable_shallow += g.shallow[i] as u64;
@@ -1053,28 +1067,13 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
         rows
     };
     // B5: heap composition by kind. Fixed 4-bucket order.
-    const KIND_ORDER: [&str; 4] = [
-        "Instances",
-        "Object arrays",
-        "Primitive arrays",
-        "Class objects",
-    ];
     let heap_composition = {
-        let mut objs = [0u64; 4];
-        let mut sh = [0u64; 4];
-        let idx = |k: &str| KIND_ORDER.iter().position(|&x| x == k).unwrap();
-        for i in 0..n {
-            if g.idom[i] == undef {
-                continue;
-            }
-            let b = idx(object_kind(g, i));
-            objs[b] += 1;
-            sh[b] += g.shallow[i] as u64;
-        }
+        let mut objs = comp_objs;
+        let mut sh = comp_sh;
         // Synthetic <system class loader> counts as an Instance, matching how
         // total_objects/total_shallow count it above.
         if let Some(sz) = g.system_classloader_shallow {
-            let b = idx("Instances");
+            let b = kind_idx("Instances");
             objs[b] += 1;
             sh[b] += sz as u64;
         }
@@ -1158,41 +1157,35 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
     let mut class_retained: Vec<u64> = vec![0; class_count];
     let mut max_shallow: Vec<u64> = vec![0; class_count];
 
-    // First pass: for all reachable objects
+    // Single reachable-object walk. First the histogram tally keyed on the
+    // object's own class; then the class-object contribution keyed on the class
+    // it represents. Both fold into class_retained (order-independent sums), so
+    // merging the two former passes is byte-identical.
     for i in 0..n {
         if g.idom[i] == undef {
             continue;
         }
         let ci = g.class_idx[i] as usize;
-        if ci >= class_count {
-            continue;
+        if ci < class_count {
+            let ci = remap[ci] as usize;
+            inst_count[ci] += 1;
+            shallow_total[ci] += g.shallow[i] as u64;
+            max_shallow[ci] = max_shallow[ci].max(g.shallow[i] as u64);
+            // MAT top-ancestor semantics: only count retained of objects with no
+            // same-class (or class-object) ancestor in the dominator tree.
+            if !g.has_same_class_ancestor.get(i) {
+                class_retained[ci] += g.retained[i];
+            }
         }
-        let ci = remap[ci] as usize;
-        inst_count[ci] += 1;
-        shallow_total[ci] += g.shallow[i] as u64;
-        max_shallow[ci] = max_shallow[ci].max(g.shallow[i] as u64);
-        // MAT top-ancestor semantics: only count retained of objects with no
-        // same-class (or class-object) ancestor in the dominator tree.
-        if !g.has_same_class_ancestor.get(i) {
-            class_retained[ci] += g.retained[i];
-        }
-    }
-
-    // Second pass: for each class object, add its retained to the class it represents
-    for i in 0..n {
-        if g.idom[i] == undef {
-            continue;
-        }
+        // For each class object, add its retained to the class it represents.
         let repr = class_obj_repr(g, i);
-        if repr == undef {
-            continue;
+        if repr != undef {
+            let ci = repr as usize;
+            if ci < class_count {
+                let ci = remap[ci] as usize;
+                class_retained[ci] += g.retained[i];
+            }
         }
-        let ci = repr as usize;
-        if ci >= class_count {
-            continue;
-        }
-        let ci = remap[ci] as usize;
-        class_retained[ci] += g.retained[i];
     }
 
     // Inject the synthetic <system class loader> object into its class row so
