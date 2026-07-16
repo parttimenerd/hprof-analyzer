@@ -686,20 +686,31 @@ impl InboundBuilder {
                 continue;
             }
 
-            inb_flat.copy_range(start, end, &mut nb);
-
-            // Translate each stripped predecessor NODE -> its pre-order number
-            // (dfn); drop unreachable predecessors (dfn == UNDEFINED). Storing
-            // pre-order values here means dominator Phase 1 never needs dfn, so
-            // the caller frees dfn (2GB) before the Phase-1 peak. Reuse `nb` in
-            // place: overwrite the front with translated pre-order values.
+            // Translate each predecessor NODE -> pre-order number (dfn);
+            // drop unreachable predecessors (dfn == UNDEFINED). Use range_slice
+            // for a zero-copy read when the range fits in one chunk; fall back
+            // to copy_range otherwise. Store translated values in nb.
             let mut w = 0usize;
-            for r in 0..nb.len() {
-                let node = (nb[r] & 0x7fff_ffff) as usize;
-                let pre = dfn[node];
-                if pre != u32::MAX {
-                    nb[w] = pre;
-                    w += 1;
+            if let Some(raw) = inb_flat.range_slice(start, end) {
+                nb.clear();
+                nb.reserve(raw.len());
+                for &raw_val in raw {
+                    let node = (raw_val & 0x7fff_ffff) as usize;
+                    let pre = dfn[node];
+                    if pre != u32::MAX {
+                        nb.push(pre);
+                        w += 1;
+                    }
+                }
+            } else {
+                inb_flat.copy_range(start, end, &mut nb);
+                for r in 0..nb.len() {
+                    let node = (nb[r] & 0x7fff_ffff) as usize;
+                    let pre = dfn[node];
+                    if pre != u32::MAX {
+                        nb[w] = pre;
+                        w += 1;
+                    }
                 }
             }
 
