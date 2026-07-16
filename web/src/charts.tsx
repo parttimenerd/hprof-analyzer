@@ -10,6 +10,9 @@ import type {
   Suspect,
 } from "./types";
 import { fmtCount, formatBytes } from "./format";
+import { Pie as ChartPie, Bar as ChartBar } from "react-chartjs-2";
+import { themeColors } from "./chartSetup";
+import "./chartSetup";
 
 // Dependency-free SVG charts (kept lib-free to stay well under the bundle
 // budget). Each chart renders ONLY when its backing data is present; the
@@ -44,47 +47,48 @@ function polar(cx: number, cy: number, r: number, ang: number): [number, number]
 function Pie({ data, fmt, donut, titles, onSlice }: { data: Slice[]; fmt: (n: number) => string; donut?: boolean; titles?: string[]; onSlice?: (i: number) => void }) {
   const total = data.reduce((s, d) => s + d.value, 0);
   if (total <= 0) return null;
-  const cx = 110;
-  const cy = 110;
-  const r = 100;
-  const ir = donut ? 55 : 0;
-  let a0 = -Math.PI / 2;
-  const paths = data.map((d, i) => {
-    const frac = d.value / total;
-    const a1 = a0 + frac * Math.PI * 2;
-    const large = frac > 0.5 ? 1 : 0;
-    const [x0, y0] = polar(cx, cy, r, a0);
-    const [x1, y1] = polar(cx, cy, r, a1);
-    let path: string;
-    if (ir > 0) {
-      const [ix1, iy1] = polar(cx, cy, ir, a1);
-      const [ix0, iy0] = polar(cx, cy, ir, a0);
-      path = `M ${x0} ${y0} A ${r} ${r} 0 ${large} 1 ${x1} ${y1} L ${ix1} ${iy1} A ${ir} ${ir} 0 ${large} 0 ${ix0} ${iy0} Z`;
-    } else {
-      path = `M ${cx} ${cy} L ${x0} ${y0} A ${r} ${r} 0 ${large} 1 ${x1} ${y1} Z`;
-    }
-    a0 = a1;
-    const clickProps = onSlice ? { onClick: () => onSlice(i), style: { cursor: "pointer" } } : {};
-    if (titles?.[i]) {
-      return <path key={i} d={path} fill={color(i)} stroke="var(--bg)" strokeWidth={1} {...clickProps}><title>{titles[i]}</title></path>;
-    }
-    return <path key={i} d={path} fill={color(i)} stroke="var(--bg)" strokeWidth={1} {...clickProps} />;
-  });
+  const t = themeColors();
+  const bg = data.map((_, i) => color(i));
+  const chartData = {
+    labels: data.map((d) => d.name),
+    datasets: [
+      {
+        data: data.map((d) => d.value),
+        backgroundColor: bg,
+        borderColor: t.bg,
+        borderWidth: 1,
+      },
+    ],
+  };
+  const options = {
+    responsive: true,
+    maintainAspectRatio: false,
+    cutout: donut ? "50%" : 0,
+    onClick: onSlice
+      ? (_e: unknown, els: { index: number }[]) => {
+          if (els.length) onSlice(els[0].index);
+        }
+      : undefined,
+    plugins: {
+      legend: {
+        position: "right" as const,
+        labels: { color: t.fg, boxWidth: 12, font: { size: 12 } },
+      },
+      tooltip: {
+        callbacks: {
+          label: (ctx: { dataIndex: number }) => {
+            const i = ctx.dataIndex;
+            if (titles?.[i]) return titles[i];
+            const v = data[i].value;
+            return `${data[i].name} — ${fmt(v)} (${((v / total) * 100).toFixed(1)}%)`;
+          },
+        },
+      },
+    },
+  };
   return (
-    <div className="chart-wrap" style={{ display: "flex", gap: "1.5rem", alignItems: "center", flexWrap: "wrap" }}>
-      <svg width={220} height={220} viewBox="0 0 220 220" role="img" aria-label="pie chart">
-        {paths}
-      </svg>
-      <ul style={{ listStyle: "none", padding: 0, margin: 0, fontSize: "0.82rem" }}>
-        {data.map((d, i) => (
-          <li key={i} style={{ margin: "0.2rem 0", display: "flex", alignItems: "center", gap: "0.4rem" }}>
-            <span style={{ width: 12, height: 12, background: color(i), display: "inline-block", borderRadius: 2 }} />
-            <span>
-              {d.name} — {fmt(d.value)} ({((d.value / total) * 100).toFixed(1)}%)
-            </span>
-          </li>
-        ))}
-      </ul>
+    <div className="chart-wrap" style={{ position: "relative", height: 240, maxWidth: 520 }}>
+      <ChartPie data={chartData} options={options} />
     </div>
   );
 }
