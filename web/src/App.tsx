@@ -66,12 +66,15 @@ function Nav({ report }: { report: Report }) {
   const items: [string, string][] = [
     ["triage", "OOM Triage"],
     ["overview", "System Overview"],
+    ["record-census", "HPROF Record Census"],
     ["leaks", "Leak Suspects"],
     ["top", "Top Consumers"],
     ["dominator-analysis", "Dominator Analysis"],
     ["threads", "Threads"],
   ];
   // show the entry only when the field is present.
+  if (report.top.size_distribution.count > 0) items.push(["size-distribution", "Size Distribution"]);
+  items.push(["duplicate-strings", "Duplicate Strings"]);
   if (report.top_components?.components?.length) items.push(["top-components", "Top Components"]);
   items.push(["arrays-by-size", "Arrays by Size"]);
   items.push(["collections", "Collections"]);
@@ -275,8 +278,34 @@ function KpiStrip({ report }: { report: Report }) {
     : "—";
   const dominantClass = top?.pretty_class ?? "—";
 
+  // Plain-language verdict mirroring the Markdown executive summary
+  // ("Likely problem:" line). CONCENTRATION_PCT = 50.
+  const pct = top ? pctOf(top.retained, report.leaks.total_shallow) : 0;
+  let verdict: React.ReactNode;
+  if (top && pct >= 50) {
+    verdict = (
+      <>
+        <strong>Likely problem:</strong> <code>{top.pretty_class}</code> retains {pct.toFixed(1)}% of the reachable heap
+        — investigate this first.
+      </>
+    );
+  } else if (top) {
+    verdict = (
+      <>
+        <strong>Likely problem:</strong> retention is spread across several roots; no single object dominates.
+      </>
+    );
+  } else {
+    verdict = (
+      <>
+        <strong>Likely problem:</strong> no dominant retainer; the heap looks evenly distributed.
+      </>
+    );
+  }
+
   return (
-    <div className="kpi-grid">
+    <>
+      <div className="kpi-grid">
       <div className="kpi">
         <div className="kpi-value">{formatBytes(report.overview.total_shallow)}</div>
         <div className="kpi-label">Total heap</div>
@@ -303,7 +332,9 @@ function KpiStrip({ report }: { report: Report }) {
         <div className="kpi-value">{fmtCount(report.overview.gc_roots)}</div>
         <div className="kpi-label">GC roots</div>
       </div>
-    </div>
+      </div>
+      <p className="subtitle" style={{ fontSize: "1rem" }}>{verdict}</p>
+    </>
   );
 }
 
@@ -329,10 +360,11 @@ function SortableTh<T>({ label, colKey, sortKey, setSortKey }: {
 }
 
 // ── Sortable / filterable class histogram ────────────────────────────────────
-type HistKey = "instances" | "shallow" | "retained";
+type HistKey = "instances" | "shallow" | "max_instance_shallow" | "retained";
 const HIST_COLS: { key: HistKey; label: string }[] = [
   { key: "instances", label: "Instances" },
   { key: "shallow", label: "Shallow" },
+  { key: "max_instance_shallow", label: "Largest" },
   { key: "retained", label: "Retained" },
 ];
 
@@ -402,6 +434,7 @@ function ClassHistogramTable({ rows }: { rows: HistRow[] }) {
               )}
               <td className="num">{fmtCount(h.instances)}</td>
               <td className="num">{formatBytes(h.shallow)}</td>
+              <td className="num">{formatBytes(h.max_instance_shallow)}</td>
               <td className="num">{formatBytes(h.retained)}</td>
             </tr>
           ))}
@@ -430,6 +463,284 @@ function LoaderCell({ label }: { label?: string | null }) {
 function ChartOrNote({ hasData, note, children }: { hasData: boolean; note: string; children: React.ReactNode }) {
   if (!hasData) return <p className="subtitle" style={{ color: "var(--muted)" }}>{note}</p>;
   return <>{children}</>;
+}
+
+// ── HPROF Record Census ───────────────────────────────────────────────────────
+function gcRootTagLabel(tag: number): string {
+  switch (tag) {
+    case 0x00: return "System Class";
+    case 0x01: return "JNI Global";
+    case 0x02: return "JNI Local";
+    case 0x03: return "Java Frame";
+    case 0x04: return "Native Stack";
+    case 0x05: return "Sticky Class";
+    case 0x06: return "Thread Block";
+    case 0x07: return "Busy Monitor";
+    case 0x08: return "Thread";
+    default: return "Unknown";
+  }
+}
+
+function RecordCensusSection({ report }: { report: Report }) {
+  const c = report.overview.record_census;
+  const rows: [string, number][] = [
+    ["UTF8 strings", c.utf8_records],
+    ["Load class", c.load_class_records],
+    ["Unload class", c.unload_class_records],
+    ["Stack frames", c.stack_frame_records],
+    ["Stack traces", c.stack_trace_records],
+    ["Heap dump segments", c.heap_dump_segments],
+    ["Instance dumps", c.instance_dumps],
+    ["Object-array dumps", c.obj_array_dumps],
+    ["Primitive-array dumps", c.prim_array_dumps],
+    ["Class dumps", c.class_dumps],
+  ];
+  return (
+    <section id="record-census">
+      <h2>HPROF Record Census</h2>
+      <p className="subtitle" style={{ color: "var(--muted)" }}>
+        Raw HPROF record-type composition of the dump (pass-1 counts); additive, not parity-compared.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Record Type</th>
+            <th className="num">Count</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(([label, count], i) => (
+            <tr key={i}>
+              <td>{label}</td>
+              <td className="num">{fmtCount(count)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {c.gc_root_tag_counts.length > 0 && (
+        <>
+          <h3>GC Root Records by Tag</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Root Tag</th>
+                <th className="num">Count</th>
+              </tr>
+            </thead>
+            <tbody>
+              {c.gc_root_tag_counts.map(([tag, count], i) => (
+                <tr key={i}>
+                  <td>{gcRootTagLabel(tag)}</td>
+                  <td className="num">{fmtCount(count)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </section>
+  );
+}
+
+// ── Top-Dominator Size Distribution ───────────────────────────────────────────
+function SizeDistributionSection({ report }: { report: Report }) {
+  const d = report.top.size_distribution;
+  if (d.count <= 0) return null;
+  return (
+    <section id="size-distribution">
+      <h2>Top-Dominator Size Distribution</h2>
+      <p className="subtitle" style={{ color: "var(--muted)" }}>
+        Retained-size spread across all {fmtCount(d.count)} top-level dominators (the biggest memory contributors).
+      </p>
+      <ul>
+        <li>Dominators: {fmtCount(d.count)}</li>
+        <li>Smallest / largest retained: {formatBytes(d.min)} / {formatBytes(d.max)}</li>
+        <li>Median retained: {formatBytes(d.median)}</li>
+        <li>Total retained (top-level): {formatBytes(d.total)}</li>
+      </ul>
+      <table>
+        <thead>
+          <tr>
+            <th className="num">Size ≤</th>
+            <th className="num">Count</th>
+          </tr>
+        </thead>
+        <tbody>
+          {d.buckets.map((b, i) => (
+            <tr key={i}>
+              <td className="num">{formatBytes(b.upper_bytes)}</td>
+              <td className="num">{fmtCount(b.count)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+// ── Duplicate Strings (approximate) ────────────────────────────────────────────
+function DuplicateStringsSection({ report }: { report: Report }) {
+  const d = report.overview.duplicate_strings;
+  if (!d) {
+    return (
+      <section id="duplicate-strings">
+        <h2>Duplicate Strings (approximate)</h2>
+        <p className="subtitle" style={{ color: "var(--muted)" }}>
+          Duplicate-string analysis not run (pass <code>--dup-strings</code>).
+        </p>
+      </section>
+    );
+  }
+  const w = d.char_array_waste;
+  return (
+    <section id="duplicate-strings">
+      <h2>Duplicate Strings (approximate)</h2>
+      <p className="subtitle" style={{ color: "var(--muted)" }}>
+        Opt-in (--dup-strings): each java.lang.String value hashed to 64 bits; collisions accepted as approximation.
+      </p>
+      <ul>
+        <li>Total String instances: {fmtCount(d.total_string_instances)}</li>
+        <li>Distinct values: {fmtCount(d.distinct_values)}</li>
+        <li>Duplicated values: {fmtCount(d.duplicated_values)}</li>
+        <li>Approx wasted bytes: {formatBytes(d.approx_wasted_bytes)}</li>
+      </ul>
+
+      {d.top_duplicated.length > 0 && (
+        <>
+          <h3>Most-Duplicated Values</h3>
+          <table>
+            <thead>
+              <tr>
+                <th className="num">#</th>
+                <th className="num">Count</th>
+                <th className="num">Wasted</th>
+                <th>Value</th>
+              </tr>
+            </thead>
+            <tbody>
+              {d.top_duplicated.map((s, i) => (
+                <tr key={i}>
+                  <td className="num">{i + 1}</td>
+                  <td className="num">{fmtCount(s.count)}</td>
+                  <td className="num">{formatBytes(s.wasted_bytes)}</td>
+                  <td><code>{s.text}</code></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+
+      {d.top_by_length.length > 0 && (
+        <>
+          <h3>Longest Values</h3>
+          <table>
+            <thead>
+              <tr>
+                <th className="num">#</th>
+                <th className="num">Length</th>
+                <th className="num">Count</th>
+                <th>Value</th>
+              </tr>
+            </thead>
+            <tbody>
+              {d.top_by_length.map((s, i) => (
+                <tr key={i}>
+                  <td className="num">{i + 1}</td>
+                  <td className="num">{fmtCount(s.len)}</td>
+                  <td className="num">{fmtCount(s.count)}</td>
+                  <td><code>{s.text}</code></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+
+      {d.length_histogram.length > 0 && (
+        <>
+          <h3>String Length Distribution</h3>
+          <p className="subtitle" style={{ color: "var(--muted)" }}>
+            Distinct-value lengths (bytes): min {fmtCount(d.length_stats.min)}, median {fmtCount(d.length_stats.median)},
+            max {fmtCount(d.length_stats.max)}; total {formatBytes(d.length_stats.total)}.
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th className="num">Length ≤</th>
+                <th className="num">Values</th>
+              </tr>
+            </thead>
+            <tbody>
+              {d.length_histogram.map((b, i) => (
+                <tr key={i}>
+                  <td className="num">{fmtCount(b.upper_len)}</td>
+                  <td className="num">{fmtCount(b.count)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+
+      {d.top_string_holders.length > 0 && (
+        <>
+          <h3>Classes Holding the Most Strings</h3>
+          <p className="subtitle" style={{ color: "var(--muted)" }}>
+            Number of java.lang.String instances referenced by each class's instances.
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>Class</th>
+                <th className="num">String refs</th>
+              </tr>
+            </thead>
+            <tbody>
+              {d.top_string_holders.map((h, i) => (
+                <tr key={i}>
+                  <td><code>{h.class_name}</code></td>
+                  <td className="num">{fmtCount(h.string_refs)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+
+      {w && (
+        <>
+          <h3>Char[] Waste</h3>
+          <p className="subtitle" style={{ color: "var(--muted)" }}>
+            {fmtCount(w.arrays_examined)} arrays examined, {fmtCount(w.wasteful_arrays)} wasteful,{" "}
+            {formatBytes(w.total_wasted_bytes)} total wasted.
+          </p>
+          {w.top.length > 0 && (
+            <table>
+              <thead>
+                <tr>
+                  <th className="num">Array #</th>
+                  <th className="num">Length</th>
+                  <th className="num">Used</th>
+                  <th className="num">Wasted</th>
+                </tr>
+              </thead>
+              <tbody>
+                {w.top.map((r, i) => (
+                  <tr key={i}>
+                    <td className="num">{fmtCount(r.array_obj_1based)}</td>
+                    <td className="num">{fmtCount(r.length)}</td>
+                    <td className="num">{formatBytes(r.used)}</td>
+                    <td className="num">{formatBytes(r.wasted_bytes)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </>
+      )}
+    </section>
+  );
 }
 
 // ── System Overview ─────────────────────────────────────────────────────────
@@ -2433,8 +2744,11 @@ export default function App({ report }: { report: Report }) {
       <OomTriage report={report} />
       <KpiStrip report={report} />
       <SystemOverviewSection report={report} />
+      <RecordCensusSection report={report} />
       <LeakSuspectsSection report={report} />
       <TopConsumersSection report={report} />
+      <SizeDistributionSection report={report} />
+      <DuplicateStringsSection report={report} />
       <DominatorAnalysisSection data={report.dominator_analysis} />
       <ThreadsSection report={report} />
       {report.top_components?.components?.length ? (

@@ -6,6 +6,7 @@ export interface HistRow {
   instances: number;
   shallow: number;
   retained: number;
+  max_instance_shallow: number;
   loader_id: number;
   // Human-readable class-loader label (the loader's runtime class name; the
   // boot loader is "<boot>"). Absent when unresolved. Preferred over the raw
@@ -79,6 +80,39 @@ export interface DuplicateClass {
   per_loader?: DuplicateClassLoaderRow[];
 }
 
+export interface RecordCensus {
+  utf8_records: number;
+  load_class_records: number;
+  unload_class_records: number;
+  stack_frame_records: number;
+  stack_trace_records: number;
+  heap_dump_segments: number;
+  instance_dumps: number;
+  obj_array_dumps: number;
+  prim_array_dumps: number;
+  class_dumps: number;
+  gc_root_tag_counts: [number, number][]; // (tag byte, count)
+}
+
+export interface DupStringSample { text: string; count: number; len: number; wasted_bytes: number; }
+export interface StrLenBucket { upper_len: number; count: number; }
+export interface StrLenStats { min: number; max: number; median: number; total: number; }
+export interface StringHolder { class_name: string; string_refs: number; }
+export interface CharArrayWasteRow { array_obj_1based: number; length: number; used: number; wasted_bytes: number; }
+export interface CharArrayWaste { arrays_examined: number; wasteful_arrays: number; total_wasted_bytes: number; top: CharArrayWasteRow[]; }
+export interface DupStrings {
+  distinct_values: number;
+  duplicated_values: number;
+  total_string_instances: number;
+  approx_wasted_bytes: number;
+  top_duplicated: DupStringSample[];
+  length_histogram: StrLenBucket[];
+  length_stats: StrLenStats;
+  top_string_holders: StringHolder[];
+  top_by_length: DupStringSample[];
+  char_array_waste: CharArrayWaste | null;
+}
+
 export interface SystemOverview {
   source_name: string;
   file_path: string;
@@ -114,6 +148,10 @@ export interface SystemOverview {
   top_class_concentration_bp?: number;
   // Retained heap grouped by GC root type.
   gc_roots_retained_by_type?: GcRootRetainedRow[];
+  // Raw HPROF record-type composition (pass-1 counts); always present.
+  record_census: RecordCensus;
+  // Opt-in approximate duplicate-String analysis (--dup-strings). Absent/null otherwise.
+  duplicate_strings?: DupStrings | null;
 }
 
 export interface PathStep {
@@ -240,11 +278,22 @@ export interface PackageNode {
   children: PackageNode[];
 }
 
+export interface SizeBucket { upper_bytes: number; count: number; }
+export interface TopSizeDistribution {
+  buckets: SizeBucket[];
+  count: number;
+  min: number;
+  max: number;
+  median: number;
+  total: number;
+}
+
 export interface TopConsumers {
   biggest_objects: ObjRow[];
   biggest_classes: ClassRow[];
   threshold_bp: number;
   biggest_packages: PackageNode;
+  size_distribution: TopSizeDistribution;
 }
 
 export interface ThreadInfo {
