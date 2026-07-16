@@ -109,7 +109,9 @@ fn is_anonymous_class(name: &str) -> bool {
 
 fn build_leak_indicators(g: &Graph) -> LeakIndicators {
     // 1. Anonymous/generated class count — one entry per distinct class in class_names.
-    let anonymous_class_count = g.class_names.iter()
+    let anonymous_class_count = g
+        .class_names
+        .iter()
         .filter(|n| is_anonymous_class(n))
         .count() as u64;
 
@@ -121,8 +123,12 @@ fn build_leak_indicators(g: &Graph) -> LeakIndicators {
     let mut thread_local_null_key_count: u64 = 0;
     for i in 0..n_nodes {
         let ci = g.class_idx[i] as usize;
-        if ci >= g.class_names.len() { continue; }
-        if !g.class_names[ci].ends_with(tl_suffix) { continue; }
+        if ci >= g.class_names.len() {
+            continue;
+        }
+        if !g.class_names[ci].ends_with(tl_suffix) {
+            continue;
+        }
         let start = g.fwd_offsets[i] as usize;
         let end = g.fwd_offsets[i + 1] as usize;
         let has_live_referent = g.fwd_targets[start..end]
@@ -937,13 +943,20 @@ fn build_significant_frames(
 /// of total heap (reachable + unreachable). Returns 0.0 for an empty heap.
 fn compute_fragmentation_ratio(total_shallow: u64, unreachable_shallow: u64) -> f64 {
     let denom = total_shallow + unreachable_shallow;
-    if denom == 0 { 0.0 } else { unreachable_shallow as f64 / denom as f64 }
+    if denom == 0 {
+        0.0
+    } else {
+        unreachable_shallow as f64 / denom as f64
+    }
 }
 
 /// Compute the retained heap share of the single largest class in integer basis
 /// points (100 bp = 1%). The histogram must already be sorted by retained
 /// descending (as produced by `build_system_overview`). Returns 0 when empty.
-fn compute_top_class_concentration_bp(histogram: &[crate::report::HistRow], total_retained: u64) -> u32 {
+fn compute_top_class_concentration_bp(
+    histogram: &[crate::report::HistRow],
+    total_retained: u64,
+) -> u32 {
     if total_retained == 0 {
         return 0;
     }
@@ -1391,13 +1404,19 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
         }
         let mut rows: Vec<crate::report::GcRootRetainedRow> = by_type
             .into_iter()
-            .map(|(root_type, (count, retained))| crate::report::GcRootRetainedRow {
-                root_type,
-                count,
-                retained,
-            })
+            .map(
+                |(root_type, (count, retained))| crate::report::GcRootRetainedRow {
+                    root_type,
+                    count,
+                    retained,
+                },
+            )
             .collect();
-        rows.sort_by(|a, b| b.retained.cmp(&a.retained).then(a.root_type.cmp(&b.root_type)));
+        rows.sort_by(|a, b| {
+            b.retained
+                .cmp(&a.retained)
+                .then(a.root_type.cmp(&b.root_type))
+        });
         rows
     };
 
@@ -2470,12 +2489,12 @@ mod leak_indicator_tests {
     #[test]
     fn anonymous_class_patterns() {
         // These should match:
-        assert!(is_anonymous_class("com/example/Foo$1"));           // anon inner
+        assert!(is_anonymous_class("com/example/Foo$1")); // anon inner
         assert!(is_anonymous_class("com/example/Foo$$Lambda$42/0x1234")); // lambda
-        assert!(is_anonymous_class("com/example/Foo$Proxy1"));      // proxy
-        assert!(is_anonymous_class("com/example/$$Anon"));          // anon
+        assert!(is_anonymous_class("com/example/Foo$Proxy1")); // proxy
+        assert!(is_anonymous_class("com/example/$$Anon")); // anon
         // These should NOT match:
-        assert!(!is_anonymous_class("com/example/Foo$Bar"));        // named inner
-        assert!(!is_anonymous_class("java/lang/String"));           // plain class
+        assert!(!is_anonymous_class("com/example/Foo$Bar")); // named inner
+        assert!(!is_anonymous_class("java/lang/String")); // plain class
     }
 }

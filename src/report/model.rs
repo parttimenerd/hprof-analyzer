@@ -901,8 +901,9 @@ pub struct ReferencesAnalysis {
 
 /// Scalar indicators of common Java leak patterns. All fields are always
 /// computed; zero when the corresponding objects are absent.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize,
-         schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct LeakIndicators {
     /// Count of anonymous/generated class definitions (names matching `$\d+`,
     /// `$$Lambda$`, `$$Anon`, or `$Proxy` patterns).

@@ -144,11 +144,7 @@ fn stdin_dash_rerenders_json() {
     analyze_to_json(&hprof, &tmp);
 
     let json = std::fs::File::open(&tmp).unwrap();
-    let out = Command::new(BIN)
-        .arg("-")
-        .stdin(json)
-        .output()
-        .unwrap();
+    let out = Command::new(BIN).arg("-").stdin(json).output().unwrap();
     let _ = std::fs::remove_file(&tmp);
     assert!(
         out.status.success(),
@@ -156,7 +152,10 @@ fn stdin_dash_rerenders_json() {
         String::from_utf8_lossy(&out.stderr)
     );
     let md = String::from_utf8_lossy(&out.stdout);
-    assert!(md.contains("## System Overview"), "stdin re-render missing sections");
+    assert!(
+        md.contains("## System Overview"),
+        "stdin re-render missing sections"
+    );
 }
 
 /// A saved report JSON misnamed with a `.hprof` extension is routed to analyze
@@ -170,7 +169,10 @@ fn misnamed_json_dot_hprof_hints() {
 
     let out = Command::new(BIN).arg(&tmp).output().unwrap();
     let _ = std::fs::remove_file(&tmp);
-    assert!(!out.status.success(), "misnamed .hprof JSON should fail to analyze");
+    assert!(
+        !out.status.success(),
+        "misnamed .hprof JSON should fail to analyze"
+    );
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(
         err.contains("does not start with the HPROF magic"),
@@ -182,7 +184,7 @@ fn misnamed_json_dot_hprof_hints() {
 /// gzip transparently), producing a Markdown report.
 #[test]
 fn bare_path_hprof_gz_analyzes() {
-    use flate2::{write::GzEncoder, Compression};
+    use flate2::{Compression, write::GzEncoder};
     use std::io::Write;
     let Some(hprof) = philosophers() else { return };
     let raw = std::fs::read(&hprof).unwrap();
@@ -199,5 +201,8 @@ fn bare_path_hprof_gz_analyzes() {
         String::from_utf8_lossy(&out.stderr)
     );
     let md = String::from_utf8_lossy(&out.stdout);
-    assert!(md.contains("## System Overview"), "gz analyze missing System Overview");
+    assert!(
+        md.contains("## System Overview"),
+        "gz analyze missing System Overview"
+    );
 }

@@ -445,7 +445,9 @@ fn run_default(cli: Cli) {
             dup_strings: cli.dup_strings,
             collections: cli.collections,
             collection_config: cli.collection_config.clone(),
-            coll_descs: crate::collection_config::load_collection_descs(cli.collection_config.as_deref()),
+            coll_descs: crate::collection_config::load_collection_descs(
+                cli.collection_config.as_deref(),
+            ),
             ..opts
         };
         if let Err(e) = run(

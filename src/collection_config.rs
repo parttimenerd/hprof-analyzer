@@ -1,7 +1,7 @@
 // src/collection_config.rs
 
-use std::path::{Path, PathBuf};
 use crate::pass2::{CollDesc, CollKind, builtin_coll_descs};
+use std::path::{Path, PathBuf};
 
 /// Parse a `Class#field` string into `(field_name, declaring_class)`.
 /// If no `#` is present, `class_context` is used as the declaring class.
@@ -23,7 +23,9 @@ fn parse_kind(s: &str) -> Result<CollKind, String> {
         "Deque" => Ok(CollKind::Deque),
         "Queue" => Ok(CollKind::Queue),
         "Tree" => Ok(CollKind::Tree),
-        other => Err(format!("unknown collection kind: {other:?}; expected Map|Set|List|Deque|Queue|Tree")),
+        other => Err(format!(
+            "unknown collection kind: {other:?}; expected Map|Set|List|Deque|Queue|Tree"
+        )),
     }
 }
 
@@ -37,7 +39,9 @@ struct RawEntry {
     nested_map_field: Option<String>,
 }
 
-fn default_kind() -> String { "List".into() }
+fn default_kind() -> String {
+    "List".into()
+}
 
 #[derive(serde::Deserialize)]
 struct ConfigFile {
@@ -92,7 +96,12 @@ pub(crate) fn load_collection_descs(explicit_path: Option<&Path>) -> Vec<CollDes
     let user = find_config(explicit_path)
         .and_then(|p| {
             std::fs::read_to_string(&p)
-                .map_err(|e| eprintln!("warning: could not read collection config {}: {e}", p.display()))
+                .map_err(|e| {
+                    eprintln!(
+                        "warning: could not read collection config {}: {e}",
+                        p.display()
+                    )
+                })
                 .ok()
         })
         .and_then(|src| {
@@ -113,8 +122,7 @@ fn find_config(explicit: Option<&Path>) -> Option<PathBuf> {
         return Some(cwd_candidate);
     }
     if let Some(home) = std::env::var_os("HOME") {
-        let home_candidate = PathBuf::from(home)
-            .join(".config/hprof-analyzer/collections.toml");
+        let home_candidate = PathBuf::from(home).join(".config/hprof-analyzer/collections.toml");
         if home_candidate.exists() {
             return Some(home_candidate);
         }
@@ -150,7 +158,10 @@ size_field = "mySize"
 "#;
         let descs = parse_toml_str(toml).unwrap();
         let loaded = merge_descs(descs, builtin_coll_descs());
-        let first = loaded.iter().find(|d| d.class_name == "java/util/HashMap").unwrap();
+        let first = loaded
+            .iter()
+            .find(|d| d.class_name == "java/util/HashMap")
+            .unwrap();
         assert_eq!(first.kind, CollKind::List);
     }
 
@@ -164,9 +175,15 @@ size_field = "java/util/HashMap#size"
 "#;
         let user = parse_toml_str(toml).unwrap();
         let descs = merge_descs(user, builtin_coll_descs());
-        let first_hm = descs.iter().find(|d| d.class_name == "java/util/HashMap").unwrap();
+        let first_hm = descs
+            .iter()
+            .find(|d| d.class_name == "java/util/HashMap")
+            .unwrap();
         assert_eq!(first_hm.kind, CollKind::List);
-        assert_eq!(first_hm.size_field, Some(("size".into(), "java/util/HashMap".into())));
+        assert_eq!(
+            first_hm.size_field,
+            Some(("size".into(), "java/util/HashMap".into()))
+        );
     }
 
     #[test]
@@ -182,13 +199,17 @@ kind = "Bag"
     #[test]
     fn guava_immutablelist_in_builtins() {
         let descs = builtin_coll_descs();
-        let entry = descs.iter()
+        let entry = descs
+            .iter()
             .find(|d| d.class_name == "com/google/common/collect/ImmutableList")
             .expect("ImmutableList missing from builtins");
         assert_eq!(entry.kind, CollKind::List);
         assert_eq!(
             entry.array_field,
-            Some(("array".into(), "com/google/common/collect/ImmutableList".into()))
+            Some((
+                "array".into(),
+                "com/google/common/collect/ImmutableList".into()
+            ))
         );
     }
 }

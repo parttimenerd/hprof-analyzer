@@ -821,9 +821,15 @@ pub(crate) fn build_field_decode_views(
     // declared on java/nio/Buffer. Both lookups use class_map/strings, which
     // are alive through the end of build_field_decode_views.
     let target_dbb_class = "java/nio/DirectByteBuffer";
-    let dbb_class_addr_opt: Option<u64> = p1.class_map.iter()
+    let dbb_class_addr_opt: Option<u64> = p1
+        .class_map
+        .iter()
         .find(|(_, ci)| {
-            p1.strings.get(&ci.name_id).map(|s| s.as_str()).unwrap_or("") == target_dbb_class
+            p1.strings
+                .get(&ci.name_id)
+                .map(|s| s.as_str())
+                .unwrap_or("")
+                == target_dbb_class
         })
         .map(|(addr, _)| *addr);
     let dbb_cap_off_opt: Option<u32> = dbb_class_addr_opt.and_then(|class_addr| {
