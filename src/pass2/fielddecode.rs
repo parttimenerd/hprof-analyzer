@@ -51,7 +51,7 @@ pub(crate) const ATTRIBUTION_TOP_N: usize = 25;
 // ── Collection descriptor table ──────────────────────────────────────────────
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum CollKind {
+pub(crate) enum CollKind {
     List,
     Map,
     Set,
@@ -63,195 +63,233 @@ enum CollKind {
     Tree,
 }
 
-struct CollDesc {
-    class_name: &'static str,
+#[derive(Clone, Debug)]
+pub(crate) struct CollDesc {
+    pub(crate) class_name: String,
     /// (field_name, declaring_owner_class) for the element-count field.
-    size_field: Option<(&'static str, &'static str)>,
+    pub(crate) size_field: Option<(String, String)>,
     /// (field_name, declaring_owner_class) for the backing object-array field.
-    array_field: Option<(&'static str, &'static str)>,
+    pub(crate) array_field: Option<(String, String)>,
     /// (field_name, declaring_owner_class) for a nested delegate collection
     /// (e.g. HashSet.map -> a HashMap); resolved as an object reference and
     /// currently used only for classification (Set/Tree wrappers).
     #[allow(dead_code)]
-    nested_map_field: Option<(&'static str, &'static str)>,
-    kind: CollKind,
+    pub(crate) nested_map_field: Option<(String, String)>,
+    pub(crate) kind: CollKind,
 }
 
-/// HPROF class names use `/` separators (e.g. `java/util/HashMap`), so the
-/// descriptor owner_class names below match `field_offset`'s expectation.
-static COLL_DESCS: &[CollDesc] = &[
-    CollDesc {
-        class_name: "java/util/HashMap",
-        size_field: Some(("size", "java/util/HashMap")),
-        array_field: Some(("table", "java/util/HashMap")),
-        nested_map_field: None,
-        kind: CollKind::Map,
-    },
-    CollDesc {
-        class_name: "java/util/LinkedHashMap",
-        // size/table declared on java.util.HashMap (LinkedHashMap extends it).
-        size_field: Some(("size", "java/util/HashMap")),
-        array_field: Some(("table", "java/util/HashMap")),
-        nested_map_field: None,
-        kind: CollKind::Map,
-    },
-    CollDesc {
-        class_name: "java/util/Hashtable",
-        size_field: Some(("count", "java/util/Hashtable")),
-        array_field: Some(("table", "java/util/Hashtable")),
-        nested_map_field: None,
-        kind: CollKind::Map,
-    },
-    CollDesc {
-        class_name: "java/util/concurrent/ConcurrentHashMap",
+/// Helper macro to construct a CollDesc with owned String fields.
+macro_rules! cd {
+    (
+        $class_name:expr,
+        size: ($sf:expr, $so:expr),
+        arr: ($af:expr, $ao:expr),
+        nested: ($nf:expr, $no:expr),
+        $kind:expr
+    ) => {
+        CollDesc {
+            class_name: $class_name.to_string(),
+            size_field: Some(($sf.to_string(), $so.to_string())),
+            array_field: Some(($af.to_string(), $ao.to_string())),
+            nested_map_field: Some(($nf.to_string(), $no.to_string())),
+            kind: $kind,
+        }
+    };
+    (
+        $class_name:expr,
+        size: ($sf:expr, $so:expr),
+        arr: ($af:expr, $ao:expr),
+        $kind:expr
+    ) => {
+        CollDesc {
+            class_name: $class_name.to_string(),
+            size_field: Some(($sf.to_string(), $so.to_string())),
+            array_field: Some(($af.to_string(), $ao.to_string())),
+            nested_map_field: None,
+            kind: $kind,
+        }
+    };
+    (
+        $class_name:expr,
+        size: ($sf:expr, $so:expr),
+        $kind:expr
+    ) => {
+        CollDesc {
+            class_name: $class_name.to_string(),
+            size_field: Some(($sf.to_string(), $so.to_string())),
+            array_field: None,
+            nested_map_field: None,
+            kind: $kind,
+        }
+    };
+    (
+        $class_name:expr,
+        arr: ($af:expr, $ao:expr),
+        $kind:expr
+    ) => {
+        CollDesc {
+            class_name: $class_name.to_string(),
+            size_field: None,
+            array_field: Some(($af.to_string(), $ao.to_string())),
+            nested_map_field: None,
+            kind: $kind,
+        }
+    };
+    (
+        $class_name:expr,
+        nested: ($nf:expr, $no:expr),
+        $kind:expr
+    ) => {
+        CollDesc {
+            class_name: $class_name.to_string(),
+            size_field: None,
+            array_field: None,
+            nested_map_field: Some(($nf.to_string(), $no.to_string())),
+            kind: $kind,
+        }
+    };
+    (
+        $class_name:expr,
+        $kind:expr
+    ) => {
+        CollDesc {
+            class_name: $class_name.to_string(),
+            size_field: None,
+            array_field: None,
+            nested_map_field: None,
+            kind: $kind,
+        }
+    };
+}
+
+/// Return the built-in collection descriptors. HPROF class names use `/`
+/// separators (e.g. `java/util/HashMap`), matching `field_offset`'s expectation.
+pub(crate) fn builtin_coll_descs() -> Vec<CollDesc> {
+    vec![
+        // ── JDK ──────────────────────────────────────────────────────────────
+        cd!("java/util/HashMap",
+            size: ("size", "java/util/HashMap"),
+            arr:  ("table", "java/util/HashMap"),
+            CollKind::Map),
+        cd!("java/util/LinkedHashMap",
+            // size/table declared on java.util.HashMap (LinkedHashMap extends it).
+            size: ("size", "java/util/HashMap"),
+            arr:  ("table", "java/util/HashMap"),
+            CollKind::Map),
+        cd!("java/util/Hashtable",
+            size: ("count", "java/util/Hashtable"),
+            arr:  ("table", "java/util/Hashtable"),
+            CollKind::Map),
         // size is not a plain field; approximate from non-null slots in scan 3.
-        size_field: None,
-        array_field: Some(("table", "java/util/concurrent/ConcurrentHashMap")),
-        nested_map_field: None,
-        kind: CollKind::Map,
-    },
-    CollDesc {
-        class_name: "java/util/TreeMap",
-        size_field: Some(("size", "java/util/TreeMap")),
-        array_field: None,
-        nested_map_field: None,
-        kind: CollKind::Tree,
-    },
-    CollDesc {
-        class_name: "java/util/ArrayList",
-        size_field: Some(("size", "java/util/ArrayList")),
-        array_field: Some(("elementData", "java/util/ArrayList")),
-        nested_map_field: None,
-        kind: CollKind::List,
-    },
-    CollDesc {
-        class_name: "java/util/Vector",
-        size_field: Some(("elementCount", "java/util/Vector")),
-        array_field: Some(("elementData", "java/util/Vector")),
-        nested_map_field: None,
-        kind: CollKind::List,
-    },
-    CollDesc {
-        class_name: "java/util/LinkedList",
-        size_field: Some(("size", "java/util/LinkedList")),
-        array_field: None,
-        nested_map_field: None,
-        kind: CollKind::List,
-    },
-    CollDesc {
-        class_name: "java/util/ArrayDeque",
-        size_field: None,
-        array_field: Some(("elements", "java/util/ArrayDeque")),
-        nested_map_field: None,
-        kind: CollKind::Deque,
-    },
-    CollDesc {
-        class_name: "java/util/HashSet",
-        size_field: None,
-        array_field: None,
-        nested_map_field: Some(("map", "java/util/HashSet")),
-        kind: CollKind::Set,
-    },
-    CollDesc {
-        class_name: "java/util/TreeSet",
-        size_field: None,
-        array_field: None,
-        nested_map_field: Some(("m", "java/util/TreeSet")),
-        kind: CollKind::Set,
-    },
-    CollDesc {
-        class_name: "scala/collection/mutable/HashMap",
-        size_field: Some(("contentSize", "scala/collection/mutable/HashMap")),
-        array_field: Some(("table", "scala/collection/mutable/HashMap")),
-        nested_map_field: None,
-        kind: CollKind::Map,
-    },
-    CollDesc {
-        class_name: "scala/collection/mutable/ArrayBuffer",
-        size_field: Some(("size0", "scala/collection/mutable/ArrayBuffer")),
-        array_field: Some(("array", "scala/collection/mutable/ArrayBuffer")),
-        nested_map_field: None,
-        kind: CollKind::List,
-    },
-    // Kotlin's standard collections (kotlin.collections.ArrayList / HashMap /
-    // LinkedHashMap) are thin aliases for the JDK types and match via the
-    // super-chain entries above — no dedicated rows are needed here.
-    // Eclipse Collections.
-    CollDesc {
-        class_name: "org/eclipse/collections/impl/map/mutable/UnifiedMap",
-        size_field: Some((
-            "occupied",
-            "org/eclipse/collections/impl/map/mutable/UnifiedMap",
-        )),
-        array_field: Some((
-            "table",
-            "org/eclipse/collections/impl/map/mutable/UnifiedMap",
-        )),
-        nested_map_field: None,
-        kind: CollKind::Map,
-    },
-    CollDesc {
-        class_name: "org/eclipse/collections/impl/list/mutable/FastList",
-        size_field: Some(("size", "org/eclipse/collections/impl/list/mutable/FastList")),
-        array_field: Some((
-            "items",
-            "org/eclipse/collections/impl/list/mutable/FastList",
-        )),
-        nested_map_field: None,
-        kind: CollKind::List,
-    },
-    CollDesc {
-        class_name: "org/eclipse/collections/impl/set/mutable/UnifiedSet",
-        size_field: Some((
-            "occupied",
-            "org/eclipse/collections/impl/set/mutable/UnifiedSet",
-        )),
-        array_field: Some((
-            "table",
-            "org/eclipse/collections/impl/set/mutable/UnifiedSet",
-        )),
-        nested_map_field: None,
-        kind: CollKind::Set,
-    },
-    // Trove (both the modern gnu/trove/{map,set}/hash/* layout and the legacy
-    // flat gnu/trove/* layout). _size is the element count; _set is the backing
-    // Object[] for the hash-based containers.
-    CollDesc {
-        class_name: "gnu/trove/map/hash/THashMap",
-        size_field: Some(("_size", "gnu/trove/impl/hash/THash")),
-        array_field: Some(("_set", "gnu/trove/impl/hash/TObjectHash")),
-        nested_map_field: None,
-        kind: CollKind::Map,
-    },
-    CollDesc {
-        class_name: "gnu/trove/THashMap",
-        size_field: Some(("_size", "gnu/trove/THash")),
-        array_field: Some(("_set", "gnu/trove/TObjectHash")),
-        nested_map_field: None,
-        kind: CollKind::Map,
-    },
-    CollDesc {
-        class_name: "gnu/trove/set/hash/THashSet",
-        size_field: Some(("_size", "gnu/trove/impl/hash/THash")),
-        array_field: Some(("_set", "gnu/trove/impl/hash/TObjectHash")),
-        nested_map_field: None,
-        kind: CollKind::Set,
-    },
-    CollDesc {
-        class_name: "gnu/trove/THashSet",
-        size_field: Some(("_size", "gnu/trove/THash")),
-        array_field: Some(("_set", "gnu/trove/TObjectHash")),
-        nested_map_field: None,
-        kind: CollKind::Set,
-    },
-    CollDesc {
-        class_name: "gnu/trove/map/hash/TIntObjectHashMap",
-        size_field: Some(("_size", "gnu/trove/impl/hash/THash")),
-        array_field: Some(("_values", "gnu/trove/map/hash/TIntObjectHashMap")),
-        nested_map_field: None,
-        kind: CollKind::Map,
-    },
-];
+        cd!("java/util/concurrent/ConcurrentHashMap",
+            arr: ("table", "java/util/concurrent/ConcurrentHashMap"),
+            CollKind::Map),
+        cd!("java/util/TreeMap",
+            size: ("size", "java/util/TreeMap"),
+            CollKind::Tree),
+        cd!("java/util/ArrayList",
+            size: ("size", "java/util/ArrayList"),
+            arr:  ("elementData", "java/util/ArrayList"),
+            CollKind::List),
+        cd!("java/util/Vector",
+            size: ("elementCount", "java/util/Vector"),
+            arr:  ("elementData", "java/util/Vector"),
+            CollKind::List),
+        cd!("java/util/LinkedList",
+            size: ("size", "java/util/LinkedList"),
+            CollKind::List),
+        cd!("java/util/ArrayDeque",
+            arr: ("elements", "java/util/ArrayDeque"),
+            CollKind::Deque),
+        cd!("java/util/HashSet",
+            nested: ("map", "java/util/HashSet"),
+            CollKind::Set),
+        cd!("java/util/TreeSet",
+            nested: ("m", "java/util/TreeSet"),
+            CollKind::Set),
+        // Kotlin's standard collections (kotlin.collections.ArrayList / HashMap /
+        // LinkedHashMap) are thin aliases for the JDK types and match via the
+        // super-chain entries above — no dedicated rows are needed here.
+
+        // ── Scala ─────────────────────────────────────────────────────────────
+        cd!("scala/collection/mutable/HashMap",
+            size: ("contentSize", "scala/collection/mutable/HashMap"),
+            arr:  ("table", "scala/collection/mutable/HashMap"),
+            CollKind::Map),
+        cd!("scala/collection/mutable/ArrayBuffer",
+            size: ("size0", "scala/collection/mutable/ArrayBuffer"),
+            arr:  ("array", "scala/collection/mutable/ArrayBuffer"),
+            CollKind::List),
+
+        // ── Eclipse Collections ───────────────────────────────────────────────
+        cd!("org/eclipse/collections/impl/map/mutable/UnifiedMap",
+            size: ("occupied", "org/eclipse/collections/impl/map/mutable/UnifiedMap"),
+            arr:  ("table",    "org/eclipse/collections/impl/map/mutable/UnifiedMap"),
+            CollKind::Map),
+        cd!("org/eclipse/collections/impl/list/mutable/FastList",
+            size: ("size",  "org/eclipse/collections/impl/list/mutable/FastList"),
+            arr:  ("items", "org/eclipse/collections/impl/list/mutable/FastList"),
+            CollKind::List),
+        cd!("org/eclipse/collections/impl/set/mutable/UnifiedSet",
+            size: ("occupied", "org/eclipse/collections/impl/set/mutable/UnifiedSet"),
+            arr:  ("table",    "org/eclipse/collections/impl/set/mutable/UnifiedSet"),
+            CollKind::Set),
+
+        // ── Trove (modern gnu/trove/{map,set}/hash/* layout) ─────────────────
+        // _size is the element count; _set is the backing Object[] for hash containers.
+        cd!("gnu/trove/map/hash/THashMap",
+            size: ("_size", "gnu/trove/impl/hash/THash"),
+            arr:  ("_set",  "gnu/trove/impl/hash/TObjectHash"),
+            CollKind::Map),
+        cd!("gnu/trove/set/hash/THashSet",
+            size: ("_size", "gnu/trove/impl/hash/THash"),
+            arr:  ("_set",  "gnu/trove/impl/hash/TObjectHash"),
+            CollKind::Set),
+        cd!("gnu/trove/map/hash/TIntObjectHashMap",
+            size: ("_size",   "gnu/trove/impl/hash/THash"),
+            arr:  ("_values", "gnu/trove/map/hash/TIntObjectHashMap"),
+            CollKind::Map),
+
+        // ── Trove (legacy flat gnu/trove/* layout) ────────────────────────────
+        cd!("gnu/trove/THashMap",
+            size: ("_size", "gnu/trove/THash"),
+            arr:  ("_set",  "gnu/trove/TObjectHash"),
+            CollKind::Map),
+        cd!("gnu/trove/THashSet",
+            size: ("_size", "gnu/trove/THash"),
+            arr:  ("_set",  "gnu/trove/TObjectHash"),
+            CollKind::Set),
+
+        // ── Guava ─────────────────────────────────────────────────────────────
+        cd!("com/google/common/collect/ImmutableList",
+            arr: ("array", "com/google/common/collect/ImmutableList"),
+            CollKind::List),
+        cd!("com/google/common/collect/ImmutableMap",
+            arr: ("table", "com/google/common/collect/ImmutableMap"),
+            CollKind::Map),
+        cd!("com/google/common/collect/ImmutableSet",
+            arr: ("elements", "com/google/common/collect/ImmutableSet"),
+            CollKind::Set),
+        cd!("com/google/common/collect/ImmutableMultimap",
+            CollKind::Map),
+        cd!("com/google/common/collect/ArrayListMultimap",
+            nested: ("map", "com/google/common/collect/ArrayListMultimap"),
+            CollKind::Map),
+        cd!("com/google/common/collect/HashMultimap",
+            nested: ("map", "com/google/common/collect/HashMultimap"),
+            CollKind::Set),
+        cd!("com/google/common/collect/LinkedHashMultimap",
+            nested: ("map", "com/google/common/collect/LinkedHashMultimap"),
+            CollKind::Map),
+        cd!("com/google/common/collect/TreeMultimap",
+            nested: ("map", "com/google/common/collect/TreeMultimap"),
+            CollKind::Map),
+        cd!("com/google/common/collect/HashBiMap",
+            size: ("size",           "com/google/common/collect/HashBiMap"),
+            arr:  ("hashTableKToV",  "com/google/common/collect/HashBiMap"),
+            CollKind::Map),
+    ]
+}
 
 /// Reference class names, indexed 0=soft, 1=weak, 2=phantom.
 static REF_CLASSES: [&str; 3] = [
@@ -304,14 +342,15 @@ fn walk_superchain<T>(
 }
 
 /// Walk `class_id`'s super-chain (child-first) and return the index of the
-/// FIRST COLL_DESC whose class_name matches a class in the chain, or None.
+/// FIRST CollDesc in `descs` whose class_name matches a class in the chain, or None.
 fn match_coll_desc(
     class_id: u64,
     class_map: &HashMap<u64, crate::pass1::ClassInfo>,
     strings: &HashMap<u64, String>,
+    descs: &[CollDesc],
 ) -> Option<usize> {
     walk_superchain(class_id, class_map, strings, |cname| {
-        COLL_DESCS.iter().position(|d| d.class_name == cname)
+        descs.iter().position(|d| d.class_name == cname)
     })
 }
 
@@ -334,6 +373,7 @@ fn classify(
     class_map: &HashMap<u64, crate::pass1::ClassInfo>,
     strings: &HashMap<u64, String>,
     obj_ref_width: usize,
+    descs: &[CollDesc],
 ) -> ClassRole {
     // References take priority (a Reference is never a collection).
     if let Some(kind_idx) = match_ref_kind(class_id, class_map, strings) {
@@ -353,12 +393,12 @@ fn classify(
         // referent field missing → cannot decode; treat as plain.
         return ClassRole::Plain;
     }
-    if let Some(desc_idx) = match_coll_desc(class_id, class_map, strings) {
-        let desc = &COLL_DESCS[desc_idx];
-        let size_off = desc.size_field.and_then(|(name, owner)| {
+    if let Some(desc_idx) = match_coll_desc(class_id, class_map, strings, descs) {
+        let desc = &descs[desc_idx];
+        let size_off = desc.size_field.as_ref().and_then(|(name, owner)| {
             field_offset(class_id, name, owner, class_map, strings, obj_ref_width)
         });
-        let array_off = desc.array_field.and_then(|(name, owner)| {
+        let array_off = desc.array_field.as_ref().and_then(|(name, owner)| {
             field_offset(class_id, name, owner, class_map, strings, obj_ref_width)
         });
         // Only track collections we can extract SOMETHING useful from (a size
@@ -729,6 +769,7 @@ pub(crate) fn build_field_decode_views(
     p1: &Pass1,
     shallow: &[u32],
     collect_attribution: bool,
+    descs: &[CollDesc],
 ) -> std::io::Result<FieldDecodeViews> {
     let id_size = p1.id_size;
     // Instance-blob object references are id_size wide (compressed OOPs only
@@ -781,7 +822,7 @@ pub(crate) fn build_field_decode_views(
     scan_all_instances(path, id_size, |addr, class_id, blob| {
         let role = role_cache
             .entry(class_id)
-            .or_insert_with(|| classify(class_id, class_map, strings, obj_ref_width))
+            .or_insert_with(|| classify(class_id, class_map, strings, obj_ref_width, descs))
             .clone();
         match role {
             ClassRole::Plain => {}
@@ -790,7 +831,7 @@ pub(crate) fn build_field_decode_views(
                 size_off,
                 array_off,
             } => {
-                let is_map = COLL_DESCS[desc_idx].kind == CollKind::Map;
+                let is_map = descs[desc_idx].kind == CollKind::Map;
                 // Shallow size of THIS collection instance (precomputed vec).
                 let coll_shallow = p1
                     .id_map
@@ -1395,14 +1436,15 @@ mod tests {
     #[test]
     fn resolves_hashmap_offsets() {
         let (class_map, strings) = fixture();
-        let role = classify(0x20, &class_map, &strings, 8);
+        let descs = builtin_coll_descs();
+        let role = classify(0x20, &class_map, &strings, 8, &descs);
         match role {
             ClassRole::Collection {
                 size_off,
                 array_off,
                 desc_idx,
             } => {
-                assert_eq!(COLL_DESCS[desc_idx].class_name, "java/util/HashMap");
+                assert_eq!(descs[desc_idx].class_name, "java/util/HashMap");
                 // size Int at offset 0; table Object at offset 4.
                 assert_eq!(size_off, Some((0, HprofType::Int)));
                 assert_eq!(array_off, Some((4, HprofType::Object)));
@@ -1414,14 +1456,15 @@ mod tests {
     #[test]
     fn resolves_arraylist_offsets() {
         let (class_map, strings) = fixture();
-        let role = classify(0x30, &class_map, &strings, 8);
+        let descs = builtin_coll_descs();
+        let role = classify(0x30, &class_map, &strings, 8, &descs);
         match role {
             ClassRole::Collection {
                 size_off,
                 array_off,
                 desc_idx,
             } => {
-                assert_eq!(COLL_DESCS[desc_idx].class_name, "java/util/ArrayList");
+                assert_eq!(descs[desc_idx].class_name, "java/util/ArrayList");
                 assert_eq!(size_off, Some((0, HprofType::Int)));
                 assert_eq!(array_off, Some((4, HprofType::Object)));
             }
@@ -1432,16 +1475,17 @@ mod tests {
     #[test]
     fn subclass_resolves_via_super_chain() {
         let (class_map, strings) = fixture();
-        // MyList (0x40) is not itself in COLL_DESCS, but its super ArrayList is.
-        let role = classify(0x40, &class_map, &strings, 8);
+        let descs = builtin_coll_descs();
+        // MyList (0x40) is not itself in descs, but its super ArrayList is.
+        let role = classify(0x40, &class_map, &strings, 8, &descs);
         match role {
             ClassRole::Collection {
                 size_off,
                 array_off,
                 desc_idx,
             } => {
-                assert_eq!(COLL_DESCS[desc_idx].class_name, "java/util/ArrayList");
-                assert_eq!(COLL_DESCS[desc_idx].kind, CollKind::List);
+                assert_eq!(descs[desc_idx].class_name, "java/util/ArrayList");
+                assert_eq!(descs[desc_idx].kind, CollKind::List);
                 // MyList lays out its own `extra`(Int, off 0) first, then the
                 // inherited ArrayList fields: size(Int) at 4, elementData at 8.
                 assert_eq!(size_off, Some((4, HprofType::Int)));
@@ -1481,7 +1525,8 @@ mod tests {
 
     #[test]
     fn new_descriptors_match_by_name() {
-        // COLL_DESCS carries the Eclipse/Trove rows with the expected kinds.
+        // builtin_coll_descs() carries the Eclipse/Trove rows with the expected kinds.
+        let descs = builtin_coll_descs();
         for (name, kind) in [
             (
                 "org/eclipse/collections/impl/list/mutable/FastList",
@@ -1499,11 +1544,11 @@ mod tests {
             ("gnu/trove/set/hash/THashSet", CollKind::Set),
             ("gnu/trove/map/hash/TIntObjectHashMap", CollKind::Map),
         ] {
-            let idx = COLL_DESCS
+            let idx = descs
                 .iter()
                 .position(|d| d.class_name == name)
-                .unwrap_or_else(|| panic!("{name} missing from COLL_DESCS"));
-            assert_eq!(COLL_DESCS[idx].kind, kind, "{name} kind");
+                .unwrap_or_else(|| panic!("{name} missing from builtin_coll_descs()"));
+            assert_eq!(descs[idx].kind, kind, "{name} kind");
         }
     }
 

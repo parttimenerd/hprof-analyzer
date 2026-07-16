@@ -511,7 +511,7 @@ impl Pass2 {
             fd_referent_idx,
             fd_attribution_raw,
             fd_attribution_trunc,
-        ) = fielddecode::build_field_decode_views(path, &p1, &shallow, opts.collections)?;
+        ) = fielddecode::build_field_decode_views(path, &p1, &shallow, opts.collections, &fielddecode::builtin_coll_descs())?;
 
         // class_map + strings are no longer needed; free before the large edge
         // arrays get allocated in Phase 3/4 to lower peak RSS. The STACK_FRAME/
