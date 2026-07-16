@@ -70,10 +70,21 @@ impl ChunkU32 {
     /// Free every chunk whose slots are entirely below `boundary` (exclusive).
     /// Idempotent: already-freed chunks stay empty. Call as the Phase-4 read
     /// cursor advances so consumed backing memory is returned promptly.
+    /// Uses MADV_FREE to advise the OS to reclaim physical pages immediately,
+    /// preventing jemalloc's free list from holding freed pages in RSS.
     pub fn free_below(&mut self, boundary: usize) {
         let last_chunk = boundary >> CHUNK_LOG; // chunks strictly before this are fully consumed
         for c in 0..last_chunk {
             if !self.chunks[c].is_empty() {
+                #[cfg(target_os = "linux")]
+                {
+                    let chunk = &self.chunks[c];
+                    let ptr = chunk.as_ptr() as *mut libc::c_void;
+                    let len = chunk.len() * std::mem::size_of::<u32>();
+                    // MADV_DONTNEED: immediately returns pages to OS, reducing RSS
+                    // before jemalloc's free list delays the reclaim.
+                    unsafe { libc::madvise(ptr, len, libc::MADV_DONTNEED); }
+                }
                 self.chunks[c] = Vec::new();
             }
         }
