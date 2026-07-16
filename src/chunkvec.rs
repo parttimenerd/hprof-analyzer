@@ -60,6 +60,32 @@ impl ChunkU32 {
         self.chunks[c][o] = val;
     }
 
+    /// Issue a T0 prefetch for the slot at `idx` without reading or writing it.
+    /// Call this well before `set(idx, ...)` to hide DRAM latency on the write.
+    #[inline(always)]
+    pub fn prefetch_set(&self, idx: usize) {
+        let c = idx >> CHUNK_LOG;
+        let o = idx & CHUNK_MASK;
+        if c < self.chunks.len() {
+            let chunk = &self.chunks[c];
+            if o < chunk.len() {
+                unsafe {
+                    let ptr = chunk.as_ptr().add(o) as *const i8;
+                    #[cfg(target_arch = "x86_64")]
+                    core::arch::x86_64::_mm_prefetch::<
+                        { core::arch::x86_64::_MM_HINT_T0 },
+                    >(ptr);
+                    #[cfg(target_arch = "aarch64")]
+                    core::arch::asm!(
+                        "prfm pldl1keep, [{p}]",
+                        p = in(reg) ptr,
+                        options(nostack, readonly)
+                    );
+                }
+            }
+        }
+    }
+
     /// Get the value at `idx`.
     #[inline(always)]
     pub fn get(&self, idx: usize) -> u32 {

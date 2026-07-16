@@ -487,7 +487,10 @@ impl InboundBuilder {
         // this global scheme covers every target regardless of per-node degree.
         // TPF_GLOBAL=64: each in_cursors[dst] read touches a random 4-byte slot in
         // the ~2 GB in_cursors array; 64 entries ahead hides ~100 ns DRAM latency.
+        // TPF2=32: two-level prefetch — once in_cursors[dst_mid] is warm (from the
+        // level-1 prefetch 32 iters ago), read it to prefetch the inb_flat write slot.
         const TPF_GLOBAL: usize = 64;
+        const TPF2: usize = 32; // second level: prefetch inb_flat[in_cursors[tgt[k+TPF2]]]
         let total_fwd_edges = fwd_offsets[n_nodes] as usize;
         let ic_len = in_cursors.len();
         let ic_ptr = in_cursors.as_ptr();
@@ -563,6 +566,17 @@ impl InboundBuilder {
                                 p = in(reg) ptr,
                                 options(nostack, readonly)
                             );
+                        }
+                    }
+                    // Level 2: pf_tgt_pos - TPF2 was prefetched TPF2 iters ago so
+                    // in_cursors[tgt[pf_tgt_pos-TPF2]] is now warm in L1/L2.
+                    // Read it to prefetch the inb_flat write destination.
+                    if pf_tgt_pos >= TPF2 {
+                        let mid_flat = pf_tgt_pos - TPF2;
+                        let mid_dst = fwd_targets.get(mid_flat) as usize;
+                        if mid_dst < ic_len {
+                            let inb_slot = unsafe { *ic_ptr.add(mid_dst) } as usize;
+                            inb_flat.prefetch_set(inb_slot);
                         }
                     }
                     pf_tgt_pos += 1;
