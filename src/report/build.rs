@@ -91,7 +91,55 @@ pub fn build_model(
         collections: g.collections.clone(),
         references,
         collection_attribution: build_collection_attribution(g),
-        leak_indicators: Default::default(),
+        leak_indicators: build_leak_indicators(g),
+    }
+}
+
+fn is_anonymous_class(name: &str) -> bool {
+    // $<digits-only> — anonymous inner class (e.g. Foo$1, Bar$23)
+    if let Some(pos) = name.rfind('$') {
+        let after = &name[pos + 1..];
+        if !after.is_empty() && after.chars().all(|c| c.is_ascii_digit()) {
+            return true;
+        }
+    }
+    // Lambda, cglib anon, and reflection proxy patterns
+    name.contains("$$Lambda$") || name.contains("$$Anon") || name.contains("$Proxy")
+}
+
+fn build_leak_indicators(g: &Graph) -> LeakIndicators {
+    // 1. Anonymous/generated class count — one entry per distinct class in class_names.
+    let anonymous_class_count = g.class_names.iter()
+        .filter(|n| is_anonymous_class(n))
+        .count() as u64;
+
+    // 2. ThreadLocalMap$Entry null-key count.
+    // A cleared referent means the entry has no forward edges to a live non-zero object.
+    // Excluded (weak-ref) edges are high-bit tagged (0x8000_0000); we mask to get the index.
+    let tl_suffix = "ThreadLocal$ThreadLocalMap$Entry";
+    let n_nodes = g.fwd_offsets.len().saturating_sub(1);
+    let mut thread_local_null_key_count: u64 = 0;
+    for i in 0..n_nodes {
+        let ci = g.class_idx[i] as usize;
+        if ci >= g.class_names.len() { continue; }
+        if !g.class_names[ci].ends_with(tl_suffix) { continue; }
+        let start = g.fwd_offsets[i] as usize;
+        let end = g.fwd_offsets[i + 1] as usize;
+        let has_live_referent = g.fwd_targets[start..end]
+            .iter()
+            .any(|&t| (t & 0x7FFF_FFFF) != 0);
+        if !has_live_referent {
+            thread_local_null_key_count += 1;
+        }
+    }
+
+    // 3. DirectByteBuffer capacity sum — already computed in pass2.
+    let direct_byte_buffer_capacity_sum = g.direct_byte_buffer_capacity_sum;
+
+    LeakIndicators {
+        anonymous_class_count,
+        thread_local_null_key_count,
+        direct_byte_buffer_capacity_sum,
     }
 }
 
@@ -2412,5 +2460,22 @@ mod attribution_tests {
         let ca = aggregate_collection_attribution(&raw, &retained, false);
         assert_eq!(ca.most_overall[0].total_retained, 0);
         assert_eq!(ca.biggest_single[0].retained, 0);
+    }
+}
+
+#[cfg(test)]
+mod leak_indicator_tests {
+    use super::*;
+
+    #[test]
+    fn anonymous_class_patterns() {
+        // These should match:
+        assert!(is_anonymous_class("com/example/Foo$1"));           // anon inner
+        assert!(is_anonymous_class("com/example/Foo$$Lambda$42/0x1234")); // lambda
+        assert!(is_anonymous_class("com/example/Foo$Proxy1"));      // proxy
+        assert!(is_anonymous_class("com/example/$$Anon"));          // anon
+        // These should NOT match:
+        assert!(!is_anonymous_class("com/example/Foo$Bar"));        // named inner
+        assert!(!is_anonymous_class("java/lang/String"));           // plain class
     }
 }
