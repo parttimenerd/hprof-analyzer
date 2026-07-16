@@ -10,7 +10,11 @@ REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 BIN="$REPO/target/release/hprof-analyzer"
 FIXTURE="$REPO/tests/fixtures/dump_4_philosophers.hprof"
 
-# Generate a fresh HTML report if none given.
+TMPDIR_SMOKE=""
+TMPDIR_TEST=""
+trap 'rm -rf "$TMPDIR_TEST" "${TMPDIR_SMOKE:-}"' EXIT
+
+# Generate a fresh HTML report if none given; resolve relative paths to absolute.
 HTML="${1:-}"
 if [[ -z "$HTML" ]]; then
   TMPDIR_SMOKE="$(mktemp -d)"
@@ -18,6 +22,8 @@ if [[ -z "$HTML" ]]; then
   echo "Generating HTML report from $FIXTURE..."
   "$BIN" "$FIXTURE" "$HTML"
   echo "Report written to $HTML"
+elif [[ "$HTML" != /* ]]; then
+  HTML="$(cd "$(dirname "$HTML")" && pwd)/$(basename "$HTML")"
 fi
 
 # Set up a local playwright runner directory with @playwright/test installed.
@@ -59,7 +65,7 @@ test.beforeAll(async () => {
   baseUrl = `http://127.0.0.1:${addr.port}/`;
 });
 
-test.afterAll(() => server.close());
+test.afterAll(() => new Promise<void>(resolve => server.close(() => resolve())));
 
 test('page title contains "Heap Dump Analysis"', async ({ page }) => {
   await page.goto(baseUrl);
