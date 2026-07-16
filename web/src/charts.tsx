@@ -91,7 +91,7 @@ function Pie({ data, fmt, donut, titles, onSlice }: { data: Slice[]; fmt: (n: nu
 }
 
 // ── Horizontal bar ──────────────────────────────────────────────────────────
-function HBar({ data, fmt, barColor, titles, onBar }: { data: Slice[]; fmt: (n: number) => string; barColor?: number; titles?: string[]; onBar?: (i: number) => void; labelWidth?: number }) {
+function HBar({ data, fmt, barColor, titles, onBar }: { data: Slice[]; fmt: (n: number) => string; barColor?: number; titles?: string[]; onBar?: (i: number) => void }) {
   const max = data.reduce((m, d) => Math.max(m, d.value), 0);
   if (max <= 0) return null;
   const t = themeColors();
