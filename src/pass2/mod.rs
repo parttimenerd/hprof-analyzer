@@ -573,8 +573,19 @@ impl Pass2 {
                                 in_degree[dst] += 1;
                             }
                         }
-                        for chunk in elem_bytes.chunks_exact(deg_ids as usize) {
-                            let ref_val = read_id(chunk, id_size);
+                        // Prefetch id_map slots for element refs PF_ELEM ahead.
+                        // Element addresses are unique so IndexCache can't help.
+                        const PF_ELEM_2A: usize = 16;
+                        let ids_us2 = deg_ids as usize;
+                        let total_e = elem_bytes.len() / ids_us2;
+                        for ke in 0..total_e {
+                            if ke + PF_ELEM_2A < total_e {
+                                let pf_ref = read_id(&elem_bytes[(ke + PF_ELEM_2A) * ids_us2..], id_size);
+                                if pf_ref != 0 {
+                                    p1.id_map.prefetch_index_of(pf_ref);
+                                }
+                            }
+                            let ref_val = read_id(&elem_bytes[ke * ids_us2..], id_size);
                             if ref_val != 0 {
                                 if let Some(dst) = deg_idx_cache.index_of(&p1.id_map, ref_val) {
                                     out_degree[src_idx] += 1;
