@@ -794,17 +794,26 @@ type FieldDecodeViews = (
     u64, // direct_byte_buffer_capacity_sum
 );
 
-/// Compute the collection/array/reference views in exactly THREE full-file
-/// scans. Returns `(collections, references, reference_referent_idx)`; the
-/// caller computes `only_weakly_retained` later from the referent indices +
-/// `idom`. Must run while `p1.class_map` / `p1.strings` are still alive.
-pub(crate) fn build_field_decode_views(
+/// Compute the collection/array/reference views in ONE full-file scan, and
+/// optionally co-dispatch each record to a caller-supplied hook (used to fuse
+/// the pass-2a degree-count scan into the same file read). Returns
+/// `(collections, references, reference_referent_idx)`; the caller computes
+/// `only_weakly_retained` later from the referent indices + `idom`. Must run
+/// while `p1.class_map` / `p1.strings` are still alive.
+///
+/// `extra_hook` receives every `Record` BEFORE the field-decode processing;
+/// pass a no-op closure when no fused scan is needed.
+pub(crate) fn build_field_decode_views<H>(
     path: &str,
     p1: &Pass1,
     shallow: &[u32],
     collect_attribution: bool,
     descs: &[CollDesc],
-) -> std::io::Result<FieldDecodeViews> {
+    mut extra_hook: H,
+) -> std::io::Result<FieldDecodeViews>
+where
+    H: FnMut(Record<'_>),
+{
     let id_size = p1.id_size;
     // Instance-blob object references are id_size wide (compressed OOPs only
     // narrows object-ARRAY elements). Both instance fields and obj-array
@@ -909,7 +918,17 @@ pub(crate) fn build_field_decode_views(
     // state (the only cross-record dependency, `wanted_arrays`, is resolved in a
     // post-pass loop). Only one record's bytes are resident at a time, so peak
     // RSS is unchanged.
-    scan_all_records(path, id_size, |rec| match rec {
+    scan_all_records(path, id_size, |rec| {
+        // Co-dispatch to the fused caller hook (e.g. 2a degree counting) BEFORE
+        // field-decode processing. All Record fields are Copy so the fields can
+        // be used again below after this call.
+        match rec {
+            Record::Instance(addr, class_id, blob) => extra_hook(Record::Instance(addr, class_id, blob)),
+            Record::PrimArray(addr, et, cnt, bytes) => extra_hook(Record::PrimArray(addr, et, cnt, bytes)),
+            Record::ObjArray(addr, acid, cnt, elems) => extra_hook(Record::ObjArray(addr, acid, cnt, elems)),
+            Record::ClassDump(ca, si, li, srefs) => extra_hook(Record::ClassDump(ca, si, li, srefs)),
+        }
+        match rec {
         // ── on_instance: every INSTANCE_DUMP ──────────────────────────────────
         Record::Instance(addr, class_id, blob) => {
             // ── DirectByteBuffer capacity accumulation ────────────────────────
@@ -1208,6 +1227,9 @@ pub(crate) fn build_field_decode_views(
             // per-array data now; fold after the single scan completes.
             obj_array_raw.push((addr, non_null, count));
         }
+        // ── ClassDump: no field-decode work ───────────────────────────────────
+        Record::ClassDump(..) => {}
+        } // end match rec
     })?;
 
     // ── Post-pass fold: tracked-collection fill (#9) + map-collision (#13) ─────

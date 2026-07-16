@@ -315,27 +315,29 @@ pub(crate) enum Record<'a> {
     PrimArray(u64, u8, u64, &'a [u8]),
     /// OBJ_ARRAY_DUMP: `(addr, array_class_id, count, &elem_ref_bytes)`.
     ObjArray(u64, u64, u64, &'a [u8]),
+    /// CLASS_DUMP: `(class_obj_addr, super_id, loader_id, &static_obj_refs)`.
+    /// `static_obj_refs` contains the addresses of all Object-typed static fields.
+    ClassDump(u64, u64, u64, &'a [u64]),
 }
 
 /// Single full-file sequential scan over all heap object records. For every
-/// INSTANCE_DUMP / PRIM_ARRAY_DUMP / OBJ_ARRAY_DUMP sub-record it invokes `f`
-/// once with the matching [`Record`] variant. Fuses what were three separate
-/// full-file scans (instances, primitive arrays, object arrays) into ONE read.
+/// INSTANCE_DUMP / PRIM_ARRAY_DUMP / OBJ_ARRAY_DUMP / CLASS_DUMP sub-record it
+/// invokes `f` once with the matching [`Record`] variant. Fuses what were
+/// separate full-file scans (instances, primitive arrays, object arrays) into
+/// ONE read, and also delivers class-dump structural data for edge counting.
 ///
-/// A single callback (rather than three) is deliberate: the three fused scan
-/// bodies mutate overlapping accumulator state, and three separate `FnMut`
-/// arguments cannot each hold a `&mut` to the same variable at once.
+/// A single callback (rather than separate ones) is deliberate: the fused scan
+/// bodies mutate overlapping accumulator state, and separate `FnMut` arguments
+/// cannot each hold a `&mut` to the same variable at once.
 ///
-/// The skip skeleton + byte accounting are identical to the three single-record
-/// scanners; only ONE record's bytes are materialized at a time (three separate
-/// reused scratch buffers, each holding one record), so peak RSS is unchanged
-/// versus running the three scans back-to-back — but the file is read ONCE
-/// instead of three times.
+/// The skip skeleton + byte accounting are identical to the separate scanners;
+/// only ONE record's bytes are materialized at a time (separate reused scratch
+/// buffers), so peak RSS is unchanged versus running the scans back-to-back —
+/// but the file is read ONCE instead of multiple times.
 ///
 /// Callers that have a cross-record ordering dependency (e.g. an obj-array whose
 /// owning collection instance may appear later in the file) must NOT resolve it
-/// inline here; collect the raw per-record data and resolve it in a cheap
-/// in-memory post-pass. HPROF gives no record-ordering guarantee.
+/// inline here; collect the raw per-record data and resolve in a post-pass.
 pub(crate) fn scan_all_records<F>(path: &str, id_size: u8, mut f: F) -> io::Result<()>
 where
     F: FnMut(Record<'_>),
@@ -346,6 +348,8 @@ where
     let mut inst_scratch: Vec<u8> = Vec::with_capacity(256);
     let mut prim_scratch: Vec<u8> = Vec::with_capacity(256);
     let mut obj_scratch: Vec<u8> = Vec::with_capacity(256);
+    // Reused scratch for class-dump static Object refs (bounded per class).
+    let mut static_obj_refs: Vec<u64> = Vec::with_capacity(32);
     loop {
         let tag = match r.u1() {
             Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
@@ -381,8 +385,43 @@ where
                             remaining -= 4 + ids;
                         }
                         heap::CLASS_DUMP => {
-                            let consumed = skip_class_dump(&mut r, id_size)?;
+                            let class_addr = r.id()?;
+                            r.skip(4)?; // stack serial
+                            let super_id = r.id()?;
+                            let loader_id = r.id()?;
+                            r.skip(ids * 4 + 4)?; // signer, protdomain, r1, r2, instance_size
+                            let mut consumed = ids + 4 + ids + ids + ids * 4 + 4;
+                            // Constant pool: skip.
+                            let cp = r.u2()? as u64;
+                            consumed += 2;
+                            for _ in 0..cp {
+                                r.skip(2)?;
+                                let tp = r.u1()?;
+                                let vs = value_size(tp, id_size);
+                                r.skip(vs)?;
+                                consumed += 2 + 1 + vs;
+                            }
+                            // Static fields: collect Object-typed ref values.
+                            static_obj_refs.clear();
+                            let sc = r.u2()? as u64;
+                            consumed += 2;
+                            for _ in 0..sc {
+                                r.skip(ids)?; // name_id
+                                let tp = r.u1()?;
+                                let vs = value_size(tp, id_size);
+                                consumed += ids + 1 + vs;
+                                if tp == 2 {
+                                    static_obj_refs.push(r.id()?);
+                                } else {
+                                    r.skip(vs)?;
+                                }
+                            }
+                            // Instance fields: skip.
+                            let ic = r.u2()? as u64;
+                            consumed += 2 + ic * (ids + 1);
+                            r.skip(ic * (ids + 1))?;
                             remaining -= consumed;
+                            f(Record::ClassDump(class_addr, super_id, loader_id, &static_obj_refs));
                         }
                         heap::INSTANCE_DUMP => {
                             let addr = r.id()?;
