@@ -1,5 +1,5 @@
 import React from "react";
-import type { AllocSites, ArraysBySize, ClassRow, CollectionAttribution, CollectionsAnalysis, DomTreeNode, DominatorAnalysis, FillRatioBucket, HistRow, LeakIndicators, MergedPathNode, ObjRow, PackageNode, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalObj, TopArrays, TopComponents, UnreachableClassRow } from "./types";
+import type { AllocSites, ArraysBySize, ClassRow, CollectionAttribution, CollectionsAnalysis, Component, DomTreeNode, DominatorAnalysis, FillRatioBucket, HistRow, LeakIndicators, MergedPathNode, ObjRow, PackageNode, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalObj, TopArrays, TopComponents, UnreachableClassRow } from "./types";
 import { fmtCount, fmtExactBytes, formatBytes, formatEpochMs, pctOf, shortLoader } from "./format";
 import {
   CompositionStackedBar,
@@ -498,7 +498,7 @@ function RecordCensusSection({ report }: { report: Report }) {
   return (
     <section id="record-census">
       <h2>HPROF Record Census</h2>
-      <p className="subtitle" style={{ color: "var(--muted)" }}>
+      <p className="subtitle">
         Raw HPROF record-type composition of the dump (pass-1 counts); additive, not parity-compared.
       </p>
       <table>
@@ -549,7 +549,7 @@ function SizeDistributionSection({ report }: { report: Report }) {
   return (
     <section id="size-distribution">
       <h2>Top-Dominator Size Distribution</h2>
-      <p className="subtitle" style={{ color: "var(--muted)" }}>
+      <p className="subtitle">
         Retained-size spread across all {fmtCount(d.count)} top-level dominators (the biggest memory contributors).
       </p>
       <ul>
@@ -585,7 +585,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
     return (
       <section id="duplicate-strings">
         <h2>Duplicate Strings (approximate)</h2>
-        <p className="subtitle" style={{ color: "var(--muted)" }}>
+        <p className="subtitle">
           Duplicate-string analysis not run (pass <code>--dup-strings</code>).
         </p>
       </section>
@@ -595,7 +595,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
   return (
     <section id="duplicate-strings">
       <h2>Duplicate Strings (approximate)</h2>
-      <p className="subtitle" style={{ color: "var(--muted)" }}>
+      <p className="subtitle">
         Opt-in (--dup-strings): each java.lang.String value hashed to 64 bits; collisions accepted as approximation.
       </p>
       <ul>
@@ -660,7 +660,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
       {d.length_histogram.length > 0 && (
         <>
           <h3>String Length Distribution</h3>
-          <p className="subtitle" style={{ color: "var(--muted)" }}>
+          <p className="subtitle">
             Distinct-value lengths (bytes): min {fmtCount(d.length_stats.min)}, median {fmtCount(d.length_stats.median)},
             max {fmtCount(d.length_stats.max)}; total {formatBytes(d.length_stats.total)}.
           </p>
@@ -686,7 +686,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
       {d.top_string_holders.length > 0 && (
         <>
           <h3>Classes Holding the Most Strings</h3>
-          <p className="subtitle" style={{ color: "var(--muted)" }}>
+          <p className="subtitle">
             Number of java.lang.String instances referenced by each class's instances.
           </p>
           <table>
@@ -711,7 +711,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
       {w && (
         <>
           <h3>Char[] Waste</h3>
-          <p className="subtitle" style={{ color: "var(--muted)" }}>
+          <p className="subtitle">
             {fmtCount(w.arrays_examined)} arrays examined, {fmtCount(w.wasteful_arrays)} wasteful,{" "}
             {formatBytes(w.total_wasted_bytes)} total wasted.
           </p>
@@ -1661,43 +1661,58 @@ function ThreadsSection({ report }: { report: Report }) {
 // ── Top Components ─────────────────────────────────────────────────────────────
 // Retained heap grouped by class loader (component), mirroring Eclipse MAT's
 // Top Components view. Mirrors render_md.rs::render_top_components.
+type ComponentKey = "retained" | "pct";
+const COMPONENT_COLS: { key: ComponentKey; label: string }[] = [
+  { key: "retained", label: "Retained" },
+  { key: "pct", label: "% Heap" },
+];
+
 function TopComponentsSection({ data }: { data: TopComponents }) {
   if (!data?.components?.length) return null;
+  const [sortKey, setSortKey] = React.useState<ComponentKey>("retained");
+  const sorted = React.useMemo(
+    () => [...data.components].sort((a, b) => b[sortKey] - a[sortKey]),
+    [data.components, sortKey],
+  );
   return (
     <section id="top-components">
       <h2>Top Components</h2>
       <p className="subtitle">
         Retained heap grouped by class loader (component); % Heap is the share of total reachable heap.
       </p>
-      <table>
-        <thead>
-          <tr>
-            <th>Component</th>
-            <th className="num">Retained</th>
-            <th className="num">% Heap</th>
-            <th>Top classes</th>
-          </tr>
-        </thead>
-        <tbody>
-          {data.components.map((c, i) => (
-            <tr key={i}>
-              <td>
-                <code>{c.loader_label}</code>
-              </td>
-              <td className="num">{formatBytes(c.retained)}</td>
-              <td className="num">{c.pct.toFixed(1)}%</td>
-              <td>
-                {c.top_classes.map((cc, j) => (
-                  <span key={j}>
-                    {j > 0 ? ", " : ""}
-                    <code>{cc.pretty_class}</code> ({formatBytes(cc.retained)})
-                  </span>
-                ))}
-              </td>
+      <details open>
+        <summary>Components by retained heap ({fmtCount(data.components.length)} rows)</summary>
+        <table>
+          <thead>
+            <tr>
+              <th>Component</th>
+              {COMPONENT_COLS.map((c) => (
+                <SortableTh<Component> key={c.key} label={c.label} colKey={c.key} sortKey={sortKey} setSortKey={setSortKey} />
+              ))}
+              <th>Top classes</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {sorted.map((c, i) => (
+              <tr key={i}>
+                <td>
+                  <code>{c.loader_label}</code>
+                </td>
+                <td className="num">{formatBytes(c.retained)}</td>
+                <td className="num">{c.pct.toFixed(1)}%</td>
+                <td>
+                  {c.top_classes.map((cc, j) => (
+                    <span key={j}>
+                      {j > 0 ? ", " : ""}
+                      <code>{cc.pretty_class}</code> ({formatBytes(cc.retained)})
+                    </span>
+                  ))}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </details>
     </section>
   );
 }
@@ -2235,8 +2250,16 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
 // ── Unreachable Objects ─────────────────────────────────────────────────────
 // Per-class histogram of objects not dominated by the virtual root
 // (idom == u32::MAX). Always-on; mirrors render_md.rs::render_unreachable_histogram.
+type UnreachableKey = "objects" | "shallow";
+const UNREACHABLE_COLS: { key: UnreachableKey; label: string }[] = [
+  { key: "objects", label: "Objects" },
+  { key: "shallow", label: "Shallow" },
+];
+
 function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
   const rows: UnreachableClassRow[] = data?.unreachable_histogram ?? [];
+  const [sortKey, setSortKey] = React.useState<UnreachableKey>("shallow");
+  const sorted = React.useMemo(() => [...rows].sort((a, b) => b[sortKey] - a[sortKey]), [rows, sortKey]);
   return (
     <section id="unreachable-objects">
       <h2>Unreachable Objects</h2>
@@ -2246,26 +2269,30 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
         <>
           <p className="subtitle">
             {fmtCount(data?.unreachable_count ?? 0)} unreachable objects retaining{" "}
-            {formatBytes(data?.unreachable_shallow ?? 0)} shallow (top 30 classes by shallow).
+            {formatBytes(data?.unreachable_shallow ?? 0)} shallow (top {fmtCount(rows.length)} classes by shallow).
           </p>
-          <table>
-            <thead>
-              <tr>
-                <th>Class</th>
-                <th className="num">Objects</th>
-                <th className="num">Shallow</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r, i) => (
-                <tr key={i}>
-                  <td><code>{r.pretty_class}</code></td>
-                  <td className="num">{fmtCount(r.objects)}</td>
-                  <td className="num">{formatBytes(r.shallow)}</td>
+          <details open>
+            <summary>Unreachable objects by class ({fmtCount(rows.length)} rows)</summary>
+            <table>
+              <thead>
+                <tr>
+                  <th>Class</th>
+                  {UNREACHABLE_COLS.map((c) => (
+                    <SortableTh<UnreachableClassRow> key={c.key} label={c.label} colKey={c.key} sortKey={sortKey} setSortKey={setSortKey} />
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {sorted.map((r, i) => (
+                  <tr key={i}>
+                    <td><code>{r.pretty_class}</code></td>
+                    <td className="num">{fmtCount(r.objects)}</td>
+                    <td className="num">{formatBytes(r.shallow)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </details>
         </>
       )}
     </section>
@@ -2281,7 +2308,7 @@ function AllocSitesSection({ data }: { data: AllocSites }) {
       <h2>Allocation Sites</h2>
       <p className="subtitle">Objects grouped by the stack trace that allocated them.</p>
       {!data.traces_present ? (
-        <p className="subtitle" style={{ color: "var(--muted)" }}>
+        <p className="subtitle">
           Allocation tracking was off in this dump (stack_trace_serial = 0); no allocation sites available.
         </p>
       ) : (
