@@ -208,6 +208,23 @@ fn decode_checked(buf: &[u8], pos: usize) -> Option<(u32, usize)> {
     Some((v, c))
 }
 
+/// Bounds-checked vbyte skip: advance `pos` past one vbyte without decoding
+/// the value. Returns the new `pos`, or `None` on out-of-bounds. Faster than
+/// `decode_checked` when the value is not needed (skip loop in Phase 1).
+#[inline]
+fn skip_checked(buf: &[u8], mut pos: usize) -> Option<usize> {
+    loop {
+        if pos >= buf.len() {
+            return None;
+        }
+        let b = buf[pos];
+        pos += 1;
+        if b & 0x80 == 0 {
+            return Some(pos);
+        }
+    }
+}
+
 /// Run Phase 1 (semidominator computation) over the reverse pre-order.
 /// Decodes each node's predecessor list from the blocked CSR (or, when
 /// `exact_offsets` is Some, from an exact per-node byte-offset table that
@@ -248,17 +265,18 @@ fn phase1(
             let block = w_node / crate::pass2::INB_BLOCK;
             let mut p = inb_block_off[block] as usize;
             for _ in (block * crate::pass2::INB_BLOCK)..w_node {
+                // Decode the count (needed to know how many deltas to skip).
                 let (cnt, c0) = decode_checked(inb_data, p).ok_or(DesyncErr {
                     at: i,
                     why: "skip count ran off end",
                 })?;
                 p += c0;
+                // Skip each delta without decoding — just advance past the bytes.
                 for _ in 0..cnt {
-                    let (_, c1) = decode_checked(inb_data, p).ok_or(DesyncErr {
+                    p = skip_checked(inb_data, p).ok_or(DesyncErr {
                         at: i,
                         why: "skip delta ran off end",
                     })?;
-                    p += c1;
                 }
             }
             p
