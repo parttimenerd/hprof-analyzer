@@ -13,8 +13,10 @@ use super::Pass2;
 /// Each node's predecessor slice is count-prefixed so it is self-delimiting;
 /// dominator Phase-1 seeks to the block start then scans-skips to node w.
 /// Trades ~K/2 extra vbyte skips per lookup for dropping the full per-node
-/// offset array (n+1 u32 = ~2GB) down to (n/K) u32.
-pub const INB_BLOCK: usize = 16;
+/// offset array (n+1 u64 = ~4GB) down to (n/K) u64.
+/// At K=8: block table ~514MB (514M nodes × 8B / 8); avg skip = 3.5 nodes.
+/// Reduced from K=16 (avg skip 7.5) to halve dominator Phase-1 CSR seek cost.
+pub const INB_BLOCK: usize = 8;
 
 // ── Graph output struct ────────────────────────────────────────────────────
 
