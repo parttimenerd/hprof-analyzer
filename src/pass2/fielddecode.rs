@@ -54,12 +54,26 @@ pub(crate) enum CollKind {
     List,
     Map,
     Set,
-    #[allow(dead_code)]
     Deque,
-    #[allow(dead_code)]
     Queue,
-    #[allow(dead_code)]
     Tree,
+}
+
+impl CollKind {
+    /// Container-kind discriminant used in [`ContainerRecord::kind`] /
+    /// `AttributionRaw::container_kind` (0=List..5=Tree; 6/7 reserved for
+    /// object/primitive arrays). Widening the value space here does NOT touch
+    /// the serialized schema.
+    fn discriminant(self) -> u8 {
+        match self {
+            CollKind::List => 0,
+            CollKind::Map => 1,
+            CollKind::Set => 2,
+            CollKind::Deque => 3,
+            CollKind::Queue => 4,
+            CollKind::Tree => 5,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -642,7 +656,8 @@ struct HolderEdge {
 
 /// A container (collection/obj-array/prim-array) seen under `--collections`,
 /// keyed by its address; carries its dense object index + element count + kind
-/// (0=collection, 1=object array, 2=primitive array) + resolved class name.
+/// (0=List,1=Map,2=Set,3=Deque,4=Queue,5=Tree,6=object array,7=primitive array)
+/// + resolved class name.
 struct ContainerRecord {
     container_idx: u32,
     elements: u64,
@@ -916,8 +931,9 @@ pub(crate) fn build_field_decode_views(
                             map_total += 1;
                         }
                     }
-                    // Attribution: record this collection as a container (kind 0).
-                    // elements = the read size (0 when the collection has no plain
+                    // Attribution: record this collection as a container (kind
+                    // = its CollKind discriminant, 0=List..5=Tree). elements =
+                    // the read size (0 when the collection has no plain
                     // size field, e.g. ConcurrentHashMap — documented limitation).
                     if collect_attribution {
                         if let Some(cidx) = p1.id_map.index_of(addr) {
@@ -927,7 +943,7 @@ pub(crate) fn build_field_decode_views(
                                     ContainerRecord {
                                         container_idx: cidx as u32,
                                         elements: size.unwrap_or(0),
-                                        kind: 0,
+                                        kind: descs[desc_idx].kind.discriminant(),
                                         container_class: pretty_name(class_id, p1),
                                     },
                                 );
@@ -1047,7 +1063,7 @@ pub(crate) fn build_field_decode_views(
             if idx != u32::MAX {
                 top_prim.add(idx, elem_type as u64, count, sh);
             }
-            // Attribution: record this primitive array as a container (kind 2).
+            // Attribution: record this primitive array as a container (kind 7).
             if collect_attribution && idx != u32::MAX {
                 if container_records.len() < CONTAINER_CAP {
                     container_records.insert(
@@ -1055,7 +1071,7 @@ pub(crate) fn build_field_decode_views(
                         ContainerRecord {
                             container_idx: idx,
                             elements: count,
-                            kind: 2,
+                            kind: 7,
                             container_class: prim_array_class_name(elem_type).to_string(),
                         },
                     );
@@ -1125,7 +1141,7 @@ pub(crate) fn build_field_decode_views(
                 top_obj.add(arr_idx, array_class_id, count, arr_shallow);
             }
 
-            // Attribution: record this object array as a container (kind 1).
+            // Attribution: record this object array as a container (kind 6).
             if collect_attribution && arr_idx != u32::MAX {
                 if container_records.len() < CONTAINER_CAP {
                     container_records.insert(
@@ -1133,7 +1149,7 @@ pub(crate) fn build_field_decode_views(
                         ContainerRecord {
                             container_idx: arr_idx,
                             elements: count,
-                            kind: 1,
+                            kind: 6,
                             container_class: pretty_name(array_class_id, p1),
                         },
                     );
@@ -1698,7 +1714,7 @@ mod tests {
             ContainerRecord {
                 container_idx: 7,
                 elements: 42,
-                kind: 1,
+                kind: 1, // round-trip value only; 1 now denotes Map
                 container_class: "java.util.X".to_string(),
             },
         );

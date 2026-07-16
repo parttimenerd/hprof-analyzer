@@ -223,9 +223,14 @@ fn build_references(g: &Graph) -> ReferencesAnalysis {
 /// `(holder,field)` key spans containers of more than one kind.
 fn kind_label(k: u8) -> &'static str {
     match k {
-        0 => "collection",
-        1 => "object array",
-        2 => "primitive array",
+        0 => "list",
+        1 => "map",
+        2 => "set",
+        3 => "deque",
+        4 => "queue",
+        5 => "tree",
+        6 => "object array",
+        7 => "primitive array",
         _ => "mixed",
     }
 }
@@ -987,11 +992,8 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
     let mut total_shallow: u64 = 0;
     let mut unreachable_count: u64 = 0;
     let mut unreachable_shallow: u64 = 0;
-    // Per-class tally of unreachable objects (idom == undef), bounded by #classes.
     let mut unreach_count: Vec<u64> = vec![0; class_count];
     let mut unreach_shallow: Vec<u64> = vec![0; class_count];
-    // Heap composition by object kind, tallied in the SAME reachable-object walk
-    // (KIND_ORDER = Instances/Object arrays/Primitive arrays/Class objects).
     const KIND_ORDER: [&str; 4] = [
         "Instances",
         "Object arrays",
@@ -1001,24 +1003,75 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
     let kind_idx = |k: &str| KIND_ORDER.iter().position(|&x| x == k).unwrap();
     let mut comp_objs = [0u64; 4];
     let mut comp_sh = [0u64; 4];
+    // retention_concentration: collect top-level (idom==vroot) retained values.
+    let vroot_u32 = n as u32;
+    let undef_u32 = u32::MAX;
+    let mut tops: Vec<u64> = Vec::new();
+    // classes_loaded and classloaders_loaded (class-object walk)
+    let mut classes_loaded: u64 = 0;
+    let mut loader_set: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    // Class histogram
+    let mut inst_count: Vec<u64> = vec![0; class_count];
+    let mut shallow_total: Vec<u64> = vec![0; class_count];
+    let mut class_retained: Vec<u64> = vec![0; class_count];
+    let mut max_shallow: Vec<u64> = vec![0; class_count];
+
+    // Single fused pass over all objects — computes totals, composition,
+    // top-level retained, class histogram, and class-loader rollup together
+    // to avoid 5 separate O(n) scans on large dumps.
     for i in 0..n {
-        if g.idom[i] != undef {
+        let id = g.idom[i];
+        let sh = g.shallow[i] as u64;
+        let ci_raw = g.class_idx[i] as usize;
+        if id != undef_u32 {
             total_objects += 1;
-            total_shallow += g.shallow[i] as u64;
+            total_shallow += sh;
             let b = kind_idx(object_kind(g, i));
             comp_objs[b] += 1;
-            comp_sh[b] += g.shallow[i] as u64;
+            comp_sh[b] += sh;
+            // Retention concentration: collect top-level retained values.
+            if id == vroot_u32 {
+                tops.push(g.retained[i]);
+            }
+            // Class histogram
+            if ci_raw < class_count {
+                let ci = remap[ci_raw] as usize;
+                inst_count[ci] += 1;
+                shallow_total[ci] += sh;
+                if sh > max_shallow[ci] {
+                    max_shallow[ci] = sh;
+                }
+                if !g.has_same_class_ancestor.get(i) {
+                    class_retained[ci] += g.retained[i];
+                }
+            }
+            // Class object: add its retained to the represented class row,
+            // and track classes_loaded / loader set.
+            let repr = class_obj_repr(g, i);
+            if repr != undef_u32 {
+                if (repr as usize) < class_count {
+                    let ci = remap[repr as usize] as usize;
+                    class_retained[ci] += g.retained[i];
+                }
+                classes_loaded += 1;
+                let lid = g
+                    .class_obj_class_idx
+                    .get(&(i as u32))
+                    .and_then(|&row| g.class_loader_id.get(row as usize).copied())
+                    .unwrap_or(0);
+                loader_set.insert(lid);
+            }
         } else {
             unreachable_count += 1;
-            unreachable_shallow += g.shallow[i] as u64;
-            let ci = g.class_idx[i] as usize;
-            if ci < class_count {
-                let ci = remap[ci] as usize;
+            unreachable_shallow += sh;
+            if ci_raw < class_count {
+                let ci = remap[ci_raw] as usize;
                 unreach_count[ci] += 1;
-                unreach_shallow[ci] += g.shallow[i] as u64;
+                unreach_shallow[ci] += sh;
             }
         }
     }
+    let classloaders_loaded = loader_set.len() as u64;
 
     // MAT materializes a synthetic <system class loader> object at 0x0
     // (class java/lang/ClassLoader, no HPROF record). Inject its count +
@@ -2443,7 +2496,7 @@ mod attribution_tests {
         // array (idx 1) — distinct containers, different kinds.
         let raw = vec![
             rec(0, "com/foo/Holder", "data", 0, "java/util/ArrayList", 5),
-            rec(1, "com/foo/Holder", "data", 1, "[Ljava/lang/Object;", 7),
+            rec(1, "com/foo/Holder", "data", 6, "[Ljava/lang/Object;", 7),
         ];
         let retained = vec![100u64, 200u64];
         let ca = aggregate_collection_attribution(&raw, &retained, false);
@@ -2457,7 +2510,7 @@ mod attribution_tests {
     /// Single-kind key keeps its own label (regression: not "mixed").
     #[test]
     fn test_single_kind_label() {
-        let raw = vec![rec(0, "com/foo/H", "arr", 2, "[I", 3)];
+        let raw = vec![rec(0, "com/foo/H", "arr", 7, "[I", 3)];
         let retained = vec![64u64];
         let ca = aggregate_collection_attribution(&raw, &retained, true);
         assert_eq!(ca.most_overall[0].container_kind, "primitive array");
