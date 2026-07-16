@@ -46,7 +46,6 @@ const FIELD_REF_CAP: usize = 10_000_000;
 /// Max container records collected under --collections (~32 B each → ~48 MB).
 const CONTAINER_CAP: usize = 1_500_000;
 /// Fixed top-N for both attribution rankings (documented, used by AREA C).
-#[allow(dead_code)]
 pub(crate) const ATTRIBUTION_TOP_N: usize = 25;
 
 // ── Collection descriptor table ──────────────────────────────────────────────

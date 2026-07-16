@@ -28,6 +28,7 @@ mod scan;
 mod sizing;
 mod strings;
 
+pub(crate) use fielddecode::ATTRIBUTION_TOP_N;
 pub(crate) use meta::*;
 pub use model::*;
 pub(crate) use scan::*;

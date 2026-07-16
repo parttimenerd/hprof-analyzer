@@ -199,11 +199,7 @@ pub struct StringHolder {
 /// `--collections`. Carries the DENSE object index (retained size is filled
 /// later and looked up in build_model) plus pre-resolved owned name Strings
 /// (class_map/strings die right after field-decode). Runtime-only, not serialized.
-///
-/// Every field is consumed by build_model's attribution aggregation; the allow
-/// bridges the gap until that consumer lands.
 #[derive(Clone)]
-#[allow(dead_code)]
 pub struct AttributionRaw {
     pub container_idx: u32,
     pub holder_class: String,
@@ -368,11 +364,9 @@ pub struct Graph {
     /// Raw container-attribution records from field-decode under `--collections`;
     /// `None` when the flag was off. Consumed in build_model to attach retained
     /// sizes and aggregate. Not serialized.
-    #[allow(dead_code)]
     pub collection_attribution_raw: Option<Vec<AttributionRaw>>,
     /// True when the holder-edge or container-record cap was hit (attribution
     /// data is a bounded sample). Not serialized.
-    #[allow(dead_code)]
     pub collection_attribution_truncated: bool,
 }
 

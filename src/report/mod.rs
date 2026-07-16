@@ -1501,4 +1501,29 @@ mod tests {
         let empty = build_size_distribution(&[]);
         assert_eq!(empty, TopSizeDistribution::default());
     }
+
+    /// Container attribution is None on the default path (flag off, raw vec
+    /// absent) so the JSON field stays absent — byte-identical to today. When
+    /// the raw vec is present (even empty) it becomes Some so the key appears.
+    #[test]
+    fn test_collection_attribution_none_and_some() {
+        // None path: fixture graph has collection_attribution_raw == None.
+        let (mut g, dc_off, dc_tgt) = fixture();
+        assert!(g.collection_attribution_raw.is_none());
+        let r = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        assert!(
+            r.collection_attribution.is_none(),
+            "flag-off must leave collection_attribution absent"
+        );
+
+        // Some(empty) path: build_model must emit Some with empty rankings.
+        g.collection_attribution_raw = Some(Vec::new());
+        let r2 = build_model_t(&g, &dc_off, &dc_tgt, DOMINATED_CAP);
+        let ca = r2
+            .collection_attribution
+            .expect("Some when raw vec present");
+        assert!(ca.most_overall.is_empty());
+        assert!(ca.biggest_single.is_empty());
+        assert!(!ca.truncated);
+    }
 }

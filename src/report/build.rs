@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::pass2::Graph;
+use crate::pass2::{ATTRIBUTION_TOP_N, AttributionRaw};
 
 const THRESHOLD_PCT: f64 = 10.0;
 /// Default per-suspect cap on the "accumulated objects" lists (immediately
@@ -89,7 +90,7 @@ pub fn build_model(
         dominator_analysis,
         collections: g.collections.clone(),
         references,
-        collection_attribution: None,
+        collection_attribution: build_collection_attribution(g),
     }
 }
 
@@ -160,6 +161,158 @@ fn build_references(g: &Graph) -> ReferencesAnalysis {
     }
 
     references
+}
+
+/// Kind label for a raw record's `container_kind` byte. `_` maps to "mixed",
+/// used both for unexpected bytes and as the aggregated label when one
+/// `(holder,field)` key spans containers of more than one kind.
+fn kind_label(k: u8) -> &'static str {
+    match k {
+        0 => "collection",
+        1 => "object array",
+        2 => "primitive array",
+        _ => "mixed",
+    }
+}
+
+/// Build the container-attribution rankings from the raw field-decode records,
+/// attaching each container's retained size via its dense index. `None` when
+/// `--collections` was off (the raw vec is absent). Aggregates two rankings:
+/// most_overall (per Class#field, total elements/retained across all its
+/// containers, distinct-container count) and biggest_single (per Class#field,
+/// the single largest container by element count).
+fn build_collection_attribution(g: &Graph) -> Option<CollectionAttribution> {
+    let raw = g.collection_attribution_raw.as_ref()?;
+    Some(aggregate_collection_attribution(
+        raw,
+        &g.retained,
+        g.collection_attribution_truncated,
+    ))
+}
+
+/// Pure aggregation core (no `Graph` dependency, so it is directly unit
+/// testable): fold the raw attribution records into the two `Class#field`
+/// rankings, looking up each container's retained size in `retained` by its
+/// dense object index. See [`build_collection_attribution`] for the semantics.
+fn aggregate_collection_attribution(
+    raw: &[AttributionRaw],
+    retained: &[u64],
+    truncated: bool,
+) -> CollectionAttribution {
+    use std::collections::HashMap;
+
+    // most_overall accumulator, keyed by (holder_class, field).
+    struct OverallAcc {
+        total_elements: u64,
+        total_retained: u64,
+        // Distinct container indices under this key: powers container_count and
+        // dedups elements/retained so a shared container isn't double-counted.
+        seen: std::collections::HashSet<u32>,
+        // Kind of the FIRST distinct container; `mixed` once a later distinct
+        // container disagrees.
+        first_kind: u8,
+        mixed: bool,
+    }
+    // biggest_single accumulator, keyed by (holder_class, field).
+    struct BiggestAcc {
+        elements: u64,
+        retained: u64,
+        container_class: String,
+    }
+
+    let mut overall: HashMap<(String, String), OverallAcc> = HashMap::new();
+    let mut biggest: HashMap<(String, String), BiggestAcc> = HashMap::new();
+
+    for rec in raw {
+        let retained_bytes = retained
+            .get(rec.container_idx as usize)
+            .copied()
+            .unwrap_or(0);
+        let key = (rec.holder_class.clone(), rec.field.clone());
+
+        // most_overall: dedup by distinct container index.
+        let acc = overall.entry(key.clone()).or_insert_with(|| OverallAcc {
+            total_elements: 0,
+            total_retained: 0,
+            seen: std::collections::HashSet::new(),
+            first_kind: rec.container_kind,
+            mixed: false,
+        });
+        if acc.seen.insert(rec.container_idx) {
+            acc.total_elements += rec.elements;
+            acc.total_retained += retained_bytes;
+            // Mixed determination only considers DISTINCT containers.
+            if rec.container_kind != acc.first_kind {
+                acc.mixed = true;
+            }
+        }
+
+        // biggest_single: track the single largest container by element count
+        // (tie-break larger retained). Idempotent under duplicate container
+        // rows, so no dedup is needed.
+        let b = biggest.entry(key).or_insert_with(|| BiggestAcc {
+            elements: 0,
+            retained: 0,
+            container_class: String::new(),
+        });
+        if rec.elements > b.elements || (rec.elements == b.elements && retained_bytes > b.retained)
+        {
+            b.elements = rec.elements;
+            b.retained = retained_bytes;
+            b.container_class = rec.container_class.clone();
+        }
+    }
+
+    let mut most_overall: Vec<FieldAttributionRow> = overall
+        .into_iter()
+        .map(|((holder_class, field), acc)| FieldAttributionRow {
+            holder_class,
+            field,
+            container_kind: if acc.mixed {
+                "mixed".to_string()
+            } else {
+                kind_label(acc.first_kind).to_string()
+            },
+            total_elements: acc.total_elements,
+            total_retained: acc.total_retained,
+            container_count: acc.seen.len() as u64,
+        })
+        .collect();
+    // total_elements desc, total_retained desc, holder_class asc, field asc.
+    most_overall.sort_by(|a, b| {
+        b.total_elements
+            .cmp(&a.total_elements)
+            .then(b.total_retained.cmp(&a.total_retained))
+            .then_with(|| a.holder_class.cmp(&b.holder_class))
+            .then_with(|| a.field.cmp(&b.field))
+    });
+    most_overall.truncate(ATTRIBUTION_TOP_N);
+
+    let mut biggest_single: Vec<FieldAttributionBiggestRow> = biggest
+        .into_iter()
+        .map(|((holder_class, field), b)| FieldAttributionBiggestRow {
+            holder_class,
+            field,
+            container_class: b.container_class,
+            elements: b.elements,
+            retained: b.retained,
+        })
+        .collect();
+    // elements desc, retained desc, holder_class asc, field asc.
+    biggest_single.sort_by(|a, b| {
+        b.elements
+            .cmp(&a.elements)
+            .then(b.retained.cmp(&a.retained))
+            .then_with(|| a.holder_class.cmp(&b.holder_class))
+            .then_with(|| a.field.cmp(&b.field))
+    });
+    biggest_single.truncate(ATTRIBUTION_TOP_N);
+
+    CollectionAttribution {
+        most_overall,
+        biggest_single,
+        truncated,
+    }
 }
 
 /// Max components (class loaders) surfaced in the Top Components view.
@@ -2081,5 +2234,110 @@ fn build_top_consumers(g: &Graph, top_n: usize) -> TopConsumers {
         threshold_bp,
         biggest_packages,
         size_distribution,
+    }
+}
+
+#[cfg(test)]
+mod attribution_tests {
+    use super::*;
+
+    fn rec(
+        container_idx: u32,
+        holder: &str,
+        field: &str,
+        kind: u8,
+        container_class: &str,
+        elements: u64,
+    ) -> AttributionRaw {
+        AttributionRaw {
+            container_idx,
+            holder_class: holder.to_string(),
+            field: field.to_string(),
+            container_kind: kind,
+            container_class: container_class.to_string(),
+            elements,
+        }
+    }
+
+    /// Two keys with different total_elements come out in DESC order; the pure
+    /// helper's most_overall/biggest_single are populated as expected.
+    #[test]
+    fn test_ordering_desc_by_elements() {
+        // key A: com/foo/Big#items, one container idx 0 with 100 elements.
+        // key B: com/foo/Small#items, one container idx 1 with 10 elements.
+        let raw = vec![
+            rec(0, "com/foo/Big", "items", 0, "java/util/ArrayList", 100),
+            rec(1, "com/foo/Small", "items", 0, "java/util/ArrayList", 10),
+        ];
+        let retained = vec![5000u64, 500u64];
+        let ca = aggregate_collection_attribution(&raw, &retained, false);
+        assert_eq!(ca.most_overall.len(), 2);
+        assert_eq!(ca.most_overall[0].holder_class, "com/foo/Big");
+        assert_eq!(ca.most_overall[0].total_elements, 100);
+        assert_eq!(ca.most_overall[0].total_retained, 5000);
+        assert_eq!(ca.most_overall[1].holder_class, "com/foo/Small");
+        // biggest_single mirrors the ordering.
+        assert_eq!(ca.biggest_single[0].holder_class, "com/foo/Big");
+        assert_eq!(ca.biggest_single[0].elements, 100);
+        assert_eq!(ca.biggest_single[0].container_class, "java/util/ArrayList");
+        assert!(!ca.truncated);
+    }
+
+    /// Distinct-container dedup: two records with the SAME container_idx under
+    /// one key count that container's elements/retained ONCE, container_count 1.
+    #[test]
+    fn test_distinct_container_dedup() {
+        // Two Cache instances share ONE map (container idx 0): the join emits
+        // two rows with the same container_idx.
+        let raw = vec![
+            rec(0, "com/foo/Cache", "map", 0, "java/util/HashMap", 42),
+            rec(0, "com/foo/Cache", "map", 0, "java/util/HashMap", 42),
+        ];
+        let retained = vec![9000u64];
+        let ca = aggregate_collection_attribution(&raw, &retained, false);
+        assert_eq!(ca.most_overall.len(), 1);
+        let row = &ca.most_overall[0];
+        assert_eq!(row.container_count, 1, "shared container counted once");
+        assert_eq!(row.total_elements, 42, "elements not double-counted");
+        assert_eq!(row.total_retained, 9000, "retained not double-counted");
+    }
+
+    /// Mixed kind: two DISTINCT containers of different kinds under one key
+    /// yield container_kind == "mixed".
+    #[test]
+    fn test_mixed_kind() {
+        // com/foo/Holder#data points at a collection (idx 0) and an object
+        // array (idx 1) — distinct containers, different kinds.
+        let raw = vec![
+            rec(0, "com/foo/Holder", "data", 0, "java/util/ArrayList", 5),
+            rec(1, "com/foo/Holder", "data", 1, "[Ljava/lang/Object;", 7),
+        ];
+        let retained = vec![100u64, 200u64];
+        let ca = aggregate_collection_attribution(&raw, &retained, false);
+        assert_eq!(ca.most_overall.len(), 1);
+        assert_eq!(ca.most_overall[0].container_kind, "mixed");
+        assert_eq!(ca.most_overall[0].container_count, 2);
+        assert_eq!(ca.most_overall[0].total_elements, 12);
+        assert_eq!(ca.most_overall[0].total_retained, 300);
+    }
+
+    /// Single-kind key keeps its own label (regression: not "mixed").
+    #[test]
+    fn test_single_kind_label() {
+        let raw = vec![rec(0, "com/foo/H", "arr", 2, "[I", 3)];
+        let retained = vec![64u64];
+        let ca = aggregate_collection_attribution(&raw, &retained, true);
+        assert_eq!(ca.most_overall[0].container_kind, "primitive array");
+        assert!(ca.truncated);
+    }
+
+    /// Retained lookup is defensive: an out-of-range container_idx contributes 0.
+    #[test]
+    fn test_out_of_range_retained_is_zero() {
+        let raw = vec![rec(99, "com/foo/H", "f", 0, "java/util/ArrayList", 1)];
+        let retained = vec![10u64]; // idx 99 is out of range
+        let ca = aggregate_collection_attribution(&raw, &retained, false);
+        assert_eq!(ca.most_overall[0].total_retained, 0);
+        assert_eq!(ca.biggest_single[0].retained, 0);
     }
 }
