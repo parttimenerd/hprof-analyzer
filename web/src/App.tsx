@@ -1991,8 +1991,8 @@ function RetentionConcentrationSection({ report }: { report: Report }) {
         the share only climbs as you widen to <strong>Top 10</strong> / <strong>Top 100</strong>,
         the leak is spread across many peers.
       </p>
-      <ConcentrationChart data={rc} />
-      <ConcentrationStackedBar data={rc} />
+      <ConcentrationChart rc={rc} />
+      <ConcentrationStackedBar rc={rc} />
       <table>
         <thead>
           <tr>
