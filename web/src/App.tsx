@@ -74,7 +74,7 @@ function Nav({ report }: { report: Report }) {
   ];
   // show the entry only when the field is present.
   if (report.top.size_distribution.count > 0) items.push(["size-distribution", "Size Distribution"]);
-  items.push(["duplicate-strings", "Duplicate Strings"]);
+  if (report.overview.duplicate_strings) items.push(["duplicate-strings", "Duplicate Strings"]);
   if (report.top_components?.components?.length) items.push(["top-components", "Top Components"]);
   items.push(["arrays-by-size", "Arrays by Size"]);
   items.push(["collections", "Collections"]);
