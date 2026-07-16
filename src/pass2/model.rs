@@ -696,7 +696,28 @@ impl InboundBuilder {
             if let Some(raw) = inb_flat.range_slice(start, end) {
                 nb.clear();
                 nb.reserve(raw.len());
-                for &raw_val in raw {
+                // Software prefetch of dfn[node] 8 iterations ahead to hide
+                // random-DRAM latency on large dfn arrays (each ~2 GB on big dumps).
+                const PF: usize = 8;
+                for (k, &raw_val) in raw.iter().enumerate() {
+                    if k + PF < raw.len() {
+                        let pf_node = (raw[k + PF] & 0x7fff_ffff) as usize;
+                        if pf_node < dfn.len() {
+                            unsafe {
+                                let ptr = dfn.as_ptr().add(pf_node) as *const i8;
+                                #[cfg(target_arch = "x86_64")]
+                                core::arch::x86_64::_mm_prefetch::<
+                                    { core::arch::x86_64::_MM_HINT_T0 },
+                                >(ptr);
+                                #[cfg(target_arch = "aarch64")]
+                                core::arch::asm!(
+                                    "prfm pldl1keep, [{p}]",
+                                    p = in(reg) ptr,
+                                    options(nostack, readonly)
+                                );
+                            }
+                        }
+                    }
                     let node = (raw_val & 0x7fff_ffff) as usize;
                     let pre = dfn[node];
                     if pre != u32::MAX {
@@ -706,7 +727,26 @@ impl InboundBuilder {
                 }
             } else {
                 inb_flat.copy_range(start, end, &mut nb);
+                const PF2: usize = 8;
                 for r in 0..nb.len() {
+                    if r + PF2 < nb.len() {
+                        let pf_node = (nb[r + PF2] & 0x7fff_ffff) as usize;
+                        if pf_node < dfn.len() {
+                            unsafe {
+                                let ptr = dfn.as_ptr().add(pf_node) as *const i8;
+                                #[cfg(target_arch = "x86_64")]
+                                core::arch::x86_64::_mm_prefetch::<
+                                    { core::arch::x86_64::_MM_HINT_T0 },
+                                >(ptr);
+                                #[cfg(target_arch = "aarch64")]
+                                core::arch::asm!(
+                                    "prfm pldl1keep, [{p}]",
+                                    p = in(reg) ptr,
+                                    options(nostack, readonly)
+                                );
+                            }
+                        }
+                    }
                     let node = (nb[r] & 0x7fff_ffff) as usize;
                     let pre = dfn[node];
                     if pre != u32::MAX {
