@@ -1,16 +1,14 @@
 //! Build script: bundle the `web/` React app into `web/dist/bundle.js`.
 //!
-//! Policy (plan §6.1):
-//!   - `cargo:rerun-if-changed` on the web sources so a source edit triggers a
-//!     rebuild.
-//!   - If `node`/`npm` are present, run `npm ci && npm run build` (esbuild ->
-//!     `web/dist/bundle.js`, a single minified JS with CSS inlined).
-//!   - If npm is absent (or the build fails), fall back to the COMMITTED
-//!     `web/dist/bundle.js` so a downstream `cargo build` works WITHOUT node,
-//!     emitting a `cargo:warning` noting the fallback.
+//! The bundle is a GENERATED artifact — it is git-ignored and NOT committed.
+//! `src/html.rs` embeds it via `include_str!("../web/dist/bundle.js")`, so this
+//! script MUST produce it before the crate compiles. There is no committed
+//! fallback: if `node`/`npm` are missing or the esbuild build fails, the crate
+//! build fails with a clear error (rather than silently embedding a stale file).
 //!
-//! The committed bundle is a hard `include_str!` dependency of `src/html.rs`,
-//! so a build always has a bundle to embed; this script only refreshes it.
+//!   - `cargo:rerun-if-changed` on the web sources so a source edit re-bundles.
+//!   - Run `npm ci` (or `npm install` if no lockfile) then `npm run build`
+//!     (esbuild -> `web/dist/bundle.js`, a single minified JS with CSS inlined).
 
 use std::path::Path;
 use std::process::Command;
@@ -19,25 +17,20 @@ fn main() {
     // Rebuild when the web app sources or its manifest change.
     println!("cargo:rerun-if-changed=web/src");
     println!("cargo:rerun-if-changed=web/package.json");
+    println!("cargo:rerun-if-changed=web/package-lock.json");
     println!("cargo:rerun-if-changed=web/esbuild.config.mjs");
-    // Also depend on the committed bundle itself (the fallback / include_str!
-    // target) so editing it directly triggers a rebuild of the crate.
-    println!("cargo:rerun-if-changed=web/dist/bundle.js");
 
     let web = Path::new("web");
-    if !web.join("package.json").exists() {
-        println!("cargo:warning=web/package.json not found; using committed web/dist/bundle.js");
-        return;
-    }
+    assert!(
+        web.join("package.json").exists(),
+        "web/package.json not found — cannot build the HTML report bundle"
+    );
 
-    // Skip npm entirely if it is not on PATH (offline/sandboxed build): the
-    // committed bundle is used as-is.
-    if !npm_available() {
-        println!(
-            "cargo:warning=npm not found on PATH; using committed web/dist/bundle.js (offline build)"
-        );
-        return;
-    }
+    assert!(
+        npm_available(),
+        "npm not found on PATH — it is required to build web/dist/bundle.js \
+         (the bundle is generated, not committed). Install Node.js/npm."
+    );
 
     // `npm ci` needs a lockfile; fall back to `npm install` if absent.
     let install_cmd = if web.join("package-lock.json").exists() {
@@ -46,15 +39,18 @@ fn main() {
         "install"
     };
 
-    if !run_npm(web, &[install_cmd]) {
-        println!(
-            "cargo:warning=npm {install_cmd} failed (offline?); using committed web/dist/bundle.js"
-        );
-        return;
-    }
-    if !run_npm(web, &["run", "build"]) {
-        println!("cargo:warning=npm run build failed; using committed web/dist/bundle.js");
-    }
+    assert!(
+        run_npm(web, &[install_cmd]),
+        "`npm {install_cmd}` failed while installing the web bundle dependencies"
+    );
+    assert!(
+        run_npm(web, &["run", "build"]),
+        "`npm run build` failed while bundling web/dist/bundle.js"
+    );
+    assert!(
+        web.join("dist/bundle.js").exists(),
+        "npm run build did not produce web/dist/bundle.js"
+    );
 }
 
 fn npm_available() -> bool {

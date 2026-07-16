@@ -24,11 +24,11 @@ use flate2::{Compression, write::DeflateEncoder};
 use crate::report::Report;
 
 /// The built React bundle (minified JS + inlined CSS), produced by `web/`'s
-/// esbuild build and committed at `web/dist/bundle.js`. Embedded compressed.
+/// esbuild build. It is a GENERATED artifact at `web/dist/bundle.js`
+/// (git-ignored) that `build.rs` regenerates before every compile.
 ///
-/// `include_str!` fails the build if the file is missing, so the committed
-/// artifact is a hard build dependency (matching the plan's committed-bundle
-/// policy).
+/// `include_str!` fails the build if the file is missing; `build.rs` guarantees
+/// it exists by running the esbuild bundle as a hard build step.
 const BUNDLE_JS: &str = include_str!("../web/dist/bundle.js");
 
 /// Raw-DEFLATE (level 9) then base64-encode a byte slice. The codec matches the
