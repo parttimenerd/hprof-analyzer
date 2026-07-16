@@ -464,6 +464,50 @@ impl Default for IndexCache {
     }
 }
 
+/// Inline cache for `class_addr_to_hist` lookups (class object address → histogram index).
+/// Same direct-mapped design as `IndexCache`, but keyed on class addresses (which recur
+/// for every instance of the same class) instead of object addresses.
+/// `u32::MAX` encodes absent (class not in histogram map).
+/// 2048 slots × 12 bytes = 24 KB — fits in L1 on most CPUs.
+const CPC_SIZE: usize = 2048;
+pub struct ClassPlanCache {
+    keys: Box<[u64; CPC_SIZE]>,
+    vals: Box<[u32; CPC_SIZE]>,
+}
+
+impl ClassPlanCache {
+    pub fn new() -> Self {
+        Self {
+            keys: Box::new([0u64; CPC_SIZE]),
+            vals: Box::new([u32::MAX; CPC_SIZE]),
+        }
+    }
+
+    /// Look up `class_addr` in `map`, consulting the cache first.
+    /// Returns the histogram index, or `u32::MAX` if absent.
+    #[inline(always)]
+    pub fn get(&mut self, map: &std::collections::HashMap<u64, u32>, class_addr: u64) -> u32 {
+        let slot = ((class_addr ^ (class_addr >> 20)) as usize) & (CPC_SIZE - 1);
+        // SAFETY: slot < CPC_SIZE by construction.
+        let k = unsafe { *self.keys.get_unchecked(slot) };
+        if k == class_addr {
+            return unsafe { *self.vals.get_unchecked(slot) };
+        }
+        let v = map.get(&class_addr).copied().unwrap_or(u32::MAX);
+        unsafe {
+            *self.keys.get_unchecked_mut(slot) = class_addr;
+            *self.vals.get_unchecked_mut(slot) = v;
+        }
+        v
+    }
+}
+
+impl Default for ClassPlanCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

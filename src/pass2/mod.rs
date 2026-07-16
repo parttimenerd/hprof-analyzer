@@ -840,6 +840,7 @@ impl Pass2 {
     ) -> io::Result<()> {
         let ids = id_size as u64;
         let mut cache = crate::id_map::IndexCache::new();
+        let mut class_cache = crate::id_map::ClassPlanCache::new();
 
         macro_rules! edge_if_valid {
             ($src:expr, $dst_addr:expr, $excl:expr) => {
@@ -912,14 +913,13 @@ impl Pass2 {
                     // instance fields: the only edge is instance→class, which
                     // doesn't need the field bytes. Saves a memcpy for all-primitive
                     // classes (e.g. java.lang.Integer, primitive wrappers, etc.).
-                    let field_plan = class_addr_to_hist.get(&class_id).and_then(|&cidx| {
+                    let cidx = class_cache.get(class_addr_to_hist, class_id);
+                    let field_plan = if cidx != u32::MAX {
                         let plan = &field_plans_dense[cidx as usize];
-                        if plan.is_empty() {
-                            None
-                        } else {
-                            Some((cidx, plan))
-                        }
-                    });
+                        if plan.is_empty() { None } else { Some((cidx, plan)) }
+                    } else {
+                        None
+                    };
                     if field_plan.is_some() {
                         r.read_bytes_reuse(scratch, data_len as usize)?;
                     } else {
@@ -1033,6 +1033,7 @@ impl Pass2 {
     ) -> io::Result<()> {
         let ids = id_size as u64;
         let mut cache = crate::id_map::IndexCache::new();
+        let mut class_cache = crate::id_map::ClassPlanCache::new();
 
         macro_rules! add_edge {
             ($src:expr, $dst_addr:expr, $excluded:expr) => {
@@ -1124,14 +1125,13 @@ impl Pass2 {
                     }
                     checked_sub!(remaining, ids + 4 + ids + 4 + data_len);
 
-                    let field_plan = class_addr_to_hist.get(&class_id).and_then(|&cidx| {
-                        let plan = &field_plans_dense[cidx as usize];
-                        if plan.is_empty() {
-                            None
-                        } else {
-                            Some((cidx, plan))
-                        }
-                    });
+                    let cidx_2b = class_cache.get(class_addr_to_hist, class_id);
+                    let field_plan = if cidx_2b != u32::MAX {
+                        let plan = &field_plans_dense[cidx_2b as usize];
+                        if plan.is_empty() { None } else { Some((cidx_2b, plan)) }
+                    } else {
+                        None
+                    };
                     if field_plan.is_some() {
                         r.read_bytes_reuse(scratch, data_len as usize)?;
                     } else {
