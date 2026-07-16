@@ -13,6 +13,7 @@
 
 mod bitset;
 mod chunkvec;
+mod collection_config;
 mod cvec;
 mod diff;
 mod diff_reports;
@@ -56,7 +57,7 @@ enum OutputFormat {
 /// analyses (root paths, alloc sites, thread locals, dominator tree) now run
 /// unconditionally; these caps bound their output size. `--detail default`
 /// reproduces the historical cap values so MAT/golden parity is unchanged.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct AnalyzeOptions {
     pub root_path_max_depth: usize,
     pub alloc_sites_top: usize,
@@ -67,6 +68,8 @@ pub struct AnalyzeOptions {
     pub top_consumers: usize,
     pub dup_strings: bool,
     pub collections: bool,
+    pub collection_config: Option<std::path::PathBuf>,
+    pub coll_descs: Vec<crate::pass2::CollDesc>,
 }
 
 #[cfg(test)]
@@ -161,6 +164,11 @@ struct Cli {
     /// ~300MB peak RSS). Analyze-only.
     #[arg(long)]
     collections: bool,
+
+    /// Path to a TOML file defining custom collection handlers.
+    /// Auto-discovers .hprof-analyzer.toml (CWD) or $HOME/.config/hprof-analyzer/collections.toml.
+    #[arg(long, value_name = "PATH")]
+    collection_config: Option<std::path::PathBuf>,
 }
 
 /// Named subcommands. The default (no subcommand) analyzes or re-renders the
@@ -282,6 +290,8 @@ impl DetailLevel {
             top_consumers: tc,
             dup_strings: false,
             collections: false,
+            collection_config: None,
+            coll_descs: crate::collection_config::load_collection_descs(None),
         }
     }
 }
@@ -434,6 +444,8 @@ fn run_default(cli: Cli) {
         let opts = AnalyzeOptions {
             dup_strings: cli.dup_strings,
             collections: cli.collections,
+            collection_config: cli.collection_config.clone(),
+            coll_descs: crate::collection_config::load_collection_descs(cli.collection_config.as_deref()),
             ..opts
         };
         if let Err(e) = run(
@@ -453,6 +465,12 @@ fn run_default(cli: Cli) {
             fail(
                 "--collections has no effect when re-rendering a saved report; \
                   re-run on the .hprof dump to include it",
+            );
+        }
+        if cli.collection_config.is_some() {
+            fail(
+                "--collection-config has no effect when re-rendering a saved report; \
+                  re-run on the .hprof dump to use it",
             );
         }
         if cli.dup_strings {
