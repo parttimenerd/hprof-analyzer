@@ -50,7 +50,7 @@ pub(crate) fn render_duplicate_strings(
     d: &Option<crate::pass2::DupStrings>,
     graphs: bool,
 ) {
-    use crate::md::{bar, sparkline, Align, Table};
+    use crate::md::{Align, Table, bar, sparkline};
     out.push_str("### Duplicate Strings (approximate)\n\n");
     let d = match d {
         None => {
@@ -1451,7 +1451,7 @@ pub(crate) fn render_top_components(tc: &TopComponents, graphs: bool, out: &mut 
 /// Emits the heading + a fallback italic line even when empty so the document
 /// structure stays stable.
 pub(crate) fn render_arrays_by_size(a: &ArraysBySize, graphs: bool, out: &mut String) {
-    use crate::md::{bar, Align, Table};
+    use crate::md::{Align, Table, bar};
     out.push_str("## Arrays by Size\n\n");
     if a.obj_array_buckets.is_empty() && a.prim_array_buckets.is_empty() && a.zero_length_count == 0
     {
@@ -1527,7 +1527,7 @@ fn render_fill_ratio_table(
     graphs: bool,
     out: &mut String,
 ) {
-    use crate::md::{bar, Align, Table};
+    use crate::md::{Align, Table, bar};
     if buckets.is_empty() {
         out.push_str("_None._\n\n");
         return;
@@ -1563,7 +1563,7 @@ fn render_fill_ratio_table(
 }
 
 pub(crate) fn render_collections(c: &CollectionsAnalysis, graphs: bool, out: &mut String) {
-    use crate::md::{bar, Align, Table};
+    use crate::md::{Align, Table, bar};
     out.push_str("## Collections\n\n");
     out.push_str(
         "_Collection and array occupancy: how full collections are, how big they get, \
@@ -1766,7 +1766,7 @@ pub(crate) fn render_collections(c: &CollectionsAnalysis, graphs: bool, out: &mu
 /// md-graphs; when `graphs` is set an extra proportional bar column is appended
 /// on Shallow.
 fn render_top_arrays(t: &TopArrays, kind: &str, graphs: bool, out: &mut String) {
-    use crate::md::{bar, Align, Table};
+    use crate::md::{Align, Table, bar};
 
     out.push_str(&format!("### Top Arrays ({kind})\n\n"));
     out.push_str(&format!(
@@ -1845,7 +1845,7 @@ pub(crate) fn render_collection_attribution(
     graphs: bool,
     out: &mut String,
 ) {
-    use crate::md::{bar, Align, Table};
+    use crate::md::{Align, Table, bar};
     let Some(a) = a else {
         return;
     };
@@ -1971,7 +1971,7 @@ pub(crate) fn render_collection_attribution(
 /// fallback line even when no references are present so the structure stays
 /// stable.
 pub(crate) fn render_references(rf: &ReferencesAnalysis, graphs: bool, out: &mut String) {
-    use crate::md::{bar, Align, Table};
+    use crate::md::{Align, Table, bar};
     out.push_str("## References\n\n");
     out.push_str("_Soft/weak/phantom reference referents (what they point at)._\n\n");
 
@@ -2026,7 +2026,7 @@ pub(crate) fn render_references(rf: &ReferencesAnalysis, graphs: bool, out: &mut
 /// Emits the heading + a fallback italic line even when empty so the document
 /// structure stays stable.
 pub(crate) fn render_unreachable_histogram(o: &SystemOverview, graphs: bool, out: &mut String) {
-    use crate::md::{bar, Align, Table};
+    use crate::md::{Align, Table, bar};
     out.push_str("## Unreachable Objects\n\n");
     if o.unreachable_histogram.is_empty() {
         out.push_str("*No unreachable objects.*\n\n");
@@ -2074,7 +2074,7 @@ pub(crate) fn render_unreachable_histogram(o: &SystemOverview, graphs: bool, out
 /// on Drop (big drops) and on Dominated Shallow (immediate dominators). Emits the
 /// headings + fallback italic lines even when empty so the structure stays stable.
 pub(crate) fn render_dominator_analysis(d: &DominatorAnalysis, graphs: bool, out: &mut String) {
-    use crate::md::{bar, Align, Table};
+    use crate::md::{Align, Table, bar};
     out.push_str("## Dominator Analysis\n\n");
 
     // ---- Big Drops ----
@@ -2284,7 +2284,7 @@ pub(crate) fn render_alloc_sites(a: &AllocSites, graphs: bool, out: &mut String)
         );
         return;
     }
-    use crate::md::{bar, Align, Table};
+    use crate::md::{Align, Table, bar};
     let max = a.sites.iter().map(|s| s.object_count).max().unwrap_or(0);
     let mut t = if graphs {
         Table::new(

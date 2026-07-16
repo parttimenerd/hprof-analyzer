@@ -472,6 +472,13 @@ impl InboundBuilder {
         let n_nodes = fwd_offsets.len().saturating_sub(1);
         let mut buf: Vec<u32> = Vec::with_capacity(4096);
         let mut next_fwd_free: usize = 1 << 26; // first chunk boundary = 64 M u32 = 256 MB
+        // MADV_DONTNEED fwd_offsets pages as src advances past page boundaries.
+        // fwd_offsets[0..src] is dead after processing src; freeing pages
+        // immediately counteracts the inb_flat page faults during the transpose.
+        #[cfg(target_os = "linux")]
+        let fwd_off_ptr = fwd_offsets.as_ptr();
+        #[cfg(target_os = "linux")]
+        let mut next_off_dontneed: usize = 1 << 10; // first page boundary = 1024 u32 = 4 KB
         for src in 0..n_nodes {
             let lo = fwd_offsets[src] as usize;
             let hi = fwd_offsets[src + 1] as usize;
@@ -482,6 +489,18 @@ impl InboundBuilder {
             if lo >= next_fwd_free {
                 fwd_targets.free_below(lo);
                 next_fwd_free = ((lo >> 26) + 1) << 26; // next chunk boundary
+            }
+            // DONTNEED consumed fwd_offsets pages as src advances past page boundaries.
+            #[cfg(target_os = "linux")]
+            if src >= next_off_dontneed {
+                let pages_end = src & !(1024 - 1); // align down to 4KB page
+                let len = pages_end * std::mem::size_of::<u32>();
+                if len > 0 {
+                    unsafe {
+                        libc::madvise(fwd_off_ptr as *mut libc::c_void, len, libc::MADV_DONTNEED);
+                    }
+                }
+                next_off_dontneed = pages_end + 1024; // advance by one page
             }
             fwd_targets.copy_range(lo, hi, &mut buf);
             for &dst in &buf {
@@ -613,6 +632,7 @@ impl InboundBuilder {
         mut inb_flat: crate::chunkvec::ChunkU32,
         dfn: &[u32],
     ) -> io::Result<(Vec<u64>, Vec<u8>)> {
+        #[allow(clippy::redundant_locals)]
         let in_cursors = in_cursors;
         // -- Phase 4: Build inbound CSR (blocked offsets + count-prefixed data) --
         // inb_block_off[b] = byte offset where node (b*INB_BLOCK)'s slice begins.
@@ -624,8 +644,7 @@ impl InboundBuilder {
         // past 2× the true size. Without this the Vec doubles from ~4 GB to an
         // 8 GB capacity, wasting ~4 GB of RSS through Phase 4.
         // Cap at 6 GB so we don't over-commit on small dumps.
-        let inb_data_cap = ((total_inb as usize).saturating_mul(5) / 2)
-            .min(6 * 1024 * 1024 * 1024);
+        let inb_data_cap = ((total_inb as usize).saturating_mul(5) / 2).min(6 * 1024 * 1024 * 1024);
         inb_data.reserve(inb_data_cap);
 
         // CSR is contiguous: start[i] = end of node i-1 = in_cursors[i-1] after fill.

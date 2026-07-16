@@ -13,6 +13,7 @@ pub enum Codec {
     /// No compression: keep the live Vec (no RSS win; A/B escape hatch).
     None,
     /// deflate at max level (flate2 Compression::best()).
+    #[allow(dead_code)]
     Deflate9,
     /// zstd at level 3 — fast compress, good ratio, fast decompress.
     Zstd3,
@@ -177,7 +178,12 @@ fn stream_u32s<R: Read, F: FnMut(u32)>(mut r: R, f: &mut F) -> io::Result<()> {
         }
         // Whole u32s inside this buffer.
         while i + 4 <= n {
-            f(u32::from_le_bytes([buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]));
+            f(u32::from_le_bytes([
+                buf[i],
+                buf[i + 1],
+                buf[i + 2],
+                buf[i + 3],
+            ]));
             i += 4;
         }
         // Stash a 1-3 byte tail for the next read.

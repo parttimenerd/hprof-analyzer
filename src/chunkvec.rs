@@ -24,6 +24,7 @@ pub struct ChunkU32 {
 
 impl ChunkU32 {
     /// Returns true if no slots are allocated (len == 0).
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.chunks.is_empty()
     }
@@ -83,7 +84,9 @@ impl ChunkU32 {
                     let len = chunk.len() * std::mem::size_of::<u32>();
                     // MADV_DONTNEED: immediately returns pages to OS, reducing RSS
                     // before jemalloc's free list delays the reclaim.
-                    unsafe { libc::madvise(ptr, len, libc::MADV_DONTNEED); }
+                    unsafe {
+                        libc::madvise(ptr, len, libc::MADV_DONTNEED);
+                    }
                 }
                 self.chunks[c] = Vec::new();
             }
