@@ -1455,6 +1455,53 @@ fn fill_ratio_label(b: &FillRatioBucket) -> String {
 /// `graphs` is set, an extra proportional bar column is appended on the object
 /// count of each table. Emits the heading + fallback italic lines even when
 /// empty so the document structure stays stable.
+/// Render a fill-ratio bucket table (`Collection Fill Ratio`, `Array Fill
+/// Ratio`, `Map Collision Ratio`). `count_header` names the object column
+/// (e.g. "Collections"); `with_wasted` adds the Wasted bytes column. When
+/// `graphs` is set a proportional bar column on objects is appended.
+fn render_fill_ratio_table(
+    buckets: &[FillRatioBucket],
+    ratio_header: &str,
+    count_header: &str,
+    with_wasted: bool,
+    graphs: bool,
+    out: &mut String,
+) {
+    use crate::md::{Align, Table, bar};
+    if buckets.is_empty() {
+        out.push_str("_None._\n\n");
+        return;
+    }
+    let obj_max = buckets.iter().map(|b| b.objects).max().unwrap_or(0);
+    let mut headers: Vec<&str> = vec![ratio_header, count_header, "Shallow"];
+    let mut aligns = vec![Align::Right, Align::Right, Align::Right];
+    if with_wasted {
+        headers.push("Wasted");
+        aligns.push(Align::Right);
+    }
+    if graphs {
+        headers.push("");
+        aligns.push(Align::Left);
+    }
+    let mut t = Table::new(&headers, &aligns);
+    for b in buckets {
+        let mut row = vec![
+            fill_ratio_label(b),
+            fmt_count(b.objects),
+            format_bytes(b.shallow),
+        ];
+        if with_wasted {
+            row.push(format_bytes(b.wasted));
+        }
+        if graphs {
+            row.push(bar(b.objects, obj_max, render_graphs::GRAPH_BAR_WIDTH));
+        }
+        t.row(row);
+    }
+    t.render(out);
+    out.push('\n');
+}
+
 pub(crate) fn render_collections(c: &CollectionsAnalysis, graphs: bool, out: &mut String) {
     use crate::md::{Align, Table, bar};
     out.push_str("## Collections\n\n");
@@ -1470,38 +1517,14 @@ pub(crate) fn render_collections(c: &CollectionsAnalysis, graphs: bool, out: &mu
         fmt_count(c.collection_fill_ratio.tracked),
         fmt_count(c.collection_fill_ratio.total),
     ));
-    if c.collection_fill_ratio.buckets.is_empty() {
-        out.push_str("_None._\n\n");
-    } else {
-        let obj_max = c
-            .collection_fill_ratio
-            .buckets
-            .iter()
-            .map(|b| b.objects)
-            .max()
-            .unwrap_or(0);
-        let mut headers: Vec<&str> = vec!["Fill %", "Collections", "Shallow", "Wasted"];
-        let mut aligns = vec![Align::Right, Align::Right, Align::Right, Align::Right];
-        if graphs {
-            headers.push("");
-            aligns.push(Align::Left);
-        }
-        let mut t = Table::new(&headers, &aligns);
-        for b in &c.collection_fill_ratio.buckets {
-            let mut row = vec![
-                fill_ratio_label(b),
-                fmt_count(b.objects),
-                format_bytes(b.shallow),
-                format_bytes(b.wasted),
-            ];
-            if graphs {
-                row.push(bar(b.objects, obj_max, render_graphs::GRAPH_BAR_WIDTH));
-            }
-            t.row(row);
-        }
-        t.render(out);
-        out.push('\n');
-    }
+    render_fill_ratio_table(
+        &c.collection_fill_ratio.buckets,
+        "Fill %",
+        "Collections",
+        true,
+        graphs,
+        out,
+    );
 
     // ── Collections by Size ──────────────────────────────────────────────────
     out.push_str("### Collections by Size\n\n");
@@ -1548,38 +1571,14 @@ pub(crate) fn render_collections(c: &CollectionsAnalysis, graphs: bool, out: &mu
         "_{} tracked object arrays._\n\n",
         fmt_count(c.array_fill_ratio.tracked),
     ));
-    if c.array_fill_ratio.buckets.is_empty() {
-        out.push_str("_None._\n\n");
-    } else {
-        let obj_max = c
-            .array_fill_ratio
-            .buckets
-            .iter()
-            .map(|b| b.objects)
-            .max()
-            .unwrap_or(0);
-        let mut headers: Vec<&str> = vec!["Fill %", "Arrays", "Shallow", "Wasted"];
-        let mut aligns = vec![Align::Right, Align::Right, Align::Right, Align::Right];
-        if graphs {
-            headers.push("");
-            aligns.push(Align::Left);
-        }
-        let mut t = Table::new(&headers, &aligns);
-        for b in &c.array_fill_ratio.buckets {
-            let mut row = vec![
-                fill_ratio_label(b),
-                fmt_count(b.objects),
-                format_bytes(b.shallow),
-                format_bytes(b.wasted),
-            ];
-            if graphs {
-                row.push(bar(b.objects, obj_max, render_graphs::GRAPH_BAR_WIDTH));
-            }
-            t.row(row);
-        }
-        t.render(out);
-        out.push('\n');
-    }
+    render_fill_ratio_table(
+        &c.array_fill_ratio.buckets,
+        "Fill %",
+        "Arrays",
+        true,
+        graphs,
+        out,
+    );
 
     // ── Map Collision Ratio ──────────────────────────────────────────────────
     out.push_str("### Map Collision Ratio\n\n");
@@ -1588,37 +1587,14 @@ pub(crate) fn render_collections(c: &CollectionsAnalysis, graphs: bool, out: &mu
         fmt_count(c.map_collision_ratio.tracked),
         fmt_count(c.map_collision_ratio.total),
     ));
-    if c.map_collision_ratio.buckets.is_empty() {
-        out.push_str("_None._\n\n");
-    } else {
-        let obj_max = c
-            .map_collision_ratio
-            .buckets
-            .iter()
-            .map(|b| b.objects)
-            .max()
-            .unwrap_or(0);
-        let mut headers: Vec<&str> = vec!["Load %", "Maps", "Shallow"];
-        let mut aligns = vec![Align::Right, Align::Right, Align::Right];
-        if graphs {
-            headers.push("");
-            aligns.push(Align::Left);
-        }
-        let mut t = Table::new(&headers, &aligns);
-        for b in &c.map_collision_ratio.buckets {
-            let mut row = vec![
-                fill_ratio_label(b),
-                fmt_count(b.objects),
-                format_bytes(b.shallow),
-            ];
-            if graphs {
-                row.push(bar(b.objects, obj_max, render_graphs::GRAPH_BAR_WIDTH));
-            }
-            t.row(row);
-        }
-        t.render(out);
-        out.push('\n');
-    }
+    render_fill_ratio_table(
+        &c.map_collision_ratio.buckets,
+        "Load %",
+        "Maps",
+        false,
+        graphs,
+        out,
+    );
 
     // ── Constant Primitive Arrays ────────────────────────────────────────────
     out.push_str("### Constant Primitive Arrays\n\n");
