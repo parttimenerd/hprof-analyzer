@@ -132,7 +132,9 @@ fn build_leak_indicators(g: &Graph) -> LeakIndicators {
         }
         let start = g.fwd_offsets[i] as usize;
         let end = g.fwd_offsets[i + 1] as usize;
-        let has_live_referent = g.fwd_targets[start..end]
+        let mut edge_buf: Vec<u32> = Vec::new();
+        g.fwd_targets.copy_range(start, end, &mut edge_buf);
+        let has_live_referent = edge_buf
             .iter()
             .any(|&t| (t & 0x7FFF_FFFF) != 0);
         if !has_live_referent {

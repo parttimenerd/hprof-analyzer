@@ -720,13 +720,19 @@ fn run(
     let mut rpo = rpo;
     let t = Instant::now();
     progress::phase("building inbound references");
-    let (inb_block_off, inb_data) =
-        inbound.build_from_fwd(&g.fwd_offsets, &g.fwd_targets, &rpo.dfn)?;
+    // Move fwd_offsets and fwd_targets into build_from_fwd so they can be freed
+    // INSIDE the call, before Phase 4 allocates inb_data — reducing the peak
+    // from (fwd_offsets + fwd_targets + inb_flat + inb_data coexist) to just
+    // (inb_flat + inb_data coexist). g.fwd_offsets/fwd_targets are empty after.
+    let (inb_block_off, inb_data) = inbound.build_from_fwd(
+        std::mem::take(&mut g.fwd_offsets),
+        std::mem::take(&mut g.fwd_targets),
+        &rpo.dfn,
+    )?;
     log(verbose, "inbound", t.elapsed().as_secs_f64());
 
-    // Free forward CSR: no longer needed now that inbound has been built.
-    g.fwd_offsets = Vec::new();
-    g.fwd_targets = Vec::new();
+    // fwd_offsets and fwd_targets were moved into build_from_fwd and freed
+    // there (before Phase 4) — g.fwd_offsets/fwd_targets are already empty.
     crate::trace::trim();
 
     // Rebuild vertex: dfn is still live and the inbound encode has returned,

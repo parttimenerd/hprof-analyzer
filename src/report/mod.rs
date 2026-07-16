@@ -162,7 +162,7 @@ mod tests {
             jvm_version: None,
             class_obj_class_idx,
             fwd_offsets: Vec::new(),
-            fwd_targets: Vec::new(),
+            fwd_targets: crate::chunkvec::ChunkU32::default(),
             synthetic_root_count,
             system_classloader_shallow: None,
             idom,

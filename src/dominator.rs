@@ -379,7 +379,12 @@ fn link(w: u32, parent: u32, ancestor: &mut [u32]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chunkvec::ChunkU32;
     use crate::rpo_dfs::{rebuild_vertex, rpo_dfs};
+
+    fn make_fwd_tgt(v: Vec<u32>) -> ChunkU32 {
+        ChunkU32::from_vec(v)
+    }
 
     // Build inbound CSR in the production BLOCKED format: predecessors in
     // PRE-ORDER space (node -> dfn, drop unreachable, sort+dedup), each node's
@@ -418,7 +423,7 @@ mod tests {
     fn diamond_idom() {
         // vroot→0, 0→{1,2}, 1→3, 2→3
         let fwd_off = vec![0u32, 2, 3, 4, 4];
-        let fwd_tgt = vec![1u32, 2, 3, 3];
+        let fwd_tgt = make_fwd_tgt(vec![1u32, 2, 3, 3]);
         let roots = vec![0u32];
         let mut rpo = rpo_dfs(4, &roots, &fwd_off, &fwd_tgt);
         rpo.vertex = rebuild_vertex(&rpo.dfn, rpo.parent_pre.len());
@@ -436,7 +441,7 @@ mod tests {
     fn chain_idom() {
         // vroot→0→1→2
         let fwd_off = vec![0u32, 1, 2, 2];
-        let fwd_tgt = vec![1u32, 2u32];
+        let fwd_tgt = make_fwd_tgt(vec![1u32, 2u32]);
         let roots = vec![0u32];
         let mut rpo = rpo_dfs(3, &roots, &fwd_off, &fwd_tgt);
         rpo.vertex = rebuild_vertex(&rpo.dfn, rpo.parent_pre.len());
@@ -452,7 +457,7 @@ mod tests {
     fn two_roots_no_shared_path() {
         // vroot→{0,1}
         let fwd_off = vec![0u32, 0, 0];
-        let fwd_tgt = vec![];
+        let fwd_tgt = make_fwd_tgt(vec![]);
         let roots = vec![0u32, 1u32];
         let mut rpo = rpo_dfs(2, &roots, &fwd_off, &fwd_tgt);
         rpo.vertex = rebuild_vertex(&rpo.dfn, rpo.parent_pre.len());
@@ -470,7 +475,7 @@ mod tests {
         // node 3 reachable from both 1 and 2; node 2 reachable from 0 and 1.
         // idom[2]=0 (0→2 direct and 0→1→2), idom[3]=0 (0→1→3 and 0→..→2→3)
         let fwd_off = vec![0u32, 2, 4, 5, 5];
-        let fwd_tgt = vec![1u32, 2, 2, 3, 3];
+        let fwd_tgt = make_fwd_tgt(vec![1u32, 2, 2, 3, 3]);
         let roots = vec![0u32];
         let mut rpo = rpo_dfs(4, &roots, &fwd_off, &fwd_tgt);
         rpo.vertex = rebuild_vertex(&rpo.dfn, rpo.parent_pre.len());
@@ -494,14 +499,15 @@ mod tests {
         let n = INB_BLOCK * 3 + 5; // spans 4 blocks
         // Forward chain vroot->0->1->...->n-1
         let mut fwd_off = vec![0u32; n + 1];
-        let mut fwd_tgt = Vec::new();
+        let mut fwd_tgt_raw = Vec::new();
         for i in 0..n {
-            fwd_off[i] = fwd_tgt.len() as u32;
+            fwd_off[i] = fwd_tgt_raw.len() as u32;
             if i + 1 < n {
-                fwd_tgt.push((i + 1) as u32);
+                fwd_tgt_raw.push((i + 1) as u32);
             }
         }
-        fwd_off[n] = fwd_tgt.len() as u32;
+        fwd_off[n] = fwd_tgt_raw.len() as u32;
+        let fwd_tgt = make_fwd_tgt(fwd_tgt_raw.clone());
         let roots = vec![0u32];
         let mut rpo = rpo_dfs(n, &roots, &fwd_off, &fwd_tgt);
         rpo.vertex = rebuild_vertex(&rpo.dfn, rpo.parent_pre.len());
@@ -513,7 +519,8 @@ mod tests {
         let (good_off, inb_data) = build_inb(n, &preds, &rpo.dfn);
 
         // Sanity: uncorrupted run is correct.
-        let mut rpo2 = rpo_dfs(n, &roots, &fwd_off, &fwd_tgt);
+        let fwd_tgt2 = make_fwd_tgt(fwd_tgt_raw.clone());
+        let mut rpo2 = rpo_dfs(n, &roots, &fwd_off, &fwd_tgt2);
         rpo2.vertex = rebuild_vertex(&rpo2.dfn, rpo2.parent_pre.len());
         let idom_good = compute_dominators(n, rpo2, &roots, &good_off, &inb_data).unwrap();
         for i in 1..n {
@@ -523,7 +530,8 @@ mod tests {
         // Corrupt block offset 1 (a non-zero block start) to a wrong value.
         let mut bad_off = good_off.clone();
         bad_off[1] = bad_off[1].wrapping_add(1); // shift into the middle of a vbyte
-        let mut rpo3 = rpo_dfs(n, &roots, &fwd_off, &fwd_tgt);
+        let fwd_tgt3 = make_fwd_tgt(fwd_tgt_raw);
+        let mut rpo3 = rpo_dfs(n, &roots, &fwd_off, &fwd_tgt3);
         rpo3.vertex = rebuild_vertex(&rpo3.dfn, rpo3.parent_pre.len());
         let idom_rec = compute_dominators(n, rpo3, &roots, &bad_off, &inb_data).unwrap();
         for i in 1..n {
@@ -544,7 +552,7 @@ mod tests {
         // Nodes: A=0, C=1, S=2, D=3.
         // Forward edges: A→S, C→D, D→S. A and C are GC roots (vroot→A, vroot→C).
         let fwd_off = vec![0u32, 1, 2, 2, 3];
-        let fwd_tgt = vec![2u32, 3u32, 2u32]; // A→S, C→D, D→S
+        let fwd_tgt = make_fwd_tgt(vec![2u32, 3u32, 2u32]); // A→S, C→D, D→S
         let roots = vec![0u32, 1u32]; // A and C are GC roots
         let mut rpo = rpo_dfs(4, &roots, &fwd_off, &fwd_tgt);
         rpo.vertex = rebuild_vertex(&rpo.dfn, rpo.parent_pre.len());

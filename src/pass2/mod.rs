@@ -663,7 +663,7 @@ let mut field_plans_dense: Vec<FieldPlan> = vec![Vec::new(); n_dense_classes];
         // deferred into InboundBuilder so its ~5.5GB does not coexist with
         // the rpo phase's arrays. The forward fill never touches inb_flat.
         let total_edges = *fwd_offsets.last().unwrap() as usize;
-        let mut fwd_targets: Vec<u32> = vec![u32::MAX; total_edges];
+        let mut fwd_targets = crate::chunkvec::ChunkU32::zeroed(total_edges);
         crate::trace::probe("pass2: after fwd_targets alloc");
         // B3: no fwd_cursor clone. fwd_offsets is advanced in place as the
         // write cursor during the fill, then restored by right-shift below.
@@ -708,7 +708,7 @@ let mut field_plans_dense: Vec<FieldPlan> = vec![Vec::new(); n_dense_classes];
         // out_degree above, so each fits within its node's slice.
         for &(src, dst) in &synthetic_edges {
             let pos = fwd_offsets[src as usize] as usize;
-            fwd_targets[pos] = dst;
+            fwd_targets.set(pos, dst);
             fwd_offsets[src as usize] += 1;
         }
 
@@ -1009,7 +1009,7 @@ let mut field_plans_dense: Vec<FieldPlan> = vec![Vec::new(); n_dense_classes];
         field_plans_dense: &[FieldPlan],
         do_fwd: bool,
         do_inb: bool,
-        fwd_targets: &mut Vec<u32>,
+        fwd_targets: &mut crate::chunkvec::ChunkU32,
         fwd_offsets: &mut Vec<u32>,
         inb_flat: &mut crate::chunkvec::ChunkU32,
         in_degree: &mut Vec<u32>,
@@ -1026,7 +1026,7 @@ let mut field_plans_dense: Vec<FieldPlan> = vec![Vec::new(); n_dense_classes];
                         if do_fwd {
                             // fwd_offsets[src] is the in-place write cursor.
                             let pos = fwd_offsets[src] as usize;
-                            fwd_targets[pos] = dst as u32;
+                            fwd_targets.set(pos, dst as u32);
                             fwd_offsets[src] += 1;
                         }
                         if do_inb {
@@ -1190,7 +1190,7 @@ let mut field_plans_dense: Vec<FieldPlan> = vec![Vec::new(); n_dense_classes];
         id_map: &crate::id_map::IdMap,
         do_fwd: bool,
         do_inb: bool,
-        fwd_targets: &mut Vec<u32>,
+        fwd_targets: &mut crate::chunkvec::ChunkU32,
         fwd_offsets: &mut Vec<u32>,
         inb_flat: &mut crate::chunkvec::ChunkU32,
         in_degree: &mut Vec<u32>,
@@ -1219,7 +1219,7 @@ let mut field_plans_dense: Vec<FieldPlan> = vec![Vec::new(); n_dense_classes];
                         if do_fwd {
                             // fwd_offsets[src] is the in-place write cursor.
                             let pos = fwd_offsets[src] as usize;
-                            fwd_targets[pos] = dst as u32;
+                            fwd_targets.set(pos, dst as u32);
                             fwd_offsets[src] += 1;
                         }
                         if do_inb {

@@ -314,8 +314,9 @@ pub struct Graph {
     /// i's out-edge targets in `fwd_targets`. Built via prefix-sum of out-degrees.
     pub fwd_offsets: Vec<u32>,
     /// Flat concatenation of every node's out-edge target indices, sliced by
-    /// `fwd_offsets`. The largest single array pass2 builds (~6GB on big dumps).
-    pub fwd_targets: Vec<u32>,
+    /// `fwd_offsets`. Chunked so the transpose can free consumed chunks incrementally,
+    /// capping the (fwd_targets + inb_flat) coexistence peak.
+    pub fwd_targets: crate::chunkvec::ChunkU32,
     /// Number of GC roots added synthetically (system class roots, etc.)
     /// Reported GC roots = gc_root_indices.len() - synthetic_root_count
     pub synthetic_root_count: usize,
@@ -428,8 +429,8 @@ impl InboundBuilder {
     /// eliminating the ~234 s fourth full-file scan entirely.
     pub fn build_from_fwd(
         self,
-        fwd_offsets: &[u32],
-        fwd_targets: &[u32],
+        fwd_offsets: Vec<u32>,
+        mut fwd_targets: crate::chunkvec::ChunkU32,
         dfn: &[u32],
     ) -> io::Result<(Vec<u64>, Vec<u8>)> {
         let InboundBuilder {
@@ -466,16 +467,31 @@ impl InboundBuilder {
         // dst, write src into inb_flat at in_cursors[dst] and advance the cursor.
         // `in_cursors[i]` starts as the cumulative prefix-sum START for node i
         // and advances to the END as edges are written.
+        // fwd_targets chunks are freed as the read pointer advances past each
+        // 256 MB boundary — capping (fwd_targets + inb_flat) coexistence peak.
         let n_nodes = fwd_offsets.len().saturating_sub(1);
+        let mut buf: Vec<u32> = Vec::with_capacity(4096);
+        let mut next_fwd_free: usize = 1 << 26; // first chunk boundary = 64 M u32 = 256 MB
         for src in 0..n_nodes {
             let lo = fwd_offsets[src] as usize;
             let hi = fwd_offsets[src + 1] as usize;
-            for &dst in &fwd_targets[lo..hi] {
+            // Free fully-consumed fwd_targets chunks as the lo pointer advances.
+            if lo >= next_fwd_free {
+                fwd_targets.free_below(lo);
+                next_fwd_free = ((lo >> 26) + 1) << 26; // next chunk boundary
+            }
+            fwd_targets.copy_range(lo, hi, &mut buf);
+            for &dst in &buf {
                 let dst = dst as usize;
                 inb_flat.set(in_cursors[dst] as usize, src as u32);
                 in_cursors[dst] += 1;
             }
         }
+        // fwd_offsets and fwd_targets are no longer needed; free them before
+        // Phase 4 allocates inb_data to reduce the coexistence peak.
+        drop(fwd_offsets);
+        drop(fwd_targets);
+        crate::trace::trim();
         crate::trace::probe("inbound fwd-transpose: after transpose loop");
 
         // Synthetic edges are already included in fwd_targets (they were
@@ -532,7 +548,7 @@ impl InboundBuilder {
         {
             let mut r = HprofReader::open(&path)?;
             let mut scratch: Vec<u8> = Vec::with_capacity(4096);
-            let mut fwd_t_stub: Vec<u32> = Vec::new();
+            let mut fwd_t_stub: crate::chunkvec::ChunkU32 = crate::chunkvec::ChunkU32::zeroed(0);
             let mut fwd_offsets_stub: Vec<u32> = Vec::new();
             loop {
                 let tag = match r.u1() {

@@ -50,7 +50,12 @@ pub fn rebuild_vertex(dfn: &[u32], count: usize) -> Vec<u32> {
 /// Traverse the graph from the virtual root, assigning DFS pre-order numbers
 /// (`dfn`) and DFS-tree parents (`parent_pre`). `vertex` is returned empty;
 /// see [`RpoResult::vertex`] and [`rebuild_vertex`].
-pub fn rpo_dfs(n: usize, roots: &[u32], fwd_off: &[u32], fwd_tgt: &[u32]) -> RpoResult {
+pub fn rpo_dfs(
+    n: usize,
+    roots: &[u32],
+    fwd_off: &[u32],
+    fwd_tgt: &crate::chunkvec::ChunkU32,
+) -> RpoResult {
     let vroot = n as u32;
 
     let mut parent_pre: Vec<u32> = Vec::with_capacity(n + 1);
@@ -86,7 +91,7 @@ pub fn rpo_dfs(n: usize, roots: &[u32], fwd_off: &[u32], fwd_tgt: &[u32]) -> Rpo
                 roots[*cursor]
             } else {
                 let v = top as usize;
-                fwd_tgt[(fwd_off[v] as usize) + *cursor]
+                fwd_tgt.get((fwd_off[v] as usize) + *cursor)
             };
             *cursor += 1;
 
@@ -126,12 +131,21 @@ pub fn rpo_dfs(n: usize, roots: &[u32], fwd_off: &[u32], fwd_tgt: &[u32]) -> Rpo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chunkvec::ChunkU32;
+
+    fn make_fwd_tgt(v: Vec<u32>) -> ChunkU32 {
+        let mut c = ChunkU32::zeroed(v.len());
+        for (i, &x) in v.iter().enumerate() {
+            c.set(i, x);
+        }
+        c
+    }
 
     #[test]
     fn rpo_diamond() {
         // 0→{1,2}, 1→3, 2→3; roots=[0]
         let fwd_off = vec![0u32, 2, 3, 4, 4];
-        let fwd_tgt = vec![1u32, 2, 3, 3];
+        let fwd_tgt = make_fwd_tgt(vec![1u32, 2, 3, 3]);
         let r = rpo_dfs(4, &[0u32], &fwd_off, &fwd_tgt);
         // All 4 nodes reachable → each has a real pre-order number.
         for v in 0..4usize {
@@ -149,7 +163,7 @@ mod tests {
     fn rpo_unreachable() {
         // 0→1; node 2 unreachable; roots=[0]
         let fwd_off = vec![0u32, 1, 1, 1];
-        let fwd_tgt = vec![1u32];
+        let fwd_tgt = make_fwd_tgt(vec![1u32]);
         let r = rpo_dfs(3, &[0u32], &fwd_off, &fwd_tgt);
         // nodes 0,1 reachable; node 2 unreachable (no DFS number).
         assert_ne!(r.dfn[0], u32::MAX);

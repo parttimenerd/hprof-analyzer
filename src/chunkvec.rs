@@ -17,11 +17,27 @@ const CHUNK_MASK: usize = CHUNK_LEN - 1;
 /// Fill-then-consume u32 array split into fixed 256 MB chunks so each chunk can
 /// be freed the instant its read cursor passes it (see module docs for the RSS
 /// rationale). Empty inner `Vec`s mark already-freed chunks.
+#[derive(Default)]
 pub struct ChunkU32 {
     chunks: Vec<Vec<u32>>,
 }
 
 impl ChunkU32 {
+    /// Returns true if no slots are allocated (len == 0).
+    pub fn is_empty(&self) -> bool {
+        self.chunks.is_empty()
+    }
+
+    /// Build a ChunkU32 from a flat Vec (useful in tests).
+    #[cfg(test)]
+    pub fn from_vec(v: Vec<u32>) -> Self {
+        let mut c = Self::zeroed(v.len());
+        for (i, &x) in v.iter().enumerate() {
+            c.set(i, x);
+        }
+        c
+    }
+
     /// Allocate `len` u32 slots, zero-initialized, across power-of-two chunks.
     pub fn zeroed(len: usize) -> Self {
         let nchunks = len.div_ceil(CHUNK_LEN);
@@ -41,6 +57,14 @@ impl ChunkU32 {
         let c = idx >> CHUNK_LOG;
         let o = idx & CHUNK_MASK;
         self.chunks[c][o] = val;
+    }
+
+    /// Get the value at `idx`.
+    #[inline(always)]
+    pub fn get(&self, idx: usize) -> u32 {
+        let c = idx >> CHUNK_LOG;
+        let o = idx & CHUNK_MASK;
+        self.chunks[c][o]
     }
 
     /// Free every chunk whose slots are entirely below `boundary` (exclusive).
