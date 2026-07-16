@@ -120,23 +120,30 @@ fn build_leak_indicators(g: &Graph) -> LeakIndicators {
     // A cleared referent means the entry has no forward edges to a live non-zero object.
     // Excluded (weak-ref) edges are high-bit tagged (0x8000_0000); we mask to get the index.
     let tl_suffix = "ThreadLocal$ThreadLocalMap$Entry";
+    // Precompute which class indices match the suffix to avoid per-object string scan.
+    let tl_class_set: std::collections::HashSet<usize> = g
+        .class_names
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| n.ends_with(tl_suffix))
+        .map(|(ci, _)| ci)
+        .collect();
     let n_nodes = g.fwd_offsets.len().saturating_sub(1);
     let mut thread_local_null_key_count: u64 = 0;
-    for i in 0..n_nodes {
-        let ci = g.class_idx[i] as usize;
-        if ci >= g.class_names.len() {
-            continue;
-        }
-        if !g.class_names[ci].ends_with(tl_suffix) {
-            continue;
-        }
-        let start = g.fwd_offsets[i] as usize;
-        let end = g.fwd_offsets[i + 1] as usize;
+    if !tl_class_set.is_empty() {
         let mut edge_buf: Vec<u32> = Vec::new();
-        g.fwd_targets.copy_range(start, end, &mut edge_buf);
-        let has_live_referent = edge_buf.iter().any(|&t| (t & 0x7FFF_FFFF) != 0);
-        if !has_live_referent {
-            thread_local_null_key_count += 1;
+        for i in 0..n_nodes {
+            let ci = g.class_idx[i] as usize;
+            if !tl_class_set.contains(&ci) {
+                continue;
+            }
+            let start = g.fwd_offsets[i] as usize;
+            let end = g.fwd_offsets[i + 1] as usize;
+            g.fwd_targets.copy_range(start, end, &mut edge_buf);
+            let has_live_referent = edge_buf.iter().any(|&t| (t & 0x7FFF_FFFF) != 0);
+            if !has_live_referent {
+                thread_local_null_key_count += 1;
+            }
         }
     }
 
