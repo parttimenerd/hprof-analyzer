@@ -98,3 +98,163 @@ fn bundle_is_within_size_budget() {
         "web/dist/bundle.js is {size} bytes, over the {BUDGET}-byte budget"
     );
 }
+
+// ── Helpers for HPROF-based tests ──────────────────────────────────────────
+
+fn fixture_is_present(path: &str) -> bool {
+    std::fs::metadata(path)
+        .map(|m| m.len() >= 1024)
+        .unwrap_or(false)
+}
+
+fn analyze_to_html(hprof: &str, extra_args: &[&str]) -> String {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_hprof-analyzer"));
+    cmd.arg(hprof).args(extra_args).arg("--format").arg("html");
+    let out = cmd.output().expect("failed to run hprof-analyzer");
+    assert!(
+        out.status.success(),
+        "analyze failed for {hprof} with args {extra_args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).expect("HTML is UTF-8")
+}
+
+/// The section IDs live inside the minified JS bundle (`id:"<name>"` in JSX
+/// object notation). The bundle is deflate+base64-encoded in the HTML, so we
+/// check the on-disk bundle.js source rather than the emitted HTML bytes.
+fn bundle_js() -> String {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/web/dist/bundle.js");
+    std::fs::read_to_string(path).expect("web/dist/bundle.js must exist")
+}
+
+fn bundle_contains_section_id(bundle: &str, id: &str) -> bool {
+    bundle.contains(&format!("id:\"{id}\""))
+}
+
+/// Assert that the HTML output looks well-formed (has both embedded blobs, no
+/// external references) and the shared bundle includes the core section IDs.
+fn assert_core_sections(html: &str, label: &str) {
+    // Structural: the two blobs must always be present in any HTML output.
+    assert!(
+        html.contains("id=\"report-data\""),
+        "{label}: missing id=\"report-data\" blob"
+    );
+    assert!(
+        html.contains("id=\"app-bundle\""),
+        "{label}: missing id=\"app-bundle\" blob"
+    );
+    // No stray visible NaN / undefined that would indicate a JS rendering bug.
+    assert!(
+        !html.contains(">NaN<") && !html.contains(">undefined<"),
+        "{label}: HTML contains NaN or undefined in visible text"
+    );
+    // Core section IDs must exist in the bundle source.
+    let bundle = bundle_js();
+    for id in &["triage", "overview", "leaks", "collections", "glossary"] {
+        assert!(
+            bundle_contains_section_id(&bundle, id),
+            "{label}: bundle missing section id:\"{id}\""
+        );
+    }
+}
+
+#[test]
+fn html_all_fixtures_default() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
+    let entries: Vec<_> = std::fs::read_dir(dir)
+        .expect("fixtures dir")
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().map(|x| x == "hprof").unwrap_or(false))
+        .collect();
+
+    assert!(!entries.is_empty(), "no .hprof fixtures found");
+
+    let mut ran = 0;
+    for entry in entries {
+        let path = entry.path();
+        let path_str = path.to_str().unwrap();
+        if !fixture_is_present(path_str) {
+            continue; // LFS pointer stub — skip
+        }
+        let label = path.file_name().unwrap().to_string_lossy().to_string();
+        let html = analyze_to_html(path_str, &[]);
+        assert_core_sections(&html, &label);
+        ran += 1;
+    }
+
+    if ran == 0 {
+        eprintln!("html_all_fixtures_default: all fixtures are LFS stubs, skipped");
+    }
+}
+
+#[test]
+fn html_all_flags_philosophers() {
+    let hprof = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/dump_4_philosophers.hprof"
+    );
+    if !fixture_is_present(hprof) {
+        eprintln!("html_all_flags_philosophers: fixture is LFS stub, skipped");
+        return;
+    }
+
+    // Verify the bundle always has the flag-gated section IDs.
+    let bundle = bundle_js();
+    for id in &["duplicate-strings", "container-attribution"] {
+        assert!(
+            bundle_contains_section_id(&bundle, id),
+            "bundle missing flag-gated section id:\"{id}\""
+        );
+    }
+
+    // Smoke-test each flag combination: CLI must succeed and produce valid HTML.
+    let flag_combos: &[&[&str]] = &[
+        &[],
+        &["--dup-strings"],
+        &["--collections"],
+        &["--dup-strings", "--collections"],
+        &["--detail", "minimal"],
+        &["--detail", "max"],
+    ];
+
+    for args in flag_combos {
+        let label = format!("philosophers {:?}", args);
+        let html = analyze_to_html(hprof, args);
+        assert_core_sections(&html, &label);
+    }
+}
+
+#[test]
+fn html_anchor_ids_present() {
+    // render_html() uses the JSON fixture to produce the HTML.
+    let html = render_html();
+
+    // Confirm the HTML is well-formed (blobs present, no NaN/undefined).
+    assert_core_sections(&html, "json-fixture");
+
+    // These IDs must always exist in the bundle (always-on sections).
+    // The bundle is deflate+base64 encoded inside the HTML, so we check the
+    // on-disk bundle.js which is what gets compiled into the binary.
+    let bundle = bundle_js();
+    let required_ids = [
+        "triage",
+        "overview",
+        "record-census",
+        "leaks",
+        "top",
+        "dominator-analysis",
+        "threads",
+        "arrays-by-size",
+        "collections",
+        "references",
+        "unreachable-objects",
+        "glossary",
+    ];
+
+    for id in &required_ids {
+        assert!(
+            bundle_contains_section_id(&bundle, id),
+            "bundle missing required section id:\"{id}\""
+        );
+    }
+}
