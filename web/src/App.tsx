@@ -323,8 +323,8 @@ function KpiStrip({ report }: { report: Report }) {
         <div className="kpi-label">Top suspect share</div>
       </div>
       <div className="kpi">
-        <div className="kpi-value" title={dominantClass}>
-          <code>{dominantClass}</code>
+        <div className="kpi-value">
+          <code title={dominantClass}>{dominantClass}</code>
         </div>
         <div className="kpi-label">Dominant retainer</div>
       </div>
