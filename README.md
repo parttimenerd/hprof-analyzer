@@ -103,7 +103,10 @@ comfortably, or from a script.
 it, and put `hprof-analyzer` on your `PATH`. Prebuilt targets: Linux x86_64
 (glibc and static musl), macOS aarch64, Windows x86_64.
 
-**With Cargo** (needs a recent Rust toolchain, edition 2024):
+**With Cargo.** The crate is Rust **edition 2024**, so it needs **Rust 1.85 or
+newer**; a current stable toolchain is recommended (CI builds on `stable`).
+Install [rustup](https://rustup.rs/) and run `rustup update stable` if your
+toolchain is older, then:
 
 ```sh
 cargo install --path .
@@ -117,6 +120,34 @@ cd hprof-analyzer
 cargo build --release
 # binary at target/release/hprof-analyzer
 ```
+
+## Building and testing
+
+Requires a stable Rust toolchain (1.85+, edition 2024) — see
+[Install](#install). All commands run from the repository root:
+
+```sh
+cargo build --release        # optimized binary at target/release/hprof-analyzer
+cargo test --release         # unit tests + JSON-schema + report parity fixtures
+cargo fmt --all -- --check   # formatting gate (matches CI)
+cargo clippy --release --all-targets -- -D warnings   # lint gate (matches CI)
+```
+
+CI (`.github/workflows/ci.yml`) runs the same `fmt`, `clippy -D warnings`, and
+`test` steps on `stable`. The parity fixtures the tests read live under
+`tests/fixtures/` (checked in alongside the tests).
+
+The self-contained HTML report embeds a small React bundle
+(`web/dist/bundle.js`). A prebuilt bundle is committed, so a plain
+`cargo build` needs no Node.js. When you change the web sources under `web/src/`,
+rebuild the bundle before it is picked up:
+
+```sh
+cd web && npm install && npm run build   # regenerates web/dist/bundle.js (needs Node.js)
+```
+
+`build.rs` regenerates the bundle automatically when `web/package.json` and Node
+are present; otherwise it falls back to the committed bundle.
 
 ## Usage
 
