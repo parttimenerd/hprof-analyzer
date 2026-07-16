@@ -427,7 +427,10 @@ function ClassHistogramTable({ rows }: { rows: HistRow[] }) {
             <tr key={i}>
               <td className="num">{i + 1}</td>
               <td>
-                <code>{h.pretty_class}</code>
+                <span className="copy-cell">
+                  <code>{h.pretty_class}</code>
+                  <CopyBtn text={h.pretty_class} />
+                </span>
               </td>
               {showLoader && (
                 <td>
@@ -456,6 +459,22 @@ function LoaderCell({ label }: { label?: string | null }) {
     <code className="loader" title={label ?? undefined}>
       {short}
     </code>
+  );
+}
+
+function CopyBtn({ text }: { text: string }) {
+  const [copied, setCopied] = React.useState(false);
+  const copy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigator.clipboard?.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    });
+  };
+  return (
+    <button className="copy-btn" onClick={copy} title="Copy class name" aria-label="Copy class name">
+      {copied ? "✓" : "⎘"}
+    </button>
   );
 }
 
@@ -1396,7 +1415,10 @@ function TopConsumersSection({ report }: { report: Report }) {
           {clsSort.sorted.map((c, i) => (
             <tr key={i}>
               <td>
-                <code>{c.pretty_class}</code>
+                <span className="copy-cell">
+                  <code>{c.pretty_class}</code>
+                  <CopyBtn text={c.pretty_class} />
+                </span>
               </td>
               <td className="num">{fmtCount(c.instances)}</td>
               <td className="num" title={fmtExactBytes(c.retained)}>
@@ -1464,7 +1486,10 @@ function ThreadLocalsTable({ objs }: { objs: ThreadLocalObj[] }) {
           {objs.map((o, i) => (
             <tr key={i}>
               <td>
-                <code>{o.display_class}</code>
+                <span className="copy-cell">
+                  <code>{o.display_class}</code>
+                  <CopyBtn text={o.display_class} />
+                </span>
               </td>
               <td className="num">{formatBytes(o.shallow)}</td>
               <td className="num">{formatBytes(o.retained)}</td>
@@ -2204,7 +2229,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
           <tbody>
             {drops.map((r, i) => (
               <tr key={i}>
-                <td><code>{r.display_class}</code></td>
+                <td><span className="copy-cell"><code>{r.display_class}</code><CopyBtn text={r.display_class} /></span></td>
                 <td className="num">{formatBytes(r.retained)}</td>
                 <td>{r.largest_child_class ? <code>{r.largest_child_class}</code> : "—"}</td>
                 <td className="num">{formatBytes(r.largest_child_retained)}</td>
@@ -2236,7 +2261,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
           <tbody>
             {idoms.map((r, i) => (
               <tr key={i}>
-                <td><code>{r.dominator_class}</code></td>
+                <td><span className="copy-cell"><code>{r.dominator_class}</code><CopyBtn text={r.dominator_class} /></span></td>
                 <td className="num">{fmtCount(r.dominator_count)}</td>
                 <td className="num">{fmtCount(r.dominated_count)}</td>
                 <td className="num">{formatBytes(r.dominator_shallow)}</td>

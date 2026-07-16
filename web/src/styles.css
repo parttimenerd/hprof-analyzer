@@ -144,6 +144,12 @@ th.sortable.active { color: var(--accent); }
 .sysprops th { position: sticky; top: 0; background: var(--card); }
 .sysprop-val { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.82rem; word-break: break-word; }
 
+.copy-cell { display: inline-flex; align-items: center; gap: 0.3rem; max-width: 100%; }
+.copy-cell code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.copy-btn { visibility: hidden; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 0.78rem; padding: 0 0.15rem; line-height: 1; border-radius: 3px; }
+.copy-btn:hover, .copy-btn:focus { color: var(--accent); visibility: visible; outline: none; }
+td:hover .copy-btn { visibility: visible; }
+
 /* Print: hide interactive chrome, expand collapsibles, avoid mid-card breaks. */
 @media print {
   .toc, .back-to-top, .theme-toggle-wrap { display: none !important; }
