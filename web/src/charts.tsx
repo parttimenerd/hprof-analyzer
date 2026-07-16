@@ -94,32 +94,53 @@ function Pie({ data, fmt, donut, titles, onSlice }: { data: Slice[]; fmt: (n: nu
 }
 
 // ── Horizontal bar ──────────────────────────────────────────────────────────
-function HBar({ data, fmt, barColor, titles, onBar, labelWidth }: { data: Slice[]; fmt: (n: number) => string; barColor?: number; titles?: string[]; onBar?: (i: number) => void; labelWidth?: number }) {
+function HBar({ data, fmt, barColor, titles, onBar }: { data: Slice[]; fmt: (n: number) => string; barColor?: number; titles?: string[]; onBar?: (i: number) => void; labelWidth?: number }) {
   const max = data.reduce((m, d) => Math.max(m, d.value), 0);
   if (max <= 0) return null;
+  const t = themeColors();
+  const barCol = barColor != null ? color(barColor) : undefined;
+  const chartData = {
+    labels: data.map((d) => d.name),
+    datasets: [
+      {
+        data: data.map((d) => d.value),
+        backgroundColor: barCol ?? data.map((_, i) => color(i)),
+        borderRadius: 3,
+      },
+    ],
+  };
+  const options = {
+    indexAxis: "y" as const,
+    responsive: true,
+    maintainAspectRatio: false,
+    onClick: onBar
+      ? (_e: unknown, els: { index: number }[]) => {
+          if (els.length) onBar(els[0].index);
+        }
+      : undefined,
+    scales: {
+      x: {
+        ticks: { color: t.muted, callback: (v: number | string) => fmt(Number(v)) },
+        grid: { color: t.border },
+      },
+      y: {
+        ticks: { color: t.fg, font: { size: 11 } },
+        grid: { display: false },
+      },
+    },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        callbacks: {
+          label: (ctx: { dataIndex: number }) => titles?.[ctx.dataIndex] ?? `${data[ctx.dataIndex].name} — ${fmt(data[ctx.dataIndex].value)}`,
+        },
+      },
+    },
+  };
+  const height = Math.max(140, data.length * 26 + 40);
   return (
-    <div className="chart-wrap">
-      {data.map((d, i) => (
-        <div key={i} style={{ display: "flex", alignItems: "center", gap: "0.5rem", margin: "0.18rem 0", fontSize: "0.8rem", ...(onBar ? { cursor: "pointer" } : {}) }} {...(titles?.[i] ? { title: titles[i] } : {})} {...(onBar ? { onClick: () => onBar(i) } : {})}>
-          <span style={{ width: labelWidth ?? 220, textAlign: "right", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={d.name}>
-            {d.name}
-          </span>
-          <span style={{ flex: 1, background: "var(--border)", borderRadius: 3, height: 16, position: "relative" }}>
-            <span
-              style={{
-                position: "absolute",
-                left: 0,
-                top: 0,
-                bottom: 0,
-                width: `${(d.value / max) * 100}%`,
-                background: color(barColor ?? i),
-                borderRadius: 3,
-              }}
-            />
-          </span>
-          <span style={{ width: 90, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{fmt(d.value)}</span>
-        </div>
-      ))}
+    <div className="chart-wrap" style={{ position: "relative", height, maxWidth: 720 }}>
+      <ChartBar data={chartData} options={options} />
     </div>
   );
 }
