@@ -1,6 +1,6 @@
 // esbuild build for the hprof-analyzer HTML report.
 //
-// Bundles src/index.tsx (React + recharts) into a single minified IIFE with
+// Bundles src/index.tsx (React + chart.js / react-chartjs-2) into a single minified IIFE with
 // CSS inlined, written to dist/bundle.js. The bundle is embedded COMPRESSED in
 // the emitted HTML, so this file is the whole client app.
 //
@@ -10,7 +10,7 @@
 import { build } from "esbuild";
 import { readFileSync, statSync } from "node:fs";
 
-// ≤ 350 KB minified bundle budget (plan §6.1c). Enforced here so a source
+// ≤ 400 KB minified bundle budget. Enforced here so a source
 // change that blows the budget fails the build (and therefore CI).
 const BUDGET_BYTES = 400 * 1024;
 
