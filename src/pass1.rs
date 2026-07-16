@@ -1,11 +1,12 @@
 //! Pass 1: the first scan over the heap dump. It reads STRING/LOAD_CLASS/
 //! STACK_FRAME/STACK_TRACE records and every heap-dump sub-record, building the
 //! `id_map` and one entry per object across a set of parallel per-object arrays
-//! (`class_ids`, `shallow_sizes`, `kind`, `elem_count`, and optionally
-//! `alloc_stack_serial`) that stay 1:1 aligned by index. It also records
-//! class/thread metadata and GC roots. This pass is on the peak-RSS-critical
-//! path and its output feeds byte-exact parity tests, so it is written to keep
-//! large scratch arrays from coexisting.
+//! (`class_ids`, `kind`, `elem_count`, and optionally `alloc_stack_serial`)
+//! that stay 1:1 aligned by index. It also records class/thread metadata and
+//! GC roots. This pass is on the peak-RSS-critical path and its output feeds
+//! byte-exact parity tests, so it is written to keep large scratch arrays from
+//! coexisting. Shallow sizes are NOT built here — pass2 Phase 0b recomputes
+//! them with the authoritative MAT formula.
 
 use std::{
     collections::HashMap,
@@ -69,8 +70,6 @@ pub struct Pass1 {
     pub class_ids: Vec<u32>,
     /// Distinct class-object addresses; class_ids[i] indexes this for kind 0/1/3.
     pub class_addr_table: Vec<u64>,
-    /// Per-object shallow size in bytes (1:1 with the object arrays).
-    pub shallow_sizes: Vec<u32>,
     /// Per-object HPROF allocation stack-trace serial (u4), 1:1 with the other
     /// per-object parallel arrays. Only populated when `--alloc-sites` capture
     /// is on; otherwise left empty so the default path costs zero extra RSS.
@@ -162,7 +161,6 @@ impl Pass1 {
         // CLASS_MASK strips those bits when accessing the class index or type code.
         let mut class_addr_table: Vec<u64> = Vec::new();
         let mut class_addr_to_idx: HashMap<u64, u32> = HashMap::default();
-        let mut tmp_shallow: Vec<u32> = Vec::new();
         let mut tmp_elem_count: Vec<u32> = Vec::new();
         // Per-object alloc stack-trace serial. Only grown when capturing; stays
         // empty (zero RSS) on the default path.
@@ -258,7 +256,6 @@ impl Pass1 {
                         &mut tmp_class_ids,
                         &mut class_addr_table,
                         &mut class_addr_to_idx,
-                        &mut tmp_shallow,
                         &mut tmp_elem_count,
                         &mut tmp_alloc_serial,
                         &mut gc_root_addrs,
@@ -291,21 +288,6 @@ impl Pass1 {
         drop(class_addr_to_idx);
         crate::trace::trim(); // return allocator free-list to OS before sort peak
 
-        // Fix up shallow sizes where class wasn't yet seen at scan time.
-        // tmp_class_ids holds kind (bits 30-31) + interned class index (bits 0-29).
-        // kind 1/2 (arrays) skip; kinds 0/3 reference a class for shallow lookup.
-        const CLASS_MASK: u32 = 0x3FFF_FFFF;
-        for (i, &cidx_packed) in tmp_class_ids.iter().enumerate() {
-            let kind = (cidx_packed >> 30) as u8;
-            if tmp_shallow[i] == 0 && (kind == 0 || kind == 3) {
-                let cidx = cidx_packed & CLASS_MASK;
-                let addr = class_addr_table[cidx as usize];
-                if let Some(ci) = class_map.get(&addr) {
-                    tmp_shallow[i] = ci.instance_size;
-                }
-            }
-        }
-
         // Sort by address and deduplicate (same address may appear under
         // multiple roots). `order` is a u32 permutation (heaps hold < 4 G
         // objects, so u32 suffices). To keep `order` (2 GB @514M) off the
@@ -329,7 +311,6 @@ impl Pass1 {
         apply_permutation_in_place(&mut order, |x, y| {
             tmp_addrs.swap(x, y);
             tmp_class_ids.swap(x, y);
-            tmp_shallow.swap(x, y);
             tmp_elem_count.swap(x, y);
             // Only permute the alloc-serial array when it was actually captured
             // (1:1 with the others). Empty on the default path — leave untouched.
@@ -356,7 +337,6 @@ impl Pass1 {
                     // Compact every parallel array by the SAME (write, rank)
                     // shift so all payloads stay 1:1 aligned by index.
                     tmp_class_ids[write] = tmp_class_ids[rank];
-                    tmp_shallow[write] = tmp_shallow[rank];
                     tmp_elem_count[write] = tmp_elem_count[rank];
                     if !tmp_alloc_serial.is_empty() {
                         tmp_alloc_serial[write] = tmp_alloc_serial[rank];
@@ -377,7 +357,6 @@ impl Pass1 {
         // The payload arrays are already compacted (unique, address-sorted) in
         // their prefix [0, m); truncate and reuse them directly as outputs.
         tmp_class_ids.truncate(m);
-        tmp_shallow.truncate(m);
         tmp_elem_count.truncate(m);
         // Only truncate the alloc-serial array when captured (else it is empty).
         if !tmp_alloc_serial.is_empty() {
@@ -385,13 +364,13 @@ impl Pass1 {
         }
         // Unpack kind (bits 30-31) from tmp_class_ids and strip to clean class index.
         // Done after dedup/truncate so the extraction is over the final m unique objects.
+        const CLASS_MASK: u32 = 0x3FFF_FFFF;
         let mut kind: Vec<u8> = Vec::with_capacity(m);
         for c in &mut tmp_class_ids {
             kind.push((*c >> 30) as u8);
             *c &= CLASS_MASK;
         }
         let class_ids = tmp_class_ids;
-        let shallow_sizes = tmp_shallow;
         let elem_count = tmp_elem_count;
         let alloc_stack_serial = tmp_alloc_serial;
 
@@ -402,7 +381,6 @@ impl Pass1 {
             id_map,
             class_ids,
             class_addr_table,
-            shallow_sizes,
             alloc_stack_serial,
             kind,
             elem_count,
@@ -445,7 +423,6 @@ fn scan_heap_segment(
     tmp_class_ids: &mut Vec<u32>,
     class_addr_table: &mut Vec<u64>,
     class_addr_to_idx: &mut HashMap<u64, u32>,
-    tmp_shallow: &mut Vec<u32>,
     tmp_elem_count: &mut Vec<u32>,
     tmp_alloc_serial: &mut Vec<u32>,
     gc_root_addrs: &mut Vec<u64>,
@@ -529,7 +506,6 @@ fn scan_heap_segment(
                     });
                     tmp_class_ids.push(idx | (3u32 << 30)); // class-of-class resolved later in pass2
                 }
-                tmp_shallow.push(0); // pass2 recalculates shallow size for class objects
                 tmp_elem_count.push(0);
                 // CLASS_DUMP has no per-object alloc serial; push 0 so the array
                 // stays 1:1 with the object ordering.
@@ -542,10 +518,6 @@ fn scan_heap_segment(
                 let class_id = r.id()?;
                 let data_len = r.u4()? as u64;
                 r.skip(data_len)?;
-                let shallow = class_map
-                    .get(&class_id)
-                    .map(|c| c.instance_size)
-                    .unwrap_or(0);
                 tmp_addrs.push(addr);
                 {
                     let idx = *class_addr_to_idx.entry(class_id).or_insert_with(|| {
@@ -555,7 +527,6 @@ fn scan_heap_segment(
                     });
                     tmp_class_ids.push(idx); // kind=0, bits 30-31 = 0
                 }
-                tmp_shallow.push(shallow);
                 tmp_elem_count.push(0);
                 remaining -= ids + 4 + ids + 4 + data_len;
                 *instance_count += 1;
@@ -569,9 +540,6 @@ fn scan_heap_segment(
                 let count = r.u4()? as u64;
                 let elem_class_id = r.id()?;
                 r.skip(count * ids)?;
-                // shallow size: addr + stack + count + class + count*id elems
-                // (uses file id_size; exact formula in pass2/report)
-                let shallow = (ids + ids + 4 + 4 + count * ids) as u32;
                 tmp_addrs.push(addr);
                 {
                     let idx = *class_addr_to_idx.entry(elem_class_id).or_insert_with(|| {
@@ -581,7 +549,6 @@ fn scan_heap_segment(
                     });
                     tmp_class_ids.push(idx | (1u32 << 30)); // kind=1 object array
                 }
-                tmp_shallow.push(shallow);
                 tmp_elem_count.push(count as u32);
                 remaining -= ids + 4 + 4 + ids + count * ids;
                 *obj_array_count += 1;
@@ -598,13 +565,10 @@ fn scan_heap_segment(
                     .map(|t| t.byte_size() as u64)
                     .unwrap_or(1);
                 r.skip(count * elem_size)?;
-                // shallow: addr + stack + count + type_code + count*elem_size
-                let shallow = (ids + ids + 4 + 4 + 1 + count * elem_size) as u32;
                 tmp_addrs.push(addr);
                 // kind 2 stores the raw element type code (0-11) in class_ids bits 0-29,
                 // with kind=2 packed into bits 30-31.
                 tmp_class_ids.push((2u32 << 30) | elem_type_code as u32);
-                tmp_shallow.push(shallow);
                 tmp_elem_count.push(count as u32);
                 remaining -= ids + 4 + 4 + 1 + count * elem_size;
                 *prim_array_count += 1;
@@ -1055,7 +1019,6 @@ mod tests {
         }
         let p = Pass1::run(DUMP).unwrap();
         assert_eq!(p.id_map.len(), p.class_ids.len(), "class_ids len");
-        assert_eq!(p.id_map.len(), p.shallow_sizes.len(), "shallow_sizes len");
     }
 
     #[test]

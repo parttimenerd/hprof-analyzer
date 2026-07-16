@@ -223,8 +223,7 @@ impl Pass2 {
         // loop below, which must run AFTER the `get_or_insert_class` closure is
         // last used (~line 913, it holds a mutable borrow of `class_loader_id`).
         // We therefore keep `class_ids` alive until after that loop and free it
-        // there; only the two vecs not needed by the loop are freed here.
-        p1.shallow_sizes = Vec::new();
+        // there; only the vec not needed by the loop is freed here.
         // ── Fold: arrays-by-size histogram ───────────────────────────────
         // Bucket every array (kind 1=obj, 2=prim) by power-of-two element
         // length into a per-kind BTreeMap keyed by `upper_len`, accumulating
