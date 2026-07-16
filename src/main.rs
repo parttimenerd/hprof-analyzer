@@ -711,13 +711,27 @@ fn run(
     let rpo = rpo_dfs::rpo_dfs(g.n, &g.gc_root_indices, &g.fwd_offsets, &g.fwd_targets);
     log(verbose, "rpo", t.elapsed().as_secs_f64());
 
+    // Compress parent_pre (~2 GB dense) between RPO and inbound to reduce
+    // the peak during the transpose loop. parent_pre is not needed until
+    // compute_dominators; holding it compressed saves ~1.5 GB at inb_flat alloc
+    // and at the transpose peak. Decompressed just before compute_dominators.
+    let mut rpo = rpo;
+    let parent_pre_count = rpo.parent_pre.len(); // count needed for rebuild_vertex
+    let parent_pre_c = if compress != cvec::Codec::None {
+        let c = cvec::CompressedU32::compress(&rpo.parent_pre, compress)?;
+        rpo.parent_pre = Vec::new();
+        Some(c)
+    } else {
+        None
+    };
+    crate::trace::probe("main: after compress parent_pre (before inbound)");
+
     // Build the inbound CSR by transposing the forward CSR, avoiding a third
     // full-file scan. The fwd CSR and rpo.dfn are both still alive here:
     // dfn is needed for node→pre-order translation in Phase 4 of the encode.
     // After the transpose the fwd CSR and id_map (inside InboundBuilder) are
     // freed; vertex is rebuilt once inb_flat encoding is done so it never
     // coexists with the large inb_flat intermediate.
-    let mut rpo = rpo;
     let t = Instant::now();
     progress::phase("building inbound references");
     // Move fwd_offsets and fwd_targets into build_from_fwd so they can be freed
@@ -738,11 +752,17 @@ fn run(
     // Rebuild vertex: dfn is still live and the inbound encode has returned,
     // so the ~2 GB vertex never coexists with inb_flat. vertex = invert(dfn)
     // is a pure O(n) pass; the dominator reads it next.
-    let count = rpo.parent_pre.len();
+    let count = parent_pre_count;
     rpo.vertex = rpo_dfs::rebuild_vertex(&rpo.dfn, count);
     crate::trace::probe("main: after rebuild_vertex (post-inbound, dfn live)");
     rpo.dfn = Vec::new();
     crate::trace::trim();
+
+    // Restore parent_pre from compressed blob before the dominator stage.
+    if let Some(c) = parent_pre_c {
+        rpo.parent_pre = c.restore()?;
+        crate::trace::probe("main: after restore parent_pre (before dominator)");
+    }
 
     let t = Instant::now();
     progress::phase("computing dominators");
