@@ -2759,6 +2759,17 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
 }
 
 export default function App({ report }: { report: Report }) {
+  // Scroll to the URL hash once the DOM has been painted after initial render.
+  // The browser fires the native hash-scroll before React mounts, so we must
+  // replay it here.
+  React.useEffect(() => {
+    const hash = window.location.hash.slice(1);
+    if (!hash) return;
+    requestAnimationFrame(() => {
+      document.getElementById(hash)?.scrollIntoView({ behavior: "smooth" });
+    });
+  }, []); // empty deps → runs once after first render
+
   return (
     <div className="app">
       <h1>
