@@ -82,6 +82,9 @@ mod tests {
                 duplicate_classes: vec![],
                 record_census: Default::default(),
                 duplicate_strings: None,
+                heap_fragmentation_ratio: 0.0,
+                top_class_concentration_bp: 0,
+                gc_roots_retained_by_type: vec![],
             },
             leaks: LeakSuspects {
                 total_shallow: 1000,
@@ -108,6 +111,7 @@ mod tests {
             collections: Default::default(),
             references: Default::default(),
             collection_attribution: None,
+            leak_indicators: Default::default(),
         }
     }
 

@@ -885,6 +885,26 @@ fn build_significant_frames(
     (frames_out, max_local_retained)
 }
 
+/// Compute the heap fragmentation ratio: unreachable shallow heap as a fraction
+/// of total heap (reachable + unreachable). Returns 0.0 for an empty heap.
+fn compute_fragmentation_ratio(total_shallow: u64, unreachable_shallow: u64) -> f64 {
+    let denom = total_shallow + unreachable_shallow;
+    if denom == 0 { 0.0 } else { unreachable_shallow as f64 / denom as f64 }
+}
+
+/// Compute the retained heap share of the single largest class in integer basis
+/// points (100 bp = 1%). The histogram must already be sorted by retained
+/// descending (as produced by `build_system_overview`). Returns 0 when empty.
+fn compute_top_class_concentration_bp(histogram: &[crate::report::HistRow], total_retained: u64) -> u32 {
+    if total_retained == 0 {
+        return 0;
+    }
+    histogram
+        .first()
+        .map(|r| ((r.retained.saturating_mul(10_000)) / total_retained).min(10_000) as u32)
+        .unwrap_or(0)
+}
+
 /// Aggregate all "System Overview" scalars, the class histogram, and the
 /// derived breakdowns (GC-roots-by-type, heap composition, dominator-depth
 /// histogram, retention concentration, loader rollup, duplicate classes) in a
@@ -1304,6 +1324,35 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
         (rollup, dups)
     };
 
+    // Heap-shape scalars.
+    let heap_fragmentation_ratio = compute_fragmentation_ratio(total_shallow, unreachable_shallow);
+    let top_class_concentration_bp =
+        compute_top_class_concentration_bp(&histogram, retention_concentration.total_retained);
+
+    // GC roots retained by type: aggregate retained heap per root type.
+    let gc_roots_retained_by_type: Vec<crate::report::GcRootRetainedRow> = {
+        use std::collections::HashMap;
+        let mut by_type: HashMap<String, (u64, u64)> = HashMap::new();
+        for (&idx, &ty) in g.gc_root_indices.iter().zip(g.gc_root_types.iter()) {
+            if let Some(label) = gc_root_type_label_opt(ty) {
+                let retained = g.retained.get(idx as usize).copied().unwrap_or(0);
+                let e = by_type.entry(label.to_string()).or_insert((0, 0));
+                e.0 += 1;
+                e.1 = e.1.saturating_add(retained);
+            }
+        }
+        let mut rows: Vec<crate::report::GcRootRetainedRow> = by_type
+            .into_iter()
+            .map(|(root_type, (count, retained))| crate::report::GcRootRetainedRow {
+                root_type,
+                count,
+                retained,
+            })
+            .collect();
+        rows.sort_by(|a, b| b.retained.cmp(&a.retained).then(a.root_type.cmp(&b.root_type)));
+        rows
+    };
+
     // Compressed OOPs: references narrower than identifiers (id_size 8 -> ref 4).
     let compressed_oops = Some(g.ref_size < g.id_size);
     let dump_creation = if g.header_timestamp_ms != 0 {
@@ -1347,9 +1396,9 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
         duplicate_classes,
         record_census: g.record_census.clone(),
         duplicate_strings: g.dup_strings.clone(),
-        heap_fragmentation_ratio: 0.0,
-        top_class_concentration_bp: 0,
-        gc_roots_retained_by_type: vec![],
+        heap_fragmentation_ratio,
+        top_class_concentration_bp,
+        gc_roots_retained_by_type,
     }
 }
 
@@ -2238,6 +2287,26 @@ fn build_top_consumers(g: &Graph, top_n: usize) -> TopConsumers {
         threshold_bp,
         biggest_packages,
         size_distribution,
+    }
+}
+
+#[cfg(test)]
+mod fragmentation_tests {
+    use super::*;
+
+    #[test]
+    fn fragmentation_ratio_zero_when_no_unreachable() {
+        assert_eq!(compute_fragmentation_ratio(1000, 0), 0.0_f64);
+    }
+
+    #[test]
+    fn fragmentation_ratio_half() {
+        assert!((compute_fragmentation_ratio(500, 500) - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn fragmentation_ratio_zero_empty_heap() {
+        assert_eq!(compute_fragmentation_ratio(0, 0), 0.0_f64);
     }
 }
 
