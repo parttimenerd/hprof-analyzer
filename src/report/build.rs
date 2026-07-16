@@ -77,6 +77,7 @@ pub fn build_model(
     crate::trace::probe("build_model: after dominator_analysis aggregates");
     let references = build_references(g);
     crate::trace::probe("build_model: after references only-weakly-retained rollup");
+    let collection_attribution = build_collection_attribution(g, &overview);
     Report {
         schema_version: SCHEMA_VERSION,
         generated,
@@ -90,7 +91,7 @@ pub fn build_model(
         dominator_analysis,
         collections: g.collections.clone(),
         references,
-        collection_attribution: build_collection_attribution(g),
+        collection_attribution,
         leak_indicators: build_leak_indicators(g),
     }
 }
@@ -241,12 +242,23 @@ fn kind_label(k: u8) -> &'static str {
 /// most_overall (per Class#field, total elements/retained across all its
 /// containers, distinct-container count) and biggest_single (per Class#field,
 /// the single largest container by element count).
-fn build_collection_attribution(g: &Graph) -> Option<CollectionAttribution> {
+fn build_collection_attribution(
+    g: &Graph,
+    overview: &SystemOverview,
+) -> Option<CollectionAttribution> {
+    use std::collections::HashMap;
     let raw = g.collection_attribution_raw.as_ref()?;
+    // holder-instance lookup: prettified class name → summed live instances
+    // (sum across distinct class-loader rows sharing a pretty name).
+    let mut holder_counts: HashMap<String, u64> = HashMap::new();
+    for row in &overview.histogram {
+        *holder_counts.entry(row.pretty_class.clone()).or_insert(0) += row.instances;
+    }
     Some(aggregate_collection_attribution(
         raw,
         &g.retained,
         g.collection_attribution_truncated,
+        &holder_counts,
     ))
 }
 
@@ -258,6 +270,7 @@ fn aggregate_collection_attribution(
     raw: &[AttributionRaw],
     retained: &[u64],
     truncated: bool,
+    holder_counts: &std::collections::HashMap<String, u64>,
 ) -> CollectionAttribution {
     use std::collections::HashMap;
 
@@ -278,6 +291,7 @@ fn aggregate_collection_attribution(
         elements: u64,
         retained: u64,
         container_class: String,
+        capacity: u64,
     }
 
     let mut overall: HashMap<(String, String), OverallAcc> = HashMap::new();
@@ -314,20 +328,20 @@ fn aggregate_collection_attribution(
             elements: 0,
             retained: 0,
             container_class: String::new(),
+            capacity: 0,
         });
         if rec.elements > b.elements || (rec.elements == b.elements && retained_bytes > b.retained)
         {
             b.elements = rec.elements;
             b.retained = retained_bytes;
             b.container_class = crate::report::pretty_class_name(&rec.container_class);
+            b.capacity = rec.capacity;
         }
     }
 
     let mut most_overall: Vec<FieldAttributionRow> = overall
         .into_iter()
         .map(|((holder_class, field), acc)| FieldAttributionRow {
-            holder_class,
-            field,
             container_kind: if acc.mixed {
                 "mixed".to_string()
             } else {
@@ -336,6 +350,12 @@ fn aggregate_collection_attribution(
             total_elements: acc.total_elements,
             total_retained: acc.total_retained,
             container_count: acc.seen.len() as u64,
+            holder_instances: holder_counts
+                .get(&crate::report::pretty_class_name(&holder_class))
+                .copied()
+                .unwrap_or(0),
+            holder_class,
+            field,
         })
         .collect();
     // total_elements desc, total_retained desc, holder_class asc, field asc.
@@ -356,6 +376,7 @@ fn aggregate_collection_attribution(
             container_class: b.container_class,
             elements: b.elements,
             retained: b.retained,
+            capacity: b.capacity,
         })
         .collect();
     // elements desc, retained desc, holder_class asc, field asc.
@@ -2442,7 +2463,16 @@ mod attribution_tests {
             container_kind: kind,
             container_class: container_class.to_string(),
             elements,
+            // Arrays carry real capacity; here default it to elements so the
+            // biggest-single capacity mirrors elements in these tests.
+            capacity: elements,
         }
+    }
+
+    /// Empty holder-instance map ⇒ every row's `holder_instances` is 0. Used by
+    /// most aggregate tests that don't exercise Metric A.
+    fn no_holders() -> std::collections::HashMap<String, u64> {
+        std::collections::HashMap::new()
     }
 
     /// Two keys with different total_elements come out in DESC order; the pure
@@ -2456,15 +2486,27 @@ mod attribution_tests {
             rec(1, "com/foo/Small", "items", 0, "java/util/ArrayList", 10),
         ];
         let retained = vec![5000u64, 500u64];
-        let ca = aggregate_collection_attribution(&raw, &retained, false);
+        // Metric A: holder-instance lookup keyed by PRETTIFIED class name.
+        let mut holders = std::collections::HashMap::new();
+        holders.insert("com.foo.Big".to_string(), 3u64);
+        let ca = aggregate_collection_attribution(&raw, &retained, false, &holders);
         assert_eq!(ca.most_overall.len(), 2);
         assert_eq!(ca.most_overall[0].holder_class, "com/foo/Big");
         assert_eq!(ca.most_overall[0].total_elements, 100);
         assert_eq!(ca.most_overall[0].total_retained, 5000);
+        assert_eq!(
+            ca.most_overall[0].holder_instances, 3,
+            "holder_instances populated from the map"
+        );
+        assert_eq!(ca.most_overall[1].holder_instances, 0, "absent holder ⇒ 0");
         assert_eq!(ca.most_overall[1].holder_class, "com/foo/Small");
         // biggest_single mirrors the ordering.
         assert_eq!(ca.biggest_single[0].holder_class, "com/foo/Big");
         assert_eq!(ca.biggest_single[0].elements, 100);
+        assert_eq!(
+            ca.biggest_single[0].capacity, 100,
+            "rec() defaults capacity to elements"
+        );
         assert_eq!(ca.biggest_single[0].container_class, "java.util.ArrayList");
         assert!(!ca.truncated);
     }
@@ -2480,7 +2522,7 @@ mod attribution_tests {
             rec(0, "com/foo/Cache", "map", 0, "java/util/HashMap", 42),
         ];
         let retained = vec![9000u64];
-        let ca = aggregate_collection_attribution(&raw, &retained, false);
+        let ca = aggregate_collection_attribution(&raw, &retained, false, &no_holders());
         assert_eq!(ca.most_overall.len(), 1);
         let row = &ca.most_overall[0];
         assert_eq!(row.container_count, 1, "shared container counted once");
@@ -2499,7 +2541,7 @@ mod attribution_tests {
             rec(1, "com/foo/Holder", "data", 6, "[Ljava/lang/Object;", 7),
         ];
         let retained = vec![100u64, 200u64];
-        let ca = aggregate_collection_attribution(&raw, &retained, false);
+        let ca = aggregate_collection_attribution(&raw, &retained, false, &no_holders());
         assert_eq!(ca.most_overall.len(), 1);
         assert_eq!(ca.most_overall[0].container_kind, "mixed");
         assert_eq!(ca.most_overall[0].container_count, 2);
@@ -2512,7 +2554,7 @@ mod attribution_tests {
     fn test_single_kind_label() {
         let raw = vec![rec(0, "com/foo/H", "arr", 7, "[I", 3)];
         let retained = vec![64u64];
-        let ca = aggregate_collection_attribution(&raw, &retained, true);
+        let ca = aggregate_collection_attribution(&raw, &retained, true, &no_holders());
         assert_eq!(ca.most_overall[0].container_kind, "primitive array");
         assert!(ca.truncated);
     }
@@ -2522,7 +2564,7 @@ mod attribution_tests {
     fn test_out_of_range_retained_is_zero() {
         let raw = vec![rec(99, "com/foo/H", "f", 0, "java/util/ArrayList", 1)];
         let retained = vec![10u64]; // idx 99 is out of range
-        let ca = aggregate_collection_attribution(&raw, &retained, false);
+        let ca = aggregate_collection_attribution(&raw, &retained, false, &no_holders());
         assert_eq!(ca.most_overall[0].total_retained, 0);
         assert_eq!(ca.biggest_single[0].retained, 0);
     }

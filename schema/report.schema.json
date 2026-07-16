@@ -56,6 +56,9 @@
           "rows": [],
           "truncated": false
         },
+        "kind_summary": {
+          "kinds": []
+        },
         "map_collision_ratio": {
           "buckets": [],
           "total": 0,
@@ -463,6 +466,57 @@
         "buckets"
       ]
     },
+    "CollectionKindStat": {
+      "description": "One collection-kind's aggregate stats. Additive.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "kind": {
+          "type": "string"
+        },
+        "max_elements": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "total_elements": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "total_shallow": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "kind",
+        "count",
+        "total_elements",
+        "total_shallow",
+        "max_elements"
+      ]
+    },
+    "CollectionKindSummary": {
+      "description": "Per-kind rollup over all classified collections. Additive.",
+      "type": "object",
+      "properties": {
+        "kinds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CollectionKindStat"
+          }
+        }
+      },
+      "required": [
+        "kinds"
+      ]
+    },
     "CollectionsAnalysis": {
       "description": "Groups the five collection/array views. Additive.",
       "type": "object",
@@ -495,6 +549,12 @@
           "default": {
             "rows": [],
             "truncated": false
+          }
+        },
+        "kind_summary": {
+          "$ref": "#/$defs/CollectionKindSummary",
+          "default": {
+            "kinds": []
           }
         },
         "map_collision_ratio": {
@@ -969,6 +1029,13 @@
       "description": "One holder `Class#field` whose single largest container is ranked by element count.",
       "type": "object",
       "properties": {
+        "capacity": {
+          "description": "Backing-array length (slots) of the single largest container:\n`elements` = used, `capacity` = slots. Real for arrays; for classified\ncollections this equals `elements` (degenerate — see the field-decode\nnote; the backing array's true length is not cheaply joinable). Additive.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
         "container_class": {
           "type": "string"
         },
@@ -1014,6 +1081,13 @@
         },
         "holder_class": {
           "type": "string"
+        },
+        "holder_instances": {
+          "description": "Live-instance count of `holder_class` from the System-Overview class\nhistogram (matched by prettified class name), or `0` when the holder\nclass has no histogram row. Additive.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
         },
         "total_elements": {
           "type": "integer",

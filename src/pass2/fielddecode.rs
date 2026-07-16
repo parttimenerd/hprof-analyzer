@@ -14,9 +14,10 @@ use std::collections::HashMap;
 use crate::{
     pass1::Pass1,
     report::{
-        ArrayFillRatio, CollectionFillRatio, CollectionsAnalysis, CollectionsBySize,
-        ConstantArrayRow, ConstantPrimitiveArrays, FillRatioBucket, MapCollisionRatio,
-        RefStatClassRow, ReferenceStats, ReferencesAnalysis, SizeHistogramBucket,
+        ArrayFillRatio, CollectionFillRatio, CollectionKindStat, CollectionKindSummary,
+        CollectionsAnalysis, CollectionsBySize, ConstantArrayRow, ConstantPrimitiveArrays,
+        FillRatioBucket, MapCollisionRatio, RefStatClassRow, ReferenceStats, ReferencesAnalysis,
+        SizeHistogramBucket,
     },
     types::HprofType,
 };
@@ -72,6 +73,19 @@ impl CollKind {
             CollKind::Deque => 3,
             CollKind::Queue => 4,
             CollKind::Tree => 5,
+        }
+    }
+
+    /// Lowercase per-kind label, matching `kind_label` in report/build.rs
+    /// (0=list..5=tree). Used for the per-kind collection summary rows.
+    fn label(self) -> &'static str {
+        match self {
+            CollKind::List => "list",
+            CollKind::Map => "map",
+            CollKind::Set => "set",
+            CollKind::Deque => "deque",
+            CollKind::Queue => "queue",
+            CollKind::Tree => "tree",
         }
     }
 }
@@ -663,6 +677,10 @@ struct ContainerRecord {
     elements: u64,
     kind: u8,
     container_class: String,
+    /// Backing-array length (slots): `elements` = used, `capacity` = slots.
+    /// Arrays carry their real length; classified collections set this equal to
+    /// `elements` (see the collection-insert note).
+    capacity: u64,
 }
 
 /// Join holder edges against container records: for each edge whose `pointee`
@@ -685,6 +703,7 @@ fn join_attribution(
                 container_kind: rec.kind,
                 container_class: rec.container_class.clone(),
                 elements: rec.elements,
+                capacity: rec.capacity,
             });
         }
     }
@@ -803,6 +822,10 @@ pub(crate) fn build_field_decode_views(
     let mut map_collision = FillAcc::default();
     let mut coll_total: u64 = 0; // every collection with a size read
     let mut map_total: u64 = 0; // every map collection seen
+    // Per-kind collection summary (always-on): indexed by CollKind discriminant
+    // 0=List..5=Tree. Each entry = (count, total_elements, total_shallow,
+    // max_elements). Folded only when a size was read (mirrors coll_total).
+    let mut kind_stats: [(u64, u64, u64, u64); 6] = [(0, 0, 0, 0); 6];
     // Wanted backing arrays (array addr → its collection's size/is_map).
     let mut wanted_arrays: HashMap<u64, ArrayWant> = HashMap::new();
 
@@ -930,6 +953,13 @@ pub(crate) fn build_field_decode_views(
                         if is_map {
                             map_total += 1;
                         }
+                        // Per-kind summary fold (same guard as coll_total so
+                        // counts stay consistent).
+                        let ks = &mut kind_stats[descs[desc_idx].kind.discriminant() as usize];
+                        ks.0 += 1;
+                        ks.1 += size;
+                        ks.2 += coll_shallow;
+                        ks.3 = ks.3.max(size);
                     }
                     // Attribution: record this collection as a container (kind
                     // = its CollKind discriminant, 0=List..5=Tree). elements =
@@ -945,6 +975,16 @@ pub(crate) fn build_field_decode_views(
                                         elements: size.unwrap_or(0),
                                         kind: descs[desc_idx].kind.discriminant(),
                                         container_class: pretty_name(class_id, p1),
+                                        // Degenerate: a collection's TRUE capacity
+                                        // is its backing array's length, but that
+                                        // array's ContainerRecord is keyed by the
+                                        // ARRAY address (ArrayWant carries no
+                                        // reverse array→collection link), so real
+                                        // capacity is not cheaply joinable here.
+                                        // Arrays (kind 6/7 below) carry real
+                                        // capacity; collections ship capacity ==
+                                        // elements for now.
+                                        capacity: size.unwrap_or(0),
                                     },
                                 );
                             } else {
@@ -1073,6 +1113,8 @@ pub(crate) fn build_field_decode_views(
                             elements: count,
                             kind: 7,
                             container_class: prim_array_class_name(elem_type).to_string(),
+                            // Primitive array: length == capacity == elements.
+                            capacity: count,
                         },
                     );
                 } else {
@@ -1151,6 +1193,8 @@ pub(crate) fn build_field_decode_views(
                             elements: count,
                             kind: 6,
                             container_class: pretty_name(array_class_id, p1),
+                            // Object array: length == capacity == elements.
+                            capacity: count,
                         },
                     );
                 } else {
@@ -1212,6 +1256,32 @@ pub(crate) fn build_field_decode_views(
     let attribution_truncated = edges_truncated || containers_truncated;
 
     // ── Assemble collection views ─────────────────────────────────────────────
+    // Per-kind summary in fixed enum order (List,Map,Set,Deque,Queue,Tree),
+    // skipping kinds with zero count for cleaner output — deterministic.
+    const KIND_ORDER: [CollKind; 6] = [
+        CollKind::List,
+        CollKind::Map,
+        CollKind::Set,
+        CollKind::Deque,
+        CollKind::Queue,
+        CollKind::Tree,
+    ];
+    let kind_summary = CollectionKindSummary {
+        kinds: KIND_ORDER
+            .iter()
+            .filter_map(|&k| {
+                let (count, total_elements, total_shallow, max_elements) =
+                    kind_stats[k.discriminant() as usize];
+                (count > 0).then(|| CollectionKindStat {
+                    kind: k.label().to_string(),
+                    count,
+                    total_elements,
+                    total_shallow,
+                    max_elements,
+                })
+            })
+            .collect(),
+    };
     let collections = CollectionsAnalysis {
         collection_fill_ratio: CollectionFillRatio {
             tracked: coll_fill_tracked,
@@ -1235,6 +1305,7 @@ pub(crate) fn build_field_decode_views(
         ),
         top_prim_arrays: top_prim.into_top_arrays(p1, prim_array_name_of_key),
         top_obj_arrays: top_obj.into_top_arrays(p1, obj_array_name_of_key),
+        kind_summary,
     };
 
     // ── Assemble reference views ──────────────────────────────────────────────
@@ -1716,6 +1787,7 @@ mod tests {
                 elements: 42,
                 kind: 1, // round-trip value only; 1 now denotes Map
                 container_class: "java.util.X".to_string(),
+                capacity: 64,
             },
         );
         let out = join_attribution(
@@ -1732,5 +1804,6 @@ mod tests {
         assert_eq!(row.container_kind, 1);
         assert_eq!(row.container_class, "java.util.X");
         assert_eq!(row.elements, 42);
+        assert_eq!(row.capacity, 64);
     }
 }

@@ -1,6 +1,6 @@
 {
-  "schema_version": 2,
-  "generated": "2026-07-16T14:08:09.799133000Z",
+  "schema_version": 3,
+  "generated": "2026-07-16T15:01:56.903743000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
     "file_path": "tests/fixtures/dump_4_philosophers.hprof",
@@ -89773,6 +89773,24 @@
           "array_class": "scala.math.BigInt[]",
           "objects": 1,
           "shallow": 8216
+        }
+      ]
+    },
+    "kind_summary": {
+      "kinds": [
+        {
+          "kind": "list",
+          "count": 106,
+          "total_elements": 1300,
+          "total_shallow": 2544,
+          "max_elements": 491
+        },
+        {
+          "kind": "map",
+          "count": 5892,
+          "total_elements": 11095,
+          "total_shallow": 371184,
+          "max_elements": 2889
         }
       ]
     }

@@ -824,6 +824,28 @@ pub struct CollectionsAnalysis {
     pub top_prim_arrays: TopArrays,
     #[serde(default)]
     pub top_obj_arrays: TopArrays,
+    #[serde(default)]
+    pub kind_summary: CollectionKindSummary,
+}
+
+/// One collection-kind's aggregate stats. Additive.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct CollectionKindStat {
+    pub kind: String,        // "list"/"map"/"set"/"deque"/"queue"/"tree"
+    pub count: u64,          // number of collections of this kind (with a readable size)
+    pub total_elements: u64, // sum of sizes
+    pub total_shallow: u64,  // sum of the collection instances' shallow bytes
+    pub max_elements: u64,   // largest single size in this kind
+}
+
+/// Per-kind rollup over all classified collections. Additive.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct CollectionKindSummary {
+    pub kinds: Vec<CollectionKindStat>,
 }
 
 /// One holder `Class#field` ranked by total elements across every container it points at.
@@ -837,6 +859,11 @@ pub struct FieldAttributionRow {
     pub total_elements: u64,
     pub total_retained: u64,
     pub container_count: u64,
+    /// Live-instance count of `holder_class` from the System-Overview class
+    /// histogram (matched by prettified class name), or `0` when the holder
+    /// class has no histogram row. Additive.
+    #[serde(default)]
+    pub holder_instances: u64,
 }
 
 /// One holder `Class#field` whose single largest container is ranked by element count.
@@ -849,6 +876,12 @@ pub struct FieldAttributionBiggestRow {
     pub container_class: String,
     pub elements: u64,
     pub retained: u64,
+    /// Backing-array length (slots) of the single largest container:
+    /// `elements` = used, `capacity` = slots. Real for arrays; for classified
+    /// collections this equals `elements` (degenerate — see the field-decode
+    /// note; the backing array's true length is not cheaply joinable). Additive.
+    #[serde(default)]
+    pub capacity: u64,
 }
 
 /// Container attribution by holder `Class#field`, present only when `--collections` was passed.
@@ -918,7 +951,7 @@ pub struct LeakIndicators {
 
 /// Schema version for the machine-readable JSON output. Bump on any
 /// breaking change to the `Report` shape; the JSON always carries this.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// One allocation site: a distinct HPROF stack-trace serial, its resolved frame
 /// lines, and the aggregate footprint of the objects allocated there.

@@ -207,6 +207,10 @@ pub struct AttributionRaw {
     pub container_kind: u8,
     pub container_class: String,
     pub elements: u64,
+    /// Backing-array length (slots): `elements` = used, `capacity` = slots.
+    /// Real for arrays; equals `elements` for classified collections (see the
+    /// field-decode container-insert note).
+    pub capacity: u64,
 }
 
 pub struct Graph {
