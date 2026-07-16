@@ -2178,19 +2178,19 @@ fn build_top_consumers(g: &Graph, top_n: usize) -> TopConsumers {
     let undef = u32::MAX;
     let class_count = g.class_names.len();
 
-    // Collect top-level dominators
+    // Collect top-level dominators and sum total shallow in a single pass.
     let mut top_level: Vec<u32> = Vec::new();
+    let mut total_shallow: u64 = 0;
     for i in 0..n {
-        if g.idom[i] == vroot {
+        let id = g.idom[i];
+        if id == undef {
+            continue;
+        }
+        total_shallow += g.shallow[i] as u64;
+        if id == vroot {
             top_level.push(i as u32);
         }
     }
-
-    // Total shallow of all reachable objects (MAT parity: pct base for Biggest Objects)
-    let total_shallow: u64 = (0..n)
-        .filter(|&i| g.idom[i] != undef)
-        .map(|i| g.shallow[i] as u64)
-        .sum();
 
     // Sort by retained desc for biggest objects, with tie-breaker on ascending
     // object index (top_level built in ascending order).
