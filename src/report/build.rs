@@ -1036,6 +1036,22 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
     let mut class_retained: Vec<u64> = vec![0; class_count];
     let mut max_shallow: Vec<u64> = vec![0; class_count];
 
+    // Precompute per-class kind (0=Instances,1=Object arrays,2=Primitive arrays)
+    // to avoid re-parsing class names on every object in the hot loop below.
+    // Class objects (kind 3) are detected per-object via class_obj_class_idx.
+    let class_kind: Vec<u8> = (0..class_count)
+        .map(|ci| {
+            let name = &g.class_names[ci];
+            if is_prim_array_desc(name) {
+                2
+            } else if name.starts_with('[') {
+                1
+            } else {
+                0
+            }
+        })
+        .collect();
+
     // Single fused pass over all objects — computes totals, composition,
     // top-level retained, class histogram, and class-loader rollup together
     // to avoid 5 separate O(n) scans on large dumps.
@@ -1046,7 +1062,17 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
         if id != undef_u32 {
             total_objects += 1;
             total_shallow += sh;
-            let b = kind_idx(object_kind(g, i));
+            // Look up class-object repr once; derive kind from it (avoids
+            // redundant class_obj_repr call inside object_kind AND per-name
+            // string parsing for every non-class-object).
+            let repr = class_obj_repr(g, i);
+            let b = if repr != undef_u32 {
+                3 // "Class objects"
+            } else if ci_raw < class_count {
+                class_kind[ci_raw] as usize
+            } else {
+                0 // fallback "Instances"
+            };
             comp_objs[b] += 1;
             comp_sh[b] += sh;
             // Retention concentration: collect top-level retained values.
@@ -1067,18 +1093,15 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
             }
             // Class object: add its retained to the represented class row,
             // and track classes_loaded / loader set.
-            let repr = class_obj_repr(g, i);
             if repr != undef_u32 {
                 if (repr as usize) < class_count {
                     let ci = remap[repr as usize] as usize;
                     class_retained[ci] += g.retained[i];
                 }
                 classes_loaded += 1;
-                let lid = g
-                    .class_obj_class_idx
-                    .get(&(i as u32))
-                    .and_then(|&row| g.class_loader_id.get(row as usize).copied())
-                    .unwrap_or(0);
+                // repr IS the value from class_obj_class_idx (the class row index),
+                // so we can look up the loader_id directly from class_loader_id.
+                let lid = g.class_loader_id.get(repr as usize).copied().unwrap_or(0);
                 loader_set.insert(lid);
             }
         } else {
