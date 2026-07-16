@@ -49,6 +49,14 @@
           "buckets": [],
           "total": 0,
           "tracked": 0
+        },
+        "top_obj_arrays": {
+          "top_by_class": [],
+          "top_individual": []
+        },
+        "top_prim_arrays": {
+          "top_by_class": [],
+          "top_individual": []
         }
       }
     },
@@ -449,6 +457,20 @@
             "buckets": [],
             "total": 0,
             "tracked": 0
+          }
+        },
+        "top_obj_arrays": {
+          "$ref": "#/$defs/TopArrays",
+          "default": {
+            "top_by_class": [],
+            "top_individual": []
+          }
+        },
+        "top_prim_arrays": {
+          "$ref": "#/$defs/TopArrays",
+          "default": {
+            "top_by_class": [],
+            "top_individual": []
           }
         }
       }
@@ -2270,6 +2292,82 @@
       },
       "required": [
         "threads"
+      ]
+    },
+    "TopArrayClassRow": {
+      "description": "One array class in a \"top array classes by aggregate shallow bytes\" list.\nAdditive.",
+      "type": "object",
+      "properties": {
+        "array_class": {
+          "type": "string"
+        },
+        "objects": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "shallow": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "array_class",
+        "objects",
+        "shallow"
+      ]
+    },
+    "TopArrayRow": {
+      "description": "One individual array in a \"top arrays by shallow bytes\" list. Additive.",
+      "type": "object",
+      "properties": {
+        "array_class": {
+          "type": "string"
+        },
+        "length": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "obj_index_1based": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "shallow": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "array_class",
+        "length",
+        "shallow",
+        "obj_index_1based"
+      ]
+    },
+    "TopArrays": {
+      "description": "Top arrays for one array category (primitive or object): the largest\nindividual arrays by shallow bytes and the largest array classes by\naggregate shallow bytes. Additive.",
+      "type": "object",
+      "properties": {
+        "top_by_class": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TopArrayClassRow"
+          }
+        },
+        "top_individual": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TopArrayRow"
+          }
+        }
+      },
+      "required": [
+        "top_individual",
+        "top_by_class"
       ]
     },
     "TopComponents": {

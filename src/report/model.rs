@@ -753,6 +753,39 @@ pub struct ConstantPrimitiveArrays {
     pub truncated: bool,
 }
 
+/// One individual array in a "top arrays by shallow bytes" list. Additive.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct TopArrayRow {
+    pub array_class: String,
+    pub length: u64,
+    pub shallow: u64,
+    pub obj_index_1based: u64,
+}
+
+/// One array class in a "top array classes by aggregate shallow bytes" list.
+/// Additive.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct TopArrayClassRow {
+    pub array_class: String,
+    pub objects: u64,
+    pub shallow: u64,
+}
+
+/// Top arrays for one array category (primitive or object): the largest
+/// individual arrays by shallow bytes and the largest array classes by
+/// aggregate shallow bytes. Additive.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct TopArrays {
+    pub top_individual: Vec<TopArrayRow>,
+    pub top_by_class: Vec<TopArrayClassRow>,
+}
+
 /// Groups the five collection/array views. Additive.
 #[derive(
     Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
@@ -768,6 +801,10 @@ pub struct CollectionsAnalysis {
     pub map_collision_ratio: MapCollisionRatio,
     #[serde(default)]
     pub constant_primitive_arrays: ConstantPrimitiveArrays,
+    #[serde(default)]
+    pub top_prim_arrays: TopArrays,
+    #[serde(default)]
+    pub top_obj_arrays: TopArrays,
 }
 
 /// One class row in a reference-statistics histogram. Additive.

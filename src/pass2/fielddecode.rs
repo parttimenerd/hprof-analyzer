@@ -643,6 +643,8 @@ pub(crate) fn build_field_decode_views(
             const_other,
             const_truncated,
         ),
+        top_prim_arrays: Default::default(),
+        top_obj_arrays: Default::default(),
     };
 
     // ── Assemble reference views ──────────────────────────────────────────────

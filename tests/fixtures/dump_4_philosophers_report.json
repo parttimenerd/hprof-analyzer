@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated": "2026-07-16T03:26:53.460896000Z",
+  "generated": "2026-07-16T06:51:38.574065000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
     "file_path": "tests/fixtures/dump_4_philosophers.hprof",
@@ -89529,6 +89529,14 @@
         }
       ],
       "truncated": false
+    },
+    "top_prim_arrays": {
+      "top_individual": [],
+      "top_by_class": []
+    },
+    "top_obj_arrays": {
+      "top_individual": [],
+      "top_by_class": []
     }
   },
   "references": {
