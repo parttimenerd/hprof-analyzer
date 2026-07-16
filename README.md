@@ -37,12 +37,19 @@ Pick the format that fits: plain **Markdown**, **Markdown with ASCII graphs**
 (bars, sparklines, dominator trees), a self-contained **HTML** page you can open
 in any browser, or machine-readable **JSON**.
 
-See it for real — sample reports from the public
-[Renaissance benchmark](https://renaissance.dev/) `scala-doku` dump:
+See it for real — a live viewer with all four output formats side by side,
+built from the public [Renaissance benchmark](https://renaissance.dev/)
+`scala-doku` dump:
+
+**➡ [Open the sample report viewer](https://parttimenerd.github.io/hprof-analyzer/)**
+
+Switch formats in the top-left; on either Markdown view, hit *Render to HTML*
+in the top-right to see it formatted. Prefer the raw files? They live here:
 
 - [`scala-doku.md`](docs/samples/scala-doku.md) — plain Markdown
 - [`scala-doku.graphs.md`](docs/samples/scala-doku.graphs.md) — Markdown with ASCII graphs
 - [`scala-doku.html`](docs/samples/scala-doku.html) — self-contained HTML
+- [`scala-doku.json`](docs/samples/scala-doku.json) — machine-readable JSON
 
 ## Get a report in 30 seconds
 

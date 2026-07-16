@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hprof-analyzer — sample report viewer</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  body { display: flex; flex-direction: column; }
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 1rem; padding: 0.6rem 1rem; border-bottom: 1px solid #8884;
+    flex-wrap: wrap; position: sticky; top: 0; background: Canvas; z-index: 10;
+  }
+  .left, .right { display: flex; align-items: center; gap: 0.5rem; }
+  .title { font-weight: 600; margin-right: 0.75rem; }
+  .title small { font-weight: 400; opacity: 0.7; }
+  .switch button, .render-btn {
+    font: inherit; padding: 0.35rem 0.7rem; border: 1px solid #8886;
+    border-radius: 6px; background: Canvas; color: CanvasText; cursor: pointer;
+  }
+  .switch button.active { background: #4f8cff; color: #fff; border-color: #4f8cff; }
+  .switch button:hover:not(.active), .render-btn:hover { background: #8882; }
+  .render-btn[hidden] { display: none; }
+  main { flex: 1; overflow: auto; padding: 1rem 1.25rem; }
+  main.raw pre { white-space: pre; overflow: auto; }
+  pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px; line-height: 1.35; margin: 0; }
+  iframe { width: 100%; height: 100%; border: 0; }
+  main.frame { padding: 0; }
+  /* rendered-markdown styling */
+  .md h1 { font-size: 1.7rem; border-bottom: 1px solid #8884; padding-bottom: .3rem; }
+  .md h2 { font-size: 1.35rem; border-bottom: 1px solid #8884; padding-bottom: .2rem; margin-top: 1.8rem; }
+  .md h3 { font-size: 1.1rem; margin-top: 1.4rem; }
+  .md h4 { font-size: 1rem; margin-top: 1.1rem; }
+  .md table { border-collapse: collapse; margin: 0.8rem 0; font-size: 0.9rem; }
+  .md th, .md td { border: 1px solid #8886; padding: 0.3rem 0.6rem; text-align: left; }
+  .md th { background: #8882; }
+  .md code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: #8882; padding: 0.1rem 0.3rem; border-radius: 4px; font-size: 0.88em; }
+  .md pre { background: #8881; padding: 0.7rem; border-radius: 6px; overflow: auto; }
+  .md pre code { background: none; padding: 0; }
+  .md hr { border: 0; border-top: 1px solid #8884; margin: 1.5rem 0; }
+  .md a { color: #4f8cff; }
+  .md ul, .md ol { padding-left: 1.4rem; }
+  .status { padding: 1rem 1.25rem; opacity: 0.7; }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <span class="title">hprof-analyzer <small>scala-doku sample</small></span>
+    <span class="switch" id="switch">
+      <button data-fmt="md" class="active">Markdown</button>
+      <button data-fmt="graphs">Markdown + graphs</button>
+      <button data-fmt="html">HTML</button>
+      <button data-fmt="json">JSON</button>
+    </span>
+  </div>
+  <div class="right">
+    <button class="render-btn" id="renderBtn">Render to HTML &rarr;</button>
+  </div>
+</header>
+<main id="main"><div class="status">Loading&hellip;</div></main>
+
+<script>
+const SOURCES = {
+  md:     { url: "samples/scala-doku.md",        kind: "md"   },
+  graphs: { url: "samples/scala-doku.graphs.md",  kind: "md"   },
+  html:   { url: "samples/scala-doku.html",       kind: "html" },
+  json:   { url: "samples/scala-doku.json",       kind: "json" },
+};
+
+const main = document.getElementById("main");
+const renderBtn = document.getElementById("renderBtn");
+const switchEl = document.getElementById("switch");
+const cache = {};
+let current = "md";
+let rendered = false; // whether the current markdown view is rendered-to-HTML
+
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// Minimal, dependency-free Markdown -> HTML.
+// Supports: ATX headings, tables (GFM), fenced code, unordered/ordered lists,
+// blockquotes, hr, inline code, bold, italic, links. Deliberately small.
+function mdToHtml(src) {
+  const lines = src.replace(/\r\n?/g, "\n").split("\n");
+  const out = [];
+  let i = 0;
+
+  const inline = (t) => {
+    // escape first, then re-introduce our markup
+    t = escapeHtml(t);
+    t = t.replace(/`([^`]+)`/g, (_, c) => `<code>${c}</code>`);
+    t = t.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, txt, href) =>
+      `<a href="${href}" target="_blank" rel="noopener">${txt}</a>`);
+    t = t.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    t = t.replace(/(^|[^*])\*([^*]+)\*/g, "$1<em>$2</em>");
+    return t;
+  };
+
+  const isTableSep = (s) => /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(s) && s.includes("-");
+  const splitRow = (s) => {
+    let r = s.trim();
+    if (r.startsWith("|")) r = r.slice(1);
+    if (r.endsWith("|")) r = r.slice(0, -1);
+    return r.split("|").map((c) => c.trim());
+  };
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // fenced code
+    const fence = line.match(/^```(.*)$/);
+    if (fence) {
+      const buf = [];
+      i++;
+      while (i < lines.length && !/^```/.test(lines[i])) { buf.push(lines[i]); i++; }
+      i++; // closing fence
+      out.push(`<pre><code>${escapeHtml(buf.join("\n"))}</code></pre>`);
+      continue;
+    }
+
+    // horizontal rule
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) { out.push("<hr>"); i++; continue; }
+
+    // heading
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
+    if (h) { const n = h[1].length; out.push(`<h${n}>${inline(h[2])}</h${n}>`); i++; continue; }
+
+    // table: current row + separator on next line
+    if (line.includes("|") && i + 1 < lines.length && isTableSep(lines[i + 1])) {
+      const header = splitRow(line);
+      i += 2;
+      const rows = [];
+      while (i < lines.length && lines[i].includes("|") && lines[i].trim() !== "") {
+        rows.push(splitRow(lines[i])); i++;
+      }
+      let t = "<table><thead><tr>";
+      t += header.map((c) => `<th>${inline(c)}</th>`).join("");
+      t += "</tr></thead><tbody>";
+      for (const r of rows) {
+        t += "<tr>" + header.map((_, k) => `<td>${inline(r[k] ?? "")}</td>`).join("") + "</tr>";
+      }
+      t += "</tbody></table>";
+      out.push(t);
+      continue;
+    }
+
+    // blockquote
+    if (/^\s*>/.test(line)) {
+      const buf = [];
+      while (i < lines.length && /^\s*>/.test(lines[i])) { buf.push(lines[i].replace(/^\s*>\s?/, "")); i++; }
+      out.push(`<blockquote>${inline(buf.join(" "))}</blockquote>`);
+      continue;
+    }
+
+    // unordered list
+    if (/^\s*[-*+]\s+/.test(line)) {
+      const buf = [];
+      while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) {
+        buf.push(`<li>${inline(lines[i].replace(/^\s*[-*+]\s+/, ""))}</li>`); i++;
+      }
+      out.push(`<ul>${buf.join("")}</ul>`);
+      continue;
+    }
+
+    // ordered list
+    if (/^\s*\d+\.\s+/.test(line)) {
+      const buf = [];
+      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
+        buf.push(`<li>${inline(lines[i].replace(/^\s*\d+\.\s+/, ""))}</li>`); i++;
+      }
+      out.push(`<ol>${buf.join("")}</ol>`);
+      continue;
+    }
+
+    // blank line
+    if (line.trim() === "") { i++; continue; }
+
+    // paragraph (gather consecutive non-structural lines)
+    const buf = [line];
+    i++;
+    while (i < lines.length && lines[i].trim() !== "" &&
+           !/^(#{1,6}\s|```|\s*[-*+]\s|\s*\d+\.\s|\s*>)/.test(lines[i]) &&
+           !(lines[i].includes("|") && i + 1 < lines.length && isTableSep(lines[i + 1]))) {
+      buf.push(lines[i]); i++;
+    }
+    out.push(`<p>${inline(buf.join(" "))}</p>`);
+  }
+  return out.join("\n");
+}
+
+async function load(fmt) {
+  const src = SOURCES[fmt];
+  if (!cache[fmt]) {
+    main.className = "";
+    main.innerHTML = '<div class="status">Loading&hellip;</div>';
+    try {
+      const resp = await fetch(src.url);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      cache[fmt] = await resp.text();
+    } catch (e) {
+      main.innerHTML = `<div class="status">Could not load <code>${src.url}</code>: ${e.message}. ` +
+        `If you opened this file directly, serve the folder over HTTP ` +
+        `(e.g. <code>python3 -m http.server</code>) so <code>fetch</code> works.</div>`;
+      return;
+    }
+  }
+  render(fmt);
+}
+
+function render(fmt) {
+  const src = SOURCES[fmt];
+  const text = cache[fmt];
+  renderBtn.hidden = src.kind !== "md";
+
+  if (src.kind === "html") {
+    main.className = "frame";
+    main.innerHTML = "";
+    const iframe = document.createElement("iframe");
+    iframe.setAttribute("sandbox", "allow-scripts");
+    iframe.srcdoc = text;
+    main.appendChild(iframe);
+    return;
+  }
+
+  if (src.kind === "md" && rendered) {
+    main.className = "md";
+    main.innerHTML = mdToHtml(text);
+    renderBtn.textContent = "Show raw Markdown";
+    return;
+  }
+
+  // raw text (markdown source or json)
+  main.className = "raw";
+  const pre = document.createElement("pre");
+  pre.textContent = text;
+  main.innerHTML = "";
+  main.appendChild(pre);
+  if (src.kind === "md") renderBtn.textContent = "Render to HTML →";
+}
+
+switchEl.addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-fmt]");
+  if (!btn) return;
+  for (const b of switchEl.querySelectorAll("button")) b.classList.remove("active");
+  btn.classList.add("active");
+  current = btn.dataset.fmt;
+  rendered = false; // reset to raw when switching
+  load(current);
+});
+
+renderBtn.addEventListener("click", () => {
+  rendered = !rendered;
+  render(current);
+});
+
+load(current);
+</script>
+</body>
+</html>
