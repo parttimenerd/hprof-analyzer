@@ -301,6 +301,26 @@ let mut field_plans_dense: Vec<FieldPlan> = vec![Vec::new(); n_dense_classes];
         }
         drop(field_plans);
 
+        // Compress class_idx and alloc_stack_serial NOW — before the 2a scan
+        // allocates out_degree and in_degree (~4 GB). Both arrays are final at
+        // this point and not read again until the retained/report phases. Freeing
+        // their ~2 GB dense Vecs here removes ~4 GB from the 2a-scan binding peak.
+        let class_idx_c = if compress != crate::cvec::Codec::None {
+            let c = crate::cvec::CompressedU32::compress(&class_idx, compress)?;
+            class_idx = Vec::new();
+            c
+        } else {
+            crate::cvec::CompressedU32::compress(&class_idx, crate::cvec::Codec::None)?
+        };
+        let alloc_serial_c = if compress != crate::cvec::Codec::None {
+            let c = crate::cvec::CompressedU32::compress(&p1.alloc_stack_serial, compress)?;
+            p1.alloc_stack_serial = Vec::new();
+            Some(c)
+        } else {
+            None
+        };
+        crate::trace::probe("pass2: after early-compress class_idx+alloc_serial (before 2a scan)");
+
         // ── Sub-pass 2a scan ─────────────────────────────────────────────
         {
             let mut r = HprofReader::open(path)?;
@@ -336,6 +356,7 @@ let mut field_plans_dense: Vec<FieldPlan> = vec![Vec::new(); n_dense_classes];
                 }
             }
         }
+        crate::trace::probe("pass2: after 2a scan (out+in_degree filled)");
 
         // Class objects already map to the java/lang/Class row (JLC_KEY) from Phase 0c.
         let jlc_idx = get_or_insert_class(JLC_KEY, &|| "java/lang/Class".to_string(), &|| 0);
@@ -534,6 +555,7 @@ let mut field_plans_dense: Vec<FieldPlan> = vec![Vec::new(); n_dense_classes];
             opts.collections,
             &opts.coll_descs,
         )?;
+        crate::trace::probe("pass2: after field_decode_views (3 extra scans done)");
 
         // Free class_ids now: build_field_decode_views was its last reader
         // (class_name_of_index uses it for referent class lookups). Releasing
@@ -628,37 +650,13 @@ let mut field_plans_dense: Vec<FieldPlan> = vec![Vec::new(); n_dense_classes];
         }
         drop(out_degree); // dead after prefix sum
 
-        // Compress the two cold per-object arrays (shallow, class_idx) NOW,
-        // before the forward-CSR fwd_targets (~6GB) is allocated. Both are
-        // final here and idle until the retained phase, so freeing their dense
-        // ~2GB Vecs each removes ~4GB from the binding fwd_targets-alloc peak.
-        // main.rs holds the blobs across the peak and restores before consumers.
+        // Compress shallow NOW, before fwd_targets (~6GB) is allocated.
+        // class_idx and alloc_serial were already compressed before the 2a scan.
         let shallow_c = crate::cvec::CompressedU32::compress(&shallow, compress)?;
         if compress != crate::cvec::Codec::None {
             shallow = Vec::new();
         }
-        let class_idx_c = crate::cvec::CompressedU32::compress(&class_idx, compress)?;
-        if compress != crate::cvec::Codec::None {
-            class_idx = Vec::new();
-        }
-        // Compress the per-object alloc stack serials (~2GB dense u32 under
-        // alloc-sites) at the SAME point, before fwd_targets alloc: pass1
-        // touched every element (faulting all pages), so even a mostly-zero
-        // array occupies ~2GB real RSS through the fwd_targets + rpo + inbound
-        // binding peak. It is read only once, by the report's alloc-site
-        // aggregation, long after that peak. main.rs holds the blob and streams
-        // it back post-retained (see build_alloc_sites_from). None only under
-        // Codec::None (the raw array is kept for the direct-aggregate path).
-        // Graph.alloc_stack_serial stays empty.
-        let alloc_serial_c = if compress != crate::cvec::Codec::None {
-            let c = crate::cvec::CompressedU32::compress(&p1.alloc_stack_serial, compress)?;
-            p1.alloc_stack_serial = Vec::new();
-            Some(c)
-        } else {
-            None
-        };
-        crate::trace::probe("pass2: after early-compress shallow/class_idx");
-        crate::trace::probe("pass2: after fwd_offsets prefix-sum (out_degree freed)");
+        crate::trace::probe("pass2: after compress-cold shallow (before fwd_targets)");
 
         // ── Phase 3b: Build forward CSR ──────────────────────────────────
         // The forward fill runs FIRST (inside build); the inbound CSR is
