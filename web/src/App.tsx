@@ -1579,7 +1579,7 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
 function ThreadOverviewTable({ threads }: { threads: ThreadInfo[] }) {
   if (threads.length === 0) return null;
   return (
-    <details className="thread-overview-detail" open>
+    <details className="thread-overview-detail">
       <summary>Thread Overview ({fmtCount(threads.length)})</summary>
       <table>
         <thead>
