@@ -584,6 +584,7 @@ function SizeDistributionSection({ report }: { report: Report }) {
           <tr>
             <th className="num">Size ≤</th>
             <th className="num">Count</th>
+            <th className="num">% of Dom.</th>
           </tr>
         </thead>
         <tbody>
@@ -591,9 +592,17 @@ function SizeDistributionSection({ report }: { report: Report }) {
             <tr key={i}>
               <td className="num">{formatBytes(b.upper_bytes)}</td>
               <td className="num">{fmtCount(b.count)}</td>
+              <td className="num">{d.count > 0 ? (b.count / d.count * 100).toFixed(1) + "%" : "—"}</td>
             </tr>
           ))}
         </tbody>
+        <tfoot>
+          <tr>
+            <td className="num"><strong>Total</strong></td>
+            <td className="num"><strong>{fmtCount(d.count)}</strong></td>
+            <td className="num"><strong>100.0%</strong></td>
+          </tr>
+        </tfoot>
       </table>
     </section>
   );
@@ -617,7 +626,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
     <section id="duplicate-strings">
       <h2>Duplicate Strings (approximate)</h2>
       <p className="subtitle">
-        Opt-in (--dup-strings): each java.lang.String value hashed to 64 bits; collisions accepted as approximation.
+        Opt-in (<code>--dup-strings</code>): each <code>java.lang.String</code> value hashed to 64 bits; collisions accepted as approximation.
       </p>
       <ul>
         <li>Total String instances: {fmtCount(d.total_string_instances)}</li>
@@ -708,7 +717,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
         <>
           <h3>Classes Holding the Most Strings</h3>
           <p className="subtitle">
-            Number of java.lang.String instances referenced by each class's instances.
+            Number of <code>java.lang.String</code> instances referenced by each class's instances.
           </p>
           <table>
             <thead>
@@ -1891,31 +1900,47 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
   };
 
   // Format a basis-point fill/load range as a percent label (e.g. "0–10%").
-  const ratioLabel = (b: FillRatioBucket) => `${b.lower_ratio_bp / 100}–${b.upper_ratio_bp / 100}%`;
+  const ratioLabel = (b: FillRatioBucket) =>
+    b.lower_ratio_bp === b.upper_ratio_bp
+      ? `${b.lower_ratio_bp / 100}% (full)`
+      : `${b.lower_ratio_bp / 100}–${b.upper_ratio_bp / 100}%`;
 
   // A fill/wasted table (Collection Fill Ratio, Array Fill Ratio) sharing 4 cols.
-  const fillTable = (label: string, itemsHeader: string, buckets: FillRatioBucket[]) => (
-    <table>
-      <thead>
-        <tr>
-          <th className="num">{label}</th>
-          <th className="num">{itemsHeader}</th>
-          <th className="num">Shallow</th>
-          <th className="num">Wasted</th>
-        </tr>
-      </thead>
-      <tbody>
-        {buckets.map((b, i) => (
-          <tr key={i}>
-            <td className="num">{ratioLabel(b)}</td>
-            <td className="num">{fmtCount(b.objects)}</td>
-            <td className="num">{formatBytes(b.shallow)}</td>
-            <td className="num">{formatBytes(b.wasted)}</td>
+  const fillTable = (label: string, itemsHeader: string, buckets: FillRatioBucket[]) => {
+    const totalItems = buckets.reduce((s, b) => s + b.objects, 0);
+    const totalShallow = buckets.reduce((s, b) => s + b.shallow, 0);
+    const totalWasted = buckets.reduce((s, b) => s + b.wasted, 0);
+    return (
+      <table>
+        <thead>
+          <tr>
+            <th className="num">{label}</th>
+            <th className="num">{itemsHeader}</th>
+            <th className="num">Shallow</th>
+            <th className="num">Wasted</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
-  );
+        </thead>
+        <tbody>
+          {buckets.map((b, i) => (
+            <tr key={i}>
+              <td className="num">{ratioLabel(b)}</td>
+              <td className="num">{fmtCount(b.objects)}</td>
+              <td className="num">{formatBytes(b.shallow)}</td>
+              <td className="num">{formatBytes(b.wasted)}</td>
+            </tr>
+          ))}
+        </tbody>
+        <tfoot>
+          <tr>
+            <td className="num"><strong>Total</strong></td>
+            <td className="num"><strong>{fmtCount(totalItems)}</strong></td>
+            <td className="num"><strong>{formatBytes(totalShallow)}</strong></td>
+            <td className="num"><strong>{formatBytes(totalWasted)}</strong></td>
+          </tr>
+        </tfoot>
+      </table>
+    );
+  };
 
   const cfrBuckets = cfr?.buckets ?? [];
   const cbsBuckets = cbs?.buckets ?? [];
@@ -1993,6 +2018,13 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
               </tr>
             ))}
           </tbody>
+          <tfoot>
+            <tr>
+              <td className="num"><strong>Total</strong></td>
+              <td className="num"><strong>{fmtCount(cbsBuckets.reduce((s, b) => s + b.objects, 0))}</strong></td>
+              <td className="num"><strong>{formatBytes(cbsBuckets.reduce((s, b) => s + b.shallow, 0))}</strong></td>
+            </tr>
+          </tfoot>
         </table>
       )}
 
@@ -2082,7 +2114,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
     <section id="container-attribution">
       <h2>Container Attribution (Class#field)</h2>
       <p className="subtitle">
-        Which holder Class#field points at the most container memory. Two rankings: total across
+        Which holder <code>Class#field</code> points at the most container memory. Two rankings: total across
         all containers reached through a field, and the single largest container per field.
       </p>
 
@@ -2236,7 +2268,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
               <th>Object</th>
               <th className="num">Retained</th>
               <th>Largest Child</th>
-              <th className="num">Child Retained</th>
+              <th className="num">Child Ret.</th>
               <th className="num">Drop</th>
             </tr>
           </thead>
