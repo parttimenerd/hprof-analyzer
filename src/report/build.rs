@@ -54,16 +54,6 @@ pub fn build_model(
     alloc_sites: Option<AllocSites>,
 ) -> Report {
     let generated = now_iso8601();
-
-    // Compute raw_total_shallow once: sum of shallow[i] for all reachable nodes
-    // (idom[i] != undef). Three downstream functions each needed this O(n) sum;
-    // compute it here and pass it in to avoid redundant scans.
-    let undef_u32 = u32::MAX;
-    let raw_total_shallow: u64 = (0..g.n)
-        .filter(|&i| g.idom[i] != undef_u32)
-        .map(|i| g.shallow[i] as u64)
-        .sum();
-
     crate::trace::probe("build_model: before system_overview aggregates");
     let overview = build_system_overview(g, depth_counts, opts.top_consumers);
     crate::trace::probe("build_model: after system_overview aggregates");
@@ -75,16 +65,15 @@ pub fn build_model(
         opts.root_path_max_depth,
         opts.dominator_tree_max_nodes,
         opts.dominator_tree_max_depth,
-        raw_total_shallow,
     );
     crate::trace::probe("build_model: after leak_suspects aggregates");
-    let top = build_top_consumers(g, opts.top_consumers, raw_total_shallow);
+    let top = build_top_consumers(g, opts.top_consumers);
     crate::trace::probe("build_model: after top_consumers aggregates");
     let threads = build_thread_overview(g);
     crate::trace::probe("build_model: after thread_overview aggregates");
     let top_components = build_top_components(&overview);
     crate::trace::probe("build_model: after top_components aggregates");
-    let dominator_analysis = build_dominator_analysis(g, dc_offsets, dc_targets, raw_total_shallow);
+    let dominator_analysis = build_dominator_analysis(g, dc_offsets, dc_targets);
     crate::trace::probe("build_model: after dominator_analysis aggregates");
     let references = build_references(g);
     crate::trace::probe("build_model: after references only-weakly-retained rollup");
@@ -131,30 +120,23 @@ fn build_leak_indicators(g: &Graph) -> LeakIndicators {
     // A cleared referent means the entry has no forward edges to a live non-zero object.
     // Excluded (weak-ref) edges are high-bit tagged (0x8000_0000); we mask to get the index.
     let tl_suffix = "ThreadLocal$ThreadLocalMap$Entry";
-    // Precompute which class indices match the suffix to avoid per-object string scan.
-    let tl_class_set: std::collections::HashSet<usize> = g
-        .class_names
-        .iter()
-        .enumerate()
-        .filter(|(_, n)| n.ends_with(tl_suffix))
-        .map(|(ci, _)| ci)
-        .collect();
     let n_nodes = g.fwd_offsets.len().saturating_sub(1);
     let mut thread_local_null_key_count: u64 = 0;
-    if !tl_class_set.is_empty() {
+    for i in 0..n_nodes {
+        let ci = g.class_idx[i] as usize;
+        if ci >= g.class_names.len() {
+            continue;
+        }
+        if !g.class_names[ci].ends_with(tl_suffix) {
+            continue;
+        }
+        let start = g.fwd_offsets[i] as usize;
+        let end = g.fwd_offsets[i + 1] as usize;
         let mut edge_buf: Vec<u32> = Vec::new();
-        for i in 0..n_nodes {
-            let ci = g.class_idx[i] as usize;
-            if !tl_class_set.contains(&ci) {
-                continue;
-            }
-            let start = g.fwd_offsets[i] as usize;
-            let end = g.fwd_offsets[i + 1] as usize;
-            g.fwd_targets.copy_range(start, end, &mut edge_buf);
-            let has_live_referent = edge_buf.iter().any(|&t| (t & 0x7FFF_FFFF) != 0);
-            if !has_live_referent {
-                thread_local_null_key_count += 1;
-            }
+        g.fwd_targets.copy_range(start, end, &mut edge_buf);
+        let has_live_referent = edge_buf.iter().any(|&t| (t & 0x7FFF_FFFF) != 0);
+        if !has_live_referent {
+            thread_local_null_key_count += 1;
         }
     }
 
@@ -502,7 +484,6 @@ fn build_dominator_analysis(
     g: &Graph,
     dc_offsets: &[u32],
     dc_targets: &[u32],
-    raw_total_shallow: u64,
 ) -> DominatorAnalysis {
     let n = g.n;
     let undef = u32::MAX;
@@ -520,7 +501,10 @@ fn build_dominator_analysis(
     };
 
     // Total reachable shallow, for the big-drops significance threshold (1%).
-    let total_shallow = raw_total_shallow;
+    let total_shallow: u64 = (0..n)
+        .filter(|&i| g.idom[i] != undef)
+        .map(|i| g.shallow[i] as u64)
+        .sum();
     const DROP_THRESHOLD_PCT: f64 = 1.0;
     let threshold = (total_shallow as f64 * DROP_THRESHOLD_PCT / 100.0) as u64;
 
@@ -1052,22 +1036,6 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
     let mut class_retained: Vec<u64> = vec![0; class_count];
     let mut max_shallow: Vec<u64> = vec![0; class_count];
 
-    // Precompute per-class kind (0=Instances,1=Object arrays,2=Primitive arrays)
-    // to avoid re-parsing class names on every object in the hot loop below.
-    // Class objects (kind 3) are detected per-object via class_obj_class_idx.
-    let class_kind: Vec<u8> = (0..class_count)
-        .map(|ci| {
-            let name = &g.class_names[ci];
-            if is_prim_array_desc(name) {
-                2
-            } else if name.starts_with('[') {
-                1
-            } else {
-                0
-            }
-        })
-        .collect();
-
     // Single fused pass over all objects — computes totals, composition,
     // top-level retained, class histogram, and class-loader rollup together
     // to avoid 5 separate O(n) scans on large dumps.
@@ -1078,17 +1046,7 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
         if id != undef_u32 {
             total_objects += 1;
             total_shallow += sh;
-            // Look up class-object repr once; derive kind from it (avoids
-            // redundant class_obj_repr call inside object_kind AND per-name
-            // string parsing for every non-class-object).
-            let repr = class_obj_repr(g, i);
-            let b = if repr != undef_u32 {
-                3 // "Class objects"
-            } else if ci_raw < class_count {
-                class_kind[ci_raw] as usize
-            } else {
-                0 // fallback "Instances"
-            };
+            let b = kind_idx(object_kind(g, i));
             comp_objs[b] += 1;
             comp_sh[b] += sh;
             // Retention concentration: collect top-level retained values.
@@ -1109,15 +1067,18 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
             }
             // Class object: add its retained to the represented class row,
             // and track classes_loaded / loader set.
+            let repr = class_obj_repr(g, i);
             if repr != undef_u32 {
                 if (repr as usize) < class_count {
                     let ci = remap[repr as usize] as usize;
                     class_retained[ci] += g.retained[i];
                 }
                 classes_loaded += 1;
-                // repr IS the value from class_obj_class_idx (the class row index),
-                // so we can look up the loader_id directly from class_loader_id.
-                let lid = g.class_loader_id.get(repr as usize).copied().unwrap_or(0);
+                let lid = g
+                    .class_obj_class_idx
+                    .get(&(i as u32))
+                    .and_then(|&row| g.class_loader_id.get(row as usize).copied())
+                    .unwrap_or(0);
                 loader_set.insert(lid);
             }
         } else {
@@ -1624,15 +1585,17 @@ pub(crate) fn build_leak_suspects(
     root_path_max_depth: usize,
     dom_max_nodes: usize,
     dom_max_depth: usize,
-    raw_total_shallow: u64,
 ) -> LeakSuspects {
     let n = g.n;
     let undef = u32::MAX;
 
-    // Total shallow heap of reachable objects (pre-computed by build_model).
+    // Total shallow heap of reachable objects
+    let mut total_shallow: u64 = (0..n)
+        .filter(|&i| g.idom[i] != undef)
+        .map(|i| g.shallow[i] as u64)
+        .sum();
     // Include MAT's synthetic <system class loader> object for internal
     // consistency with build_system_overview's total_shallow.
-    let mut total_shallow = raw_total_shallow;
     if let Some(sz) = g.system_classloader_shallow {
         total_shallow += sz as u64;
     }
@@ -2179,24 +2142,25 @@ pub(crate) fn build_size_distribution(retained_desc: &[u64]) -> TopSizeDistribut
 /// Build the "Top Consumers" model: biggest objects (top-level dominators by
 /// retained), biggest classes, and the pruned package tree. Bounded reductions
 /// over the graph; no per-object Vec is retained.
-fn build_top_consumers(g: &Graph, top_n: usize, raw_total_shallow: u64) -> TopConsumers {
+fn build_top_consumers(g: &Graph, top_n: usize) -> TopConsumers {
     let n = g.n;
     let vroot = n as u32;
     let undef = u32::MAX;
     let class_count = g.class_names.len();
 
-    // Collect top-level dominators in a single pass; total_shallow is pre-computed.
+    // Collect top-level dominators
     let mut top_level: Vec<u32> = Vec::new();
-    let total_shallow = raw_total_shallow;
     for i in 0..n {
-        let id = g.idom[i];
-        if id == undef {
-            continue;
-        }
-        if id == vroot {
+        if g.idom[i] == vroot {
             top_level.push(i as u32);
         }
     }
+
+    // Total shallow of all reachable objects (MAT parity: pct base for Biggest Objects)
+    let total_shallow: u64 = (0..n)
+        .filter(|&i| g.idom[i] != undef)
+        .map(|i| g.shallow[i] as u64)
+        .sum();
 
     // Sort by retained desc for biggest objects, with tie-breaker on ascending
     // object index (top_level built in ascending order).
@@ -2221,22 +2185,19 @@ fn build_top_consumers(g: &Graph, top_n: usize, raw_total_shallow: u64) -> TopCo
             let ci = g.class_idx[idx] as usize;
             // For class objects, show the class they represent (MAT parity: no
             // "class " prefix)
-            let display_class = {
-                let repr = class_obj_repr(g, idx);
-                if repr != undef {
-                    let repr_usize = repr as usize;
-                    if repr_usize < g.class_names.len() {
-                        pretty_class_name(&g.class_names[repr_usize])
-                    } else if ci < g.class_names.len() {
-                        pretty_class_name(&g.class_names[ci])
-                    } else {
-                        String::from("?")
-                    }
+            let display_class = if class_obj_repr(g, idx) != undef {
+                let repr = class_obj_repr(g, idx) as usize;
+                if repr < g.class_names.len() {
+                    pretty_class_name(&g.class_names[repr])
                 } else if ci < g.class_names.len() {
                     pretty_class_name(&g.class_names[ci])
                 } else {
                     String::from("?")
                 }
+            } else if ci < g.class_names.len() {
+                pretty_class_name(&g.class_names[ci])
+            } else {
+                String::from("?")
             };
 
             let pct = if total_shallow > 0 {
@@ -2318,20 +2279,10 @@ fn build_top_consumers(g: &Graph, top_n: usize, raw_total_shallow: u64) -> TopCo
     for &i in &top_level {
         let idx = i as usize;
         // Use the class the object represents (for class objects), else own class.
-        let raw_name = {
-            let repr = class_obj_repr(g, idx);
-            if repr != undef {
-                let repr_usize = repr as usize;
-                if repr_usize < g.class_names.len() {
-                    &g.class_names[repr_usize]
-                } else {
-                    let ci = g.class_idx[idx] as usize;
-                    if ci < g.class_names.len() {
-                        &g.class_names[ci]
-                    } else {
-                        continue;
-                    }
-                }
+        let raw_name = if class_obj_repr(g, idx) != undef {
+            let repr = class_obj_repr(g, idx) as usize;
+            if repr < g.class_names.len() {
+                &g.class_names[repr]
             } else {
                 let ci = g.class_idx[idx] as usize;
                 if ci < g.class_names.len() {
@@ -2339,6 +2290,13 @@ fn build_top_consumers(g: &Graph, top_n: usize, raw_total_shallow: u64) -> TopCo
                 } else {
                     continue;
                 }
+            }
+        } else {
+            let ci = g.class_idx[idx] as usize;
+            if ci < g.class_names.len() {
+                &g.class_names[ci]
+            } else {
+                continue;
             }
         };
         let retained = g.retained[idx];

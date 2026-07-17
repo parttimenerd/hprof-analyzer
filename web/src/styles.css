@@ -8,6 +8,15 @@
   --warn-bg: #fff4e5;
   --warn-border: #f0b429;
 }
+
+.stack-detail summary { cursor: pointer; list-style: none; }
+.stack-detail summary::-webkit-details-marker { display: none; }
+.stack-detail summary::before { content: "▶ "; font-size: 0.7rem; opacity: 0.6; }
+.stack-detail[open] summary::before { content: "▼ "; }
+.stack-frames { margin: 0.3rem 0 0 1.25rem; padding: 0; list-style: decimal; }
+.stack-frames li { font-size: 0.82rem; color: var(--muted); padding: 0.05rem 0; }
+.stack-frames li code { background: none; padding: 0; font-size: inherit; }
+
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
     --bg: #16181c;

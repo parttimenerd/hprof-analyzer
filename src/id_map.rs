@@ -292,59 +292,6 @@ impl IdMap {
         search_offsets(&self.offsets[lo..hi], d).map(|pos| lo + pos)
     }
 
-    /// Issue a software prefetch for the `offsets` cache line that `index_of(addr)`
-    /// will most likely access, without performing the full lookup. Call this as
-    /// early as possible (right after `addr` is known) to overlap computation with
-    /// the DRAM latency. Uses interpolation to approximate the target slot.
-    ///
-    /// For the dominant single-block case this is O(1): no partition_point, just
-    /// one interpolation and one prefetch instruction.
-    #[inline]
-    pub fn prefetch_index_of(&self, addr: u64) {
-        if self.block_base.is_empty() {
-            return;
-        }
-        // Single-block fast path (most heaps fit in one 4 GB span).
-        let b = if self.block_base.len() == 1 {
-            0
-        } else {
-            self.block_base.partition_point(|&base| base <= addr).saturating_sub(1)
-        };
-        if b >= self.block_base.len() {
-            return;
-        }
-        let delta = addr.wrapping_sub(self.block_base[b]);
-        if delta >= BLOCK_SPAN {
-            return;
-        }
-        let d = delta as u32;
-        let lo = self.block_start[b] as usize;
-        let hi = self.block_start[b + 1] as usize;
-        if lo >= hi {
-            return;
-        }
-        let lo_v = unsafe { *self.offsets.get_unchecked(lo) } as u64;
-        let hi_v = unsafe { *self.offsets.get_unchecked(hi - 1) } as u64;
-        let range = (hi - lo) as u64;
-        let approx = if hi_v > lo_v {
-            let off = range.saturating_mul(d as u64 - lo_v) / (hi_v - lo_v);
-            lo + off.min(range - 1) as usize
-        } else {
-            lo
-        };
-        unsafe {
-            let ptr = self.offsets.as_ptr().add(approx) as *const i8;
-            #[cfg(target_arch = "x86_64")]
-            core::arch::x86_64::_mm_prefetch::<{ core::arch::x86_64::_MM_HINT_T0 }>(ptr);
-            #[cfg(target_arch = "aarch64")]
-            core::arch::asm!(
-                "prfm pldl1keep, [{p}]",
-                p = in(reg) ptr,
-                options(nostack, readonly)
-            );
-        }
-    }
-
     /// Reconstruct the address stored at dense index `i` (inverse of `index_of`).
     pub fn addr_at(&self, i: usize) -> u64 {
         // Block whose start index is the greatest <= i.
@@ -512,50 +459,6 @@ impl IndexCache {
 }
 
 impl Default for IndexCache {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Inline cache for `class_addr_to_hist` lookups (class object address → histogram index).
-/// Same direct-mapped design as `IndexCache`, but keyed on class addresses (which recur
-/// for every instance of the same class) instead of object addresses.
-/// `u32::MAX` encodes absent (class not in histogram map).
-/// 2048 slots × 12 bytes = 24 KB — fits in L1 on most CPUs.
-const CPC_SIZE: usize = 2048;
-pub struct ClassPlanCache {
-    keys: Box<[u64; CPC_SIZE]>,
-    vals: Box<[u32; CPC_SIZE]>,
-}
-
-impl ClassPlanCache {
-    pub fn new() -> Self {
-        Self {
-            keys: Box::new([0u64; CPC_SIZE]),
-            vals: Box::new([u32::MAX; CPC_SIZE]),
-        }
-    }
-
-    /// Look up `class_addr` in `map`, consulting the cache first.
-    /// Returns the histogram index, or `u32::MAX` if absent.
-    #[inline(always)]
-    pub fn get(&mut self, map: &std::collections::HashMap<u64, u32>, class_addr: u64) -> u32 {
-        let slot = ((class_addr ^ (class_addr >> 20)) as usize) & (CPC_SIZE - 1);
-        // SAFETY: slot < CPC_SIZE by construction.
-        let k = unsafe { *self.keys.get_unchecked(slot) };
-        if k == class_addr {
-            return unsafe { *self.vals.get_unchecked(slot) };
-        }
-        let v = map.get(&class_addr).copied().unwrap_or(u32::MAX);
-        unsafe {
-            *self.keys.get_unchecked_mut(slot) = class_addr;
-            *self.vals.get_unchecked_mut(slot) = v;
-        }
-        v
-    }
-}
-
-impl Default for ClassPlanCache {
     fn default() -> Self {
         Self::new()
     }

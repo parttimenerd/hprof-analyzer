@@ -1579,7 +1579,7 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
 function ThreadOverviewTable({ threads }: { threads: ThreadInfo[] }) {
   if (threads.length === 0) return null;
   return (
-    <details className="thread-overview-detail">
+    <details className="thread-overview-detail" open>
       <summary>Thread Overview ({fmtCount(threads.length)})</summary>
       <table>
         <thead>
@@ -2353,10 +2353,19 @@ function AllocSitesSection({ data }: { data: AllocSites }) {
             {data.sites.map((s, i) => (
               <tr key={i}>
                 <td>
-                  {s.frames.length > 0 ? (
+                  {s.frames.length === 0 ? (
+                    <span className="hint">serial {s.stack_serial} <span className="muted">(no frames recorded)</span></span>
+                  ) : s.frames.length === 1 ? (
                     <code>{s.frames[0]}</code>
                   ) : (
-                    <span className="hint">serial {s.stack_serial}</span>
+                    <details className="stack-detail">
+                      <summary><code>{s.frames[0]}</code></summary>
+                      <ol className="stack-frames">
+                        {s.frames.map((f, fi) => (
+                          <li key={fi}><code>{f}</code></li>
+                        ))}
+                      </ol>
+                    </details>
                   )}
                 </td>
                 <td className="num">{fmtCount(s.object_count)}</td>

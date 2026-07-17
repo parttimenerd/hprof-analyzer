@@ -40,7 +40,7 @@ pub(crate) fn escape_string_cell(s: &str) -> String {
 }
 /// a single `[` followed by one primitive type char. These are boot-loaded
 /// (single loader), so exact-name duplicate rows can be folded safely.
-pub(crate) fn is_prim_array_desc(name: &str) -> bool {
+fn is_prim_array_desc(name: &str) -> bool {
     name.len() == 2
         && name.as_bytes()[0] == b'['
         && matches!(

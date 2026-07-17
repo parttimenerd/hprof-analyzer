@@ -320,7 +320,42 @@ impl Pass2 {
         };
         crate::trace::probe("pass2: after early-compress class_idx+alloc_serial (before 2a scan)");
 
-        // ── Sub-pass 2a is now fused into build_field_decode_views below ─────
+        // ── Sub-pass 2a scan ─────────────────────────────────────────────
+        {
+            let mut r = HprofReader::open(path)?;
+            // Scratch buffer reused across INSTANCE_DUMP and OBJ_ARRAY_DUMP reads (fix #6)
+            let mut scratch: Vec<u8> = Vec::with_capacity(4096);
+
+            loop {
+                let tag = match r.u1() {
+                    Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+                    other => other?,
+                };
+                let _ts = r.u4()?;
+                let length = r.u4()? as u64;
+
+                match tag {
+                    tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
+                        Self::scan_heap_2a(
+                            &mut r,
+                            id_size,
+                            length,
+                            &p1.id_map,
+                            &class_addr_to_hist,
+                            &field_plans_dense,
+                            &mut out_degree,
+                            &mut in_degree,
+                            &mut scratch,
+                        )?;
+                    }
+                    tags::HEAP_DUMP_END => break,
+                    _ => {
+                        r.skip(length)?;
+                    }
+                }
+            }
+        }
+        crate::trace::probe("pass2: after 2a scan (out+in_degree filled)");
 
         // Class objects already map to the java/lang/Class row (JLC_KEY) from Phase 0c.
         let jlc_idx = get_or_insert_class(JLC_KEY, &|| "java/lang/Class".to_string(), &|| 0);
@@ -502,13 +537,9 @@ impl Pass2 {
         // garbage) if the layout does not match the Hashtable form.
         let (system_properties, jvm_version) = resolve_system_properties(path, &p1)?;
 
-        // Always-on field-decode views (collections, arrays, references). Fused
-        // with the 2a degree-count scan: the extra_hook closure runs for every
-        // heap record in the same file pass, eliminating one ~34 GB file read.
-        // Must run while class_map/strings are alive.
-        let mut deg_idx_cache = crate::id_map::IndexCache::new();
-        let mut deg_cls_cache = crate::id_map::ClassPlanCache::new();
-        let deg_ids = id_size as u64;
+        // Always-on field-decode views (collections, arrays, references). One
+        // shared 3-scan pass; all aggregates are capped (see fielddecode.rs), so
+        // RSS stays within the grant. Must run while class_map/strings are alive.
         let (
             fd_collections,
             fd_references,
@@ -522,109 +553,8 @@ impl Pass2 {
             &shallow,
             opts.collections,
             &opts.coll_descs,
-            |rec| {
-                match rec {
-                    crate::pass2::scan::Record::Instance(addr, class_id, blob) => {
-                        // Prefetch the id_map slot for `addr` as early as possible in
-                        // the handler so the cidx/plan lookups can overlap the DRAM fetch.
-                        p1.id_map.prefetch_index_of(addr);
-                        let cidx = deg_cls_cache.get(&class_addr_to_hist, class_id);
-                        let field_plan = if cidx != u32::MAX {
-                            let plan = &field_plans_dense[cidx as usize];
-                            if plan.is_empty() { None } else { Some(plan) }
-                        } else {
-                            None
-                        };
-                        let src_idx = match deg_idx_cache.index_of(&p1.id_map, addr) {
-                            Some(i) => i,
-                            None => return,
-                        };
-                        if class_id != 0 {
-                            if let Some(dst) = deg_idx_cache.index_of(&p1.id_map, class_id) {
-                                out_degree[src_idx] += 1;
-                                in_degree[dst] += 1;
-                            }
-                        }
-                        if let Some(plan) = field_plan {
-                            for &(off, _excluded) in plan {
-                                let off = off as usize;
-                                if off + id_size as usize <= blob.len() {
-                                    let ref_val = read_ref(&blob[off..], id_size as usize);
-                                    if ref_val != 0 {
-                                        if let Some(dst) = deg_idx_cache.index_of(&p1.id_map, ref_val) {
-                                            out_degree[src_idx] += 1;
-                                            in_degree[dst] += 1;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    crate::pass2::scan::Record::ObjArray(addr, elem_class_id, _count, elem_bytes) => {
-                        // Prefetch the id_map slot for `addr` before further work.
-                        p1.id_map.prefetch_index_of(addr);
-                        let src_idx = match deg_idx_cache.index_of(&p1.id_map, addr) {
-                            Some(i) => i,
-                            None => return,
-                        };
-                        if elem_class_id != 0 {
-                            if let Some(dst) = deg_idx_cache.index_of(&p1.id_map, elem_class_id) {
-                                out_degree[src_idx] += 1;
-                                in_degree[dst] += 1;
-                            }
-                        }
-                        // Prefetch id_map slots for element refs PF_ELEM ahead.
-                        // Element addresses are unique so IndexCache can't help.
-                        const PF_ELEM_2A: usize = 16;
-                        let ids_us2 = deg_ids as usize;
-                        let total_e = elem_bytes.len() / ids_us2;
-                        for ke in 0..total_e {
-                            if ke + PF_ELEM_2A < total_e {
-                                let pf_ref = read_id(&elem_bytes[(ke + PF_ELEM_2A) * ids_us2..], id_size);
-                                if pf_ref != 0 {
-                                    p1.id_map.prefetch_index_of(pf_ref);
-                                }
-                            }
-                            let ref_val = read_id(&elem_bytes[ke * ids_us2..], id_size);
-                            if ref_val != 0 {
-                                if let Some(dst) = deg_idx_cache.index_of(&p1.id_map, ref_val) {
-                                    out_degree[src_idx] += 1;
-                                    in_degree[dst] += 1;
-                                }
-                            }
-                        }
-                    }
-                    crate::pass2::scan::Record::ClassDump(class_addr, super_id, loader_id, static_obj_refs) => {
-                        if let Some(src) = deg_idx_cache.index_of(&p1.id_map, class_addr) {
-                            if super_id != 0 {
-                                if let Some(dst) = p1.id_map.index_of(super_id) {
-                                    out_degree[src] += 1;
-                                    in_degree[dst] += 1;
-                                }
-                            }
-                            if loader_id != 0 {
-                                if let Some(dst) = p1.id_map.index_of(loader_id) {
-                                    out_degree[src] += 1;
-                                    in_degree[dst] += 1;
-                                }
-                            }
-                            for &ref_val in static_obj_refs {
-                                if ref_val != 0 {
-                                    if let Some(dst) = p1.id_map.index_of(ref_val) {
-                                        out_degree[src] += 1;
-                                        in_degree[dst] += 1;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    crate::pass2::scan::Record::PrimArray(..) => {}
-                }
-            },
         )?;
-        crate::trace::probe("pass2: after field_decode_views+2a fused scan");
-        drop(deg_idx_cache);
-        drop(deg_cls_cache);
+        crate::trace::probe("pass2: after field_decode_views (3 extra scans done)");
 
         // Free class_ids now: build_field_decode_views was its last reader
         // (class_name_of_index uses it for referent class lookups). Releasing
@@ -892,12 +822,182 @@ impl Pass2 {
         Ok((graph, inbound, shallow_c, class_idx_c, alloc_serial_c))
     }
 
+    /// First-scan heap walker that COUNTS out/in degrees per node and finalizes
+    /// each object's authoritative shallow size (arrays/instances use their real
+    /// element count / class blob). Produces the degree arrays that Phase 3
+    /// prefix-sums into the CSR offsets; fills no edge targets itself.
+    #[allow(clippy::too_many_arguments)]
+    fn scan_heap_2a(
+        r: &mut HprofReader,
+        id_size: u8,
+        mut remaining: u64,
+        id_map: &crate::id_map::IdMap,
+        class_addr_to_hist: &HashMap<u64, u32>,
+        field_plans_dense: &[FieldPlan],
+        out_degree: &mut Vec<u32>,
+        in_degree: &mut Vec<u32>,
+        scratch: &mut Vec<u8>,
+    ) -> io::Result<()> {
+        let ids = id_size as u64;
+        let mut cache = crate::id_map::IndexCache::new();
+
+        macro_rules! edge_if_valid {
+            ($src:expr, $dst_addr:expr, $excl:expr) => {
+                if $dst_addr != 0 {
+                    if let Some(dst) = cache.index_of(id_map, $dst_addr) {
+                        let src = $src as usize;
+                        out_degree[src] += 1;
+                        in_degree[dst] += 1;
+                    }
+                }
+            };
+        }
+
+        macro_rules! checked_sub {
+            ($remaining:expr, $sz:expr) => {
+                $remaining = $remaining
+                    .checked_sub($sz)
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "segment overrun"))?;
+            };
+        }
+
+        while remaining > 0 {
+            let sub_tag = r.u1()?;
+            checked_sub!(remaining, 1u64);
+
+            match sub_tag {
+                heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED => {
+                    r.skip(ids)?;
+                    checked_sub!(remaining, ids);
+                }
+                heap::ROOT_JNI_GLOBAL => {
+                    r.skip(2 * ids)?;
+                    checked_sub!(remaining, 2 * ids);
+                }
+                heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME => {
+                    r.skip(ids + 8)?;
+                    checked_sub!(remaining, ids + 8);
+                }
+                heap::ROOT_NATIVE_STACK | heap::ROOT_THREAD_BLOCK => {
+                    r.skip(ids + 4)?;
+                    checked_sub!(remaining, ids + 4);
+                }
+                heap::ROOT_STICKY_CLASS => {
+                    r.skip(ids)?;
+                    checked_sub!(remaining, ids);
+                }
+                heap::ROOT_THREAD_OBJ => {
+                    r.skip(ids + 8)?;
+                    checked_sub!(remaining, ids + 8);
+                }
+                heap::CLASS_DUMP => {
+                    let consumed =
+                        Self::count_class_dump_edges(r, id_size, id_map, out_degree, in_degree)?;
+                    checked_sub!(remaining, consumed);
+                }
+                heap::INSTANCE_DUMP => {
+                    let addr = r.id()?;
+                    r.skip(4)?;
+                    let class_id = r.id()?;
+                    let data_len = r.u4()? as u64;
+                    if data_len > remaining {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "array too large",
+                        ));
+                    }
+                    r.read_bytes_reuse(scratch, data_len as usize)?;
+                    checked_sub!(remaining, ids + 4 + ids + 4 + data_len);
+
+                    let src_idx = match id_map.index_of(addr) {
+                        Some(i) => i,
+                        None => continue,
+                    };
+
+                    // Edge: instance → class object
+                    edge_if_valid!(src_idx, class_id, false);
+
+                    // Edges from Object-type fields (dense Vec by class histogram idx,
+                    // no HashMap lookup — Phase 0b already precomputed the per-class plan).
+                    if let Some(&cidx) = class_addr_to_hist.get(&class_id) {
+                        for &(off, _excluded) in &field_plans_dense[cidx as usize] {
+                            let off = off as usize;
+                            if off + id_size as usize <= scratch.len() {
+                                let ref_val = read_ref(&scratch[off..], id_size as usize);
+                                if ref_val != 0 {
+                                    if let Some(dst) = cache.index_of(id_map, ref_val) {
+                                        out_degree[src_idx] += 1;
+                                        in_degree[dst] += 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                heap::OBJ_ARRAY_DUMP => {
+                    let addr = r.id()?;
+                    r.skip(4)?;
+                    let count = r.u4()? as u64;
+                    let elem_class_id = r.id()?;
+                    let byte_len = count.saturating_mul(ids);
+                    if byte_len > remaining {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "array too large",
+                        ));
+                    }
+                    r.read_bytes_reuse(scratch, byte_len as usize)?;
+                    checked_sub!(remaining, ids + 4 + 4 + ids + byte_len);
+
+                    let src_idx = match id_map.index_of(addr) {
+                        Some(i) => i,
+                        None => continue,
+                    };
+
+                    // Shallow size already correct from Phase 0b; class_idx set by Phase 0c.
+
+                    // Edge: array → element class object
+                    edge_if_valid!(src_idx, elem_class_id, false);
+
+                    // Edges: array → non-null elements
+                    for chunk in scratch.chunks(ids as usize) {
+                        let ref_val = read_id(chunk, id_size);
+                        if ref_val != 0 {
+                            if let Some(dst) = cache.index_of(id_map, ref_val) {
+                                out_degree[src_idx] += 1;
+                                in_degree[dst] += 1;
+                            }
+                        }
+                    }
+                }
+                heap::PRIM_ARRAY_DUMP => {
+                    let _addr = r.id()?;
+                    r.skip(4)?;
+                    let count = r.u4()? as u64;
+                    let elem_type = r.u1()?;
+                    let esz = HprofType::from_code(elem_type)
+                        .map(|t| t.byte_size() as u64)
+                        .unwrap_or(1);
+                    r.skip(count * esz)?;
+                    checked_sub!(remaining, ids + 4 + 4 + 1 + count * esz);
+                    // No object edges; shallow already set by Phase 0b.
+                }
+                other => {
+                    return Err(io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!("unknown heap sub-tag 0x{other:02x} in 2a"),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Second-scan heap walker that FILLS the CSR edge arrays (degrees already
-    /// counted by the fused scan in build_field_decode_views). `do_fwd`/`do_inb`
-    /// select which side is being filled: the forward pass advances `fwd_offsets`
-    /// in place as write cursors; the inbound pass writes into `inb_flat` at
-    /// `in_degree` cursors, tagging excluded (weak/finalizer) referrers with the
-    /// high bit.
+    /// counted by `scan_heap_2a`). `do_fwd`/`do_inb` select which side is being
+    /// filled: the forward pass advances `fwd_offsets` in place as write
+    /// cursors; the inbound pass writes into `inb_flat` at `in_degree` cursors,
+    /// tagging excluded (weak/finalizer) referrers with the high bit.
     #[allow(clippy::too_many_arguments)]
     fn fill_heap_2b(
         r: &mut HprofReader,
@@ -916,7 +1016,6 @@ impl Pass2 {
     ) -> io::Result<()> {
         let ids = id_size as u64;
         let mut cache = crate::id_map::IndexCache::new();
-        let mut class_cache = crate::id_map::ClassPlanCache::new();
 
         macro_rules! add_edge {
             ($src:expr, $dst_addr:expr, $excluded:expr) => {
@@ -997,10 +1096,6 @@ impl Pass2 {
                 }
                 heap::INSTANCE_DUMP => {
                     let addr = r.id()?;
-                    // Issue a prefetch for the id_map offsets slot we'll soon need.
-                    // The skip(4) + id() + u4() reads below give the memory system
-                    // ~16 bytes of parsing time (~2 ns) to start the DRAM fetch.
-                    id_map.prefetch_index_of(addr);
                     r.skip(4)?;
                     let class_id = r.id()?;
                     let data_len = r.u4()? as u64;
@@ -1010,20 +1105,8 @@ impl Pass2 {
                             "array too large",
                         ));
                     }
+                    r.read_bytes_reuse(scratch, data_len as usize)?;
                     checked_sub!(remaining, ids + 4 + ids + 4 + data_len);
-
-                    let cidx_2b = class_cache.get(class_addr_to_hist, class_id);
-                    let field_plan = if cidx_2b != u32::MAX {
-                        let plan = &field_plans_dense[cidx_2b as usize];
-                        if plan.is_empty() { None } else { Some((cidx_2b, plan)) }
-                    } else {
-                        None
-                    };
-                    if field_plan.is_some() {
-                        r.read_bytes_reuse(scratch, data_len as usize)?;
-                    } else {
-                        r.skip(data_len)?;
-                    }
 
                     let src_idx = match id_map.index_of(addr) {
                         Some(i) => i,
@@ -1034,8 +1117,8 @@ impl Pass2 {
                     add_edge!(src_idx, class_id, false);
 
                     // Edges from Object-type fields (dense Vec by class histogram idx)
-                    if let Some((_cidx, plan)) = field_plan {
-                        for &(off, excluded) in plan {
+                    if let Some(&cidx) = class_addr_to_hist.get(&class_id) {
+                        for &(off, excluded) in &field_plans_dense[cidx as usize] {
                             let off = off as usize;
                             if off + id_size as usize <= scratch.len() {
                                 let ref_val = read_ref(&scratch[off..], id_size as usize);
@@ -1046,8 +1129,6 @@ impl Pass2 {
                 }
                 heap::OBJ_ARRAY_DUMP => {
                     let addr = r.id()?;
-                    // Issue a prefetch for the id_map offsets slot before further reads.
-                    id_map.prefetch_index_of(addr);
                     r.skip(4)?;
                     let count = r.u4()? as u64;
                     let elem_class_id = r.id()?;
@@ -1070,21 +1151,8 @@ impl Pass2 {
                     add_edge!(src_idx, elem_class_id, false);
 
                     // Edges to elements
-                    // Prefetch the id_map slot for each element address PF_ELEM
-                    // positions ahead so the IndexCache miss path lands from
-                    // cache instead of DRAM.  Element references are unique so
-                    // the IndexCache can't help; the prefetch does.
-                    const PF_ELEM: usize = 16;
-                    let ids_us = ids as usize;
-                    let total_elems = scratch.len() / ids_us;
-                    for k in 0..total_elems {
-                        if k + PF_ELEM < total_elems {
-                            let pf_ref = read_id(&scratch[(k + PF_ELEM) * ids_us..], id_size);
-                            if pf_ref != 0 {
-                                id_map.prefetch_index_of(pf_ref);
-                            }
-                        }
-                        let ref_val = read_id(&scratch[k * ids_us..], id_size);
+                    for chunk in scratch.chunks(ids as usize) {
+                        let ref_val = read_id(chunk, id_size);
                         add_edge!(src_idx, ref_val, false);
                     }
                 }
@@ -1203,6 +1271,93 @@ impl Pass2 {
         }
 
         // Instance fields (just skip)
+        let ic = r.u2()? as u64;
+        consumed += 2;
+        r.skip(ic * (ids + 1))?;
+        consumed += ic * (ids + 1);
+
+        Ok(consumed)
+    }
+}
+
+// ── Also need 2a version of CLASS_DUMP to count static obj edges ───────────
+// We need a version that also counts degrees for CLASS_DUMP static fields.
+
+impl Pass2 {
+    /// COUNT-phase counterpart to `fill_class_dump_edges`: counts a class
+    /// object's structural edges (→ superclass, → loader, → each Object-typed
+    /// static field) into the degree arrays. Returns bytes consumed.
+    fn count_class_dump_edges(
+        r: &mut HprofReader,
+        id_size: u8,
+        id_map: &crate::id_map::IdMap,
+        out_degree: &mut Vec<u32>,
+        in_degree: &mut Vec<u32>,
+    ) -> io::Result<u64> {
+        let ids = id_size as u64;
+        let mut consumed = 0u64;
+
+        let class_addr = r.id()?;
+        consumed += ids;
+        r.skip(4)?;
+        consumed += 4;
+        let super_id = r.id()?;
+        consumed += ids;
+        let loader_id = r.id()?;
+        consumed += ids;
+        r.skip(ids * 4 + 4)?;
+        consumed += ids * 4 + 4;
+
+        let src_opt = id_map.index_of(class_addr);
+
+        macro_rules! count_edge {
+            ($dst_addr:expr) => {
+                if $dst_addr != 0 {
+                    if let Some(dst) = id_map.index_of($dst_addr) {
+                        if let Some(src) = src_opt {
+                            out_degree[src] += 1;
+                            in_degree[dst] += 1;
+                        }
+                    }
+                }
+            };
+        }
+
+        if src_opt.is_some() {
+            count_edge!(super_id);
+            count_edge!(loader_id);
+        }
+
+        let cp = r.u2()? as u64;
+        consumed += 2;
+        for _ in 0..cp {
+            r.skip(2)?;
+            consumed += 2;
+            let tp = r.u1()?;
+            consumed += 1;
+            let vs = value_size(tp, id_size);
+            r.skip(vs)?;
+            consumed += vs;
+        }
+
+        let sc = r.u2()? as u64;
+        consumed += 2;
+        for _ in 0..sc {
+            r.skip(ids)?;
+            consumed += ids;
+            let tp = r.u1()?;
+            consumed += 1;
+            let vs = value_size(tp, id_size);
+            if tp == 2 {
+                let ref_val = read_id_from_reader(r, id_size)?;
+                consumed += vs;
+                count_edge!(ref_val);
+            } else {
+                r.skip(vs)?;
+                consumed += vs;
+            }
+        }
+
         let ic = r.u2()? as u64;
         consumed += 2;
         r.skip(ic * (ids + 1))?;

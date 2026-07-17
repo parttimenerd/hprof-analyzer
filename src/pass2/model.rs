@@ -13,10 +13,8 @@ use super::Pass2;
 /// Each node's predecessor slice is count-prefixed so it is self-delimiting;
 /// dominator Phase-1 seeks to the block start then scans-skips to node w.
 /// Trades ~K/2 extra vbyte skips per lookup for dropping the full per-node
-/// offset array (n+1 u64 = ~4GB) down to (n/K) u64.
-/// At K=8: block table ~514MB (514M nodes × 8B / 8); avg skip = 3.5 nodes.
-/// Reduced from K=16 (avg skip 7.5) to halve dominator Phase-1 CSR seek cost.
-pub const INB_BLOCK: usize = 8;
+/// offset array (n+1 u32 = ~2GB) down to (n/K) u32.
+pub const INB_BLOCK: usize = 16;
 
 // ── Graph output struct ────────────────────────────────────────────────────
 
@@ -481,42 +479,6 @@ impl InboundBuilder {
         let fwd_off_ptr = fwd_offsets.as_ptr();
         #[cfg(target_os = "linux")]
         let mut next_off_dontneed: usize = 1 << 10; // first page boundary = 1024 u32 = 4 KB
-
-        // Global sliding-window prefetch for in_cursors[dst] with depth TPF_GLOBAL.
-        // Per-node PF=8 never fires for nodes with ≤8 out-edges (the majority);
-        // this global scheme covers every target regardless of per-node degree.
-        // TPF_GLOBAL=64: each in_cursors[dst] read touches a random 4-byte slot in
-        // the ~2 GB in_cursors array; 64 entries ahead hides ~100 ns DRAM latency.
-        // TPF2=32: two-level prefetch — once in_cursors[dst_mid] is warm (from the
-        // level-1 prefetch 32 iters ago), read it to prefetch the inb_flat write slot.
-        const TPF_GLOBAL: usize = 64;
-        const TPF2: usize = 32; // second level: prefetch inb_flat[in_cursors[tgt[k+TPF2]]]
-        let total_fwd_edges = fwd_offsets[n_nodes] as usize;
-        let ic_len = in_cursors.len();
-        let ic_ptr = in_cursors.as_ptr();
-        // pf_tgt_pos: global flat fwd_targets position for the lookahead.
-        let mut pf_tgt_pos: usize = 0;
-        // Prime the pipeline: issue the first TPF_GLOBAL prefetches.
-        for pp in 0..TPF_GLOBAL.min(total_fwd_edges) {
-            let pf_dst = fwd_targets.get(pp) as usize;
-            if pf_dst < ic_len {
-                unsafe {
-                    let ptr = ic_ptr.add(pf_dst) as *const i8;
-                    #[cfg(target_arch = "x86_64")]
-                    core::arch::x86_64::_mm_prefetch::<
-                        { core::arch::x86_64::_MM_HINT_T0 },
-                    >(ptr);
-                    #[cfg(target_arch = "aarch64")]
-                    core::arch::asm!(
-                        "prfm pldl1keep, [{p}]",
-                        p = in(reg) ptr,
-                        options(nostack, readonly)
-                    );
-                }
-            }
-        }
-        pf_tgt_pos = TPF_GLOBAL.min(total_fwd_edges);
-
         for src in 0..n_nodes {
             let lo = fwd_offsets[src] as usize;
             let hi = fwd_offsets[src + 1] as usize;
@@ -548,39 +510,7 @@ impl InboundBuilder {
                 fwd_targets.copy_range(lo, hi, &mut buf);
                 &buf
             };
-            for &dst in targets.iter() {
-                // Advance global lookahead: prefetch in_cursors[dst'] for the
-                // target TPF_GLOBAL positions ahead in the flat edge sequence.
-                if pf_tgt_pos < total_fwd_edges {
-                    let pf_dst = fwd_targets.get(pf_tgt_pos) as usize;
-                    if pf_dst < ic_len {
-                        unsafe {
-                            let ptr = ic_ptr.add(pf_dst) as *const i8;
-                            #[cfg(target_arch = "x86_64")]
-                            core::arch::x86_64::_mm_prefetch::<
-                                { core::arch::x86_64::_MM_HINT_T0 },
-                            >(ptr);
-                            #[cfg(target_arch = "aarch64")]
-                            core::arch::asm!(
-                                "prfm pldl1keep, [{p}]",
-                                p = in(reg) ptr,
-                                options(nostack, readonly)
-                            );
-                        }
-                    }
-                    // Level 2: pf_tgt_pos - TPF2 was prefetched TPF2 iters ago so
-                    // in_cursors[tgt[pf_tgt_pos-TPF2]] is now warm in L1/L2.
-                    // Read it to prefetch the inb_flat write destination.
-                    if pf_tgt_pos >= TPF2 {
-                        let mid_flat = pf_tgt_pos - TPF2;
-                        let mid_dst = fwd_targets.get(mid_flat) as usize;
-                        if mid_dst < ic_len {
-                            let inb_slot = unsafe { *ic_ptr.add(mid_dst) } as usize;
-                            inb_flat.prefetch_set(inb_slot);
-                        }
-                    }
-                    pf_tgt_pos += 1;
-                }
+            for &dst in targets {
                 let dst = dst as usize;
                 inb_flat.set(in_cursors[dst] as usize, src as u32);
                 in_cursors[dst] += 1;
@@ -731,47 +661,6 @@ impl InboundBuilder {
         let mut nb: Vec<u32> = Vec::new();
         // Free consumed chunks every ~256 M slots crossed (one chunk).
         let mut next_free_at: usize = 1 << 26;
-
-        // Global sliding-window prefetch: issue dfn[node] prefetches PF_GLOBAL
-        // elements ahead in the *flat* inb_flat sequence, crossing node boundaries.
-        // The per-node PF=8 scheme never fires for nodes with ≤8 predecessors
-        // (the vast majority); this covers every node regardless of predecessor count.
-        // PF_GLOBAL=64: at ~3 ns/iter and 100 ns DRAM latency, 32+ entries needed;
-        // 64 gives comfortable margin for NUMA / loaded-memory scenarios.
-        const PF_GLOBAL: usize = 64;
-        let total_inb_us = total_inb as usize;
-        // Inline helper: issue a prefetch for dfn[inb_flat[pp]] if in bounds.
-        macro_rules! global_prefetch_at {
-            ($pp:expr) => {
-                if $pp < total_inb_us {
-                    let pv = inb_flat.get($pp);
-                    let pf_node = (pv & 0x7fff_ffff) as usize;
-                    if pf_node < dfn.len() {
-                        unsafe {
-                            let ptr = dfn.as_ptr().add(pf_node) as *const i8;
-                            #[cfg(target_arch = "x86_64")]
-                            core::arch::x86_64::_mm_prefetch::<
-                                { core::arch::x86_64::_MM_HINT_T0 },
-                            >(ptr);
-                            #[cfg(target_arch = "aarch64")]
-                            core::arch::asm!(
-                                "prfm pldl1keep, [{p}]",
-                                p = in(reg) ptr,
-                                options(nostack, readonly)
-                            );
-                        }
-                    }
-                }
-            };
-        }
-
-        // Prime the pipeline: issue the first PF_GLOBAL prefetches before the loop.
-        for pp in 0..PF_GLOBAL.min(total_inb_us) {
-            global_prefetch_at!(pp);
-        }
-        // pf_pos: global flat position of the next element to prefetch.
-        let mut pf_pos: usize = PF_GLOBAL.min(total_inb_us);
-
         for i in 0..n {
             let end = in_cursors[i] as usize; // in_cursors[i] = end offset after fill
 
@@ -801,16 +690,11 @@ impl InboundBuilder {
             // drop unreachable predecessors (dfn == UNDEFINED). Use range_slice
             // for a zero-copy read when the range fits in one chunk; fall back
             // to copy_range otherwise. Store translated values in nb.
-            // For each element processed, issue one global-sequence prefetch
-            // PF_GLOBAL positions ahead (pf_pos tracks that position).
             let mut w = 0usize;
             if let Some(raw) = inb_flat.range_slice(start, end) {
                 nb.clear();
                 nb.reserve(raw.len());
-                for &raw_val in raw.iter() {
-                    // Advance global lookahead by one element.
-                    global_prefetch_at!(pf_pos);
-                    pf_pos += 1;
+                for &raw_val in raw {
                     let node = (raw_val & 0x7fff_ffff) as usize;
                     let pre = dfn[node];
                     if pre != u32::MAX {
@@ -821,9 +705,6 @@ impl InboundBuilder {
             } else {
                 inb_flat.copy_range(start, end, &mut nb);
                 for r in 0..nb.len() {
-                    // Advance global lookahead by one element.
-                    global_prefetch_at!(pf_pos);
-                    pf_pos += 1;
                     let node = (nb[r] & 0x7fff_ffff) as usize;
                     let pre = dfn[node];
                     if pre != u32::MAX {

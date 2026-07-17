@@ -112,33 +112,7 @@ pub fn rpo_dfs(
             // Fast path: adjacency list fits in one chunk — iterate the slice
             // directly without per-element shift/mask overhead.
             if let Some(adj) = fwd_tgt.range_slice(lo + *cursor, hi) {
-                // Prefetch dfn[adj[k + PF_DFS]] while consuming adj[k].
-                // dfn is a 2 GB random-access array; for nodes with many children
-                // (large object arrays) most lookups are DRAM misses. PF_DFS=16
-                // covers ~50 ns at 3 ns/iter to hide ~100 ns DRAM latency.
-                const PF_DFS: usize = 16;
-                let dfn_ptr = dfn.as_ptr();
-                let dfn_len = dfn.len();
-                for (k, &child) in adj.iter().enumerate() {
-                    // Issue a prefetch for the element PF_DFS positions ahead.
-                    if k + PF_DFS < adj.len() {
-                        let pf_child = unsafe { *adj.get_unchecked(k + PF_DFS) } as usize;
-                        if pf_child < dfn_len {
-                            unsafe {
-                                let ptr = dfn_ptr.add(pf_child) as *const i8;
-                                #[cfg(target_arch = "x86_64")]
-                                core::arch::x86_64::_mm_prefetch::<
-                                    { core::arch::x86_64::_MM_HINT_T0 },
-                                >(ptr);
-                                #[cfg(target_arch = "aarch64")]
-                                core::arch::asm!(
-                                    "prfm pldl1keep, [{p}]",
-                                    p = in(reg) ptr,
-                                    options(nostack, readonly)
-                                );
-                            }
-                        }
-                    }
+                for &child in adj {
                     *cursor += 1;
                     if child as usize > n {
                         continue;

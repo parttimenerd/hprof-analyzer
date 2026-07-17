@@ -174,40 +174,13 @@ pub fn compute_dominators(
     let mut idom = vec![UNDEFINED; n + 1];
     crate::trace::probe("dominator: after idom alloc");
     idom[n] = vroot; // virtual root dominates itself
-    // Prefetch rpo.vertex[idom_pre[i+PF_TR]] ahead to hide the DRAM latency of
-    // the random rpo.vertex[dom_pre] read. idom_pre[i] is sequential (hardware-
-    // prefetched), but dom_pre is random, so rpo.vertex[dom_pre] is a DRAM miss.
-    const PF_TR: usize = 64;
-    let vertex_ptr = rpo.vertex.as_ptr();
-    let vertex_len = rpo.vertex.len();
-    let idom_pre_ptr = idom_pre.as_ptr();
-    let idom_pre_len = idom_pre.len();
     for i in 1..count {
-        if i + PF_TR < idom_pre_len {
-            let pf_dom_pre = unsafe { *idom_pre_ptr.add(i + PF_TR) } as usize;
-            if pf_dom_pre < vertex_len {
-                unsafe {
-                    let ptr = vertex_ptr.add(pf_dom_pre) as *const i8;
-                    #[cfg(target_arch = "x86_64")]
-                    core::arch::x86_64::_mm_prefetch::<
-                        { core::arch::x86_64::_MM_HINT_T0 },
-                    >(ptr);
-                    #[cfg(target_arch = "aarch64")]
-                    core::arch::asm!(
-                        "prfm pldl1keep, [{p}]",
-                        p = in(reg) ptr,
-                        options(nostack, readonly)
-                    );
-                }
-            }
-        }
         let node = rpo.vertex[i] as usize;
         let dom_pre = idom_pre[i];
         let dom_node = rpo.vertex[dom_pre as usize];
         // If the dominator is the virtual root (pre-order 0), store vroot (= n)
         idom[node] = if dom_pre == 0 { vroot } else { dom_node };
     }
-    let _ = (vertex_ptr, idom_pre_ptr); // suppress unused-ptr warnings on non-x86/aarch64
 
     Ok(idom)
 }
@@ -235,23 +208,6 @@ fn decode_checked(buf: &[u8], pos: usize) -> Option<(u32, usize)> {
     Some((v, c))
 }
 
-/// Bounds-checked vbyte skip: advance `pos` past one vbyte without decoding
-/// the value. Returns the new `pos`, or `None` on out-of-bounds. Faster than
-/// `decode_checked` when the value is not needed (skip loop in Phase 1).
-#[inline]
-fn skip_checked(buf: &[u8], mut pos: usize) -> Option<usize> {
-    loop {
-        if pos >= buf.len() {
-            return None;
-        }
-        let b = buf[pos];
-        pos += 1;
-        if b & 0x80 == 0 {
-            return Some(pos);
-        }
-    }
-}
-
 /// Run Phase 1 (semidominator computation) over the reverse pre-order.
 /// Decodes each node's predecessor list from the blocked CSR (or, when
 /// `exact_offsets` is Some, from an exact per-node byte-offset table that
@@ -273,73 +229,7 @@ fn phase1(
     // Reused scratch buffer for path compression in eval/compress.
     // Avoids a per-call Vec allocation in the hot loop (514M+ iterations on large dumps).
     let mut chain: Vec<u32> = Vec::new();
-
-    // Two-level prefetch for the inbound CSR decode:
-    //   Level 1 (PF_DOM=64):  prefetch inb_block_off[future_block] to bring the
-    //                          8-byte offset into L1 before we need it.
-    //   Level 2 (PF_DOM2=32): once inb_block_off[mid_block] is warm (we issued
-    //                          its prefetch 32 iters ago), load its value and
-    //                          prefetch inb_data[offset] to hide the ~4 GB
-    //                          random-access penalty on the actual CSR bytes.
-    //   vertex[] access is sequential (reverse i), so the hardware prefetcher
-    //   covers it; only inb_block_off and inb_data need explicit prefetches.
-    const PF_DOM: usize = 64;
-    const PF_DOM2: usize = 32; // second level: inb_block_off now warm, fetch data
-    let ibo_ptr = inb_block_off.as_ptr();
-    let ibo_len = inb_block_off.len();
-    let ibd_ptr = inb_data.as_ptr();
-    let ibd_len = inb_data.len();
-
     for i in (1..count).rev() {
-        // Level 1: prefetch the inb_block_off slot PF_DOM iters from now.
-        if i >= 1 + PF_DOM {
-            let pf_i = i - PF_DOM;
-            let pf_w_node = rpo.vertex[pf_i] as usize;
-            let pf_block = pf_w_node / crate::pass2::INB_BLOCK;
-            if pf_block < ibo_len {
-                unsafe {
-                    let ptr = ibo_ptr.add(pf_block) as *const i8;
-                    #[cfg(target_arch = "x86_64")]
-                    core::arch::x86_64::_mm_prefetch::<
-                        { core::arch::x86_64::_MM_HINT_T0 },
-                    >(ptr);
-                    #[cfg(target_arch = "aarch64")]
-                    core::arch::asm!(
-                        "prfm pldl1keep, [{p}]",
-                        p = in(reg) ptr,
-                        options(nostack, readonly)
-                    );
-                }
-            }
-        }
-        // Level 2: inb_block_off[mid_block] is now warm; read the offset and
-        // prefetch the corresponding inb_data byte (hides the 4 GB random read).
-        if i >= 1 + PF_DOM2 && i < count - (PF_DOM - PF_DOM2) {
-            let pf2_i = i - PF_DOM2;
-            let pf2_w_node = rpo.vertex[pf2_i] as usize;
-            let pf2_block = pf2_w_node / crate::pass2::INB_BLOCK;
-            if pf2_block < ibo_len {
-                // inb_block_off[pf2_block] should be in L1 now (we prefetched
-                // it PF_DOM - PF_DOM2 = 32 iterations ago).
-                let data_off = unsafe { *ibo_ptr.add(pf2_block) } as usize;
-                if data_off < ibd_len {
-                    unsafe {
-                        let ptr = ibd_ptr.add(data_off) as *const i8;
-                        #[cfg(target_arch = "x86_64")]
-                        core::arch::x86_64::_mm_prefetch::<
-                            { core::arch::x86_64::_MM_HINT_T0 },
-                        >(ptr);
-                        #[cfg(target_arch = "aarch64")]
-                        core::arch::asm!(
-                            "prfm pldl1keep, [{p}]",
-                            p = in(reg) ptr,
-                            options(nostack, readonly)
-                        );
-                    }
-                }
-            }
-        }
-
         let w_node = rpo.vertex[i] as usize;
 
         // Implicit virtual-root predecessor for GC roots
@@ -358,18 +248,17 @@ fn phase1(
             let block = w_node / crate::pass2::INB_BLOCK;
             let mut p = inb_block_off[block] as usize;
             for _ in (block * crate::pass2::INB_BLOCK)..w_node {
-                // Decode the count (needed to know how many deltas to skip).
                 let (cnt, c0) = decode_checked(inb_data, p).ok_or(DesyncErr {
                     at: i,
                     why: "skip count ran off end",
                 })?;
                 p += c0;
-                // Skip each delta without decoding — just advance past the bytes.
                 for _ in 0..cnt {
-                    p = skip_checked(inb_data, p).ok_or(DesyncErr {
+                    let (_, c1) = decode_checked(inb_data, p).ok_or(DesyncErr {
                         at: i,
                         why: "skip delta ran off end",
                     })?;
+                    p += c1;
                 }
             }
             p

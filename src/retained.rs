@@ -18,32 +18,7 @@ pub fn build_dom_children_csr(n: usize, idom: &[u32]) -> (Vec<u32>, Vec<u32>) {
     // Single offsets array of length n+2 (no separate child_deg ~2GB @514M).
     // Step 1: count each parent's degree into child_off[p+1] (shifted by one).
     let mut child_off: Vec<u32> = vec![0u32; n + 2];
-    // Prefetch child_off[idom[u+PF]+1] PF_BDC iterations ahead to hide DRAM
-    // latency on the random write into the 2 GB child_off array.
-    const PF_BDC: usize = 64;
-    let co_ptr = child_off.as_ptr();
-    let co_len = child_off.len();
-    let idom_ptr = idom.as_ptr();
-    let idom_len = idom.len();
     for u in 0..n {
-        if u + PF_BDC < idom_len {
-            let pf_p = unsafe { *idom_ptr.add(u + PF_BDC) };
-            if pf_p != undef && pf_p as usize + 1 < co_len {
-                unsafe {
-                    let ptr = co_ptr.add(pf_p as usize + 1) as *const i8;
-                    #[cfg(target_arch = "x86_64")]
-                    core::arch::x86_64::_mm_prefetch::<
-                        { core::arch::x86_64::_MM_HINT_T0 },
-                    >(ptr);
-                    #[cfg(target_arch = "aarch64")]
-                    core::arch::asm!(
-                        "prfm pldl1keep, [{p}]",
-                        p = in(reg) ptr,
-                        options(nostack, readonly)
-                    );
-                }
-            }
-        }
         let p = idom[u];
         if p == undef || p == u as u32 {
             continue;
@@ -60,27 +35,7 @@ pub fn build_dom_children_csr(n: usize, idom: &[u32]) -> (Vec<u32>, Vec<u32>) {
     // (no ~n-length cursor clone). After the fill, child_off[d] has walked forward
     // to d's END index, so right-shift by one to restore the canonical offsets.
     // Range MUST be 1..=n+1 so child_off[n+1] (vroot's child end) is preserved.
-    let co_ptr2 = child_off.as_ptr();
     for u in 0..n {
-        // Level-1 prefetch: child_off[idom[u+PF]] — the write-cursor slot.
-        if u + PF_BDC < idom_len {
-            let pf_p = unsafe { *idom_ptr.add(u + PF_BDC) };
-            if pf_p != undef && (pf_p as usize) < co_len {
-                unsafe {
-                    let ptr = co_ptr2.add(pf_p as usize) as *const i8;
-                    #[cfg(target_arch = "x86_64")]
-                    core::arch::x86_64::_mm_prefetch::<
-                        { core::arch::x86_64::_MM_HINT_T0 },
-                    >(ptr);
-                    #[cfg(target_arch = "aarch64")]
-                    core::arch::asm!(
-                        "prfm pldl1keep, [{p}]",
-                        p = in(reg) ptr,
-                        options(nostack, readonly)
-                    );
-                }
-            }
-        }
         let p = idom[u];
         if p == undef || p == u as u32 {
             continue;
@@ -88,9 +43,6 @@ pub fn build_dom_children_csr(n: usize, idom: &[u32]) -> (Vec<u32>, Vec<u32>) {
         child_tgt[child_off[p as usize] as usize] = u as u32;
         child_off[p as usize] += 1;
     }
-    // Suppress unused-variable warnings for the raw pointers used only in
-    // cfg-gated inline asm / prefetch paths on non-x86/aarch64 targets.
-    let _ = (co_ptr, co_ptr2);
     for i in (1..=n + 1).rev() {
         child_off[i] = child_off[i - 1];
     }
@@ -169,15 +121,6 @@ pub fn compute_retained(
     stk_cls.push(undef);
     stk_ci.push(undef);
 
-    // Prefetch distance for class_idx random reads in the DFS push branch.
-    // class_idx is ~2 GB; each access to class_idx[child] is a likely DRAM miss.
-    // PF_RET=32 covers ~100 ns at the DFS iteration rate.
-    const PF_RET: usize = 32;
-    let ci_ptr = class_idx.as_ptr();
-    let ci_len = class_idx.len();
-    let ct_ptr = child_tgt.as_ptr();
-    let ct_len = child_tgt.len();
-
     while !stk_node.is_empty() {
         let top = stk_node.len() - 1;
         let v = stk_node[top];
@@ -186,49 +129,6 @@ pub fn compute_retained(
         let end_child = child_off[v as usize + 1];
 
         if next_child_pos < end_child {
-            // Prefetch class_idx[child_tgt[next_child_pos + PF_RET]] and
-            // child_off[child_tgt[...]] ahead to hide DRAM latency on both
-            // the class lookup and the child_off push on the DFS stack.
-            // Crossing a node's child-range boundary is safe: we'll use those
-            // entries when DFS eventually iterates that sibling/cousin node.
-            let pf_pos = next_child_pos as usize + PF_RET;
-            if pf_pos < ct_len {
-                let pf_child = unsafe { *ct_ptr.add(pf_pos) } as usize;
-                if pf_child < ci_len {
-                    unsafe {
-                        let ci_ptr2 = ci_ptr.add(pf_child) as *const i8;
-                        #[cfg(target_arch = "x86_64")]
-                        core::arch::x86_64::_mm_prefetch::<
-                            { core::arch::x86_64::_MM_HINT_T0 },
-                        >(ci_ptr2);
-                        #[cfg(target_arch = "aarch64")]
-                        core::arch::asm!(
-                            "prfm pldl1keep, [{p}]",
-                            p = in(reg) ci_ptr2,
-                            options(nostack, readonly)
-                        );
-                    }
-                }
-                // Also prefetch child_off[pf_child] for the stack push.
-                let co_ptr_r = child_off.as_ptr();
-                let co_len_r = child_off.len();
-                if pf_child < co_len_r {
-                    unsafe {
-                        let co_ptr2 = co_ptr_r.add(pf_child) as *const i8;
-                        #[cfg(target_arch = "x86_64")]
-                        core::arch::x86_64::_mm_prefetch::<
-                            { core::arch::x86_64::_MM_HINT_T0 },
-                        >(co_ptr2);
-                        #[cfg(target_arch = "aarch64")]
-                        core::arch::asm!(
-                            "prfm pldl1keep, [{p}]",
-                            p = in(reg) co_ptr2,
-                            options(nostack, readonly)
-                        );
-                    }
-                }
-                let _ = (co_ptr_r, co_len_r); // suppress non-x86/aarch64 unused warning
-            }
             // Advance child iterator on the current frame.
             let child = child_tgt[next_child_pos as usize];
             stk_child_idx[top] = next_child_pos + 1;
