@@ -740,7 +740,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
 
       {w && (
         <>
-          <h3>Char[] Waste</h3>
+          <h3><code>char[]</code> Waste</h3>
           <p className="subtitle">
             {fmtCount(w.arrays_examined)} arrays examined, {fmtCount(w.wasteful_arrays)} wasteful,{" "}
             {formatBytes(w.total_wasted_bytes)} total wasted.
@@ -2383,7 +2383,7 @@ function AllocSitesSection({ data }: { data: AllocSites }) {
       <p className="subtitle">Objects grouped by the stack trace that allocated them.</p>
       {!data.traces_present ? (
         <p className="subtitle">
-          Allocation tracking was off in this dump (stack_trace_serial = 0); no allocation sites available.
+          Allocation tracking was off in this dump (<code>stack_trace_serial = 0</code>); no allocation sites available.
         </p>
       ) : (
         <table>
@@ -2567,13 +2567,13 @@ function LeakIndicatorsSection({ data }: { data?: LeakIndicators }) {
           )}
           {thread_local_null_key_count > 0 && (
             <tr>
-              <td>ThreadLocal null-key entries (cleared referent)</td>
+              <td><code>ThreadLocal</code> null-key entries (cleared referent)</td>
               <td className="num">{fmtCount(thread_local_null_key_count)}</td>
             </tr>
           )}
           {direct_byte_buffer_capacity_sum > 0 && (
             <tr>
-              <td>DirectByteBuffer total capacity</td>
+              <td><code>DirectByteBuffer</code> total capacity</td>
               <td className="num">{formatBytes(direct_byte_buffer_capacity_sum)}</td>
             </tr>
           )}

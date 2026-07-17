@@ -227,13 +227,13 @@ pub(crate) fn render_leak_indicators(li: &crate::report::LeakIndicators, out: &m
     }
     if li.thread_local_null_key_count > 0 {
         t.row([
-            "ThreadLocal null-key entries (cleared referent)".into(),
+            "`ThreadLocal` null-key entries (cleared referent)".into(),
             fmt_count(li.thread_local_null_key_count),
         ]);
     }
     if li.direct_byte_buffer_capacity_sum > 0 {
         t.row([
-            "DirectByteBuffer total capacity".into(),
+            "`DirectByteBuffer` total capacity".into(),
             format_bytes(li.direct_byte_buffer_capacity_sum),
         ]);
     }
@@ -1852,7 +1852,7 @@ pub(crate) fn render_collection_attribution(
 
     out.push_str("## Container Attribution (Class#field)\n\n");
     out.push_str(
-        "_Which holder Class#field points at the most container memory. Two rankings: total \
+        "_Which holder `Class#field` points at the most container memory. Two rankings: total \
          across all containers reached through a field, and the single largest container per \
          field._\n\n",
     );
@@ -2280,7 +2280,7 @@ pub(crate) fn render_alloc_sites(a: &AllocSites, graphs: bool, out: &mut String)
     out.push_str("## Allocation Sites\n\n");
     if !a.traces_present {
         out.push_str(
-            "_Allocation tracking was off in this dump (stack_trace_serial = 0); no allocation sites available._\n\n",
+            "_Allocation tracking was off in this dump (`stack_trace_serial = 0`); no allocation sites available._\n\n",
         );
         return;
     }
