@@ -1748,39 +1748,53 @@ function TopComponentsSection({ data }: { data: TopComponents }) {
 // ── Arrays by Size ─────────────────────────────────────────────────────────
 // Power-of-two array-length histogram (object vs primitive arrays). Always-on;
 // mirrors render_md.rs::render_arrays_by_size.
-function ArraysBySizeSection({ data }: { data?: ArraysBySize }) {
+function ArraysBySizeSection({ data, totalShallow }: { data?: ArraysBySize; totalShallow: number }) {
   const obj = data?.obj_array_buckets ?? [];
   const prim = data?.prim_array_buckets ?? [];
   const zero = data?.zero_length_count ?? 0;
   const empty = obj.length === 0 && prim.length === 0 && zero === 0;
 
-  const bucketTable = (title: string, buckets: ArraysBySize["obj_array_buckets"]) => (
-    <>
-      <h3>{title}</h3>
-      {buckets.length === 0 ? (
-        <p className="subtitle">None.</p>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th className="num">Max length</th>
-              <th className="num">Objects</th>
-              <th className="num">Shallow</th>
-            </tr>
-          </thead>
-          <tbody>
-            {buckets.map((b, i) => (
-              <tr key={i}>
-                <td className="num">&le; {fmtCount(b.upper_len)}</td>
-                <td className="num">{fmtCount(b.objects)}</td>
-                <td className="num">{formatBytes(b.shallow)}</td>
+  const bucketTable = (title: string, buckets: ArraysBySize["obj_array_buckets"]) => {
+    const totalObjects = buckets.reduce((s, b) => s + b.objects, 0);
+    const totalBytes = buckets.reduce((s, b) => s + b.shallow, 0);
+    return (
+      <>
+        <h3>{title}</h3>
+        {buckets.length === 0 ? (
+          <p className="subtitle">None.</p>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th className="num">Max length</th>
+                <th className="num">Objects</th>
+                <th className="num">Shallow</th>
+                <th className="num">% Heap</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </>
-  );
+            </thead>
+            <tbody>
+              {buckets.map((b, i) => (
+                <tr key={i}>
+                  <td className="num">&le; {fmtCount(b.upper_len)}</td>
+                  <td className="num">{fmtCount(b.objects)}</td>
+                  <td className="num">{formatBytes(b.shallow)}</td>
+                  <td className="num">{totalShallow > 0 ? (b.shallow / totalShallow * 100).toFixed(1) + "%" : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr>
+                <td className="num"><strong>Total</strong></td>
+                <td className="num"><strong>{fmtCount(totalObjects)}</strong></td>
+                <td className="num"><strong>{formatBytes(totalBytes)}</strong></td>
+                <td className="num"><strong>{totalShallow > 0 ? (totalBytes / totalShallow * 100).toFixed(1) + "%" : "—"}</strong></td>
+              </tr>
+            </tfoot>
+          </table>
+        )}
+      </>
+    );
+  };
 
   return (
     <section id="arrays-by-size">
@@ -2830,7 +2844,7 @@ export default function App({ report }: { report: Report }) {
       {report.top_components?.components?.length ? (
         <TopComponentsSection data={report.top_components} />
       ) : null}
-      <ArraysBySizeSection data={report.arrays_by_size} />
+      <ArraysBySizeSection data={report.arrays_by_size} totalShallow={report.overview.total_shallow} />
       <CollectionsSection data={report.collections} />
       {report.collection_attribution && (
         <CollectionAttributionSection data={report.collection_attribution} />

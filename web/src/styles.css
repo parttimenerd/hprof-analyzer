@@ -16,6 +16,7 @@
 .stack-frames { margin: 0.3rem 0 0 1.25rem; padding: 0; list-style: decimal; }
 .stack-frames li { font-size: 0.82rem; color: var(--muted); padding: 0.05rem 0; }
 .stack-frames li code { background: none; padding: 0; font-size: inherit; }
+tfoot tr { border-top: 2px solid var(--border); }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
