@@ -1995,6 +1995,15 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
               </tr>
             ))}
           </tbody>
+          <tfoot>
+            <tr>
+              <td className="num"><strong>Total</strong></td>
+              <td className="num"><strong>{fmtCount(kindRows.reduce((s, r) => s + r.count, 0))}</strong></td>
+              <td className="num"><strong>{fmtCount(kindRows.reduce((s, r) => s + r.total_elements, 0))}</strong></td>
+              <td className="num"></td>
+              <td className="num"><strong>{formatBytes(kindRows.reduce((s, r) => s + r.total_shallow, 0))}</strong></td>
+            </tr>
+          </tfoot>
         </table>
       )}
 
@@ -2075,6 +2084,13 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
               </tr>
             ))}
           </tbody>
+          <tfoot>
+            <tr>
+              <td className="num"><strong>Total</strong></td>
+              <td className="num"><strong>{fmtCount(mcrBuckets.reduce((s, b) => s + b.objects, 0))}</strong></td>
+              <td className="num"><strong>{formatBytes(mcrBuckets.reduce((s, b) => s + b.shallow, 0))}</strong></td>
+            </tr>
+          </tfoot>
         </table>
       )}
 
@@ -2297,6 +2313,15 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
               </tr>
             ))}
           </tbody>
+          <tfoot>
+            <tr>
+              <td className="num"><strong>Total</strong></td>
+              <td className="num"><strong>{formatBytes(drops.reduce((s, r) => s + r.retained, 0))}</strong></td>
+              <td></td>
+              <td className="num"><strong>{formatBytes(drops.reduce((s, r) => s + r.largest_child_retained, 0))}</strong></td>
+              <td className="num"><strong>{formatBytes(drops.reduce((s, r) => s + r.drop_bytes, 0))}</strong></td>
+            </tr>
+          </tfoot>
         </table>
       )}
 
@@ -2329,6 +2354,15 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
               </tr>
             ))}
           </tbody>
+          <tfoot>
+            <tr>
+              <td className="num"><strong>Total</strong></td>
+              <td className="num"><strong>{fmtCount(idoms.reduce((s, r) => s + r.dominator_count, 0))}</strong></td>
+              <td className="num"><strong>{fmtCount(idoms.reduce((s, r) => s + r.dominated_count, 0))}</strong></td>
+              <td className="num"><strong>{formatBytes(idoms.reduce((s, r) => s + r.dominator_shallow, 0))}</strong></td>
+              <td className="num"><strong>{formatBytes(idoms.reduce((s, r) => s + r.dominated_shallow, 0))}</strong></td>
+            </tr>
+          </tfoot>
         </table>
       )}
     </section>
@@ -2359,7 +2393,7 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
             {fmtCount(data?.unreachable_count ?? 0)} unreachable objects retaining{" "}
             {formatBytes(data?.unreachable_shallow ?? 0)} shallow (top {fmtCount(rows.length)} classes by shallow).
           </p>
-          <details open>
+          <details>
             <summary>Unreachable objects by class ({fmtCount(rows.length)} rows)</summary>
             <table>
               <thead>
