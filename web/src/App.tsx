@@ -2354,7 +2354,7 @@ function AllocSitesSection({ data }: { data: AllocSites }) {
               <tr key={i}>
                 <td>
                   {s.frames.length === 0 ? (
-                    <span className="hint">serial {s.stack_serial} <span className="muted">(no frames recorded)</span></span>
+                    <span className="hint">serial {s.stack_serial} <span className="hint">(no frames recorded)</span></span>
                   ) : s.frames.length === 1 ? (
                     <code>{s.frames[0]}</code>
                   ) : (
