@@ -1870,6 +1870,13 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
                 </tr>
               ))}
             </tbody>
+            <tfoot>
+              <tr>
+                <td className="num"><strong>Total</strong></td>
+                <td className="num"></td>
+                <td className="num"><strong>{formatBytes(individual.reduce((s, r) => s + r.shallow, 0))}</strong></td>
+              </tr>
+            </tfoot>
           </table>
         )}
         <h4>Top Array Classes ({kind})</h4>
@@ -1893,6 +1900,13 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
                 </tr>
               ))}
             </tbody>
+            <tfoot>
+              <tr>
+                <td className="num"><strong>Total</strong></td>
+                <td className="num"><strong>{fmtCount(byClass.reduce((s, r) => s + r.objects, 0))}</strong></td>
+                <td className="num"><strong>{formatBytes(byClass.reduce((s, r) => s + r.shallow, 0))}</strong></td>
+              </tr>
+            </tfoot>
           </table>
         )}
       </>
@@ -2300,7 +2314,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
               <th>Dominator Class</th>
               <th className="num">#Dominators</th>
               <th className="num">#Dominated</th>
-              <th className="num">Dominator Shallow</th>
+              <th className="num">Dom. Shallow</th>
               <th className="num">Dominated Shallow</th>
             </tr>
           </thead>

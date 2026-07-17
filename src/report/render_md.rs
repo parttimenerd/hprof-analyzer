@@ -170,7 +170,7 @@ pub(crate) fn render_duplicate_strings(
 
     // ── Char[] backing-array waste ───────────────────────────────────────────
     if let Some(w) = &d.char_array_waste {
-        out.push_str("#### Char[] Waste\n\n");
+        out.push_str("#### `char[]` Waste\n\n");
         out.push_str(&format!(
             "_{} arrays examined, {} wasteful, {} total wasted._\n\n",
             fmt_count(w.arrays_examined),
