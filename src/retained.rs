@@ -186,7 +186,9 @@ pub fn compute_retained(
         let end_child = child_off[v as usize + 1];
 
         if next_child_pos < end_child {
-            // Prefetch class_idx[child_tgt[next_child_pos + PF_RET]] ahead.
+            // Prefetch class_idx[child_tgt[next_child_pos + PF_RET]] and
+            // child_off[child_tgt[...]] ahead to hide DRAM latency on both
+            // the class lookup and the child_off push on the DFS stack.
             // Crossing a node's child-range boundary is safe: we'll use those
             // entries when DFS eventually iterates that sibling/cousin node.
             let pf_pos = next_child_pos as usize + PF_RET;
@@ -194,19 +196,38 @@ pub fn compute_retained(
                 let pf_child = unsafe { *ct_ptr.add(pf_pos) } as usize;
                 if pf_child < ci_len {
                     unsafe {
-                        let ptr = ci_ptr.add(pf_child) as *const i8;
+                        let ci_ptr2 = ci_ptr.add(pf_child) as *const i8;
                         #[cfg(target_arch = "x86_64")]
                         core::arch::x86_64::_mm_prefetch::<
                             { core::arch::x86_64::_MM_HINT_T0 },
-                        >(ptr);
+                        >(ci_ptr2);
                         #[cfg(target_arch = "aarch64")]
                         core::arch::asm!(
                             "prfm pldl1keep, [{p}]",
-                            p = in(reg) ptr,
+                            p = in(reg) ci_ptr2,
                             options(nostack, readonly)
                         );
                     }
                 }
+                // Also prefetch child_off[pf_child] for the stack push.
+                let co_ptr_r = child_off.as_ptr();
+                let co_len_r = child_off.len();
+                if pf_child < co_len_r {
+                    unsafe {
+                        let co_ptr2 = co_ptr_r.add(pf_child) as *const i8;
+                        #[cfg(target_arch = "x86_64")]
+                        core::arch::x86_64::_mm_prefetch::<
+                            { core::arch::x86_64::_MM_HINT_T0 },
+                        >(co_ptr2);
+                        #[cfg(target_arch = "aarch64")]
+                        core::arch::asm!(
+                            "prfm pldl1keep, [{p}]",
+                            p = in(reg) co_ptr2,
+                            options(nostack, readonly)
+                        );
+                    }
+                }
+                let _ = (co_ptr_r, co_len_r); // suppress non-x86/aarch64 unused warning
             }
             // Advance child iterator on the current frame.
             let child = child_tgt[next_child_pos as usize];
