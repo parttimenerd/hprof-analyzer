@@ -545,6 +545,8 @@ impl Pass2 {
             fd_references,
             fd_referent_idx,
             fd_attribution_raw,
+            fd_fields_by_size_raw,
+            fd_coll_values_raw,
             fd_attribution_trunc,
             fd_dbb_capacity_sum,
         ) = fielddecode::build_field_decode_views(
@@ -815,6 +817,8 @@ impl Pass2 {
             reference_referent_idx: fd_referent_idx,
             collection_attribution_raw: fd_attribution_raw,
             collection_attribution_truncated: fd_attribution_trunc,
+            fields_by_size_raw: fd_fields_by_size_raw,
+            coll_values_raw: fd_coll_values_raw,
             direct_byte_buffer_capacity_sum: fd_dbb_capacity_sum,
         };
 
