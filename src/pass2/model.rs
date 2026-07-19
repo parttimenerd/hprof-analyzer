@@ -213,6 +213,34 @@ pub struct AttributionRaw {
     pub capacity: u64,
 }
 
+/// One raw `Class#field` group produced by field-decode under `--collections`:
+/// a holder class + field and the DENSE indices of the distinct objects that
+/// field points at. Retained size and the dominant runtime pointee type are
+/// computed later in build_model (where `idom`/`retained`/`class_idx` are
+/// known). Bounded by caps applied in field-decode. Runtime-only, not serialized.
+#[derive(Clone)]
+pub struct FieldSizeRaw {
+    pub holder_class: String,
+    pub field: String,
+    /// Distinct pointee dense object indices (deduped, capped).
+    pub pointee_indices: Vec<u32>,
+}
+
+/// Raw per-collection element/value tally produced by field-decode under
+/// `--collections`. Carries the collection instance's DENSE object index, its
+/// kind byte and pretty container-class name, plus the DENSE object indices of
+/// its non-null element slots (deduped is NOT required — counts matter). Runtime
+/// element types are resolved later in build_model from `class_idx`. Bounded by
+/// a per-collection slot cap. Runtime-only, not serialized.
+#[derive(Clone)]
+pub struct CollValuesRaw {
+    pub container_idx: u32,
+    pub kind: u8,
+    pub container_class: String,
+    /// Dense object indices of non-null element slots (capped per collection).
+    pub value_indices: Vec<u32>,
+}
+
 pub struct Graph {
     /// Object count = number of live nodes in the graph (indexes 0..n).
     pub n: usize,
@@ -373,6 +401,13 @@ pub struct Graph {
     /// True when the holder-edge or container-record cap was hit (attribution
     /// data is a bounded sample). Not serialized.
     pub collection_attribution_truncated: bool,
+    /// Raw `Class#field` → pointee-index records from field-decode under
+    /// `--collections`; `None` when the flag was off. Consumed in build_model to
+    /// sum retained size per field. Not serialized.
+    pub fields_by_size_raw: Option<Vec<FieldSizeRaw>>,
+    /// Raw per-collection element tallies (dense value indices). `None` when
+    /// `--collections` was off. Consumed by build_model, then dropped.
+    pub coll_values_raw: Option<Vec<CollValuesRaw>>,
     /// Sum of `capacity` fields across all live `java/nio/DirectByteBuffer`
     /// instances. 0 when no such instances are found or the field cannot be
     /// resolved. Computed unconditionally during the pass2 field-decode scan.
