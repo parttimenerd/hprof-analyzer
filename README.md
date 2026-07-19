@@ -420,6 +420,20 @@ The two-pass parser, the dominator-tree construction, the shallow/retained size
 formulas, and the compressed index structures are described in
 [DESIGN.md](DESIGN.md).
 
+## Contributing
+
+See [Building and testing](#building-and-testing) for build instructions and
+test configuration, and [DESIGN.md](DESIGN.md) for how to extend the analyzer.
+
+## Support & Feedback
+
+This project is open to feature requests, suggestions, bug reports, and the
+like via GitHub issues. Contributions and feedback are encouraged and always
+welcome.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+Copyright 2025 SAP SE or an SAP affiliate company, Johannes Bechberger and
+contributors.
