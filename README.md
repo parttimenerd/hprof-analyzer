@@ -112,9 +112,9 @@ Gzip-compressed dumps (`.hprof.gz`) are read transparently.
 ## Why you might want it
 
 - **Very large dumps at bounded memory.** It streams the dump in two passes and
-  keeps peak RSS well below the heap size. A large dump with a **20 GB live
-  Java heap** (**35.8 GB (33.4 GiB)** as an uncompressed `.hprof` file, or
-  **~8 GB gzip-compressed**) analyzes in **~17.5 minutes at ~14 GB peak RSS**
+  keeps peak RSS well below the heap size. A large dump with a **~20 GiB
+  live Java heap** (**33.4 GiB** as an uncompressed `.hprof` file, or **~7.5 GiB
+  gzip-compressed**) analyzes in **~17.5 minutes at ~14 GiB peak RSS**
   (see [Performance](#performance)). MAT typically needs a machine with memory
   comparable to the dump.
 - **Scriptable and CI-friendly.** It never prompts and never opens a window.
@@ -126,16 +126,21 @@ Gzip-compressed dumps (`.hprof.gz`) are read transparently.
 - **Deterministic.** The Markdown output is byte-stable (modulo the generation
   timestamp), so it diffs cleanly across runs and across dumps.
 
-## When to use MAT instead
+## When to use alternatives
 
 This tool is **deliberately narrow**: it renders static replicas of the three
-views above plus threads, and nothing else. If you need to *explore* a heap
-(run OQL queries, walk the dominator tree interactively, inspect arbitrary
-objects and their fields, follow references by hand, or use the full breadth of
-MAT's analyses), reach for **[Eclipse MAT](https://eclipse.dev/mat/)**, the
-complete interactive GUI. `hprof-analyzer` is for the common case where you
-already know you want those reports, want them fast, on a dump too large to open
-comfortably, or from a script.
+views above plus threads, and nothing else. If you need to *explore* a heap —
+run OQL queries, walk the dominator tree interactively, inspect arbitrary
+objects and their fields, or use the full breadth of MAT's analyses — reach for
+**[Eclipse MAT](https://eclipse.dev/mat/)**, the complete interactive GUI. Use
+`hprof-analyzer` instead when you already know you want those reports and want
+them fast, scriptable, or on a dump too large to open comfortably.
+
+If all you need is a class histogram,
+[`hprof-slurp`](https://github.com/agourlay/hprof-slurp) is faster and lighter
+because it never builds the dominator tree. But that also means it cannot report
+retained sizes, leak suspects, root paths, or Top Consumers — the analyses
+`hprof-analyzer` exists to provide.
 
 ## Install
 
@@ -379,58 +384,35 @@ hprof-analyzer completions bash > /etc/bash_completion.d/hprof-analyzer
 ## Performance
 
 The headline run is a large real-world dump (only the resource
-numbers are shared): a **20 GB live Java heap**, **35.8 GB (33.4 GiB)**
-uncompressed on disk. The other rows are reproducible public dumps you can
-regenerate: a **VS Code / Eclipse-based JVM** dump (~1 GB file), and a
+numbers are shared): a **~20 GiB live Java heap**, **33.4 GiB** uncompressed on
+disk. The other rows are reproducible public dumps you can regenerate: a
+**VS Code / Eclipse-based JVM** dump (~1 GiB file), and a
 **[HeapothesYs](https://github.com/corretto/heapothesys) HyperAlloc** synthetic
-allocation dump (~10 GB file). Each row records the exact commit so the numbers
-stay meaningful as the tool evolves.
+allocation dump (~10 GiB file). All sizes are in binary units (GiB/MiB). Each
+row records the exact commit so the numbers stay meaningful as the tool evolves.
 
-| Workload | Heap (live) | Dump file | Peak RSS | Wall clock | CPU (user + sys) | Machine | Measured |
-|----------|-------------|-----------|----------|------------|------------------|---------|----------|
-| Large real-world dump | ~20 GB | 35.8 GB (33.4 GiB), ~8 GB gzip | 14.07 GiB (14,757,272 KB) | 17 min 33.66 s | 987.45 s + 65.34 s = 1053 s | AMD Ryzen Threadripper PRO 3995WX (64c/128t), 123 GB RAM | 2026-07-13, commit `180ed35` |
-| HeapothesYs HyperAlloc | 7.91 GiB (8,491,155,296 B) | 10.32 GiB (11,080,826,276 B) | 966 MiB (989,540 KB) | 1 min 19.73 s | 66.77 s + 11.62 s = 78.4 s | Intel-class workstation (128 threads, 123 GB RAM) | 2026-07-19, commit `04f5e58` |
-| VS Code JVM | 752 MiB (788,717,960 B) | 1.01 GiB (1,088,816,653 B) | 500 MiB (511,540 KB) | 21.63 s | 19.64 s + 1.98 s = 21.6 s | Intel-class workstation (128 threads, 123 GB RAM) | 2026-07-19, commit `04f5e58` |
+All rows were measured on an AMD Ryzen Threadripper PRO 3995WX (64 cores /
+128 threads) with 123 GiB RAM. The "ours" columns are `hprof-analyzer`; the
+"MAT" columns are Eclipse MAT 1.17.0 on the same dump, for comparison.
+
+| Workload | Heap (live) | Dump file | RSS (ours) | RSS (MAT) | Wall (ours) | Wall (MAT) | Measured |
+|----------|-------------|-----------|------------|-----------|-------------|------------|----------|
+| Large real-world dump | ~20 GiB | 33.4 GiB (~7.5 GiB gzip) | 14.65 GiB | 62.05 GiB | 13 min 20.56 s | 27 min 16.15 s | 2026-07-19, commit `20ad99c` |
+| HeapothesYs HyperAlloc | 7.91 GiB | 10.32 GiB | 0.94 GiB | 20.32 GiB | 1 min 19.73 s | 1 min 48.40 s | 2026-07-19, commit `04f5e58` |
+| VS Code JVM | 0.73 GiB | 1.01 GiB | 0.49 GiB | 5.27 GiB | 21.63 s | 1 min 27.03 s | 2026-07-19, commit `04f5e58` |
+
+MAT was run with `ParseHeapDump.sh` (leak-suspects + top-components) with its
+`MemoryAnalyzer.ini` configured for `-Xmx60g`; peak RSS scales with the dump
+(62 GiB on the largest). `hprof-analyzer` holds peak RSS far below the dump size
+and needs no heap tuning. Correctness is validated against MAT 1.17.0: the
+`compare mat` subcommand diffs a MAT System Overview export against our JSON, and
+the parity fixtures gate on it (see [Compare against a MAT
+export](#compare-against-a-mat-export)).
 
 Peak RSS stays well below both the dump-file size and the live-heap size (~40%
 of the uncompressed file on the big run, and a fraction of that on the smaller
 ones) because the analyzer never holds the whole dump in memory; it streams the
 records in two passes and works over compressed, bounded-size index structures.
-
-**Why the large run takes ~17 minutes** while the 10 GB HyperAlloc dump
-finishes in ~80 seconds: wall clock scales with the amount of dump data read and
-the number of objects in the graph, and the large dump is **~3.5× larger on
-disk** with a far denser, more interconnected object graph (deep dominator trees
-and reference chains, versus HyperAlloc's shallow, uniform allocation churn).
-The dominant cost is the two streaming passes plus dominator-tree construction
-over hundreds of millions of objects; that work grows with graph size and
-connectivity, not just file bytes. There is no faster mode that skips it without
-dropping the retained-size analyses (leak suspects, top consumers, root paths)
-that are the whole point of the tool — if you only need a class histogram, a
-lighter streaming tool is the better fit (see [below](#versus-hprof-slurp)). The
-run is already parallel where it helps (note the >900 s of user CPU against the
-~1053 s wall clock on a 64-core box); the remaining time is inherently
-sequential streaming I/O and graph construction.
-
-### Compared against Eclipse MAT
-
-Correctness is validated against **Eclipse Memory Analyzer (MAT) 1.17.0**: the
-`compare mat` subcommand diffs a MAT System Overview export against our JSON and
-the parity fixtures gate on it (see [Compare against a MAT
-export](#compare-against-a-mat-export)). MAT typically needs a machine with
-memory comparable to the dump (its `MemoryAnalyzer.ini` on the box above is
-configured with `-Xmx60g` to parse the large dumps), whereas `hprof-analyzer`
-holds peak RSS far below the dump size.
-
-### Versus hprof-slurp
-
-[`hprof-slurp`](https://github.com/agourlay/hprof-slurp) is a great tool for a
-different job: a fast, streaming class histogram. It is **faster and lighter**
-than `hprof-analyzer`, because it does far less. It does not build the
-dominator tree, so it cannot report retained sizes, leak suspects, root paths,
-or the Top Consumers view. If a class histogram is all you need, use it. If you
-need the retained-size analyses above, that extra work is the reason
-`hprof-analyzer` costs more.
 
 ## How it works
 
