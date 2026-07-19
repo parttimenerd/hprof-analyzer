@@ -191,9 +191,26 @@ fn find_eocd(bytes: &[u8]) -> Option<usize> {
         return None;
     }
     let start = bytes.len().saturating_sub(22 + 65_536);
-    (start..=bytes.len() - 22)
-        .rev()
-        .find(|&i| &bytes[i..i + 4] == b"PK\x05\x06")
+    (start..=bytes.len() - 22).rev().find(|&i| {
+        if &bytes[i..i + 4] != b"PK\x05\x06" {
+            return false;
+        }
+        // Validate the candidate: the EOCD's trailing comment length must be
+        // consistent with the record's position, and the central-directory
+        // offset/size must lie within the file. This rejects a stray
+        // `PK\x05\x06` byte sequence appearing inside HTML content.
+        let comment_len = u16::from_le_bytes([bytes[i + 20], bytes[i + 21]]) as usize;
+        if i + 22 + comment_len != bytes.len() {
+            return false;
+        }
+        let cd_size =
+            u32::from_le_bytes([bytes[i + 12], bytes[i + 13], bytes[i + 14], bytes[i + 15]])
+                as usize;
+        let cd_off =
+            u32::from_le_bytes([bytes[i + 16], bytes[i + 17], bytes[i + 18], bytes[i + 19]])
+                as usize;
+        cd_off + cd_size <= i
+    })
 }
 
 // ── HTML parsing (scraper) ───────────────────────────────────────────────────

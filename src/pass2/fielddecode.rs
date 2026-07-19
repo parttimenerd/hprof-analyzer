@@ -347,6 +347,9 @@ enum ClassRole {
     Reference {
         kind_idx: usize,
         referent_off: (u32, HprofType),
+        /// True iff this class is a `ThreadLocal$ThreadLocalMap$Entry` — used to
+        /// count entries whose weak referent (the ThreadLocal key) is null.
+        is_tl_entry: bool,
     },
 }
 
@@ -417,9 +420,17 @@ fn classify(
             strings,
             obj_ref_width,
         ) {
+            // A ThreadLocalMap$Entry directly extends WeakReference, so its own
+            // class name carries the marker (no super-chain walk needed).
+            let is_tl_entry = class_map
+                .get(&class_id)
+                .and_then(|ci| strings.get(&ci.name_id))
+                .map(|name| name.ends_with("ThreadLocal$ThreadLocalMap$Entry"))
+                .unwrap_or(false);
             return ClassRole::Reference {
                 kind_idx,
                 referent_off,
+                is_tl_entry,
             };
         }
         // referent field missing → cannot decode; treat as plain.
@@ -861,6 +872,7 @@ type FieldDecodeViews = (
     Option<Vec<CollValuesRaw>>,
     bool,
     u64, // direct_byte_buffer_capacity_sum
+    u64, // thread_local_null_key_count
 );
 
 /// Compute the collection/array/reference views in exactly THREE full-file
@@ -907,6 +919,9 @@ pub(crate) fn build_field_decode_views(
     // kind → (objects, shallow) folded into the "<other>" row past the cap.
     let mut ref_hist_other = [(0u64, 0u64); 3];
     let mut referent_idx: [Vec<u32>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+    // ThreadLocal$ThreadLocalMap$Entry instances whose weak referent (the key)
+    // is null — the classic thread-local leak signal.
+    let mut tl_null_key_count: u64 = 0;
 
     // Top arrays (individual + per-class), one per array category.
     let mut top_prim = TopArrayAcc::default();
@@ -1089,28 +1104,31 @@ pub(crate) fn build_field_decode_views(
                 ClassRole::Reference {
                     kind_idx,
                     referent_off,
+                    is_tl_entry,
                 } => {
                     ref_instances[kind_idx] += 1;
                     let (off, _ty) = referent_off;
                     let o = off as usize;
                     if o + obj_ref_width <= blob.len() {
                         let referent = read_ref(&blob[o..], obj_ref_width);
-                        if referent != 0 {
-                            if let Some(ridx) = p1.id_map.index_of(referent) {
-                                let name = class_name_of_index(ridx, p1);
-                                let sh = shallow[ridx] as u64;
-                                let hist = &mut ref_hist[kind_idx];
-                                if hist.contains_key(&name) || hist.len() < REFERENT_HIST_CAP {
-                                    let e = hist.entry(name).or_insert((0, 0));
-                                    e.0 += 1;
-                                    e.1 += sh;
-                                } else {
-                                    ref_hist_other[kind_idx].0 += 1;
-                                    ref_hist_other[kind_idx].1 += sh;
-                                }
-                                if referent_idx[kind_idx].len() < REFERENT_CAP {
-                                    referent_idx[kind_idx].push(ridx as u32);
-                                }
+                        if referent == 0 {
+                            if is_tl_entry {
+                                tl_null_key_count += 1;
+                            }
+                        } else if let Some(ridx) = p1.id_map.index_of(referent) {
+                            let name = class_name_of_index(ridx, p1);
+                            let sh = shallow[ridx] as u64;
+                            let hist = &mut ref_hist[kind_idx];
+                            if hist.contains_key(&name) || hist.len() < REFERENT_HIST_CAP {
+                                let e = hist.entry(name).or_insert((0, 0));
+                                e.0 += 1;
+                                e.1 += sh;
+                            } else {
+                                ref_hist_other[kind_idx].0 += 1;
+                                ref_hist_other[kind_idx].1 += sh;
+                            }
+                            if referent_idx[kind_idx].len() < REFERENT_CAP {
+                                referent_idx[kind_idx].push(ridx as u32);
                             }
                         }
                     }
@@ -1480,6 +1498,7 @@ pub(crate) fn build_field_decode_views(
         coll_values_raw,
         attribution_truncated,
         dbb_capacity_sum,
+        tl_null_key_count,
     ))
 }
 
@@ -1659,7 +1678,16 @@ fn decode_prim_value(elem_type: u8, bytes: &[u8]) -> i64 {
                 bytes[0] as i8 as i64
             }
         }
-        Some(HprofType::Char) | Some(HprofType::Short) => {
+        Some(HprofType::Char) => {
+            // Java `char` is an unsigned 16-bit value (0..=65535); decode as u16
+            // so a high-code-point fill (e.g. '￿') is not recorded negative.
+            if bytes.len() < 2 {
+                0
+            } else {
+                u16::from_be_bytes([bytes[0], bytes[1]]) as i64
+            }
+        }
+        Some(HprofType::Short) => {
             if bytes.len() < 2 {
                 0
             } else {
@@ -1964,5 +1992,18 @@ mod tests {
         assert_eq!(row.container_class, "java.util.X");
         assert_eq!(row.elements, 42);
         assert_eq!(row.capacity, 64);
+    }
+
+    #[test]
+    fn decode_prim_value_char_is_unsigned() {
+        // Java `char` is unsigned 16-bit: a high-code-point fill like '￿'
+        // must decode to 65535, not -1. `short` stays signed.
+        let char_code = 5u8; // HprofType::Char
+        let short_code = 9u8; // HprofType::Short
+        assert_eq!(decode_prim_value(char_code, &[0xFF, 0xFF]), 65535);
+        assert_eq!(decode_prim_value(char_code, &[0x80, 0x00]), 32768);
+        assert_eq!(decode_prim_value(char_code, &[0x00, 0x41]), 65); // 'A'
+        // Short with the same high-bit bytes is negative.
+        assert_eq!(decode_prim_value(short_code, &[0xFF, 0xFF]), -1);
     }
 }

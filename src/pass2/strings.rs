@@ -14,6 +14,7 @@ use std::io::{self, ErrorKind};
 use super::{
     CharArrayWaste, CharArrayWasteRow, DupStringSample, DupStrings, StrLenBucket, StrLenStats,
     StringHolder, build_field_plans, field_offset, read_ref, scan_prim_arrays, skip_class_dump,
+    sub_remaining,
 };
 
 /// Max retained sample text length (bytes) for a most-duplicated String — bounds
@@ -57,38 +58,38 @@ pub(crate) fn scan_all_instances<F: FnMut(u64, u64, &[u8])>(
                 let mut remaining = length;
                 while remaining > 0 {
                     let sub_tag = r.u1()?;
-                    remaining -= 1;
+                    sub_remaining(&mut remaining, 1)?;
                     match sub_tag {
                         heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED | heap::ROOT_STICKY_CLASS => {
                             r.skip(ids)?;
-                            remaining -= ids;
+                            sub_remaining(&mut remaining, ids)?;
                         }
                         heap::ROOT_JNI_GLOBAL => {
                             r.skip(2 * ids)?;
-                            remaining -= 2 * ids;
+                            sub_remaining(&mut remaining, 2 * ids)?;
                         }
                         heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME | heap::ROOT_THREAD_OBJ => {
                             r.skip(ids + 8)?;
-                            remaining -= ids + 8;
+                            sub_remaining(&mut remaining, ids + 8)?;
                         }
                         heap::ROOT_NATIVE_STACK | heap::ROOT_THREAD_BLOCK => {
                             r.skip(ids + 4)?;
-                            remaining -= ids + 4;
+                            sub_remaining(&mut remaining, ids + 4)?;
                         }
                         heap::HEAP_DUMP_INFO => {
                             r.skip(4 + ids)?;
-                            remaining -= 4 + ids;
+                            sub_remaining(&mut remaining, 4 + ids)?;
                         }
                         heap::CLASS_DUMP => {
                             let consumed = skip_class_dump(&mut r, id_size)?;
-                            remaining -= consumed;
+                            sub_remaining(&mut remaining, consumed)?;
                         }
                         heap::INSTANCE_DUMP => {
                             let addr = r.id()?;
                             r.skip(4)?;
                             let class_id = r.id()?;
                             let data_len = r.u4()? as u64;
-                            remaining -= ids + 4 + ids + 4 + data_len;
+                            sub_remaining(&mut remaining, ids + 4 + ids + 4 + data_len)?;
                             r.read_bytes_reuse(&mut scratch, data_len as usize)?;
                             f(addr, class_id, &scratch);
                         }
@@ -98,7 +99,7 @@ pub(crate) fn scan_all_instances<F: FnMut(u64, u64, &[u8])>(
                             r.skip(ids)?;
                             let byte_len = count.saturating_mul(ids);
                             r.skip(byte_len)?;
-                            remaining -= ids + 4 + 4 + ids + byte_len;
+                            sub_remaining(&mut remaining, ids + 4 + 4 + ids + byte_len)?;
                         }
                         heap::PRIM_ARRAY_DUMP => {
                             r.skip(ids + 4)?;
@@ -107,8 +108,11 @@ pub(crate) fn scan_all_instances<F: FnMut(u64, u64, &[u8])>(
                             let esz = HprofType::from_code(elem_type)
                                 .map(|t| t.byte_size() as u64)
                                 .unwrap_or(1);
-                            r.skip(count * esz)?;
-                            remaining -= ids + 4 + 4 + 1 + count * esz;
+                            r.skip(count.saturating_mul(esz))?;
+                            sub_remaining(
+                                &mut remaining,
+                                ids + 4 + 4 + 1 + count.saturating_mul(esz),
+                            )?;
                         }
                         other => {
                             return Err(io::Error::new(

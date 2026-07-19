@@ -27,6 +27,11 @@ pub fn decode_one(buf: &[u8]) -> (u32, usize) {
             return (val, i + 1);
         }
         shift += 7;
+        // A well-formed u32 vbyte is at most 5 bytes; bail before `shift` can
+        // reach 32 (which would be UB / a wrapping shift on malformed input).
+        if shift >= 32 {
+            return (val, i + 1);
+        }
     }
     (val, buf.len())
 }
@@ -104,6 +109,11 @@ pub fn decode_one_u64(buf: &[u8]) -> (u64, usize) {
             return (val, i + 1);
         }
         shift += 7;
+        // A well-formed u64 vbyte is at most 10 bytes; bail before `shift` can
+        // reach 64 (which would be UB / a wrapping shift on malformed input).
+        if shift >= 64 {
+            return (val, i + 1);
+        }
     }
     (val, buf.len())
 }
@@ -242,5 +252,22 @@ mod tests {
         encode_delta_u64(&[], &mut buf);
         assert!(buf.is_empty());
         assert_eq!(decode_delta_u64(&buf, 0), Vec::<u64>::new());
+    }
+
+    #[test]
+    fn malformed_all_continuation_bytes_does_not_panic() {
+        // A stream of bytes that all set the continuation bit is malformed
+        // (never reachable from `encode`, but must not shift-overflow / panic).
+        let buf = vec![0xFFu8; 16];
+        let (_v, consumed) = decode_one(&buf);
+        assert!(
+            consumed <= 5,
+            "u32 decode consumed too many bytes: {consumed}"
+        );
+        let (_v, consumed) = decode_one_u64(&buf);
+        assert!(
+            consumed <= 10,
+            "u64 decode consumed too many bytes: {consumed}"
+        );
     }
 }

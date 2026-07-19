@@ -15,6 +15,7 @@ use std::{
 
 use crate::{
     id_map::IdMap,
+    pass2::sub_remaining,
     reader::HprofReader,
     types::{HprofType, heap, tags},
 };
@@ -198,7 +199,17 @@ impl Pass1 {
                 tags::STRING_IN_UTF8 => {
                     utf8_records += 1;
                     let str_id = r.id()?;
-                    let bytes = r.read_bytes((length - id_size as u64) as usize)?;
+                    // Body = id(8) + UTF-8 bytes. A truncated/corrupt record with
+                    // `length < id_size` would underflow the subtraction to a
+                    // near-u64::MAX byte count, triggering a ~16 EiB allocation in
+                    // `read_bytes` (abort/OOM). Reject it as malformed instead.
+                    let payload_len = length.checked_sub(id_size as u64).ok_or_else(|| {
+                        io::Error::new(
+                            ErrorKind::InvalidData,
+                            "STRING_IN_UTF8 record length shorter than id size",
+                        )
+                    })?;
+                    let bytes = r.read_bytes(payload_len as usize)?;
                     strings.insert(str_id, String::from_utf8_lossy(&bytes).into_owned());
                 }
                 tags::LOAD_CLASS => {
@@ -440,28 +451,28 @@ fn scan_heap_segment(
 
     while remaining > 0 {
         let sub_tag = r.u1()?;
-        remaining -= 1;
+        sub_remaining(&mut remaining, 1)?;
 
         match sub_tag {
             heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED => {
                 *gc_root_tag_counts.entry(sub_tag).or_insert(0) += 1;
                 gc_root_addrs.push(r.id()?);
                 gc_root_types.push(sub_tag);
-                remaining -= ids;
+                sub_remaining(&mut remaining, ids)?;
             }
             heap::ROOT_JNI_GLOBAL => {
                 *gc_root_tag_counts.entry(sub_tag).or_insert(0) += 1;
                 gc_root_addrs.push(r.id()?);
                 gc_root_types.push(sub_tag);
                 r.skip(ids)?; // JNI global ref id
-                remaining -= 2 * ids;
+                sub_remaining(&mut remaining, 2 * ids)?;
             }
             heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME => {
                 *gc_root_tag_counts.entry(sub_tag).or_insert(0) += 1;
                 let local_id = r.id()?;
                 let thread_serial = r.u4()?;
                 let frame_number = r.u4()?;
-                remaining -= ids + 8;
+                sub_remaining(&mut remaining, ids + 8)?;
                 // NOT a direct GC root — synthetic edge from thread object (MAT parity)
                 thread_local_pairs.push((thread_serial, frame_number, local_id));
             }
@@ -469,7 +480,7 @@ fn scan_heap_segment(
                 *gc_root_tag_counts.entry(sub_tag).or_insert(0) += 1;
                 let local_id = r.id()?;
                 let thread_serial = r.u4()?;
-                remaining -= ids + 4;
+                sub_remaining(&mut remaining, ids + 4)?;
                 // NOT a direct GC root — synthetic edge from thread object (MAT parity).
                 // No stack-frame index in these records → sentinel u32::MAX.
                 thread_local_pairs.push((thread_serial, u32::MAX, local_id));
@@ -479,21 +490,21 @@ fn scan_heap_segment(
                 gc_root_addrs.push(r.id()?);
                 gc_root_types.push(sub_tag);
                 *has_sticky_class_roots = true;
-                remaining -= ids;
+                sub_remaining(&mut remaining, ids)?;
             }
             heap::ROOT_THREAD_OBJ => {
                 *gc_root_tag_counts.entry(sub_tag).or_insert(0) += 1;
                 let obj_id = r.id()?;
                 let thread_serial = r.u4()?;
                 r.skip(4)?; // stack_trace_serial
-                remaining -= ids + 8;
+                sub_remaining(&mut remaining, ids + 8)?;
                 gc_root_addrs.push(obj_id);
                 gc_root_types.push(sub_tag);
                 thread_serial_to_obj_id.insert(thread_serial, obj_id);
             }
             heap::CLASS_DUMP => {
                 let (class_addr, consumed) = read_class_dump(r, id_size, class_map)?;
-                remaining -= consumed;
+                sub_remaining(&mut remaining, consumed)?;
                 *class_dump_count += 1;
                 // Class objects must be in id_map so GC roots referencing them resolve correctly
                 // (hprof-analyzer: scanClassDumpA1 calls state.appendAddress(classId))
@@ -528,7 +539,7 @@ fn scan_heap_segment(
                     tmp_class_ids.push(idx); // kind=0, bits 30-31 = 0
                 }
                 tmp_elem_count.push(0);
-                remaining -= ids + 4 + ids + 4 + data_len;
+                sub_remaining(&mut remaining, ids + 4 + ids + 4 + data_len)?;
                 *instance_count += 1;
             }
             heap::OBJ_ARRAY_DUMP => {
@@ -539,7 +550,8 @@ fn scan_heap_segment(
                 tmp_alloc_serial.push(stack_serial);
                 let count = r.u4()? as u64;
                 let elem_class_id = r.id()?;
-                r.skip(count * ids)?;
+                let byte_len = count.saturating_mul(ids);
+                r.skip(byte_len)?;
                 tmp_addrs.push(addr);
                 {
                     let idx = *class_addr_to_idx.entry(elem_class_id).or_insert_with(|| {
@@ -550,7 +562,7 @@ fn scan_heap_segment(
                     tmp_class_ids.push(idx | (1u32 << 30)); // kind=1 object array
                 }
                 tmp_elem_count.push(count as u32);
-                remaining -= ids + 4 + 4 + ids + count * ids;
+                sub_remaining(&mut remaining, ids + 4 + 4 + ids + byte_len)?;
                 *obj_array_count += 1;
             }
             heap::PRIM_ARRAY_DUMP => {
@@ -564,20 +576,21 @@ fn scan_heap_segment(
                 let elem_size = HprofType::from_code(elem_type_code)
                     .map(|t| t.byte_size() as u64)
                     .unwrap_or(1);
-                r.skip(count * elem_size)?;
+                let byte_len = count.saturating_mul(elem_size);
+                r.skip(byte_len)?;
                 tmp_addrs.push(addr);
                 // kind 2 stores the raw element type code (0-11) in class_ids bits 0-29,
                 // with kind=2 packed into bits 30-31.
                 tmp_class_ids.push((2u32 << 30) | elem_type_code as u32);
                 tmp_elem_count.push(count as u32);
-                remaining -= ids + 4 + 4 + 1 + count * elem_size;
+                sub_remaining(&mut remaining, ids + 4 + 4 + 1 + byte_len)?;
                 *prim_array_count += 1;
             }
             heap::HEAP_DUMP_INFO => {
                 // u4 heap_id + id heap_name_string_id. No object/class payload;
                 // skip it so the sub-record stream stays aligned.
                 r.skip(4 + ids)?;
-                remaining -= 4 + ids;
+                sub_remaining(&mut remaining, 4 + ids)?;
             }
             other => {
                 return Err(io::Error::new(

@@ -122,29 +122,13 @@ fn build_leak_indicators(g: &Graph) -> LeakIndicators {
         .filter(|n| is_anonymous_class(n))
         .count() as u64;
 
-    // 2. ThreadLocalMap$Entry null-key count.
-    // A cleared referent means the entry has no forward edges to a live non-zero object.
-    // Excluded (weak-ref) edges are high-bit tagged (0x8000_0000); we mask to get the index.
-    let tl_suffix = "ThreadLocal$ThreadLocalMap$Entry";
-    let n_nodes = g.fwd_offsets.len().saturating_sub(1);
-    let mut thread_local_null_key_count: u64 = 0;
-    for i in 0..n_nodes {
-        let ci = g.class_idx[i] as usize;
-        if ci >= g.class_names.len() {
-            continue;
-        }
-        if !g.class_names[ci].ends_with(tl_suffix) {
-            continue;
-        }
-        let start = g.fwd_offsets[i] as usize;
-        let end = g.fwd_offsets[i + 1] as usize;
-        let mut edge_buf: Vec<u32> = Vec::new();
-        g.fwd_targets.copy_range(start, end, &mut edge_buf);
-        let has_live_referent = edge_buf.iter().any(|&t| (t & 0x7FFF_FFFF) != 0);
-        if !has_live_referent {
-            thread_local_null_key_count += 1;
-        }
-    }
+    // 2. ThreadLocalMap$Entry null-key count — computed during the pass2
+    // field-decode scan, where the weak referent's nullness is directly
+    // observable. It cannot be reconstructed here from the forward CSR: a null
+    // referent is an absent edge, indistinguishable from any other missing
+    // target, and every instance additionally carries an untagged class-object
+    // forward edge that would defeat an "any live target" heuristic.
+    let thread_local_null_key_count = g.thread_local_null_key_count;
 
     // 3. DirectByteBuffer capacity sum — already computed in pass2.
     let direct_byte_buffer_capacity_sum = g.direct_byte_buffer_capacity_sum;
@@ -2155,9 +2139,11 @@ pub(crate) fn build_leak_suspects(
                 });
                 let mut depth = 0usize;
                 loop {
-                    let best_child = dom_children(cur)
-                        .iter()
-                        .max_by_key(|&&c| g.retained[c as usize]);
+                    let best_child = dom_children(cur).iter().max_by(|&&a, &&b| {
+                        g.retained[a as usize]
+                            .cmp(&g.retained[b as usize])
+                            .then(b.cmp(&a))
+                    });
                     let Some(&c) = best_child else {
                         // Leaf: current object is the accumulation point.
                         accumulation = Some(cur);
@@ -2405,7 +2391,14 @@ pub(crate) fn build_size_distribution(retained_desc: &[u64]) -> TopSizeDistribut
     // counts into a BTreeMap so buckets come out ascending & deterministic.
     let mut map: std::collections::BTreeMap<u64, u64> = std::collections::BTreeMap::new();
     for &r in retained_desc {
-        let upper = if r <= 1 { 1 } else { r.next_power_of_two() };
+        // `next_power_of_two` panics (debug) / wraps to 0 (release) for r > 2^63;
+        // clamp such absurd values (physically unreachable — an ~8 EiB single
+        // dominator) into the top bucket rather than corrupting the histogram.
+        let upper = if r <= 1 {
+            1
+        } else {
+            r.checked_next_power_of_two().unwrap_or(u64::MAX)
+        };
         *map.entry(upper).or_insert(0) += 1;
     }
     let buckets = map

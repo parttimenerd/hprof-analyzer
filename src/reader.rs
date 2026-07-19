@@ -34,10 +34,14 @@ impl HprofReader {
         let mut peek = BufReader::new(file);
         let mut magic = [0u8; 2];
         peek.read_exact(&mut magic)?;
+        // Stitch the sniffed magic bytes back onto the front of the stream so we
+        // never re-open the path (avoids a double-open + a TOCTOU window, and
+        // works on inputs that can only be opened once).
+        let stream = io::Cursor::new(magic.to_vec()).chain(peek);
         let inner: Box<dyn Read> = if magic == [0x1f, 0x8b] {
-            Box::new(GzDecoder::new(File::open(path)?))
+            Box::new(GzDecoder::new(stream))
         } else {
-            Box::new(io::Cursor::new(magic.to_vec()).chain(peek))
+            Box::new(stream)
         };
         let mut r = HprofReader {
             format: String::new(),
@@ -62,7 +66,14 @@ impl HprofReader {
             s.push(b);
         }
         self.format = String::from_utf8_lossy(&s).into_owned();
-        self.id_size = self.u4()? as u8;
+        let id_size = self.u4()?;
+        if id_size != 4 && id_size != 8 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unsupported id_size in HPROF header: {id_size} (expected 4 or 8)"),
+            ));
+        }
+        self.id_size = id_size as u8;
         self.timestamp_ms = self.u8()?;
         Ok(())
     }
@@ -315,5 +326,46 @@ mod tests {
         let mut buf = Vec::new();
         r.read_bytes_reuse(&mut buf, 5).unwrap();
         assert_eq!(buf, vec![11, 12, 13, 14, 15]);
+    }
+
+    // Build a minimal HPROF header blob: NUL-terminated format string, a 4-byte
+    // id_size, then an 8-byte timestamp.
+    fn header_blob(id_size: u32) -> Vec<u8> {
+        let mut v = b"JAVA PROFILE 1.0.2\0".to_vec();
+        v.extend_from_slice(&id_size.to_be_bytes());
+        v.extend_from_slice(&1u64.to_be_bytes());
+        v
+    }
+
+    fn reader_over(data: Vec<u8>) -> HprofReader {
+        HprofReader {
+            format: String::new(),
+            id_size: 0,
+            timestamp_ms: 0,
+            inner: Box::new(io::Cursor::new(data)),
+            buf: vec![0u8; BUF_CAP],
+            pos: 0,
+            end: 0,
+        }
+    }
+
+    #[test]
+    fn read_header_accepts_4_and_8() {
+        for sz in [4u32, 8] {
+            let mut r = reader_over(header_blob(sz));
+            r.read_header().unwrap();
+            assert_eq!(r.id_size, sz as u8);
+            assert!(r.format.starts_with("JAVA PROFILE"));
+        }
+    }
+
+    #[test]
+    fn read_header_rejects_bad_id_size() {
+        // 260 truncates to 4 as a u8 — must be rejected, not silently accepted.
+        for sz in [0u32, 2, 16, 260] {
+            let mut r = reader_over(header_blob(sz));
+            let err = r.read_header().unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidData, "sz={sz}");
+        }
     }
 }

@@ -170,14 +170,19 @@ fn format_epoch_nanos(secs: u64, nanos: u32) -> String {
 /// Human-readable byte size (`B`/`KB`/`MB`/`GB`, binary 1024 base). Used only
 /// for display; the JSON model always carries raw `u64` byte counts.
 pub fn format_bytes(n: u64) -> String {
+    // Pick the unit by MAGNITUDE, then guard the boundary: a value just below a
+    // unit threshold (e.g. 1 MiB - 1) would otherwise round up to "1024.0 KB".
+    // If the rounded mantissa reaches 1024, promote to the next unit.
     if n < 1024 {
         return format!("{} B", n);
     }
-    if n < 1024 * 1024 {
-        return format!("{:.1} KB", n as f64 / 1024.0);
+    let kb = n as f64 / 1024.0;
+    if n < 1024 * 1024 && (kb * 10.0).round() < 1024.0 * 10.0 {
+        return format!("{:.1} KB", kb);
     }
-    if n < 1024 * 1024 * 1024 {
-        return format!("{:.1} MB", n as f64 / (1024.0 * 1024.0));
+    let mb = n as f64 / (1024.0 * 1024.0);
+    if n < 1024 * 1024 * 1024 && (mb * 10.0).round() < 1024.0 * 10.0 {
+        return format!("{:.1} MB", mb);
     }
     format!("{:.2} GB", n as f64 / (1024.0 * 1024.0 * 1024.0))
 }

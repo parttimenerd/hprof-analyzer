@@ -1311,6 +1311,7 @@ pub(crate) fn render_threads(t: &ThreadOverview, graphs: bool, out: &mut String)
             .name
             .clone()
             .filter(|s| !s.is_empty())
+            .map(|s| escape_string_cell(&s))
             .unwrap_or_else(|| format!("<thread {}>", th.thread_serial));
         let ctx = th.context_class_loader.as_deref().unwrap_or("—");
         let name_link = format!("[{}](#thread-{})", name, th.thread_serial);
@@ -1347,7 +1348,9 @@ pub(crate) fn render_threads(t: &ThreadOverview, graphs: bool, out: &mut String)
         match &th.name {
             Some(name) if !name.is_empty() => out.push_str(&format!(
                 "### Thread {} \"{}\" ({})\n\n",
-                th.thread_serial, name, class
+                th.thread_serial,
+                escape_string_cell(name),
+                class
             )),
             _ => out.push_str(&format!("### Thread {} ({})\n\n", th.thread_serial, class)),
         }
@@ -1516,6 +1519,7 @@ pub(crate) fn render_arrays_by_size(a: &ArraysBySize, graphs: bool, out: &mut St
         t.render(out);
         out.push('\n');
     };
+    render_table("Object arrays", &a.obj_array_buckets, out);
     render_table("Primitive arrays", &a.prim_array_buckets, out);
     out.push_str(&format!(
         "Zero-length arrays: {}\n\n",

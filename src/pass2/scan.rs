@@ -7,6 +7,21 @@ use crate::{
     types::{HprofType, heap, tags},
 };
 
+/// Subtract a consumed sub-record byte count from a heap-segment's `remaining`
+/// counter, erroring instead of underflowing. A malformed or truncated
+/// HEAP_DUMP_SEGMENT can declare a sub-record longer than the bytes actually
+/// left in the segment; a plain `remaining -= n` would then wrap the `u64`
+/// (panic in debug, a near-`u64::MAX` value in release that keeps the scan
+/// loop spinning into out-of-bounds reads / total misparse of the stream).
+/// Every scanner in this module routes its byte accounting through this.
+#[inline]
+pub(crate) fn sub_remaining(remaining: &mut u64, n: u64) -> io::Result<()> {
+    *remaining = remaining
+        .checked_sub(n)
+        .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "heap segment sub-record overrun"))?;
+    Ok(())
+}
+
 /// Full-file sequential scan invoking `f(addr, class_id, &blob)` for each
 /// INSTANCE_DUMP whose object address is in `wanted`. Mirrors the heap-record
 /// scan skeleton in `scan_heap_2a`/`fill_heap_2b` (streaming-only reader,
@@ -34,38 +49,38 @@ pub(crate) fn scan_instance_blobs<F: FnMut(u64, u64, &[u8])>(
                 let mut remaining = length;
                 while remaining > 0 {
                     let sub_tag = r.u1()?;
-                    remaining -= 1;
+                    sub_remaining(&mut remaining, 1)?;
                     match sub_tag {
                         heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED | heap::ROOT_STICKY_CLASS => {
                             r.skip(ids)?;
-                            remaining -= ids;
+                            sub_remaining(&mut remaining, ids)?;
                         }
                         heap::ROOT_JNI_GLOBAL => {
                             r.skip(2 * ids)?;
-                            remaining -= 2 * ids;
+                            sub_remaining(&mut remaining, 2 * ids)?;
                         }
                         heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME | heap::ROOT_THREAD_OBJ => {
                             r.skip(ids + 8)?;
-                            remaining -= ids + 8;
+                            sub_remaining(&mut remaining, ids + 8)?;
                         }
                         heap::ROOT_NATIVE_STACK | heap::ROOT_THREAD_BLOCK => {
                             r.skip(ids + 4)?;
-                            remaining -= ids + 4;
+                            sub_remaining(&mut remaining, ids + 4)?;
                         }
                         heap::HEAP_DUMP_INFO => {
                             r.skip(4 + ids)?;
-                            remaining -= 4 + ids;
+                            sub_remaining(&mut remaining, 4 + ids)?;
                         }
                         heap::CLASS_DUMP => {
                             let consumed = skip_class_dump(&mut r, id_size)?;
-                            remaining -= consumed;
+                            sub_remaining(&mut remaining, consumed)?;
                         }
                         heap::INSTANCE_DUMP => {
                             let addr = r.id()?;
                             r.skip(4)?;
                             let class_id = r.id()?;
                             let data_len = r.u4()? as u64;
-                            remaining -= ids + 4 + ids + 4 + data_len;
+                            sub_remaining(&mut remaining, ids + 4 + ids + 4 + data_len)?;
                             if wanted.contains(&addr) {
                                 r.read_bytes_reuse(&mut scratch, data_len as usize)?;
                                 f(addr, class_id, &scratch);
@@ -79,7 +94,7 @@ pub(crate) fn scan_instance_blobs<F: FnMut(u64, u64, &[u8])>(
                             r.skip(ids)?;
                             let byte_len = count.saturating_mul(ids);
                             r.skip(byte_len)?;
-                            remaining -= ids + 4 + 4 + ids + byte_len;
+                            sub_remaining(&mut remaining, ids + 4 + 4 + ids + byte_len)?;
                         }
                         heap::PRIM_ARRAY_DUMP => {
                             r.skip(ids + 4)?;
@@ -88,8 +103,11 @@ pub(crate) fn scan_instance_blobs<F: FnMut(u64, u64, &[u8])>(
                             let esz = HprofType::from_code(elem_type)
                                 .map(|t| t.byte_size() as u64)
                                 .unwrap_or(1);
-                            r.skip(count * esz)?;
-                            remaining -= ids + 4 + 4 + 1 + count * esz;
+                            r.skip(count.saturating_mul(esz))?;
+                            sub_remaining(
+                                &mut remaining,
+                                ids + 4 + 4 + 1 + count.saturating_mul(esz),
+                            )?;
                         }
                         other => {
                             return Err(io::Error::new(
@@ -131,38 +149,38 @@ pub(crate) fn scan_prim_arrays<F: FnMut(u64, &[u8])>(
                 let mut remaining = length;
                 while remaining > 0 {
                     let sub_tag = r.u1()?;
-                    remaining -= 1;
+                    sub_remaining(&mut remaining, 1)?;
                     match sub_tag {
                         heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED | heap::ROOT_STICKY_CLASS => {
                             r.skip(ids)?;
-                            remaining -= ids;
+                            sub_remaining(&mut remaining, ids)?;
                         }
                         heap::ROOT_JNI_GLOBAL => {
                             r.skip(2 * ids)?;
-                            remaining -= 2 * ids;
+                            sub_remaining(&mut remaining, 2 * ids)?;
                         }
                         heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME | heap::ROOT_THREAD_OBJ => {
                             r.skip(ids + 8)?;
-                            remaining -= ids + 8;
+                            sub_remaining(&mut remaining, ids + 8)?;
                         }
                         heap::ROOT_NATIVE_STACK | heap::ROOT_THREAD_BLOCK => {
                             r.skip(ids + 4)?;
-                            remaining -= ids + 4;
+                            sub_remaining(&mut remaining, ids + 4)?;
                         }
                         heap::HEAP_DUMP_INFO => {
                             r.skip(4 + ids)?;
-                            remaining -= 4 + ids;
+                            sub_remaining(&mut remaining, 4 + ids)?;
                         }
                         heap::CLASS_DUMP => {
                             let consumed = skip_class_dump(&mut r, id_size)?;
-                            remaining -= consumed;
+                            sub_remaining(&mut remaining, consumed)?;
                         }
                         heap::INSTANCE_DUMP => {
                             r.skip(ids + 4)?;
                             let _class_id = r.id()?;
                             let data_len = r.u4()? as u64;
                             r.skip(data_len)?;
-                            remaining -= ids + 4 + ids + 4 + data_len;
+                            sub_remaining(&mut remaining, ids + 4 + ids + 4 + data_len)?;
                         }
                         heap::OBJ_ARRAY_DUMP => {
                             r.skip(ids + 4)?;
@@ -170,7 +188,7 @@ pub(crate) fn scan_prim_arrays<F: FnMut(u64, &[u8])>(
                             r.skip(ids)?;
                             let byte_len = count.saturating_mul(ids);
                             r.skip(byte_len)?;
-                            remaining -= ids + 4 + 4 + ids + byte_len;
+                            sub_remaining(&mut remaining, ids + 4 + 4 + ids + byte_len)?;
                         }
                         heap::PRIM_ARRAY_DUMP => {
                             let addr = r.id()?;
@@ -180,8 +198,8 @@ pub(crate) fn scan_prim_arrays<F: FnMut(u64, &[u8])>(
                             let esz = HprofType::from_code(elem_type)
                                 .map(|t| t.byte_size() as u64)
                                 .unwrap_or(1);
-                            let byte_len = count * esz;
-                            remaining -= ids + 4 + 4 + 1 + byte_len;
+                            let byte_len = count.saturating_mul(esz);
+                            sub_remaining(&mut remaining, ids + 4 + 4 + 1 + byte_len)?;
                             if wanted.contains(&addr) {
                                 r.read_bytes_reuse(&mut scratch, byte_len as usize)?;
                                 f(addr, &scratch);
@@ -232,38 +250,38 @@ pub(crate) fn scan_obj_arrays<F: FnMut(u64, &[u8])>(
                 let mut remaining = length;
                 while remaining > 0 {
                     let sub_tag = r.u1()?;
-                    remaining -= 1;
+                    sub_remaining(&mut remaining, 1)?;
                     match sub_tag {
                         heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED | heap::ROOT_STICKY_CLASS => {
                             r.skip(ids)?;
-                            remaining -= ids;
+                            sub_remaining(&mut remaining, ids)?;
                         }
                         heap::ROOT_JNI_GLOBAL => {
                             r.skip(2 * ids)?;
-                            remaining -= 2 * ids;
+                            sub_remaining(&mut remaining, 2 * ids)?;
                         }
                         heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME | heap::ROOT_THREAD_OBJ => {
                             r.skip(ids + 8)?;
-                            remaining -= ids + 8;
+                            sub_remaining(&mut remaining, ids + 8)?;
                         }
                         heap::ROOT_NATIVE_STACK | heap::ROOT_THREAD_BLOCK => {
                             r.skip(ids + 4)?;
-                            remaining -= ids + 4;
+                            sub_remaining(&mut remaining, ids + 4)?;
                         }
                         heap::HEAP_DUMP_INFO => {
                             r.skip(4 + ids)?;
-                            remaining -= 4 + ids;
+                            sub_remaining(&mut remaining, 4 + ids)?;
                         }
                         heap::CLASS_DUMP => {
                             let consumed = skip_class_dump(&mut r, id_size)?;
-                            remaining -= consumed;
+                            sub_remaining(&mut remaining, consumed)?;
                         }
                         heap::INSTANCE_DUMP => {
                             r.skip(ids + 4)?;
                             let _class_id = r.id()?;
                             let data_len = r.u4()? as u64;
                             r.skip(data_len)?;
-                            remaining -= ids + 4 + ids + 4 + data_len;
+                            sub_remaining(&mut remaining, ids + 4 + ids + 4 + data_len)?;
                         }
                         heap::OBJ_ARRAY_DUMP => {
                             let addr = r.id()?;
@@ -271,7 +289,7 @@ pub(crate) fn scan_obj_arrays<F: FnMut(u64, &[u8])>(
                             let count = r.u4()? as u64;
                             r.skip(ids)?; // array class id
                             let byte_len = count.saturating_mul(ids);
-                            remaining -= ids + 4 + 4 + ids + byte_len;
+                            sub_remaining(&mut remaining, ids + 4 + 4 + ids + byte_len)?;
                             if wanted.contains(&addr) {
                                 r.read_bytes_reuse(&mut scratch, byte_len as usize)?;
                                 f(addr, &scratch);
@@ -286,8 +304,11 @@ pub(crate) fn scan_obj_arrays<F: FnMut(u64, &[u8])>(
                             let esz = HprofType::from_code(elem_type)
                                 .map(|t| t.byte_size() as u64)
                                 .unwrap_or(1);
-                            r.skip(count * esz)?;
-                            remaining -= ids + 4 + 4 + 1 + count * esz;
+                            r.skip(count.saturating_mul(esz))?;
+                            sub_remaining(
+                                &mut remaining,
+                                ids + 4 + 4 + 1 + count.saturating_mul(esz),
+                            )?;
                         }
                         other => {
                             return Err(io::Error::new(
@@ -358,38 +379,38 @@ where
                 let mut remaining = length;
                 while remaining > 0 {
                     let sub_tag = r.u1()?;
-                    remaining -= 1;
+                    sub_remaining(&mut remaining, 1)?;
                     match sub_tag {
                         heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED | heap::ROOT_STICKY_CLASS => {
                             r.skip(ids)?;
-                            remaining -= ids;
+                            sub_remaining(&mut remaining, ids)?;
                         }
                         heap::ROOT_JNI_GLOBAL => {
                             r.skip(2 * ids)?;
-                            remaining -= 2 * ids;
+                            sub_remaining(&mut remaining, 2 * ids)?;
                         }
                         heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME | heap::ROOT_THREAD_OBJ => {
                             r.skip(ids + 8)?;
-                            remaining -= ids + 8;
+                            sub_remaining(&mut remaining, ids + 8)?;
                         }
                         heap::ROOT_NATIVE_STACK | heap::ROOT_THREAD_BLOCK => {
                             r.skip(ids + 4)?;
-                            remaining -= ids + 4;
+                            sub_remaining(&mut remaining, ids + 4)?;
                         }
                         heap::HEAP_DUMP_INFO => {
                             r.skip(4 + ids)?;
-                            remaining -= 4 + ids;
+                            sub_remaining(&mut remaining, 4 + ids)?;
                         }
                         heap::CLASS_DUMP => {
                             let consumed = skip_class_dump(&mut r, id_size)?;
-                            remaining -= consumed;
+                            sub_remaining(&mut remaining, consumed)?;
                         }
                         heap::INSTANCE_DUMP => {
                             let addr = r.id()?;
                             r.skip(4)?;
                             let class_id = r.id()?;
                             let data_len = r.u4()? as u64;
-                            remaining -= ids + 4 + ids + 4 + data_len;
+                            sub_remaining(&mut remaining, ids + 4 + ids + 4 + data_len)?;
                             r.read_bytes_reuse(&mut inst_scratch, data_len as usize)?;
                             f(Record::Instance(addr, class_id, &inst_scratch));
                         }
@@ -399,7 +420,7 @@ where
                             let count = r.u4()? as u64;
                             let array_class_id = r.id()?; // array class id
                             let byte_len = count.saturating_mul(ids);
-                            remaining -= ids + 4 + 4 + ids + byte_len;
+                            sub_remaining(&mut remaining, ids + 4 + 4 + ids + byte_len)?;
                             r.read_bytes_reuse(&mut obj_scratch, byte_len as usize)?;
                             f(Record::ObjArray(addr, array_class_id, count, &obj_scratch));
                         }
@@ -411,8 +432,8 @@ where
                             let esz = HprofType::from_code(elem_type)
                                 .map(|t| t.byte_size() as u64)
                                 .unwrap_or(1);
-                            let byte_len = count * esz;
-                            remaining -= ids + 4 + 4 + 1 + byte_len;
+                            let byte_len = count.saturating_mul(esz);
+                            sub_remaining(&mut remaining, ids + 4 + 4 + 1 + byte_len)?;
                             r.read_bytes_reuse(&mut prim_scratch, byte_len as usize)?;
                             f(Record::PrimArray(addr, elem_type, count, &prim_scratch));
                         }
@@ -459,27 +480,27 @@ pub(crate) fn scan_class_dumps<F: FnMut(u64, &[(u64, u8, u64)])>(
                 let mut remaining = length;
                 while remaining > 0 {
                     let sub_tag = r.u1()?;
-                    remaining -= 1;
+                    sub_remaining(&mut remaining, 1)?;
                     match sub_tag {
                         heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED | heap::ROOT_STICKY_CLASS => {
                             r.skip(ids)?;
-                            remaining -= ids;
+                            sub_remaining(&mut remaining, ids)?;
                         }
                         heap::ROOT_JNI_GLOBAL => {
                             r.skip(2 * ids)?;
-                            remaining -= 2 * ids;
+                            sub_remaining(&mut remaining, 2 * ids)?;
                         }
                         heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME | heap::ROOT_THREAD_OBJ => {
                             r.skip(ids + 8)?;
-                            remaining -= ids + 8;
+                            sub_remaining(&mut remaining, ids + 8)?;
                         }
                         heap::ROOT_NATIVE_STACK | heap::ROOT_THREAD_BLOCK => {
                             r.skip(ids + 4)?;
-                            remaining -= ids + 4;
+                            sub_remaining(&mut remaining, ids + 4)?;
                         }
                         heap::HEAP_DUMP_INFO => {
                             r.skip(4 + ids)?;
-                            remaining -= 4 + ids;
+                            sub_remaining(&mut remaining, 4 + ids)?;
                         }
                         heap::CLASS_DUMP => {
                             let mut consumed = 0u64;
@@ -531,14 +552,14 @@ pub(crate) fn scan_class_dumps<F: FnMut(u64, &[(u64, u8, u64)])>(
                                 consumed += ids + 1;
                             }
                             f(class_obj_id, &statics);
-                            remaining -= consumed;
+                            sub_remaining(&mut remaining, consumed)?;
                         }
                         heap::INSTANCE_DUMP => {
                             r.skip(ids + 4)?;
                             let _class_id = r.id()?;
                             let data_len = r.u4()? as u64;
                             r.skip(data_len)?;
-                            remaining -= ids + 4 + ids + 4 + data_len;
+                            sub_remaining(&mut remaining, ids + 4 + ids + 4 + data_len)?;
                         }
                         heap::OBJ_ARRAY_DUMP => {
                             r.skip(ids + 4)?;
@@ -546,7 +567,7 @@ pub(crate) fn scan_class_dumps<F: FnMut(u64, &[(u64, u8, u64)])>(
                             r.skip(ids)?;
                             let byte_len = count.saturating_mul(ids);
                             r.skip(byte_len)?;
-                            remaining -= ids + 4 + 4 + ids + byte_len;
+                            sub_remaining(&mut remaining, ids + 4 + 4 + ids + byte_len)?;
                         }
                         heap::PRIM_ARRAY_DUMP => {
                             r.skip(ids + 4)?;
@@ -555,8 +576,11 @@ pub(crate) fn scan_class_dumps<F: FnMut(u64, &[(u64, u8, u64)])>(
                             let esz = HprofType::from_code(elem_type)
                                 .map(|t| t.byte_size() as u64)
                                 .unwrap_or(1);
-                            r.skip(count * esz)?;
-                            remaining -= ids + 4 + 4 + 1 + count * esz;
+                            r.skip(count.saturating_mul(esz))?;
+                            sub_remaining(
+                                &mut remaining,
+                                ids + 4 + 4 + 1 + count.saturating_mul(esz),
+                            )?;
                         }
                         other => {
                             return Err(io::Error::new(
@@ -667,5 +691,29 @@ pub(crate) fn value_size(type_code: u8, id_size: u8) -> u64 {
         Some(HprofType::Object) => id_size as u64,
         Some(t) => t.byte_size() as u64,
         None => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sub_remaining_errors_on_underflow_instead_of_wrapping() {
+        // Normal accounting decrements in place.
+        let mut rem = 100u64;
+        sub_remaining(&mut rem, 40).unwrap();
+        assert_eq!(rem, 60);
+        sub_remaining(&mut rem, 60).unwrap();
+        assert_eq!(rem, 0);
+
+        // A sub-record claiming more bytes than the segment has left must error
+        // (InvalidData), NOT wrap to ~u64::MAX and spin the scan loop into OOB
+        // reads. This is the malformed/truncated HEAP_DUMP_SEGMENT case.
+        let mut rem = 3u64;
+        let err = sub_remaining(&mut rem, 4).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+        // On error the counter is left unchanged (no partial mutation).
+        assert_eq!(rem, 3);
     }
 }

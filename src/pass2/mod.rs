@@ -549,6 +549,7 @@ impl Pass2 {
             fd_coll_values_raw,
             fd_attribution_trunc,
             fd_dbb_capacity_sum,
+            fd_tl_null_key_count,
         ) = fielddecode::build_field_decode_views(
             path,
             &p1,
@@ -645,9 +646,19 @@ impl Pass2 {
         // compression transients, lowering the binding peak by ~2 GB.
         let mut fwd_offsets: Vec<u32> = Vec::with_capacity(n + 1);
         fwd_offsets.push(0u32);
+        let mut edge_acc: u64 = 0;
         for i in 0..n {
-            let next = fwd_offsets[i] + out_degree[i];
-            fwd_offsets.push(next);
+            edge_acc += out_degree[i] as u64;
+            if edge_acc > u32::MAX as u64 {
+                return Err(io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "forward edge count exceeds u32::MAX ({edge_acc}); \
+                         dump has too many references for the u32 CSR"
+                    ),
+                ));
+            }
+            fwd_offsets.push(edge_acc as u32);
         }
         drop(out_degree); // dead after prefix sum
 
@@ -748,6 +759,14 @@ impl Pass2 {
             *d = total_inb as u32;
             total_inb += cnt;
         }
+        // Inbound and forward edges are the same set counted from opposite ends,
+        // so the forward-CSR guard above already bounds this. Assert the
+        // invariant so a future divergence surfaces instead of silently
+        // truncating a cursor.
+        debug_assert!(
+            total_inb <= u32::MAX as u64,
+            "inbound edge total {total_inb} exceeds u32::MAX"
+        );
         let in_cursors = in_degree; // renamed for clarity: prefix-summed START cursors
 
         // Precompute source_name before moving p1.id_map into InboundBuilder.
@@ -820,6 +839,7 @@ impl Pass2 {
             fields_by_size_raw: fd_fields_by_size_raw,
             coll_values_raw: fd_coll_values_raw,
             direct_byte_buffer_capacity_sum: fd_dbb_capacity_sum,
+            thread_local_null_key_count: fd_tl_null_key_count,
         };
 
         // Package the deferred inbound-CSR construction. Moves id_map,

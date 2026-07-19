@@ -416,6 +416,14 @@ pub struct Graph {
     /// resolved. Computed unconditionally during the pass2 field-decode scan.
     #[allow(dead_code)]
     pub direct_byte_buffer_capacity_sum: u64,
+    /// Count of live `ThreadLocal$ThreadLocalMap$Entry` instances whose weak
+    /// `referent` (the ThreadLocal key) is null — the classic thread-local leak
+    /// signature (cleared key, value still strongly held). Computed during the
+    /// pass2 field-decode scan, where referent nullness is directly observable;
+    /// it cannot be recovered from the forward CSR because a null referent is
+    /// simply an absent edge, indistinguishable from any other missing target.
+    #[allow(dead_code)]
+    pub thread_local_null_key_count: u64,
 }
 
 /// Deferred inbound-CSR construction. Built by `Pass2::build` with everything

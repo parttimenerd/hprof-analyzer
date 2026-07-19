@@ -12,6 +12,20 @@ pub(crate) fn align_up(n: usize, align: usize) -> usize {
     n.div_ceil(align) * align
 }
 
+/// Clamp a `usize` shallow-size computation into the `u32` slot used by the
+/// `Graph.shallow` array. Sizes are stored as `u32` (compressed CSR); a single
+/// array larger than 4 GiB (e.g. a `long[]` with over 536M elements, or any
+/// byte array past 4 GiB) exceeds `u32::MAX`. A plain `as u32` cast would wrap
+/// such a giant object to a near-zero size, corrupting `total_shallow`, every
+/// retained-size rollup, and all size-based rankings (the huge array would then
+/// sort as tiny). Saturating instead under-counts by a bounded amount (capped
+/// near 4 GiB) while keeping the value monotonic and the object visibly large,
+/// which is the far less misleading failure mode.
+#[inline]
+fn shallow_u32(n: usize) -> u32 {
+    n.min(u32::MAX as usize) as u32
+}
+
 /// Byte sizes of non-Object (primitive) fields for a class's own fields only.
 pub(crate) fn own_prim_bytes(ci: &ClassInfo, _ref_size: usize) -> usize {
     ci.fields
@@ -66,12 +80,15 @@ pub(crate) fn instance_shallow_size(
     cache: &mut HashMap<u64, usize>,
 ) -> u32 {
     let inner = calculate_size_recursive(class_addr, class_map, ptr_size, ref_size, cache);
-    align_up(inner, 8) as u32
+    shallow_u32(align_up(inner, 8))
 }
 
 /// MAT shallow size of an Object[] array: header + length + `num_elem` refs.
 pub(crate) fn obj_array_shallow(num_elem: u64, ptr_size: usize, ref_size: usize) -> u32 {
-    align_up(ptr_size + ref_size + 4 + num_elem as usize * ref_size, 8) as u32
+    shallow_u32(align_up(
+        ptr_size + ref_size + 4 + num_elem as usize * ref_size,
+        8,
+    ))
 }
 
 /// MAT shallow size of a primitive array: aligned header + `num_elem` elements.
@@ -82,7 +99,7 @@ pub(crate) fn prim_array_shallow(
     ref_size: usize,
 ) -> u32 {
     let header = align_up(ptr_size + ref_size + 4, ref_size);
-    align_up(header + num_elem as usize * elem_size, 8) as u32
+    shallow_u32(align_up(header + num_elem as usize * elem_size, 8))
 }
 
 /// MAT shallow size of a class object (java.lang.Class): its static-field bytes
@@ -91,7 +108,7 @@ pub(crate) fn class_obj_shallow(ci: &ClassInfo, _ptr_size: usize, ref_size: usiz
     // MAT parity: class-object shallow = alignUp(staticObjFields*refSize + staticPrimBytes, 8).
     // No pointer+ref floor (matClassSize in hprof-analyzer); classes with no statics get 0.
     let computed = ci.static_obj_count as usize * ref_size + ci.static_prim_bytes as usize;
-    align_up(computed, 8) as u32
+    shallow_u32(align_up(computed, 8))
 }
 
 // ── Field layout cache ─────────────────────────────────────────────────────
@@ -317,4 +334,26 @@ pub(crate) fn field_offset(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn array_shallow_saturates_instead_of_wrapping() {
+        // A long[] with >536M elements exceeds u32::MAX bytes. A plain `as u32`
+        // cast would WRAP it to a near-zero size (making a multi-GB array sort
+        // as tiny); we must clamp to u32::MAX instead so the value stays large.
+        let huge = 600_000_000u64; // *8 bytes ≈ 4.8 GiB, over u32::MAX
+        let sz = prim_array_shallow(huge, 8, 8, 8);
+        assert_eq!(sz, u32::MAX, "oversized prim array must saturate, not wrap");
+
+        let obj_sz = obj_array_shallow(u64::from(u32::MAX), 8, 8);
+        assert_eq!(obj_sz, u32::MAX, "oversized object array must saturate");
+
+        // A normal array is unaffected: header = align_up(8+8+4, 8) = 24,
+        // then align_up(24 + 10*4, 8) = align_up(64, 8) = 64.
+        assert_eq!(prim_array_shallow(10, 4, 8, 8), 64);
+    }
 }

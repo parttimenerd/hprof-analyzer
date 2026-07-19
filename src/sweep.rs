@@ -240,7 +240,14 @@ fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
     } else {
-        format!("{}...", &s[..max.saturating_sub(3)])
+        let budget = max.saturating_sub(3);
+        let end = s
+            .char_indices()
+            .map(|(i, _)| i)
+            .take_while(|&i| i <= budget)
+            .last()
+            .unwrap_or(0);
+        format!("{}...", &s[..end])
     }
 }
 
@@ -304,6 +311,20 @@ mod tests {
         assert_eq!(r.total_fail(), 0);
         assert_eq!(r.real_comparisons(), N_MIN);
         assert!(r.gate_pass());
+    }
+
+    /// `truncate` must cut on a char boundary, never panic mid-UTF-8.
+    #[test]
+    fn truncate_respects_utf8_boundaries() {
+        // Short ASCII passes through unchanged.
+        assert_eq!(truncate("abc", 34), "abc");
+        // A string of multi-byte chars longer than the cap: must not panic and
+        // must stay valid UTF-8 with the "..." suffix.
+        let s = "héllo wörld ".repeat(10); // each of é/ö is 2 bytes
+        let out = truncate(&s, 34);
+        assert!(out.ends_with("..."));
+        assert!(out.len() <= 34);
+        assert!(s.starts_with(out.trim_end_matches("...")));
     }
 
     /// Any FAIL -> GATE FAIL, even with plenty of comparisons.
