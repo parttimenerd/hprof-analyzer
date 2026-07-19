@@ -378,22 +378,49 @@ hprof-analyzer completions bash > /etc/bash_completion.d/hprof-analyzer
 
 ## Performance
 
-Measured on a large real-world heap dump. The dump itself is not included; only
-the resource numbers are reported here. The dump holds a
-**20 GB live Java heap**; the `.hprof` file is **35.8 GB (33.4 GiB)**
-uncompressed, or **~8 GB gzip-compressed**. The run was measured at commit
-[`180ed35`](https://github.com/parttimenerd/hprof-analyzer/commit/180ed35); the
-per-run column below records the exact revision so the numbers stay reproducible
-as the tool evolves.
+The headline run is a large real-world dump (only the resource
+numbers are shared): a **20 GB live Java heap**, **35.8 GB (33.4 GiB)**
+uncompressed on disk. The other rows are reproducible public dumps you can
+regenerate: a **VS Code / Eclipse-based JVM** dump (~1 GB file), and a
+**[HeapothesYs](https://github.com/corretto/heapothesys) HyperAlloc** synthetic
+allocation dump (~10 GB file). Each row records the exact commit so the numbers
+stay meaningful as the tool evolves.
 
-| Heap (live) | Dump file | Compressed | Peak RSS | Wall clock | CPU (user + sys) | Machine | Measured |
-|-------------|-----------|------------|----------|------------|------------------|---------|----------|
-| ~20 GB | 35.8 GB (33.4 GiB) | ~8 GB (.hprof.gz) | 14.07 GiB (14,757,272 KB) | 17 min 33.66 s | 987.45 s + 65.34 s = 1053 s | AMD Ryzen Threadripper PRO 3995WX (64c/128t), 123 GB RAM, Ubuntu 25.10 | 2026-07-13, commit `180ed35` |
+| Workload | Heap (live) | Dump file | Peak RSS | Wall clock | CPU (user + sys) | Machine | Measured |
+|----------|-------------|-----------|----------|------------|------------------|---------|----------|
+| Large real-world dump | ~20 GB | 35.8 GB (33.4 GiB), ~8 GB gzip | 14.07 GiB (14,757,272 KB) | 17 min 33.66 s | 987.45 s + 65.34 s = 1053 s | AMD Ryzen Threadripper PRO 3995WX (64c/128t), 123 GB RAM | 2026-07-13, commit `180ed35` |
+| HeapothesYs HyperAlloc | 7.91 GiB (8,491,155,296 B) | 10.32 GiB (11,080,826,276 B) | 966 MiB (989,540 KB) | 1 min 19.73 s | 66.77 s + 11.62 s = 78.4 s | Intel-class workstation (128 threads, 123 GB RAM) | 2026-07-19, commit `04f5e58` |
+| VS Code JVM | 752 MiB (788,717,960 B) | 1.01 GiB (1,088,816,653 B) | 500 MiB (511,540 KB) | 21.63 s | 19.64 s + 1.98 s = 21.6 s | Intel-class workstation (128 threads, 123 GB RAM) | 2026-07-19, commit `04f5e58` |
 
-Peak RSS stays at roughly 40% of the uncompressed dump size (and below the 20 GB
-live heap) because the analyzer never holds the whole dump in memory; it
-streams the records in two passes and works over compressed, bounded-size index
-structures.
+Peak RSS stays well below both the dump-file size and the live-heap size (~40%
+of the uncompressed file on the big run, and a fraction of that on the smaller
+ones) because the analyzer never holds the whole dump in memory; it streams the
+records in two passes and works over compressed, bounded-size index structures.
+
+**Why the large run takes ~17 minutes** while the 10 GB HyperAlloc dump
+finishes in ~80 seconds: wall clock scales with the amount of dump data read and
+the number of objects in the graph, and the large dump is **~3.5× larger on
+disk** with a far denser, more interconnected object graph (deep dominator trees
+and reference chains, versus HyperAlloc's shallow, uniform allocation churn).
+The dominant cost is the two streaming passes plus dominator-tree construction
+over hundreds of millions of objects; that work grows with graph size and
+connectivity, not just file bytes. There is no faster mode that skips it without
+dropping the retained-size analyses (leak suspects, top consumers, root paths)
+that are the whole point of the tool — if you only need a class histogram, a
+lighter streaming tool is the better fit (see [below](#versus-hprof-slurp)). The
+run is already parallel where it helps (note the >900 s of user CPU against the
+~1053 s wall clock on a 64-core box); the remaining time is inherently
+sequential streaming I/O and graph construction.
+
+### Compared against Eclipse MAT
+
+Correctness is validated against **Eclipse Memory Analyzer (MAT) 1.17.0**: the
+`compare mat` subcommand diffs a MAT System Overview export against our JSON and
+the parity fixtures gate on it (see [Compare against a MAT
+export](#compare-against-a-mat-export)). MAT typically needs a machine with
+memory comparable to the dump (its `MemoryAnalyzer.ini` on the box above is
+configured with `-Xmx60g` to parse the large dumps), whereas `hprof-analyzer`
+holds peak RSS far below the dump size.
 
 ### Versus hprof-slurp
 
