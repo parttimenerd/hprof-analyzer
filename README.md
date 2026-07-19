@@ -4,30 +4,29 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Your JVM died with an `OutOfMemoryError` and left behind a multi-gigabyte
-`.hprof` heap dump. You want to know **what filled the heap** — without opening a
+`.hprof` heap dump. You want to know **what filled the heap** without opening a
 34 GB file in a GUI or provisioning a machine as big as the dump.
 
 `hprof-analyzer` is a command-line tool that reads the dump and writes a
 report. It answers three questions Eclipse Memory Analyzer (MAT) answers, plus
-a threads view — quickly, at low memory, and in a single file you can email or
-diff in CI.
+a threads view, at low memory, in a single file you can email or diff in CI.
 
 ## What you get
 
 Run one command and get a report with these sections:
 
-- **System Overview** — heap size, object and class counts, the biggest
+- **System Overview**: heap size, object and class counts, the biggest
   consumers by class and by class loader, duplicate classes, and GC roots. Plus
   a per-class histogram (with a "largest single instance" column), a raw HPROF
   record census, and a top-dominator size distribution.
-- **Leak Suspects** — the objects that retain the most memory, the accumulation
-  points behind them, and what each one keeps alive — including the reference
-  chain from a suspect all the way up to its GC root.
-- **Top Consumers** — the largest objects, classes, and class loaders by
+- **Leak Suspects**: the objects that retain the most memory, the accumulation
+  points behind them, and what each one keeps alive, including the reference
+  chain from a suspect up to its GC root.
+- **Top Consumers**: the largest objects, classes, and class loaders by
   retained size, and the biggest packages.
-- **Threads** — thread stacks, the thread objects, and the local variables they
+- **Threads**: thread stacks, the thread objects, and the local variables they
   keep alive.
-- **Duplicate strings** (opt-in, `--dup-strings`) — approximate
+- **Duplicate strings** (opt-in, `--dup-strings`): approximate
   duplicate-`java.lang.String` analysis: how many values are total / distinct /
   duplicated, roughly how many bytes are wasted, the top 25 most-duplicated
   values (with their exact text), a string-length histogram, and the top 25
@@ -37,50 +36,92 @@ Pick the format that fits: plain **Markdown**, **Markdown with ASCII graphs**
 (bars, sparklines, dominator trees), a self-contained **HTML** page you can open
 in any browser, or machine-readable **JSON**.
 
-See it for real — a live viewer with all four output formats side by side,
-built from the public [Renaissance benchmark](https://renaissance.dev/)
-`scala-doku` dump:
+A live viewer shows all four output formats side by side, built from the public
+[Renaissance benchmark](https://renaissance.dev/) `scala-doku` dump:
 
 **➡ [Open the sample report viewer](https://parttimenerd.github.io/hprof-analyzer/)**
 
-Switch formats in the top-left; on either Markdown view, hit *Render to HTML*
-in the top-right to see it formatted. Prefer the raw files? They live here:
+Switch formats in the top-left; the *Default* / *All features* toggle beside
+them swaps between a default-options run and one with every optional analysis on
+(`--dup-strings --collections`). On either Markdown view, hit *Render to HTML*
+in the top-right to see it formatted. The raw files are here.
 
-- [`scala-doku.md`](docs/samples/scala-doku.md) — plain Markdown
-- [`scala-doku.graphs.md`](docs/samples/scala-doku.graphs.md) — Markdown with ASCII graphs
-- [`scala-doku.html`](docs/samples/scala-doku.html) — self-contained HTML
-- [`scala-doku.json`](docs/samples/scala-doku.json) — machine-readable JSON
+Default options:
 
-## Get a report in 30 seconds
+- [`scala-doku.md`](docs/samples/scala-doku.md): plain Markdown
+- [`scala-doku.graphs.md`](docs/samples/scala-doku.graphs.md): Markdown with ASCII graphs
+- [`scala-doku.html`](https://parttimenerd.github.io/hprof-analyzer/samples/scala-doku.html): self-contained HTML (opens live)
+- [`scala-doku.json`](docs/samples/scala-doku.json): machine-readable JSON
+
+All optional features (`--dup-strings --collections`):
+
+- [`scala-doku-full.md`](docs/samples/scala-doku-full.md): plain Markdown
+- [`scala-doku-full.graphs.md`](docs/samples/scala-doku-full.graphs.md): Markdown with ASCII graphs
+- [`scala-doku-full.html`](https://parttimenerd.github.io/hprof-analyzer/samples/scala-doku-full.html): self-contained HTML (opens live)
+- [`scala-doku-full.json`](docs/samples/scala-doku-full.json): machine-readable JSON
+
+## Quick start
+
+Grab a prebuilt binary and analyze a dump in two commands. No Rust, no Node, no
+build step. Pick the line for your platform (see [Install](#install) for all
+targets and other install methods):
 
 ```sh
-hprof-analyzer heap.hprof report.html
+# macOS (Apple Silicon)
+curl -L https://github.com/parttimenerd/hprof-analyzer/releases/download/nightly/hprof-analyzer-aarch64-apple-darwin.tar.gz | tar xz
+
+# Linux (x86_64, glibc)
+curl -L https://github.com/parttimenerd/hprof-analyzer/releases/download/nightly/hprof-analyzer-x86_64-unknown-linux-gnu.tar.gz | tar xz
 ```
 
-Open `report.html` in a browser — that's the whole workflow. To read it in the
-terminal instead, drop the output path and you get Markdown on stdout:
+That unpacks a folder containing the `hprof-analyzer` binary. Run it on your
+dump:
 
 ```sh
-hprof-analyzer heap.hprof
+./hprof-analyzer-*/hprof-analyzer heap.hprof report.html
 ```
+
+Open `report.html` in any browser. To read the report in your terminal instead,
+drop the output path and you get Markdown on stdout:
+
+```sh
+./hprof-analyzer-*/hprof-analyzer heap.hprof
+```
+
+To run it from anywhere, move the binary onto your `PATH` (e.g.
+`sudo mv hprof-analyzer-*/hprof-analyzer /usr/local/bin/`), then just
+`hprof-analyzer heap.hprof report.html`. The rest of this README assumes it is
+on your `PATH`.
+
+## One command, one report
 
 There is no subcommand to remember: hand the tool a `.hprof` dump and it
-analyzes it; hand it a saved report JSON and it re-renders it. Gzip-compressed
-dumps (`.hprof.gz`) are read transparently.
+analyzes it; hand it a saved report JSON and it re-renders it. With an output
+path it writes a file (format inferred from the extension); without one it
+prints Markdown to stdout.
+
+```sh
+hprof-analyzer heap.hprof report.html    # write an HTML report
+hprof-analyzer heap.hprof                 # or Markdown to stdout
+```
+
+Analysis time scales with the dump: a small dump is done in seconds, while a
+multi-gigabyte large dump takes minutes (see [Performance](#performance)).
+Gzip-compressed dumps (`.hprof.gz`) are read transparently.
 
 ## Why you might want it
 
 - **Very large dumps at bounded memory.** It streams the dump in two passes and
   keeps peak RSS well below the heap size. A large dump with a **20 GB live
-  Java heap** — **35.8 GB (33.4 GiB)** as an uncompressed `.hprof` file, or
-  **~8 GB gzip-compressed** — analyzes in **~17.5 minutes at ~14 GB peak RSS**
+  Java heap** (**35.8 GB (33.4 GiB)** as an uncompressed `.hprof` file, or
+  **~8 GB gzip-compressed**) analyzes in **~17.5 minutes at ~14 GB peak RSS**
   (see [Performance](#performance)). MAT typically needs a machine with memory
   comparable to the dump.
 - **Scriptable and CI-friendly.** It never prompts and never opens a window.
   Emit JSON, diff two dumps to catch memory growth in a pipeline, or gate a
   build on retained-size regressions.
-- **Emailable output.** The HTML report is a single self-contained file — no
-  server, no external assets — so you can attach it to a ticket or share it as
+- **Emailable output.** The HTML report is a single self-contained file, with no
+  server and no external assets, so you can attach it to a ticket or share it as
   is.
 - **Deterministic.** The Markdown output is byte-stable (modulo the generation
   timestamp), so it diffs cleanly across runs and across dumps.
@@ -88,35 +129,69 @@ dumps (`.hprof.gz`) are read transparently.
 ## When to use MAT instead
 
 This tool is **deliberately narrow**: it renders static replicas of the three
-views above plus threads, and nothing else. If you need to *explore* a heap —
-run OQL queries, walk the dominator tree interactively, inspect arbitrary
+views above plus threads, and nothing else. If you need to *explore* a heap
+(run OQL queries, walk the dominator tree interactively, inspect arbitrary
 objects and their fields, follow references by hand, or use the full breadth of
-MAT's analyses — reach for **[Eclipse MAT](https://eclipse.dev/mat/)**, the
+MAT's analyses), reach for **[Eclipse MAT](https://eclipse.dev/mat/)**, the
 complete interactive GUI. `hprof-analyzer` is for the common case where you
 already know you want those reports, want them fast, on a dump too large to open
 comfortably, or from a script.
 
 ## Install
 
-**Release binary.** Download the archive for your platform from the
-[Releases page](https://github.com/parttimenerd/hprof-analyzer/releases), unpack
-it, and put `hprof-analyzer` on your `PATH`. Prebuilt targets: Linux x86_64
-(glibc and static musl), macOS aarch64, Windows x86_64.
+Three ways to install, fastest first.
 
-**With Cargo.** The crate is Rust **edition 2024**, so it needs **Rust 1.85 or
-newer**; a current stable toolchain is recommended (CI builds on `stable`).
-Building from source (Cargo or `git clone`) also needs **Node.js/npm** on your
-`PATH` — `build.rs` bundles the HTML report's JavaScript with esbuild at
-compile time (see [Building and testing](#building-and-testing)). If you'd
-rather skip the Node toolchain, use a prebuilt release binary above.
-Install [rustup](https://rustup.rs/) and run `rustup update stable` if your
-toolchain is older, then:
+### 1. Prebuilt binary (recommended, no toolchain)
+
+Download the archive for your platform, unpack it, and put the `hprof-analyzer`
+binary on your `PATH`. The archives bundle the HTML report's assets already, so
+you need **no Rust and no Node.js**.
+
+| Platform | Archive |
+| --- | --- |
+| Linux x86_64 (glibc) | `hprof-analyzer-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux x86_64 (static musl) | `hprof-analyzer-x86_64-unknown-linux-musl.tar.gz` |
+| macOS (Apple Silicon) | `hprof-analyzer-aarch64-apple-darwin.tar.gz` |
+| Windows x86_64 | `hprof-analyzer-x86_64-pc-windows-msvc.zip` |
+
+A rolling [`nightly`](https://github.com/parttimenerd/hprof-analyzer/releases/tag/nightly)
+pre-release always tracks the latest commit on `main`. Download it in one line
+(swap in the archive for your platform):
+
+```sh
+curl -L https://github.com/parttimenerd/hprof-analyzer/releases/download/nightly/hprof-analyzer-x86_64-unknown-linux-gnu.tar.gz | tar xz
+sudo mv hprof-analyzer-*/hprof-analyzer /usr/local/bin/
+hprof-analyzer --help
+```
+
+Once a versioned release is tagged, the same archives are also published there
+and reachable via the stable `.../releases/latest/download/<archive>` URL; until
+then, use the `nightly` URL above. You can also browse every asset on the
+[Releases page](https://github.com/parttimenerd/hprof-analyzer/releases).
+
+The static **musl** build has no libc dependency, so it runs on any Linux
+(including minimal containers and older distros). Prefer it if the glibc build
+complains about a missing or too-old `libc`.
+
+### 2. With Cargo
+
+Needs a **Rust toolchain (1.85+, edition 2024)** and **Node.js/npm** on your
+`PATH` — `build.rs` bundles the HTML report's JavaScript with esbuild at compile
+time (see [Building and testing](#building-and-testing)). Install
+[rustup](https://rustup.rs/) and run `rustup update stable` if your toolchain is
+older, then from a checkout of this repo:
 
 ```sh
 cargo install --path .
 ```
 
-**From source:**
+This installs `hprof-analyzer` into `~/.cargo/bin` (ensure it is on your
+`PATH`). If you would rather skip the Node toolchain, use a prebuilt binary
+(option 1).
+
+### 3. From source
+
+Same toolchain requirements as option 2 (Rust 1.85+ and Node.js/npm):
 
 ```sh
 git clone https://github.com/parttimenerd/hprof-analyzer
@@ -127,7 +202,7 @@ cargo build --release
 
 ## Building and testing
 
-Requires a stable Rust toolchain (1.85+, edition 2024) — see
+Requires a stable Rust toolchain (1.85+, edition 2024); see
 [Install](#install). All commands run from the repository root:
 
 ```sh
@@ -142,8 +217,8 @@ CI (`.github/workflows/ci.yml`) runs the same `fmt`, `clippy -D warnings`, and
 `tests/fixtures/` (checked in alongside the tests).
 
 The self-contained HTML report embeds a small React bundle
-(`web/dist/bundle.js`). This bundle is a generated artifact — it is
-**git-ignored, not committed** — so building the crate requires **Node.js/npm**
+(`web/dist/bundle.js`). This bundle is a generated artifact that is
+**git-ignored, not committed**, so building the crate requires **Node.js/npm**
 on your `PATH`: `build.rs` runs esbuild to produce the bundle before the crate
 compiles, and fails with a clear error if `node`/`npm` are missing. When you
 change the web sources under `web/src/`, `build.rs` re-bundles automatically on
@@ -154,7 +229,7 @@ cd web && npm install && npm run build   # regenerates web/dist/bundle.js
 ```
 
 If you only need the binary and want to avoid the Node toolchain, download a
-prebuilt release binary instead (see [Install](#install)) — the releases ship
+prebuilt release binary instead (see [Install](#install)); the releases ship
 with the bundle already embedded.
 
 ## Usage
@@ -189,7 +264,7 @@ hprof-analyzer heap.hprof -f md-graphs       # Markdown with ASCII graphs
 ```
 
 `md-graphs` shares the `.md` extension with plain Markdown, so it is never
-inferred — ask for it explicitly with `-f md-graphs`.
+inferred; ask for it explicitly with `-f md-graphs`.
 
 **Duplicate strings.** Add `--dup-strings` to include the duplicate-`String`
 section (see [What you get](#what-you-get)). It adds two extra scans of the heap
@@ -208,11 +283,11 @@ stderr is a terminal. Control it with `--progress auto|always|never` (default
 
 Every report includes four deeper analyses, always on:
 
-- **Root paths** — dominator chain from each single-object suspect up to its GC
+- **Root paths**: dominator chain from each single-object suspect up to its GC
   root (MAT-style).
-- **Allocation sites** — objects aggregated by allocation stack-trace serial.
-- **Thread locals** — each thread's local root objects.
-- **Dominator subtree** — the multi-level dominator subtree per accumulation
+- **Allocation sites**: objects aggregated by allocation stack-trace serial.
+- **Thread locals**: each thread's local root objects.
+- **Dominator subtree**: the multi-level dominator subtree per accumulation
   point.
 
 One flag scales the output-size caps for these sections (and the top-consumer /
@@ -233,10 +308,10 @@ The preset controls seven caps:
 | `max`       |        200 |       500 |           100 |   100,000 |        50 |           500 |           100 |
 
 Two caveats. **Memory:** `--detail max` can raise the dominator-tree cap to 100k
-nodes and push peak RSS higher on very large dumps — that is the documented
+nodes and push peak RSS higher on very large dumps; that is the documented
 tradeoff. **Allocation tracking:** allocation sites only yield real stacks if
 the JVM recorded allocation stack traces (`stack_trace_serial`); most HotSpot
-dumps have this off, and the report says so honestly rather than inventing data.
+dumps have this off, and the report says so rather than inventing data.
 
 ### Compare against a MAT export
 
@@ -250,8 +325,8 @@ hprof-analyzer compare mat mat_System_Overview.zip report.json
 
 ### Track growth across two dumps
 
-Compare an earlier report against a later one to see what grew — handy for
-finding a leak by comparing snapshots over time:
+Compare an earlier report against a later one to see what grew. This is a handy
+way to find a leak by comparing snapshots over time:
 
 ```sh
 hprof-analyzer early.hprof a.json
@@ -262,9 +337,9 @@ hprof-analyzer compare reports a.json b.json
 ### Re-render a saved report
 
 The JSON is the canonical form; re-render it to any format without re-parsing
-the dump. Just pass the report path as the input — the tool sees it is a saved
-report, not a dump, and re-renders it. It takes an optional output path with the
-same extension inference:
+the dump. Just pass the report path as the input, and the tool sees it is a
+saved report, not a dump, and re-renders it. It takes an optional output path
+with the same extension inference:
 
 ```sh
 hprof-analyzer report.json                    # Markdown to stdout
@@ -273,16 +348,16 @@ hprof-analyzer report.json -f md-graphs       # Markdown with ASCII graphs
 ```
 
 The analyze-only flags (`--dup-strings`, `--collections`, non-default
-`--detail`) have no effect when re-rendering — those sections are baked into the
-JSON at analyze time — so passing one on a report input is an error with a hint
-to re-run on the `.hprof` dump.
+`--detail`) have no effect when re-rendering, because those sections are baked
+into the JSON at analyze time, so passing one on a report input is an error with
+a hint to re-run on the `.hprof` dump.
 
 ### Compressed JSON
 
 Write the canonical report gzip-compressed by giving the output path a `.gz`
 suffix (the JSON is repetitive and typically shrinks ~20×). A `.gz` report reads
-back transparently — the tool sniffs the gzip magic bytes, so it also works from
-stdin:
+back transparently, because the tool sniffs the gzip magic bytes, so it also
+works from stdin:
 
 ```sh
 hprof-analyzer heap.hprof report.json.gz    # gzip-compressed JSON (inferred)
@@ -304,14 +379,17 @@ hprof-analyzer completions bash > /etc/bash_completion.d/hprof-analyzer
 Measured on a large real-world heap dump. The dump itself is not included; only
 the resource numbers are reported here. The dump holds a
 **20 GB live Java heap**; the `.hprof` file is **35.8 GB (33.4 GiB)**
-uncompressed, or **~8 GB gzip-compressed**.
+uncompressed, or **~8 GB gzip-compressed**. The run was measured at commit
+[`180ed35`](https://github.com/parttimenerd/hprof-analyzer/commit/180ed35); the
+per-run column below records the exact revision so the numbers stay reproducible
+as the tool evolves.
 
 | Heap (live) | Dump file | Compressed | Peak RSS | Wall clock | CPU (user + sys) | Machine | Measured |
 |-------------|-----------|------------|----------|------------|------------------|---------|----------|
-| ~20 GB | 35.8 GB (33.4 GiB) | ~8 GB (.hprof.gz) | 14.07 GiB (14,757,272 KB) | 17 min 33.66 s | 987.45 s + 65.34 s = 1053 s | AMD Ryzen Threadripper PRO 3995WX (64c/128t), 123 GB RAM, Ubuntu 25.10 | 2026-07-13, commit `a1c0bbb` |
+| ~20 GB | 35.8 GB (33.4 GiB) | ~8 GB (.hprof.gz) | 14.07 GiB (14,757,272 KB) | 17 min 33.66 s | 987.45 s + 65.34 s = 1053 s | AMD Ryzen Threadripper PRO 3995WX (64c/128t), 123 GB RAM, Ubuntu 25.10 | 2026-07-13, commit `180ed35` |
 
 Peak RSS stays at roughly 40% of the uncompressed dump size (and below the 20 GB
-live heap) because the analyzer never holds the whole dump in memory — it
+live heap) because the analyzer never holds the whole dump in memory; it
 streams the records in two passes and works over compressed, bounded-size index
 structures.
 
@@ -319,7 +397,7 @@ structures.
 
 [`hprof-slurp`](https://github.com/agourlay/hprof-slurp) is a great tool for a
 different job: a fast, streaming class histogram. It is **faster and lighter**
-than `hprof-analyzer` — because it does far less. It does not build the
+than `hprof-analyzer`, because it does far less. It does not build the
 dominator tree, so it cannot report retained sizes, leak suspects, root paths,
 or the Top Consumers view. If a class histogram is all you need, use it. If you
 need the retained-size analyses above, that extra work is the reason
@@ -333,4 +411,4 @@ formulas, and the compressed index structures are described in
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
