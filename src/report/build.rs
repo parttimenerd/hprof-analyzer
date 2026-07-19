@@ -78,6 +78,9 @@ pub fn build_model(
     let references = build_references(g);
     crate::trace::probe("build_model: after references only-weakly-retained rollup");
     let collection_attribution = build_collection_attribution(g, &overview);
+    let fields_by_size = build_fields_by_size(g, &overview);
+    let biggest_collections = build_biggest_collections(g);
+    let collection_contents = build_collection_contents(g);
     Report {
         schema_version: SCHEMA_VERSION,
         generated,
@@ -92,6 +95,9 @@ pub fn build_model(
         collections: g.collections.clone(),
         references,
         collection_attribution,
+        fields_by_size,
+        biggest_collections,
+        collection_contents,
         leak_indicators: build_leak_indicators(g),
     }
 }
@@ -260,6 +266,284 @@ fn build_collection_attribution(
         g.collection_attribution_truncated,
         &holder_counts,
     ))
+}
+
+/// Aggregate the raw fields-by-size groups into a ranking of `Class#field` by
+/// total retained size of their pointees. `None` when `--collections` was off
+/// (the raw vec is absent). For each group: sum `g.retained` over distinct
+/// pointee indices, pick the dominant runtime pointee class (by summed
+/// retained), and match the holder's live-instance count from the histogram.
+/// Sorted by total_retained desc, truncated to `ATTRIBUTION_TOP_N`.
+fn build_fields_by_size(g: &Graph, overview: &SystemOverview) -> Option<FieldsBySize> {
+    use std::collections::HashMap;
+    let raw = g.fields_by_size_raw.as_ref()?;
+    // dense idx → element count, for the `elements` column (container pointees).
+    let elems_by_idx: std::collections::HashMap<u32, u64> = g
+        .coll_values_raw
+        .as_ref()
+        .map(|cv| {
+            cv.iter()
+                .map(|c| (c.container_idx, c.value_indices.len() as u64))
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut holder_counts: HashMap<String, u64> = HashMap::new();
+    for row in &overview.histogram {
+        *holder_counts.entry(row.pretty_class.clone()).or_insert(0) += row.instances;
+    }
+
+    let mut rows: Vec<FieldBySizeRow> = raw
+        .iter()
+        .map(|grp| {
+            let mut total_retained: u64 = 0;
+            // Sum retained per pointee, and tally retained per runtime type to
+            // pick the dominant one.
+            let mut type_retained: HashMap<String, u64> = HashMap::new();
+            for &idx in &grp.pointee_indices {
+                let r = g.retained.get(idx as usize).copied().unwrap_or(0);
+                total_retained += r;
+                *type_retained
+                    .entry(class_display(g, idx as usize))
+                    .or_insert(0) += r;
+            }
+            // Dominant pointee type: the class with the most summed retained. If
+            // more than one type is present and none has a strict majority of
+            // retained, report `varies`.
+            let pointee_type = dominant_pointee_type(&type_retained, total_retained);
+            let holder_instances = holder_counts
+                .get(&pretty_class_name(&grp.holder_class))
+                .copied()
+                .unwrap_or(0);
+            let elements: u64 = grp
+                .pointee_indices
+                .iter()
+                .filter_map(|idx| elems_by_idx.get(idx).copied())
+                .sum();
+            let category = classify_pointee(&pointee_type);
+            FieldBySizeRow {
+                holder_class: pretty_class_name(&grp.holder_class),
+                field: grp.field.clone(),
+                pointee_type,
+                total_retained,
+                pointees: grp.pointee_indices.len() as u64,
+                holder_instances,
+                elements,
+                category,
+            }
+        })
+        .collect();
+
+    rows.sort_by(|a, b| {
+        b.total_retained
+            .cmp(&a.total_retained)
+            .then(b.pointees.cmp(&a.pointees))
+            .then_with(|| a.holder_class.cmp(&b.holder_class))
+            .then_with(|| a.field.cmp(&b.field))
+    });
+    let truncated = rows.len() > ATTRIBUTION_TOP_N;
+    rows.truncate(ATTRIBUTION_TOP_N);
+    Some(FieldsBySize { rows, truncated })
+}
+
+/// Pick the dominant runtime pointee type from a `type → summed retained` map:
+/// the single type holding a strict majority (> 50%) of the group's retained
+/// size, else `varies` when more than one type is present. A single type always
+/// wins.
+fn dominant_pointee_type(
+    type_retained: &std::collections::HashMap<String, u64>,
+    total_retained: u64,
+) -> String {
+    if type_retained.len() == 1 {
+        return type_retained.keys().next().cloned().unwrap_or_default();
+    }
+    let (best, best_r) = type_retained
+        .iter()
+        .max_by_key(|(_, r)| **r)
+        .map(|(t, r)| (t.clone(), *r))
+        .unwrap_or_default();
+    if total_retained > 0 && best_r * 2 > total_retained {
+        best
+    } else {
+        "varies".to_string()
+    }
+}
+
+/// Dominant element type by COUNT (>50% majority), else `varies`. Single type
+/// always wins. Mirrors `dominant_pointee_type` but keyed on counts.
+fn dominant_value_type(counts: &std::collections::HashMap<String, u64>) -> String {
+    if counts.len() == 1 {
+        return counts.keys().next().cloned().unwrap_or_default();
+    }
+    let total: u64 = counts.values().sum();
+    let (best, best_c) = counts
+        .iter()
+        .max_by_key(|(_, c)| **c)
+        .map(|(t, c)| (t.clone(), *c))
+        .unwrap_or_default();
+    if total > 0 && best_c * 2 > total {
+        best
+    } else {
+        "varies".to_string()
+    }
+}
+
+/// Top-K element types by count (desc), ties broken by type name asc.
+fn top_value_shares(
+    counts: &std::collections::HashMap<String, u64>,
+    k: usize,
+) -> Vec<ValueTypeShare> {
+    let mut v: Vec<ValueTypeShare> = counts
+        .iter()
+        .map(|(t, c)| ValueTypeShare {
+            type_name: t.clone(),
+            count: *c,
+        })
+        .collect();
+    v.sort_by(|a, b| {
+        b.count
+            .cmp(&a.count)
+            .then_with(|| a.type_name.cmp(&b.type_name))
+    });
+    v.truncate(k);
+    v
+}
+
+/// Bucket a runtime pointee type into "array" / "collection" / "object" for the
+/// Fields-by-Size category column. `varies` and empty fall back to "object".
+fn classify_pointee(pointee_type: &str) -> String {
+    if pointee_type.ends_with("[]") {
+        "array".to_string()
+    } else if pointee_type.starts_with("java.util.")
+        || pointee_type.contains("Map")
+        || pointee_type.contains("List")
+        || pointee_type.contains("Set")
+        || pointee_type.contains("Collection")
+        || pointee_type.contains("scala.collection")
+    {
+        "collection".to_string()
+    } else {
+        "object".to_string()
+    }
+}
+
+/// Build the per-instance "biggest collections" ranking from the raw
+/// per-collection value tallies. `None` when `--collections` was off. Retained
+/// is joined by the collection's dense index. Owner is left `None` (the raw
+/// record carries no address to join the holder-edge map). Combined list ranked
+/// by retained desc then elements desc then class asc, top `ATTRIBUTION_TOP_N`;
+/// per-kind lists reuse that order. Element/value type columns come from the
+/// per-collection element-index tally.
+fn build_biggest_collections(g: &Graph) -> Option<BiggestCollections> {
+    let raw = g.coll_values_raw.as_ref()?;
+    const TOP_N: usize = ATTRIBUTION_TOP_N;
+    const TOP_K_TYPES: usize = 4;
+
+    let mut rows: Vec<BiggestCollectionRow> = raw
+        .iter()
+        .map(|c| {
+            let mut counts: std::collections::HashMap<String, u64> =
+                std::collections::HashMap::new();
+            for &vi in &c.value_indices {
+                *counts.entry(class_display(g, vi as usize)).or_insert(0) += 1;
+            }
+            let retained = g
+                .retained
+                .get(c.container_idx as usize)
+                .copied()
+                .unwrap_or(0);
+            BiggestCollectionRow {
+                kind: kind_label(c.kind).to_string(),
+                container_class: c.container_class.clone(),
+                elements: c.value_indices.len() as u64,
+                capacity: c.value_indices.len() as u64,
+                retained: Some(retained),
+                owner: None,
+                dominant_value_type: Some(dominant_value_type(&counts)),
+                value_type_breakdown: top_value_shares(&counts, TOP_K_TYPES),
+            }
+        })
+        .collect();
+
+    rows.sort_by(|a, b| {
+        b.retained
+            .unwrap_or(0)
+            .cmp(&a.retained.unwrap_or(0))
+            .then(b.elements.cmp(&a.elements))
+            .then_with(|| a.container_class.cmp(&b.container_class))
+    });
+    let truncated = rows.len() > TOP_N;
+    let combined: Vec<BiggestCollectionRow> = rows.iter().take(TOP_N).cloned().collect();
+
+    const KINDS: [&str; 6] = ["list", "map", "set", "deque", "queue", "tree"];
+    let mut by_kind: Vec<CollectionKindTable> = Vec::new();
+    for kind in KINDS {
+        let mut krows: Vec<BiggestCollectionRow> =
+            rows.iter().filter(|r| r.kind == kind).cloned().collect();
+        if krows.is_empty() {
+            continue;
+        }
+        krows.truncate(TOP_N);
+        by_kind.push(CollectionKindTable {
+            kind: kind.to_string(),
+            rows: krows,
+        });
+    }
+
+    Some(BiggestCollections {
+        combined,
+        by_kind,
+        truncated,
+    })
+}
+
+/// Aggregate the raw per-collection value tallies into a global per-collection-
+/// class breakdown: for each container class, sum instances + total values and
+/// merge element-type counts, keeping the top types. `None` when `--collections`
+/// was off. Sorted by total_values desc, top `ATTRIBUTION_TOP_N`.
+fn build_collection_contents(g: &Graph) -> Option<CollectionContents> {
+    use std::collections::HashMap;
+    let raw = g.coll_values_raw.as_ref()?;
+    const TOP_N: usize = ATTRIBUTION_TOP_N;
+    const TOP_K_TYPES: usize = 5;
+
+    struct Acc {
+        instances: u64,
+        total_values: u64,
+        type_counts: HashMap<String, u64>,
+    }
+    let mut by_class: HashMap<String, Acc> = HashMap::new();
+    for c in raw {
+        let acc = by_class.entry(c.container_class.clone()).or_insert(Acc {
+            instances: 0,
+            total_values: 0,
+            type_counts: HashMap::new(),
+        });
+        acc.instances += 1;
+        acc.total_values += c.value_indices.len() as u64;
+        for &vi in &c.value_indices {
+            *acc.type_counts
+                .entry(class_display(g, vi as usize))
+                .or_insert(0) += 1;
+        }
+    }
+
+    let mut rows: Vec<CollectionContentsRow> = by_class
+        .into_iter()
+        .map(|(collection_class, acc)| CollectionContentsRow {
+            collection_class,
+            instances: acc.instances,
+            total_values: acc.total_values,
+            top_value_types: top_value_shares(&acc.type_counts, TOP_K_TYPES),
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        b.total_values
+            .cmp(&a.total_values)
+            .then_with(|| a.collection_class.cmp(&b.collection_class))
+    });
+    let truncated = rows.len() > TOP_N;
+    rows.truncate(TOP_N);
+    Some(CollectionContents { rows, truncated })
 }
 
 /// Pure aggregation core (no `Graph` dependency, so it is directly unit
