@@ -22,6 +22,9 @@ pub fn render_markdown_graphs(r: &Report) -> String {
     render_arrays_by_size(&r.arrays_by_size, true, &mut out);
     render_collections(&r.collections, true, &mut out);
     render_collection_attribution(&r.collection_attribution, true, &mut out);
+    render_fields_by_size(&r.fields_by_size, true, &mut out);
+    render_biggest_collections(&r.biggest_collections, true, &mut out);
+    render_collection_contents(&r.collection_contents, true, &mut out);
     render_references(&r.references, true, &mut out);
     render_unreachable_histogram(&r.overview, true, &mut out);
     // Allocation sites (always present; `None` only for legacy reports).
@@ -56,6 +59,17 @@ fn render_toc_graphs(r: &Report, out: &mut String) {
         out.push_str(
             "- [Container Attribution (Class#field)](#container-attribution-classfield)\n",
         );
+    }
+    if r.fields_by_size.is_some() {
+        out.push_str(
+            "- [Fields by Retained Size (Class#field)](#fields-by-retained-size-classfield)\n",
+        );
+    }
+    if r.biggest_collections.is_some() {
+        out.push_str("- [Biggest Collections](#biggest-collections)\n");
+    }
+    if r.collection_contents.is_some() {
+        out.push_str("- [Collection Contents by Type](#collection-contents-by-type)\n");
     }
     out.push_str("- [References](#references)\n");
     out.push_str("- [Unreachable Objects](#unreachable-objects)\n");
@@ -444,11 +458,10 @@ fn render_retention_concentration_graphs(o: &SystemOverview, out: &mut String) {
     out.push('\n');
 }
 
-/// Dominator-Depth Distribution (md-graphs): a sparkline over the per-depth
-/// object counts plus the full per-depth table with a proportional bar column.
-/// Standalone section near the end of the report.
+/// Dominator-Depth Distribution (md-graphs): the full per-depth table with a
+/// proportional bar column. Standalone section near the end of the report.
 fn render_dominator_depth_graphs(o: &SystemOverview, out: &mut String) {
-    use crate::md::{Align, Table, bar, sparkline};
+    use crate::md::{Align, Table, bar};
     let Some(stats) = depth_stats(&o.dominator_depth_histogram) else {
         return;
     };
@@ -456,14 +469,6 @@ fn render_dominator_depth_graphs(o: &SystemOverview, out: &mut String) {
     out.push_str(DEPTH_DIST_CAPTION);
     out.push_str(&depth_summary_line(&stats));
     let counts: Vec<u64> = stats.rows.iter().map(|&(_, o, _, _)| o).collect();
-    let first = stats.rows.first().map(|&(d, ..)| d).unwrap_or(0);
-    let last = stats.rows.last().map(|&(d, ..)| d).unwrap_or(0);
-    out.push_str(&format!(
-        "`{}`  (depth {}–{})\n\n",
-        sparkline(&counts),
-        first,
-        last,
-    ));
     const DEPTH_CAP: usize = 50;
     let dmax = counts.iter().copied().max().unwrap_or(0);
     let total = stats.rows.len();
