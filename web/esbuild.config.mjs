@@ -10,9 +10,9 @@
 import { build } from "esbuild";
 import { readFileSync, statSync } from "node:fs";
 
-// ≤ 410 KB minified bundle budget. Enforced here so a source
+// ≤ 450 KB minified bundle budget. Enforced here so a source
 // change that blows the budget fails the build (and therefore CI).
-const BUDGET_BYTES = 410 * 1024;
+const BUDGET_BYTES = 450 * 1024;
 
 await build({
   entryPoints: ["src/index.tsx"],

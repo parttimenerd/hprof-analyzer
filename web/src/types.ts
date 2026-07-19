@@ -457,6 +457,8 @@ export interface TopArrayRow {
   length: number;
   shallow: number;
   obj_index_1based: number;
+  // Primary incoming reference (`Class#field`). Absent when --collections off.
+  owner?: string;
 }
 
 export interface TopArrayClassRow {
@@ -519,6 +521,49 @@ export interface CollectionAttribution {
   truncated: boolean;
 }
 
+// Fields by Retained Size (Class#field): which holder field retains the most
+// memory summed over its pointees. Absent when --collections was off.
+export interface FieldBySizeRow {
+  holder_class: string;
+  field: string;
+  pointee_type: string;
+  total_retained: number;
+  pointees: number;
+  holder_instances: number;
+  elements?: number;
+  category?: string;
+}
+export interface FieldsBySize {
+  rows: FieldBySizeRow[];
+  truncated: boolean;
+}
+
+export interface ValueTypeShare { type_name: string; count: number; }
+
+export interface BiggestCollectionRow {
+  kind: string;
+  container_class: string;
+  elements: number;
+  capacity: number;
+  retained?: number;
+  owner?: string;
+  dominant_value_type?: string;
+  value_type_breakdown?: ValueTypeShare[];
+}
+export interface CollectionKindTable { kind: string; rows: BiggestCollectionRow[]; }
+export interface BiggestCollections {
+  combined: BiggestCollectionRow[];
+  by_kind: CollectionKindTable[];
+  truncated: boolean;
+}
+export interface CollectionContentsRow {
+  collection_class: string;
+  instances: number;
+  total_values: number;
+  top_value_types: ValueTypeShare[];
+}
+export interface CollectionContents { rows: CollectionContentsRow[]; truncated: boolean; }
+
 // One class row of a reference referent/only-weakly-retained histogram.
 export interface RefStatClassRow {
   pretty_class: string;
@@ -566,6 +611,10 @@ export interface Report {
   collections: CollectionsAnalysis;
   // container attribution (Class#field). Absent when --collections was off.
   collection_attribution?: CollectionAttribution;
+  // fields ranked by retained size (Class#field). Absent when --collections off.
+  fields_by_size?: FieldsBySize;
+  biggest_collections?: BiggestCollections;
+  collection_contents?: CollectionContents;
   // soft/weak/phantom reference referent analysis. Always-on.
   references: ReferencesAnalysis;
   // Scalar leak-pattern indicators. Always-on; zero fields omitted.

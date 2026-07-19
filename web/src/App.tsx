@@ -1,5 +1,5 @@
 import React from "react";
-import type { AllocSites, ArraysBySize, ClassRow, CollectionAttribution, CollectionsAnalysis, Component, DomTreeNode, DominatorAnalysis, FillRatioBucket, HistRow, LeakIndicators, MergedPathNode, ObjRow, PackageNode, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalObj, TopArrays, TopComponents, UnreachableClassRow } from "./types";
+import type { AllocSites, ArraysBySize, BiggestCollectionRow, BiggestCollections, ClassRow, CollectionAttribution, CollectionContents, CollectionsAnalysis, Component, DomTreeNode, DominatorAnalysis, FieldsBySize, FillRatioBucket, HistRow, LeakIndicators, MergedPathNode, ObjRow, PackageNode, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalObj, TopArrays, TopComponents, UnreachableClassRow } from "./types";
 import { fmtCount, fmtExactBytes, formatBytes, formatEpochMs, pctOf, shortLoader } from "./format";
 import {
   CompositionStackedBar,
@@ -91,6 +91,9 @@ function Nav({ report }: { report: Report }) {
   addData("arrays-by-size", "Arrays by Size");
   addData("collections", "Collections");
   if (report.collection_attribution) addData("container-attribution", "Container Attribution");
+  if (report.fields_by_size) addData("fields-by-size", "Fields by Size");
+  if (report.biggest_collections) addData("biggest-collections", "Biggest Collections");
+  if (report.collection_contents) addData("collection-contents", "Collection Contents");
   addData("references", "References");
   addData("unreachable-objects", "Unreachable Objects");
   if (report.alloc_sites) addData("alloc-sites", "Allocation Sites");
@@ -1844,6 +1847,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
   const topArraysBlock = (t: TopArrays | undefined, kind: string) => {
     const individual = t?.top_individual ?? [];
     const byClass = t?.top_by_class ?? [];
+    const hasOwner = individual.some((r) => r.owner != null);
     return (
       <>
         <h3>Top Arrays ({kind})</h3>
@@ -1859,6 +1863,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
                 <th>Array class</th>
                 <th className="num">Length</th>
                 <th className="num">Shallow</th>
+                {hasOwner && <th>Owner (Class#field)</th>}
               </tr>
             </thead>
             <tbody>
@@ -1867,6 +1872,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
                   <td><code>{r.array_class}</code></td>
                   <td className="num">{fmtCount(r.length)}</td>
                   <td className="num">{formatBytes(r.shallow)}</td>
+                  {hasOwner && <td>{r.owner ? <code>{r.owner}</code> : "—"}</td>}
                 </tr>
               ))}
             </tbody>
@@ -1875,6 +1881,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
                 <td className="num"><strong>Total</strong></td>
                 <td className="num"></td>
                 <td className="num"><strong>{formatBytes(individual.reduce((s, r) => s + r.shallow, 0))}</strong></td>
+                {hasOwner && <td></td>}
               </tr>
             </tfoot>
           </table>
@@ -2210,6 +2217,189 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
         <p className="subtitle">
           Attribution data was truncated (holder-edge or container-record cap hit); rankings are a
           bounded sample.
+        </p>
+      )}
+    </section>
+  );
+}
+
+function BiggestCollectionsSection({ data }: { data?: BiggestCollections }) {
+  if (!data) return null;
+  const renderTable = (rows: BiggestCollectionRow[], title: string) => {
+    if (rows.length === 0) return null;
+    const hasRetained = rows.some((r) => r.retained != null);
+    const hasOwner = rows.some((r) => r.owner != null);
+    const hasValue = rows.some((r) => r.dominant_value_type != null);
+    const totalElements = rows.reduce((s, r) => s + r.elements, 0);
+    const totalRetained = rows.reduce((s, r) => s + (r.retained ?? 0), 0);
+    return (
+      <>
+        <h3>{title}</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Kind</th>
+              <th>Container Class</th>
+              <th className="num">Elements</th>
+              {hasValue && <th>Value Type</th>}
+              {hasOwner && <th>Owner (Class#field)</th>}
+              {hasRetained && <th className="num">Retained</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i}>
+                <td>{r.kind}</td>
+                <td><code>{r.container_class}</code></td>
+                <td className="num">{fmtCount(r.elements)}</td>
+                {hasValue && <td>{r.dominant_value_type ? <code>{r.dominant_value_type}</code> : "—"}</td>}
+                {hasOwner && <td>{r.owner ? <code>{r.owner}</code> : "—"}</td>}
+                {hasRetained && <td className="num">{r.retained != null ? formatBytes(r.retained) : "—"}</td>}
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td className="num"><strong>Total</strong></td>
+              <td></td>
+              <td className="num"><strong>{fmtCount(totalElements)}</strong></td>
+              {hasValue && <td></td>}
+              {hasOwner && <td></td>}
+              {hasRetained && <td className="num"><strong>{formatBytes(totalRetained)}</strong></td>}
+            </tr>
+          </tfoot>
+        </table>
+      </>
+    );
+  };
+  return (
+    <section id="biggest-collections">
+      <h2>Biggest Collections</h2>
+      <p className="subtitle">
+        The largest individual collection instances. Owner is the primary incoming <code>Class#field</code>;
+        value type is the dominant runtime element type (<code>varies</code> when none dominates).
+        Owner/retained/value columns require <code>--collections</code>.
+      </p>
+      {renderTable(data.combined, "Combined")}
+      {data.by_kind.map((k) => renderTable(k.rows, `By Kind — ${k.kind}`))}
+      {data.truncated && (
+        <p className="subtitle">Collection value tally was truncated; ranking is a bounded sample.</p>
+      )}
+    </section>
+  );
+}
+
+function CollectionContentsSection({ data }: { data?: CollectionContents }) {
+  if (!data) return null;
+  const rows = data.rows ?? [];
+  return (
+    <section id="collection-contents">
+      <h2>Collection Contents by Type</h2>
+      <p className="subtitle">
+        What runtime element/value types your collections hold, aggregated per collection class.
+        Requires <code>--collections</code>.
+      </p>
+      {rows.length === 0 ? (
+        <p className="subtitle">None.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>Collection Class</th>
+              <th className="num">Instances</th>
+              <th className="num">Total Values</th>
+              <th>Top Value Types</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i}>
+                <td><code>{r.collection_class}</code></td>
+                <td className="num">{fmtCount(r.instances)}</td>
+                <td className="num">{fmtCount(r.total_values)}</td>
+                <td>
+                  {r.top_value_types.length === 0
+                    ? "—"
+                    : r.top_value_types.map((s, j) => (
+                        <span key={j}>
+                          {j > 0 ? ", " : ""}
+                          <code>{s.type_name}</code> ×{fmtCount(s.count)}
+                        </span>
+                      ))}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {data.truncated && (
+        <p className="subtitle">Truncated; a bounded sample of collection classes is shown.</p>
+      )}
+    </section>
+  );
+}
+
+// ── Fields by Retained Size (Class#field) ────────────────────────────────────
+// Which holder Class#field retains the most memory summed over its pointees.
+// Absent when --collections was off. Mirrors render_md.rs::render_fields_by_size
+// (HTML has no bar column).
+function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
+  if (!data) return null;
+  const rows = data.rows ?? [];
+  const totalRetained = rows.reduce((s, r) => s + r.total_retained, 0);
+  const totalPointees = rows.reduce((s, r) => s + r.pointees, 0);
+  return (
+    <section id="fields-by-size">
+      <h2>Fields by Retained Size (Class#field)</h2>
+      <p className="subtitle">
+        Which holder <code>Class#field</code> retains the most memory, summed over every object the
+        field points at. Runtime pointee type is the dominant concrete class reached through the
+        field (<code>varies</code> when no single type dominates).
+      </p>
+      {rows.length === 0 ? (
+        <p className="subtitle">None.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>Class#field</th>
+              <th>Runtime Pointee Type</th>
+              <th>Category</th>
+              <th className="num">Pointees</th>
+              <th className="num">Elements</th>
+              <th className="num">Holder Instances</th>
+              <th className="num">Retained</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i}>
+                <td><code>{r.holder_class}#{r.field}</code></td>
+                <td><code>{r.pointee_type}</code></td>
+                <td>{r.category ?? "—"}</td>
+                <td className="num">{fmtCount(r.pointees)}</td>
+                <td className="num">{r.elements != null ? fmtCount(r.elements) : "—"}</td>
+                <td className="num">{fmtCount(r.holder_instances)}</td>
+                <td className="num">{formatBytes(r.total_retained)}</td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td className="num"><strong>Total</strong></td>
+              <td></td>
+              <td></td>
+              <td className="num"><strong>{fmtCount(totalPointees)}</strong></td>
+              <td className="num"><strong>{fmtCount(rows.reduce((s,r)=>s+(r.elements??0),0))}</strong></td>
+              <td className="num"></td>
+              <td className="num"><strong>{formatBytes(totalRetained)}</strong></td>
+            </tr>
+          </tfoot>
+        </table>
+      )}
+      {data.truncated && (
+        <p className="subtitle">
+          Field grouping was truncated (group or pointee cap hit); ranking is a bounded sample.
         </p>
       )}
     </section>
@@ -2942,6 +3132,9 @@ export default function App({ report }: { report: Report }) {
       {report.collection_attribution && (
         <CollectionAttributionSection data={report.collection_attribution} />
       )}
+      {report.fields_by_size && <FieldsBySizeSection data={report.fields_by_size} />}
+      {report.biggest_collections && <BiggestCollectionsSection data={report.biggest_collections} />}
+      {report.collection_contents && <CollectionContentsSection data={report.collection_contents} />}
       <ReferencesSection data={report.references} />
       <UnreachableObjectsSection data={report.overview} />
       {report.alloc_sites && <AllocSitesSection data={report.alloc_sites} />}
