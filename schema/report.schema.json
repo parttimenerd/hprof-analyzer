@@ -23,11 +23,33 @@
         "zero_length_count": 0
       }
     },
+    "biggest_collections": {
+      "description": "Largest individual collection instances. Additive.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/BiggestCollections"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "collection_attribution": {
       "description": "Container attribution by holder `Class#field`, present only when\n`--collections` was passed; `None` otherwise. Additive; not parity-compared.",
       "anyOf": [
         {
           "$ref": "#/$defs/CollectionAttribution"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "collection_contents": {
+      "description": "Global per-collection-class value-type breakdown. Additive.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CollectionContents"
         },
         {
           "type": "null"
@@ -86,6 +108,17 @@
           "rows": []
         }
       }
+    },
+    "fields_by_size": {
+      "description": "Holder `Class#field` ranked by total retained size of their pointees,\npresent only when `--collections` was passed; `None` otherwise. Additive.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FieldsBySize"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "generated": {
       "type": "string"
@@ -324,6 +357,88 @@
         "rows"
       ]
     },
+    "BiggestCollectionRow": {
+      "description": "One individual collection instance in the \"biggest collections\" listing.\nBasics (kind/container_class/elements/capacity) are always present; the\nremaining fields are filled only under `--collections`. Additive.",
+      "type": "object",
+      "properties": {
+        "capacity": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "container_class": {
+          "type": "string"
+        },
+        "dominant_value_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "elements": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "kind": {
+          "type": "string"
+        },
+        "owner": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retained": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "value_type_breakdown": {
+          "description": "Top element/value runtime types by count (Level 2). Empty when\n`--collections` was off or no element types were tallied.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ValueTypeShare"
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "container_class",
+        "elements",
+        "capacity"
+      ]
+    },
+    "BiggestCollections": {
+      "description": "The largest individual collection instances: a combined ranking plus a\nper-kind breakdown. Present whenever collections were classified (basics\nalways; extra columns only under `--collections`). Additive.",
+      "type": "object",
+      "properties": {
+        "by_kind": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CollectionKindTable"
+          }
+        },
+        "combined": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BiggestCollectionRow"
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "combined",
+        "by_kind",
+        "truncated"
+      ]
+    },
     "CharArrayWaste": {
       "description": "Waste in char[]/byte[] arrays backing Strings. `top` sorted by\nwasted_bytes desc, capped. Additive.",
       "type": "object",
@@ -439,6 +554,56 @@
         "truncated"
       ]
     },
+    "CollectionContents": {
+      "description": "Global \"what's in your collections\" breakdown, one row per collection class.\nPresent only under `--collections`. Additive.",
+      "type": "object",
+      "properties": {
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CollectionContentsRow"
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "rows",
+        "truncated"
+      ]
+    },
+    "CollectionContentsRow": {
+      "description": "One collection *class* (e.g. `java.util.HashMap`) aggregated across all its\ninstances: instance count, total element/value slots, and the top runtime\nelement/value types globally. Additive.",
+      "type": "object",
+      "properties": {
+        "collection_class": {
+          "type": "string"
+        },
+        "instances": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "top_value_types": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ValueTypeShare"
+          }
+        },
+        "total_values": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "collection_class",
+        "instances",
+        "total_values",
+        "top_value_types"
+      ]
+    },
     "CollectionFillRatio": {
       "description": "How full collections are (size vs backing-array capacity). `tracked` =\ncollections actually sampled; `total` = all collections seen (tracked <=\ntotal when a cap was hit). Additive.",
       "type": "object",
@@ -515,6 +680,25 @@
       },
       "required": [
         "kinds"
+      ]
+    },
+    "CollectionKindTable": {
+      "description": "Biggest collections of one kind (e.g. all Maps), ranked. Additive.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BiggestCollectionRow"
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "rows"
       ]
     },
     "CollectionsAnalysis": {
@@ -1107,6 +1291,81 @@
         "total_elements",
         "total_retained",
         "container_count"
+      ]
+    },
+    "FieldBySizeRow": {
+      "description": "One holder `Class#field` (with declared field type) ranked by the total\nretained size of everything the field points at, summed over all live\nholder instances. Additive.",
+      "type": "object",
+      "properties": {
+        "category": {
+          "description": "Pointee category: `\"collection\"`, `\"array\"`, or `\"object\"`, derived from\nthe dominant runtime pointee type. Additive.",
+          "type": "string",
+          "default": ""
+        },
+        "elements": {
+          "description": "Total element count over container pointees of this field (`0` for\nnon-container fields). Additive.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
+        "field": {
+          "description": "Field name.",
+          "type": "string"
+        },
+        "holder_class": {
+          "description": "Pretty holder class name.",
+          "type": "string"
+        },
+        "holder_instances": {
+          "description": "Live-instance count of `holder_class` from the class histogram, or `0`.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "pointee_type": {
+          "description": "Runtime class of what the field points at (dominant type by retained\nsize). HPROF does not record declared reference-field types, so this is\nthe concrete pointee class; `varies` when the field points at multiple\ntypes and no single one dominates.",
+          "type": "string"
+        },
+        "pointees": {
+          "description": "Number of distinct pointees (non-null field slots) for this field.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "total_retained": {
+          "description": "Sum of retained size over distinct pointees of this `Class#field`.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "holder_class",
+        "field",
+        "pointee_type",
+        "total_retained",
+        "pointees",
+        "holder_instances"
+      ]
+    },
+    "FieldsBySize": {
+      "description": "`Class#field` holders ranked by total retained size of their pointees.\nPresent only when `--collections` was passed. Additive.",
+      "type": "object",
+      "properties": {
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FieldBySizeRow"
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "rows",
+        "truncated"
       ]
     },
     "FillRatioBucket": {
@@ -2599,6 +2858,14 @@
           "format": "uint64",
           "minimum": 0
         },
+        "owner": {
+          "description": "Primary incoming reference (`Class#field`) that points at this array,\nresolved from the `--collections` holder-edge scan. `None` when\n`--collections` was off or no field edge references it. Additive.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
         "shallow": {
           "type": "integer",
           "format": "uint64",
@@ -2763,6 +3030,26 @@
         "pretty_class",
         "objects",
         "shallow"
+      ]
+    },
+    "ValueTypeShare": {
+      "description": "One runtime-type share within a collection's element/value tally. Additive.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "description": "Number of element slots of this type in the group.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "type_name": {
+          "description": "Pretty runtime class name of the element/value.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type_name",
+        "count"
       ]
     }
   }

@@ -1391,8 +1391,11 @@ pub(crate) fn build_field_decode_views(
     // ── Collection value tallies: per-collection non-null element dense indices,
     // folded from the backing-array walk. Runtime element types resolved later
     // in build_model. Only present under --collections. ──────────────────────
-    let coll_values_raw: Option<Vec<CollValuesRaw>> =
-        if collect_attribution { Some(coll_values) } else { None };
+    let coll_values_raw: Option<Vec<CollValuesRaw>> = if collect_attribution {
+        Some(coll_values)
+    } else {
+        None
+    };
 
     // ── Assemble collection views ─────────────────────────────────────────────
     // Per-kind summary in fixed enum order (List,Map,Set,Deque,Queue,Tree),

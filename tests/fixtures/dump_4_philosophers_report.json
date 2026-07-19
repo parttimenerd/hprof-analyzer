@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "generated": "2026-07-16T15:43:12.967813000Z",
+  "generated": "2026-07-19T11:44:07.252700000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
     "file_path": "tests/fixtures/dump_4_philosophers.hprof",
@@ -89104,11 +89104,88 @@
     "constant_primitive_arrays": {
       "rows": [
         {
+          "array_class": "int[]",
+          "length": 131064,
+          "value": 0,
+          "objects": 1,
+          "shallow": 524272
+        },
+        {
+          "array_class": "int[]",
+          "length": 4902,
+          "value": 0,
+          "objects": 1,
+          "shallow": 19624
+        },
+        {
+          "array_class": "char[]",
+          "length": 8192,
+          "value": 0,
+          "objects": 1,
+          "shallow": 16400
+        },
+        {
+          "array_class": "byte[]",
+          "length": 8192,
+          "value": 0,
+          "objects": 1,
+          "shallow": 8208
+        },
+        {
+          "array_class": "int[]",
+          "length": 802,
+          "value": 0,
+          "objects": 1,
+          "shallow": 3224
+        },
+        {
+          "array_class": "int[]",
+          "length": 770,
+          "value": 0,
+          "objects": 1,
+          "shallow": 3096
+        },
+        {
+          "array_class": "int[]",
+          "length": 550,
+          "value": 0,
+          "objects": 1,
+          "shallow": 2216
+        },
+        {
+          "array_class": "long[]",
+          "length": 32,
+          "value": 0,
+          "objects": 4,
+          "shallow": 1088
+        },
+        {
           "array_class": "byte[]",
           "length": 2,
           "value": 49,
           "objects": 31,
           "shallow": 744
+        },
+        {
+          "array_class": "int[]",
+          "length": 32,
+          "value": 0,
+          "objects": 4,
+          "shallow": 576
+        },
+        {
+          "array_class": "byte[]",
+          "length": 256,
+          "value": 0,
+          "objects": 2,
+          "shallow": 544
+        },
+        {
+          "array_class": "byte[]",
+          "length": 512,
+          "value": 0,
+          "objects": 1,
+          "shallow": 528
         },
         {
           "array_class": "byte[]",
@@ -89123,6 +89200,20 @@
           "value": 0,
           "objects": 15,
           "shallow": 360
+        },
+        {
+          "array_class": "short[]",
+          "length": 32,
+          "value": 0,
+          "objects": 4,
+          "shallow": 320
+        },
+        {
+          "array_class": "int[]",
+          "length": 74,
+          "value": 0,
+          "objects": 1,
+          "shallow": 312
         },
         {
           "array_class": "int[]",
@@ -89140,24 +89231,17 @@
         },
         {
           "array_class": "int[]",
-          "length": 32,
+          "length": 48,
           "value": 0,
-          "objects": 4,
-          "shallow": 576
+          "objects": 1,
+          "shallow": 208
         },
         {
-          "array_class": "long[]",
-          "length": 32,
+          "array_class": "char[]",
+          "length": 26,
           "value": 0,
-          "objects": 4,
-          "shallow": 1088
-        },
-        {
-          "array_class": "short[]",
-          "length": 32,
-          "value": 0,
-          "objects": 4,
-          "shallow": 320
+          "objects": 2,
+          "shallow": 144
         },
         {
           "array_class": "int[]",
@@ -89165,6 +89249,55 @@
           "value": 0,
           "objects": 3,
           "shallow": 120
+        },
+        {
+          "array_class": "byte[]",
+          "length": 63,
+          "value": 48,
+          "objects": 1,
+          "shallow": 80
+        },
+        {
+          "array_class": "int[]",
+          "length": 16,
+          "value": -1881356936,
+          "objects": 1,
+          "shallow": 80
+        },
+        {
+          "array_class": "int[]",
+          "length": 16,
+          "value": -1881356440,
+          "objects": 1,
+          "shallow": 80
+        },
+        {
+          "array_class": "int[]",
+          "length": 16,
+          "value": -1881355944,
+          "objects": 1,
+          "shallow": 80
+        },
+        {
+          "array_class": "int[]",
+          "length": 16,
+          "value": -1881004352,
+          "objects": 1,
+          "shallow": 80
+        },
+        {
+          "array_class": "int[]",
+          "length": 16,
+          "value": 0,
+          "objects": 1,
+          "shallow": 80
+        },
+        {
+          "array_class": "int[]",
+          "length": 12,
+          "value": 0,
+          "objects": 1,
+          "shallow": 64
         },
         {
           "array_class": "byte[]",
@@ -89181,13 +89314,6 @@
           "shallow": 48
         },
         {
-          "array_class": "byte[]",
-          "length": 256,
-          "value": 0,
-          "objects": 2,
-          "shallow": 544
-        },
-        {
           "array_class": "char[]",
           "length": 2,
           "value": 83,
@@ -89195,11 +89321,32 @@
           "shallow": 48
         },
         {
-          "array_class": "char[]",
-          "length": 26,
+          "array_class": "int[]",
+          "length": 8,
           "value": 0,
-          "objects": 2,
-          "shallow": 144
+          "objects": 1,
+          "shallow": 48
+        },
+        {
+          "array_class": "byte[]",
+          "length": 10,
+          "value": 32,
+          "objects": 1,
+          "shallow": 32
+        },
+        {
+          "array_class": "byte[]",
+          "length": 13,
+          "value": 48,
+          "objects": 1,
+          "shallow": 32
+        },
+        {
+          "array_class": "byte[]",
+          "length": 16,
+          "value": 0,
+          "objects": 1,
+          "shallow": 32
         },
         {
           "array_class": "byte[]",
@@ -89398,158 +89545,11 @@
           "shallow": 24
         },
         {
-          "array_class": "byte[]",
-          "length": 10,
-          "value": 32,
-          "objects": 1,
-          "shallow": 32
-        },
-        {
-          "array_class": "byte[]",
-          "length": 13,
-          "value": 48,
-          "objects": 1,
-          "shallow": 32
-        },
-        {
-          "array_class": "byte[]",
-          "length": 16,
-          "value": 0,
-          "objects": 1,
-          "shallow": 32
-        },
-        {
-          "array_class": "byte[]",
-          "length": 63,
-          "value": 48,
-          "objects": 1,
-          "shallow": 80
-        },
-        {
-          "array_class": "byte[]",
-          "length": 512,
-          "value": 0,
-          "objects": 1,
-          "shallow": 528
-        },
-        {
-          "array_class": "byte[]",
-          "length": 8192,
-          "value": 0,
-          "objects": 1,
-          "shallow": 8208
-        },
-        {
           "array_class": "char[]",
           "length": 2,
           "value": 70,
           "objects": 1,
           "shallow": 24
-        },
-        {
-          "array_class": "char[]",
-          "length": 8192,
-          "value": 0,
-          "objects": 1,
-          "shallow": 16400
-        },
-        {
-          "array_class": "int[]",
-          "length": 8,
-          "value": 0,
-          "objects": 1,
-          "shallow": 48
-        },
-        {
-          "array_class": "int[]",
-          "length": 12,
-          "value": 0,
-          "objects": 1,
-          "shallow": 64
-        },
-        {
-          "array_class": "int[]",
-          "length": 16,
-          "value": -1881356936,
-          "objects": 1,
-          "shallow": 80
-        },
-        {
-          "array_class": "int[]",
-          "length": 16,
-          "value": -1881356440,
-          "objects": 1,
-          "shallow": 80
-        },
-        {
-          "array_class": "int[]",
-          "length": 16,
-          "value": -1881355944,
-          "objects": 1,
-          "shallow": 80
-        },
-        {
-          "array_class": "int[]",
-          "length": 16,
-          "value": -1881004352,
-          "objects": 1,
-          "shallow": 80
-        },
-        {
-          "array_class": "int[]",
-          "length": 16,
-          "value": 0,
-          "objects": 1,
-          "shallow": 80
-        },
-        {
-          "array_class": "int[]",
-          "length": 48,
-          "value": 0,
-          "objects": 1,
-          "shallow": 208
-        },
-        {
-          "array_class": "int[]",
-          "length": 74,
-          "value": 0,
-          "objects": 1,
-          "shallow": 312
-        },
-        {
-          "array_class": "int[]",
-          "length": 550,
-          "value": 0,
-          "objects": 1,
-          "shallow": 2216
-        },
-        {
-          "array_class": "int[]",
-          "length": 770,
-          "value": 0,
-          "objects": 1,
-          "shallow": 3096
-        },
-        {
-          "array_class": "int[]",
-          "length": 802,
-          "value": 0,
-          "objects": 1,
-          "shallow": 3224
-        },
-        {
-          "array_class": "int[]",
-          "length": 4902,
-          "value": 0,
-          "objects": 1,
-          "shallow": 19624
-        },
-        {
-          "array_class": "int[]",
-          "length": 131064,
-          "value": 0,
-          "objects": 1,
-          "shallow": 524272
         }
       ],
       "truncated": false
@@ -89560,61 +89560,71 @@
           "array_class": "int[]",
           "length": 131064,
           "shallow": 524272,
-          "obj_index_1based": 2
+          "obj_index_1based": 2,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 261187,
           "shallow": 261208,
-          "obj_index_1based": 99101
+          "obj_index_1based": 99101,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 238192,
           "shallow": 238208,
-          "obj_index_1based": 70491
+          "obj_index_1based": 70491,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 229980,
           "shallow": 230000,
-          "obj_index_1based": 73387
+          "obj_index_1based": 73387,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 144353,
           "shallow": 144376,
-          "obj_index_1based": 72656
+          "obj_index_1based": 72656,
+          "owner": null
         },
         {
           "array_class": "long[]",
           "length": 8192,
           "shallow": 65552,
-          "obj_index_1based": 72680
+          "obj_index_1based": 72680,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 60231,
           "shallow": 60248,
-          "obj_index_1based": 182193
+          "obj_index_1based": 182193,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 46187,
           "shallow": 46208,
-          "obj_index_1based": 99154
+          "obj_index_1based": 99154,
+          "owner": null
         },
         {
           "array_class": "int[]",
           "length": 8781,
           "shallow": 35144,
-          "obj_index_1based": 182113
+          "obj_index_1based": 182113,
+          "owner": null
         },
         {
           "array_class": "int[]",
           "length": 7863,
           "shallow": 31472,
-          "obj_index_1based": 76083
+          "obj_index_1based": 76083,
+          "owner": null
         }
       ],
       "top_by_class": [
@@ -89666,61 +89676,71 @@
           "array_class": "java.lang.Object[]",
           "length": 131072,
           "shallow": 524304,
-          "obj_index_1based": 1
+          "obj_index_1based": 1,
+          "owner": null
         },
         {
           "array_class": "java.lang.Object[]",
           "length": 7937,
           "shallow": 31768,
-          "obj_index_1based": 236822
+          "obj_index_1based": 236822,
+          "owner": null
         },
         {
           "array_class": "java.util.HashMap$Node[]",
           "length": 4096,
           "shallow": 16400,
-          "obj_index_1based": 39348
+          "obj_index_1based": 39348,
+          "owner": null
         },
         {
           "array_class": "java.util.HashMap$Node[]",
           "length": 4096,
           "shallow": 16400,
-          "obj_index_1based": 76135
+          "obj_index_1based": 76135,
+          "owner": null
         },
         {
           "array_class": "java.lang.Object[]",
           "length": 2285,
           "shallow": 9160,
-          "obj_index_1based": 70448
+          "obj_index_1based": 70448,
+          "owner": null
         },
         {
           "array_class": "java.lang.Object[]",
           "length": 2126,
           "shallow": 8520,
-          "obj_index_1based": 187292
+          "obj_index_1based": 187292,
+          "owner": null
         },
         {
           "array_class": "scala.math.BigInt[]",
           "length": 2049,
           "shallow": 8216,
-          "obj_index_1based": 74058
+          "obj_index_1based": 74058,
+          "owner": null
         },
         {
           "array_class": "scala.math.BigInt[]",
           "length": 2049,
           "shallow": 8216,
-          "obj_index_1based": 146904
+          "obj_index_1based": 146904,
+          "owner": null
         },
         {
           "array_class": "java.lang.Object[]",
           "length": 2048,
           "shallow": 8208,
-          "obj_index_1based": 91191
+          "obj_index_1based": 91191,
+          "owner": null
         },
         {
           "array_class": "java.util.concurrent.ConcurrentHashMap$Node[]",
           "length": 2048,
           "shallow": 8208,
-          "obj_index_1based": 240798
+          "obj_index_1based": 240798,
+          "owner": null
         }
       ],
       "top_by_class": [
