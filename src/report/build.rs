@@ -143,9 +143,13 @@ fn build_leak_indicators(g: &Graph) -> LeakIndicators {
 /// Pretty class-display name for object index `i`, matching the derivation used
 /// throughout the report (`build_dominator_analysis`'s `display_of`): resolve
 /// the object's class row and render it via `pretty_class_name`. Returns an
-/// empty string when the class row is out of range.
+/// empty string when the object index `i` or the resolved class row is out of
+/// range.
 fn class_display(g: &Graph, i: usize) -> String {
-    let ci = g.class_idx[i] as usize;
+    let Some(&raw_ci) = g.class_idx.get(i) else {
+        return String::new();
+    };
+    let ci = raw_ci as usize;
     if ci < g.class_names.len() {
         pretty_class_name(&g.class_names[ci])
     } else {
