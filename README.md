@@ -105,6 +105,10 @@ it, and put `hprof-analyzer` on your `PATH`. Prebuilt targets: Linux x86_64
 
 **With Cargo.** The crate is Rust **edition 2024**, so it needs **Rust 1.85 or
 newer**; a current stable toolchain is recommended (CI builds on `stable`).
+Building from source (Cargo or `git clone`) also needs **Node.js/npm** on your
+`PATH` — `build.rs` bundles the HTML report's JavaScript with esbuild at
+compile time (see [Building and testing](#building-and-testing)). If you'd
+rather skip the Node toolchain, use a prebuilt release binary above.
 Install [rustup](https://rustup.rs/) and run `rustup update stable` if your
 toolchain is older, then:
 
@@ -138,16 +142,20 @@ CI (`.github/workflows/ci.yml`) runs the same `fmt`, `clippy -D warnings`, and
 `tests/fixtures/` (checked in alongside the tests).
 
 The self-contained HTML report embeds a small React bundle
-(`web/dist/bundle.js`). A prebuilt bundle is committed, so a plain
-`cargo build` needs no Node.js. When you change the web sources under `web/src/`,
-rebuild the bundle before it is picked up:
+(`web/dist/bundle.js`). This bundle is a generated artifact — it is
+**git-ignored, not committed** — so building the crate requires **Node.js/npm**
+on your `PATH`: `build.rs` runs esbuild to produce the bundle before the crate
+compiles, and fails with a clear error if `node`/`npm` are missing. When you
+change the web sources under `web/src/`, `build.rs` re-bundles automatically on
+the next `cargo build`; you can also rebuild it by hand:
 
 ```sh
-cd web && npm install && npm run build   # regenerates web/dist/bundle.js (needs Node.js)
+cd web && npm install && npm run build   # regenerates web/dist/bundle.js
 ```
 
-`build.rs` regenerates the bundle automatically when `web/package.json` and Node
-are present; otherwise it falls back to the committed bundle.
+If you only need the binary and want to avoid the Node toolchain, download a
+prebuilt release binary instead (see [Install](#install)) — the releases ship
+with the bundle already embedded.
 
 ## Usage
 

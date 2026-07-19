@@ -542,15 +542,90 @@ fn analyze_error_hint(input: &str, e: &io::Error) -> String {
              re-render it)"
         );
     }
+    // A genuine dump (HPROF magic present) that hits EOF mid-record is almost
+    // always a truncated or partially-copied file — the terse reader message
+    // ("eof in read_into" / "eof in skip") gives no hint of that. Say so.
+    if e.kind() == io::ErrorKind::UnexpectedEof && looks_like_hprof(input) {
+        return format!(
+            "{msg}\n(hint: '{input}' appears truncated or corrupt — the parser \
+             hit end of file mid-record; re-copy the .hprof dump and retry)"
+        );
+    }
     msg
 }
 
-/// Turn a `render` error into an actionable message.
+/// Turn a `render` error into an actionable message. The most common mistake is
+/// feeding the re-render path a *rendered* report (HTML/Markdown) instead of the
+/// canonical `.json` it was rendered from; serde then fails with a bare
+/// "invalid report JSON" that gives no clue what the file actually is. Sniff the
+/// first non-whitespace bytes and name the likely format so the fix is obvious.
 fn render_error_hint(input: &str, e: &io::Error) -> String {
     if e.kind() == io::ErrorKind::NotFound {
         return format!("cannot open '{input}': no such file or directory");
     }
-    e.to_string()
+    let msg = e.to_string();
+    if msg.starts_with("invalid report JSON") && input != "-" {
+        match sniff_report_kind(input) {
+            Some("html") => {
+                return format!(
+                    "{msg}\n(hint: '{input}' looks like a rendered HTML report; \
+                     re-render from the saved report JSON (.json/.json.gz), not \
+                     the .html)"
+                );
+            }
+            Some("markdown") => {
+                return format!(
+                    "{msg}\n(hint: '{input}' looks like a rendered Markdown report; \
+                     re-render from the saved report JSON (.json/.json.gz))"
+                );
+            }
+            _ => {
+                return format!(
+                    "{msg}\n(hint: expected a saved report JSON (.json/.json.gz); \
+                     analyze a .hprof dump to produce one)"
+                );
+            }
+        }
+    }
+    msg
+}
+
+/// Peek at the first non-whitespace bytes of `path` (transparently gunzipping a
+/// gzip-magic prefix) to guess whether a non-JSON re-render input is a rendered
+/// HTML report (`<`), a Markdown report (`#`/`|`), or unknown. Best-effort: any
+/// read error yields `None`, and the caller falls back to a generic hint.
+fn sniff_report_kind(path: &str) -> Option<&'static str> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut head = [0u8; 512];
+    let n = f.read(&mut head).ok()?;
+    let head = &head[..n];
+    // Transparently sniff through a gzip prefix so `.md.gz` / `.html.gz` are
+    // classified too (matches how render_report gunzips its input).
+    let decoded;
+    let bytes: &[u8] = if head.starts_with(&[0x1f, 0x8b]) {
+        let mut d = flate2::read::GzDecoder::new(head);
+        let mut buf = Vec::new();
+        // A short read is fine; we only need the leading bytes.
+        let _ = d.read_to_end(&mut buf);
+        if buf.is_empty() {
+            return None;
+        }
+        decoded = buf;
+        &decoded
+    } else {
+        head
+    };
+    let s = String::from_utf8_lossy(bytes);
+    let t = s.trim_start();
+    let lower = t.to_ascii_lowercase();
+    if t.starts_with('<') || lower.contains("<!doctype") || lower.contains("<html") {
+        return Some("html");
+    }
+    if t.starts_with('#') || t.starts_with('|') {
+        return Some("markdown");
+    }
+    None
 }
 
 /// True when the file at `path` begins with the HPROF magic (`JAVA PROFILE`).
@@ -706,17 +781,21 @@ fn run(
     // shallow_c/class_idx_c hold the blobs, g.shallow/g.class_idx are empty.
     log(verbose, "compress-cold", t.elapsed().as_secs_f64());
 
+    crate::trace::probe("main: after compress_id_map (before rpo_dfs)");
     let t = Instant::now();
     progress::phase("ordering objects (reverse post-order)");
     let rpo = rpo_dfs::rpo_dfs(g.n, &g.gc_root_indices, &g.fwd_offsets, &g.fwd_targets);
+    crate::trace::probe("main: after rpo_dfs (before compress parent_pre)");
     log(verbose, "rpo", t.elapsed().as_secs_f64());
+
+    crate::trace::trim();
 
     // Compress parent_pre (~2 GB dense) between RPO and inbound to reduce
     // the peak during the transpose loop. parent_pre is not needed until
     // compute_dominators; holding it compressed saves ~1.5 GB at inb_flat alloc
     // and at the transpose peak. Decompressed just before compute_dominators.
     let mut rpo = rpo;
-    let parent_pre_count = rpo.parent_pre.len(); // count needed for rebuild_vertex
+    let parent_pre_count = rpo.parent_pre.len();
     let parent_pre_c = if compress != cvec::Codec::None {
         let c = cvec::CompressedU32::compress(&rpo.parent_pre, compress)?;
         rpo.parent_pre = Vec::new();
@@ -734,10 +813,8 @@ fn run(
     // coexists with the large inb_flat intermediate.
     let t = Instant::now();
     progress::phase("building inbound references");
-    // Move fwd_offsets and fwd_targets into build_from_fwd so they can be freed
-    // INSIDE the call, before Phase 4 allocates inb_data — reducing the peak
-    // from (fwd_offsets + fwd_targets + inb_flat + inb_data coexist) to just
-    // (inb_flat + inb_data coexist). g.fwd_offsets/fwd_targets are empty after.
+    // fwd_offsets and fwd_targets are moved into build_from_fwd so they can be
+    // freed INSIDE the call, before Phase 4 allocates inb_data.
     let (inb_block_off, inb_data) = inbound.build_from_fwd(
         std::mem::take(&mut g.fwd_offsets),
         std::mem::take(&mut g.fwd_targets),
@@ -745,8 +822,6 @@ fn run(
     )?;
     log(verbose, "inbound", t.elapsed().as_secs_f64());
 
-    // fwd_offsets and fwd_targets were moved into build_from_fwd and freed
-    // there (before Phase 4) — g.fwd_offsets/fwd_targets are already empty.
     crate::trace::trim();
 
     // Rebuild vertex: dfn is still live and the inbound encode has returned,

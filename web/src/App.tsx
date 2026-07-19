@@ -2242,6 +2242,13 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
           </tr>
         ))}
       </tbody>
+      <tfoot>
+        <tr>
+          <td className="num"><strong>Total</strong></td>
+          <td className="num"><strong>{fmtCount(rows.reduce((s, r) => s + r.objects, 0))}</strong></td>
+          <td className="num"><strong>{formatBytes(rows.reduce((s, r) => s + r.shallow, 0))}</strong></td>
+        </tr>
+      </tfoot>
     </table>
   );
 
@@ -2470,6 +2477,14 @@ function AllocSitesSection({ data }: { data: AllocSites }) {
               </tr>
             ))}
           </tbody>
+          <tfoot>
+            <tr>
+              <td className="num"><strong>Total</strong></td>
+              <td className="num"><strong>{fmtCount(data.sites.reduce((s, r) => s + r.object_count, 0))}</strong></td>
+              <td className="num"><strong>{formatBytes(data.sites.reduce((s, r) => s + r.shallow_total, 0))}</strong></td>
+              <td className="num"><strong>{formatBytes(data.sites.reduce((s, r) => s + r.retained_total, 0))}</strong></td>
+            </tr>
+          </tfoot>
         </table>
       )}
     </section>
@@ -2477,8 +2492,6 @@ function AllocSitesSection({ data }: { data: AllocSites }) {
 }
 
 // ── Retention Concentration ─────────────────────────────────────────────────
-// How much of the heap the few biggest top-level dominators hold. Mirrors
-// render_md.rs::render_retention_concentration.
 function RetentionConcentrationSection({ report }: { report: Report }) {
   const rc = report.overview.retention_concentration;
   if (!rc || (rc.top1_bp === 0 && rc.top10_bp === 0 && rc.top100_bp === 0 && rc.num_objects_ge_1pct === 0)) {

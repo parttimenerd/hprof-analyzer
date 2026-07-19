@@ -51,6 +51,21 @@ mod tests {
     }
 
     #[test]
+    fn test_escape_string_cell_strips_control_bytes() {
+        // Decoded heap Strings can hold arbitrary bytes; the Markdown cell must
+        // never emit raw C0/DEL control chars (they turn the report into a
+        // "binary file" that corrupts terminals and breaks grep/diff).
+        let got = escape_string_cell("a\u{0}b\u{1b}c\u{7f}d");
+        assert!(
+            !got.chars().any(|c| (c as u32) < 0x20 || c as u32 == 0x7f),
+            "control chars must not survive: {got:?}"
+        );
+        assert_eq!(got, "a\u{fffd}b\u{fffd}c\u{fffd}d");
+        // Existing escapes still apply.
+        assert_eq!(escape_string_cell("a|b`c\nd"), "a\\|b'c d");
+    }
+
+    #[test]
     fn test_pretty_class_name() {
         assert_eq!(pretty_class_name("java/lang/String"), "java.lang.String");
         assert_eq!(pretty_class_name("[I"), "int[]");

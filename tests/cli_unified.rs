@@ -206,3 +206,98 @@ fn bare_path_hprof_gz_analyzes() {
         "gz analyze missing System Overview"
     );
 }
+
+/// Feeding a rendered HTML report to the re-render path fails with a typed hint
+/// naming HTML, not a bare "invalid report JSON" (Bug 2).
+#[test]
+fn rerender_html_input_hints_html() {
+    let Some(hprof) = philosophers() else { return };
+    let tmp = std::env::temp_dir().join(format!("hprof_cli_{}.html", std::process::id()));
+    let setup = Command::new(BIN)
+        .arg(&hprof)
+        .arg(&tmp)
+        .args(["--format", "html"])
+        .output()
+        .unwrap();
+    assert!(
+        setup.status.success(),
+        "setup analyze→html failed: {}",
+        String::from_utf8_lossy(&setup.stderr)
+    );
+
+    let out = Command::new(BIN).arg(&tmp).output().unwrap();
+    let _ = std::fs::remove_file(&tmp);
+    assert!(!out.status.success(), "HTML re-render input should fail");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("rendered HTML report"),
+        "missing HTML re-render hint, got: {err}"
+    );
+}
+
+/// Feeding a gzip-compressed rendered Markdown report to the re-render path
+/// fails with a Markdown hint (sniffed through the gzip prefix) (Bug 2).
+#[test]
+fn rerender_gz_markdown_input_hints_markdown() {
+    let Some(hprof) = philosophers() else { return };
+    let tmp = std::env::temp_dir().join(format!("hprof_cli_{}.md.gz", std::process::id()));
+    let setup = Command::new(BIN).arg(&hprof).arg(&tmp).output().unwrap();
+    assert!(
+        setup.status.success(),
+        "setup analyze→md.gz failed: {}",
+        String::from_utf8_lossy(&setup.stderr)
+    );
+
+    let out = Command::new(BIN).arg(&tmp).output().unwrap();
+    let _ = std::fs::remove_file(&tmp);
+    assert!(!out.status.success(), "gz-md re-render input should fail");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("rendered Markdown report"),
+        "missing Markdown re-render hint, got: {err}"
+    );
+}
+
+/// A truncated `.hprof` dump (valid magic, cut mid-record) fails with a
+/// "truncated or corrupt" hint rather than a bare "eof in read_into" (Bug 3).
+#[test]
+fn truncated_dump_hints_corrupt() {
+    let Some(hprof) = philosophers() else { return };
+    let raw = std::fs::read(&hprof).unwrap();
+    assert!(raw.len() > 5000, "fixture unexpectedly small");
+    let tmp = std::env::temp_dir().join(format!("hprof_trunc_{}.hprof", std::process::id()));
+    std::fs::write(&tmp, &raw[..5000]).unwrap();
+
+    let out = Command::new(BIN).arg(&tmp).output().unwrap();
+    let _ = std::fs::remove_file(&tmp);
+    assert!(!out.status.success(), "truncated dump should fail");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("truncated or corrupt"),
+        "missing truncated-dump hint, got: {err}"
+    );
+}
+
+/// `--dup-strings` Markdown output must be valid text, never leaking raw control
+/// bytes from decoded String values that would make it a "binary file" (Bug 1).
+#[test]
+fn dup_strings_markdown_has_no_control_bytes() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg(&hprof)
+        .arg("--dup-strings")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "dup-strings analyze failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // No C0 controls (except \t \n \r) and no DEL in the raw output bytes.
+    let bad = out
+        .stdout
+        .iter()
+        .filter(|&&b| (b < 0x20 && b != b'\t' && b != b'\n' && b != b'\r') || b == 0x7f)
+        .count();
+    assert_eq!(bad, 0, "dup-strings Markdown leaked {bad} control byte(s)");
+}

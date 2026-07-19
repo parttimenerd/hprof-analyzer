@@ -31,12 +31,23 @@ pub(crate) fn gc_root_type_label(ty: u8) -> &'static str {
 }
 
 /// Escape a decoded String value for a one-line Markdown table code-span cell:
-/// collapse newlines/tabs to spaces, escape table pipes, and replace backticks
-/// (which would break the surrounding code-span) with single quotes.
+/// collapse newlines/tabs to spaces, escape table pipes, replace backticks
+/// (which would break the surrounding code-span) with single quotes, and map
+/// any remaining control character (C0 range and DEL) to the Unicode
+/// replacement char `U+FFFD`. Decoded heap Strings can hold arbitrary bytes;
+/// without this the Markdown report turns into a "binary file" that corrupts
+/// terminals and defeats `grep`/`diff` (HTML/JSON sanitize on their own paths).
 pub(crate) fn escape_string_cell(s: &str) -> String {
-    s.replace(['\n', '\r', '\t'], " ")
+    s.chars()
+        .map(|c| match c {
+            '\n' | '\r' | '\t' => ' ',
+            '`' => '\'',
+            // Remaining C0 controls and DEL become the replacement char.
+            c if (c as u32) < 0x20 || c as u32 == 0x7f => '\u{fffd}',
+            c => c,
+        })
+        .collect::<String>()
         .replace('|', "\\|")
-        .replace('`', "'")
 }
 /// a single `[` followed by one primitive type char. These are boot-loaded
 /// (single loader), so exact-name duplicate rows can be folded safely.

@@ -655,7 +655,19 @@ impl Pass2 {
         if compress != crate::cvec::Codec::None {
             shallow = Vec::new();
         }
-        crate::trace::probe("pass2: after compress-cold shallow (before fwd_targets)");
+        // Compress in_degree (~2GB raw counts) before fwd_targets alloc.
+        // in_degree is completely idle during the fwd fill; compressing it here
+        // drops ~1.8 GB from the fwd-fill peak. Restored after the fwd fill for
+        // the prefix-sum that builds in_cursors. Delta + zstd is very effective
+        // on monotonically-constrained data (counts of edges per node).
+        let in_degree_c = if compress != crate::cvec::Codec::None {
+            let c = crate::cvec::CompressedU32::compress(&in_degree, compress)?;
+            in_degree = Vec::new();
+            Some(c)
+        } else {
+            None
+        };
+        crate::trace::probe("pass2: after compress-cold shallow+in_degree (before fwd_targets)");
 
         // ── Phase 3b: Build forward CSR ──────────────────────────────────
         // The forward fill runs FIRST (inside build); the inbound CSR is
@@ -719,6 +731,11 @@ impl Pass2 {
             fwd_offsets[i] = fwd_offsets[i - 1];
         }
         fwd_offsets[0] = 0;
+
+        // Restore in_degree from compressed blob (if compressed above).
+        if let Some(c) = in_degree_c {
+            in_degree = c.restore()?;
+        }
 
         // Prefix-sum in_degree counts → START cursors for the deferred inbound
         // build. in_degree[i] becomes node i's inbound slice START; total_inb

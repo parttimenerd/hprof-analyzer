@@ -435,7 +435,7 @@ impl InboundBuilder {
     ) -> io::Result<(Vec<u64>, Vec<u8>)> {
         let InboundBuilder {
             n,
-            mut in_cursors,
+            in_cursors,
             total_inb,
             synthetic_edges: _,
             // The rest are only needed by the file-scan path; drop them early to
@@ -452,7 +452,6 @@ impl InboundBuilder {
         drop(class_addr_to_hist);
         drop(field_plans_dense);
 
-        // Allocate the flat inbound array.
         let mut inb_flat = crate::chunkvec::ChunkU32::zeroed(total_inb as usize);
         if crate::trace::enabled() {
             eprintln!(
@@ -462,6 +461,8 @@ impl InboundBuilder {
             );
         }
         crate::trace::probe("inbound fwd-transpose: after inb_flat alloc");
+
+        let mut in_cursors = in_cursors;
 
         // Transpose the forward CSR: for each src and each of its fwd targets
         // dst, write src into inb_flat at in_cursors[dst] and advance the cursor.
@@ -546,6 +547,7 @@ impl InboundBuilder {
             mut in_cursors,
             total_inb,
             synthetic_edges,
+            ..
         } = self;
 
         // Reconstruct the id_map: either it was left live (Codec::None) or it

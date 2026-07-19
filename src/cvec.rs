@@ -45,8 +45,26 @@ fn deflate_decompress(blob: &[u8], cap: usize) -> io::Result<Vec<u8>> {
     Ok(out)
 }
 
-fn zstd_compress(raw: &[u8]) -> io::Result<Vec<u8>> {
-    zstd::encode_all(raw, 3).map_err(io::Error::other)
+/// Compress a `&[u32]` slice to zstd without materializing a full-size byte copy.
+/// On little-endian targets (x86_64, aarch64) the u32 memory layout is already
+/// LE bytes, so we reinterpret the slice directly. On big-endian targets we fall
+/// back to an explicit byte copy (rare in practice; correctness preserved).
+fn zstd_compress_u32(v: &[u32]) -> io::Result<Vec<u8>> {
+    #[cfg(target_endian = "little")]
+    {
+        // SAFETY: [u32] and [u8] have no padding or provenance constraints;
+        // reinterpreting u32 memory as bytes is always well-defined.
+        let bytes = unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, v.len() * 4) };
+        zstd::encode_all(bytes, 3).map_err(io::Error::other)
+    }
+    #[cfg(not(target_endian = "little"))]
+    {
+        let mut bytes = Vec::with_capacity(v.len() * 4);
+        for &x in v {
+            bytes.extend_from_slice(&x.to_le_bytes());
+        }
+        zstd::encode_all(&bytes, 3).map_err(io::Error::other)
+    }
 }
 
 fn zstd_decompress(blob: &[u8], cap: usize) -> io::Result<Vec<u8>> {
@@ -81,13 +99,15 @@ impl CompressedU32 {
                 len,
             }),
             Codec::Deflate9 | Codec::Zstd3 => {
-                let mut bytes = Vec::with_capacity(len * 4);
-                for &x in v {
-                    bytes.extend_from_slice(&x.to_le_bytes());
-                }
                 let blob = if codec == Codec::Zstd3 {
-                    zstd_compress(&bytes)?
+                    // Avoid materializing a full-size byte copy by reinterpreting
+                    // the u32 slice as bytes directly (LE-native on x86_64/aarch64).
+                    zstd_compress_u32(v)?
                 } else {
+                    let mut bytes = Vec::with_capacity(len * 4);
+                    for &x in v {
+                        bytes.extend_from_slice(&x.to_le_bytes());
+                    }
                     deflate_compress(&bytes)?
                 };
                 Ok(Self {

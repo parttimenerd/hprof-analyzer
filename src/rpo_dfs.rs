@@ -61,6 +61,7 @@ pub fn rpo_dfs(
     let mut parent_pre: Vec<u32> = Vec::with_capacity(n + 1);
     let mut dfn = vec![u32::MAX; n + 1];
     let mut dfs_count: u32 = 0;
+    crate::trace::probe("rpo_dfs: after dfn+parent_pre alloc (before DFS loop)");
 
     // Explicit stacks: parallel arrays (node, child_cursor)
     let mut node_stack: Vec<u32> = Vec::with_capacity(1024);

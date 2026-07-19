@@ -1488,11 +1488,20 @@ pub(crate) fn render_arrays_by_size(a: &ArraysBySize, graphs: bool, out: &mut St
             }
             t.row(row);
         }
+        let total_objects: u64 = buckets.iter().map(|b| b.objects).sum();
+        let total_shallow: u64 = buckets.iter().map(|b| b.shallow).sum();
+        let mut total_row = vec![
+            "**Total**".to_string(),
+            format!("**{}**", fmt_count(total_objects)),
+            format!("**{}**", format_bytes(total_shallow)),
+        ];
+        if graphs {
+            total_row.push(String::new());
+        }
+        t.row(total_row);
         t.render(out);
         out.push('\n');
     };
-
-    render_table("Object arrays", &a.obj_array_buckets, out);
     render_table("Primitive arrays", &a.prim_array_buckets, out);
     out.push_str(&format!(
         "Zero-length arrays: {}\n\n",
@@ -1506,7 +1515,11 @@ pub(crate) fn render_arrays_by_size(a: &ArraysBySize, graphs: bool, out: &mut St
 fn fill_ratio_label(b: &FillRatioBucket) -> String {
     let lo = b.lower_ratio_bp as f64 / 100.0;
     let hi = b.upper_ratio_bp as f64 / 100.0;
-    format!("{lo:.0}–{hi:.0}%")
+    if b.lower_ratio_bp == b.upper_ratio_bp {
+        format!("{lo:.0}% (full)")
+    } else {
+        format!("{lo:.0}–{hi:.0}%")
+    }
 }
 
 /// Render the always-on "Collections" section: five collection/array sub-views
@@ -1558,6 +1571,21 @@ fn render_fill_ratio_table(
         }
         t.row(row);
     }
+    let total_objects: u64 = buckets.iter().map(|b| b.objects).sum();
+    let total_shallow: u64 = buckets.iter().map(|b| b.shallow).sum();
+    let mut total_row = vec![
+        "**Total**".to_string(),
+        format!("**{}**", fmt_count(total_objects)),
+        format!("**{}**", format_bytes(total_shallow)),
+    ];
+    if with_wasted {
+        let total_wasted: u64 = buckets.iter().map(|b| b.wasted).sum();
+        total_row.push(format!("**{}**", format_bytes(total_wasted)));
+    }
+    if graphs {
+        total_row.push(String::new());
+    }
+    t.row(total_row);
     t.render(out);
     out.push('\n');
 }
@@ -1618,11 +1646,23 @@ pub(crate) fn render_collections(c: &CollectionsAnalysis, graphs: bool, out: &mu
             }
             t.row(row);
         }
+        let total_count: u64 = c.kind_summary.kinds.iter().map(|s| s.count).sum();
+        let total_elements: u64 = c.kind_summary.kinds.iter().map(|s| s.total_elements).sum();
+        let total_shallow: u64 = c.kind_summary.kinds.iter().map(|s| s.total_shallow).sum();
+        let mut total_row = vec![
+            "**Total**".to_string(),
+            format!("**{}**", fmt_count(total_count)),
+            format!("**{}**", fmt_count(total_elements)),
+            String::new(),
+            format!("**{}**", format_bytes(total_shallow)),
+        ];
+        if graphs {
+            total_row.push(String::new());
+        }
+        t.row(total_row);
         t.render(out);
         out.push('\n');
     }
-
-    // ── Collection Fill Ratio ────────────────────────────────────────────────
     out.push_str("### Collection Fill Ratio\n\n");
     out.push_str(&format!(
         "_{} tracked of {} collections._\n\n",
@@ -1673,11 +1713,30 @@ pub(crate) fn render_collections(c: &CollectionsAnalysis, graphs: bool, out: &mu
             }
             t.row(row);
         }
+        let total_objects: u64 = c
+            .collections_by_size
+            .buckets
+            .iter()
+            .map(|b| b.objects)
+            .sum();
+        let total_shallow: u64 = c
+            .collections_by_size
+            .buckets
+            .iter()
+            .map(|b| b.shallow)
+            .sum();
+        let mut total_row = vec![
+            "**Total**".to_string(),
+            format!("**{}**", fmt_count(total_objects)),
+            format!("**{}**", format_bytes(total_shallow)),
+        ];
+        if graphs {
+            total_row.push(String::new());
+        }
+        t.row(total_row);
         t.render(out);
         out.push('\n');
     }
-
-    // ── Array Fill Ratio ─────────────────────────────────────────────────────
     out.push_str("### Array Fill Ratio\n\n");
     out.push_str(&format!(
         "_{} tracked object arrays._\n\n",
@@ -1801,6 +1860,16 @@ fn render_top_arrays(t: &TopArrays, kind: &str, graphs: bool, out: &mut String) 
             }
             tbl.row(row);
         }
+        let total_shallow: u64 = t.top_individual.iter().map(|r| r.shallow).sum();
+        let mut total_row = vec![
+            "**Total**".to_string(),
+            String::new(),
+            format!("**{}**", format_bytes(total_shallow)),
+        ];
+        if graphs {
+            total_row.push(String::new());
+        }
+        tbl.row(total_row);
         tbl.render(out);
         out.push('\n');
     }
@@ -1829,6 +1898,17 @@ fn render_top_arrays(t: &TopArrays, kind: &str, graphs: bool, out: &mut String) 
             }
             tbl.row(row);
         }
+        let total_instances: u64 = t.top_by_class.iter().map(|r| r.objects).sum();
+        let total_shallow: u64 = t.top_by_class.iter().map(|r| r.shallow).sum();
+        let mut total_row = vec![
+            "**Total**".to_string(),
+            format!("**{}**", fmt_count(total_instances)),
+            format!("**{}**", format_bytes(total_shallow)),
+        ];
+        if graphs {
+            total_row.push(String::new());
+        }
+        tbl.row(total_row);
         tbl.render(out);
         out.push('\n');
     }
@@ -2112,6 +2192,14 @@ pub(crate) fn render_dominator_analysis(d: &DominatorAnalysis, graphs: bool, out
             headers.push("");
             aligns.push(Align::Left);
         }
+        let total_retained: u64 = d.big_drops.rows.iter().map(|r| r.retained).sum();
+        let total_child_ret: u64 = d
+            .big_drops
+            .rows
+            .iter()
+            .map(|r| r.largest_child_retained)
+            .sum();
+        let total_drop: u64 = d.big_drops.rows.iter().map(|r| r.drop_bytes).sum();
         let mut t = Table::new(&headers, &aligns);
         for r in &d.big_drops.rows {
             let child = if r.largest_child_class.is_empty() {
@@ -2131,6 +2219,17 @@ pub(crate) fn render_dominator_analysis(d: &DominatorAnalysis, graphs: bool, out
             }
             t.row(row);
         }
+        let mut total_row = vec![
+            "**Total**".to_string(),
+            format!("**{}**", format_bytes(total_retained)),
+            String::new(),
+            format!("**{}**", format_bytes(total_child_ret)),
+            format!("**{}**", format_bytes(total_drop)),
+        ];
+        if graphs {
+            total_row.push(String::new());
+        }
+        t.row(total_row);
         t.render(out);
         out.push('\n');
     }
@@ -2169,6 +2268,30 @@ pub(crate) fn render_dominator_analysis(d: &DominatorAnalysis, graphs: bool, out
             headers.push("");
             aligns.push(Align::Left);
         }
+        let total_dom_count: u64 = d
+            .immediate_dominators
+            .rows
+            .iter()
+            .map(|r| r.dominator_count)
+            .sum();
+        let total_dmd_count: u64 = d
+            .immediate_dominators
+            .rows
+            .iter()
+            .map(|r| r.dominated_count)
+            .sum();
+        let total_dom_shallow: u64 = d
+            .immediate_dominators
+            .rows
+            .iter()
+            .map(|r| r.dominator_shallow)
+            .sum();
+        let total_dmd_shallow: u64 = d
+            .immediate_dominators
+            .rows
+            .iter()
+            .map(|r| r.dominated_shallow)
+            .sum();
         let mut t = Table::new(&headers, &aligns);
         for r in &d.immediate_dominators.rows {
             let mut row = vec![
@@ -2187,6 +2310,17 @@ pub(crate) fn render_dominator_analysis(d: &DominatorAnalysis, graphs: bool, out
             }
             t.row(row);
         }
+        let mut total_row = vec![
+            "**Total**".to_string(),
+            format!("**{}**", fmt_count(total_dom_count)),
+            format!("**{}**", fmt_count(total_dmd_count)),
+            format!("**{}**", format_bytes(total_dom_shallow)),
+            format!("**{}**", format_bytes(total_dmd_shallow)),
+        ];
+        if graphs {
+            total_row.push(String::new());
+        }
+        t.row(total_row);
         t.render(out);
         out.push('\n');
     }
