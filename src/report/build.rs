@@ -977,6 +977,14 @@ impl<'g> AllocAgg<'g> {
         if serial == 0 {
             return;
         }
+        // Guard against a blob/graph length mismatch: `i` tracks the number of
+        // serials streamed in, which must equal the object count. If a corrupt
+        // or mismatched alloc-serial blob decodes to more entries than the
+        // graph has objects, index directly would panic; skip the overrun
+        // instead so aggregation degrades gracefully rather than crashing.
+        if i >= self.g.shallow.len() {
+            return;
+        }
         let e = self.agg.entry(serial).or_insert((0, 0, 0));
         e.0 += 1;
         e.1 += self.g.shallow[i] as u64;
