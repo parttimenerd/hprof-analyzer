@@ -781,6 +781,11 @@ pub struct TopArrayRow {
     pub length: u64,
     pub shallow: u64,
     pub obj_index_1based: u64,
+    /// Primary incoming reference (`Class#field`) that points at this array,
+    /// resolved from the `--collections` holder-edge scan. `None` when
+    /// `--collections` was off or no field edge references it. Additive.
+    #[serde(default)]
+    pub owner: Option<String>,
 }
 
 /// One array class in a "top array classes by aggregate shallow bytes" list.
@@ -891,6 +896,126 @@ pub struct FieldAttributionBiggestRow {
 pub struct CollectionAttribution {
     pub most_overall: Vec<FieldAttributionRow>,
     pub biggest_single: Vec<FieldAttributionBiggestRow>,
+    pub truncated: bool,
+}
+
+/// One holder `Class#field` (with declared field type) ranked by the total
+/// retained size of everything the field points at, summed over all live
+/// holder instances. Additive.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct FieldBySizeRow {
+    /// Pretty holder class name.
+    pub holder_class: String,
+    /// Field name.
+    pub field: String,
+    /// Runtime class of what the field points at (dominant type by retained
+    /// size). HPROF does not record declared reference-field types, so this is
+    /// the concrete pointee class; `varies` when the field points at multiple
+    /// types and no single one dominates.
+    pub pointee_type: String,
+    /// Sum of retained size over distinct pointees of this `Class#field`.
+    pub total_retained: u64,
+    /// Number of distinct pointees (non-null field slots) for this field.
+    pub pointees: u64,
+    /// Live-instance count of `holder_class` from the class histogram, or `0`.
+    pub holder_instances: u64,
+    /// Total element count over container pointees of this field (`0` for
+    /// non-container fields). Additive.
+    #[serde(default)]
+    pub elements: u64,
+    /// Pointee category: `"collection"`, `"array"`, or `"object"`, derived from
+    /// the dominant runtime pointee type. Additive.
+    #[serde(default)]
+    pub category: String,
+}
+
+/// `Class#field` holders ranked by total retained size of their pointees.
+/// Present only when `--collections` was passed. Additive.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct FieldsBySize {
+    pub rows: Vec<FieldBySizeRow>,
+    pub truncated: bool,
+}
+
+/// One runtime-type share within a collection's element/value tally. Additive.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct ValueTypeShare {
+    /// Pretty runtime class name of the element/value.
+    pub type_name: String,
+    /// Number of element slots of this type in the group.
+    pub count: u64,
+}
+
+/// One individual collection instance in the "biggest collections" listing.
+/// Basics (kind/container_class/elements/capacity) are always present; the
+/// remaining fields are filled only under `--collections`. Additive.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct BiggestCollectionRow {
+    pub kind: String,
+    pub container_class: String,
+    pub elements: u64,
+    pub capacity: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retained: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dominant_value_type: Option<String>,
+    /// Top element/value runtime types by count (Level 2). Empty when
+    /// `--collections` was off or no element types were tallied.
+    #[serde(default)]
+    pub value_type_breakdown: Vec<ValueTypeShare>,
+}
+
+/// Biggest collections of one kind (e.g. all Maps), ranked. Additive.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct CollectionKindTable {
+    pub kind: String,
+    pub rows: Vec<BiggestCollectionRow>,
+}
+
+/// The largest individual collection instances: a combined ranking plus a
+/// per-kind breakdown. Present whenever collections were classified (basics
+/// always; extra columns only under `--collections`). Additive.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct BiggestCollections {
+    pub combined: Vec<BiggestCollectionRow>,
+    pub by_kind: Vec<CollectionKindTable>,
+    pub truncated: bool,
+}
+
+/// One collection *class* (e.g. `java.util.HashMap`) aggregated across all its
+/// instances: instance count, total element/value slots, and the top runtime
+/// element/value types globally. Additive.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct CollectionContentsRow {
+    pub collection_class: String,
+    pub instances: u64,
+    pub total_values: u64,
+    pub top_value_types: Vec<ValueTypeShare>,
+}
+
+/// Global "what's in your collections" breakdown, one row per collection class.
+/// Present only under `--collections`. Additive.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct CollectionContents {
+    pub rows: Vec<CollectionContentsRow>,
     pub truncated: bool,
 }
 
@@ -1010,6 +1135,16 @@ pub struct Report {
     /// `--collections` was passed; `None` otherwise. Additive; not parity-compared.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collection_attribution: Option<CollectionAttribution>,
+    /// Holder `Class#field` ranked by total retained size of their pointees,
+    /// present only when `--collections` was passed; `None` otherwise. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fields_by_size: Option<FieldsBySize>,
+    /// Largest individual collection instances. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub biggest_collections: Option<BiggestCollections>,
+    /// Global per-collection-class value-type breakdown. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collection_contents: Option<CollectionContents>,
     /// Always-computed scalar leak indicators. Additive; defaults to zero for
     /// round-trip with older JSON.
     #[serde(default)]
