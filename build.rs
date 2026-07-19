@@ -53,8 +53,14 @@ fn main() {
     );
 }
 
+// On Windows the npm launcher is `npm.cmd`, not `npm`; a bare `Command::new("npm")`
+// fails with "program not found" even when Node is installed and on PATH.
+fn npm_bin() -> &'static str {
+    if cfg!(windows) { "npm.cmd" } else { "npm" }
+}
+
 fn npm_available() -> bool {
-    Command::new("npm")
+    Command::new(npm_bin())
         .arg("--version")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -64,7 +70,7 @@ fn npm_available() -> bool {
 }
 
 fn run_npm(dir: &Path, args: &[&str]) -> bool {
-    match Command::new("npm").args(args).current_dir(dir).status() {
+    match Command::new(npm_bin()).args(args).current_dir(dir).status() {
         Ok(s) => s.success(),
         Err(_) => false,
     }
