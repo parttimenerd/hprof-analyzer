@@ -435,5 +435,5 @@ welcome.
 
 MIT. See [LICENSE](LICENSE).
 
-Copyright 2025 SAP SE or an SAP affiliate company, Johannes Bechberger and
+Copyright 2026 SAP SE or an SAP affiliate company, Johannes Bechberger and
 contributors.
