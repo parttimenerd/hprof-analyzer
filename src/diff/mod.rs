@@ -111,6 +111,9 @@ mod tests {
             collections: Default::default(),
             references: Default::default(),
             collection_attribution: None,
+            fields_by_size: None,
+            biggest_collections: None,
+            collection_contents: None,
             leak_indicators: Default::default(),
         }
     }
