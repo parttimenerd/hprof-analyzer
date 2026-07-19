@@ -44,21 +44,14 @@ A live viewer shows all four output formats side by side, built from the public
 Switch formats in the top-left; the *Default* / *All features* toggle beside
 them swaps between a default-options run and one with every optional analysis on
 (`--dup-strings --collections`). On either Markdown view, hit *Render to HTML*
-in the top-right to see it formatted. The raw files are here.
+in the top-right to see it formatted. The raw files are here:
 
-Default options:
-
-- [`scala-doku.md`](docs/samples/scala-doku.md): plain Markdown
-- [`scala-doku.graphs.md`](docs/samples/scala-doku.graphs.md): Markdown with ASCII graphs
-- [`scala-doku.html`](https://parttimenerd.github.io/hprof-analyzer/samples/scala-doku.html): self-contained HTML (opens live)
-- [`scala-doku.json`](docs/samples/scala-doku.json): machine-readable JSON
-
-All optional features (`--dup-strings --collections`):
-
-- [`scala-doku-full.md`](docs/samples/scala-doku-full.md): plain Markdown
-- [`scala-doku-full.graphs.md`](docs/samples/scala-doku-full.graphs.md): Markdown with ASCII graphs
-- [`scala-doku-full.html`](https://parttimenerd.github.io/hprof-analyzer/samples/scala-doku-full.html): self-contained HTML (opens live)
-- [`scala-doku-full.json`](docs/samples/scala-doku-full.json): machine-readable JSON
+| Format | Default options | All optional features |
+|--------|-----------------|-----------------------|
+| Plain Markdown | [`scala-doku.md`](docs/samples/scala-doku.md) | [`scala-doku-full.md`](docs/samples/scala-doku-full.md) |
+| Markdown with ASCII graphs | [`scala-doku.graphs.md`](docs/samples/scala-doku.graphs.md) | [`scala-doku-full.graphs.md`](docs/samples/scala-doku-full.graphs.md) |
+| Self-contained HTML (opens live) | [`scala-doku.html`](https://parttimenerd.github.io/hprof-analyzer/samples/scala-doku.html) | [`scala-doku-full.html`](https://parttimenerd.github.io/hprof-analyzer/samples/scala-doku-full.html) |
+| Machine-readable JSON | [`scala-doku.json`](docs/samples/scala-doku.json) | [`scala-doku-full.json`](docs/samples/scala-doku-full.json) |
 
 ## Quick start
 
