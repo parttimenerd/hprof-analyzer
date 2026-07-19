@@ -544,7 +544,6 @@ export interface BiggestCollectionRow {
   kind: string;
   container_class: string;
   elements: number;
-  capacity: number;
   retained?: number;
   owner?: string;
   dominant_value_type?: string;

@@ -953,8 +953,8 @@ pub struct ValueTypeShare {
 }
 
 /// One individual collection instance in the "biggest collections" listing.
-/// Basics (kind/container_class/elements/capacity) are always present; the
-/// remaining fields are filled only under `--collections`. Additive.
+/// Basics (kind/container_class/elements) are always present; the remaining
+/// fields are filled only under `--collections`. Additive.
 #[derive(
     Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
 )]
@@ -962,7 +962,6 @@ pub struct BiggestCollectionRow {
     pub kind: String,
     pub container_class: String,
     pub elements: u64,
-    pub capacity: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retained: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

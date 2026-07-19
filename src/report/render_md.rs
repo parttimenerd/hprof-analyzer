@@ -2217,11 +2217,16 @@ fn render_biggest_collection_table(
     let has_retained = rows.iter().any(|r| r.retained.is_some());
     let has_owner = rows.iter().any(|r| r.owner.is_some());
     let has_value = rows.iter().any(|r| r.dominant_value_type.is_some());
+    let has_breakdown = rows.iter().any(|r| !r.value_type_breakdown.is_empty());
 
     let mut headers: Vec<&str> = vec!["Kind", "Container Class", "Elements"];
     let mut aligns = vec![Align::Left, Align::Left, Align::Right];
     if has_value {
         headers.push("Value Type");
+        aligns.push(Align::Left);
+    }
+    if has_breakdown {
+        headers.push("Value Types (top)");
         aligns.push(Align::Left);
     }
     if has_owner {
@@ -2257,6 +2262,17 @@ fn render_biggest_collection_table(
                 None => "—".to_string(),
             });
         }
+        if has_breakdown {
+            row.push(if r.value_type_breakdown.is_empty() {
+                "—".to_string()
+            } else {
+                r.value_type_breakdown
+                    .iter()
+                    .map(|s| format!("`{}` ×{}", s.type_name, fmt_count(s.count)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            });
+        }
         if has_owner {
             row.push(match &r.owner {
                 Some(o) => format!("`{o}`"),
@@ -2285,6 +2301,9 @@ fn render_biggest_collection_table(
         fmt_count(total_elements),
     ];
     if has_value {
+        total_row.push(String::new());
+    }
+    if has_breakdown {
         total_row.push(String::new());
     }
     if has_owner {

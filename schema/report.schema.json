@@ -358,14 +358,9 @@
       ]
     },
     "BiggestCollectionRow": {
-      "description": "One individual collection instance in the \"biggest collections\" listing.\nBasics (kind/container_class/elements/capacity) are always present; the\nremaining fields are filled only under `--collections`. Additive.",
+      "description": "One individual collection instance in the \"biggest collections\" listing.\nBasics (kind/container_class/elements) are always present; the remaining\nfields are filled only under `--collections`. Additive.",
       "type": "object",
       "properties": {
-        "capacity": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
         "container_class": {
           "type": "string"
         },
@@ -409,8 +404,7 @@
       "required": [
         "kind",
         "container_class",
-        "elements",
-        "capacity"
+        "elements"
       ]
     },
     "BiggestCollections": {

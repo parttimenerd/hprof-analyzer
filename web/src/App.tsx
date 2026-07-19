@@ -2230,6 +2230,7 @@ function BiggestCollectionsSection({ data }: { data?: BiggestCollections }) {
     const hasRetained = rows.some((r) => r.retained != null);
     const hasOwner = rows.some((r) => r.owner != null);
     const hasValue = rows.some((r) => r.dominant_value_type != null);
+    const hasBreakdown = rows.some((r) => (r.value_type_breakdown?.length ?? 0) > 0);
     const totalElements = rows.reduce((s, r) => s + r.elements, 0);
     const totalRetained = rows.reduce((s, r) => s + (r.retained ?? 0), 0);
     return (
@@ -2242,6 +2243,7 @@ function BiggestCollectionsSection({ data }: { data?: BiggestCollections }) {
               <th>Container Class</th>
               <th className="num">Elements</th>
               {hasValue && <th>Value Type</th>}
+              {hasBreakdown && <th>Value Types (top)</th>}
               {hasOwner && <th>Owner (Class#field)</th>}
               {hasRetained && <th className="num">Retained</th>}
             </tr>
@@ -2253,6 +2255,18 @@ function BiggestCollectionsSection({ data }: { data?: BiggestCollections }) {
                 <td><code>{r.container_class}</code></td>
                 <td className="num">{fmtCount(r.elements)}</td>
                 {hasValue && <td>{r.dominant_value_type ? <code>{r.dominant_value_type}</code> : "—"}</td>}
+                {hasBreakdown && (
+                  <td>
+                    {!r.value_type_breakdown || r.value_type_breakdown.length === 0
+                      ? "—"
+                      : r.value_type_breakdown.map((s, j) => (
+                          <span key={j}>
+                            {j > 0 ? ", " : ""}
+                            <code>{s.type_name}</code> ×{fmtCount(s.count)}
+                          </span>
+                        ))}
+                  </td>
+                )}
                 {hasOwner && <td>{r.owner ? <code>{r.owner}</code> : "—"}</td>}
                 {hasRetained && <td className="num">{r.retained != null ? formatBytes(r.retained) : "—"}</td>}
               </tr>
@@ -2264,6 +2278,7 @@ function BiggestCollectionsSection({ data }: { data?: BiggestCollections }) {
               <td></td>
               <td className="num"><strong>{fmtCount(totalElements)}</strong></td>
               {hasValue && <td></td>}
+              {hasBreakdown && <td></td>}
               {hasOwner && <td></td>}
               {hasRetained && <td className="num"><strong>{formatBytes(totalRetained)}</strong></td>}
             </tr>

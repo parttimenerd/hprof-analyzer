@@ -1330,6 +1330,8 @@ pub(crate) fn build_field_decode_views(
                         container_idx: want.coll_idx,
                         kind: want.coll_kind,
                         container_class: want.coll_class.clone(),
+                        // Owner is joined below, once owner_by_addr is built.
+                        owner: None,
                         value_indices: slot_targets,
                     });
                 } else {
@@ -1389,9 +1391,17 @@ pub(crate) fn build_field_decode_views(
     };
 
     // ── Collection value tallies: per-collection non-null element dense indices,
-    // folded from the backing-array walk. Runtime element types resolved later
-    // in build_model. Only present under --collections. ──────────────────────
+    // folded from the backing-array walk. Owner is joined here (owner_by_addr is
+    // now built) by resolving each collection's address from its dense index.
+    // Runtime element types resolved later in build_model. Only present under
+    // `--collections`. ─────────────────────────────────────────────────────────
     let coll_values_raw: Option<Vec<CollValuesRaw>> = if collect_attribution {
+        if let Some(m) = owner_by_addr.as_ref() {
+            for c in &mut coll_values {
+                let addr = p1.id_map.addr_at(c.container_idx as usize);
+                c.owner = m.get(&addr).cloned();
+            }
+        }
         Some(coll_values)
     } else {
         None

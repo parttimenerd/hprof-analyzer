@@ -428,10 +428,10 @@ fn classify_pointee(pointee_type: &str) -> String {
 
 /// Build the per-instance "biggest collections" ranking from the raw
 /// per-collection value tallies. `None` when `--collections` was off. Retained
-/// is joined by the collection's dense index. Owner is left `None` (the raw
-/// record carries no address to join the holder-edge map). Combined list ranked
-/// by retained desc then elements desc then class asc, top `ATTRIBUTION_TOP_N`;
-/// per-kind lists reuse that order. Element/value type columns come from the
+/// is joined by the collection's dense index; owner is the primary incoming
+/// `Class#field` resolved during field-decode. Combined list ranked by retained
+/// desc then elements desc then class asc, top `ATTRIBUTION_TOP_N`; per-kind
+/// lists reuse that order. Element/value type columns come from the
 /// per-collection element-index tally.
 fn build_biggest_collections(g: &Graph) -> Option<BiggestCollections> {
     let raw = g.coll_values_raw.as_ref()?;
@@ -455,9 +455,8 @@ fn build_biggest_collections(g: &Graph) -> Option<BiggestCollections> {
                 kind: kind_label(c.kind).to_string(),
                 container_class: c.container_class.clone(),
                 elements: c.value_indices.len() as u64,
-                capacity: c.value_indices.len() as u64,
                 retained: Some(retained),
-                owner: None,
+                owner: c.owner.clone(),
                 dominant_value_type: Some(dominant_value_type(&counts)),
                 value_type_breakdown: top_value_shares(&counts, TOP_K_TYPES),
             }

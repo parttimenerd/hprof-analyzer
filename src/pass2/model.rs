@@ -237,6 +237,9 @@ pub struct CollValuesRaw {
     pub container_idx: u32,
     pub kind: u8,
     pub container_class: String,
+    /// Primary incoming `Class#field` referrer, resolved from the holder-edge
+    /// map at emit time. `None` when the collection has no attributed owner.
+    pub owner: Option<String>,
     /// Dense object indices of non-null element slots (capped per collection).
     pub value_indices: Vec<u32>,
 }
