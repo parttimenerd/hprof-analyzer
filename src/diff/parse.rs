@@ -149,6 +149,15 @@ fn read_zip_html(path: &str) -> io::Result<Vec<HtmlDoc>> {
         let comment_len = u16::from_le_bytes([bytes[p + 32], bytes[p + 33]]) as usize;
         let lho = u32::from_le_bytes([bytes[p + 42], bytes[p + 43], bytes[p + 44], bytes[p + 45]])
             as usize;
+        // The 46-byte fixed header is proven present by the `p + 46` guard above,
+        // but `name_len` is a 16-bit field (up to 65535) read from the dump. A
+        // truncated or hostile zip can declare a name extending past the buffer;
+        // slicing `p+46 .. p+46+name_len` would then panic. Bound-check the full
+        // variable-length record before reading it (mirrors the local-header
+        // guard below), and bail out cleanly on overrun.
+        if p + 46 + name_len + extra_len + comment_len > bytes.len() {
+            break;
+        }
         let name = String::from_utf8_lossy(&bytes[p + 46..p + 46 + name_len]).to_string();
         p += 46 + name_len + extra_len + comment_len;
 
@@ -671,4 +680,66 @@ fn parse_mat_docs(docs: &[HtmlDoc]) -> MatReport {
 pub fn load_mat_report(path: &str) -> io::Result<MatReport> {
     let docs = load_mat_html(path)?;
     Ok(parse_mat_docs(&docs))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A malformed central-directory record whose `name_len` field overruns the
+    /// buffer must not panic `read_zip_html` — it must bail out cleanly. Before
+    /// the bound check the `&bytes[p+46..p+46+name_len]` slice panicked with an
+    /// index-out-of-bounds on truncated/hostile zip input.
+    #[test]
+    fn read_zip_html_survives_oversized_name_len() {
+        // Central-directory record: 46-byte fixed header claiming name_len=1000
+        // but no name bytes actually follow (record sits flush against EOCD).
+        let mut cd = Vec::new();
+        cd.extend_from_slice(b"PK\x01\x02"); // central dir signature
+        cd.extend_from_slice(&[0u8; 6]); // version made by / needed, flags
+        cd.extend_from_slice(&[0u8; 2]); // method (stored)
+        cd.extend_from_slice(&[0u8; 8]); // mod time/date, crc32
+        cd.extend_from_slice(&0u32.to_le_bytes()); // comp size
+        cd.extend_from_slice(&0u32.to_le_bytes()); // uncomp size
+        cd.extend_from_slice(&1000u16.to_le_bytes()); // name_len — LIES, overruns
+        cd.extend_from_slice(&0u16.to_le_bytes()); // extra_len
+        cd.extend_from_slice(&0u16.to_le_bytes()); // comment_len
+        cd.extend_from_slice(&[0u8; 8]); // disk#, int/ext attrs
+        cd.extend_from_slice(&0u32.to_le_bytes()); // local header offset
+        assert_eq!(cd.len(), 46);
+
+        let cd_off = 0u32;
+        let cd_size = cd.len() as u32;
+
+        // EOCD record that find_eocd will accept: 1 central-dir entry, and
+        // cd_off+cd_size <= eocd position, comment_len consistent with EOF.
+        let mut eocd = Vec::new();
+        eocd.extend_from_slice(b"PK\x05\x06"); // EOCD signature
+        eocd.extend_from_slice(&0u16.to_le_bytes()); // disk number
+        eocd.extend_from_slice(&0u16.to_le_bytes()); // cd start disk
+        eocd.extend_from_slice(&1u16.to_le_bytes()); // entries this disk
+        eocd.extend_from_slice(&1u16.to_le_bytes()); // total entries
+        eocd.extend_from_slice(&cd_size.to_le_bytes()); // cd size
+        eocd.extend_from_slice(&cd_off.to_le_bytes()); // cd offset
+        eocd.extend_from_slice(&0u16.to_le_bytes()); // comment length
+
+        let mut blob = cd;
+        blob.extend_from_slice(&eocd);
+
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("hprof_zip_fuzz_{}.zip", std::process::id()));
+        std::fs::write(&path, &blob).unwrap();
+
+        // Must return (Ok or Err), never panic.
+        let result = read_zip_html(path.to_str().unwrap());
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            result.is_ok(),
+            "read_zip_html should bail cleanly, not error, on an overrun name_len"
+        );
+        assert!(
+            result.unwrap().is_empty(),
+            "no HTML docs should be extracted from the malformed record"
+        );
+    }
 }
