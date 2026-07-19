@@ -151,6 +151,8 @@ you need **no Rust and no Node.js**.
 | --- | --- |
 | Linux x86_64 (glibc) | `hprof-analyzer-x86_64-unknown-linux-gnu.tar.gz` |
 | Linux x86_64 (static musl) | `hprof-analyzer-x86_64-unknown-linux-musl.tar.gz` |
+| Linux aarch64 (glibc) | `hprof-analyzer-aarch64-unknown-linux-gnu.tar.gz` |
+| Linux aarch64 (static musl) | `hprof-analyzer-aarch64-unknown-linux-musl.tar.gz` |
 | macOS (Apple Silicon) | `hprof-analyzer-aarch64-apple-darwin.tar.gz` |
 | Windows x86_64 | `hprof-analyzer-x86_64-pc-windows-msvc.zip` |
 

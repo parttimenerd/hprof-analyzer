@@ -56,6 +56,12 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             archive: tar.gz
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            archive: tar.gz
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            archive: tar.gz
           - os: macos-latest
             target: aarch64-apple-darwin
             archive: tar.gz
@@ -71,8 +77,17 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # build.rs bundles web/ (esbuild) into the git-ignored web/dist/bundle.js
+      # that src/html.rs embeds, so node/npm are required to compile the crate.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
       - name: Install musl tools
-        if: matrix.target == 'x86_64-unknown-linux-musl'
+        if: endsWith(matrix.target, '-linux-musl')
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Cache cargo
@@ -148,4 +163,4 @@ jobs:
           name: Nightly
           prerelease: true
           files: artifacts/*
-          body: "Rolling nightly build from the latest commit on master."
+          body: "Rolling nightly build from the latest commit on main."
