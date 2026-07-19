@@ -23,7 +23,8 @@ use crate::{
 };
 
 use super::{
-    AttributionRaw, Record, field_offset, prim_array_class_name, read_ref, scan_all_records,
+    AttributionRaw, CollValuesRaw, FieldSizeRaw, Record, field_offset, prim_array_class_name,
+    read_ref, scan_all_records,
 };
 
 // ── Caps (bound every aggregate) ─────────────────────────────────────────────
@@ -47,6 +48,15 @@ const FIELD_REF_CAP: usize = 10_000_000;
 const CONTAINER_CAP: usize = 1_500_000;
 /// Fixed top-N for both attribution rankings (documented, used by AREA C).
 pub(crate) const ATTRIBUTION_TOP_N: usize = 25;
+/// Max distinct `Class#field` groups kept for the fields-by-size ranking.
+const FIELD_SIZE_GROUP_CAP: usize = 200_000;
+/// Max distinct pointees retained per `Class#field` group (bounds the summed
+/// retained work + memory; groups beyond this are marked truncated).
+const FIELD_SIZE_POINTEES_PER_GROUP: usize = 100_000;
+/// Max element slots tallied per collection for the value-type breakdown.
+const COLL_VALUES_PER_COLLECTION: usize = 4_096;
+/// Max distinct collections whose element types are tallied.
+const COLL_VALUES_GROUP_CAP: usize = 200_000;
 
 // ── Collection descriptor table ──────────────────────────────────────────────
 
@@ -528,6 +538,13 @@ struct ArrayWant {
     /// Shallow size of the COLLECTION instance (not the backing array), carried
     /// from scan 1 so scan 3 can attribute it to the collection fill views.
     coll_shallow: u64,
+    /// Dense object index of the OWNING collection instance (for value tally);
+    /// `u32::MAX` when the collection has no dense index.
+    coll_idx: u32,
+    /// Collection kind byte (0=list..5=tree) of the owning collection.
+    coll_kind: u8,
+    /// Pretty class name of the owning collection instance.
+    coll_class: String,
 }
 
 /// Number of individual arrays and array classes surfaced per category.
@@ -596,17 +613,27 @@ impl TopArrayAcc {
         self,
         p1: &Pass1,
         name_of: impl Fn(u64, &Pass1) -> String,
+        owner_by_addr: Option<&HashMap<u64, String>>,
     ) -> crate::report::TopArrays {
         // Individual: drain heap, resolve names, sort shallow desc / class asc /
         // index asc.
         let mut individual: Vec<crate::report::TopArrayRow> = self
             .heap
             .into_iter()
-            .map(|std::cmp::Reverse(c)| crate::report::TopArrayRow {
-                array_class: name_of(c.class_key, p1),
-                length: c.length,
-                shallow: c.shallow,
-                obj_index_1based: c.obj_index as u64 + 1,
+            .map(|std::cmp::Reverse(c)| {
+                // Owner: resolve the array's address from its dense index, then
+                // look up its primary `Class#field` referrer (first-wins).
+                let owner = owner_by_addr.and_then(|m| {
+                    let addr = p1.id_map.addr_at(c.obj_index as usize);
+                    m.get(&addr).cloned()
+                });
+                crate::report::TopArrayRow {
+                    array_class: name_of(c.class_key, p1),
+                    length: c.length,
+                    shallow: c.shallow,
+                    obj_index_1based: c.obj_index as u64 + 1,
+                    owner,
+                }
             })
             .collect();
         individual.sort_by(|a, b| {
@@ -710,6 +737,45 @@ fn join_attribution(
     out
 }
 
+/// Group holder edges by `(holder_class, field)` into [`FieldSizeRaw`] records,
+/// collecting the DENSE object index of each distinct pointee (deduped). Bounded
+/// by [`FIELD_SIZE_GROUP_CAP`] distinct groups and [`FIELD_SIZE_POINTEES_PER_GROUP`]
+/// pointees per group. Names are resolved from the interner tables; addresses
+/// are mapped to dense indices via `id_map` (edges whose pointee is not a live
+/// object are skipped). Retained size + dominant runtime type are computed later
+/// in build_model.
+fn assemble_field_size_raw(
+    edges: &[HolderEdge],
+    holder_class_names: &[String],
+    field_names: &[String],
+    p1: &Pass1,
+) -> Vec<FieldSizeRaw> {
+    // (holder_class_key, field_key) → set of distinct pointee dense indices.
+    let mut groups: HashMap<(u32, u32), std::collections::HashSet<u32>> = HashMap::new();
+    for e in edges {
+        let Some(idx) = p1.id_map.index_of(e.pointee) else {
+            continue;
+        };
+        let key = (e.holder_class_key, e.field_key);
+        // Cap the number of distinct groups; existing groups keep growing.
+        if !groups.contains_key(&key) && groups.len() >= FIELD_SIZE_GROUP_CAP {
+            continue;
+        }
+        let set = groups.entry(key).or_default();
+        if set.len() < FIELD_SIZE_POINTEES_PER_GROUP {
+            set.insert(idx as u32);
+        }
+    }
+    groups
+        .into_iter()
+        .map(|((hk, fk), set)| FieldSizeRaw {
+            holder_class: holder_class_names[hk as usize].clone(),
+            field: field_names[fk as usize].clone(),
+            pointee_indices: set.into_iter().collect(),
+        })
+        .collect()
+}
+
 /// Enumerate every Object-type instance field of `class_id`, returning
 /// `(field_name_id, byte_offset)` for each. The layout mirrors
 /// [`build_field_plans`]/[`field_offset`]: walk the super-chain CHILD-FIRST (as
@@ -783,6 +849,7 @@ fn class_name_of_index(i: usize, p1: &Pass1) -> String {
 
 /// Return type of [`build_field_decode_views`]: the collection & reference
 /// views, the per-kind referent indices, the optional raw attribution records
+/// (`Some` only under `--collections`), the optional raw fields-by-size groups
 /// (`Some` only under `--collections`), a truncation flag, and the sum of
 /// `capacity` fields across all `java/nio/DirectByteBuffer` instances.
 type FieldDecodeViews = (
@@ -790,6 +857,8 @@ type FieldDecodeViews = (
     ReferencesAnalysis,
     [Vec<u32>; 3],
     Option<Vec<AttributionRaw>>,
+    Option<Vec<FieldSizeRaw>>,
+    Option<Vec<CollValuesRaw>>,
     bool,
     u64, // direct_byte_buffer_capacity_sum
 );
@@ -901,7 +970,7 @@ pub(crate) fn build_field_decode_views(
     // is not fully populated until the single scan completes. Sums are
     // order-independent, so folding post-pass is byte-identical to the old
     // scan-1-then-scan-3 ordering.
-    let mut obj_array_raw: Vec<(u64, u64, u64)> = Vec::new();
+    let mut obj_array_raw: Vec<(u64, u64, u64, Vec<u32>)> = Vec::new();
 
     // ── Single fused full-file scan (instances + prim arrays + obj arrays) ─────
     // Replaces three separate full-file scans with ONE pass. Each record kind
@@ -1004,6 +1073,13 @@ pub(crate) fn build_field_decode_views(
                                         size: size.unwrap_or(0),
                                         is_map,
                                         coll_shallow,
+                                        coll_idx: p1
+                                            .id_map
+                                            .index_of(addr)
+                                            .map(|i| i as u32)
+                                            .unwrap_or(u32::MAX),
+                                        coll_kind: descs[desc_idx].kind.discriminant(),
+                                        coll_class: pretty_name(class_id, p1),
                                     },
                                 );
                             }
@@ -1159,13 +1235,20 @@ pub(crate) fn build_field_decode_views(
             }
             // Non-null slots: count nonzero id_size-wide refs.
             let mut non_null: u64 = 0;
+            let mut slot_targets: Vec<u32> = Vec::new();
             for slot in 0..count as usize {
                 let off = slot * obj_ref_width;
                 if off + obj_ref_width > elem_ref_bytes.len() {
                     break;
                 }
-                if read_ref(&elem_ref_bytes[off..], obj_ref_width) != 0 {
+                let r = read_ref(&elem_ref_bytes[off..], obj_ref_width);
+                if r != 0 {
                     non_null += 1;
+                    if collect_attribution && slot_targets.len() < COLL_VALUES_PER_COLLECTION {
+                        if let Some(ti) = p1.id_map.index_of(r) {
+                            slot_targets.push(ti as u32);
+                        }
+                    }
                 }
             }
             // #11 array fill ratio over ALL object arrays. Attribute THIS array's
@@ -1206,7 +1289,7 @@ pub(crate) fn build_field_decode_views(
             // `wanted_arrays` may not yet contain this array's owning collection
             // (its INSTANCE_DUMP can appear later in the file). Collect the raw
             // per-array data now; fold after the single scan completes.
-            obj_array_raw.push((addr, non_null, count));
+            obj_array_raw.push((addr, non_null, count, slot_targets));
         }
     })?;
 
@@ -1217,7 +1300,9 @@ pub(crate) fn build_field_decode_views(
     // byte-identical to folding inline during a dedicated obj-array scan.
     let mut coll_fill_tracked: u64 = 0;
     let mut map_collision_tracked: u64 = 0;
-    for (addr, non_null, count) in obj_array_raw.drain(..) {
+    let mut coll_values: Vec<CollValuesRaw> = Vec::new();
+    let mut coll_values_truncated = false;
+    for (addr, non_null, count, slot_targets) in obj_array_raw.drain(..) {
         if let Some(want) = wanted_arrays.get(&addr) {
             // ConcurrentHashMap has no plain size: approximate size as non-null
             // slot count (want.size stays 0 in that case).
@@ -1237,6 +1322,20 @@ pub(crate) fn build_field_decode_views(
                 map_collision.add(non_null, count, want.coll_shallow, 0);
                 map_collision_tracked += 1;
             }
+            // Value-type tally: record the backing array's non-null slot targets
+            // against the OWNING collection instance (only under --collections).
+            if collect_attribution && !slot_targets.is_empty() {
+                if coll_values.len() < COLL_VALUES_GROUP_CAP {
+                    coll_values.push(CollValuesRaw {
+                        container_idx: want.coll_idx,
+                        kind: want.coll_kind,
+                        container_class: want.coll_class.clone(),
+                        value_indices: slot_targets,
+                    });
+                } else {
+                    coll_values_truncated = true;
+                }
+            }
         }
     }
 
@@ -1253,7 +1352,47 @@ pub(crate) fn build_field_decode_views(
     } else {
         None
     };
-    let attribution_truncated = edges_truncated || containers_truncated;
+    let attribution_truncated = edges_truncated || containers_truncated || coll_values_truncated;
+
+    // ── Array-owner map: pointee address → primary `Class#field` (first-wins).
+    // Used to attribute each top individual array to a referencing field. Only
+    // built under --collections; keyed by address so it joins against the top
+    // arrays' addresses (resolved via id_map.addr_at). ────────────────────────
+    let owner_by_addr: Option<HashMap<u64, String>> = if collect_attribution {
+        let mut m: HashMap<u64, String> = HashMap::new();
+        for e in &edges {
+            m.entry(e.pointee).or_insert_with(|| {
+                format!(
+                    "{}#{}",
+                    holder_class_names[e.holder_class_key as usize],
+                    field_names[e.field_key as usize]
+                )
+            });
+        }
+        Some(m)
+    } else {
+        None
+    };
+
+    // ── Fields-by-size raw groups: (holder_class, field) → distinct pointee
+    // dense indices. Retained/pointee-type are computed later in build_model
+    // where idom/class_idx are known. Bounded by group + per-group caps. ──────
+    let fields_by_size_raw: Option<Vec<FieldSizeRaw>> = if collect_attribution {
+        Some(assemble_field_size_raw(
+            &edges,
+            &holder_class_names,
+            &field_names,
+            p1,
+        ))
+    } else {
+        None
+    };
+
+    // ── Collection value tallies: per-collection non-null element dense indices,
+    // folded from the backing-array walk. Runtime element types resolved later
+    // in build_model. Only present under --collections. ──────────────────────
+    let coll_values_raw: Option<Vec<CollValuesRaw>> =
+        if collect_attribution { Some(coll_values) } else { None };
 
     // ── Assemble collection views ─────────────────────────────────────────────
     // Per-kind summary in fixed enum order (List,Map,Set,Deque,Queue,Tree),
@@ -1303,8 +1442,12 @@ pub(crate) fn build_field_decode_views(
             const_other,
             const_truncated,
         ),
-        top_prim_arrays: top_prim.into_top_arrays(p1, prim_array_name_of_key),
-        top_obj_arrays: top_obj.into_top_arrays(p1, obj_array_name_of_key),
+        top_prim_arrays: top_prim.into_top_arrays(
+            p1,
+            prim_array_name_of_key,
+            owner_by_addr.as_ref(),
+        ),
+        top_obj_arrays: top_obj.into_top_arrays(p1, obj_array_name_of_key, owner_by_addr.as_ref()),
         kind_summary,
     };
 
@@ -1320,6 +1463,8 @@ pub(crate) fn build_field_decode_views(
         references,
         referent_idx,
         attribution_raw,
+        fields_by_size_raw,
+        coll_values_raw,
         attribution_truncated,
         dbb_capacity_sum,
     ))
@@ -1391,8 +1536,9 @@ fn assemble_const_arrays(
         )
         .collect();
     rows.sort_by(|a, b| {
-        b.objects
-            .cmp(&a.objects)
+        b.shallow
+            .cmp(&a.shallow)
+            .then(b.objects.cmp(&a.objects))
             .then(a.array_class.cmp(&b.array_class))
             .then(a.length.cmp(&b.length))
             .then(a.value.cmp(&b.value))
