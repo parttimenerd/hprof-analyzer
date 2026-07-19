@@ -258,6 +258,9 @@ pub fn render_markdown(r: &Report) -> String {
     render_arrays_by_size(&r.arrays_by_size, false, &mut out);
     render_collections(&r.collections, false, &mut out);
     render_collection_attribution(&r.collection_attribution, false, &mut out);
+    render_fields_by_size(&r.fields_by_size, false, &mut out);
+    render_biggest_collections(&r.biggest_collections, false, &mut out);
+    render_collection_contents(&r.collection_contents, false, &mut out);
     render_references(&r.references, false, &mut out);
     render_unreachable_histogram(&r.overview, false, &mut out);
     // Allocation sites (always present; `None` only for legacy reports).
@@ -293,6 +296,17 @@ fn render_toc(r: &Report, out: &mut String) {
         out.push_str(
             "- [Container Attribution (Class#field)](#container-attribution-classfield)\n",
         );
+    }
+    if r.fields_by_size.is_some() {
+        out.push_str(
+            "- [Fields by Retained Size (Class#field)](#fields-by-retained-size-classfield)\n",
+        );
+    }
+    if r.biggest_collections.is_some() {
+        out.push_str("- [Biggest Collections](#biggest-collections)\n");
+    }
+    if r.collection_contents.is_some() {
+        out.push_str("- [Collection Contents by Type](#collection-contents-by-type)\n");
     }
     out.push_str("- [References](#references)\n");
     out.push_str("- [Unreachable Objects](#unreachable-objects)\n");
@@ -1842,8 +1856,15 @@ fn render_top_arrays(t: &TopArrays, kind: &str, graphs: bool, out: &mut String) 
             .map(|r| r.shallow)
             .max()
             .unwrap_or(0);
+        // The Owner column (primary `Class#field` referrer) is present only when
+        // attribution data exists (i.e. `--collections` was passed).
+        let has_owner = t.top_individual.iter().any(|r| r.owner.is_some());
         let mut headers: Vec<&str> = vec!["Array class", "Length", "Shallow"];
         let mut aligns = vec![Align::Left, Align::Right, Align::Right];
+        if has_owner {
+            headers.push("Owner (Class#field)");
+            aligns.push(Align::Left);
+        }
         if graphs {
             headers.push("");
             aligns.push(Align::Left);
@@ -1855,6 +1876,12 @@ fn render_top_arrays(t: &TopArrays, kind: &str, graphs: bool, out: &mut String) 
                 fmt_count(r.length),
                 format_bytes(r.shallow),
             ];
+            if has_owner {
+                row.push(match &r.owner {
+                    Some(o) => format!("`{o}`"),
+                    None => "—".to_string(),
+                });
+            }
             if graphs {
                 row.push(bar(r.shallow, sh_max, render_graphs::GRAPH_BAR_WIDTH));
             }
@@ -1866,6 +1893,9 @@ fn render_top_arrays(t: &TopArrays, kind: &str, graphs: bool, out: &mut String) 
             String::new(),
             format!("**{}**", format_bytes(total_shallow)),
         ];
+        if has_owner {
+            total_row.push(String::new());
+        }
         if graphs {
             total_row.push(String::new());
         }
@@ -2043,6 +2073,285 @@ pub(crate) fn render_collection_attribution(
             "_Attribution data was truncated (holder-edge or container-record cap hit); \
              rankings are a bounded sample._\n\n",
         );
+    }
+}
+
+/// `Class#field` holders ranked by total retained size of everything the field
+/// points at. Present only when `--collections` was passed. Shared by plain md
+/// and md-graphs; when `graphs` is set a proportional bar is appended on the
+/// Retained column.
+pub(crate) fn render_fields_by_size(f: &Option<FieldsBySize>, graphs: bool, out: &mut String) {
+    use crate::md::{Align, Table, bar};
+    let Some(f) = f else {
+        return;
+    };
+
+    out.push_str("## Fields by Retained Size (Class#field)\n\n");
+    out.push_str(
+        "_Which holder `Class#field` retains the most memory, summed over every object the \
+         field points at. Runtime pointee type is the dominant concrete class reached through \
+         the field (`varies` when no single type dominates)._\n\n",
+    );
+
+    if f.rows.is_empty() {
+        out.push_str("_None._\n\n");
+        return;
+    }
+
+    let ret_max = f.rows.iter().map(|r| r.total_retained).max().unwrap_or(0);
+    let mut headers: Vec<&str> = vec![
+        "Class#field",
+        "Runtime Pointee Type",
+        "Category",
+        "Pointees",
+        "Elements",
+        "Holder Instances",
+        "Retained",
+    ];
+    let mut aligns = vec![
+        Align::Left,
+        Align::Left,
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+    ];
+    if graphs {
+        headers.push("");
+        aligns.push(Align::Left);
+    }
+    let mut t = Table::new(&headers, &aligns);
+    let mut total_retained = 0u64;
+    let mut total_pointees = 0u64;
+    let mut total_elements = 0u64;
+    for r in &f.rows {
+        total_retained += r.total_retained;
+        total_pointees += r.pointees;
+        total_elements += r.elements;
+        let mut row = vec![
+            format!("`{}#{}`", r.holder_class, r.field),
+            format!("`{}`", r.pointee_type),
+            r.category.clone(),
+            fmt_count(r.pointees),
+            fmt_count(r.elements),
+            fmt_count(r.holder_instances),
+            format_bytes(r.total_retained),
+        ];
+        if graphs {
+            row.push(bar(
+                r.total_retained,
+                ret_max,
+                render_graphs::GRAPH_BAR_WIDTH,
+            ));
+        }
+        t.row(row);
+    }
+    let mut total_row = vec![
+        "**Total**".to_string(),
+        String::new(),
+        String::new(),
+        fmt_count(total_pointees),
+        fmt_count(total_elements),
+        String::new(),
+        format_bytes(total_retained),
+    ];
+    if graphs {
+        total_row.push(String::new());
+    }
+    t.row(total_row);
+    t.render(out);
+    out.push('\n');
+
+    if f.truncated {
+        out.push_str(
+            "_Field grouping was truncated (group or pointee cap hit); ranking is a bounded \
+             sample._\n\n",
+        );
+    }
+}
+
+/// Largest individual collection instances: a combined ranking plus per-kind
+/// sub-tables. Retained/owner/value columns render only when present (filled
+/// under `--collections`). Shared by md and md-graphs; `graphs` adds a
+/// proportional bar on Retained (or Elements when retained is absent).
+pub(crate) fn render_biggest_collections(
+    b: &Option<BiggestCollections>,
+    graphs: bool,
+    out: &mut String,
+) {
+    let Some(b) = b else {
+        return;
+    };
+    out.push_str("## Biggest Collections\n\n");
+    out.push_str(
+        "_The largest individual collection instances. Owner is the primary incoming \
+         `Class#field`; value type is the dominant runtime element type (`varies` when none \
+         dominates). Owner/retained/value columns require `--collections`._\n\n",
+    );
+
+    render_biggest_collection_table(&b.combined, "Combined", graphs, out);
+    for k in &b.by_kind {
+        let title = format!("By Kind — {}", k.kind);
+        render_biggest_collection_table(&k.rows, &title, graphs, out);
+    }
+    if b.truncated {
+        out.push_str("_Collection value tally was truncated; ranking is a bounded sample._\n\n");
+    }
+}
+
+/// One biggest-collections sub-table. Columns adapt: retained/owner/value shown
+/// only when at least one row carries them.
+fn render_biggest_collection_table(
+    rows: &[BiggestCollectionRow],
+    title: &str,
+    graphs: bool,
+    out: &mut String,
+) {
+    use crate::md::{Align, Table, bar};
+    out.push_str(&format!("### {title}\n\n"));
+    if rows.is_empty() {
+        out.push_str("_None._\n\n");
+        return;
+    }
+    let has_retained = rows.iter().any(|r| r.retained.is_some());
+    let has_owner = rows.iter().any(|r| r.owner.is_some());
+    let has_value = rows.iter().any(|r| r.dominant_value_type.is_some());
+
+    let mut headers: Vec<&str> = vec!["Kind", "Container Class", "Elements"];
+    let mut aligns = vec![Align::Left, Align::Left, Align::Right];
+    if has_value {
+        headers.push("Value Type");
+        aligns.push(Align::Left);
+    }
+    if has_owner {
+        headers.push("Owner (Class#field)");
+        aligns.push(Align::Left);
+    }
+    if has_retained {
+        headers.push("Retained");
+        aligns.push(Align::Right);
+    }
+    if graphs {
+        headers.push("");
+        aligns.push(Align::Left);
+    }
+
+    let ret_max = rows.iter().filter_map(|r| r.retained).max().unwrap_or(0);
+    let el_max = rows.iter().map(|r| r.elements).max().unwrap_or(0);
+
+    let mut t = Table::new(&headers, &aligns);
+    let mut total_elements = 0u64;
+    let mut total_retained = 0u64;
+    for r in rows {
+        total_elements += r.elements;
+        total_retained += r.retained.unwrap_or(0);
+        let mut row = vec![
+            r.kind.clone(),
+            format!("`{}`", r.container_class),
+            fmt_count(r.elements),
+        ];
+        if has_value {
+            row.push(match &r.dominant_value_type {
+                Some(v) => format!("`{v}`"),
+                None => "—".to_string(),
+            });
+        }
+        if has_owner {
+            row.push(match &r.owner {
+                Some(o) => format!("`{o}`"),
+                None => "—".to_string(),
+            });
+        }
+        if has_retained {
+            row.push(match r.retained {
+                Some(x) => format_bytes(x),
+                None => "—".to_string(),
+            });
+        }
+        if graphs {
+            let (v, m) = if has_retained {
+                (r.retained.unwrap_or(0), ret_max)
+            } else {
+                (r.elements, el_max)
+            };
+            row.push(bar(v, m, render_graphs::GRAPH_BAR_WIDTH));
+        }
+        t.row(row);
+    }
+    let mut total_row = vec![
+        "**Total**".to_string(),
+        String::new(),
+        fmt_count(total_elements),
+    ];
+    if has_value {
+        total_row.push(String::new());
+    }
+    if has_owner {
+        total_row.push(String::new());
+    }
+    if has_retained {
+        total_row.push(format!("**{}**", format_bytes(total_retained)));
+    }
+    if graphs {
+        total_row.push(String::new());
+    }
+    t.row(total_row);
+    t.render(out);
+    out.push('\n');
+}
+
+/// Global per-collection-class value-type breakdown. Present only under
+/// `--collections`. Each row: collection class, instance count, total element
+/// slots, and the top runtime element types (as `Type ×count`). No graphs bar.
+pub(crate) fn render_collection_contents(
+    c: &Option<CollectionContents>,
+    _graphs: bool,
+    out: &mut String,
+) {
+    use crate::md::{Align, Table};
+    let Some(c) = c else {
+        return;
+    };
+    out.push_str("## Collection Contents by Type\n\n");
+    out.push_str(
+        "_What runtime element/value types your collections hold, aggregated per collection \
+         class. Requires `--collections`._\n\n",
+    );
+    if c.rows.is_empty() {
+        out.push_str("_None._\n\n");
+        return;
+    }
+    let mut t = Table::new(
+        &[
+            "Collection Class",
+            "Instances",
+            "Total Values",
+            "Top Value Types",
+        ],
+        &[Align::Left, Align::Right, Align::Right, Align::Left],
+    );
+    for r in &c.rows {
+        let types = if r.top_value_types.is_empty() {
+            "—".to_string()
+        } else {
+            r.top_value_types
+                .iter()
+                .map(|s| format!("`{}` ×{}", s.type_name, fmt_count(s.count)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        t.row(vec![
+            format!("`{}`", r.collection_class),
+            fmt_count(r.instances),
+            fmt_count(r.total_values),
+            types,
+        ]);
+    }
+    t.render(out);
+    out.push('\n');
+    if c.truncated {
+        out.push_str("_Truncated; a bounded sample of collection classes is shown._\n\n");
     }
 }
 /// referent histograms plus (where present) an approximate only-weakly-retained
