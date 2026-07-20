@@ -3,6 +3,8 @@
 [![CI](https://github.com/parttimenerd/hprof-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/parttimenerd/hprof-analyzer/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
+An experimental tool by the [SapMachine](https://sapmachine.io) team.
+
 Your JVM died with an `OutOfMemoryError` and left behind a multi-gigabyte
 `.hprof` heap dump. You want to know **what filled the heap** without opening a
 34 GB file in a GUI or provisioning a machine as big as the dump.
