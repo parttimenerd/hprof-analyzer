@@ -1,5 +1,5 @@
 import React from "react";
-import type { AllocSites, ArraysBySize, BiggestCollectionRow, BiggestCollections, ClassRow, CollectionAttribution, CollectionContents, CollectionsAnalysis, Component, DomTreeNode, DominatorAnalysis, FieldsBySize, FillRatioBucket, HeapComposition, HistRow, LeakIndicators, MergedPathNode, ObjRow, PackageNode, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalObj, TopArrays, TopComponents, UnreachableClassRow } from "./types";
+import type { AllocSites, ArraysBySize, BiggestCollectionRow, BiggestCollections, ClassRow, CollectionAttribution, CollectionContents, CollectionsAnalysis, Component, DominatorAnalysis, FieldsBySize, FillRatioBucket, HeapComposition, HistRow, LeakIndicators, MergedPathNode, ObjRow, PackageNode, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalObj, TopArrays, TopComponents, UnreachableClassRow } from "./types";
 import { fmtCount, fmtExactBytes, formatBytes, formatEpochMs, pctOf, shortLoader } from "./format";
 import {
   CompositionStackedBar,
@@ -13,7 +13,7 @@ import {
   TopClassesChart,
   TreemapBar,
 } from "./charts";
-import { UnreachableDomTreeSection } from "./domTree";
+import { UnreachableDomTreeSection, DomSubtreeSvg } from "./domTree";
 
 // ── Theme Toggle ─────────────────────────────────────────────────────────────
 // Cycles auto → light → dark → auto. Persists the choice in localStorage so it
@@ -1131,76 +1131,6 @@ function RootPathList({ steps }: { steps: RootPathStep[] }) {
   );
 }
 
-// One node of the recursive dominator subtree, as a
-// collapsible <details>/<summary> tree (modeled on PackageTreeRow). Children are
-// rendered nested; leaves are non-collapsible. Mirrors report.rs::render_dom_tree.
-function DomSubtreeNode({ node, depth }: { node: DomTreeNode; depth: number }) {
-  const hasChildren = node.children.length > 0;
-  const label = (
-    <>
-      <code>{node.display_class}</code>{" "}
-      <span className="path-ret">
-        shallow {formatBytes(node.shallow)} · retained {formatBytes(node.retained)}
-      </span>
-    </>
-  );
-  if (!hasChildren) {
-    return (
-      <li style={{ paddingLeft: `${depth * 1.1}rem` }}>
-        <span className="tree-leaf">•</span> {label}
-      </li>
-    );
-  }
-
-  // Collapse consecutive same-class leaf children into a single summary row.
-  const collapsedChildren: React.ReactNode[] = [];
-  let i = 0;
-  while (i < node.children.length) {
-    const c = node.children[i];
-    if (c.children.length === 0) {
-      let j = i + 1;
-      while (j < node.children.length && node.children[j].children.length === 0 && node.children[j].display_class === c.display_class) j++;
-      const count = j - i;
-      if (count > 1) {
-        const totalShallow = node.children.slice(i, j).reduce((s, n) => s + n.shallow, 0);
-        const totalRetained = node.children.slice(i, j).reduce((s, n) => s + n.retained, 0);
-        collapsedChildren.push(
-          <li key={i} style={{ paddingLeft: `${(depth + 1) * 1.1}rem` }}>
-            <span className="tree-leaf">•</span>{" "}
-            <code>{c.display_class}</code>{" "}
-            <span className="path-ret">×{count} — shallow {formatBytes(totalShallow)} · retained {formatBytes(totalRetained)}</span>
-          </li>
-        );
-        i = j;
-        continue;
-      }
-    }
-    collapsedChildren.push(<DomSubtreeNode key={i} node={c} depth={depth + 1} />);
-    i++;
-  }
-
-  return (
-    <li>
-      <details open={depth < 1}>
-        <summary style={{ paddingLeft: `${depth * 1.1}rem` }}>{label}</summary>
-        <ul className="dom-subtree">
-          {collapsedChildren}
-        </ul>
-      </details>
-    </li>
-  );
-}
-
-function DomSubtree({ node }: { node: DomTreeNode }) {
-  return (
-    <details>
-      <summary>Dominator subtree</summary>
-      <ul className="dom-subtree">
-        <DomSubtreeNode node={node} depth={0} />
-      </ul>
-    </details>
-  );
-}
 
 // One node of the recursive "merged shortest paths to GC roots" prefix tree
 // (class-group suspects). Mirrors DomSubtreeNode. Each node shows the class, how
@@ -1325,7 +1255,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
         </details>
       )}
       {s.root_path && <RootPathList steps={s.root_path} />}
-      {s.dominator_tree && <DomSubtree node={s.dominator_tree} />}
+      {s.dominator_tree && <DomSubtreeSvg node={s.dominator_tree} />}
       {!s.is_single && s.merged_paths && <MergedPaths node={s.merged_paths} />}
     </div>
   );
