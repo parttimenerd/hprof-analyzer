@@ -8,7 +8,7 @@ Your JVM died with an `OutOfMemoryError` and left behind a multi-gigabyte
 34 GB file in a GUI or provisioning a machine as big as the dump.
 
 `hprof-analyzer` is a command-line tool that reads the dump and writes a
-self-contained report covering the same ground as Eclipse MAT's System
+self-contained report covering the same ground as [Eclipse MAT](https://eclipse.dev/mat/)'s System
 Overview, Leak Suspects, and Top Consumers analyses — plus a threads view. It
 streams the file in two passes so peak RSS stays well below the dump size: on a
 33 GiB dump it peaks at ~15 GiB where MAT needs ~62 GiB. The report is a
