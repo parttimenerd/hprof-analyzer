@@ -11,7 +11,7 @@ Your JVM died with an `OutOfMemoryError` and left behind a multi-gigabyte
 self-contained report covering the same ground as [Eclipse MAT](https://eclipse.dev/mat/)'s System
 Overview, Leak Suspects, and Top Consumers analyses, plus additional views. Peak
 RSS stays well below the dump size: on a 33 GiB dump it peaks at ~15 GiB where
-MAT needs ~62 GiB. The report is a single file you can email, attach to a
+MAT needs ~62 GiB (see [Performance](#performance)). The report is a single file you can email, attach to a
 ticket, or diff in CI.
 
 *An experimental tool by the [SapMachine](https://sapmachine.io) team.*
