@@ -3,8 +3,6 @@
 [![CI](https://github.com/parttimenerd/hprof-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/parttimenerd/hprof-analyzer/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-An experimental tool by the [SapMachine](https://sapmachine.io) team.
-
 Your JVM died with an `OutOfMemoryError` and left behind a multi-gigabyte
 `.hprof` heap dump. You want to know **what filled the heap** without opening a
 34 GB file in a GUI or provisioning a machine as big as the dump.
@@ -15,6 +13,8 @@ Overview, Leak Suspects, and Top Consumers analyses — plus a threads view. It
 streams the file in two passes so peak RSS stays well below the dump size: on a
 33 GiB dump it peaks at ~15 GiB where MAT needs ~62 GiB. The report is a
 single file you can email, attach to a ticket, or diff in CI.
+
+*An experimental tool by the [SapMachine](https://sapmachine.io) team.*
 
 ## What you get
 
