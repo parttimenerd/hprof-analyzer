@@ -1,0 +1,35 @@
+name: Question / support
+description: Ask how to use hprof-analyzer or interpret its output.
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have a usage question or need help reading a report? Ask away. If your
+        question is about a specific dump, attaching the dump and/or report
+        (see below) lets us give a concrete answer.
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: What are you trying to do, and where are you stuck?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Dump or report (optional)
+      description: >-
+        If it helps answer the question, attach the `.hprof` dump (or a
+        redacted/minimized one) and/or the report `hprof-analyzer` produced.
+        The JSON output rarely contains raw heap contents and is safe to share.
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: hprof-analyzer version
+      description: Output of `hprof-analyzer --version`, if relevant.
+      placeholder: e.g. 0.1.0
+    validations:
+      required: false

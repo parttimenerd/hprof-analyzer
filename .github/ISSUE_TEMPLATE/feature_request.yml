@@ -1,0 +1,41 @@
+name: Feature request
+description: Suggest a new analysis, output, or usability improvement.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion! Feature requests are welcome.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the use case or pain point, not just the solution.
+      placeholder: e.g. "I can't tell which thread is holding a leaked collection."
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like `hprof-analyzer` to do?
+      placeholder: e.g. "Add a column linking each big collection to its owning thread."
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches or workarounds you have tried or thought about.
+    validations:
+      required: false
+  - type: textarea
+    id: example
+    attributes:
+      label: Example dump or report (optional)
+      description: >-
+        If a specific `.hprof` dump or generated report motivates the request,
+        attaching it (or a redacted/minimized version) helps us design the
+        feature against real data.
+    validations:
+      required: false

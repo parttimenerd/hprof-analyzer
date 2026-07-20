@@ -1,0 +1,68 @@
+name: Bug report
+description: Report incorrect analysis, a crash, or unexpected output.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug! To reproduce it we usually need the heap dump
+        and the report `hprof-analyzer` produced. Please attach both if you can
+        (see the fields below for how to minimize/redact them).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you observe, and what did you expect instead?
+      placeholder: e.g. "Retained size for `com.example.Cache` is reported as 0, but MAT shows 3.2 GiB."
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The exact command line you ran, plus any relevant flags.
+      placeholder: |
+        1. hprof-analyzer dump.hprof report.html --dup-strings
+        2. Open report.html
+        3. Scroll to Class Histogram
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: hprof-dump
+    attributes:
+      label: Heap dump (.hprof)
+      description: >-
+        Attach the `.hprof` dump that triggers the bug (drag-and-drop the file
+        or a `.zip`/`.gz` of it into this box). Dumps can contain sensitive data
+        — if you cannot share the original, a smaller or redacted dump that still
+        reproduces the issue is ideal. If you truly cannot attach one, say so and
+        describe the heap as precisely as you can.
+    validations:
+      required: false
+  - type: textarea
+    id: report
+    attributes:
+      label: Generated report
+      description: >-
+        Attach the report `hprof-analyzer` produced (the `.html`, `.md`, or
+        `.json` output). The JSON output is the most useful for diagnosing
+        analysis bugs and rarely contains raw heap contents.
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: hprof-analyzer version
+      description: Output of `hprof-analyzer --version`, or the commit you built from.
+      placeholder: e.g. 0.1.0 or commit 1cead19
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: OS and JVM
+      description: Your OS/arch, and the JVM/version that produced the dump if known.
+      placeholder: e.g. macOS 15 arm64; dump from Temurin 21 on Linux x86_64
+    validations:
+      required: false
