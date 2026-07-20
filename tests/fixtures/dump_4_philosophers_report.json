@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "generated": "2026-07-19T11:59:29.512217000Z",
+  "generated": "2026-07-20T14:29:09.162904000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
     "file_path": "tests/fixtures/dump_4_philosophers.hprof",
@@ -175,6 +175,594 @@
     "classloaders_loaded": 5,
     "unreachable_count": 5970,
     "unreachable_shallow": 836392,
+    "unreachable_retained": 836392,
+    "unreachable_composition": {
+      "by_kind": [
+        {
+          "kind": "Instances",
+          "objects": 1795,
+          "shallow_heap": 55824
+        },
+        {
+          "kind": "Object arrays",
+          "objects": 309,
+          "shallow_heap": 12624
+        },
+        {
+          "kind": "Primitive arrays",
+          "objects": 3579,
+          "shallow_heap": 766496
+        },
+        {
+          "kind": "Class objects",
+          "objects": 287,
+          "shallow_heap": 1448
+        }
+      ]
+    },
+    "unreachable_garbage_roots": [
+      {
+        "pretty_class": "int[]",
+        "retained": 524272,
+        "objects": 1,
+        "children": []
+      },
+      {
+        "pretty_class": "int[]",
+        "retained": 19624,
+        "objects": 1,
+        "children": []
+      },
+      {
+        "pretty_class": "java.lang.ref.SoftReference",
+        "retained": 12240,
+        "objects": 250,
+        "children": [
+          {
+            "pretty_class": "java.lang.Class$ReflectionData",
+            "retained": 12200,
+            "objects": 249,
+            "children": [
+              {
+                "pretty_class": "java.lang.reflect.Method[]",
+                "retained": 12136,
+                "objects": 248,
+                "children": [
+                  {
+                    "pretty_class": "java.lang.reflect.Method",
+                    "retained": 504,
+                    "objects": 6,
+                    "children": [
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 328,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 304,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 48,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 24,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "pretty_class": "java.lang.Class[]",
+                        "retained": 40,
+                        "objects": 1,
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "pretty_class": "java.lang.reflect.Method",
+                    "retained": 360,
+                    "objects": 6,
+                    "children": [
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 176,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 152,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 64,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 40,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "pretty_class": "java.lang.Class[]",
+                        "retained": 32,
+                        "objects": 1,
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "pretty_class": "java.lang.reflect.Method",
+                    "retained": 352,
+                    "objects": 6,
+                    "children": [
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 176,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 152,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 56,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 32,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "pretty_class": "java.lang.Class[]",
+                        "retained": 32,
+                        "objects": 1,
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "pretty_class": "java.lang.reflect.Method",
+                    "retained": 352,
+                    "objects": 6,
+                    "children": [
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 184,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 160,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "pretty_class": "java.lang.Class[]",
+                        "retained": 32,
+                        "objects": 1,
+                        "children": []
+                      },
+                      {
+                        "pretty_class": "java.lang.Class[]",
+                        "retained": 24,
+                        "objects": 1,
+                        "children": []
+                      },
+                      {
+                        "pretty_class": "byte[]",
+                        "retained": 24,
+                        "objects": 1,
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "pretty_class": "java.lang.reflect.Method",
+                    "retained": 320,
+                    "objects": 6,
+                    "children": [
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 144,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 120,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 64,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 40,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "pretty_class": "java.lang.Class[]",
+                        "retained": 24,
+                        "objects": 1,
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "pretty_class": "java.lang.reflect.Method",
+                    "retained": 304,
+                    "objects": 6,
+                    "children": [
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 128,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 104,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 64,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 40,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "pretty_class": "java.lang.Class[]",
+                        "retained": 24,
+                        "objects": 1,
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "pretty_class": "java.lang.reflect.Method",
+                    "retained": 296,
+                    "objects": 6,
+                    "children": [
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 120,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 96,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 64,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 40,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "pretty_class": "java.lang.Class[]",
+                        "retained": 24,
+                        "objects": 1,
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "pretty_class": "java.lang.reflect.Method",
+                    "retained": 296,
+                    "objects": 6,
+                    "children": [
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 128,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 104,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 56,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 32,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "pretty_class": "java.lang.Class[]",
+                        "retained": 24,
+                        "objects": 1,
+                        "children": []
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "pretty_class": "int[]",
+        "retained": 4112,
+        "objects": 1,
+        "children": []
+      },
+      {
+        "pretty_class": "int[]",
+        "retained": 4112,
+        "objects": 1,
+        "children": []
+      },
+      {
+        "pretty_class": "int[]",
+        "retained": 3728,
+        "objects": 1,
+        "children": []
+      },
+      {
+        "pretty_class": "java.lang.ref.SoftReference",
+        "retained": 3272,
+        "objects": 70,
+        "children": [
+          {
+            "pretty_class": "java.lang.Class$ReflectionData",
+            "retained": 3232,
+            "objects": 69,
+            "children": [
+              {
+                "pretty_class": "java.lang.reflect.Field[]",
+                "retained": 3168,
+                "objects": 68,
+                "children": [
+                  {
+                    "pretty_class": "java.lang.reflect.Field",
+                    "retained": 200,
+                    "objects": 4,
+                    "children": [
+                      {
+                        "pretty_class": "jdk.internal.reflect.MethodHandleObjectFieldAccessorImpl",
+                        "retained": 128,
+                        "objects": 3,
+                        "children": [
+                          {
+                            "pretty_class": "java.lang.invoke.DirectMethodHandle$StaticAccessor",
+                            "retained": 96,
+                            "objects": 2,
+                            "children": []
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "pretty_class": "java.lang.reflect.Field",
+                    "retained": 144,
+                    "objects": 3,
+                    "children": [
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 72,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 48,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "pretty_class": "java.lang.reflect.Field",
+                    "retained": 144,
+                    "objects": 3,
+                    "children": [
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 72,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 48,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "pretty_class": "java.lang.reflect.Field",
+                    "retained": 136,
+                    "objects": 3,
+                    "children": [
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 64,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 40,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "pretty_class": "java.lang.reflect.Field",
+                    "retained": 136,
+                    "objects": 3,
+                    "children": [
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 64,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 40,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "pretty_class": "java.lang.reflect.Field",
+                    "retained": 136,
+                    "objects": 3,
+                    "children": [
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 64,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 40,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "pretty_class": "java.lang.reflect.Field",
+                    "retained": 136,
+                    "objects": 3,
+                    "children": [
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 64,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 40,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "pretty_class": "java.lang.reflect.Field",
+                    "retained": 136,
+                    "objects": 3,
+                    "children": [
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 64,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 40,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "pretty_class": "int[]",
+        "retained": 3224,
+        "objects": 1,
+        "children": []
+      },
+      {
+        "pretty_class": "int[]",
+        "retained": 2216,
+        "objects": 1,
+        "children": []
+      },
+      {
+        "pretty_class": "int[]",
+        "retained": 2064,
+        "objects": 1,
+        "children": []
+      }
+    ],
     "heap_fragmentation_ratio": 0.06422193050942514,
     "top_class_concentration_bp": 3193,
     "gc_roots_retained_by_type": [
@@ -203,152 +791,182 @@
       {
         "pretty_class": "int[]",
         "objects": 2142,
-        "shallow": 679064
+        "shallow": 679064,
+        "retained": 679064
       },
       {
         "pretty_class": "byte[]",
         "objects": 1437,
-        "shallow": 87432
+        "shallow": 87432,
+        "retained": 87432
       },
       {
         "pretty_class": "java.lang.String",
         "objects": 1429,
-        "shallow": 34296
+        "shallow": 34296,
+        "retained": 121520
       },
       {
         "pretty_class": "java.lang.Object[]",
         "objects": 181,
-        "shallow": 7752
+        "shallow": 7752,
+        "retained": 7752
       },
       {
         "pretty_class": "java.lang.reflect.Method",
         "objects": 80,
-        "shallow": 7040
+        "shallow": 7040,
+        "retained": 15488
       },
       {
         "pretty_class": "java.lang.reflect.Field",
         "objects": 79,
-        "shallow": 5688
+        "shallow": 5688,
+        "retained": 9152
       },
       {
         "pretty_class": "java.lang.Class$ReflectionData",
         "objects": 34,
-        "shallow": 2176
+        "shallow": 2176,
+        "retained": 30512
       },
       {
         "pretty_class": "java.lang.Class[]",
         "objects": 75,
-        "shallow": 1960
+        "shallow": 1960,
+        "retained": 1960
       },
       {
         "pretty_class": "java.lang.Class",
         "objects": 287,
-        "shallow": 1448
+        "shallow": 1448,
+        "retained": 0
       },
       {
         "pretty_class": "java.lang.ref.SoftReference",
         "objects": 34,
-        "shallow": 1360
+        "shallow": 1360,
+        "retained": 31872
       },
       {
         "pretty_class": "java.lang.invoke.MemberName",
         "objects": 23,
-        "shallow": 920
+        "shallow": 920,
+        "retained": 984
       },
       {
         "pretty_class": "java.lang.ClassValue$Entry[]",
         "objects": 6,
-        "shallow": 864
+        "shallow": 864,
+        "retained": 864
       },
       {
         "pretty_class": "java.lang.reflect.Constructor",
         "objects": 11,
-        "shallow": 792
+        "shallow": 792,
+        "retained": 2272
       },
       {
         "pretty_class": "java.lang.reflect.Field[]",
         "objects": 14,
-        "shallow": 552
+        "shallow": 552,
+        "retained": 9704
       },
       {
         "pretty_class": "java.lang.reflect.Method[]",
         "objects": 12,
-        "shallow": 536
+        "shallow": 536,
+        "retained": 16200
       },
       {
         "pretty_class": "java.util.WeakHashMap$Entry[]",
         "objects": 6,
-        "shallow": 480
+        "shallow": 480,
+        "retained": 640
       },
       {
         "pretty_class": "java.lang.invoke.DirectMethodHandle$Constructor",
         "objects": 9,
-        "shallow": 432
+        "shallow": 432,
+        "retained": 1296
       },
       {
         "pretty_class": "java.lang.ClassValue$ClassValueMap",
         "objects": 6,
-        "shallow": 384
+        "shallow": 384,
+        "retained": 2704
       },
       {
         "pretty_class": "java.lang.reflect.Constructor[]",
         "objects": 11,
-        "shallow": 264
+        "shallow": 264,
+        "retained": 2360
       },
       {
         "pretty_class": "java.util.HashMap$Node",
         "objects": 7,
-        "shallow": 224
+        "shallow": 224,
+        "retained": 224
       },
       {
         "pretty_class": "jdk.internal.reflect.DirectConstructorHandleAccessor",
         "objects": 9,
-        "shallow": 216
+        "shallow": 216,
+        "retained": 1592
       },
       {
         "pretty_class": "java.lang.invoke.ResolvedMethodName",
         "objects": 13,
-        "shallow": 208
+        "shallow": 208,
+        "retained": 208
       },
       {
         "pretty_class": "java.lang.Thread",
         "objects": 2,
-        "shallow": 208
+        "shallow": 208,
+        "retained": 520
       },
       {
         "pretty_class": "java.lang.ref.ReferenceQueue",
         "objects": 6,
-        "shallow": 192
+        "shallow": 192,
+        "retained": 624
       },
       {
         "pretty_class": "java.util.concurrent.locks.ReentrantLock$NonfairSync",
         "objects": 6,
-        "shallow": 192
+        "shallow": 192,
+        "retained": 192
       },
       {
         "pretty_class": "java.lang.invoke.DirectMethodHandle",
         "objects": 4,
-        "shallow": 160
+        "shallow": 160,
+        "retained": 384
       },
       {
         "pretty_class": "java.lang.invoke.BoundMethodHandle$Species_L",
         "objects": 4,
-        "shallow": 160
+        "shallow": 160,
+        "retained": 544
       },
       {
         "pretty_class": "java.util.WeakHashMap$Entry",
         "objects": 4,
-        "shallow": 160
+        "shallow": 160,
+        "retained": 160
       },
       {
         "pretty_class": "java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject",
         "objects": 6,
-        "shallow": 144
+        "shallow": 144,
+        "retained": 144
       },
       {
         "pretty_class": "jdk.internal.reflect.DirectMethodHandleAccessor",
         "objects": 4,
-        "shallow": 128
+        "shallow": 128,
+        "retained": 672
       }
     ],
     "histogram": [

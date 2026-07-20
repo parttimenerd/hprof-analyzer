@@ -2618,10 +2618,25 @@
           "format": "uint64",
           "minimum": 0
         },
+        "unreachable_composition": {
+          "description": "Composition of the unreachable heap by object kind (instances / object\narrays / primitive arrays / class objects), mirroring `heap_composition`\nfor the reachable heap. Additive; not parity-compared. Empty when there\nare no unreachable objects.",
+          "$ref": "#/$defs/HeapComposition",
+          "default": {
+            "by_kind": []
+          }
+        },
         "unreachable_count": {
           "type": "integer",
           "format": "uint64",
           "minimum": 0
+        },
+        "unreachable_garbage_roots": {
+          "description": "Top garbage-root dominator subtrees in the unreachable forest, sorted by\nretained desc and capped (top-5 roots × depth-4). Each entry is the root\nof a subtree of unreachable objects with no reachable predecessor; the\ntree structure reflects the dominator relationships within that garbage\ncluster. Additive; not parity-compared.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/UnreachableGarbageRoot"
+          }
         },
         "unreachable_histogram": {
           "description": "Per-class histogram of unreachable objects (idom == u32::MAX), sorted by\nshallow descending and capped. Additive; not parity-compared.",
@@ -2630,6 +2645,13 @@
           "items": {
             "$ref": "#/$defs/UnreachableClassRow"
           }
+        },
+        "unreachable_retained": {
+          "description": "Total retained heap held within the unreachable forest, computed by a\ndominator pass over the unreachable subgraph. Equals the sum of shallow\nsizes of all unreachable objects (every unreachable object is dominated\nby exactly one garbage root within the forest). Additive; not parity-\ncompared. 0 when there are no unreachable objects.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
         },
         "unreachable_shallow": {
           "type": "integer",
@@ -3014,6 +3036,12 @@
         "pretty_class": {
           "type": "string"
         },
+        "retained": {
+          "description": "Retained size within the unreachable forest: the sum of shallow sizes of\nevery unreachable object dominated by objects of this class, computed by\na dominator pass over the unreachable subgraph (a synthetic root over the\ngarbage roots). Goes beyond MAT, which discards unreachable objects.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
         "shallow": {
           "type": "integer",
           "format": "uint64",
@@ -3023,7 +3051,43 @@
       "required": [
         "pretty_class",
         "objects",
-        "shallow"
+        "shallow",
+        "retained"
+      ]
+    },
+    "UnreachableGarbageRoot": {
+      "description": "One node in the per-garbage-root dominator sub-tree. A garbage root is an\nunreachable object that has no unreachable predecessor (entry point of a\ngarbage subtree). Children are capped by depth and fan-out. Additive; not\nparity-compared.",
+      "type": "object",
+      "properties": {
+        "children": {
+          "description": "Dominated children, sorted retained-desc, capped.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/UnreachableGarbageRoot"
+          }
+        },
+        "objects": {
+          "description": "Number of real objects in the subtree rooted at this node.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "pretty_class": {
+          "description": "Human-readable class name of the dominating object at this node.",
+          "type": "string"
+        },
+        "retained": {
+          "description": "Total retained heap within the subtree rooted at this node (within the\nunreachable forest only).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "pretty_class",
+        "retained",
+        "objects"
       ]
     },
     "ValueTypeShare": {

@@ -137,7 +137,10 @@ export interface SystemOverview {
   classloaders_loaded: number;
   unreachable_count: number;
   unreachable_shallow: number;
+  unreachable_retained?: number;
+  unreachable_composition?: HeapComposition;
   unreachable_histogram: UnreachableClassRow[];
+  unreachable_garbage_roots?: UnreachableGarbageRoot[];
   histogram: HistRow[];
   histogram_truncated_to: number | null;
   loader_rollup: LoaderRollup[];
@@ -404,6 +407,15 @@ export interface UnreachableClassRow {
   pretty_class: string;
   objects: number;
   shallow: number;
+  retained: number;
+}
+
+// One node in the garbage-root dominator tree (recursive).
+export interface UnreachableGarbageRoot {
+  pretty_class: string;
+  retained: number;
+  objects: number;
+  children: UnreachableGarbageRoot[];
 }
 
 // One fill-ratio bucket (basis-point range) for collections/arrays/maps.

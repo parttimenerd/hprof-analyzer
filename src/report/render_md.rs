@@ -2431,12 +2431,10 @@ pub(crate) fn render_references(rf: &ReferencesAnalysis, graphs: bool, out: &mut
     }
 }
 
-/// Render the always-on "Unreachable Objects" section: a per-class histogram of
-/// objects not dominated by the virtual root (`idom == u32::MAX`), sorted by
-/// shallow descending and capped. Shared by plain md and md-graphs; when
-/// `graphs` is set, an extra proportional bar column is appended on Objects.
-/// Emits the heading + a fallback italic line even when empty so the document
-/// structure stays stable.
+/// Render the always-on "Unreachable Objects" section: a per-class histogram
+/// plus a by-kind composition table, sorted by shallow descending and capped.
+/// Shared by plain md and md-graphs; when `graphs` is set, proportional bar
+/// columns are appended. Emits the heading + a fallback italic line when empty.
 pub(crate) fn render_unreachable_histogram(o: &SystemOverview, graphs: bool, out: &mut String) {
     use crate::md::{Align, Table, bar};
     out.push_str("## Unreachable Objects\n\n");
@@ -2445,19 +2443,52 @@ pub(crate) fn render_unreachable_histogram(o: &SystemOverview, graphs: bool, out
         return;
     }
     out.push_str(&format!(
-        "_{} unreachable objects retaining {} shallow (top {} classes by shallow)._\n\n",
+        "_{} unreachable objects retaining {} shallow ({} retained within the \
+         unreachable forest; top {} classes by shallow)._\n\n",
         fmt_count(o.unreachable_count),
         format_bytes(o.unreachable_shallow),
+        format_bytes(o.unreachable_retained),
         UNREACHABLE_HISTOGRAM_CAP,
     ));
+    // Composition by object kind (mirrors System Overview heap composition).
+    if o.unreachable_composition.by_kind.len() > 1 {
+        let mut headers: Vec<&str> = vec!["Kind", "Objects", "Shallow"];
+        let mut aligns = vec![Align::Left, Align::Right, Align::Right];
+        if graphs {
+            headers.push("");
+            aligns.push(Align::Left);
+        }
+        let sh_max = o
+            .unreachable_composition
+            .by_kind
+            .iter()
+            .map(|k| k.shallow_heap)
+            .max()
+            .unwrap_or(0);
+        let mut t = Table::new(&headers, &aligns);
+        for k in &o.unreachable_composition.by_kind {
+            let mut row = vec![
+                k.kind.clone(),
+                fmt_count(k.objects),
+                format_bytes(k.shallow_heap),
+            ];
+            if graphs {
+                row.push(bar(k.shallow_heap, sh_max, render_graphs::GRAPH_BAR_WIDTH));
+            }
+            t.row(row);
+        }
+        t.render(out);
+        out.push('\n');
+    }
+    // Per-class histogram.
     let obj_max = o
         .unreachable_histogram
         .iter()
         .map(|r| r.objects)
         .max()
         .unwrap_or(0);
-    let mut headers: Vec<&str> = vec!["Class", "Objects", "Shallow"];
-    let mut aligns = vec![Align::Left, Align::Right, Align::Right];
+    let mut headers: Vec<&str> = vec!["Class", "Objects", "Shallow", "Retained"];
+    let mut aligns = vec![Align::Left, Align::Right, Align::Right, Align::Right];
     if graphs {
         headers.push("");
         aligns.push(Align::Left);
@@ -2468,6 +2499,7 @@ pub(crate) fn render_unreachable_histogram(o: &SystemOverview, graphs: bool, out
             format!("`{}`", r.pretty_class),
             fmt_count(r.objects),
             format_bytes(r.shallow),
+            format_bytes(r.retained),
         ];
         if graphs {
             row.push(bar(r.objects, obj_max, render_graphs::GRAPH_BAR_WIDTH));
@@ -2476,6 +2508,82 @@ pub(crate) fn render_unreachable_histogram(o: &SystemOverview, graphs: bool, out
     }
     t.render(out);
     out.push('\n');
+    // Garbage-root dominator trees.
+    render_garbage_root_trees(&o.unreachable_garbage_roots, graphs, out);
+}
+
+/// Render the top garbage-root dominator subtrees as indented ASCII trees.
+/// Each line: `prefix class — retained (N objects)`, optionally with a
+/// retained ASCII bar when `graphs` is true.
+fn render_garbage_root_trees(roots: &[UnreachableGarbageRoot], graphs: bool, out: &mut String) {
+    if roots.is_empty() {
+        return;
+    }
+    let retained_max = roots.iter().map(|r| r.retained).max().unwrap_or(0);
+    out.push_str("### Garbage-Root Dominator Trees\n\n");
+    out.push_str(
+        "_Top garbage-root subtrees by retained heap (unreachable objects \
+                  with no reachable predecessor). Depth capped._\n\n",
+    );
+    for (i, root) in roots.iter().enumerate() {
+        let label = if graphs {
+            use crate::md::bar;
+            format!(
+                "**{}** — {} ({} objects) {}",
+                root.pretty_class,
+                format_bytes(root.retained),
+                fmt_count(root.objects),
+                bar(root.retained, retained_max, render_graphs::GRAPH_BAR_WIDTH),
+            )
+        } else {
+            format!(
+                "**{}** — {} ({} objects)",
+                root.pretty_class,
+                format_bytes(root.retained),
+                fmt_count(root.objects),
+            )
+        };
+        out.push_str(&format!("{}. {}\n", i + 1, label));
+        render_garbage_root_node(&root.children, "   ", graphs, retained_max, out);
+        out.push('\n');
+    }
+}
+
+fn render_garbage_root_node(
+    nodes: &[UnreachableGarbageRoot],
+    prefix: &str,
+    graphs: bool,
+    retained_max: u64,
+    out: &mut String,
+) {
+    for (i, node) in nodes.iter().enumerate() {
+        let is_last = i == nodes.len() - 1;
+        let connector = if is_last { "└─ " } else { "├─ " };
+        let line = if graphs {
+            use crate::md::bar;
+            format!(
+                "{}{}{} — {} ({} objects) {}\n",
+                prefix,
+                connector,
+                node.pretty_class,
+                format_bytes(node.retained),
+                fmt_count(node.objects),
+                bar(node.retained, retained_max, render_graphs::GRAPH_BAR_WIDTH),
+            )
+        } else {
+            format!(
+                "{}{}{} — {} ({} objects)\n",
+                prefix,
+                connector,
+                node.pretty_class,
+                format_bytes(node.retained),
+                fmt_count(node.objects),
+            )
+        };
+        out.push_str(&line);
+        let child_prefix = format!("{}{}  ", prefix, if is_last { "   " } else { "│  " });
+        render_garbage_root_node(&node.children, &child_prefix, graphs, retained_max, out);
+    }
 }
 
 /// Render the always-on "Dominator Analysis" section: two dominator-tree

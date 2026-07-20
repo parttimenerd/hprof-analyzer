@@ -223,6 +223,7 @@ mod tests {
             coll_values_raw: None,
             direct_byte_buffer_capacity_sum: 0,
             thread_local_null_key_count: 0,
+            unreachable_retained: None,
         };
         (g, dc_off, dc_tgt)
     }

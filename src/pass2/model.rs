@@ -424,6 +424,12 @@ pub struct Graph {
     /// simply an absent edge, indistinguishable from any other missing target.
     #[allow(dead_code)]
     pub thread_local_null_key_count: u64,
+    /// Retained sizes within the unreachable forest, computed by the
+    /// `unreachable_retained` stage in `main.rs` while the forward CSR is still
+    /// alive. `None` until that stage runs (or when there are no unreachable
+    /// objects). Consumed by `build_system_overview`; a bounded per-class
+    /// aggregate, so it carries no per-object RSS into the report phase.
+    pub unreachable_retained: Option<crate::unreachable_retained::UnreachableRetained>,
 }
 
 /// Deferred inbound-CSR construction. Built by `Pass2::build` with everything

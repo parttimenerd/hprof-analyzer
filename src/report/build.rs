@@ -1302,6 +1302,9 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
     let kind_idx = |k: &str| KIND_ORDER.iter().position(|&x| x == k).unwrap();
     let mut comp_objs = [0u64; 4];
     let mut comp_sh = [0u64; 4];
+    // Same kind buckets, but for the UNREACHABLE heap (mirrors comp_objs/comp_sh).
+    let mut unreach_comp_objs = [0u64; 4];
+    let mut unreach_comp_sh = [0u64; 4];
     // retention_concentration: collect top-level (idom==vroot) retained values.
     let vroot_u32 = n as u32;
     let undef_u32 = u32::MAX;
@@ -1363,6 +1366,9 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
         } else {
             unreachable_count += 1;
             unreachable_shallow += sh;
+            let b = kind_idx(object_kind(g, i));
+            unreach_comp_objs[b] += 1;
+            unreach_comp_sh[b] += sh;
             if ci_raw < class_count {
                 let ci = remap[ci_raw] as usize;
                 unreach_count[ci] += 1;
@@ -1437,6 +1443,21 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
                 kind: k.to_string(),
                 objects: objs[b],
                 shallow_heap: sh[b],
+            })
+            .collect();
+        HeapComposition { by_kind }
+    };
+    // Unreachable-heap composition by kind (mirrors heap_composition; no
+    // synthetic class-loader injection — that object is always reachable).
+    let unreachable_composition = {
+        let by_kind = KIND_ORDER
+            .iter()
+            .enumerate()
+            .filter(|&(b, _)| unreach_comp_objs[b] > 0)
+            .map(|(b, &k)| KindStat {
+                kind: k.to_string(),
+                objects: unreach_comp_objs[b],
+                shallow_heap: unreach_comp_sh[b],
             })
             .collect();
         HeapComposition { by_kind }
@@ -1521,6 +1542,26 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
 
     // Per-class unreachable-objects histogram: capped, shallow-desc. Only
     // canonical rows (remap[ci] == ci) with unreachable objects are emitted.
+    // Retained-within-the-forest (if computed by the unreachable_retained stage)
+    // is looked up per canonical class row; 0 when the stage did not run.
+    let unreach_retained_by_class = g
+        .unreachable_retained
+        .as_ref()
+        .map(|u| &u.retained_by_class);
+    // Fold the raw-class-keyed retained map through `remap` into canonical rows
+    // once (the histogram merges duplicate class rows into their canonical ci).
+    let unreach_retained_canonical: Vec<u64> = {
+        let mut v = vec![0u64; class_count];
+        if let Some(map) = unreach_retained_by_class {
+            for (&rc, &r) in map {
+                if (rc as usize) < class_count {
+                    let ci = remap[rc as usize] as usize;
+                    v[ci] += r;
+                }
+            }
+        }
+        v
+    };
     let unreachable_histogram: Vec<UnreachableClassRow> = {
         let mut order: Vec<usize> = (0..class_count)
             .filter(|&ci| remap[ci] as usize == ci && unreach_count[ci] > 0)
@@ -1538,6 +1579,7 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
                 pretty_class: pretty_class_name(&g.class_names[ci]),
                 objects: unreach_count[ci],
                 shallow: unreach_shallow[ci],
+                retained: unreach_retained_canonical[ci],
             })
             .collect()
     };
@@ -1726,6 +1768,17 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
         classloaders_loaded,
         unreachable_count,
         unreachable_shallow,
+        unreachable_retained: g
+            .unreachable_retained
+            .as_ref()
+            .map(|u| u.total)
+            .unwrap_or(0),
+        unreachable_composition,
+        unreachable_garbage_roots: g
+            .unreachable_retained
+            .as_ref()
+            .map(|u| u.garbage_roots.clone())
+            .unwrap_or_default(),
         unreachable_histogram,
         histogram,
         histogram_truncated_to: None,

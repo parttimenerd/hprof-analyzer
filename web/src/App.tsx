@@ -1,5 +1,5 @@
 import React from "react";
-import type { AllocSites, ArraysBySize, BiggestCollectionRow, BiggestCollections, ClassRow, CollectionAttribution, CollectionContents, CollectionsAnalysis, Component, DomTreeNode, DominatorAnalysis, FieldsBySize, FillRatioBucket, HistRow, LeakIndicators, MergedPathNode, ObjRow, PackageNode, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalObj, TopArrays, TopComponents, UnreachableClassRow } from "./types";
+import type { AllocSites, ArraysBySize, BiggestCollectionRow, BiggestCollections, ClassRow, CollectionAttribution, CollectionContents, CollectionsAnalysis, Component, DomTreeNode, DominatorAnalysis, FieldsBySize, FillRatioBucket, HeapComposition, HistRow, LeakIndicators, MergedPathNode, ObjRow, PackageNode, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalObj, TopArrays, TopComponents, UnreachableClassRow } from "./types";
 import { fmtCount, fmtExactBytes, formatBytes, formatEpochMs, pctOf, shortLoader } from "./format";
 import {
   CompositionStackedBar,
@@ -13,6 +13,7 @@ import {
   TopClassesChart,
   TreemapBar,
 } from "./charts";
+import { UnreachableDomTreeSection } from "./domTree";
 
 // ── Theme Toggle ─────────────────────────────────────────────────────────────
 // Cycles auto → light → dark → auto. Persists the choice in localStorage so it
@@ -1150,14 +1151,40 @@ function DomSubtreeNode({ node, depth }: { node: DomTreeNode; depth: number }) {
       </li>
     );
   }
+
+  // Collapse consecutive same-class leaf children into a single summary row.
+  const collapsedChildren: React.ReactNode[] = [];
+  let i = 0;
+  while (i < node.children.length) {
+    const c = node.children[i];
+    if (c.children.length === 0) {
+      let j = i + 1;
+      while (j < node.children.length && node.children[j].children.length === 0 && node.children[j].display_class === c.display_class) j++;
+      const count = j - i;
+      if (count > 1) {
+        const totalShallow = node.children.slice(i, j).reduce((s, n) => s + n.shallow, 0);
+        const totalRetained = node.children.slice(i, j).reduce((s, n) => s + n.retained, 0);
+        collapsedChildren.push(
+          <li key={i} style={{ paddingLeft: `${(depth + 1) * 1.1}rem` }}>
+            <span className="tree-leaf">•</span>{" "}
+            <code>{c.display_class}</code>{" "}
+            <span className="path-ret">×{count} — shallow {formatBytes(totalShallow)} · retained {formatBytes(totalRetained)}</span>
+          </li>
+        );
+        i = j;
+        continue;
+      }
+    }
+    collapsedChildren.push(<DomSubtreeNode key={i} node={c} depth={depth + 1} />);
+    i++;
+  }
+
   return (
     <li>
       <details open={depth < 1}>
         <summary style={{ paddingLeft: `${depth * 1.1}rem` }}>{label}</summary>
         <ul className="dom-subtree">
-          {node.children.map((c, i) => (
-            <DomSubtreeNode key={i} node={c} depth={depth + 1} />
-          ))}
+          {collapsedChildren}
         </ul>
       </details>
     </li>
@@ -2584,11 +2611,42 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
 // ── Unreachable Objects ─────────────────────────────────────────────────────
 // Per-class histogram of objects not dominated by the virtual root
 // (idom == u32::MAX). Always-on; mirrors render_md.rs::render_unreachable_histogram.
-type UnreachableKey = "objects" | "shallow";
+type UnreachableKey = "objects" | "shallow" | "retained";
 const UNREACHABLE_COLS: { key: UnreachableKey; label: string }[] = [
   { key: "objects", label: "Objects" },
   { key: "shallow", label: "Shallow" },
+  { key: "retained", label: "Retained" },
 ];
+
+function UnreachableCompositionTable({ comp }: { comp: HeapComposition }) {
+  if (comp.by_kind.length === 0) return null;
+  return (
+    <>
+      <h3>Unreachable Heap Composition</h3>
+      <ChartOrNote hasData={comp.by_kind.length >= 2} note="Composition chart needs at least two kinds; showing the table only.">
+        <CompositionStackedBar data={comp.by_kind} />
+      </ChartOrNote>
+      <table>
+        <thead>
+          <tr>
+            <th>Kind</th>
+            <th className="num">Objects</th>
+            <th className="num">Shallow</th>
+          </tr>
+        </thead>
+        <tbody>
+          {comp.by_kind.map((k, i) => (
+            <tr key={i}>
+              <td>{k.kind}</td>
+              <td className="num">{fmtCount(k.objects)}</td>
+              <td className="num">{formatBytes(k.shallow_heap)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </>
+  );
+}
 
 function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
   const rows: UnreachableClassRow[] = data?.unreachable_histogram ?? [];
@@ -2603,8 +2661,15 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
         <>
           <p className="subtitle">
             {fmtCount(data?.unreachable_count ?? 0)} unreachable objects retaining{" "}
-            {formatBytes(data?.unreachable_shallow ?? 0)} shallow (top {fmtCount(rows.length)} classes by shallow).
+            {formatBytes(data?.unreachable_shallow ?? 0)} shallow ({formatBytes(data?.unreachable_retained ?? 0)} retained
+            within the unreachable forest; top {fmtCount(rows.length)} classes by shallow).
           </p>
+          {data?.unreachable_composition && (
+            <UnreachableCompositionTable comp={data.unreachable_composition} />
+          )}
+          {data?.unreachable_garbage_roots && data.unreachable_garbage_roots.length > 0 && (
+            <UnreachableDomTreeSection roots={data.unreachable_garbage_roots} />
+          )}
           <details open>
             <summary>Unreachable objects by class ({fmtCount(rows.length)} rows)</summary>
             <table>
@@ -2622,6 +2687,7 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
                     <td><code>{r.pretty_class}</code></td>
                     <td className="num">{fmtCount(r.objects)}</td>
                     <td className="num">{formatBytes(r.shallow)}</td>
+                    <td className="num">{formatBytes(r.retained)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -2630,6 +2696,7 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
                   <td><strong>Total</strong></td>
                   <td className="num"><strong>{fmtCount(data?.unreachable_count ?? 0)}</strong></td>
                   <td className="num"><strong>{formatBytes(data?.unreachable_shallow ?? 0)}</strong></td>
+                  <td className="num"><strong>{formatBytes(data?.unreachable_retained ?? 0)}</strong></td>
                 </tr>
               </tfoot>
             </table>

@@ -11,7 +11,7 @@ import type {
 } from "./types";
 import { fmtCount, formatBytes } from "./format";
 import { Pie as ChartPie, Bar as ChartBar } from "react-chartjs-2";
-import { themeColors } from "./chartSetup";
+import { themeColors, useThemeKey } from "./chartSetup";
 import "./chartSetup";
 
 // Chart.js-based charts (via react-chartjs-2, over the tree-shaken chart.js
@@ -44,6 +44,7 @@ interface Slice {
 function Pie({ data, fmt, donut, titles, onSlice }: { data: Slice[]; fmt: (n: number) => string; donut?: boolean; titles?: string[]; onSlice?: (i: number) => void }) {
   const total = data.reduce((s, d) => s + d.value, 0);
   if (total <= 0) return null;
+  const themeKey = useThemeKey();
   const t = themeColors();
   const bg = data.map((_, i) => color(i));
   const chartData = {
@@ -84,7 +85,7 @@ function Pie({ data, fmt, donut, titles, onSlice }: { data: Slice[]; fmt: (n: nu
     },
   };
   return (
-    <div className="chart-wrap" role="img" aria-label="Pie chart" style={{ position: "relative", height: 240, maxWidth: 520 }}>
+    <div key={themeKey} className="chart-wrap" role="img" aria-label="Pie chart" style={{ position: "relative", height: 240, maxWidth: 520 }}>
       <ChartPie data={chartData} options={options} />
     </div>
   );
@@ -94,6 +95,7 @@ function Pie({ data, fmt, donut, titles, onSlice }: { data: Slice[]; fmt: (n: nu
 function HBar({ data, fmt, barColor, titles, onBar }: { data: Slice[]; fmt: (n: number) => string; barColor?: number; titles?: string[]; onBar?: (i: number) => void }) {
   const max = data.reduce((m, d) => Math.max(m, d.value), 0);
   if (max <= 0) return null;
+  const themeKey = useThemeKey();
   const t = themeColors();
   const barCol = barColor != null ? color(barColor) : undefined;
   const chartData = {
@@ -136,7 +138,7 @@ function HBar({ data, fmt, barColor, titles, onBar }: { data: Slice[]; fmt: (n: 
   };
   const height = Math.max(140, data.length * 26 + 40);
   return (
-    <div className="chart-wrap" role="img" aria-label="Horizontal bar chart" style={{ position: "relative", height, maxWidth: 720 }}>
+    <div key={themeKey} className="chart-wrap" role="img" aria-label="Horizontal bar chart" style={{ position: "relative", height, maxWidth: 720 }}>
       <ChartBar data={chartData} options={options} />
     </div>
   );
@@ -156,6 +158,7 @@ function VBar({
 }) {
   const max = yMaxPct ?? data.reduce((m, d) => Math.max(m, d.value), 0);
   if (max <= 0) return null;
+  const themeKey = useThemeKey();
   const t = themeColors();
   const chartData = {
     labels: data.map((d) => d.label),
@@ -192,7 +195,7 @@ function VBar({
     },
   };
   return (
-    <div className="chart-wrap" role="img" aria-label="Bar chart" style={{ position: "relative", height: 200, maxWidth: 720 }}>
+    <div key={themeKey} className="chart-wrap" role="img" aria-label="Bar chart" style={{ position: "relative", height: 200, maxWidth: 720 }}>
       <ChartBar data={chartData} options={options} />
     </div>
   );
@@ -317,6 +320,7 @@ function StackedBar({ segments, fmt }: {
 }) {
   const total = segments.reduce((s, x) => s + x.value, 0);
   if (total <= 0) return null;
+  const themeKey = useThemeKey();
   const t = themeColors();
   const chartData = {
     labels: [""],
@@ -357,7 +361,7 @@ function StackedBar({ segments, fmt }: {
     },
   };
   return (
-    <div className="chart-wrap" role="img" aria-label="Stacked bar chart" style={{ position: "relative", height: 90, maxWidth: 720 }}>
+    <div key={themeKey} className="chart-wrap" role="img" aria-label="Stacked bar chart" style={{ position: "relative", height: 90, maxWidth: 720 }}>
       <ChartBar data={chartData} options={options} />
     </div>
   );

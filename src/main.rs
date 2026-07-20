@@ -33,6 +33,7 @@ mod rpo_dfs;
 mod sweep;
 mod trace;
 mod types;
+mod unreachable_retained;
 mod vbyte;
 
 use std::io::IsTerminal;
@@ -788,6 +789,30 @@ fn run(
     crate::trace::probe("main: after rpo_dfs (before compress parent_pre)");
     log(verbose, "rpo", t.elapsed().as_secs_f64());
 
+    crate::trace::trim();
+
+    // Retained size within the unreachable forest. This is the ONLY point where
+    // both the forward CSR (out-edges) and reachability (rpo.dfn) are alive: the
+    // forward CSR is moved into the inbound transpose just below. We extract the
+    // unreachable subgraph here, run a self-contained dominator + retained pass
+    // on it, and keep only a bounded per-class aggregate on `g` for the report
+    // phase. shallow/class_idx are streamed out of their compressed blobs (never
+    // re-inflated dense) so this adds no large array to the rpo/inbound peak.
+    let t = Instant::now();
+    progress::phase("retained size (unreachable forest)");
+    g.unreachable_retained = unreachable_retained::compute_unreachable_retained(
+        g.n,
+        &rpo.dfn,
+        &g.fwd_offsets,
+        &g.fwd_targets,
+        &shallow_c,
+        &class_idx_c,
+        g.class_names.len(),
+        &g.class_obj_class_idx,
+        &g.class_names,
+    )?;
+    crate::trace::probe("main: after unreachable_retained (fwd CSR + dfn still alive)");
+    log(verbose, "unreachable-retained", t.elapsed().as_secs_f64());
     crate::trace::trim();
 
     // Compress parent_pre (~2 GB dense) between RPO and inbound to reduce

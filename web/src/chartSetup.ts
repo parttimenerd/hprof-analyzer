@@ -2,6 +2,7 @@
 // before any react-chartjs-2 <Pie>/<Bar> renders. We register ONLY the
 // controllers, elements, scales, and plugins the report's charts use, so the
 // bundle stays small.
+import React from "react";
 import {
   Chart as ChartJS,
   ArcElement,
@@ -29,4 +30,36 @@ export function themeColors(): { fg: string; muted: string; border: string; bg: 
     border: v("--border", "#e2e2e2"),
     bg: v("--bg", "#ffffff"),
   };
+}
+
+// Sync Chart.js global defaults to the current theme so legend labels, tick
+// labels, and grid lines all inherit the right color without needing per-chart
+// overrides. Called once on load and again whenever data-theme changes.
+function syncChartDefaults() {
+  const t = themeColors();
+  ChartJS.defaults.color = t.fg;
+  ChartJS.defaults.borderColor = t.border;
+}
+
+syncChartDefaults();
+new MutationObserver(syncChartDefaults).observe(document.documentElement, {
+  attributes: true,
+  attributeFilter: ["data-theme"],
+});
+
+// Returns the current data-theme attribute value ("light" | "dark" | "").
+// Charts should use this as a `key` prop so they remount — and re-read
+// themeColors() — whenever the user toggles the theme.
+export function useThemeKey(): string {
+  const [theme, setTheme] = React.useState(
+    () => document.documentElement.getAttribute("data-theme") ?? ""
+  );
+  React.useEffect(() => {
+    const obs = new MutationObserver(() => {
+      setTheme(document.documentElement.getAttribute("data-theme") ?? "");
+    });
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => obs.disconnect();
+  }, []);
+  return theme;
 }

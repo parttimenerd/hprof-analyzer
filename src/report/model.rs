@@ -40,6 +40,31 @@ pub struct UnreachableClassRow {
     pub pretty_class: String,
     pub objects: u64,
     pub shallow: u64,
+    /// Retained size within the unreachable forest: the sum of shallow sizes of
+    /// every unreachable object dominated by objects of this class, computed by
+    /// a dominator pass over the unreachable subgraph (a synthetic root over the
+    /// garbage roots). Goes beyond MAT, which discards unreachable objects.
+    pub retained: u64,
+}
+
+/// One node in the per-garbage-root dominator sub-tree. A garbage root is an
+/// unreachable object that has no unreachable predecessor (entry point of a
+/// garbage subtree). Children are capped by depth and fan-out. Additive; not
+/// parity-compared.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct UnreachableGarbageRoot {
+    /// Human-readable class name of the dominating object at this node.
+    pub pretty_class: String,
+    /// Total retained heap within the subtree rooted at this node (within the
+    /// unreachable forest only).
+    pub retained: u64,
+    /// Number of real objects in the subtree rooted at this node.
+    pub objects: u64,
+    /// Dominated children, sorted retained-desc, capped.
+    #[serde(default)]
+    pub children: Vec<UnreachableGarbageRoot>,
 }
 
 /// One row of the GC-roots-by-type breakdown: a human-readable root-type label
@@ -262,6 +287,26 @@ pub struct SystemOverview {
     pub classloaders_loaded: u64,
     pub unreachable_count: u64,
     pub unreachable_shallow: u64,
+    /// Total retained heap held within the unreachable forest, computed by a
+    /// dominator pass over the unreachable subgraph. Equals the sum of shallow
+    /// sizes of all unreachable objects (every unreachable object is dominated
+    /// by exactly one garbage root within the forest). Additive; not parity-
+    /// compared. 0 when there are no unreachable objects.
+    #[serde(default)]
+    pub unreachable_retained: u64,
+    /// Composition of the unreachable heap by object kind (instances / object
+    /// arrays / primitive arrays / class objects), mirroring `heap_composition`
+    /// for the reachable heap. Additive; not parity-compared. Empty when there
+    /// are no unreachable objects.
+    #[serde(default)]
+    pub unreachable_composition: HeapComposition,
+    /// Top garbage-root dominator subtrees in the unreachable forest, sorted by
+    /// retained desc and capped (top-5 roots × depth-4). Each entry is the root
+    /// of a subtree of unreachable objects with no reachable predecessor; the
+    /// tree structure reflects the dominator relationships within that garbage
+    /// cluster. Additive; not parity-compared.
+    #[serde(default)]
+    pub unreachable_garbage_roots: Vec<UnreachableGarbageRoot>,
     /// Ratio of unreachable shallow heap to total heap (reachable + unreachable).
     /// Range [0.0, 1.0]. 0.0 for an empty heap.
     #[serde(default)]

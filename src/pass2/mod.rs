@@ -840,6 +840,7 @@ impl Pass2 {
             coll_values_raw: fd_coll_values_raw,
             direct_byte_buffer_capacity_sum: fd_dbb_capacity_sum,
             thread_local_null_key_count: fd_tl_null_key_count,
+            unreachable_retained: None,
         };
 
         // Package the deferred inbound-CSR construction. Moves id_map,
