@@ -359,9 +359,9 @@ All rows were measured on an AMD Ryzen Threadripper PRO 3995WX (64 cores /
 
 | Workload | Heap (live) | Dump file | RSS (ours) | RSS (MAT) | Wall (ours) | Wall (MAT) | Measured |
 |----------|-------------|-----------|------------|-----------|-------------|------------|----------|
-| Large real-world dump | ~20 GiB | 33.4 GiB (~7.5 GiB gzip) | 14.65 GiB | 62.05 GiB | 13:21 | 27:16 | 2026-07-19, [`20ad99c`](https://github.com/parttimenerd/hprof-analyzer/commit/20ad99c) |
-| HeapothesYs HyperAlloc | 7.91 GiB | 10.32 GiB | 0.94 GiB | 20.32 GiB | 1:20 | 1:48 | 2026-07-19, [`04f5e58`](https://github.com/parttimenerd/hprof-analyzer/commit/04f5e58) |
-| VS Code JVM | 0.73 GiB | 1.01 GiB | 0.49 GiB | 5.27 GiB | 0:22 | 1:27 | 2026-07-19, [`04f5e58`](https://github.com/parttimenerd/hprof-analyzer/commit/04f5e58) |
+| Large real-world dump | ~20 GiB | 33.4 GiB (~7.5 GiB gzip) | 14.65 GiB | 62.05 GiB | 13:21 | 27:16 | 2026-07-19, [`86006f7`](https://github.com/parttimenerd/hprof-analyzer/commit/86006f7) |
+| HeapothesYs HyperAlloc | 7.91 GiB | 10.32 GiB | 0.94 GiB | 20.32 GiB | 1:20 | 1:48 | 2026-07-19, [`86006f7`](https://github.com/parttimenerd/hprof-analyzer/commit/86006f7) |
+| VS Code JVM | 0.73 GiB | 1.01 GiB | 0.49 GiB | 5.27 GiB | 0:22 | 1:27 | 2026-07-19, [`86006f7`](https://github.com/parttimenerd/hprof-analyzer/commit/86006f7) |
 
 MAT was run with `ParseHeapDump.sh` (leak-suspects + top-components) with its
 `MemoryAnalyzer.ini` configured for `-Xmx60g`; peak RSS scales with the dump
