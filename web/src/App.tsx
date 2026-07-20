@@ -2605,7 +2605,7 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
             {fmtCount(data?.unreachable_count ?? 0)} unreachable objects retaining{" "}
             {formatBytes(data?.unreachable_shallow ?? 0)} shallow (top {fmtCount(rows.length)} classes by shallow).
           </p>
-          <details>
+          <details open>
             <summary>Unreachable objects by class ({fmtCount(rows.length)} rows)</summary>
             <table>
               <thead>
@@ -2625,6 +2625,13 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
                   </tr>
                 ))}
               </tbody>
+              <tfoot>
+                <tr>
+                  <td><strong>Total</strong></td>
+                  <td className="num"><strong>{fmtCount(data?.unreachable_count ?? 0)}</strong></td>
+                  <td className="num"><strong>{formatBytes(data?.unreachable_shallow ?? 0)}</strong></td>
+                </tr>
+              </tfoot>
             </table>
           </details>
         </>
