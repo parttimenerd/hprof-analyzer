@@ -1,6 +1,7 @@
 # hprof-analyzer
 
 [![CI](https://github.com/parttimenerd/hprof-analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/parttimenerd/hprof-analyzer/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/hprof-analyzer.svg)](https://crates.io/crates/hprof-analyzer)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Your JVM died with an `OutOfMemoryError` and left behind a multi-gigabyte
@@ -180,22 +181,19 @@ complains about a missing or too-old `libc`.
 
 Needs a **Rust toolchain (1.85+, edition 2024)**. Install
 [rustup](https://rustup.rs/) and run `rustup update stable` if your toolchain is
-older, then from a checkout of this repo:
+older, then:
 
 ```sh
-cargo install --path .
+cargo install hprof-analyzer
 ```
 
 This installs `hprof-analyzer` into `~/.cargo/bin` (ensure it is on your
-`PATH`). Node.js/npm is optional: the repository ships a pre-built
-`web/dist/bundle.js`, so the build works without it. If you modify the web
-sources under `web/src/`, npm is needed to regenerate the bundle
-(see [Building and testing](#building-and-testing)).
+`PATH`). Node.js/npm is not required.
 
 ### 3. From source
 
-Same toolchain requirements as option 2 (Rust 1.85+; Node.js/npm only needed
-if you change the web sources):
+Same Rust toolchain requirement (1.85+). Node.js/npm only needed if you change
+the web sources under `web/src/`:
 
 ```sh
 git clone https://github.com/parttimenerd/hprof-analyzer
