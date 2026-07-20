@@ -85,10 +85,19 @@ summary { cursor: pointer; color: var(--accent); font-size: 0.85rem; }
 .suspect { border-left: 3px solid var(--accent); padding-left: 0.9rem; margin: 1rem 0; }
 .pill { display: inline-block; background: var(--card); border: 1px solid var(--border); border-radius: 999px; padding: 0.05rem 0.55rem; font-size: 0.75rem; color: var(--muted); margin-left: 0.4rem; }
 .pill.keyword { margin-left: 0; margin-right: 0.4rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--accent); }
-.thread { margin: 0.35rem 0; border-bottom: 1px solid var(--border); }
-.thread summary { color: var(--fg); font-size: 0.9rem; padding: 0.25rem 0; }
+.thread { margin: 0.25rem 0; border-bottom: 1px solid var(--border); }
+.thread summary { color: var(--fg); font-size: 0.9rem; padding: 0.3rem 0; cursor: pointer; display: flex; align-items: baseline; gap: 0.4rem; flex-wrap: wrap; }
 .thread-name { font-weight: 600; color: var(--accent); }
-.thread-serial { color: var(--muted); }
+.thread-serial { color: var(--muted); font-size: 0.82rem; }
+.thread-meta-inline { color: var(--muted); font-size: 0.8rem; display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
+.thread-state-badge { background: var(--card); border: 1px solid var(--border); border-radius: 999px; padding: 0.05rem 0.45rem; font-size: 0.72rem; color: var(--muted); }
+.thread-daemon-badge { background: #fef3c7; border: 1px solid #fcd34d; border-radius: 999px; padding: 0.05rem 0.45rem; font-size: 0.72rem; color: #92400e; }
+[data-theme=dark] .thread-daemon-badge { background: #451a03; border-color: #78350f; color: #fcd34d; }
+.thread-body { padding: 0.4rem 0 0.6rem; }
+.thread-meta-row { display: flex; flex-wrap: wrap; gap: 0.5rem 1.2rem; font-size: 0.82rem; color: var(--fg); margin-bottom: 0.5rem; }
+.thread-meta-item { display: flex; align-items: baseline; gap: 0.3rem; }
+.thread-meta-label { font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); white-space: nowrap; }
+.thread-meta-item code { font-size: 0.8rem; max-width: 28ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 .stack { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 0.6rem 0.8rem; margin: 0.35rem 0 0.75rem; overflow-x: auto; white-space: pre; line-height: 1.5; }
 
 /* Sticky in-page table of contents. */

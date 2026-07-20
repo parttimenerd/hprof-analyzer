@@ -1470,76 +1470,71 @@ function ThreadLocalsTable({ objs }: { objs: ThreadLocalObj[] }) {
   );
 }
 
+function threadStateLabel(raw: string): string {
+  // "alive, waiting, waiting indefinitely, parked" → "waiting"
+  const parts = raw.replace(/[\[\]]/g, "").split(",").map((s) => s.trim()).filter(Boolean);
+  const nonAlive = parts.filter((p) => p !== "alive" && p !== "runnable");
+  return nonAlive[nonAlive.length - 1] ?? parts[0] ?? raw;
+}
+
+function fmtLoader(raw: string): string {
+  // "org/foo/Bar @ 0xdeadbeef" → "org.foo.Bar"
+  return raw.replace(/\s*@\s*0x[0-9a-fA-F]+$/, "").replaceAll("/", ".");
+}
+
 function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
-  const cls = t.class_name ?? "<unresolved>";
   const name = t.name?.trim();
+  const cls = (t.class_name ?? "<unresolved>").replaceAll("/", ".");
   const sig = t.significant_frames ?? [];
+  const stateLabel = t.thread_state ? threadStateLabel(t.thread_state) : null;
   return (
     <details className="thread" open={open} id={`thread-${t.thread_serial}`}>
       <summary>
-        {name ? (
-          <>
-            <span className="thread-name">"{name}"</span>{" "}
-            <span className="thread-serial">
-              Thread {t.thread_serial}
-            </span>{" "}
-            (<code>{cls}</code>)
-          </>
-        ) : (
-          <>
-            Thread {t.thread_serial} (<code>{cls}</code>)
-          </>
-        )}
-        {" "}— {fmtCount(t.frames.length)} frame
-        {t.frames.length === 1 ? "" : "s"}
-        {t.local_root_count > 0 ? (
-          <>
-            {" "}·{" "}
-            <span className="thread-locals">
-              {fmtCount(t.local_root_count)} local root
-              {t.local_root_count === 1 ? "" : "s"}
-            </span>
-          </>
-        ) : null}
+        <span className="thread-name">{name ? `"${name}"` : `Thread ${t.thread_serial}`}</span>
+        {name && <span className="thread-serial"> · Thread {t.thread_serial}</span>}
+        {" "}<span className="thread-meta-inline">
+          {formatBytes(t.retained)} retained
+          {stateLabel && <span className="thread-state-badge">{stateLabel}</span>}
+          {t.is_daemon && <span className="thread-daemon-badge">daemon</span>}
+        </span>
       </summary>
-      <dl className="thread-props">
-        <dt>Shallow Heap</dt>
-        <dd>{formatBytes(t.shallow)}</dd>
-        <dt>Retained Heap</dt>
-        <dd>{formatBytes(t.retained)}</dd>
-        <dt>Max. Locals' Retained</dt>
-        <dd>{formatBytes(t.max_local_retained)}</dd>
-        <dt>Context Class Loader</dt>
-        <dd>{t.context_class_loader ? <code>{t.context_class_loader}</code> : "—"}</dd>
-        <dt>Is Daemon</dt>
-        <dd>{t.is_daemon ? "true" : "false"}</dd>
-        <dt>Priority</dt>
-        <dd>{t.priority}</dd>
-        <dt>State</dt>
-        <dd>{t.thread_state || "—"}</dd>
-      </dl>
-      {t.local_objects && <ThreadLocalsTable objs={t.local_objects} />}
-      {sig.length > 0 ? (
-        <ul className="sig-frames">
-          {sig.map((sf, i) => (
-            <li key={i}>
-              <code>{sf.frame}</code>
-              {sf.locals.length > 0 && (
-                <ul>
-                  {sf.locals.map((loc, j) => (
-                    <li key={j}>
-                      <code>{loc.display_class}</code> retains {formatBytes(loc.retained)} (
-                      {loc.pct.toFixed(1)}%)
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <pre className="stack">{t.frames.join("\n")}</pre>
-      )}
+      <div className="thread-body">
+        <div className="thread-meta-row">
+          <span className="thread-meta-item"><span className="thread-meta-label">class</span><code>{cls}</code></span>
+          <span className="thread-meta-item"><span className="thread-meta-label">shallow</span>{formatBytes(t.shallow)}</span>
+          <span className="thread-meta-item"><span className="thread-meta-label">retained</span>{formatBytes(t.retained)}</span>
+          <span className="thread-meta-item"><span className="thread-meta-label">max local retained</span>{formatBytes(t.max_local_retained)}</span>
+          <span className="thread-meta-item"><span className="thread-meta-label">priority</span>{t.priority}</span>
+          {t.context_class_loader && (
+            <span className="thread-meta-item"><span className="thread-meta-label">loader</span><code>{fmtLoader(t.context_class_loader)}</code></span>
+          )}
+          {t.thread_state && (
+            <span className="thread-meta-item"><span className="thread-meta-label">state</span>{t.thread_state.replace(/[\[\]]/g, "")}</span>
+          )}
+        </div>
+        {t.local_objects && <ThreadLocalsTable objs={t.local_objects} />}
+        {sig.length > 0 ? (
+          <ul className="sig-frames">
+            {sig.map((sf, i) => (
+              <li key={i}>
+                <code>{sf.frame}</code>
+                {sf.locals.length > 0 && (
+                  <ul>
+                    {sf.locals.map((loc, j) => (
+                      <li key={j}>
+                        <code>{loc.display_class}</code>{" "}
+                        <span className="path-ret">retains {formatBytes(loc.retained)} ({loc.pct.toFixed(1)}%)</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <pre className="stack">{t.frames.join("\n")}</pre>
+        )}
+      </div>
     </details>
   );
 }
@@ -1570,7 +1565,7 @@ function ThreadOverviewTable({ threads }: { threads: ThreadInfo[] }) {
               <td className="num">{formatBytes(t.shallow)}</td>
               <td className="num">{formatBytes(t.retained)}</td>
               <td className="num">{formatBytes(t.max_local_retained)}</td>
-              <td>{t.context_class_loader ? <code>{t.context_class_loader}</code> : "—"}</td>
+              <td>{t.context_class_loader ? <code>{fmtLoader(t.context_class_loader)}</code> : "—"}</td>
               <td>{t.is_daemon ? "yes" : "no"}</td>
               <td className="num">{t.priority}</td>
               <td>{t.thread_state || "—"}</td>
