@@ -1,5 +1,5 @@
 import React from "react";
-import type { AllocSites, ArraysBySize, BiggestCollectionRow, BiggestCollections, ClassRow, CollectionAttribution, CollectionContents, CollectionsAnalysis, Component, DominatorAnalysis, FieldsBySize, FillRatioBucket, HeapComposition, HistRow, LeakIndicators, MergedPathNode, ObjRow, PackageNode, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalObj, TopArrays, TopComponents, UnreachableClassRow } from "./types";
+import type { AllocSites, ArraysBySize, BiggestCollectionRow, BiggestCollections, ClassRow, CollectionAttribution, CollectionContents, CollectionsAnalysis, Component, DominatorAnalysis, FieldsBySize, FillRatioBucket, HeapComposition, HistRow, KindStat, LeakIndicators, MergedPathNode, ObjRow, PackageNode, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalObj, TopArrays, TopComponents, UnreachableClassRow } from "./types";
 import { fmtCount, fmtExactBytes, formatBytes, formatEpochMs, pctOf, shortLoader } from "./format";
 import {
   CompositionStackedBar,
@@ -56,6 +56,46 @@ function ThemeToggle() {
     >
       {GLYPHS[mode]} Theme: {mode.charAt(0).toUpperCase() + mode.slice(1)}
     </button>
+  );
+}
+
+// ── Table expansion context ───────────────────────────────────────────────────
+// A global toggle that makes every capped table expand all its rows at once.
+const TableExpansionCtx = React.createContext(false);
+
+const TABLE_CAP = 20;
+
+function useCapped<T>(items: T[], cap = TABLE_CAP): {
+  visible: T[];
+  hasMore: boolean;
+  extra: number;
+  showAll: boolean;
+  setShowAll: (v: boolean) => void;
+} {
+  const expandAll = React.useContext(TableExpansionCtx);
+  const [showAll, setShowAll] = React.useState(false);
+  const open = expandAll || showAll;
+  return {
+    visible: open ? items : items.slice(0, cap),
+    hasMore: items.length > cap,
+    extra: items.length - cap,
+    showAll: open,
+    setShowAll,
+  };
+}
+
+function ShowMoreRow({ extra, cols, showAll, setShowAll }: { extra: number; cols: number; showAll: boolean; setShowAll: (v: boolean) => void }) {
+  if (extra <= 0) return null;
+  return (
+    <tr>
+      <td colSpan={cols} style={{ textAlign: "center", padding: "0.4rem 0" }}>
+        {showAll ? (
+          <button className="show-more-btn" onClick={() => setShowAll(false)}>Collapse</button>
+        ) : (
+          <button className="show-more-btn" onClick={() => setShowAll(true)}>Show {fmtCount(extra)} more</button>
+        )}
+      </td>
+    </tr>
   );
 }
 
@@ -396,7 +436,7 @@ function ClassHistogramTable({ rows }: { rows: HistRow[] }) {
   }, [rows, sortKey, filter]);
 
   const CAP = 500;
-  const shown = view.slice(0, CAP);
+  const { visible: shown, hasMore, extra, showAll, setShowAll } = useCapped(view, CAP);
 
   return (
     <details open>
@@ -447,6 +487,7 @@ function ClassHistogramTable({ rows }: { rows: HistRow[] }) {
               <td className="num">{formatBytes(h.retained)}</td>
             </tr>
           ))}
+          <ShowMoreRow extra={extra} cols={99} showAll={showAll} setShowAll={setShowAll} />
         </tbody>
       </table>
     </details>
@@ -1078,6 +1119,7 @@ function AccumulationPath({ s }: { s: Suspect }) {
 
 function DominatedByClass({ rows }: { rows: HistRow[] }) {
   if (rows.length === 0) return null;
+  const { visible, hasMore, extra, showAll, setShowAll } = useCapped(rows);
   return (
     <details>
       <summary>Accumulated objects grouped by class ({rows.length})</summary>
@@ -1091,7 +1133,7 @@ function DominatedByClass({ rows }: { rows: HistRow[] }) {
           </tr>
         </thead>
         <tbody>
-          {rows.map((r, i) => (
+          {visible.map((r, i) => (
             <tr key={i}>
               <td>
                 <code>{r.pretty_class}</code>
@@ -1101,6 +1143,7 @@ function DominatedByClass({ rows }: { rows: HistRow[] }) {
               <td className="num">{formatBytes(r.retained)}</td>
             </tr>
           ))}
+          <ShowMoreRow extra={extra} cols={4} showAll={showAll} setShowAll={setShowAll} />
         </tbody>
       </table>
     </details>
@@ -1336,6 +1379,8 @@ function TopConsumersSection({ report }: { report: Report }) {
 
   const objSort = useSortedRows<ObjRow>(t.biggest_objects, "retained");
   const clsSort = useSortedRows<ClassRow>(t.biggest_classes, "retained");
+  const objCap = useCapped(objSort.sorted);
+  const clsCap = useCapped(clsSort.sorted);
 
   return (
     <section id="top">
@@ -1354,7 +1399,7 @@ function TopConsumersSection({ report }: { report: Report }) {
           </tr>
         </thead>
         <tbody>
-          {objSort.sorted.map((o, i) => (
+          {objCap.visible.map((o, i) => (
             <tr key={i}>
               <td className="num">{i + 1}</td>
               <td>
@@ -1367,6 +1412,7 @@ function TopConsumersSection({ report }: { report: Report }) {
               <td className="num">{pctOf(o.retained, total).toFixed(1)}%</td>
             </tr>
           ))}
+          <ShowMoreRow extra={objCap.extra} cols={5} showAll={objCap.showAll} setShowAll={objCap.setShowAll} />
         </tbody>
       </table>
 
@@ -1381,7 +1427,7 @@ function TopConsumersSection({ report }: { report: Report }) {
           </tr>
         </thead>
         <tbody>
-          {clsSort.sorted.map((c, i) => (
+          {clsCap.visible.map((c, i) => (
             <tr key={i}>
               <td>
                 <span className="copy-cell">
@@ -1396,6 +1442,7 @@ function TopConsumersSection({ report }: { report: Report }) {
               <td className="num">{pctOf(c.retained, total).toFixed(1)}%</td>
             </tr>
           ))}
+          <ShowMoreRow extra={clsCap.extra} cols={4} showAll={clsCap.showAll} setShowAll={clsCap.setShowAll} />
         </tbody>
       </table>
 
@@ -1665,6 +1712,7 @@ function TopComponentsSection({ data }: { data: TopComponents }) {
     () => [...components].sort((a, b) => b[sortKey] - a[sortKey]),
     [components, sortKey],
   );
+  const { visible, extra, showAll, setShowAll } = useCapped(sorted);
   if (components.length === 0) return null;
   return (
     <section id="top-components">
@@ -1685,7 +1733,7 @@ function TopComponentsSection({ data }: { data: TopComponents }) {
             </tr>
           </thead>
           <tbody>
-            {sorted.map((c, i) => (
+            {visible.map((c, i) => (
               <tr key={i}>
                 <td>
                   <code title={c.loader_label ?? undefined}>{fmtLoader(c.loader_label ?? "")}</code>
@@ -1702,6 +1750,7 @@ function TopComponentsSection({ data }: { data: TopComponents }) {
                 </td>
               </tr>
             ))}
+            <ShowMoreRow extra={extra} cols={4} showAll={showAll} setShowAll={setShowAll} />
           </tbody>
         </table>
       </details>
@@ -2175,70 +2224,73 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
   );
 }
 
+function BiggestCollectionsTable({ rows, title }: { rows: BiggestCollectionRow[]; title: string }) {
+  if (rows.length === 0) return null;
+  const hasRetained = rows.some((r) => r.retained != null);
+  const hasOwner = rows.some((r) => r.owner != null);
+  const hasValue = rows.some((r) => r.dominant_value_type != null);
+  const hasBreakdown = rows.some((r) => (r.value_type_breakdown?.length ?? 0) > 0);
+  const totalElements = rows.reduce((s, r) => s + r.elements, 0);
+  const totalRetained = rows.reduce((s, r) => s + (r.retained ?? 0), 0);
+  const { visible, extra, showAll, setShowAll } = useCapped(rows);
+  return (
+    <>
+      <h3>{title}</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Kind</th>
+            <th>Container Class</th>
+            <th className="num">Elements</th>
+            {hasValue && <th>Value Type</th>}
+            {hasBreakdown && <th>Value Types (top)</th>}
+            {hasOwner && <th>Owner (Class#field)</th>}
+            {hasRetained && <th className="num">Retained</th>}
+          </tr>
+        </thead>
+        <tbody>
+          {visible.map((r, i) => (
+            <tr key={i}>
+              <td>{r.kind}</td>
+              <td><code>{r.container_class}</code></td>
+              <td className="num">{fmtCount(r.elements)}</td>
+              {hasValue && <td>{r.dominant_value_type ? <code>{r.dominant_value_type}</code> : "—"}</td>}
+              {hasBreakdown && (
+                <td>
+                  {!r.value_type_breakdown || r.value_type_breakdown.length === 0
+                    ? "—"
+                    : r.value_type_breakdown.map((s, j) => (
+                        <span key={j}>
+                          {j > 0 ? ", " : ""}
+                          <code>{s.type_name}</code> ×{fmtCount(s.count)}
+                        </span>
+                      ))}
+                </td>
+              )}
+              {hasOwner && <td>{r.owner ? <code>{r.owner}</code> : "—"}</td>}
+              {hasRetained && <td className="num">{r.retained != null ? formatBytes(r.retained) : "—"}</td>}
+            </tr>
+          ))}
+          <ShowMoreRow extra={extra} cols={99} showAll={showAll} setShowAll={setShowAll} />
+        </tbody>
+        <tfoot>
+          <tr>
+            <td className="num"><strong>Total</strong></td>
+            <td></td>
+            <td className="num"><strong>{fmtCount(totalElements)}</strong></td>
+            {hasValue && <td></td>}
+            {hasBreakdown && <td></td>}
+            {hasOwner && <td></td>}
+            {hasRetained && <td className="num"><strong>{formatBytes(totalRetained)}</strong></td>}
+          </tr>
+        </tfoot>
+      </table>
+    </>
+  );
+}
+
 function BiggestCollectionsSection({ data }: { data?: BiggestCollections }) {
   if (!data) return null;
-  const renderTable = (rows: BiggestCollectionRow[], title: string) => {
-    if (rows.length === 0) return null;
-    const hasRetained = rows.some((r) => r.retained != null);
-    const hasOwner = rows.some((r) => r.owner != null);
-    const hasValue = rows.some((r) => r.dominant_value_type != null);
-    const hasBreakdown = rows.some((r) => (r.value_type_breakdown?.length ?? 0) > 0);
-    const totalElements = rows.reduce((s, r) => s + r.elements, 0);
-    const totalRetained = rows.reduce((s, r) => s + (r.retained ?? 0), 0);
-    return (
-      <>
-        <h3>{title}</h3>
-        <table>
-          <thead>
-            <tr>
-              <th>Kind</th>
-              <th>Container Class</th>
-              <th className="num">Elements</th>
-              {hasValue && <th>Value Type</th>}
-              {hasBreakdown && <th>Value Types (top)</th>}
-              {hasOwner && <th>Owner (Class#field)</th>}
-              {hasRetained && <th className="num">Retained</th>}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r, i) => (
-              <tr key={i}>
-                <td>{r.kind}</td>
-                <td><code>{r.container_class}</code></td>
-                <td className="num">{fmtCount(r.elements)}</td>
-                {hasValue && <td>{r.dominant_value_type ? <code>{r.dominant_value_type}</code> : "—"}</td>}
-                {hasBreakdown && (
-                  <td>
-                    {!r.value_type_breakdown || r.value_type_breakdown.length === 0
-                      ? "—"
-                      : r.value_type_breakdown.map((s, j) => (
-                          <span key={j}>
-                            {j > 0 ? ", " : ""}
-                            <code>{s.type_name}</code> ×{fmtCount(s.count)}
-                          </span>
-                        ))}
-                  </td>
-                )}
-                {hasOwner && <td>{r.owner ? <code>{r.owner}</code> : "—"}</td>}
-                {hasRetained && <td className="num">{r.retained != null ? formatBytes(r.retained) : "—"}</td>}
-              </tr>
-            ))}
-          </tbody>
-          <tfoot>
-            <tr>
-              <td className="num"><strong>Total</strong></td>
-              <td></td>
-              <td className="num"><strong>{fmtCount(totalElements)}</strong></td>
-              {hasValue && <td></td>}
-              {hasBreakdown && <td></td>}
-              {hasOwner && <td></td>}
-              {hasRetained && <td className="num"><strong>{formatBytes(totalRetained)}</strong></td>}
-            </tr>
-          </tfoot>
-        </table>
-      </>
-    );
-  };
   return (
     <section id="biggest-collections">
       <h2>Biggest Collections</h2>
@@ -2247,8 +2299,8 @@ function BiggestCollectionsSection({ data }: { data?: BiggestCollections }) {
         value type is the dominant runtime element type (<code>varies</code> when none dominates).
         Owner/retained/value columns require <code>--collections</code>.
       </p>
-      {renderTable(data.combined, "Combined")}
-      {data.by_kind.map((k) => renderTable(k.rows, `By Kind — ${k.kind}`))}
+      <BiggestCollectionsTable rows={data.combined} title="Combined" />
+      {data.by_kind.map((k) => <BiggestCollectionsTable key={k.kind} rows={k.rows} title={`By Kind — ${k.kind}`} />)}
       {data.truncated && (
         <p className="subtitle">Collection value tally was truncated; ranking is a bounded sample.</p>
       )}
@@ -2259,6 +2311,7 @@ function BiggestCollectionsSection({ data }: { data?: BiggestCollections }) {
 function CollectionContentsSection({ data }: { data?: CollectionContents }) {
   if (!data) return null;
   const rows = data.rows ?? [];
+  const { visible, extra, showAll, setShowAll } = useCapped(rows);
   return (
     <section id="collection-contents">
       <h2>Collection Contents by Type</h2>
@@ -2279,7 +2332,7 @@ function CollectionContentsSection({ data }: { data?: CollectionContents }) {
             </tr>
           </thead>
           <tbody>
-            {rows.map((r, i) => (
+            {visible.map((r, i) => (
               <tr key={i}>
                 <td><code>{r.collection_class}</code></td>
                 <td className="num">{fmtCount(r.instances)}</td>
@@ -2296,6 +2349,7 @@ function CollectionContentsSection({ data }: { data?: CollectionContents }) {
                 </td>
               </tr>
             ))}
+            <ShowMoreRow extra={extra} cols={4} showAll={showAll} setShowAll={setShowAll} />
           </tbody>
         </table>
       )}
@@ -2315,6 +2369,7 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
   const rows = data.rows ?? [];
   const totalRetained = rows.reduce((s, r) => s + r.total_retained, 0);
   const totalPointees = rows.reduce((s, r) => s + r.pointees, 0);
+  const { visible, extra, showAll, setShowAll } = useCapped(rows);
   return (
     <section id="fields-by-size">
       <h2>Fields by Retained Size (Class#field)</h2>
@@ -2339,7 +2394,7 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
             </tr>
           </thead>
           <tbody>
-            {rows.map((r, i) => (
+            {visible.map((r, i) => (
               <tr key={i}>
                 <td><code>{r.holder_class}#{r.field}</code></td>
                 <td><code>{r.pointee_type}</code></td>
@@ -2350,6 +2405,7 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
                 <td className="num">{formatBytes(r.total_retained)}</td>
               </tr>
             ))}
+            <ShowMoreRow extra={extra} cols={7} showAll={showAll} setShowAll={setShowAll} />
           </tbody>
           <tfoot>
             <tr>
@@ -2376,12 +2432,9 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
 // ── References ──────────────────────────────────────────────────────────────
 // Soft/weak/phantom reference referents (what they point at). Always-on;
 // mirrors render_md.rs::render_references.
-function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
-  const kinds: ReferenceStats[] = [data?.soft, data?.weak, data?.phantom].filter(
-    (s): s is ReferenceStats => s != null,
-  );
-
-  const classTable = (rows: RefStatClassRow[]) => (
+function RefClassTable({ rows }: { rows: RefStatClassRow[] }) {
+  const { visible, extra, showAll, setShowAll } = useCapped(rows);
+  return (
     <table>
       <thead>
         <tr>
@@ -2391,13 +2444,14 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
         </tr>
       </thead>
       <tbody>
-        {rows.map((r, i) => (
+        {visible.map((r, i) => (
           <tr key={i}>
             <td><code>{r.pretty_class}</code></td>
             <td className="num">{fmtCount(r.objects)}</td>
             <td className="num">{formatBytes(r.shallow)}</td>
           </tr>
         ))}
+        <ShowMoreRow extra={extra} cols={3} showAll={showAll} setShowAll={setShowAll} />
       </tbody>
       <tfoot>
         <tr>
@@ -2407,6 +2461,12 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
         </tr>
       </tfoot>
     </table>
+  );
+}
+
+function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
+  const kinds: ReferenceStats[] = [data?.soft, data?.weak, data?.phantom].filter(
+    (s): s is ReferenceStats => s != null,
   );
 
   return (
@@ -2421,11 +2481,11 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
             <h3>{stats.kind} References</h3>
             <p className="subtitle">{fmtCount(stats.reference_instances)} reference instances.</p>
             <h4>Referent classes</h4>
-            {classTable(stats.referent_histogram ?? [])}
+            <RefClassTable rows={stats.referent_histogram ?? []} />
             {(stats.only_weakly_retained ?? []).length > 0 && (
               <>
                 <h4>Only-weakly retained (approximate)</h4>
-                {classTable(stats.only_weakly_retained)}
+                <RefClassTable rows={stats.only_weakly_retained} />
               </>
             )}
           </React.Fragment>
@@ -2545,11 +2605,19 @@ const UNREACHABLE_COLS: { key: UnreachableKey; label: string }[] = [
 
 function UnreachableCompositionTable({ comp }: { comp: HeapComposition }) {
   if (comp.by_kind.length === 0) return null;
+  // When prim_array_by_type is available, expand "Primitive arrays" into
+  // individual types so the chart shows byte[], int[], char[], etc.
+  const chartKinds: KindStat[] = React.useMemo(() => {
+    if (!comp.prim_array_by_type?.length) return comp.by_kind;
+    return comp.by_kind.flatMap((k) =>
+      k.kind === "Primitive arrays" ? comp.prim_array_by_type! : [k]
+    );
+  }, [comp]);
   return (
     <>
       <h3>Unreachable Heap Composition</h3>
-      <ChartOrNote hasData={comp.by_kind.length >= 2} note="Composition chart needs at least two kinds; showing the table only.">
-        <CompositionStackedBar data={comp.by_kind} />
+      <ChartOrNote hasData={chartKinds.length >= 2} note="Composition chart needs at least two kinds; showing the table only.">
+        <CompositionStackedBar data={chartKinds} />
       </ChartOrNote>
       <table>
         <thead>
@@ -2561,11 +2629,20 @@ function UnreachableCompositionTable({ comp }: { comp: HeapComposition }) {
         </thead>
         <tbody>
           {comp.by_kind.map((k, i) => (
-            <tr key={i}>
-              <td>{k.kind}</td>
-              <td className="num">{fmtCount(k.objects)}</td>
-              <td className="num">{formatBytes(k.shallow_heap)}</td>
-            </tr>
+            <React.Fragment key={i}>
+              <tr>
+                <td>{k.kind}</td>
+                <td className="num">{fmtCount(k.objects)}</td>
+                <td className="num">{formatBytes(k.shallow_heap)}</td>
+              </tr>
+              {k.kind === "Primitive arrays" && comp.prim_array_by_type?.map((p, j) => (
+                <tr key={`p${j}`} style={{ fontSize: "0.88em", color: "var(--muted)" }}>
+                  <td style={{ paddingLeft: "1.5rem" }}>{p.kind}</td>
+                  <td className="num">{fmtCount(p.objects)}</td>
+                  <td className="num">{formatBytes(p.shallow_heap)}</td>
+                </tr>
+              ))}
+            </React.Fragment>
           ))}
         </tbody>
       </table>
@@ -2577,6 +2654,7 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
   const rows: UnreachableClassRow[] = data?.unreachable_histogram ?? [];
   const [sortKey, setSortKey] = React.useState<UnreachableKey>("shallow");
   const sorted = React.useMemo(() => [...rows].sort((a, b) => b[sortKey] - a[sortKey]), [rows, sortKey]);
+  const { visible, extra, showAll, setShowAll } = useCapped(sorted);
   return (
     <section id="unreachable-objects">
       <h2>Unreachable Objects</h2>
@@ -2607,7 +2685,7 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
                 </tr>
               </thead>
               <tbody>
-                {sorted.map((r, i) => (
+                {visible.map((r, i) => (
                   <tr key={i}>
                     <td><code>{r.pretty_class}</code></td>
                     <td className="num">{fmtCount(r.objects)}</td>
@@ -2615,6 +2693,7 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
                     <td className="num">{formatBytes(r.retained)}</td>
                   </tr>
                 ))}
+                <ShowMoreRow extra={extra} cols={4} showAll={showAll} setShowAll={setShowAll} />
               </tbody>
               <tfoot>
                 <tr>
@@ -2930,6 +3009,8 @@ function SeriesTable({
     });
     return keyed;
   }, [rows, sortCol]);
+  const colCount = n + (showNew ? 3 : 2);
+  const { visible, extra, showAll, setShowAll } = useCapped(sorted);
 
   const th = (label: string, col: number, title: string) => {
     const active = sortCol === col;
@@ -2956,7 +3037,7 @@ function SeriesTable({
         </tr>
       </thead>
       <tbody>
-        {sorted.map((row) => (
+        {visible.map((row) => (
           <tr key={row.pretty_class}>
             <td><code>{row.pretty_class}</code></td>
             {Array.from({ length: n }, (_, i) => (
@@ -2968,6 +3049,7 @@ function SeriesTable({
             ) : null}
           </tr>
         ))}
+        <ShowMoreRow extra={extra} cols={colCount} showAll={showAll} setShowAll={setShowAll} />
       </tbody>
     </table>
   );
@@ -3106,6 +3188,8 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
 }
 
 export default function App({ report }: { report: Report }) {
+  const [expandAllTables, setExpandAllTables] = React.useState(false);
+
   // Scroll to the URL hash once the DOM has been painted after initial render.
   // The browser fires the native hash-scroll before React mounts, so we must
   // replay it here.
@@ -3118,6 +3202,7 @@ export default function App({ report }: { report: Report }) {
   }, []); // empty deps → runs once after first render
 
   return (
+    <TableExpansionCtx.Provider value={expandAllTables}>
     <div className="app">
       <a href="#triage" className="skip-link">Skip to content</a>
       <h1>
@@ -3125,6 +3210,9 @@ export default function App({ report }: { report: Report }) {
       </h1>
       <p className="subtitle">Generated by hprof-analyzer — {report.generated}</p>
       <div className="theme-toggle-wrap">
+        <button className="theme-toggle" onClick={() => setExpandAllTables((v) => !v)}>
+          {expandAllTables ? "⊟ Collapse tables" : "⊞ Expand all tables"}
+        </button>
         <ThemeToggle />
       </div>
       <Nav report={report} />
@@ -3158,5 +3246,6 @@ export default function App({ report }: { report: Report }) {
       <GlossarySection />
       <BackToTop />
     </div>
+    </TableExpansionCtx.Provider>
   );
 }

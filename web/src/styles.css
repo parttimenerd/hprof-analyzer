@@ -116,7 +116,9 @@ summary { cursor: pointer; color: var(--accent); font-size: 0.85rem; }
 /* Theme toggle pill — sits above the sticky nav. */
 .theme-toggle { background: var(--card); color: var(--fg); border: 1px solid var(--border); border-radius: 999px; padding: 0.25rem 0.7rem; font-size: 0.8rem; cursor: pointer; }
 .theme-toggle:hover { border-color: var(--accent); color: var(--accent); }
-.theme-toggle-wrap { display: flex; justify-content: flex-end; margin-bottom: 0.35rem; }
+.theme-toggle-wrap { display: flex; justify-content: flex-end; margin-bottom: 0.35rem; gap: 0.5rem; }
+.show-more-btn { background: none; border: 1px solid var(--border); border-radius: 4px; color: var(--accent); cursor: pointer; font-size: 0.82rem; padding: 0.2rem 0.7rem; }
+.show-more-btn:hover { background: var(--card); }
 
 /* Section scroll anchoring so the sticky nav does not hide headings. */
 section, .oom { scroll-margin-top: 3rem; }

@@ -34,6 +34,7 @@ export interface KindStat {
 
 export interface HeapComposition {
   by_kind: KindStat[];
+  prim_array_by_type?: KindStat[];
 }
 
 export interface DepthBucket {
