@@ -1451,6 +1451,13 @@
           "items": {
             "$ref": "#/$defs/KindStat"
           }
+        },
+        "prim_array_by_type": {
+          "description": "When primitive arrays are present, further split by element type\n(e.g. \"byte[]\", \"int[]\"). Omitted when empty or only one type.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/KindStat"
+          }
         }
       },
       "required": [

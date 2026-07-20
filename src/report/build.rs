@@ -1305,6 +1305,10 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
     // Same kind buckets, but for the UNREACHABLE heap (mirrors comp_objs/comp_sh).
     let mut unreach_comp_objs = [0u64; 4];
     let mut unreach_comp_sh = [0u64; 4];
+    // Per primitive-element-type breakdown for unreachable prim arrays:
+    // keys are human names like "byte[]"; collected then sorted by shallow desc.
+    let mut unreach_prim_by_type: std::collections::HashMap<&'static str, (u64, u64)> =
+        std::collections::HashMap::new();
     // retention_concentration: collect top-level (idom==vroot) retained values.
     let vroot_u32 = n as u32;
     let undef_u32 = u32::MAX;
@@ -1369,6 +1373,25 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
             let b = kind_idx(object_kind(g, i));
             unreach_comp_objs[b] += 1;
             unreach_comp_sh[b] += sh;
+            // Track prim-array sub-types for the composition chart.
+            if b == kind_idx("Primitive arrays") {
+                if let Some(raw) = g.class_names.get(ci_raw) {
+                    let human: &'static str = match raw.as_str() {
+                        "[B" => "byte[]",
+                        "[I" => "int[]",
+                        "[C" => "char[]",
+                        "[J" => "long[]",
+                        "[D" => "double[]",
+                        "[F" => "float[]",
+                        "[S" => "short[]",
+                        "[Z" => "boolean[]",
+                        _ => "prim[]",
+                    };
+                    let e = unreach_prim_by_type.entry(human).or_insert((0, 0));
+                    e.0 += 1;
+                    e.1 += sh;
+                }
+            }
             if ci_raw < class_count {
                 let ci = remap[ci_raw] as usize;
                 unreach_count[ci] += 1;
@@ -1445,7 +1468,7 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
                 shallow_heap: sh[b],
             })
             .collect();
-        HeapComposition { by_kind }
+        HeapComposition { by_kind, prim_array_by_type: vec![] }
     };
     // Unreachable-heap composition by kind (mirrors heap_composition; no
     // synthetic class-loader injection — that object is always reachable).
@@ -1460,7 +1483,21 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
                 shallow_heap: unreach_comp_sh[b],
             })
             .collect();
-        HeapComposition { by_kind }
+        // Per-type breakdown for primitive arrays; sort by shallow desc,
+        // include only when 2+ distinct types are present.
+        let mut prim_array_by_type: Vec<KindStat> = unreach_prim_by_type
+            .into_iter()
+            .map(|(name, (objects, shallow_heap))| KindStat {
+                kind: name.to_string(),
+                objects,
+                shallow_heap,
+            })
+            .collect();
+        prim_array_by_type.sort_by(|a, b| b.shallow_heap.cmp(&a.shallow_heap));
+        if prim_array_by_type.len() < 2 {
+            prim_array_by_type.clear();
+        }
+        HeapComposition { by_kind, prim_array_by_type }
     };
     // B2: dominator-depth histogram (depth = # idom hops up to vroot; 1 =
     // directly under vroot). The per-depth counts were tallied for free during

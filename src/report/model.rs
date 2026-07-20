@@ -99,6 +99,10 @@ pub struct KindStat {
 )]
 pub struct HeapComposition {
     pub by_kind: Vec<KindStat>,
+    /// When primitive arrays are present, further split by element type
+    /// (e.g. "byte[]", "int[]"). Omitted when empty or only one type.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prim_array_by_type: Vec<KindStat>,
 }
 
 /// One bucket of the dominator-depth histogram (B2): how many reachable objects

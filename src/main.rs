@@ -69,6 +69,7 @@ pub struct AnalyzeOptions {
     pub top_consumers: usize,
     pub dup_strings: bool,
     pub collections: bool,
+    pub unreachable_retained: bool,
     pub collection_config: Option<std::path::PathBuf>,
     pub(crate) coll_descs: Vec<crate::pass2::CollDesc>,
 }
@@ -165,6 +166,12 @@ struct Cli {
     /// ~300MB peak RSS). Analyze-only.
     #[arg(long)]
     collections: bool,
+
+    /// Compute retained size within the unreachable-object forest (opt-in;
+    /// adds ~`n * 4` bytes peak RSS where n is the total object count — up to
+    /// several GB on large dumps). Analyze-only.
+    #[arg(long)]
+    unreachable_retained: bool,
 
     /// Path to a TOML file defining custom collection handlers.
     /// Auto-discovers .hprof-analyzer.toml (CWD) or $HOME/.config/hprof-analyzer/collections.toml.
@@ -290,6 +297,7 @@ impl DetailLevel {
             top_consumers: tc,
             dup_strings: false,
             collections: false,
+            unreachable_retained: false,
             collection_config: None,
             coll_descs: Vec::new(),
         }
@@ -451,6 +459,7 @@ fn run_default(cli: Cli) {
         let opts = AnalyzeOptions {
             dup_strings: cli.dup_strings,
             collections: cli.collections,
+            unreachable_retained: cli.unreachable_retained,
             collection_config: cli.collection_config.clone(),
             coll_descs: crate::collection_config::load_collection_descs(
                 cli.collection_config.as_deref(),
@@ -473,6 +482,12 @@ fn run_default(cli: Cli) {
         if cli.collections {
             fail(
                 "--collections has no effect when re-rendering a saved report; \
+                  re-run on the .hprof dump to include it",
+            );
+        }
+        if cli.unreachable_retained {
+            fail(
+                "--unreachable-retained has no effect when re-rendering a saved report; \
                   re-run on the .hprof dump to include it",
             );
         }
@@ -798,22 +813,27 @@ fn run(
     // on it, and keep only a bounded per-class aggregate on `g` for the report
     // phase. shallow/class_idx are streamed out of their compressed blobs (never
     // re-inflated dense) so this adds no large array to the rpo/inbound peak.
-    let t = Instant::now();
-    progress::phase("retained size (unreachable forest)");
-    g.unreachable_retained = unreachable_retained::compute_unreachable_retained(
-        g.n,
-        &rpo.dfn,
-        &g.fwd_offsets,
-        &g.fwd_targets,
-        &shallow_c,
-        &class_idx_c,
-        g.class_names.len(),
-        &g.class_obj_class_idx,
-        &g.class_names,
-    )?;
-    crate::trace::probe("main: after unreachable_retained (fwd CSR + dfn still alive)");
-    log(verbose, "unreachable-retained", t.elapsed().as_secs_f64());
-    crate::trace::trim();
+    //
+    // Gated behind --unreachable-retained because `dense: Vec<u32>` allocates
+    // n * 4 bytes (all objects), adding several GB on large dumps.
+    if opts.unreachable_retained {
+        let t = Instant::now();
+        progress::phase("retained size (unreachable forest)");
+        g.unreachable_retained = unreachable_retained::compute_unreachable_retained(
+            g.n,
+            &rpo.dfn,
+            &g.fwd_offsets,
+            &g.fwd_targets,
+            &shallow_c,
+            &class_idx_c,
+            g.class_names.len(),
+            &g.class_obj_class_idx,
+            &g.class_names,
+        )?;
+        crate::trace::probe("main: after unreachable_retained (fwd CSR + dfn still alive)");
+        log(verbose, "unreachable-retained", t.elapsed().as_secs_f64());
+        crate::trace::trim();
+    }
 
     // Compress parent_pre (~2 GB dense) between RPO and inbound to reduce
     // the peak during the transpose loop. parent_pre is not needed until
