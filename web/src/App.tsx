@@ -398,7 +398,7 @@ function ClassHistogramTable({ rows }: { rows: HistRow[] }) {
   const shown = view.slice(0, CAP);
 
   return (
-    <details>
+    <details open>
       <summary>Show full class histogram ({fmtCount(rows.length)} rows)</summary>
       <div className="tools">
         <input

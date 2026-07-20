@@ -107,7 +107,7 @@ Gzip-compressed dumps (`.hprof.gz`) are read transparently.
 - **Very large dumps at bounded memory.** It streams the dump in two passes and
   keeps peak RSS well below the heap size. A large dump with a **~20 GiB
   live Java heap** (**33.4 GiB** as an uncompressed `.hprof` file, or **~7.5 GiB
-  gzip-compressed**) analyzes in **~17.5 minutes at ~14 GiB peak RSS**
+  gzip-compressed**) analyzes in **~13.5 minutes at ~14.7 GiB peak RSS**
   (see [Performance](#performance)). MAT typically needs a machine with memory
   comparable to the dump.
 - **Scriptable and CI-friendly.** It never prompts and never opens a window.
@@ -199,38 +199,6 @@ cd hprof-analyzer
 cargo build --release
 # binary at target/release/hprof-analyzer
 ```
-
-## Building and testing
-
-Requires a stable Rust toolchain (1.85+, edition 2024); see
-[Install](#install). All commands run from the repository root:
-
-```sh
-cargo build --release        # optimized binary at target/release/hprof-analyzer
-cargo test --release         # unit tests + JSON-schema + report parity fixtures
-cargo fmt --all -- --check   # formatting gate (matches CI)
-cargo clippy --release --all-targets -- -D warnings   # lint gate (matches CI)
-```
-
-CI (`.github/workflows/ci.yml`) runs the same `fmt`, `clippy -D warnings`, and
-`test` steps on `stable`. The parity fixtures the tests read live under
-`tests/fixtures/` (checked in alongside the tests).
-
-The self-contained HTML report embeds a small React bundle
-(`web/dist/bundle.js`). This bundle is a generated artifact that is
-**git-ignored, not committed**, so building the crate requires **Node.js/npm**
-on your `PATH`: `build.rs` runs esbuild to produce the bundle before the crate
-compiles, and fails with a clear error if `node`/`npm` are missing. When you
-change the web sources under `web/src/`, `build.rs` re-bundles automatically on
-the next `cargo build`; you can also rebuild it by hand:
-
-```sh
-cd web && npm install && npm run build   # regenerates web/dist/bundle.js
-```
-
-If you only need the binary and want to avoid the Node toolchain, download a
-prebuilt release binary instead (see [Install](#install)); the releases ship
-with the bundle already embedded.
 
 ## Usage
 
@@ -381,8 +349,9 @@ numbers are shared): a **~20 GiB live Java heap**, **33.4 GiB** uncompressed on
 disk. The other rows are reproducible public dumps you can regenerate: a
 **VS Code / Eclipse-based JVM** dump (~1 GiB file), and a
 **[HeapothesYs](https://github.com/corretto/heapothesys) HyperAlloc** synthetic
-allocation dump (~10 GiB file). All sizes are in binary units (GiB/MiB). Each
-row records the exact commit so the numbers stay meaningful as the tool evolves.
+allocation dump (~10 GiB file). All sizes are in binary units (GiB/MiB), and
+wall-clock times are `minutes:seconds`. Each row records the exact commit so the
+numbers stay meaningful as the tool evolves.
 
 All rows were measured on an AMD Ryzen Threadripper PRO 3995WX (64 cores /
 128 threads) with 123 GiB RAM. The "ours" columns are `hprof-analyzer`; the
@@ -390,9 +359,9 @@ All rows were measured on an AMD Ryzen Threadripper PRO 3995WX (64 cores /
 
 | Workload | Heap (live) | Dump file | RSS (ours) | RSS (MAT) | Wall (ours) | Wall (MAT) | Measured |
 |----------|-------------|-----------|------------|-----------|-------------|------------|----------|
-| Large real-world dump | ~20 GiB | 33.4 GiB (~7.5 GiB gzip) | 14.65 GiB | 62.05 GiB | 13 min 20.56 s | 27 min 16.15 s | 2026-07-19, commit `20ad99c` |
-| HeapothesYs HyperAlloc | 7.91 GiB | 10.32 GiB | 0.94 GiB | 20.32 GiB | 1 min 19.73 s | 1 min 48.40 s | 2026-07-19, commit `04f5e58` |
-| VS Code JVM | 0.73 GiB | 1.01 GiB | 0.49 GiB | 5.27 GiB | 21.63 s | 1 min 27.03 s | 2026-07-19, commit `04f5e58` |
+| Large real-world dump | ~20 GiB | 33.4 GiB (~7.5 GiB gzip) | 14.65 GiB | 62.05 GiB | 13:21 | 27:16 | 2026-07-19, commit `20ad99c` |
+| HeapothesYs HyperAlloc | 7.91 GiB | 10.32 GiB | 0.94 GiB | 20.32 GiB | 1:20 | 1:48 | 2026-07-19, commit `04f5e58` |
+| VS Code JVM | 0.73 GiB | 1.01 GiB | 0.49 GiB | 5.27 GiB | 0:22 | 1:27 | 2026-07-19, commit `04f5e58` |
 
 MAT was run with `ParseHeapDump.sh` (leak-suspects + top-components) with its
 `MemoryAnalyzer.ini` configured for `-Xmx60g`; peak RSS scales with the dump
@@ -415,8 +384,41 @@ formulas, and the compressed index structures are described in
 
 ## Contributing
 
-See [Building and testing](#building-and-testing) for build instructions and
-test configuration, and [DESIGN.md](DESIGN.md) for how to extend the analyzer.
+Contributions are welcome. See [DESIGN.md](DESIGN.md) for the two-pass parser,
+dominator-tree construction, size formulas, and index structures — the context
+you need to extend the analyzer.
+
+### Building and testing
+
+Requires a stable Rust toolchain (1.85+, edition 2024); see
+[Install](#install). All commands run from the repository root:
+
+```sh
+cargo build --release        # optimized binary at target/release/hprof-analyzer
+cargo test --release         # unit tests + JSON-schema + report parity fixtures
+cargo fmt --all -- --check   # formatting gate (matches CI)
+cargo clippy --release --all-targets -- -D warnings   # lint gate (matches CI)
+```
+
+CI (`.github/workflows/ci.yml`) runs the same `fmt`, `clippy -D warnings`, and
+`test` steps on `stable`. The parity fixtures the tests read live under
+`tests/fixtures/` (checked in alongside the tests).
+
+The self-contained HTML report embeds a small React bundle
+(`web/dist/bundle.js`). This bundle is a generated artifact that is
+**git-ignored, not committed**, so building the crate requires **Node.js/npm**
+on your `PATH`: `build.rs` runs esbuild to produce the bundle before the crate
+compiles, and fails with a clear error if `node`/`npm` are missing. When you
+change the web sources under `web/src/`, `build.rs` re-bundles automatically on
+the next `cargo build`; you can also rebuild it by hand:
+
+```sh
+cd web && npm install && npm run build   # regenerates web/dist/bundle.js
+```
+
+If you only need the binary and want to avoid the Node toolchain, download a
+prebuilt release binary instead (see [Install](#install)); the releases ship
+with the bundle already embedded.
 
 ## Support & Feedback
 
