@@ -74,17 +74,10 @@ dump:
 ./hprof-analyzer-*/hprof-analyzer heap.hprof report.html
 ```
 
-Open `report.html` in any browser. To read the report in your terminal instead,
-drop the output path and you get Markdown on stdout:
-
-```sh
-./hprof-analyzer-*/hprof-analyzer heap.hprof
-```
-
-To run it from anywhere, move the binary onto your `PATH` (e.g.
-`sudo mv hprof-analyzer-*/hprof-analyzer /usr/local/bin/`), then just
-`hprof-analyzer heap.hprof report.html`. The rest of this README assumes it is
-on your `PATH`.
+Open `report.html` in any browser. To run it from anywhere, move the binary
+onto your `PATH` (e.g. `sudo mv hprof-analyzer-*/hprof-analyzer /usr/local/bin/`),
+then just `hprof-analyzer heap.hprof report.html`. The rest of this README
+assumes it is on your `PATH`.
 
 ## One command, one report
 
