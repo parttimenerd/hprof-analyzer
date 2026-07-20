@@ -14,3 +14,6 @@ bigdump-rss.*
 tests/fixtures/dump_0_fj-kmeans.hprof
 tests/fixtures/dump_6_dec-tree.hprof
 tests/fixtures/dump_8_log-regression.hprof
+
+# Internal AI-assisted planning/spec docs — not part of the public project.
+docs/superpowers/
