@@ -34,10 +34,17 @@ fn main() {
             web.join("package.json").exists(),
             "web/package.json not found — cannot build the HTML report bundle"
         );
-        let install_cmd = if web.join("package-lock.json").exists() { "ci" } else { "install" };
+        let install_cmd = if web.join("package-lock.json").exists() {
+            "ci"
+        } else {
+            "install"
+        };
         assert!(run_npm(web, &[install_cmd]), "`npm {install_cmd}` failed");
         assert!(run_npm(web, &["run", "build"]), "`npm run build` failed");
-        assert!(bundle.exists(), "npm run build did not produce web/dist/bundle.js");
+        assert!(
+            bundle.exists(),
+            "npm run build did not produce web/dist/bundle.js"
+        );
     }
 
     compress_bundle(&bundle);
@@ -95,7 +102,9 @@ fn bundle_is_fresh(bundle: &Path, web: &Path) -> bool {
 }
 
 fn dir_has_newer(dir: &Path, threshold: SystemTime) -> bool {
-    let Ok(entries) = std::fs::read_dir(dir) else { return false };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
