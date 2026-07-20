@@ -17,19 +17,22 @@
 //! matches `DecompressionStream('deflate-raw')` end-to-end.
 
 use std::io::Write;
+use std::sync::OnceLock;
 
 use base64::Engine as _;
 use flate2::{Compression, write::DeflateEncoder};
 
 use crate::diff_reports::SeriesDiffResult;
 use crate::report::Report;
-/// The built React bundle (minified JS + inlined CSS), produced by `web/`'s
-/// esbuild build. It is a GENERATED artifact at `web/dist/bundle.js`
-/// (git-ignored) that `build.rs` regenerates before every compile.
-///
-/// `include_str!` fails the build if the file is missing; `build.rs` guarantees
-/// it exists by running the esbuild bundle as a hard build step.
-const BUNDLE_JS: &str = include_str!("../web/dist/bundle.js");
+/// The React bundle pre-compressed as raw-deflate by `build.rs`.
+/// base64-encoded directly into the HTML; the browser inflates it via
+/// `DecompressionStream('deflate-raw')`.
+static BUNDLE_DEFLATED: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/bundle.deflate"));
+
+fn bundle_b64() -> &'static str {
+    static CACHED: OnceLock<String> = OnceLock::new();
+    CACHED.get_or_init(|| base64::engine::general_purpose::STANDARD.encode(BUNDLE_DEFLATED))
+}
 
 /// Raw-DEFLATE (level 9) then base64-encode a byte slice. The codec matches the
 /// analyzer's `--format json` Deflate9 and the browser's `deflate-raw`.
@@ -51,7 +54,7 @@ pub fn render_html(r: &Report) -> String {
     // JSON.parses it — pretty-printing would only bloat the compressed blob).
     let json = serde_json::to_string(r).expect("Report serializes to JSON");
     let data_b64 = deflate_b64(json.as_bytes());
-    let bundle_b64 = deflate_b64(BUNDLE_JS.as_bytes());
+    let bundle_b64 = bundle_b64();
 
     let title = format!("Heap Dump Analysis: {}", r.overview.source_name);
     let title = html_escape(&title);
@@ -106,7 +109,7 @@ pub fn render_diff_html(d: &SeriesDiffResult) -> String {
     let envelope = serde_json::json!({ "kind": "series-diff", "diff": d });
     let json = serde_json::to_string(&envelope).expect("diff envelope serializes to JSON");
     let data_b64 = deflate_b64(json.as_bytes());
-    let bundle_b64 = deflate_b64(BUNDLE_JS.as_bytes());
+    let bundle_b64 = bundle_b64();
 
     let title = format!("Heap Dump Comparison ({} reports)", d.labels.len());
     let title = html_escape(&title);

@@ -8,29 +8,41 @@ Your JVM died with an `OutOfMemoryError` and left behind a multi-gigabyte
 34 GB file in a GUI or provisioning a machine as big as the dump.
 
 `hprof-analyzer` is a command-line tool that reads the dump and writes a
-report. It answers three questions Eclipse Memory Analyzer (MAT) answers, plus
-a threads view, at low memory, in a single file you can email or diff in CI.
+self-contained report covering the same ground as Eclipse MAT's System
+Overview, Leak Suspects, and Top Consumers analyses — plus a threads view. It
+streams the file in two passes so peak RSS stays well below the dump size: on a
+33 GiB dump it peaks at ~15 GiB where MAT needs ~62 GiB. The report is a
+single file you can email, attach to a ticket, or diff in CI.
 
 ## What you get
 
 Run one command and get a report with these sections:
 
-- **System Overview**: heap size, object and class counts, the biggest
-  consumers by class and by class loader, duplicate classes, and GC roots. Plus
-  a per-class histogram (with a "largest single instance" column), a raw HPROF
-  record census, and a top-dominator size distribution.
-- **Leak Suspects**: the objects that retain the most memory, the accumulation
-  points behind them, and what each one keeps alive, including the reference
-  chain from a suspect up to its GC root.
-- **Top Consumers**: the largest objects, classes, and class loaders by
-  retained size, and the biggest packages.
-- **Threads**: thread stacks, the thread objects, and the local variables they
-  keep alive.
-- **Duplicate strings** (opt-in, `--dup-strings`): approximate
-  duplicate-`java.lang.String` analysis: how many values are total / distinct /
-  duplicated, roughly how many bytes are wasted, the top 25 most-duplicated
-  values (with their exact text), a string-length histogram, and the top 25
-  classes holding the most String references.
+- **System Overview**: tells you how large the heap is, which classes and class
+  loaders dominate it, how many duplicate class definitions exist, and which GC
+  roots are anchoring memory. Includes a per-class histogram with a
+  "largest single instance" column so you can spot the one object inflating a
+  count.
+- **Leak Suspects**: identifies the objects retaining the most memory and traces
+  each one back to its GC root, so you can see the exact reference chain keeping
+  it alive — the same root-path view MAT shows in its Leak Suspects report.
+- **Top Consumers**: ranks classes, class loaders, and packages by *retained*
+  size (not just shallow size), so allocations hidden inside containers show up
+  under the right owner.
+- **Threads**: maps each thread's stack frames to the local variables they keep
+  alive, so thread-local accumulation is visible without a GUI.
+- **Duplicate strings** (opt-in, `--dup-strings`): quantifies wasted memory
+  from identical `java.lang.String` values — how many bytes are duplicated, the
+  top 25 offending values, a string-length histogram, and the top 25 classes
+  holding the most String references.
+- **Collections analysis** (opt-in, `--collections`): deep inspection of every
+  Map, List, Set, and array in the heap. Shows fill ratios (how full backing
+  arrays are), size distributions, map collision rates, the biggest individual
+  collections, constant primitive arrays that could be deduplicated, and
+  container attribution by `Class#field` — which field on which class holds the
+  most elements and retains the most memory across all live instances. Supports
+  standard JDK collections, Kotlin collections, and Eclipse Collections
+  out of the box; custom types can be registered via a TOML config file.
 
 Pick the format that fits: plain **Markdown**, **Markdown with ASCII graphs**
 (bars, sparklines, dominator trees), a self-contained **HTML** page you can open
@@ -79,37 +91,33 @@ onto your `PATH` (e.g. `sudo mv hprof-analyzer-*/hprof-analyzer /usr/local/bin/`
 then just `hprof-analyzer heap.hprof report.html`. The rest of this README
 assumes it is on your `PATH`.
 
-## One command, one report
-
-There is no subcommand to remember: hand the tool a `.hprof` dump and it
-analyzes it; hand it a saved report JSON and it re-renders it. With an output
-path it writes a file (format inferred from the extension); without one it
-prints Markdown to stdout.
+There is no subcommand to remember. Hand the tool a `.hprof` dump and it
+analyzes it; hand it a saved report JSON and it re-renders it to any format
+without re-parsing the dump. With an output path, the format is inferred from
+the extension; without one, it prints Markdown to stdout.
 
 ```sh
 hprof-analyzer heap.hprof report.html    # write an HTML report
 hprof-analyzer heap.hprof                 # or Markdown to stdout
 ```
 
-Analysis time scales with the dump: a small dump is done in seconds, while a
-multi-gigabyte large dump takes minutes (see [Performance](#performance)).
+Analysis time scales with the dump. A small dump is done in seconds; a
+multi-gigabyte dump takes minutes (see [Performance](#performance)).
 Gzip-compressed dumps (`.hprof.gz`) are read transparently.
 
 ## Why you might want it
 
-- **Very large dumps at bounded memory.** It streams the dump in two passes and
-  keeps peak RSS well below the heap size. A large dump with a **~20 GiB
-  live Java heap** (**33.4 GiB** as an uncompressed `.hprof` file, or **~7.5 GiB
-  gzip-compressed**) analyzes in **~13.5 minutes at ~14.7 GiB peak RSS**
-  (see [Performance](#performance)). MAT typically needs a machine with memory
-  comparable to the dump.
-- **Scriptable and CI-friendly.** It never prompts and never opens a window.
-  Emit JSON, diff two dumps to catch memory growth in a pipeline, or gate a
-  build on retained-size regressions.
-- **Emailable output.** The HTML report is a single self-contained file, with no
-  server and no external assets, so you can attach it to a ticket or share it as
-  is.
-- **Deterministic.** The Markdown output is byte-stable (modulo the generation
+- **Very large dumps at bounded memory.** Two-pass streaming keeps peak RSS far
+  below the dump size. A **33.4 GiB** dump (**~7.5 GiB** gzip-compressed,
+  **~20 GiB** live heap) analyzes in **~13.5 minutes at ~14.7 GiB peak RSS**,
+  where MAT needs ~62 GiB (see [Performance](#performance)). No heap-size flag
+  to tune.
+- **Scriptable and CI-friendly.** Never prompts, never opens a window. Emit
+  JSON, diff two dumps to catch memory growth in a pipeline, or gate a build on
+  retained-size regressions.
+- **Emailable output.** The HTML report is a single self-contained file with no
+  server and no external assets — attach it to a ticket or share it as-is.
+- **Deterministic.** Markdown output is byte-stable (modulo the generation
   timestamp), so it diffs cleanly across runs and across dumps.
 
 ## When to use alternatives
@@ -168,9 +176,7 @@ complains about a missing or too-old `libc`.
 
 ### 2. With Cargo
 
-Needs a **Rust toolchain (1.85+, edition 2024)** and **Node.js/npm** on your
-`PATH` — `build.rs` bundles the HTML report's JavaScript with esbuild at compile
-time (see [Building and testing](#building-and-testing)). Install
+Needs a **Rust toolchain (1.85+, edition 2024)**. Install
 [rustup](https://rustup.rs/) and run `rustup update stable` if your toolchain is
 older, then from a checkout of this repo:
 
@@ -179,12 +185,15 @@ cargo install --path .
 ```
 
 This installs `hprof-analyzer` into `~/.cargo/bin` (ensure it is on your
-`PATH`). If you would rather skip the Node toolchain, use a prebuilt binary
-(option 1).
+`PATH`). Node.js/npm is optional: the repository ships a pre-built
+`web/dist/bundle.js`, so the build works without it. If you modify the web
+sources under `web/src/`, npm is needed to regenerate the bundle
+(see [Building and testing](#building-and-testing)).
 
 ### 3. From source
 
-Same toolchain requirements as option 2 (Rust 1.85+ and Node.js/npm):
+Same toolchain requirements as option 2 (Rust 1.85+; Node.js/npm only needed
+if you change the web sources):
 
 ```sh
 git clone https://github.com/parttimenerd/hprof-analyzer
@@ -337,14 +346,14 @@ hprof-analyzer completions bash > /etc/bash_completion.d/hprof-analyzer
 
 ## Performance
 
-The headline run is a large real-world dump (only the resource
-numbers are shared): a **~20 GiB live Java heap**, **33.4 GiB** uncompressed on
-disk. The other rows are reproducible public dumps you can regenerate: a
-**VS Code / Eclipse-based JVM** dump (~1 GiB file), and a
+Three representative workloads are measured below: a large real-world dump
+(resource numbers shared but the dump itself is not), a
 **[HeapothesYs](https://github.com/corretto/heapothesys) HyperAlloc** synthetic
-allocation dump (~10 GiB file). All sizes are in binary units (GiB/MiB), and
-wall-clock times are `minutes:seconds`. Each row records the exact commit so the
-numbers stay meaningful as the tool evolves.
+allocation dump (~10 GiB file), and a **VS Code / Eclipse-based JVM** dump
+(~1 GiB file). The latter two are reproducible public dumps you can regenerate.
+All sizes are in binary units (GiB/MiB), and wall-clock times are
+`minutes:seconds`. Each row records the exact commit so the numbers stay
+meaningful as the tool evolves.
 
 All rows were measured on an AMD Ryzen Threadripper PRO 3995WX (64 cores /
 128 threads) with 123 GiB RAM. The "ours" columns are `hprof-analyzer`; the
@@ -398,26 +407,23 @@ CI (`.github/workflows/ci.yml`) runs the same `fmt`, `clippy -D warnings`, and
 `tests/fixtures/` (checked in alongside the tests).
 
 The self-contained HTML report embeds a small React bundle
-(`web/dist/bundle.js`). This bundle is a generated artifact that is
-**git-ignored, not committed**, so building the crate requires **Node.js/npm**
-on your `PATH`: `build.rs` runs esbuild to produce the bundle before the crate
-compiles, and fails with a clear error if `node`/`npm` are missing. When you
-change the web sources under `web/src/`, `build.rs` re-bundles automatically on
-the next `cargo build`; you can also rebuild it by hand:
+(`web/dist/bundle.js`). This bundle is committed to the repository so that
+`cargo install` and crates.io builds work without Node.js. When you change
+the web sources under `web/src/`, `build.rs` re-bundles automatically on the
+next `cargo build` if `npm` is on your `PATH`; you can also rebuild it by hand:
 
 ```sh
 cd web && npm install && npm run build   # regenerates web/dist/bundle.js
 ```
 
-If you only need the binary and want to avoid the Node toolchain, download a
-prebuilt release binary instead (see [Install](#install)); the releases ship
-with the bundle already embedded.
+If npm is absent, the committed bundle is used as-is. If you only need the
+binary and want to avoid the Node toolchain entirely, download a prebuilt
+release binary instead (see [Install](#install)).
 
 ## Support & Feedback
 
-This project is open to feature requests, suggestions, bug reports, and the
-like via [GitHub issues](https://github.com/parttimenerd/hprof-analyzer/issues).
-Contributions and feedback are encouraged and always welcome.
+Bug reports, feature requests, and contributions are welcome via
+[GitHub issues](https://github.com/parttimenerd/hprof-analyzer/issues).
 
 ## License
 

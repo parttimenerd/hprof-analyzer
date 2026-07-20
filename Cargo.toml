@@ -2,6 +2,7 @@
 name = "hprof-analyzer"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
 description = "Fast, low-memory Java HPROF heap-dump analyzer with Eclipse MAT-parity reports (System Overview, Leak Suspects, Top Consumers)."
 license = "MIT"
 repository = "https://github.com/parttimenerd/hprof-analyzer"
@@ -9,24 +10,32 @@ readme = "README.md"
 authors = ["Johannes Bechberger"]
 keywords = ["hprof", "heap-dump", "java", "memory", "oom"]
 categories = ["command-line-utilities", "development-tools::profiling"]
-exclude = ["tests/fixtures/*.hprof", ".git-worktrees/*", "docs/*"]
+exclude = ["tests/fixtures/*.hprof", ".git-worktrees/*", "docs/*", "*.png"]
 
 [dependencies]
 base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
-flate2 = "1.1.9"
+flate2 = "1"
+# default-features = false drops legacy/arrays/zdict_builder C extensions; only encode/decode needed
 zstd = { version = "0.13", default-features = false }
-libc = "0.2"
-scraper = "0.27.0"
+scraper = "0.27"
+# pinned to =1.2.1: schemars 1.x had breaking API changes; bump carefully
 schemars = "=1.2.1"
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.150"
-toml = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# only deserializing TOML; "display" feature (TOML serialization) is not needed
+toml = { version = "0.8", default-features = false, features = ["parse"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 jsonschema = "0.47.0"
 proptest = "1"
+
+[build-dependencies]
+flate2 = "1"
 
 # Clippy is run in CI (see .github/workflows/ci.yml). Most lints are enforced;
 # the allows below are deliberate patterns in the memory-critical hot paths,
