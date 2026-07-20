@@ -977,7 +977,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
             <tbody>
               {o.loader_rollup.map((r, i) => (
                 <tr key={i}>
-                  <td>{r.loader_label ?? `loader@${r.loader_id}`}</td>
+                  <td><code title={r.loader_label ?? undefined}>{r.loader_label ? fmtLoader(r.loader_label) : `loader@${r.loader_id}`}</code></td>
                   <td className="num">{fmtCount(r.class_count)}</td>
                   <td className="num">{fmtCount(r.instances)}</td>
                   <td className="num">{formatBytes(r.shallow)}</td>
@@ -1028,7 +1028,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
                               {d.per_loader.map((pl, j) => (
                                 <tr key={j}>
                                   <td>
-                                    <code>{pl.loader_label}</code>
+                                    <code title={pl.loader_label ?? undefined}>{pl.loader_label ? fmtLoader(pl.loader_label) : "—"}</code>
                                   </td>
                                   <td className="num">{fmtCount(pl.instances)}</td>
                                   <td className="num">{formatBytes(pl.shallow)}</td>
@@ -1688,7 +1688,7 @@ function TopComponentsSection({ data }: { data: TopComponents }) {
             {sorted.map((c, i) => (
               <tr key={i}>
                 <td>
-                  <code>{c.loader_label}</code>
+                  <code title={c.loader_label ?? undefined}>{fmtLoader(c.loader_label ?? "")}</code>
                 </td>
                 <td className="num">{formatBytes(c.retained)}</td>
                 <td className="num">{c.pct.toFixed(1)}%</td>

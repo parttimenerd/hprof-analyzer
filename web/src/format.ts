@@ -40,7 +40,9 @@ export function formatEpochMs(ms: number): string {
 export function shortLoader(label: string | null | undefined): string | null {
   if (!label) return null;
   if (label === "<boot>") return "<boot>";
-  const slash = label.lastIndexOf("/");
-  return slash >= 0 ? label.slice(slash + 1) : label;
+  // Strip " @ 0xADDR" suffix, normalize slashes to dots, then take last segment.
+  const clean = label.replace(/\s*@\s*0x[0-9a-fA-F]+$/, "").replaceAll("/", ".");
+  const dot = clean.lastIndexOf(".");
+  return dot >= 0 ? clean.slice(dot + 1) : clean;
 }
 

@@ -9,7 +9,7 @@ import type {
   RetentionSummary,
   Suspect,
 } from "./types";
-import { fmtCount, formatBytes } from "./format";
+import { fmtCount, formatBytes, shortLoader } from "./format";
 import { Pie as ChartPie, Bar as ChartBar } from "react-chartjs-2";
 import { themeColors, useThemeKey } from "./chartSetup";
 import "./chartSetup";
@@ -222,11 +222,11 @@ export function TopClassesChart({ data }: { data: HistRow[] }) {
 export function LoaderRollupChart({ data }: { data: LoaderRollup[] }) {
   if (data.length === 0) return null;
   const rows: Slice[] = data.map((r) => ({
-    name: r.loader_label ?? `loader@${r.loader_id}`,
+    name: shortLoader(r.loader_label) ?? `loader@${r.loader_id}`,
     value: r.retained,
   }));
   const titles = data.map(
-    (r) => `${r.loader_label ?? `loader@${r.loader_id}`} — ${fmtCount(r.class_count)} classes, ${formatBytes(r.retained)} retained`,
+    (r) => `${shortLoader(r.loader_label) ?? `loader@${r.loader_id}`} — ${fmtCount(r.class_count)} classes, ${formatBytes(r.retained)} retained`,
   );
   return <HBar data={rows} fmt={formatBytes} barColor={4} titles={titles} />;
 }
