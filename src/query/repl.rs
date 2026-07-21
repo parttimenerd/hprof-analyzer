@@ -74,9 +74,9 @@ fn handle_meta(cmd: &str, out: &mut impl Write) -> io::Result<bool> {
 /// `io::Error` so the caller prints `error: <msg>` and stays alive.
 fn run_one(path: &str, text: &str) -> io::Result<QueryResult> {
     let q = crate::query::parse::parse(text)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.0))?;
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("parse error: {}", e.0)))?;
     let plan = crate::query::plan::plan_query(&q)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.0))?;
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("plan error: {}", e.0)))?;
     let mut results = crate::query::run::run_single_dump(path, &[(q, plan)])?;
     Ok(results.pop().unwrap_or_else(|| QueryResult {
         name: "q1".into(),
