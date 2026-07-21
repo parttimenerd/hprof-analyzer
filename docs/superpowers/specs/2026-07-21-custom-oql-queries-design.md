@@ -146,9 +146,9 @@ in:
 | `SELECT * FROM java.lang.String s WHERE s.@GCRootInfo != null` | ⚠️ partial | needs GC-root flags live at match time; served only if the query is planned onto a phase where root info is available, else rejected with a clear message |
 | `SELECT dominators(s) FROM ... s` | ✅ | DominatorStage (P3, reads surviving `idom`/`dc_off`/`dc_tgt`) |
 | `SELECT s AS RETAINED SET FROM ... s` | ✅ | RetainedSetStage (P3, dominator-subtree closure over matches) |
-| `SELECT outbounds(s) FROM ... s` | ✅ (edge-retention) | keeps forward CSR resident to P3 when the query needs it |
-| `SELECT inbounds(s) FROM ... s` | ✅ (edge-retention) | keeps inbound CSR resident past the dominator when needed |
-| `SELECT path(a, b) FROM ...` | ⚠️ bounded | supported for bounded depth; needs both CSRs (heaviest); depth-capped |
+| `SELECT outbounds(s) FROM ... s` | ✅ (edge-retention) | bounded set: re-derives out-edges by a rescan (Lever 3), no forward CSR retained |
+| `SELECT inbounds(s) FROM ... s` | ✅ (edge-retention) | keeps only matched rows' inbound adjacency, in compressed delta+vbyte form (Levers 1–2) |
+| `SELECT path(a, b) FROM ...` | ⚠️ bounded | bounded depth over the pruned matched-class subgraph (Lever 4); depth-capped |
 | `SELECT * FROM A UNION (SELECT * FROM B)` | ✅ (homogeneous) | each branch planned independently, rows concatenated; mixed-shape/nested rejected |
 
 The former "raw-edge family" gap is closed on demand: `inbounds`/`outbounds`/
@@ -217,40 +217,79 @@ resident at report time*, with zero extra memory or passes.
 The reference CSRs are freed mid-pipeline **for a memory reason, not a logical
 one**: `main.rs` frees the forward CSR inside `build_from_fwd` and drops the
 inbound CSR right after `compute_dominators`, with comments citing a ~7.5 GB CSR
-and a ~22 GB global RSS peak. So the edges *can* be kept — it just costs RSS. The
-design serves raw-edge primitives **only when a query in the run actually needs
-them**, so the common case pays nothing:
+and a ~22 GB global RSS peak. The naive fix — "keep the whole CSR when a query
+needs edges" — reintroduces exactly that multi-GB array and is unacceptable. So
+edge primitives are served by **retaining as little of the graph as the query can
+actually touch, in the compressed form the pipeline already produces**, driven by
+four levers. The common case (no edge query) pays nothing; an edge query pays for
+a pruned, compressed slice rather than the full CSR.
 
-- The planner runs **before pass2** (it only needs the parsed AST + P0 schema).
-  If any query uses `outbounds`, it sets `retain_forward`; if any uses `inbounds`,
-  it sets `retain_inbound`; `path(a,b)` sets both. These flags are threaded into
-  the pipeline setup.
-- `retain_forward` → the forward CSR is **not** `mem::take`-n into the inbound
-  transpose destructively; it is cloned/kept so it survives to the P3 query window.
-  `retain_inbound` → the `drop(inb_block_off)/drop(inb_data)` after the dominator
-  is **skipped**, keeping the inbound CSR alive.
-- At the P3 query window, `outbounds(x)` reads the forward CSR slice at `x`;
-  `inbounds(x)` reads the inbound CSR slice at `x`; both are direct O(degree)
-  lookups over the retained arrays, feeding the bounded accumulator.
-- **Bounded `path(a, b)`** is a capped BFS over the retained forward (or inbound)
-  CSR from `a` toward `b`, depth-limited by a small default cap
-  (`--query-path-depth`, e.g. 5) and frontier-capped like a RefWalk. An unbounded
-  request is rejected up front naming the cap.
+**Lever 1 — retain rows, not the graph (class-index row pruning).** The planner
+already knows the `FROM` class spec, so it knows the *matched-class row set*
+before pass2. Only the CSR rows whose source node is in that set can ever be read
+by `inbounds`/`outbounds` on the query alias. The planner emits a
+`retain_rows: ClassBitset` alongside the retain flag; the pipeline keeps only the
+adjacency of matched rows and discards the rest as the CSR is walked. For the
+typical single-class `FROM com.example.Foo`, the retained fraction is
+(instances-of-Foo / all-nodes) — usually a low-single-digit percent, not 100 %.
 
-**Cost model, made explicit.** Retaining a CSR reintroduces exactly the ~7.5 GB
-(inbound) or comparable (forward) array the pipeline worked to free, so on a very
-large dump an edge query raises peak RSS materially. This is:
-- **opt-in** — incurred only when an `inbounds`/`outbounds`/`path` query is present
-  in the run;
+**Lever 2 — keep the existing delta+vbyte block encoding (no flat expansion).**
+`inb_data` is *already* delta-encoded and vbyte-compressed (~4×, `src/vbyte.rs`,
+"output must not change") and lives in freeable 256 MB chunks (`ChunkU32`,
+`src/chunkvec.rs`). Retention keeps those exact compressed blocks for the pruned
+rows; it does **not** expand them into a flat `Vec<u32>`. At query time each
+`inbounds(x)` decodes one row's block on demand via `vbyte::decode_delta` — cheap,
+O(degree), and the retained footprint stays at the pipeline's ~4×-compressed size.
+The forward CSR, when retained, reuses the same block-delta-vbyte scheme rather
+than a flat array.
+
+**Lever 3 — re-derive `outbounds` by a scan instead of retaining the forward
+CSR.** The forward CSR is the heavier of the two and is consumed earliest. For an
+`outbounds` query over a *bounded matched set*, we do not retain it at all:
+instead the runner performs one extra P1-style resolve-scan over just the matched
+objects' field regions (reusing the `AddrFrontier` batched-resolve mechanism
+already in the spec), emitting each object's outbound targets directly into the
+bounded accumulator. This trades a small, bounded second scan for eliminating the
+single largest retained array. Full-forward retention is only used as a fallback
+when the matched set is not bounded (which the planner otherwise rejects).
+
+**Lever 4 — matched-class subgraph only for `path`.** Bounded `path(a, b)` never
+retains a whole CSR. It retains only the pruned subgraph induced by the
+matched-class row set (via Lever 1, compressed via Lever 2), and runs a capped BFS
+(`--query-path-depth`, default 5) with a frontier cap like a RefWalk. Both `a` and
+`b` must resolve within the retained subgraph; an unbounded or unrooted request is
+rejected up front naming the cap.
+
+**Cost model, made explicit.** Peak RSS added by an edge query is
+`retained_fraction × compressed_CSR_size`, not the full ~7.5 GB. For a
+single-class edge query on a large dump that is typically tens to low-hundreds of
+MB, and `outbounds` (Lever 3) adds essentially nothing beyond one bounded rescan.
+This is:
+- **opt-in** — incurred only when an `inbounds`/`outbounds`/`path` query is present;
+- **pruned + compressed** — Levers 1–2 bound the retained set to matched rows in
+  the pipeline's own ~4× encoding; Lever 3 avoids forward retention entirely for
+  the bounded case;
 - **surfaced** — `!plan`/`!explain` and a one-line note on the query result state
-  "this query retained the <forward|inbound> reference graph (+~N GB RSS)";
-- **capped** — result frontiers/rows are still bounded; retention affects the CSR
-  arrays' RSS, not unbounded query-side allocation.
+  "retained ~N MB of the <forward|inbound> graph (M% of rows, compressed)";
+- **capped** — result frontiers/rows are bounded independently of retention.
 
-Because the flags are computed pre-pass2 from the AST, a run with no edge queries
-is byte-for-byte and RSS-for-RSS identical to today. This is the same
-"adaptive: pay only for what the query touches" principle as the phase planner,
-extended to the pipeline's own teardown decisions.
+Because the flags *and* the row bitset are computed pre-pass2 from the AST + P0
+schema, a run with no edge queries is byte-for-byte and RSS-for-RSS identical to
+today. This is the same "adaptive: pay only for what the query touches" principle
+as the phase planner, sharpened from "which arrays" to "which *rows*, in which
+*encoding*".
+
+The planner surface reflects this: `RunFlags` carries not just booleans but the
+pruning set —
+
+```rust
+pub struct RunFlags {
+    pub retain_forward: bool,          // fallback: unbounded outbounds/path
+    pub retain_inbound: bool,          // inbounds present
+    pub retain_rows: Option<ClassBitset>, // Lever 1: only these source rows
+    pub outbounds_by_rescan: bool,     // Lever 3: bounded outbounds, no fwd retain
+}
+```
 
 ## Homogeneous UNION
 
@@ -321,9 +360,14 @@ pub struct QueryPlan {
 
 // Run-level flags, unioned across ALL queries in the run and consumed BEFORE
 // pass2 so the pipeline can decide what to keep resident (see edge retention).
+// Retention is row-pruned (Lever 1) and stays in the pipeline's compressed
+// delta+vbyte block form (Lever 2); bounded outbounds avoids forward retention
+// via a rescan (Lever 3).
 pub struct RunFlags {
-    pub retain_forward: bool,     // some query needs outbounds / path
-    pub retain_inbound: bool,     // some query needs inbounds / path
+    pub retain_inbound: bool,             // some query needs inbounds / path
+    pub retain_forward: bool,             // fallback only: unbounded outbounds/path
+    pub retain_rows: Option<ClassBitset>, // Lever 1: keep adjacency of these source rows only
+    pub outbounds_by_rescan: bool,        // Lever 3: bounded outbounds -> extra P1-style scan, no fwd retain
 }
 
 pub struct Stage {
@@ -352,8 +396,8 @@ this exact map (verified against `main.rs::run` + `pass2::build`):
 |---|---|---|
 | **P0 schema** (pass1 done) | class table: names, superclass chain, per-field `(name, type)`; loader labels | — (schema stays cheap) |
 | **P1 field-decode scan** (in `pass2::build`, `scan_all_records`) | every object's raw blob + `class_id`; `IdMap` (addr→index) live; field offsets decodable; String-decode machinery live | `id_map`/field plans freed at end of pass2 |
-| **P2 forward CSR** (post-pass2, pre-inbound) | `fwd_offsets`/`fwd_targets` (out-edges per object) + reachability `dfn` | moved into inbound transpose, then freed — *unless `retain_forward` is set* (see edge retention) |
-| **P3 dominator/retained** (late, in `main.rs`) | `idom`, `retained[]`, `shallow[]`, `class_idx[]` (restored); dominator-children CSR `dc_off`/`dc_tgt` (live *during* `build_model`); inbound CSR *if `retain_inbound` set*; forward CSR *if `retain_forward` set* | `dc_*` dropped post-`build_model`; retained edge CSRs dropped after the query window; `idom`/`retained` at end of pipeline |
+| **P2 forward CSR** (post-pass2, pre-inbound) | `fwd_offsets`/`fwd_targets` (out-edges per object) + reachability `dfn` | moved into inbound transpose, then freed — bounded `outbounds` re-derives edges by rescan (Lever 3) rather than retaining this; full retention only for the unbounded fallback |
+| **P3 dominator/retained** (late, in `main.rs`) | `idom`, `retained[]`, `shallow[]`, `class_idx[]` (restored); dominator-children CSR `dc_off`/`dc_tgt` (live *during* `build_model`); *pruned+compressed* inbound-CSR rows *if `retain_inbound` set* (matched rows only, delta+vbyte); forward CSR *only if the unbounded fallback is taken* | `dc_*` dropped post-`build_model`; retained edge rows dropped after the query window; `idom`/`retained` at end of pipeline |
 | **P4 histogram** (build_model) | per-class aggregates: instances/shallow/retained | report phase |
 
 The two load-bearing consequences the planner must encode:
@@ -381,17 +425,21 @@ Retained                   any use of @retainedHeapSize (P3-only)
 RuntimeType                @clazz / classof / INSTANCEOF on a value's *runtime* class
 DominatorTree { mode }     dominators(x) (children) or AS RETAINED SET (subtree
                            closure) — reads surviving idom/dc_*/retained at P3
-Edges { dir, path }        outbounds/inbounds/bounded-path — sets retain_forward
-                           and/or retain_inbound pre-pass2; reads the retained CSR
-                           at P3
+Edges { dir, path }        outbounds/inbounds/bounded-path. Sets retain_rows to
+                           the matched-class bitset (Lever 1) so only those source
+                           rows' compressed adjacency is kept (Lever 2). inbounds
+                           -> retain_inbound; bounded outbounds -> outbounds_by_rescan
+                           (Lever 3, no forward retention); path -> pruned subgraph
+                           only (Lever 4). Reads at P3.
 ```
 
 Beyond the per-query `QueryNeeds`, the planner emits **run-level pipeline flags**
-consumed *before pass2*: `retain_forward` / `retain_inbound` (set if any query
-needs `outbounds`/`inbounds`/`path`) tell the pipeline not to free the
-corresponding reference CSR (see "Query-gated edge retention"). These are unioned
-across all queries in the run, so a single edge query in a pack retains the graph
-for that run and no other.
+consumed *before pass2*: `retain_inbound` / `retain_forward` / `retain_rows` /
+`outbounds_by_rescan` (set if any query needs `outbounds`/`inbounds`/`path`) tell
+the pipeline *which rows* of *which* reference CSR to keep, in compressed form,
+and when to prefer a bounded rescan over retention (see "Query-gated edge
+retention"). These are unioned across all queries in the run, so a single edge
+query in a pack retains the pruned graph for that run and no other.
 
 The planner unions these across SELECT, WHERE, GROUP BY, and ORDER BY. Each
 requirement carries the **minimal field/edge set** it touches — never "all fields
@@ -741,10 +789,13 @@ Test-driven throughout. Layers:
      the `dc_*` window); `SELECT s AS RETAINED SET FROM ...` (assert `RetainedSet`
      stage).
    - **Edge primitives + run flags**: `SELECT outbounds(s) FROM ...` (assert
-     `RunFlags.retain_forward` set, `EdgeLookup` stage); `inbounds(s)` (assert
-     `retain_inbound`); bounded `path(a,b)` (assert both flags + `BoundedPath`
-     stage + depth cap); assert *unbounded* `path` and a run with **no** edge query
-     leaves both flags false (proving the common case is unaffected).
+     `outbounds_by_rescan` set and `retain_forward` **false** — Lever 3 avoids
+     forward retention; `EdgeLookup` stage present); `inbounds(s)` (assert
+     `retain_inbound` set *and* `retain_rows` populated with the matched-class
+     bitset — Lever 1); bounded `path(a,b)` (assert pruned-subgraph retention +
+     `BoundedPath` stage + depth cap); assert *unbounded* `path` is rejected, and
+     a run with **no** edge query leaves all retain flags false / `retain_rows`
+     `None` (proving the common case is byte/RSS-identical).
    - **Homogeneous UNION**: `SELECT * FROM A UNION (SELECT * FROM B)` (assert two
      `union_branches` sub-plans, shared cap); assert a mixed-column-shape UNION is
      rejected naming the mismatch.
@@ -820,9 +871,12 @@ shippable and independently tested:
    the same stage machinery, arbitrary 3+-phase spans.
 6. Dominator primitives (`dominators()`, `AS RETAINED SET`) as P3 stages hooked
    into the `build_model` `dc_*` window — reusing the surviving dominator tree.
-7. Query-gated edge retention: `RunFlags` computed pre-pass2, pipeline honors
-   `retain_forward`/`retain_inbound`, `EdgeLookup` + bounded `BoundedPath` stages.
-   (Sequenced late because it touches the pipeline's teardown decisions.)
+7. Query-gated edge retention: `RunFlags` (incl. `retain_rows` bitset +
+   `outbounds_by_rescan`) computed pre-pass2; pipeline retains only matched rows'
+   compressed adjacency (Levers 1–2), re-derives bounded `outbounds` by rescan
+   (Lever 3), and confines `path` to the pruned subgraph (Lever 4). `EdgeLookup`
+   + bounded `BoundedPath` stages. (Sequenced late because it touches the
+   pipeline's teardown decisions.)
 8. Homogeneous `UNION` (sub-plan-per-branch + row concatenation).
 9. TOML input + CLI wiring + golden e2e fixtures.
 10. Interactive `query` subcommand (`!plan`/`!explain`/`!schema`) — a thin
@@ -852,15 +906,20 @@ steps 7–8 close the raw-edge and set-union gaps for the users who need them.
   payloads), not just retained joins.
 - **Grammar scope creep**: the subset is deliberately fixed; anything outside it
   errors rather than silently under-delivering.
-- **Edge-retention RSS**: an `inbounds`/`outbounds`/`path` query forces the
-  pipeline to keep a reference CSR resident that it otherwise frees at the
-  ~7.5 GB / ~22 GB peak window, so on very large dumps such a query raises peak
-  RSS materially. Mitigated by making it strictly **opt-in** (only when such a
-  query is in the run — computed pre-pass2, so no-edge runs are unaffected),
-  **surfaced** (`!plan`/`!explain` and the result note report the retention +
-  estimated GB), and **capped** on the query side. It is an explicit
-  capability-for-memory trade the user opts into by writing the query; the
-  default report path is untouched. `path(a,b)` is additionally depth-capped.
+- **Edge-retention RSS**: an `inbounds`/`outbounds`/`path` query keeps some
+  reference-graph data resident that the pipeline otherwise frees near the
+  ~22 GB peak window. This is *not* the full ~7.5 GB CSR: retention is
+  **row-pruned** to the matched-class rows (Lever 1) and stays in the pipeline's
+  **compressed delta+vbyte block** form (Lever 2, ~4×), so the added peak is
+  `matched_fraction × compressed_size` — typically tens to low-hundreds of MB for
+  a single-class edge query. Bounded `outbounds` retains nothing extra, deriving
+  edges by one bounded rescan (Lever 3); `path` retains only the pruned subgraph
+  (Lever 4) and is depth-capped. Further mitigated by making it strictly
+  **opt-in** (computed pre-pass2, so no-edge runs are byte/RSS-identical) and
+  **surfaced** (`!plan`/`!explain` + result note report retained MB and % of
+  rows). The residual risk is a pathological `FROM` matching a huge fraction of
+  all objects *and* using edges; the planner surfaces the estimate so the user
+  sees the cost before running.
 - **MAT `LIKE` regex fidelity**: `LIKE` is a Java regex in MAT. We use the
   Rust `regex` crate, whose syntax covers the vast majority of Java patterns but
   differs on a few Java-specific constructs (e.g. certain named groups /
