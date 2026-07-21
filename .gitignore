@@ -30,3 +30,9 @@ tests/fixtures/dump_8_log-regression.hprof
 # Internal AI-assisted planning/spec docs — not part of the public project.
 docs/superpowers/
 docs/missing-views-plan.md
+
+# Scratch files from local dev runs.
+/_ours.md
+/_mdgraphs.md
+tests/fixtures/*.md
+tests/fixtures/dump_1_mnemonics.hprof.zip
