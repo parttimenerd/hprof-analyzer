@@ -448,6 +448,12 @@ pub fn validate_fields(q: &Query, schema: &dyn FieldSchema) -> Result<(), QueryE
     }
 
     for name in referenced {
+        // A bare reference to the FROM alias itself (e.g. `SELECT s ... String s`,
+        // as used by `AS RETAINED SET`) denotes the whole object, not a field, so
+        // it is never a field lookup and must not be validated as one.
+        if q.alias.as_deref() == Some(name.as_str()) {
+            continue;
+        }
         let bare = strip_alias(&name, q.alias.as_deref());
         if !known.iter().any(|f| f == bare) {
             return Err(QueryError(format!(
@@ -1040,6 +1046,18 @@ mod tests {
         let q2 = parse("SELECT s.bogus FROM java.lang.String s").unwrap();
         let err = validate_fields(&q2, &schema).unwrap_err();
         assert!(err.0.contains("unknown field `bogus`"), "got: {}", err.0);
+    }
+
+    #[test]
+    fn validate_accepts_bare_alias_reference() {
+        // A bare reference to the FROM alias (`SELECT s ... String s`, as
+        // emitted by `AS RETAINED SET`) denotes the whole object, not a field,
+        // so it must not be validated as (and rejected as) an unknown field.
+        let schema = FakeSchema { class: "java.lang.String", fields: vec!["count", "hash"] };
+        let q = parse("SELECT s FROM java.lang.String s").unwrap();
+        assert!(validate_fields(&q, &schema).is_ok(), "bare alias must be accepted");
+        let q2 = parse("SELECT s AS RETAINED SET FROM java.lang.String s").unwrap();
+        assert!(validate_fields(&q2, &schema).is_ok(), "AS RETAINED SET bare alias must be accepted");
     }
 
     #[test]

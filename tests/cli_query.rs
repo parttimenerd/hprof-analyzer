@@ -634,6 +634,218 @@ fn retained_query_returns_rows_via_stage_runner() {
     );
 }
 
+/// Run a single query through the `query` subcommand and return its integer row
+/// count, extracted from the printed `(N row[s])` footer. Returns `None` if the
+/// query exited non-zero or no row-count line was found. Private test helper.
+fn query_row_count(hprof: &str, oql: &str) -> Option<u64> {
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(hprof)
+        .args(["--query", oql])
+        .output()
+        .unwrap();
+    if !out.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // The subcommand prints a footer line like `(24760 rows)` / `(1 row)`. Find
+    // the line containing the word `row` and parse the leading integer inside.
+    stdout.lines().rev().find_map(|l| {
+        let t = l.trim();
+        if !t.contains("row") {
+            return None;
+        }
+        // Strip a leading `(` then take the leading digit run.
+        let digits: String = t
+            .trim_start_matches('(')
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        digits.parse::<u64>().ok()
+    })
+}
+
+/// `dominators(s)` needs the FULL analysis pipeline (the dominator tree only
+/// exists after pass 3), so it is exercised through the ANALYZE path, not the
+/// `query` subcommand. It must render a real `## Custom Queries` section with a
+/// `dominators(s)` result column and exit 0 — mirroring the retained stage-runner
+/// guard. A regression that dropped the late dominator op would surface either an
+/// error block or a missing section.
+#[test]
+fn dominators_query_returns_rows_via_analyze_path() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg(&hprof)
+        .args(["--query", "SELECT dominators(s) FROM java.lang.String s"])
+        .args(["-f", "md"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "analyze with dominators query failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let md = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        md.contains("## Custom Queries"),
+        "dominators query section missing:\n{md}"
+    );
+    assert!(
+        md.contains("dominators(s)"),
+        "dominators result column header missing:\n{md}"
+    );
+    // The late dominator op must have finalized in the pipeline, not fallen into
+    // the query-only error path.
+    assert!(
+        !md.contains("requires the full analysis pipeline"),
+        "dominators query hit the query-only error path in the FULL analyze path:\n{md}"
+    );
+    // The rendered result must not be an error block.
+    let section = &md[md.find("## Custom Queries").unwrap()..];
+    assert!(
+        !section.contains("**Error:**"),
+        "dominators query rendered an error block:\n{section}"
+    );
+}
+
+/// `SELECT s AS RETAINED SET FROM ... s` expands each match to its dominator-
+/// retained closure and therefore also needs the FULL analysis pipeline. It must
+/// render a real `## Custom Queries` section, exit 0, and — critically — NOT fall
+/// into the query-only `requires the full analysis pipeline` error path. A
+/// meaningful RETAINED SET result is a rendered table, NOT an error block, so we
+/// also assert the section carries no `**Error:**` block.
+#[test]
+fn retained_set_query_returns_rows_via_analyze_path() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg(&hprof)
+        .args([
+            "--query",
+            "SELECT s AS RETAINED SET FROM java.lang.String s \
+             WHERE @retainedHeapSize > 0 LIMIT 5",
+        ])
+        .args(["-f", "md"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "analyze with RETAINED SET query failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let md = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        md.contains("## Custom Queries"),
+        "RETAINED SET query section missing:\n{md}"
+    );
+    assert!(
+        !md.contains("requires the full analysis pipeline"),
+        "RETAINED SET query hit the query-only error path in the FULL analyze path:\n{md}"
+    );
+    // A correct RETAINED SET run renders real rows, not an error. The bare FROM
+    // alias `s` in the projection denotes the object itself and must be accepted
+    // (not validated as a class field).
+    let section = &md[md.find("## Custom Queries").unwrap()..];
+    assert!(
+        !section.contains("**Error:**"),
+        "RETAINED SET query rendered an error block (bare alias `s` mis-validated \
+         as an unknown field?):\n{section}"
+    );
+}
+
+/// `UNION` of two classes returns at least as many rows as either branch alone
+/// (set union is monotone: |A ∪ B| >= max(|A|, |B|)). Exercised through the
+/// `query` subcommand, which prints an `(N row[s])` footer per query.
+#[test]
+fn union_row_count_is_at_least_each_branch() {
+    let Some(hprof) = philosophers() else { return };
+    let a = query_row_count(&hprof, "SELECT @objectId FROM java.lang.String")
+        .expect("branch A (String) query failed or had no row count");
+    let b = query_row_count(&hprof, "SELECT @objectId FROM java.lang.Object")
+        .expect("branch B (Object) query failed or had no row count");
+    let u = query_row_count(
+        &hprof,
+        "SELECT @objectId FROM java.lang.String \
+         UNION SELECT @objectId FROM java.lang.Object",
+    )
+    .expect("UNION query failed or had no row count");
+    assert!(
+        u >= a && u >= b,
+        "UNION count {u} must be >= max(branch A {a}, branch B {b})"
+    );
+}
+
+/// A `FROM (<inner>)` semi-join restricts the outer scan to objects that appear
+/// in the inner result. Semi-joining a class against ITSELF must return no more
+/// rows than the outer-alone scan (and, for an identical inner, exactly the same
+/// set). Exercised through the `query` subcommand.
+#[test]
+fn from_subquery_semijoin_is_bounded_by_outer() {
+    let Some(hprof) = philosophers() else { return };
+    let outer = query_row_count(&hprof, "SELECT @objectId FROM java.lang.String")
+        .expect("outer-alone query failed or had no row count");
+    let semi = query_row_count(
+        &hprof,
+        "SELECT @objectId FROM (SELECT * FROM java.lang.String s) x",
+    )
+    .expect("FROM-subquery semi-join failed or had no row count");
+    assert!(
+        semi <= outer,
+        "semi-join count {semi} must be <= outer-alone count {outer}"
+    );
+}
+
+/// `WHERE @objectAddress IN (<inner>)` keeps only objects whose address is in the
+/// inner result set. Filtering a class by its OWN addresses must return no more
+/// rows than the unfiltered scan (a bounded, non-expanding set). Exercised
+/// through the `query` subcommand.
+#[test]
+fn in_subquery_is_bounded_by_unfiltered() {
+    let Some(hprof) = philosophers() else { return };
+    let unfiltered = query_row_count(&hprof, "SELECT @objectAddress FROM java.lang.String")
+        .expect("unfiltered query failed or had no row count");
+    let filtered = query_row_count(
+        &hprof,
+        "SELECT @objectAddress FROM java.lang.String \
+         WHERE @objectAddress IN (SELECT @objectAddress FROM java.lang.String)",
+    )
+    .expect("IN-subquery query failed or had no row count");
+    assert!(
+        filtered <= unfiltered,
+        "IN-subquery count {filtered} must be <= unfiltered count {unfiltered}"
+    );
+}
+
+/// A CORRELATED inner subquery — one whose body references an OUTER alias — is
+/// rejected at plan time (correlation is unsupported in this slice). Here the
+/// inner `WHERE s.hash > 0` references the outer alias `s`, so planning must fail
+/// with an `OQL plan error` that both names the query and says `correlated`.
+#[test]
+fn correlated_subquery_is_a_plan_error() {
+    let Some(hprof) = philosophers() else { return };
+    let oql = "SELECT @objectId FROM java.lang.String s \
+               WHERE @objectAddress IN \
+               (SELECT @objectAddress FROM java.lang.Object o WHERE s.hash > 0)";
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query", oql])
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "correlated subquery should be rejected"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("OQL plan error"),
+        "missing plan-error indication:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("correlated"),
+        "plan error should name the correlation problem:\n{stderr}"
+    );
+}
+
 /// The query-only fast path (`query` subcommand) never computes retained sizes
 /// or dominators, so a `@retainedHeapSize` query cannot be answered. It must
 /// exit 0 and surface an actionable inline `error:` telling the user to run the
