@@ -1186,6 +1186,9 @@ fn run(
             field_names: rw_names,
             refwalk_tails: rw_tails,
             refwalk_truncated: rw_trunc,
+            in_off: &[],
+            in_tgt: &[],
+            retained_edges: None,
         },
     );
     let mut query_results = query::run::collapse_union_results(flat_results, &union_groups);

@@ -106,6 +106,10 @@ pub fn eliminate_dead_needs(plan: &mut QueryPlan) {
                 dominator_children = true;
             }
             StageOp::RefWalkResolve { .. } => ref_walk = true,
+            // Edge-retention ops (`@inbounds`/`@outbounds`/`path`) are gated by
+            // per-run RunFlags, not by a QueryNeeds field, so there is no
+            // late-armed need to recompute for them here.
+            StageOp::EdgeLookup { .. } | StageOp::BoundedPath { .. } => {}
         }
     }
     // Only DOWNGRADE (clear) — never set a need true here (setting is the

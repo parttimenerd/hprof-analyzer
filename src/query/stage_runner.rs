@@ -6,6 +6,8 @@ use crate::query::ast::{Attr, CompareOp, Predicate, Query, SelectItem, SortDir, 
 use crate::query::execute::{CrossPhaseEntry, QueryExecState};
 use crate::query::model::{QueryColumn, QueryResult, QueryValue};
 use crate::query::plan::StageOp;
+use crate::query::runflags::EdgeDir;
+use crate::query::PATH_FRONTIER_CAP;
 
 /// A shared empty tail-scalar table, used as the default `refwalk_tails` borrow
 /// when no RefWalk query ran (the common case). `LazyLock` derefs to a `'static`
@@ -64,6 +66,14 @@ pub struct LateCtx<'a> {
     /// so the per-field CSR is incomplete and RefPath results may be partial.
     /// OR'd into each RefPath result's `truncated` flag.
     pub refwalk_truncated: bool,
+    /// Inbound-reference CSR offsets (len n+1): node i's referrers are
+    /// `in_tgt[in_off[i]..in_off[i+1]]`. Empty when `@inbounds` is not armed.
+    pub in_off: &'a [u32],
+    /// Inbound-reference CSR targets (dense referrer indices), parallel to in_off.
+    pub in_tgt: &'a [u32],
+    /// Retained forward-edge store for `@outbounds`/`path` (L1+L2 compressed),
+    /// or `None` when no forward-edge feature is armed.
+    pub retained_edges: Option<&'a crate::query::retained_edges::RetainedEdges>,
 }
 
 impl LateCtx<'_> {
@@ -105,6 +115,101 @@ pub fn walk_refpath(seeds: &[u32], hops: &[String], ctx: &LateCtx) -> Vec<u32> {
         frontier = resolve_hop(&frontier, h, ctx);
     }
     frontier
+}
+
+/// Gather the neighbours of each row in `rows` in direction `dir`.
+/// `Inbound`: referrers via the inbound CSR (`in_off`/`in_tgt`).
+/// `Outbound`: forward targets via the retained edge store (`retained_edges`);
+/// yields nothing if that store is absent.
+/// Returns the concatenated neighbour dense indices (duplicates possible across
+/// rows; dedup is the caller's concern). Bounds-checked against the CSR length.
+pub fn edge_lookup(rows: &[u32], dir: EdgeDir, ctx: &LateCtx) -> Vec<u32> {
+    let mut out = Vec::new();
+    match dir {
+        EdgeDir::Inbound => {
+            for &r in rows {
+                let ri = r as usize;
+                // node ri's referrers live in in_tgt[in_off[ri]..in_off[ri+1]];
+                // guard both offset reads against a too-short (or empty) CSR.
+                if ri + 1 >= ctx.in_off.len() {
+                    continue;
+                }
+                let (start, end) = (ctx.in_off[ri] as usize, ctx.in_off[ri + 1] as usize);
+                out.extend_from_slice(&ctx.in_tgt[start..end]);
+            }
+        }
+        EdgeDir::Outbound => {
+            if let Some(re) = ctx.retained_edges {
+                for &r in rows {
+                    out.extend(re.targets_of(r));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Bounded forward BFS from `from`, at most `depth_cap` levels, following the
+/// retained forward edge store. Stops early if a node whose dense index is in
+/// `target_rows` is reached. Frontier truncated at `PATH_FRONTIER_CAP` (returns
+/// `capped=true` when hit). Returns `(reached_nodes, capped)` where reached_nodes
+/// is the set of dense indices visited (BFS order, deduped). Never materializes
+/// the whole graph — walks only the retained subgraph via `retained_edges`.
+pub fn bounded_path(
+    from: u32, target_rows: &[u32], depth_cap: usize, ctx: &LateCtx,
+) -> (Vec<u32>, bool) {
+    // No forward edge store armed: only the seed is "reached".
+    let Some(re) = ctx.retained_edges else {
+        return (vec![from], false);
+    };
+    let targets: std::collections::HashSet<u32> = target_rows.iter().copied().collect();
+
+    let mut visited: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut reached: Vec<u32> = Vec::new();
+    let mut capped = false;
+
+    visited.insert(from);
+    reached.push(from);
+    // Early stop: the seed itself may already be a target.
+    if targets.contains(&from) {
+        return (reached, capped);
+    }
+
+    let mut frontier: Vec<u32> = vec![from];
+    for _ in 0..depth_cap {
+        if frontier.is_empty() {
+            break;
+        }
+        let mut next: Vec<u32> = Vec::new();
+        let mut hit_target = false;
+        for &node in &frontier {
+            for t in re.targets_of(node) {
+                if visited.insert(t) {
+                    reached.push(t);
+                    if targets.contains(&t) {
+                        hit_target = true;
+                    }
+                    next.push(t);
+                    if next.len() > PATH_FRONTIER_CAP {
+                        // Truncate the next frontier at the cap; further expansion
+                        // is bounded so a pathological fan-out can't blow memory.
+                        next.truncate(PATH_FRONTIER_CAP);
+                        capped = true;
+                        break;
+                    }
+                }
+            }
+            if capped {
+                break;
+            }
+        }
+        // A target was reached at this level: stop expanding further.
+        if hit_target {
+            break;
+        }
+        frontier = next;
+    }
+    (reached, capped)
 }
 
 /// Finalize a Phase-1 QueryExecState: run each pending carry through its
@@ -190,6 +295,25 @@ fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
             // handles the entire path, so later per-hop ops are skipped.
             StageOp::RefWalkResolve { .. } => {
                 return refpath_rows(entry, q, ctx);
+            }
+            StageOp::EdgeLookup { dir } => {
+                let idx: Vec<u32> = entry.carry.indices();
+                let neighbours = edge_lookup(&idx, *dir, ctx);
+                return dominator_rows(entry, q, &neighbours, entry.carry.truncated(), ctx);
+            }
+            StageOp::BoundedPath { depth_cap } => {
+                // Bounded walk from each carried seed; concatenate reached nodes.
+                // `target_rows` is empty here (no early target stop): carry-level
+                // target-class resolution lands in a later task (41/42).
+                let seeds: Vec<u32> = entry.carry.indices();
+                let mut reached = Vec::new();
+                let mut capped = false;
+                for s in seeds {
+                    let (nodes, c) = bounded_path(s, &[], *depth_cap, ctx);
+                    reached.extend(nodes);
+                    capped |= c;
+                }
+                return dominator_rows(entry, q, &reached, entry.carry.truncated() || capped, ctx);
             }
             // Later phases add more StageOp variants; an unhandled op must fail
             // loudly rather than silently dropping the query's late work.
@@ -547,6 +671,9 @@ mod tests {
             field_names: &[],
             refwalk_tails: &EMPTY_REFWALK_TAILS,
             refwalk_truncated: false,
+            in_off: &[],
+            in_tgt: &[],
+            retained_edges: None,
         }
     }
 
@@ -694,7 +821,7 @@ mod dom_ctx_tests {
         let id_map = IdMap::identity(4);
         let ctx = LateCtx { retained: &retained, idom: &idom, dc_off: &dc_off,
                             dc_tgt: &dc_tgt, shallow: &shallow, id_map: &id_map,
-                            fwd_off: &[], fwd_tgt: &[], fwd_field: &[], field_names: &[], refwalk_tails: &EMPTY_REFWALK_TAILS, refwalk_truncated: false };
+                            fwd_off: &[], fwd_tgt: &[], fwd_field: &[], field_names: &[], refwalk_tails: &EMPTY_REFWALK_TAILS, refwalk_truncated: false, in_off: &[], in_tgt: &[], retained_edges: None };
         assert_eq!(ctx.dc_off.len(), 5);
         assert_eq!(ctx.id_map.to_addr(0), id_map.to_addr(0));
     }
@@ -712,7 +839,7 @@ mod dom_run_tests {
     fn dominator_children_emits_direct_children() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false, in_off:&[], in_tgt:&[], retained_edges:None };
         assert_eq!(run_dominator_children(&[0u32], usize::MAX, &ctx), vec![1u32, 2]);
         assert_eq!(run_dominator_children(&[1u32], usize::MAX, &ctx), vec![3u32]);
         assert!(run_dominator_children(&[2u32], usize::MAX, &ctx).is_empty());
@@ -721,14 +848,14 @@ mod dom_run_tests {
     fn dominator_children_respects_cap() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false, in_off:&[], in_tgt:&[], retained_edges:None };
         assert_eq!(run_dominator_children(&[0u32], 1, &ctx).len(), 1);
     }
     #[test]
     fn dominator_of_emits_idom() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false, in_off:&[], in_tgt:&[], retained_edges:None };
         // idom = [MAX,0,0,1]: node 3's idom is 1, node 1's idom is 0, root 0 yields nothing.
         assert_eq!(run_dominator_of(&[3u32], &ctx), vec![1u32]);
         assert_eq!(run_dominator_of(&[1u32, 2u32], &ctx), vec![0u32, 0u32]);
@@ -738,7 +865,7 @@ mod dom_run_tests {
     fn retained_set_emits_bounded_closure() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false, in_off:&[], in_tgt:&[], retained_edges:None };
         let (mut set, truncated) = run_retained_set(&[0u32], usize::MAX, &ctx);
         set.sort_unstable();
         assert_eq!(set, vec![0u32, 1, 2, 3]);
@@ -748,7 +875,7 @@ mod dom_run_tests {
     fn retained_set_overflow_marks_truncated() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false, in_off:&[], in_tgt:&[], retained_edges:None };
         let (set, truncated) = run_retained_set(&[0u32], 2, &ctx);
         assert_eq!(set.len(), 2);
         assert!(truncated);
@@ -757,7 +884,7 @@ mod dom_run_tests {
     fn retained_set_dedups_shared_roots() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false, in_off:&[], in_tgt:&[], retained_edges:None };
         let (mut set, _t) = run_retained_set(&[1u32, 0u32], usize::MAX, &ctx);
         set.sort_unstable();
         assert_eq!(set, vec![0u32, 1, 2, 3]);
@@ -767,7 +894,7 @@ mod dom_run_tests {
     fn resume_dominator_children_builds_rows() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false, in_off:&[], in_tgt:&[], retained_edges:None };
         let q = crate::query::parse::parse("SELECT dominators(s) FROM C s").unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
         let mut carry = crate::query::carry::Carry::index_only(100);
@@ -786,7 +913,7 @@ mod dom_run_tests {
     fn resume_dominator_of_builds_single_row() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false, in_off:&[], in_tgt:&[], retained_edges:None };
         let q = crate::query::parse::parse("SELECT dominatorof(s) FROM C s").unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
         let mut carry = crate::query::carry::Carry::index_only(100);
@@ -802,7 +929,7 @@ mod dom_run_tests {
     fn resume_retained_set_builds_closure_rows() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false, in_off:&[], in_tgt:&[], retained_edges:None };
         let q = crate::query::parse::parse("SELECT s AS RETAINED SET FROM C s").unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
         let mut carry = crate::query::carry::Carry::index_only(100);
@@ -834,6 +961,7 @@ mod refwalk_tests {
             fwd_off, fwd_tgt, fwd_field, field_names,
             refwalk_tails: &EMPTY_REFWALK_TAILS,
             refwalk_truncated: false,
+            in_off: &[], in_tgt: &[], retained_edges: None,
         }
     }
 
@@ -855,6 +983,7 @@ mod refwalk_tests {
             fwd_off, fwd_tgt, fwd_field, field_names,
             refwalk_tails: tails,
             refwalk_truncated: false,
+            in_off: &[], in_tgt: &[], retained_edges: None,
         }
     }
 
@@ -1077,5 +1206,241 @@ mod refwalk_tests {
             Some(QueryValue::Int(3))
         );
         assert!(note.is_none(), "identity tail needs no note");
+    }
+}
+
+#[cfg(test)]
+mod edge_tests {
+    use super::*;
+    use crate::query::retained_edges::{RetainedEdges, RetainedEdgesBuilder};
+
+    static EMPTY_ID_MAP: IdMap<'static> = IdMap { addr_of: &[] };
+
+    /// Build a LateCtx wired for edge lookups: an inbound CSR (`in_off`/`in_tgt`)
+    /// and an optional retained forward-edge store. All other fields are empty.
+    fn edge_ctx<'a>(
+        in_off: &'a [u32],
+        in_tgt: &'a [u32],
+        retained_edges: Option<&'a RetainedEdges>,
+    ) -> LateCtx<'a> {
+        LateCtx {
+            retained: &[], idom: &[], dc_off: &[], dc_tgt: &[], shallow: &[],
+            id_map: &EMPTY_ID_MAP,
+            fwd_off: &[], fwd_tgt: &[], fwd_field: &[], field_names: &[],
+            refwalk_tails: &EMPTY_REFWALK_TAILS,
+            refwalk_truncated: false,
+            in_off,
+            in_tgt,
+            retained_edges,
+        }
+    }
+
+    // ---------- edge_lookup ----------
+
+    #[test]
+    fn edge_lookup_inbound_returns_sources() {
+        // Inbound CSR sized for nodes 0..=5. Node 5's referrers are [2,3].
+        // in_off has len n+1 = 7; in_off[5]..in_off[6] = [0,2) into in_tgt.
+        let in_off = [0u32, 0, 0, 0, 0, 0, 2];
+        let in_tgt = [2u32, 3];
+        let ctx = edge_ctx(&in_off, &in_tgt, None);
+        assert_eq!(edge_lookup(&[5], EdgeDir::Inbound, &ctx), vec![2, 3]);
+    }
+
+    #[test]
+    fn edge_lookup_inbound_empty_for_leaf() {
+        // Node 0 has no referrers: in_off[0]..in_off[1] is empty.
+        let in_off = [0u32, 0, 2];
+        let in_tgt = [7u32, 9];
+        let ctx = edge_ctx(&in_off, &in_tgt, None);
+        assert!(edge_lookup(&[0], EdgeDir::Inbound, &ctx).is_empty());
+        // Node 1 does have referrers [7,9].
+        assert_eq!(edge_lookup(&[1], EdgeDir::Inbound, &ctx), vec![7, 9]);
+    }
+
+    #[test]
+    fn edge_lookup_inbound_out_of_range_is_empty() {
+        // A row beyond the CSR length must not panic — it yields nothing.
+        let in_off = [0u32, 1, 1];
+        let in_tgt = [4u32];
+        let ctx = edge_ctx(&in_off, &in_tgt, None);
+        assert!(edge_lookup(&[99], EdgeDir::Inbound, &ctx).is_empty());
+        // Empty inbound CSR is also a no-op.
+        let empty = edge_ctx(&[], &[], None);
+        assert!(edge_lookup(&[0, 1], EdgeDir::Inbound, &empty).is_empty());
+    }
+
+    #[test]
+    fn edge_lookup_outbound_uses_retained_edges() {
+        let mut b = RetainedEdgesBuilder::new();
+        b.push_row(0, &[3, 7]);
+        let re = b.finish();
+        let ctx = edge_ctx(&[], &[], Some(&re));
+        assert_eq!(edge_lookup(&[0], EdgeDir::Outbound, &ctx), vec![3, 7]);
+    }
+
+    #[test]
+    fn edge_lookup_outbound_none_store_is_empty() {
+        let ctx = edge_ctx(&[], &[], None);
+        assert!(edge_lookup(&[0, 1, 2], EdgeDir::Outbound, &ctx).is_empty());
+    }
+
+    #[test]
+    fn edge_lookup_multi_row_concatenates() {
+        // Node 1 referrers [4]; node 2 referrers [5,6]. Two rows concatenate.
+        let in_off = [0u32, 0, 1, 3];
+        let in_tgt = [4u32, 5, 6];
+        let ctx = edge_ctx(&in_off, &in_tgt, None);
+        assert_eq!(edge_lookup(&[1, 2], EdgeDir::Inbound, &ctx), vec![4, 5, 6]);
+    }
+
+    #[test]
+    fn edge_lookup_outbound_multi_row_concatenates() {
+        let mut b = RetainedEdgesBuilder::new();
+        b.push_row(0, &[1, 2]);
+        b.push_row(1, &[3]);
+        let re = b.finish();
+        let ctx = edge_ctx(&[], &[], Some(&re));
+        assert_eq!(edge_lookup(&[0, 1], EdgeDir::Outbound, &ctx), vec![1, 2, 3]);
+    }
+
+    // ---------- bounded_path ----------
+
+    /// Line graph 0->1->2->...->n (each node points to its successor).
+    fn line_graph(n: u32) -> RetainedEdges {
+        let mut b = RetainedEdgesBuilder::new();
+        for i in 0..n {
+            b.push_row(i, &[i + 1]);
+        }
+        b.finish()
+    }
+
+    #[test]
+    fn bounded_path_respects_depth_cap() {
+        let re = line_graph(60);
+        let ctx = edge_ctx(&[], &[], Some(&re));
+        let (reached, capped) = bounded_path(0, &[], 3, &ctx);
+        assert!(!capped);
+        // At most seed + 3 hops = {0,1,2,3}.
+        assert!(reached.len() <= 4, "reached too far: {reached:?}");
+        let mut sorted = reached.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, vec![0, 1, 2, 3]);
+        assert!(!reached.contains(&50), "must not reach a far node at depth 3");
+    }
+
+    #[test]
+    fn bounded_path_frontier_capped() {
+        // One node fans out to > PATH_FRONTIER_CAP targets.
+        let mut b = RetainedEdgesBuilder::new();
+        let targets: Vec<u32> = (1..=(PATH_FRONTIER_CAP as u32 + 100)).collect();
+        b.push_row(0, &targets);
+        let re = b.finish();
+        let ctx = edge_ctx(&[], &[], Some(&re));
+        let (_reached, capped) = bounded_path(0, &[], 5, &ctx);
+        assert!(capped, "fan-out beyond PATH_FRONTIER_CAP must set capped");
+    }
+
+    #[test]
+    fn bounded_path_none_store_returns_seed_only() {
+        let ctx = edge_ctx(&[], &[], None);
+        let (reached, capped) = bounded_path(0, &[], 10, &ctx);
+        assert_eq!(reached, vec![0]);
+        assert!(!capped);
+    }
+
+    #[test]
+    fn bounded_path_early_stop_on_target() {
+        let re = line_graph(10);
+        let ctx = edge_ctx(&[], &[], Some(&re));
+        let (reached, capped) = bounded_path(0, &[2], 10, &ctx);
+        assert!(!capped);
+        assert!(reached.contains(&2), "must reach the target node 2");
+        // Early exit: expansion stops once 2 is reached, so 3 is not visited.
+        assert!(!reached.contains(&3), "must not expand past the target: {reached:?}");
+    }
+
+    #[test]
+    fn bounded_path_seed_is_target_returns_seed_only() {
+        let re = line_graph(10);
+        let ctx = edge_ctx(&[], &[], Some(&re));
+        let (reached, capped) = bounded_path(0, &[0], 10, &ctx);
+        assert_eq!(reached, vec![0], "seed already a target: no expansion");
+        assert!(!capped);
+    }
+
+    #[test]
+    fn bounded_path_dedups_reached() {
+        // Diamond: 0->{1,2}, 1->{3}, 2->{3}. Node 3 is reachable via two paths
+        // but must appear once in reached.
+        let mut b = RetainedEdgesBuilder::new();
+        b.push_row(0, &[1, 2]);
+        b.push_row(1, &[3]);
+        b.push_row(2, &[3]);
+        let re = b.finish();
+        let ctx = edge_ctx(&[], &[], Some(&re));
+        let (reached, _capped) = bounded_path(0, &[], 5, &ctx);
+        let threes = reached.iter().filter(|&&r| r == 3).count();
+        assert_eq!(threes, 1, "node 3 deduped: {reached:?}");
+        let mut sorted = reached.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn bounded_path_zero_depth_returns_seed_only() {
+        let re = line_graph(10);
+        let ctx = edge_ctx(&[], &[], Some(&re));
+        let (reached, capped) = bounded_path(0, &[], 0, &ctx);
+        assert_eq!(reached, vec![0], "depth_cap 0 walks no edges");
+        assert!(!capped);
+    }
+
+    // ---------- run_entry wiring ----------
+
+    #[test]
+    fn resume_bounded_path_builds_rows() {
+        // path(s, ...) plans a BoundedPath op; wire it through resume() end to end.
+        let re = line_graph(5);
+        let ctx = edge_ctx(&[], &[], Some(&re));
+        let plan = crate::query::plan::QueryPlan {
+            late_ops: vec![StageOp::BoundedPath { depth_cap: 2 }],
+            ..Default::default()
+        };
+        let q = crate::query::parse::parse("SELECT * FROM C s").unwrap();
+        let mut st = crate::query::execute::QueryExecState::new();
+        st.push_cross_phase(0, "q_path".to_string(), plan, {
+            let mut c = crate::query::carry::Carry::index_only(100);
+            c.push_index(0);
+            c
+        });
+        let out = resume(st, &[q.clone(), q], &ctx);
+        let r = &out[0];
+        assert!(r.error.is_none(), "unexpected error: {:?}", r.error);
+        // Seed 0 with depth 2 reaches {0,1,2} in a line graph.
+        assert_eq!(r.row_count, 3, "bounded walk of depth 2 from 0 → {{0,1,2}}");
+    }
+
+    #[test]
+    fn resume_edge_lookup_inbound_builds_rows() {
+        // @inbounds plans an EdgeLookup{Inbound}; wire through resume().
+        let in_off = [0u32, 0, 0, 0, 0, 0, 2];
+        let in_tgt = [2u32, 3];
+        let ctx = edge_ctx(&in_off, &in_tgt, None);
+        let plan = crate::query::plan::QueryPlan {
+            late_ops: vec![StageOp::EdgeLookup { dir: EdgeDir::Inbound }],
+            ..Default::default()
+        };
+        let q = crate::query::parse::parse("SELECT * FROM C s").unwrap();
+        let mut st = crate::query::execute::QueryExecState::new();
+        st.push_cross_phase(0, "q_in".to_string(), plan, {
+            let mut c = crate::query::carry::Carry::index_only(100);
+            c.push_index(5);
+            c
+        });
+        let out = resume(st, &[q.clone(), q], &ctx);
+        let r = &out[0];
+        assert!(r.error.is_none(), "unexpected error: {:?}", r.error);
+        assert_eq!(r.row_count, 2, "node 5's referrers are {{2,3}}");
     }
 }

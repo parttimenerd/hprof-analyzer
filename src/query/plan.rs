@@ -4,6 +4,7 @@
 
 use crate::query::ast::{Attr, Predicate, Query, RefRole, SelectItem, Value};
 use crate::query::carry::CarryLayout;
+use crate::query::runflags::EdgeDir;
 use crate::query::QueryError;
 
 /// Default cap on late-phase emitted rows (dominator children) and retained-set
@@ -72,6 +73,13 @@ pub enum StageOp {
     /// frontier layout while walking (`AddrFrontier`) or the tail scalar layout
     /// on the final hop. One op is emitted per hop.
     RefWalkResolve { hop: usize, role: RefRole, carry: CarryLayout },
+    /// Look up inbound (or outbound) neighbours of each carried dense index.
+    /// `Inbound` reads the inbound CSR; `Outbound` reads the retained forward
+    /// edge store (L3 rescan-backed). Backs `@inbounds`/`@outbounds`.
+    EdgeLookup { dir: EdgeDir },
+    /// Bounded forward BFS from each carried index toward a target class, at most
+    /// `depth_cap` levels, frontier-capped at `PATH_FRONTIER_CAP`. Backs `path(a,b)`.
+    BoundedPath { depth_cap: usize },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
