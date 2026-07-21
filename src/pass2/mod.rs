@@ -352,9 +352,10 @@ impl Pass2 {
         // QueryExecState) or Err(pre-set validation-error result at that slot).
         //
         // Phase-1 queries (`finalize_at == P1`) are armed as row executors;
-        // cross-phase queries (`finalize_at == P3`, i.e. @retainedHeapSize) are
-        // armed in carry mode so their matched dense indices are carried to the
-        // late stage instead of finalized here (retained sizes don't exist yet).
+        // cross-phase queries (`finalize_at == P2` for RefWalk, `P3` for
+        // @retainedHeapSize/dominators) are armed in carry mode so their matched
+        // dense indices are carried to the late stage instead of finalized here
+        // (the reference CSR / retained sizes don't exist yet during the scan).
         let mut scan_execs: Vec<(usize, crate::query::execute::SingleScanExecutor<_>)> = Vec::new();
         let mut scan_outcomes: Vec<Result<usize, (usize, crate::query::model::QueryResult)>> =
             Vec::new();
@@ -364,7 +365,9 @@ impl Pass2 {
             }
             match crate::query::plan::validate_fields(q, &query_resolver) {
                 Ok(()) => {
-                    let mut exec = if plan.finalize_at == crate::query::plan::Phase::P3 {
+                    let cross_phase =
+                        plan.finalize_at != crate::query::plan::Phase::P1;
+                    let mut exec = if cross_phase {
                         crate::query::execute::SingleScanExecutor::new_carry(
                             q,
                             plan,

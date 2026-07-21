@@ -874,3 +874,147 @@ fn retained_query_in_query_only_path_errors_actionably() {
         "error should tell the user to run the full report:\n{stdout}"
     );
 }
+
+/// A primitive-tail N-hop reference path (`n.next.hash`) is a RefWalk query: it
+/// walks the object-reference field `next` (HashMap$Node → HashMap$Node) and
+/// projects the primitive `hash` field on the resolved node. RefWalk queries
+/// finalize in the P2 late window (they need the query-gated reference CSR built
+/// during the scan and threaded into the resume window), so they are exercised
+/// through the ANALYZE path. A correct end-to-end run renders real integer
+/// values for chained nodes and `null` only for chain tails (a null `next`).
+/// Before the CSR was wired (and the executor armed in carry mode), every cell
+/// was silently `null`; this is the guard for that regression.
+#[test]
+fn refwalk_primitive_tail_returns_real_values_via_analyze_path() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg(&hprof)
+        .args([
+            "--query",
+            "SELECT n.next.hash FROM java.util.HashMap$Node n LIMIT 200",
+        ])
+        .args(["-f", "md"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "analyze with RefWalk query failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let md = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        md.contains("## Custom Queries"),
+        "RefWalk query section missing:\n{md}"
+    );
+    assert!(
+        md.contains("next.hash"),
+        "RefWalk projected column header missing:\n{md}"
+    );
+    let section = &md[md.find("## Custom Queries").unwrap()..];
+    assert!(
+        !section.contains("**Error:**"),
+        "RefWalk query rendered an error block:\n{section}"
+    );
+    assert!(
+        !section.contains("requires the full analysis pipeline"),
+        "RefWalk query hit the query-only error path in the FULL analyze path:\n{section}"
+    );
+    // At least one rendered `| <int> |` cell must be a real integer (a node
+    // whose `next` chains to another node, projecting that node's `hash`). A
+    // regression to silent-null would make EVERY cell `null`.
+    let has_int_cell = section.lines().any(|l| {
+        let t = l.trim();
+        // Single-column md rows look like `| -904151846 |`.
+        t.starts_with('|')
+            && t.ends_with('|')
+            && t
+                .trim_matches('|')
+                .trim()
+                .parse::<i64>()
+                .is_ok()
+    });
+    assert!(
+        has_int_cell,
+        "no real integer RefWalk tail value found — CSR/tail capture not wired \
+         end-to-end (all cells null?):\n{section}"
+    );
+}
+
+/// A RefWalk query whose tail is an OBJECT reference (`s.value`, where a
+/// `String`'s `value` is a backing `byte[]`/`char[]`) is a two-level deref that
+/// this slice does not resolve: it must project `Null` (documented limitation),
+/// NOT crash and NOT error. The run must still succeed and render the section.
+#[test]
+fn refwalk_object_ref_tail_projects_null_without_crashing() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg(&hprof)
+        .args(["--query", "SELECT s.value FROM java.lang.String s LIMIT 5"])
+        .args(["-f", "md"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "analyze with object-ref-tail RefWalk query failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let md = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        md.contains("## Custom Queries"),
+        "object-ref-tail RefWalk section missing:\n{md}"
+    );
+    let section = &md[md.find("## Custom Queries").unwrap()..];
+    assert!(
+        !section.contains("**Error:**"),
+        "object-ref-tail RefWalk rendered an error block (should be Null, not error):\n{section}"
+    );
+    // The `value` column exists and its cells are `null` (object-ref tail is not
+    // resolved in this slice), but the query did not crash or error.
+    assert!(
+        section.contains("| value |") || section.contains("value"),
+        "object-ref-tail RefWalk column header missing:\n{section}"
+    );
+}
+
+/// The query-only fast path (`query` subcommand) never builds the reference CSR,
+/// so a RefWalk query cannot be answered there. It must exit 0 and surface an
+/// actionable inline `error:` that names the reference-path cause (distinct from
+/// the retained-size message) and points the user at the full report — NOT
+/// silently return empty rows and NOT reuse the misleading @retainedHeapSize
+/// wording.
+#[test]
+fn refwalk_query_in_query_only_path_errors_actionably() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
+            "SELECT n.next.hash FROM java.util.HashMap$Node n LIMIT 5",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "query-only RefWalk query should exit 0 with an inline error: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("error:"),
+        "query-only RefWalk query must surface an inline error line:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("reference-path") || stdout.contains("reference graph"),
+        "error should name the reference-path cause (not the retained message):\n{stdout}"
+    );
+    assert!(
+        stdout.contains("full report") || stdout.contains("full analysis pipeline"),
+        "error should tell the user to run the full report:\n{stdout}"
+    );
+    // Must NOT reuse the @retainedHeapSize wording for a RefWalk query.
+    assert!(
+        !stdout.contains("@retainedHeapSize"),
+        "RefWalk error must not reuse the retained-size message:\n{stdout}"
+    );
+}

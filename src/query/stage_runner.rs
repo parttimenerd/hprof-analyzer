@@ -130,6 +130,21 @@ pub fn resume_without_late_ctx(state: QueryExecState) -> Vec<QueryResult> {
     let (finished, pending) = state.into_parts();
     let mut slotted: Vec<(usize, QueryResult)> = finished;
     for entry in pending {
+        // Tailor the error to what the entry actually needs: a RefWalk query
+        // needs the reference CSR (built only in the full analyze scan), whereas
+        // a retained/dominator query needs post-scan sizes. Both are unavailable
+        // in the query-only path, but the message must point the user at the
+        // right cause.
+        let error = if entry.plan.needs.ref_walk {
+            "reference-path (N-hop `x.field.tail`) queries require the full \
+             analysis pipeline; the reference graph is not built in the \
+             query-only path. Run the full report (drop --query-only) to use \
+             reference-path queries."
+        } else {
+            "@retainedHeapSize requires the full analysis pipeline; \
+             it is not available in the query-only path. Run the full \
+             report (drop --query-only) to use retained-size queries."
+        };
         slotted.push((
             entry.slot,
             QueryResult {
@@ -139,12 +154,7 @@ pub fn resume_without_late_ctx(state: QueryExecState) -> Vec<QueryResult> {
                 rows: Vec::new(),
                 row_count: 0,
                 truncated: false,
-                error: Some(
-                    "@retainedHeapSize requires the full analysis pipeline; \
-                     it is not available in the query-only path. Run the full \
-                     report (drop --query-only) to use retained-size queries."
-                        .to_string(),
-                ),
+                error: Some(error.to_string()),
                 note: None,
             },
         ));
