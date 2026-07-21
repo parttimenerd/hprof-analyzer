@@ -669,6 +669,34 @@ Test-driven throughout. Layers:
    sort, stable group order). Covered by the golden fixtures.
 6. **Bounds** — a query with no LIMIT on a large fixture must not blow the JSON
    size budget or RSS; assert `truncated` is set and caps hold.
+7. **MAT differential oracle** (opt-in, `#[ignore]` by default) — since the whole
+   point is MAT compatibility, use *real Eclipse MAT as the oracle* for the subset
+   we claim to match. MAT ships a headless batch mode
+   (`ParseHeapDump.sh <dump> -command "oql <query>"`, or the
+   `org.eclipse.mat.api:query` app) that runs an OQL query and writes CSV. The
+   harness:
+   - Runs a curated list of subset queries through **both** MAT headless and our
+     analyzer against the *same* fixture dump (the existing benchmark `.hprof`s).
+   - Compares results as **sets/multisets of object addresses** (`@objectAddress`),
+     not row order or formatting — MAT and we differ on ordering, labels, and
+     column rendering, but the *matched object set* must be identical for a
+     faithful subset query. For aggregate queries (`COUNT`/`SUM`), compares the
+     scalar.
+   - Normalizes the known-legitimate divergences up front: our extension clauses
+     (`ORDER BY`/`LIMIT`/`GROUP BY`) are stripped before handing the query to MAT
+     (MAT lacks them); `@retainedHeap` is rewritten to `@retainedHeapSize`; a
+     query that hit our cap (`truncated`) is compared only as "our set ⊆ MAT set".
+   - Is **gated behind an env var + feature** (`MAT_HOME` present and
+     `--features mat-oracle`) so normal `cargo test` and CI never require a JVM or
+     the MAT install. A small script (`scripts/mat-oracle.sh`) documents obtaining
+     MAT headless. When `MAT_HOME` is unset the tests `eprintln!` a skip notice and
+     pass, so the suite is green without MAT but *runnable* with it.
+   - Doubles as a **coverage-table verifier**: every ✅ row in "Coverage vs.
+     real-world MAT OQL" has a corresponding oracle case, so the compatibility
+     claims in this spec are executable, not aspirational. Rejected (❌) queries
+     assert *we* reject while MAT accepts — documenting the boundary, not a bug.
+   - Dominator primitives (`dominators()`, `AS RETAINED SET`) are included: MAT
+     computes the same dominator tree, so its result set is the oracle for ours.
 
 ## Rollout / Phasing (still one spec, one plan)
 
@@ -720,4 +748,12 @@ Each step is independently valuable: many real queries are satisfied by steps
   Rust `regex` crate, whose syntax covers the vast majority of Java patterns but
   differs on a few Java-specific constructs (e.g. certain named groups /
   backreferences). Such a pattern yields a clear "unsupported regex construct"
-  error at plan time rather than a wrong match.
+  error at plan time rather than a wrong match. The MAT differential oracle
+  (testing layer 7) will surface any semantic drift here concretely.
+- **MAT oracle brittleness**: the oracle depends on an external MAT install, a
+  JVM, and MAT's CSV output format, which can shift across MAT versions. Mitigated
+  by keeping it opt-in (`#[ignore]` + `MAT_HOME`/feature gate) so it never blocks
+  normal CI, comparing on *object-address sets* rather than MAT's formatting, and
+  pinning a documented MAT version in `scripts/mat-oracle.sh`. It is a
+  correctness *amplifier*, not a required gate; the golden e2e fixtures remain the
+  authoritative always-on check.
