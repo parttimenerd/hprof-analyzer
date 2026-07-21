@@ -82,9 +82,28 @@ pub fn resume_without_late_ctx(state: QueryExecState) -> Vec<QueryResult> {
 }
 
 fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
+    // Dominator/retained-set ops each produce a one-column ObjRef result and
+    // fully own row building; they never fall through to join_retained.
     for op in &entry.plan.late_ops {
         match op {
             StageOp::JoinRetained => {}
+            StageOp::DominatorChildren { cap } => {
+                let idx: Vec<u32> = entry.carry.indices();
+                let children = run_dominator_children(&idx, *cap, ctx);
+                let truncated = entry.carry.truncated() || children.len() >= *cap;
+                return dominator_rows(entry, q, &children, truncated, ctx);
+            }
+            StageOp::DominatorOf => {
+                let idx: Vec<u32> = entry.carry.indices();
+                let idoms = run_dominator_of(&idx, ctx);
+                return dominator_rows(entry, q, &idoms, entry.carry.truncated(), ctx);
+            }
+            StageOp::RetainedSet { cap } => {
+                let seeds: Vec<u32> = entry.carry.indices();
+                let (set, trunc) = run_retained_set(&seeds, *cap, ctx);
+                let truncated = entry.carry.truncated() || trunc;
+                return dominator_rows(entry, q, &set, truncated, ctx);
+            }
             // Later phases add more StageOp variants; an unhandled op must fail
             // loudly rather than silently dropping the query's late work.
             #[allow(unreachable_patterns)]
@@ -96,6 +115,28 @@ fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
         }
     }
     join_retained(entry, q, ctx)
+}
+
+/// Build a single-column result of object references from a set of dense
+/// indices (dominator children / idoms / retained closure). LIMIT is applied
+/// here since these ops don't route through join_retained.
+fn dominator_rows(
+    entry: &CrossPhaseEntry, q: &Query, indices: &[u32], mut truncated: bool, ctx: &LateCtx,
+) -> QueryResult {
+    let mut indices = indices.to_vec();
+    if let Some(limit) = q.limit {
+        if indices.len() as u64 > limit { indices.truncate(limit as usize); truncated = true; }
+    }
+    let col = q.select.first().map(crate::query::execute::column_name)
+        .unwrap_or_else(|| "*".to_string());
+    let rows: Vec<Vec<QueryValue>> = indices.iter().map(|&i| {
+        vec![QueryValue::ObjRef { index: ctx.id_map.to_addr(i), class: "?".to_string() }]
+    }).collect();
+    QueryResult {
+        name: entry.name.clone(), oql: String::new(),
+        columns: vec![QueryColumn { name: col }],
+        row_count: rows.len() as u64, rows, truncated, error: None,
+    }
 }
 
 fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
@@ -159,6 +200,61 @@ fn project_late_row(q: &Query, idx: u32, ret: u64) -> Vec<QueryValue> {
         SelectItem::Star => QueryValue::ObjRef { index: idx as u64, class: "?".to_string() },
         _ => QueryValue::Null,
     }).collect()
+}
+
+/// Dominator-tree children of each matched dense index, in match order, bounded
+/// by `cap`. The dominator tree gives each node one parent, so child lists are
+/// disjoint (no dedup needed).
+pub(crate) fn run_dominator_children(matches: &[u32], cap: usize, ctx: &LateCtx) -> Vec<u32> {
+    let mut out = Vec::new();
+    for &i in matches {
+        let i = i as usize;
+        if i + 1 >= ctx.dc_off.len() { continue; }
+        let (start, end) = (ctx.dc_off[i] as usize, ctx.dc_off[i + 1] as usize);
+        for &child in &ctx.dc_tgt[start..end] {
+            if out.len() >= cap { return out; }
+            out.push(child);
+        }
+    }
+    out
+}
+
+/// Immediate dominator (idom) of each matched dense index, in match order. Tree
+/// roots (`idom == u32::MAX`) have no dominator and emit nothing.
+pub(crate) fn run_dominator_of(matches: &[u32], ctx: &LateCtx) -> Vec<u32> {
+    let mut out = Vec::new();
+    for &i in matches {
+        if let Some(&d) = ctx.idom.get(i as usize) {
+            if d != u32::MAX { out.push(d); }
+        }
+    }
+    out
+}
+
+/// Bounded DFS over the dominator-children CSR from each seed. Returns
+/// (closure, truncated); `truncated` iff `cap` was hit before full exploration.
+pub(crate) fn run_retained_set(seeds: &[u32], cap: usize, ctx: &LateCtx) -> (Vec<u32>, bool) {
+    let n = ctx.dc_off.len().saturating_sub(1);
+    let mut visited = vec![false; n];
+    let mut out = Vec::new();
+    let mut stack: Vec<u32> = Vec::new();
+    for &s in seeds {
+        if (s as usize) < n && !visited[s as usize] {
+            stack.push(s);
+            while let Some(node) = stack.pop() {
+                let ni = node as usize;
+                if visited[ni] { continue; }
+                if out.len() >= cap { return (out, true); }
+                visited[ni] = true;
+                out.push(node);
+                let (start, end) = (ctx.dc_off[ni] as usize, ctx.dc_off[ni + 1] as usize);
+                for &child in &ctx.dc_tgt[start..end] {
+                    if !visited[child as usize] { stack.push(child); }
+                }
+            }
+        }
+    }
+    (out, false)
 }
 
 #[cfg(test)]
@@ -325,5 +421,120 @@ mod dom_ctx_tests {
                             dc_tgt: &dc_tgt, shallow: &shallow, id_map: &id_map };
         assert_eq!(ctx.dc_off.len(), 5);
         assert_eq!(ctx.id_map.to_addr(0), id_map.to_addr(0));
+    }
+}
+
+#[cfg(test)]
+mod dom_run_tests {
+    use super::*;
+
+    fn ctx_parts() -> (Vec<u32>, Vec<u32>, Vec<u32>, Vec<u64>, Vec<u32>) {
+        super::dom_ctx_tests::tiny_ctx_parts()
+    }
+
+    #[test]
+    fn dominator_children_emits_direct_children() {
+        let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
+        let id_map = IdMap::identity(4);
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map };
+        assert_eq!(run_dominator_children(&[0u32], usize::MAX, &ctx), vec![1u32, 2]);
+        assert_eq!(run_dominator_children(&[1u32], usize::MAX, &ctx), vec![3u32]);
+        assert!(run_dominator_children(&[2u32], usize::MAX, &ctx).is_empty());
+    }
+    #[test]
+    fn dominator_children_respects_cap() {
+        let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
+        let id_map = IdMap::identity(4);
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map };
+        assert_eq!(run_dominator_children(&[0u32], 1, &ctx).len(), 1);
+    }
+    #[test]
+    fn dominator_of_emits_idom() {
+        let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
+        let id_map = IdMap::identity(4);
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map };
+        // idom = [MAX,0,0,1]: node 3's idom is 1, node 1's idom is 0, root 0 yields nothing.
+        assert_eq!(run_dominator_of(&[3u32], &ctx), vec![1u32]);
+        assert_eq!(run_dominator_of(&[1u32, 2u32], &ctx), vec![0u32, 0u32]);
+        assert!(run_dominator_of(&[0u32], &ctx).is_empty());
+    }
+    #[test]
+    fn retained_set_emits_bounded_closure() {
+        let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
+        let id_map = IdMap::identity(4);
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map };
+        let (mut set, truncated) = run_retained_set(&[0u32], usize::MAX, &ctx);
+        set.sort_unstable();
+        assert_eq!(set, vec![0u32, 1, 2, 3]);
+        assert!(!truncated);
+    }
+    #[test]
+    fn retained_set_overflow_marks_truncated() {
+        let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
+        let id_map = IdMap::identity(4);
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map };
+        let (set, truncated) = run_retained_set(&[0u32], 2, &ctx);
+        assert_eq!(set.len(), 2);
+        assert!(truncated);
+    }
+    #[test]
+    fn retained_set_dedups_shared_roots() {
+        let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
+        let id_map = IdMap::identity(4);
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map };
+        let (mut set, _t) = run_retained_set(&[1u32, 0u32], usize::MAX, &ctx);
+        set.sort_unstable();
+        assert_eq!(set, vec![0u32, 1, 2, 3]);
+    }
+
+    #[test]
+    fn resume_dominator_children_builds_rows() {
+        let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
+        let id_map = IdMap::identity(4);
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map };
+        let q = crate::query::parse::parse("SELECT dominators(s) FROM C s").unwrap();
+        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let mut carry = crate::query::carry::Carry::index_only(100);
+        carry.push_index(0);
+        let mut st = QueryExecState::new();
+        st.push_cross_phase(0, "q_dom".to_string(), plan, carry);
+        let out = resume(st, &[q.clone(), q], &ctx);
+        assert_eq!(out.len(), 1);
+        let r = &out[0];
+        assert_eq!(r.row_count, 2, "node 0 has children {{1,2}}");
+        assert_eq!(r.columns.len(), 1);
+        assert!(r.error.is_none());
+    }
+
+    #[test]
+    fn resume_dominator_of_builds_single_row() {
+        let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
+        let id_map = IdMap::identity(4);
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map };
+        let q = crate::query::parse::parse("SELECT dominatorof(s) FROM C s").unwrap();
+        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let mut carry = crate::query::carry::Carry::index_only(100);
+        carry.push_index(3);
+        let mut st = QueryExecState::new();
+        st.push_cross_phase(0, "q_domof".to_string(), plan, carry);
+        let out = resume(st, &[q.clone(), q], &ctx);
+        let r = &out[0];
+        assert_eq!(r.row_count, 1, "node 3's idom is node 1");
+    }
+
+    #[test]
+    fn resume_retained_set_builds_closure_rows() {
+        let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
+        let id_map = IdMap::identity(4);
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map };
+        let q = crate::query::parse::parse("SELECT s AS RETAINED SET FROM C s").unwrap();
+        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let mut carry = crate::query::carry::Carry::index_only(100);
+        carry.push_index(0);
+        let mut st = QueryExecState::new();
+        st.push_cross_phase(0, "q_rset".to_string(), plan, carry);
+        let out = resume(st, &[q.clone(), q], &ctx);
+        let r = &out[0];
+        assert_eq!(r.row_count, 4, "closure of node 0 is {{0,1,2,3}}");
     }
 }
