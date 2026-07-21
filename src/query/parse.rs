@@ -306,12 +306,16 @@ impl Parser {
     }
 
     fn expect_lparen(&mut self) -> Result<(), QueryError> {
-        if matches!(self.bump(), Some(Token::LParen)) { Ok(()) }
-        else { Err(QueryError("expected `(`".into())) }
+        match self.bump() {
+            Some(Token::LParen) => Ok(()),
+            other => Err(QueryError(format!("expected `(`, found {other:?}"))),
+        }
     }
     fn expect_rparen(&mut self) -> Result<(), QueryError> {
-        if matches!(self.bump(), Some(Token::RParen)) { Ok(()) }
-        else { Err(QueryError("expected `)`".into())) }
+        match self.bump() {
+            Some(Token::RParen) => Ok(()),
+            other => Err(QueryError(format!("expected `)`, found {other:?}"))),
+        }
     }
 }
 
@@ -423,6 +427,86 @@ mod tests {
                 assert!(matches!(*r, Predicate::And(_, _)));
             }
             other => panic!("expected OR at top, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_rejects_missing_from() {
+        let err = parse("SELECT *").unwrap_err();
+        assert!(err.0.contains("FROM"), "got: {}", err.0);
+    }
+
+    #[test]
+    fn parse_rejects_unknown_attribute() {
+        let err = parse("SELECT @bogus FROM C").unwrap_err();
+        assert!(
+            err.0.contains("unknown @attribute") && err.0.contains("bogus"),
+            "got: {}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn parse_rejects_bad_comparison_operator() {
+        // `name LIMIT 1` after WHERE: `LIMIT` is not a comparison operator, and
+        // the tokenizer produces an Ident, so the operator match must reject it.
+        let err = parse("SELECT * FROM C WHERE name name").unwrap_err();
+        assert!(
+            err.0.contains("comparison operator"),
+            "got: {}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn parse_rejects_non_literal_rhs() {
+        let err = parse("SELECT * FROM C WHERE a = @objectId").unwrap_err();
+        assert!(err.0.contains("literal value"), "got: {}", err.0);
+    }
+
+    #[test]
+    fn parse_rejects_negative_limit() {
+        let err = parse("SELECT * FROM C LIMIT -1").unwrap_err();
+        assert!(err.0.contains("LIMIT count"), "got: {}", err.0);
+    }
+
+    #[test]
+    fn parse_aggregate_missing_paren_reports_found_token() {
+        // COUNT without `(` should report what it found instead, not a bare message.
+        let err = parse("SELECT COUNT * FROM C").unwrap_err();
+        assert!(
+            err.0.contains("expected `(`") && err.0.contains("found"),
+            "got: {}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn parse_classof_attr() {
+        let q = parse("SELECT classof(s) FROM java.lang.String s").unwrap();
+        assert_eq!(q.select, vec![SelectItem::Attr(Attr::ClassOf)]);
+    }
+
+    #[test]
+    fn parse_distinct_and_parenthesized_predicate() {
+        let q = parse("SELECT DISTINCT name FROM C WHERE (a = 1 OR b = 2) AND c = 3").unwrap();
+        assert!(q.distinct);
+        // Top-level AND with left = Or(...), right = Compare(c = 3).
+        match q.where_.unwrap() {
+            Predicate::And(l, r) => {
+                assert!(matches!(*l, Predicate::Or(_, _)));
+                assert!(matches!(*r, Predicate::Compare { op: CompareOp::Eq, .. }));
+            }
+            other => panic!("expected AND at top, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_predicate_instanceof() {
+        let q = parse("SELECT * FROM C WHERE s INSTANCEOF java.lang.String").unwrap();
+        match q.where_.unwrap() {
+            Predicate::InstanceOf(name) => assert_eq!(name, "java.lang.String"),
+            other => panic!("expected InstanceOf, got {other:?}"),
         }
     }
 }
