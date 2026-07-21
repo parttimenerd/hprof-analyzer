@@ -2129,6 +2129,13 @@
           "description": "Query label (e.g. \"q1\" or a user-supplied name).",
           "type": "string"
         },
+        "note": {
+          "description": "Optional advisory note (e.g. \"edge retention capped\"); populated by later\nphases, harmless (`None`) otherwise. Omitted from JSON when absent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "oql": {
           "description": "The original OQL text.",
           "type": "string"
