@@ -91,7 +91,14 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             P::Or(a, b) => self.eval_pred(a, class_id, blob) || self.eval_pred(b, class_id, blob),
             P::Not(a) => !self.eval_pred(a, class_id, blob),
             P::InstanceOf(cname) => self.resolver.class_name(class_id).map(|n| class_name_matches(n, cname)).unwrap_or(false),
-            P::Compare { lhs, op, rhs } => { let lv = self.project_attr(lhs, 0, class_id, blob); compare_values(&lv, *op, rhs) }
+            P::Compare { lhs, op, rhs } => {
+                // src_idx=0 is a placeholder: WHERE in this slice only references
+                // blob-scalar fields and class/type data, none of which use the
+                // object index. Object-identity attrs (@objectId/@objectAddress) in
+                // WHERE are out of scope and would spuriously compare against 0.
+                let lv = self.project_attr(lhs, 0, class_id, blob);
+                compare_values(&lv, *op, rhs)
+            }
         }
     }
 
