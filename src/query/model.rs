@@ -32,6 +32,7 @@ pub struct QueryResult {
     /// True if a cap was hit and rows are a bounded sample.
     pub truncated: bool,
     /// Set (with rows empty) when the query failed to parse/plan/execute.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
@@ -53,6 +54,7 @@ mod tests {
         let j = serde_json::to_string(&r).unwrap();
         assert!(j.contains("\"row_count\":1"));
         assert!(j.contains("\"truncated\":false"));
+        assert!(!j.contains("\"error\""), "error key should be omitted when None: {j}");
         let back: QueryResult = serde_json::from_str(&j).unwrap();
         assert_eq!(back, r);
     }
