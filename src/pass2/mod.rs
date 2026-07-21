@@ -71,9 +71,6 @@ impl Pass2 {
         let n = p1.id_map.len();
         let id_size = p1.id_size;
         let ptr_size = id_size as usize;
-        // Rebind mutably so the multi-segment scan loop can reborrow the visitor
-        // for each HEAP_DUMP_SEGMENT; the reborrow happens per match arm below.
-        let mut visitor = visitor;
 
         // ── Phase 0: detect ref_size ─────────────────────────────────────
         // Reuse the object-array (addr, count) data already collected in pass1
