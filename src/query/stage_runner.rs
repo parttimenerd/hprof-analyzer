@@ -28,6 +28,37 @@ pub fn resume(state: QueryExecState, queries: &[Query], ctx: &LateCtx) -> Vec<Qu
     slotted.into_iter().map(|(_, r)| r).collect()
 }
 
+/// Finalize a Phase-1 QueryExecState WITHOUT a late context: used by the
+/// query-only fast path (`run_single_dump`) that never computes retained sizes
+/// or dominators. Finished results pass through in slot order; any pending
+/// cross-phase carry (a `@retainedHeapSize` query) cannot be answered here, so
+/// it produces an actionable error result rather than silently empty rows.
+pub fn resume_without_late_ctx(state: QueryExecState, _queries: &[Query]) -> Vec<QueryResult> {
+    let (finished, pending) = state.into_parts();
+    let mut slotted: Vec<(usize, QueryResult)> = finished;
+    for entry in pending {
+        slotted.push((
+            entry.slot,
+            QueryResult {
+                name: entry.name.clone(),
+                oql: String::new(),
+                columns: Vec::new(),
+                rows: Vec::new(),
+                row_count: 0,
+                truncated: false,
+                error: Some(
+                    "@retainedHeapSize requires the full analysis pipeline; \
+                     it is not available in the query-only path. Run the full \
+                     report (drop --query-only) to use retained-size queries."
+                        .to_string(),
+                ),
+            },
+        ));
+    }
+    slotted.sort_by_key(|(slot, _)| *slot);
+    slotted.into_iter().map(|(_, r)| r).collect()
+}
+
 fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
     for op in &entry.plan.late_ops {
         match op {

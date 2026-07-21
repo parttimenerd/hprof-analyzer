@@ -812,10 +812,10 @@ fn parse_plan_queries(
     let mut parsed_queries: Vec<(query::ast::Query, query::plan::QueryPlan)> =
         Vec::with_capacity(query_texts.len());
     for text in query_texts {
-        let q = query::parse::parse(text).map_err(|e| {
+        let q = query::parse::parse_or_report(text).map_err(|report| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("OQL parse error in `{text}`: {}", e.0),
+                format!("OQL parse error in `{text}`:\n{report}"),
             )
         })?;
         let plan = query::plan::plan_query(&q).map_err(|e| {
@@ -876,8 +876,14 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
             ),
         ));
     }
-    let (.., mut query_results) =
+    let (.., query_state) =
         pass2::Pass2::build(input, p1, cvec::Codec::Zstd3, &opts, &parsed)?;
+
+    // Query-only path: retained sizes/dominators are not computed, so cross-phase
+    // (@retainedHeapSize) queries resolve to actionable errors here.
+    let query_asts: Vec<query::ast::Query> = parsed.iter().map(|(q, _)| q.clone()).collect();
+    let mut query_results =
+        query::stage_runner::resume_without_late_ctx(query_state, &query_asts);
 
     // Fill in blank oql text and default `q{N}` names for the printed tables.
     finalize_query_labels(&mut query_results, &query_texts);
@@ -949,7 +955,7 @@ fn run(
 
     let t = Instant::now();
     progress::phase("building object graph (pass 2)");
-    let (mut g, mut inbound, shallow_c, class_idx_c, alloc_serial_c, mut query_results) =
+    let (mut g, mut inbound, shallow_c, class_idx_c, alloc_serial_c, query_state) =
         pass2::Pass2::build(input, p1, compress, &opts, &parsed_queries)?;
     log(
         verbose,
@@ -1109,6 +1115,19 @@ fn run(
     g.retained = retained;
     g.has_same_class_ancestor = has_same;
     log(verbose, "retained", t.elapsed().as_secs_f64());
+
+    // Finalize cross-phase (@retainedHeapSize) queries now that retained sizes
+    // exist. Phase-1 results pass through; carried indices are joined against
+    // g.retained, then all results reassemble in original query order.
+    let query_asts: Vec<query::ast::Query> =
+        parsed_queries.iter().map(|(q, _)| q.clone()).collect();
+    let mut query_results = query::stage_runner::resume(
+        query_state,
+        &query_asts,
+        &query::stage_runner::LateCtx {
+            retained: &g.retained,
+        },
+    );
 
     // Restore + aggregate + free the alloc stack serials in a bounded window
     // right after compute_retained (needs g.shallow + g.retained, both live

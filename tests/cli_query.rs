@@ -434,13 +434,231 @@ fn analyze_mixed_kind_queries_render_in_input_order() {
 }
 
 // NOTE on execution-time query errors: `QueryResult.error` is a rendered
-// `**Error:**` block in the Custom Queries section, but there is currently no
-// CLI route on the analyze path that reaches the renderer with `error =
-// Some(..)`. Parse and plan failures fail fast in `parse_plan_queries`
-// (see `analyze_with_bad_query_flag_fails_fast`) BEFORE the pass2 build, and
-// the pass2 executor's `finish()` always sets `error: None`. The only producer
-// of `error: Some(..)` is the interactive REPL's "no result produced"
-// fallback, which never flows through `analyze`/report rendering. Hence there
-// is no CLI-testable path to a rendered `**Error:**` block yet, and item 4 of
-// the plan is intentionally left as this explanatory comment rather than a
-// test.
+// `**Error:**` block in the Custom Queries section. Parse and plan failures
+// fail fast in `parse_plan_queries` (see `analyze_with_bad_query_flag_fails_fast`)
+// BEFORE the pass2 build. Plan-time FIELD validation, however, needs a live
+// schema and so runs inside `Pass2::build` (earliest point the class field
+// tables exist): an unknown-field query is rejected there with a pre-set
+// `error: Some("unknown field …")` QueryResult, surfaced by the `query`
+// subcommand as an inline `error:` line (see
+// `query_subcommand_unknown_field_reports_error`).
+
+/// `@objectAddress` and `@usedHeapSize` must project real per-object values
+/// (not silent `Null`). The scan wires `LiveResolver::addr_of`/`shallow_of`
+/// into `id_map`/`shallow`, so each row's two cells must be non-negative
+/// integers — a regression to the `None` defaults would print `null`.
+#[test]
+fn query_subcommand_address_and_heap_size_are_non_null() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
+            "SELECT @objectAddress, @usedHeapSize FROM java.lang.String LIMIT 5",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "address/heap-size query failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("@objectAddress") && stdout.contains("@usedHeapSize"),
+        "missing attribute headers:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("null"),
+        "attributes projected null — LiveResolver addr_of/shallow_of not wired:\n{stdout}"
+    );
+    // At least one data row must have two integer cells joined by " | ".
+    let has_int_row = stdout.lines().any(|l| {
+        let cells: Vec<&str> = l.split(" | ").map(str::trim).collect();
+        cells.len() == 2
+            && cells[0].parse::<u64>().is_ok()
+            && cells[1].parse::<u64>().is_ok()
+    });
+    assert!(
+        has_int_row,
+        "no row with two integer cells (address, size) found:\n{stdout}"
+    );
+}
+
+/// `@length` on an array class must project the real element count (not a
+/// silent `Null`). The scan now visits PRIMITIVE_ARRAY_DUMP / OBJECT_ARRAY_DUMP
+/// records and threads their length through to `Attr::Length`; a regression to
+/// the pre-array path would either match no rows or print `null`.
+#[test]
+fn query_subcommand_array_length_is_non_null() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query", "SELECT @length FROM char[] LIMIT 5"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "array @length query failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("@length"), "missing @length header:\n{stdout}");
+    assert!(
+        !stdout.contains("error:"),
+        "array @length query reported an error:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("null"),
+        "array @length projected null — visit_array not wired:\n{stdout}"
+    );
+    // At least one data row must be a single non-negative integer (the length).
+    let has_len = stdout.lines().any(|l| {
+        let t = l.trim();
+        t.parse::<u64>().is_ok()
+    });
+    assert!(has_len, "no integer @length row found:\n{stdout}");
+}
+
+/// A query referencing a field that does not exist on the (exact) FROM class is
+/// rejected with an actionable `unknown field` error rather than silently
+/// returning an empty result. Validation runs inside the pass2 build where the
+/// class schema is live; the `query` subcommand surfaces it as an inline
+/// `error:` line.
+#[test]
+fn query_subcommand_unknown_field_reports_error() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query", "SELECT bogusfield FROM java.lang.String"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "unknown-field query should exit 0 with an inline error: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("unknown field"),
+        "missing unknown-field error:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("bogusfield"),
+        "error did not name the offending field:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("java.lang.String"),
+        "error did not name the FROM class:\n{stdout}"
+    );
+}
+
+/// An alias-qualified unknown field (`s.bogus`) is rejected the same way, with
+/// the error reporting the bare field name after alias-stripping.
+#[test]
+fn query_subcommand_unknown_alias_field_reports_error() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query", "SELECT s.bogus FROM java.lang.String s"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "unknown alias-field query should exit 0 with an inline error: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("unknown field `bogus`"),
+        "error should name the alias-stripped bare field `bogus`:\n{stdout}"
+    );
+}
+
+/// A `@retainedHeapSize` query is cross-phase: it cannot finalize during the
+/// pass2 scan (retained sizes only exist after the dominator pass). The full
+/// analyze path must carry the Phase-1 matches, join them against `g.retained`
+/// in the late stage (`stage_runner::resume`), and render real rows — not an
+/// error and not silent `null`. This is the end-to-end guard for Tasks 10-11.
+#[test]
+fn retained_query_returns_rows_via_stage_runner() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg(&hprof)
+        .args([
+            "--query",
+            "SELECT @objectId, @retainedHeapSize FROM java.lang.String \
+             ORDER BY @retainedHeapSize DESC LIMIT 5",
+        ])
+        .args(["-f", "md"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "analyze with retained query failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let md = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        md.contains("## Custom Queries"),
+        "retained query section missing:\n{md}"
+    );
+    assert!(
+        md.contains("@retainedHeapSize"),
+        "retained query column header missing:\n{md}"
+    );
+    // The cross-phase carry must have been finalized — no error line, no null
+    // cells for the retained column.
+    assert!(
+        !md.contains("@retainedHeapSize requires the full analysis pipeline"),
+        "retained query hit the query-only error path in the FULL analyze path:\n{md}"
+    );
+    // At least one rendered data row must carry an integer retained size. Rows
+    // in the md table are `| a | b |`; look for a line with two integer cells.
+    let has_int_row = md.lines().any(|l| {
+        let cells: Vec<&str> = l
+            .trim()
+            .trim_matches('|')
+            .split('|')
+            .map(str::trim)
+            .collect();
+        cells.len() == 2 && cells[0].parse::<u64>().is_ok() && cells[1].parse::<u64>().is_ok()
+    });
+    assert!(
+        has_int_row,
+        "no rendered row with (objectId, retainedHeapSize) integers found:\n{md}"
+    );
+}
+
+/// The query-only fast path (`query` subcommand) never computes retained sizes
+/// or dominators, so a `@retainedHeapSize` query cannot be answered. It must
+/// exit 0 and surface an actionable inline `error:` telling the user to run the
+/// full report — NOT silently return empty rows. Guards `resume_without_late_ctx`.
+#[test]
+fn retained_query_in_query_only_path_errors_actionably() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query", "SELECT @objectId, @retainedHeapSize FROM java.lang.String"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "query-only retained query should exit 0 with an inline error: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("error:"),
+        "query-only retained query must surface an inline error line:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("full report") || stdout.contains("full analysis pipeline"),
+        "error should tell the user to run the full report:\n{stdout}"
+    );
+}

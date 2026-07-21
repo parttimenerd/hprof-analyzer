@@ -67,7 +67,7 @@ impl Pass2 {
         crate::cvec::CompressedU32,
         crate::cvec::CompressedU32,
         Option<crate::cvec::CompressedU32>,
-        Vec<crate::query::model::QueryResult>,
+        crate::query::execute::QueryExecState,
     )> {
         let n = p1.id_map.len();
         let id_size = p1.id_size;
@@ -313,8 +313,13 @@ impl Pass2 {
         // and emptied below (class_idx just after this block, shallow after the
         // scan), while class_map/strings are freed only much later. class_names is
         // the live Vec that moves into Graph at the end.
-        let query_resolver =
-            crate::query::run::LiveResolver::new(&p1.class_map, &p1.strings, id_size as usize);
+        let query_resolver = crate::query::run::LiveResolver::new(
+            &p1.class_map,
+            &p1.strings,
+            id_size as usize,
+            &p1.id_map,
+            &shallow,
+        );
         let has_histogram = queries
             .iter()
             .any(|(_, p)| p.kind == crate::query::plan::StageKind::HistogramOnly);
@@ -336,10 +341,56 @@ impl Pass2 {
         } else {
             None
         };
-        let mut scan_execs = Vec::new();
-        for (q, plan) in queries {
-            if plan.kind == crate::query::plan::StageKind::SingleScan {
-                scan_execs.push(crate::query::execute::SingleScanExecutor::new(q, plan, &query_resolver));
+        // Arm one executor per valid SingleScan query. Plan-time field
+        // validation runs here (earliest point a live schema exists): a query
+        // referencing a field absent from its FROM class's super-chain is
+        // rejected up front with a pre-set error QueryResult, and its executor
+        // is not armed. `scan_outcomes` records, in `queries` input order for
+        // SingleScan entries, either Ok(slot) (armed → routed via the driver's
+        // QueryExecState) or Err(pre-set validation-error result at that slot).
+        //
+        // Phase-1 queries (`finalize_at == P1`) are armed as row executors;
+        // cross-phase queries (`finalize_at == P3`, i.e. @retainedHeapSize) are
+        // armed in carry mode so their matched dense indices are carried to the
+        // late stage instead of finalized here (retained sizes don't exist yet).
+        let mut scan_execs: Vec<(usize, crate::query::execute::SingleScanExecutor<_>)> = Vec::new();
+        let mut scan_outcomes: Vec<Result<usize, (usize, crate::query::model::QueryResult)>> =
+            Vec::new();
+        for (slot, (q, plan)) in queries.iter().enumerate() {
+            if plan.kind != crate::query::plan::StageKind::SingleScan {
+                continue;
+            }
+            match crate::query::plan::validate_fields(q, &query_resolver) {
+                Ok(()) => {
+                    let exec = if plan.finalize_at == crate::query::plan::Phase::P3 {
+                        crate::query::execute::SingleScanExecutor::new_carry(
+                            q,
+                            plan,
+                            &query_resolver,
+                            crate::query::carry::Carry::index_only(
+                                crate::query::carry::DEFAULT_CARRY_CAP,
+                            ),
+                        )
+                    } else {
+                        crate::query::execute::SingleScanExecutor::new(q, plan, &query_resolver)
+                    };
+                    scan_execs.push((slot, exec));
+                    scan_outcomes.push(Ok(slot));
+                }
+                Err(e) => {
+                    scan_outcomes.push(Err((
+                        slot,
+                        crate::query::model::QueryResult {
+                            name: String::new(),
+                            oql: String::new(),
+                            columns: Vec::new(),
+                            rows: Vec::new(),
+                            row_count: 0,
+                            truncated: false,
+                            error: Some(e.0),
+                        },
+                    )));
+                }
             }
         }
         let mut scan_driver = crate::query::run::ScanDriver::new(scan_execs);
@@ -395,6 +446,8 @@ impl Pass2 {
                             } else {
                                 Some(&mut scan_driver as &mut dyn crate::query::ObjectVisitor)
                             },
+                            &p1.class_map,
+                            &p1.strings,
                         )?;
                     }
                     tags::HEAP_DUMP_END => break,
@@ -410,21 +463,17 @@ impl Pass2 {
         // (No name/OQL source yet — the CLI wiring task fills these; empty slices
         // are safe.) Dropping the driver + resolver here ends their borrows of
         // p1.class_map / p1.strings before those maps are freed below.
-        let mut query_results: Vec<crate::query::model::QueryResult> = Vec::new();
-        // Original index in `queries` for each appended result. Results are
-        // appended in two kind-partitioned batches (SingleScan then Histogram),
-        // so this lets us restore the caller's input order before returning —
-        // otherwise a mixed-kind query set would render/label out of order.
-        let mut query_order: Vec<usize> = Vec::new();
-        if scan_driver.is_empty() {
-            drop(scan_driver);
-        } else {
-            let names: [String; 0] = [];
-            let oqls: [String; 0] = [];
-            query_results.extend(scan_driver.finish(&names, &oqls));
-            query_order.extend(queries.iter().enumerate().filter_map(|(i, (_, plan))| {
-                (plan.kind == crate::query::plan::StageKind::SingleScan).then_some(i)
-            }));
+        // Cross-phase-aware query state: the driver returns armed executors as
+        // finished (Phase-1) or pending carries (Phase-3 @retainedHeapSize),
+        // each tagged with its `slot` (input index in `queries`). Validation
+        // errors and histogram results are pushed as finished at their slots.
+        // The caller reassembles by slot after the late stage, so no positional
+        // `query_order` reorder is needed here.
+        let mut query_state = scan_driver.finish_state();
+        for outcome in scan_outcomes {
+            if let Err((slot, err_result)) = outcome {
+                query_state.push_finished(slot, err_result);
+            }
         }
         drop(query_resolver);
 
@@ -469,14 +518,12 @@ impl Pass2 {
                     shallow_total: shallow_totals[ci],
                 })
                 .collect();
-            let mut hist_results: Vec<crate::query::model::QueryResult> = Vec::new();
-            for (i, (q, plan)) in queries.iter().enumerate() {
+            for (slot, (q, plan)) in queries.iter().enumerate() {
                 if plan.kind == crate::query::plan::StageKind::HistogramOnly {
-                    hist_results.push(crate::query::histogram::run_histogram(q, plan, &summaries));
-                    query_order.push(i);
+                    let r = crate::query::histogram::run_histogram(q, plan, &summaries);
+                    query_state.push_finished(slot, r);
                 }
             }
-            query_results.extend(hist_results);
         }
 
         // Resolve each distinct non-boot class-loader OBJECT address to the
@@ -984,16 +1031,10 @@ impl Pass2 {
             synthetic_edges,
         };
 
-        // Restore the caller's query order (results were appended in two
-        // kind-partitioned batches above).
-        if query_order.len() == query_results.len() {
-            let mut paired: Vec<(usize, crate::query::model::QueryResult)> =
-                query_order.into_iter().zip(query_results.into_iter()).collect();
-            paired.sort_by_key(|(i, _)| *i);
-            query_results = paired.into_iter().map(|(_, r)| r).collect();
-        }
-
-        Ok((graph, inbound, shallow_c, class_idx_c, alloc_serial_c, query_results))
+        // Query results are tagged by slot inside `query_state`; the caller
+        // reassembles them in input order after the late (retained) stage runs,
+        // so no positional reorder happens here.
+        Ok((graph, inbound, shallow_c, class_idx_c, alloc_serial_c, query_state))
     }
 
     /// First-scan heap walker that COUNTS out/in degrees per node and finalizes
@@ -1012,6 +1053,8 @@ impl Pass2 {
         in_degree: &mut Vec<u32>,
         scratch: &mut Vec<u8>,
         mut visitor: Option<&mut (dyn crate::query::ObjectVisitor + 'v)>,
+        class_map: &HashMap<u64, crate::pass1::ClassInfo>,
+        strings: &HashMap<u64, String>,
     ) -> io::Result<()> {
         let ids = id_size as u64;
         let mut cache = crate::id_map::IndexCache::new();
@@ -1135,6 +1178,16 @@ impl Pass2 {
 
                     // Shallow size already correct from Phase 0b; class_idx set by Phase 0c.
 
+                    // OQL: deliver the array to any active query executor, resolving
+                    // its own class name from the element-class string (HPROF stores
+                    // object-array classes as `[L…;` descriptors).
+                    if let Some(v) = visitor.as_deref_mut() {
+                        if let Some(raw) = class_map.get(&elem_class_id).and_then(|ci| strings.get(&ci.name_id)) {
+                            let name = crate::report::pretty_class_name(raw);
+                            v.visit_array(src_idx, &name, count as u32);
+                        }
+                    }
+
                     // Edge: array → element class object
                     edge_if_valid!(src_idx, elem_class_id, false);
 
@@ -1150,7 +1203,7 @@ impl Pass2 {
                     }
                 }
                 heap::PRIM_ARRAY_DUMP => {
-                    let _addr = r.id()?;
+                    let addr = r.id()?;
                     r.skip(4)?;
                     let count = r.u4()? as u64;
                     let elem_type = r.u1()?;
@@ -1160,6 +1213,17 @@ impl Pass2 {
                     r.skip(count * esz)?;
                     checked_sub!(remaining, ids + 4 + 4 + 1 + count * esz);
                     // No object edges; shallow already set by Phase 0b.
+
+                    // OQL: deliver the primitive array to any active query executor.
+                    // Primitive arrays carry no class-object address; synthesize the
+                    // descriptor (`[C` → `char[]`) from the element type code.
+                    if let Some(v) = visitor.as_deref_mut() {
+                        if let Some(src_idx) = id_map.index_of(addr) {
+                            let raw = crate::pass2::sizing::prim_array_class_name(elem_type);
+                            let name = crate::report::pretty_class_name(raw);
+                            v.visit_array(src_idx, &name, count as u32);
+                        }
+                    }
                 }
                 other => {
                     return Err(io::Error::new(

@@ -90,6 +90,10 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     /// True if this executor is carrying indices for a later phase.
     pub fn is_carry(&self) -> bool { self.carry.is_some() }
 
+    /// The plan this executor runs (borrowed). Used by the driver to tag a
+    /// carried query with its plan for the late phase.
+    pub fn plan(&self) -> &QueryPlan { self.plan }
+
     /// Consume a carry executor, returning the accumulated carry. Panics if this
     /// executor is not in carry mode (caller must check `is_carry`).
     pub fn take_carry(self) -> Carry {
