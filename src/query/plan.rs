@@ -2,7 +2,7 @@
 //! each flag arms exactly one piece of machinery. Deferred constructs are
 //! rejected here (not in the parser) with a message naming the construct.
 
-use crate::query::ast::{Attr, Predicate, Query, SelectItem, Value};
+use crate::query::ast::{Attr, Predicate, Query, RefRole, SelectItem, Value};
 use crate::query::carry::CarryLayout;
 use crate::query::QueryError;
 
@@ -25,6 +25,9 @@ pub struct QueryNeeds {
     /// Arms the dominator-children CSR (dc_off/dc_tgt) in the late phase, for
     /// `dominators(x)` / `dominatorof(x)` / `AS RETAINED SET`.
     pub dominator_children: bool,
+    /// Arms the forward-reference graph (fwd CSR + per-edge field ids) in the
+    /// P2 late window, for N-hop `RefPath` resolution.
+    pub ref_walk: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,8 +40,8 @@ pub enum StageKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
     P1,
-    // P2 is constructed by later rollout phases (RefWalk); reserved here.
-    #[allow(dead_code)]
+    /// N-hop `RefPath` resolution: the forward-reference graph is live in the
+    /// post-scan window before dominators/retained (P3) are computed.
     P2,
     P3,
 }
@@ -60,6 +63,13 @@ pub enum StageOp {
     /// Bounded DFS over the dominator-children CSR from each carried index,
     /// emitting the retained closure. Backs `SELECT ... AS RETAINED SET`.
     RetainedSet { cap: usize },
+    /// Resolve one reference hop of an N-hop `RefPath` against the forward-ref
+    /// graph in the P2 window. `hop` is the 0-based hop index within the path;
+    /// `role` decides ordering relative to WHERE filtering (predicate-critical
+    /// walks resolve before filtering, projection-only after); `carry` is the
+    /// frontier layout while walking (`AddrFrontier`) or the tail scalar layout
+    /// on the final hop. One op is emitted per hop.
+    RefWalkResolve { hop: usize, role: RefRole, carry: CarryLayout },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +77,9 @@ pub enum PredCost {
     Type,
     Scalar,
     Str,
+    /// An N-hop reference-path predicate — the most expensive (walks the
+    /// forward-ref graph), so it sorts last.
+    Ref,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -306,11 +319,45 @@ fn plan_single(q: &Query) -> Result<QueryPlan, QueryError> {
     if cross_phase {
         needs.retained = true;
     }
-    let (finalize_at, late_ops) = if cross_phase {
+    let (mut finalize_at, mut late_ops) = if cross_phase {
         (Phase::P3, vec![StageOp::JoinRetained])
     } else {
         (Phase::P1, Vec::new())
     };
+
+    // N-hop RefWalk: a predicate-critical path (in WHERE) must resolve before
+    // row filtering; a projection-only path (SELECT only) resolves after. The
+    // hop count is the number of reference edges to follow; we emit one
+    // `RefWalkResolve` per hop (the final hop carries the tail scalar, earlier
+    // hops carry the address frontier). We take the max hop count of each role
+    // so a single walk of the deepest path subsumes shorter co-prefixed ones.
+    let where_hops = q.where_.as_ref().map(pred_refpath_hops).unwrap_or(0);
+    let select_hops = q.select.iter().map(select_refpath_hops).max().unwrap_or(0);
+    if where_hops > 0 || select_hops > 0 {
+        needs.ref_walk = true;
+        // A predicate-critical walk must complete before filtering, so its ops
+        // come first and set the role; otherwise the walk is projection-only.
+        let mut push_hops = |count: usize, role: RefRole| {
+            for hop in 0..count {
+                let carry = if hop + 1 == count {
+                    CarryLayout::IndexOnly
+                } else {
+                    CarryLayout::AddrFrontier
+                };
+                late_ops.push(StageOp::RefWalkResolve { hop, role, carry });
+            }
+        };
+        if where_hops > 0 {
+            push_hops(where_hops, RefRole::PredicateCritical);
+        }
+        if select_hops > 0 {
+            push_hops(select_hops, RefRole::ProjectionOnly);
+        }
+        // RefWalk finalizes at P2; a later phase (P3 retained/dominators) wins.
+        if finalize_at == Phase::P1 {
+            finalize_at = Phase::P2;
+        }
+    }
 
     Ok(QueryPlan {
         kind,
@@ -408,6 +455,28 @@ pub(crate) fn pred_uses_retained(p: &Predicate) -> bool {
         Predicate::Not(a) => pred_uses_retained(a),
         Predicate::Compare { lhs: Attr::RetainedHeapSize, .. } => true,
         _ => false,
+    }
+}
+
+/// The maximum RefPath hop count across every `Attr::RefPath` reachable in a
+/// SELECT projection (following aggregate arguments). `0` if none.
+fn select_refpath_hops(it: &SelectItem) -> usize {
+    match it {
+        SelectItem::Attr(Attr::RefPath { hops, .. }) => hops.len(),
+        SelectItem::Aggregate { arg, .. } => select_refpath_hops(arg),
+        _ => 0,
+    }
+}
+
+/// The maximum RefPath hop count across every `Attr::RefPath` reachable in a
+/// WHERE predicate tree. `0` if none. A non-zero result means at least one
+/// conjunct is predicate-critical (a refwalk must resolve before filtering).
+fn pred_refpath_hops(p: &Predicate) -> usize {
+    match p {
+        Predicate::And(a, b) | Predicate::Or(a, b) => pred_refpath_hops(a).max(pred_refpath_hops(b)),
+        Predicate::Not(a) => pred_refpath_hops(a),
+        Predicate::Compare { lhs: Attr::RefPath { hops, .. }, .. } => hops.len(),
+        _ => 0,
     }
 }
 
@@ -676,6 +745,7 @@ fn pred_cost(pred: &Predicate) -> PredCost {
             Attr::Field(_) if matches!(rhs, Value::Str(_)) => PredCost::Str,
             Attr::DisplayName => PredCost::Str,
             Attr::ClassOf => PredCost::Type,
+            Attr::RefPath { .. } => PredCost::Ref,
             _ => PredCost::Scalar,
         },
     }
@@ -692,6 +762,7 @@ fn pred_cost_rank(c: PredCost) -> u8 {
         PredCost::Type => 0,
         PredCost::Scalar => 1,
         PredCost::Str => 2,
+        PredCost::Ref => 3,
     }
 }
 
@@ -840,6 +911,64 @@ mod tests {
     fn plan_retained_set_with_aggregate_rejected() {
         let err = plan_query(&parse("SELECT count(s) AS RETAINED SET FROM java.lang.String s").unwrap()).unwrap_err();
         assert!(err.to_string().contains("RETAINED SET cannot be combined with aggregate"), "got: {err}");
+    }
+
+    #[test]
+    fn refpath_in_where_is_predicate_critical() {
+        use crate::query::ast::RefRole;
+        let q = parse("SELECT * FROM Node x WHERE x.parent.id = 7").unwrap();
+        let plan = plan_query(&q).unwrap();
+        assert!(plan.needs.ref_walk, "ref_walk need must be set");
+        assert!(
+            plan.late_ops.iter().any(|op| matches!(op,
+                StageOp::RefWalkResolve { role: RefRole::PredicateCritical, .. })),
+            "expected a PredicateCritical RefWalkResolve op, got {:?}",
+            plan.late_ops
+        );
+        // A predicate-critical refwalk resolves at P2 (before row filtering).
+        assert_eq!(plan.finalize_at, Phase::P2);
+    }
+
+    #[test]
+    fn refpath_projection_only_defers() {
+        use crate::query::ast::RefRole;
+        let q = parse("SELECT x.parent.name FROM Node x").unwrap();
+        let plan = plan_query(&q).unwrap();
+        assert!(plan.needs.ref_walk, "ref_walk need must be set");
+        assert!(
+            plan.late_ops.iter().any(|op| matches!(op,
+                StageOp::RefWalkResolve { role: RefRole::ProjectionOnly, .. })),
+            "expected a ProjectionOnly RefWalkResolve op, got {:?}",
+            plan.late_ops
+        );
+        assert_eq!(plan.finalize_at, Phase::P2);
+    }
+
+    #[test]
+    fn refpath_emits_one_resolve_op_per_hop() {
+        // `x.a.b.c` after alias-strip has hops [a, b] and tail c → 2 resolve ops.
+        let q = parse("SELECT x.a.b.c FROM Node x").unwrap();
+        let plan = plan_query(&q).unwrap();
+        let hops = plan
+            .late_ops
+            .iter()
+            .filter(|op| matches!(op, StageOp::RefWalkResolve { .. }))
+            .count();
+        assert_eq!(hops, 2, "one RefWalkResolve op per hop, got {:?}", plan.late_ops);
+    }
+
+    #[test]
+    fn refpath_with_retained_stays_p3() {
+        // A refwalk combined with a P3 need (retained) keeps finalize_at at P3
+        // (the later phase wins); ref_walk is still armed.
+        let q = parse(
+            "SELECT x.parent.name, @retainedHeapSize FROM Node x ORDER BY @retainedHeapSize DESC",
+        )
+        .unwrap();
+        let plan = plan_query(&q).unwrap();
+        assert!(plan.needs.ref_walk);
+        assert!(plan.needs.retained);
+        assert_eq!(plan.finalize_at, Phase::P3, "P3 (retained) must win over P2");
     }
 
     #[test]
