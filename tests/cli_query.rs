@@ -1018,3 +1018,43 @@ fn refwalk_query_in_query_only_path_errors_actionably() {
         "RefWalk error must not reuse the retained-size message:\n{stdout}"
     );
 }
+
+/// MEMORY-CRITICAL guard: an analyze run with NO OQL query must be byte-for-byte
+/// identical to the committed golden JSON report — the edge-retention hooks
+/// (Task 41) are gated behind `RunFlags`, so a no-edge run must not introduce a
+/// `queries` section, a retention `note`, or any other drift. The full golden
+/// equality is asserted in `integration.rs::json_golden_snapshot`; here we add a
+/// focused, self-contained assertion that the no-edge run emits NO query results
+/// and NO retention note, so a regression in the gating surfaces from this suite
+/// too (not only the golden snapshot).
+#[test]
+fn no_edge_run_baseline_unchanged() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg(&hprof)
+        .args(["--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "no-query analyze failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("analyzer stdout was not valid JSON");
+
+    // `queries` is `skip_serializing_if = "Vec::is_empty"`: a no-query run must
+    // omit it entirely. Its presence would mean the edge hooks leaked a result.
+    assert!(
+        v.get("queries").is_none(),
+        "no-edge run must not emit a `queries` section, got: {:?}",
+        v.get("queries")
+    );
+
+    // The retention note text must never appear anywhere in a no-edge run.
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !text.contains("edge query: retaining"),
+        "no-edge run must not surface any edge-retention note:\n{text}"
+    );
+}

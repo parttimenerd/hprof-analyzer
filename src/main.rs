@@ -927,6 +927,14 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
     Ok(())
 }
 
+/// The two query-gated edge structures built at the forward-CSR hook: the
+/// forward store (`@outbounds`/`path`) and a bounded inbound `(in_off, in_tgt)`
+/// CSR (`@inbounds`). Both `None` on a no-edge run.
+type RetainedEdgeStructs = (
+    Option<crate::query::retained_edges::RetainedEdges>,
+    Option<(Vec<u32>, Vec<u32>)>,
+);
+
 /// Run the full `analyze` pipeline end-to-end and write the report.
 /// Phase order and the interleaved allocation/free/compress steps are tuned
 /// for the peak-RSS budget; the inline comments flag the load-bearing points.
@@ -982,6 +990,37 @@ fn run(
              full report. Run the query with `hprof-analyzer query <dump> -e '<oql>'`.",
         ));
     }
+    // MEMORY-CRITICAL: decide edge retention BEFORE pass2 so a run with no
+    // edge-using query (@inbounds / @outbounds / path()) stays byte-for-byte and
+    // RSS-identical to today — every new branch below is gated on `run_flags`.
+    //
+    // `plan_run` needs a `ClassIndexResolver` only to fill `retain_rows` (dense
+    // class bits). The dense class universe is built INSIDE pass2 and is not
+    // available yet, so here we pass a trivial resolver: this yields the correct
+    // BOOLEAN flags (which are computed purely by query inspection). Row-level
+    // filtering (L1) is done AFTER pass2 by matching each source row's class name
+    // against the edge queries' FROM patterns, so `retain_rows` is not consulted.
+    let run_flags = {
+        struct NoClassIndex;
+        impl query::runflags::ClassIndexResolver for NoClassIndex {
+            fn class_bits(&self, _pattern: &str, _instanceof: bool) -> Vec<usize> {
+                Vec::new()
+            }
+            fn universe_len(&self) -> usize {
+                0
+            }
+        }
+        let queries: Vec<query::ast::Query> =
+            parsed_queries.iter().map(|(q, _)| q.clone()).collect();
+        // Default depth cap (a `--query-path-depth` flag is added in a later change).
+        query::runflags::plan_run(&queries, &NoClassIndex, 5).map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("OQL edge planning error: {}", e.0),
+            )
+        })?
+    };
+
     let (flat_queries, union_groups) = query::run::expand_union_queries(&parsed_queries);
 
     let t = Instant::now();
@@ -1070,6 +1109,156 @@ fn run(
     // coexists with the large inb_flat intermediate.
     let t = Instant::now();
     progress::phase("building inbound references");
+
+    // MEMORY-CRITICAL edge-retention hook (Task 41). This is the ONLY point where
+    // the forward CSR (`g.fwd_offsets`/`g.fwd_targets`) is still alive — it is
+    // consumed by `build_from_fwd` just below. When (and ONLY when) an edge query
+    // is armed, we build the two bounded, class-filtered edge structures the
+    // resume window needs, both from the live forward CSR:
+    //
+    //   * `retained_edges` (@outbounds / path): a delta+vbyte store keyed by
+    //     SOURCE dense index, retaining only rows whose SOURCE object's class
+    //     matches an edge query's FROM pattern (L1). Never expands to a flat
+    //     Vec<u32> of all edges (L2 — see retained_edges.rs).
+    //
+    //   * `retained_inbound` (@inbounds): a bounded transpose of the matched-class
+    //     forward edges into a plain (in_off,in_tgt) CSR. This is NOT a survival of
+    //     the full ~7.5 GB block-encoded inbound CSR (that is freed at its normal
+    //     drop below); it is a small index whose target lists are populated only
+    //     for nodes whose class matches an @inbounds query's FROM pattern. `in_off`
+    //     is full length (n+1) so the executor can index any node safely; only
+    //     matched targets carry referrers.
+    //
+    // Restoring the dense class_idx here costs ~4 GB, so it is guarded INSIDE the
+    // `if` — a no-edge run never restores it and the teardown is byte/RSS-identical
+    // to today. `CompressedU32::restore(&self)` takes `&self`, so the later restore
+    // at the shallow/class_idx window is unaffected.
+    let want_forward = run_flags.retain_forward || run_flags.outbounds_by_rescan;
+    let want_inbound = run_flags.retain_inbound;
+    let (retained_edges, retained_inbound): RetainedEdgeStructs = if want_forward || want_inbound {
+        // Collect the FROM (pattern, instanceof) of every query that actually uses
+        // an edge feature; class rows are retained only for these (L1).
+        let edge_froms: Vec<(String, bool)> = flat_queries
+            .iter()
+            .filter(|(q, _)| {
+                query::runflags::plan_run(std::slice::from_ref(q), &{
+                    struct NoIdx;
+                    impl query::runflags::ClassIndexResolver for NoIdx {
+                        fn class_bits(&self, _: &str, _: bool) -> Vec<usize> {
+                            Vec::new()
+                        }
+                        fn universe_len(&self) -> usize {
+                            0
+                        }
+                    }
+                    NoIdx
+                }, 5)
+                .map(|f| {
+                    f.retain_inbound || f.retain_forward || f.outbounds_by_rescan
+                })
+                .unwrap_or(false)
+            })
+            .map(|(q, _)| (q.from.class_name().to_string(), q.from.instanceof()))
+            .collect();
+
+        // Dense class index for each node. In the compressed path we restore it
+        // locally (~4 GB, freed at block end) since `restore(&self)` is idempotent
+        // and the later shallow/class_idx restore is unaffected. In the (rare)
+        // no-compress path `g.class_idx` is already dense — borrow it in place so
+        // it survives for the later `compute_retained` read.
+        let class_idx_restored: Option<Vec<u32>> = if compress != cvec::Codec::None {
+            Some(class_idx_c.restore()?)
+        } else {
+            None
+        };
+        let class_idx_ref: &[u32] = class_idx_restored
+            .as_deref()
+            .unwrap_or(g.class_idx.as_slice());
+        // A node's class matches when its class name matches any edge query's FROM
+        // pattern. `class_name_matches` is glob-aware and separator-normalizing;
+        // INSTANCEOF-inclusive matching is not modeled here (bounded superset would
+        // require the subclass table), so a plain glob match against the written
+        // FROM pattern is used — over-matching only adds retained rows, never drops.
+        let node_matches = |s: usize| -> bool {
+            let cn = &g.class_names[class_idx_ref[s] as usize];
+            edge_froms
+                .iter()
+                .any(|(pat, _inst)| query::execute::class_name_matches(cn, pat))
+        };
+
+        let n = g.n;
+        let fwd_off = &g.fwd_offsets;
+        let fwd_tgt = &g.fwd_targets;
+
+        // Forward store (@outbounds / path): rows whose SOURCE matches. The
+        // forward targets are chunked (`ChunkU32`); `copy_range` gathers one row's
+        // out-edges into a scratch Vec (handles chunk-boundary straddles).
+        let retained_edges = if want_forward {
+            let mut builder = crate::query::retained_edges::RetainedEdgesBuilder::new();
+            let mut scratch: Vec<u32> = Vec::new();
+            for s in 0..n {
+                if !node_matches(s) {
+                    continue;
+                }
+                let (lo, hi) = (fwd_off[s] as usize, fwd_off[s + 1] as usize);
+                fwd_tgt.copy_range(lo, hi, &mut scratch);
+                scratch.sort_unstable();
+                builder.push_row(s as u32, &scratch);
+            }
+            Some(builder.finish())
+        } else {
+            None
+        };
+
+        // Bounded inbound transpose (@inbounds): for each forward edge s -> t whose
+        // TARGET t matches, record s as a referrer of t. Two-pass counting build so
+        // in_tgt is sized exactly; in_off is full length (n+1). Each source row's
+        // targets are gathered via `copy_range` (chunked store).
+        let retained_inbound = if want_inbound {
+            let mut in_off = vec![0u32; n + 1];
+            let mut row: Vec<u32> = Vec::new();
+            // Pass 1: count referrers per matched target.
+            for s in 0..n {
+                let (lo, hi) = (fwd_off[s] as usize, fwd_off[s + 1] as usize);
+                fwd_tgt.copy_range(lo, hi, &mut row);
+                for &t in &row {
+                    if node_matches(t as usize) {
+                        in_off[t as usize + 1] += 1;
+                    }
+                }
+            }
+            // Prefix sum -> offsets.
+            for i in 0..n {
+                in_off[i + 1] += in_off[i];
+            }
+            let total = in_off[n] as usize;
+            let mut in_tgt = vec![0u32; total];
+            let mut cursor = in_off.clone();
+            // Pass 2: scatter sources into matched targets' slots.
+            for s in 0..n {
+                let (lo, hi) = (fwd_off[s] as usize, fwd_off[s + 1] as usize);
+                fwd_tgt.copy_range(lo, hi, &mut row);
+                for &t in &row {
+                    if node_matches(t as usize) {
+                        let slot = &mut cursor[t as usize];
+                        in_tgt[*slot as usize] = s as u32;
+                        *slot += 1;
+                    }
+                }
+            }
+            Some((in_off, in_tgt))
+        } else {
+            None
+        };
+
+        // Drop the dense class_idx we restored just for filtering (compress path).
+        drop(class_idx_restored);
+        (retained_edges, retained_inbound)
+    } else {
+        // No edge query -> zero allocation; forward CSR teardown identical to today.
+        (None, None)
+    };
+
     // fwd_offsets and fwd_targets are moved into build_from_fwd so they can be
     // freed INSIDE the call, before Phase 4 allocates inb_data.
     let (inb_block_off, inb_data) = inbound.build_from_fwd(
@@ -1170,6 +1359,11 @@ fn run(
         .as_ref()
         .map_or(&*query::stage_runner::EMPTY_REFWALK_TAILS, |c| &c.tails);
     let rw_trunc = refwalk_csr.as_ref().is_some_and(|c| c.truncated);
+    // Thread the query-gated edge structures (built at the forward-CSR hook above)
+    // into the resume window. Both are `None`/empty on a no-edge run, so the
+    // borrowed slices stay empty and behavior is identical to today.
+    let in_off: &[u32] = retained_inbound.as_ref().map_or(&[], |(o, _)| o);
+    let in_tgt: &[u32] = retained_inbound.as_ref().map_or(&[], |(_, t)| t);
     let flat_results = query::stage_runner::resume(
         query_state,
         &query_asts,
@@ -1186,12 +1380,40 @@ fn run(
             field_names: rw_names,
             refwalk_tails: rw_tails,
             refwalk_truncated: rw_trunc,
-            in_off: &[],
-            in_tgt: &[],
-            retained_edges: None,
+            in_off,
+            in_tgt,
+            retained_edges: retained_edges.as_ref(),
         },
     );
     let mut query_results = query::run::collapse_union_results(flat_results, &union_groups);
+
+    // Step D: surface the edge-retention note (Task 42 renders it). Only present
+    // when an edge feature is armed; attaching it to edge-using result rows keeps
+    // a no-edge run's JSON byte-identical (`note` is skipped when `None`). After
+    // `collapse_union_results`, `query_results` is one row per ORIGINAL top-level
+    // query, in `parsed_queries` order — zip against that (a UNION branch's edge
+    // use is detected because `plan_run` scans branches too).
+    if let Some(note) = run_flags.retention_note() {
+        for (r, (q, _)) in query_results.iter_mut().zip(parsed_queries.iter()) {
+            let edge_used = query::runflags::plan_run(std::slice::from_ref(q), &{
+                struct NoIdx;
+                impl query::runflags::ClassIndexResolver for NoIdx {
+                    fn class_bits(&self, _: &str, _: bool) -> Vec<usize> {
+                        Vec::new()
+                    }
+                    fn universe_len(&self) -> usize {
+                        0
+                    }
+                }
+                NoIdx
+            }, 5)
+            .map(|f| f.retain_inbound || f.retain_forward || f.outbounds_by_rescan)
+            .unwrap_or(false);
+            if edge_used && r.note.is_none() {
+                r.note = Some(note.clone());
+            }
+        }
+    }
 
     // Restore + aggregate + free the alloc stack serials in a bounded window
     // right after compute_retained (needs g.shallow + g.retained, both live
