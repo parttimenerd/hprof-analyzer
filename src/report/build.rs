@@ -100,6 +100,7 @@ pub fn build_model(
         collection_contents,
         leak_indicators: build_leak_indicators(g),
         triage: Vec::new(),
+        queries: Vec::new(),
     };
     // Evaluate the OOM-triage rule framework once over the finished report.
     report.triage = crate::report::evaluate_triage(&report);

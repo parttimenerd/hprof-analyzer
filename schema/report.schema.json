@@ -138,6 +138,13 @@
     "overview": {
       "$ref": "#/$defs/SystemOverview"
     },
+    "queries": {
+      "description": "Custom OQL query results (empty unless --query/--query-file was given).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/QueryResult"
+      }
+    },
     "references": {
       "description": "Soft/weak/phantom reference statistics. Always-on; additive, defaults to\nempty for round-trip with older JSON.",
       "$ref": "#/$defs/ReferencesAnalysis",
@@ -2089,6 +2096,182 @@
       "required": [
         "key",
         "value"
+      ]
+    },
+    "QueryColumn": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "QueryResult": {
+      "type": "object",
+      "properties": {
+        "columns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/QueryColumn"
+          }
+        },
+        "error": {
+          "description": "Set (with rows empty) when the query failed to parse/plan/execute.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Query label (e.g. \"q1\" or a user-supplied name).",
+          "type": "string"
+        },
+        "oql": {
+          "description": "The original OQL text.",
+          "type": "string"
+        },
+        "row_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/QueryValue"
+            }
+          }
+        },
+        "truncated": {
+          "description": "True if a cap was hit and rows are a bounded sample.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "oql",
+        "columns",
+        "rows",
+        "row_count",
+        "truncated"
+      ]
+    },
+    "QueryValue": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "null"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "bool"
+            },
+            "v": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "v"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "int"
+            },
+            "v": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "required": [
+            "kind",
+            "v"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "float"
+            },
+            "v": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "required": [
+            "kind",
+            "v"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "str"
+            },
+            "v": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "v"
+          ]
+        },
+        {
+          "description": "A reference to a heap object: dense index + its class name for display.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "obj_ref"
+            },
+            "v": {
+              "type": "object",
+              "properties": {
+                "class": {
+                  "type": "string"
+                },
+                "index": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "index",
+                "class"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "v"
+          ]
+        }
       ]
     },
     "RecordCensus": {

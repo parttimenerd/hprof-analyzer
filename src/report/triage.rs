@@ -1578,6 +1578,7 @@ mod tests {
             collection_contents: None,
             leak_indicators: LeakIndicators::default(),
             triage: Vec::new(),
+            queries: Vec::new(),
         }
     }
 

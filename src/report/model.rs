@@ -1329,4 +1329,7 @@ pub struct Report {
     /// `#[serde(default)]` keeps pre-v4 JSON (which lacks the field) loadable.
     #[serde(default)]
     pub triage: Vec<TriageSignal>,
+    /// Custom OQL query results (empty unless --query/--query-file was given).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queries: Vec<crate::query::model::QueryResult>,
 }
