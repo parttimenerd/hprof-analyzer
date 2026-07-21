@@ -33,7 +33,7 @@ pub fn resume(state: QueryExecState, queries: &[Query], ctx: &LateCtx) -> Vec<Qu
 /// or dominators. Finished results pass through in slot order; any pending
 /// cross-phase carry (a `@retainedHeapSize` query) cannot be answered here, so
 /// it produces an actionable error result rather than silently empty rows.
-pub fn resume_without_late_ctx(state: QueryExecState, _queries: &[Query]) -> Vec<QueryResult> {
+pub fn resume_without_late_ctx(state: QueryExecState) -> Vec<QueryResult> {
     let (finished, pending) = state.into_parts();
     let mut slotted: Vec<(usize, QueryResult)> = finished;
     for entry in pending {

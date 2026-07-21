@@ -881,9 +881,7 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
 
     // Query-only path: retained sizes/dominators are not computed, so cross-phase
     // (@retainedHeapSize) queries resolve to actionable errors here.
-    let query_asts: Vec<query::ast::Query> = parsed.iter().map(|(q, _)| q.clone()).collect();
-    let mut query_results =
-        query::stage_runner::resume_without_late_ctx(query_state, &query_asts);
+    let mut query_results = query::stage_runner::resume_without_late_ctx(query_state);
 
     // Fill in blank oql text and default `q{N}` names for the printed tables.
     finalize_query_labels(&mut query_results, &query_texts);

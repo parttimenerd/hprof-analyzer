@@ -90,6 +90,15 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     /// True if this executor is carrying indices for a later phase.
     pub fn is_carry(&self) -> bool { self.carry.is_some() }
 
+    /// Whether this query's FROM pattern can match an array class, so the scan
+    /// only pays the per-array name-construction cost when some executor might
+    /// consume it. Array class names end in `[]` (e.g. `char[]`,
+    /// `java.lang.Object[]`); a wildcard pattern (`*`) may also match them.
+    pub fn wants_arrays(&self) -> bool {
+        let from = &self.query.from.class_name;
+        from.ends_with("[]") || from.contains('*')
+    }
+
     /// The plan this executor runs (borrowed). Used by the driver to tag a
     /// carried query with its plan for the late phase.
     pub fn plan(&self) -> &QueryPlan { self.plan }
@@ -280,10 +289,29 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
     }
 }
 
+/// Match an object's dotted class name against a FROM pattern (exact, or a
+/// trailing `.*` package-prefix wildcard). Allocation-free on the hot path:
+/// `/` and `.` are treated as equivalent separators so a slash-form pattern
+/// still matches a dot-form name without normalizing either into a new String.
 pub fn class_name_matches(name_dotted: &str, pattern: &str) -> bool {
-    let name = name_dotted.replace('/', ".");
-    let pat = pattern.replace('/', ".");
-    if let Some(prefix) = pat.strip_suffix(".*") { name == prefix || name.starts_with(&format!("{prefix}.")) } else { name == pat }
+    // Package-prefix wildcard `pkg.*`: the name must equal `pkg` or start with
+    // `pkg` followed by a separator.
+    if let Some(prefix) = pattern.strip_suffix(".*").or_else(|| pattern.strip_suffix("/*")) {
+        if !sep_eq(name_dotted.get(..prefix.len()).unwrap_or(""), prefix) {
+            return false;
+        }
+        return name_dotted.len() == prefix.len()
+            || matches!(name_dotted.as_bytes().get(prefix.len()), Some(b'.') | Some(b'/'));
+    }
+    name_dotted.len() == pattern.len() && sep_eq(name_dotted, pattern)
+}
+
+/// Byte-wise equality treating `/` and `.` as the same separator.
+fn sep_eq(a: &str, b: &str) -> bool {
+    a.len() == b.len()
+        && a.bytes().zip(b.bytes()).all(|(x, y)| {
+            x == y || (matches!(x, b'.' | b'/') && matches!(y, b'.' | b'/'))
+        })
 }
 
 /// Read `n` big-endian bytes at `off` as a u64. None if out of range.
@@ -487,6 +515,20 @@ mod tests {
         assert!(class_name_matches("com.acme.Foo", "com/acme/Foo"));
         assert!(class_name_matches("com/acme/Foo", "com.acme.*"));
         assert!(class_name_matches("com/acme/Foo", "com/acme/*"));
+    }
+
+    #[test]
+    fn class_name_matches_arrays_and_edges() {
+        // Array class names (dotted, with the `[]` suffix the resolver produces)
+        // match exactly and are not spuriously matched by unrelated patterns.
+        assert!(class_name_matches("char[]", "char[]"));
+        assert!(class_name_matches("java.lang.Object[]", "java.lang.Object[]"));
+        assert!(!class_name_matches("char[]", "byte[]"));
+        // A shorter name than the wildcard prefix must not match (guards the
+        // `get(..prefix.len())` slice returning None → false).
+        assert!(!class_name_matches("com", "com.acme.*"));
+        // Exact match of unequal lengths is rejected without allocation.
+        assert!(!class_name_matches("com.acme.Foo", "com.acme.Foobar"));
     }
 
     #[test]

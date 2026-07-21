@@ -153,6 +153,13 @@ impl<'q, R: ClassResolver> ScanDriver<'q, R> {
     pub fn is_empty(&self) -> bool {
         self.execs.is_empty()
     }
+    /// True if any armed executor's FROM pattern can match an array class. Lets
+    /// the pass2 scan skip per-array class-name construction entirely when no
+    /// query targets arrays (the common case), keeping the multi-GB array path
+    /// allocation-free for instance-only query sets.
+    pub fn wants_arrays(&self) -> bool {
+        self.execs.iter().any(|e| e.wants_arrays())
+    }
     /// Finalize every executor into a `QueryExecState`, each tagged with its
     /// original `slot` (the query's index in the caller's list): row-mode
     /// executors push a finished `QueryResult`; carry-mode (cross-phase)
@@ -203,8 +210,7 @@ pub fn run_single_dump(
         crate::pass2::Pass2::build(path, p1, crate::cvec::Codec::Zstd3, &opts, queries)?;
     // Query-only path: no retained sizes / dominators are computed, so cross-phase
     // (@retainedHeapSize) carries resolve to actionable errors rather than rows.
-    let query_asts: Vec<Query> = queries.iter().map(|(q, _)| q.clone()).collect();
-    Ok(crate::query::stage_runner::resume_without_late_ctx(state, &query_asts))
+    Ok(crate::query::stage_runner::resume_without_late_ctx(state))
 }
 
 #[cfg(test)]

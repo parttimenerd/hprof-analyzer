@@ -394,6 +394,10 @@ impl Pass2 {
             }
         }
         let mut scan_driver = crate::query::run::ScanDriver::new(scan_execs);
+        // Computed once: does any armed query target an array class? Gates the
+        // per-array name construction in the 2a scan so instance-only query sets
+        // pay zero extra allocation on the array path.
+        let scan_wants_arrays = scan_driver.wants_arrays();
 
         // Compress class_idx and alloc_stack_serial NOW — before the 2a scan
         // allocates out_degree and in_degree (~4 GB). Both arrays are final at
@@ -446,6 +450,7 @@ impl Pass2 {
                             } else {
                                 Some(&mut scan_driver as &mut dyn crate::query::ObjectVisitor)
                             },
+                            scan_wants_arrays,
                             &p1.class_map,
                             &p1.strings,
                         )?;
@@ -1053,6 +1058,11 @@ impl Pass2 {
         in_degree: &mut Vec<u32>,
         scratch: &mut Vec<u8>,
         mut visitor: Option<&mut (dyn crate::query::ObjectVisitor + 'v)>,
+        // Whether any active query targets an array class. When false, the scan
+        // skips the per-array class-name construction (a String allocation per
+        // array record) entirely — arrays still get their edges/degrees, they
+        // just aren't delivered to the visitor.
+        visit_arrays: bool,
         class_map: &HashMap<u64, crate::pass1::ClassInfo>,
         strings: &HashMap<u64, String>,
     ) -> io::Result<()> {
@@ -1181,10 +1191,12 @@ impl Pass2 {
                     // OQL: deliver the array to any active query executor, resolving
                     // its own class name from the element-class string (HPROF stores
                     // object-array classes as `[L…;` descriptors).
-                    if let Some(v) = visitor.as_deref_mut() {
-                        if let Some(raw) = class_map.get(&elem_class_id).and_then(|ci| strings.get(&ci.name_id)) {
-                            let name = crate::report::pretty_class_name(raw);
-                            v.visit_array(src_idx, &name, count as u32);
+                    if visit_arrays {
+                        if let Some(v) = visitor.as_deref_mut() {
+                            if let Some(raw) = class_map.get(&elem_class_id).and_then(|ci| strings.get(&ci.name_id)) {
+                                let name = crate::report::pretty_class_name(raw);
+                                v.visit_array(src_idx, &name, count as u32);
+                            }
                         }
                     }
 
@@ -1217,11 +1229,13 @@ impl Pass2 {
                     // OQL: deliver the primitive array to any active query executor.
                     // Primitive arrays carry no class-object address; synthesize the
                     // descriptor (`[C` → `char[]`) from the element type code.
-                    if let Some(v) = visitor.as_deref_mut() {
-                        if let Some(src_idx) = id_map.index_of(addr) {
-                            let raw = crate::pass2::sizing::prim_array_class_name(elem_type);
-                            let name = crate::report::pretty_class_name(raw);
-                            v.visit_array(src_idx, &name, count as u32);
+                    if visit_arrays {
+                        if let Some(v) = visitor.as_deref_mut() {
+                            if let Some(src_idx) = id_map.index_of(addr) {
+                                let raw = crate::pass2::sizing::prim_array_class_name(elem_type);
+                                let name = crate::report::pretty_class_name(raw);
+                                v.visit_array(src_idx, &name, count as u32);
+                            }
                         }
                     }
                 }
