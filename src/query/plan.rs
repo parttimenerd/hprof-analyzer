@@ -357,6 +357,35 @@ fn plan_single(q: &Query) -> Result<QueryPlan, QueryError> {
         });
     }
 
+    // `@inbounds` / `@outbounds`: the referrers / forward-targets of each matched
+    // object, emitted one row per neighbour. Only special-cased as a LONE select
+    // item (mixed selects still hit the Null projection path — see execute.rs).
+    // Edges resolve in the P2 late window from the inbound CSR / retained edge
+    // store, so we finalize at P2 and carry only the dense index frontier.
+    if let [SelectItem::Attr(a @ (Attr::Inbounds | Attr::Outbounds))] = q.select.as_slice() {
+        let dir = match a {
+            Attr::Inbounds => EdgeDir::Inbound,
+            Attr::Outbounds => EdgeDir::Outbound,
+            _ => unreachable!("slice pattern already narrows to Inbounds|Outbounds"),
+        };
+        return Ok(QueryPlan {
+            kind: StageKind::SingleScan,
+            needs,
+            where_terms,
+            finalize_at: Phase::P2,
+            carry: CarryLayout::IndexOnly,
+            late_ops: vec![StageOp::EdgeLookup { dir }],
+            limit: q.limit,
+            scan_limit: None,
+            order_sensitive: q.order_by.is_some(),
+            select_arity,
+            union_branches: Vec::new(),
+            from_subplan: None,
+            in_subplans: Vec::new(),
+            deferred_projections: Vec::new(),
+        });
+    }
+
     let cross_phase = uses_retained(q);
     if cross_phase {
         needs.retained = true;
@@ -984,6 +1013,36 @@ mod tests {
         assert_eq!(plan.finalize_at, Phase::P3);
         assert!(plan.needs.dominator_children);
     }
+    #[test]
+    fn plan_inbounds_emits_edge_lookup_inbound() {
+        let plan = plan_query(&parse("SELECT @inbounds FROM java.lang.String").unwrap()).unwrap();
+        assert_eq!(plan.late_ops, vec![StageOp::EdgeLookup { dir: EdgeDir::Inbound }]);
+        assert_eq!(plan.finalize_at, Phase::P2);
+        assert!(matches!(plan.carry, CarryLayout::IndexOnly));
+        // The edge lookup does not arm the dominator-children CSR.
+        assert!(!plan.needs.dominator_children);
+    }
+    #[test]
+    fn plan_outbounds_emits_edge_lookup_outbound() {
+        let plan = plan_query(&parse("SELECT @outbounds FROM java.lang.String").unwrap()).unwrap();
+        assert_eq!(plan.late_ops, vec![StageOp::EdgeLookup { dir: EdgeDir::Outbound }]);
+        assert_eq!(plan.finalize_at, Phase::P2);
+        assert!(matches!(plan.carry, CarryLayout::IndexOnly));
+        assert!(!plan.needs.dominator_children);
+    }
+    #[test]
+    fn plan_star_select_does_not_emit_edge_lookup() {
+        // Regression guard: the @inbounds/@outbounds special-case must NOT fire
+        // for a plain non-edge select — no EdgeLookup, empty late_ops.
+        let plan = plan_query(&parse("SELECT * FROM java.lang.String").unwrap()).unwrap();
+        assert!(
+            !plan.late_ops.iter().any(|op| matches!(op, StageOp::EdgeLookup { .. })),
+            "SELECT * must not emit an EdgeLookup op, got: {:?}",
+            plan.late_ops
+        );
+        assert!(plan.late_ops.is_empty(), "SELECT * must have empty late_ops, got: {:?}", plan.late_ops);
+    }
+
     #[test]
     fn plan_retained_set_emits_retained_set_stage() {
         let plan = plan_query(&parse("SELECT s AS RETAINED SET FROM java.lang.String s").unwrap()).unwrap();

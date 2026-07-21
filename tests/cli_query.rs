@@ -433,6 +433,101 @@ fn analyze_mixed_kind_queries_render_in_input_order() {
     );
 }
 
+/// `SELECT @inbounds FROM ... ` needs the FULL analysis pipeline: the inbound
+/// reference CSR is built during the analyze scan (RunFlags-gated), so it is
+/// exercised through the ANALYZE path, not the query-only subcommand. Before the
+/// planner emitted `StageOp::EdgeLookup`, this query silently projected `Null`
+/// for every row (the executor never ran the lookup); this guards that the
+/// planner now wires the edge lookup so real referrer objects are returned.
+/// `java.lang.String` is heavily referenced in any Java heap, so its inbound set
+/// is reliably non-empty. A correct run renders `class@index` object rows, NOT
+/// all-`null` cells and NOT an error block.
+#[test]
+fn inbounds_query_returns_referrer_rows_via_analyze_path() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg(&hprof)
+        .args(["--query", "SELECT @inbounds FROM java.lang.String LIMIT 5"])
+        .args(["-f", "md"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "analyze with @inbounds query failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let md = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        md.contains("## Custom Queries"),
+        "@inbounds query section missing:\n{md}"
+    );
+    assert!(
+        md.contains("@inbounds"),
+        "@inbounds result column header missing:\n{md}"
+    );
+    let section = &md[md.find("## Custom Queries").unwrap()..];
+    assert!(
+        !section.contains("**Error:**"),
+        "@inbounds query rendered an error block:\n{section}"
+    );
+    assert!(
+        !section.contains("requires the full analysis pipeline"),
+        "@inbounds query hit the query-only error path in the FULL analyze path:\n{section}"
+    );
+    // The planner now emits EdgeLookup, so referrer objects render as
+    // `class@index` rows. A regression to the silent-Null path would make every
+    // cell `null`; assert at least one real object-reference row exists.
+    let has_obj_row = section.lines().any(|l| {
+        let t = l.trim();
+        t.starts_with('|') && t.ends_with('|') && t.contains('@') && !t.contains("null")
+    });
+    assert!(
+        has_obj_row,
+        "no real referrer object row (`class@index`) found — EdgeLookup not wired \
+         end-to-end (all cells null?):\n{section}"
+    );
+}
+
+/// `SELECT @outbounds FROM ...` is the outbound-direction twin of the @inbounds
+/// guard: it walks the retained forward edge store to return the objects each
+/// matched object references. Exercised through the ANALYZE path (the edge store
+/// is only built there). A correct run renders real `class@index` object rows and
+/// no error block; a regression to the pre-fix silent-Null planner would project
+/// `null` for every cell.
+#[test]
+fn outbounds_query_returns_target_rows_via_analyze_path() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg(&hprof)
+        .args(["--query", "SELECT @outbounds FROM java.lang.String LIMIT 5"])
+        .args(["-f", "md"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "analyze with @outbounds query failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let md = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        md.contains("## Custom Queries"),
+        "@outbounds query section missing:\n{md}"
+    );
+    assert!(
+        md.contains("@outbounds"),
+        "@outbounds result column header missing:\n{md}"
+    );
+    let section = &md[md.find("## Custom Queries").unwrap()..];
+    assert!(
+        !section.contains("**Error:**"),
+        "@outbounds query rendered an error block:\n{section}"
+    );
+    assert!(
+        !section.contains("requires the full analysis pipeline"),
+        "@outbounds query hit the query-only error path in the FULL analyze path:\n{section}"
+    );
+}
+
 // NOTE on execution-time query errors: `QueryResult.error` is a rendered
 // `**Error:**` block in the Custom Queries section. Parse and plan failures
 // fail fast in `parse_plan_queries` (see `analyze_with_bad_query_flag_fails_fast`)
