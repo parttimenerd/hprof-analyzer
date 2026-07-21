@@ -762,7 +762,7 @@ fn run(
     let t = Instant::now();
     progress::phase("building object graph (pass 2)");
     let (mut g, mut inbound, shallow_c, class_idx_c, alloc_serial_c) =
-        pass2::Pass2::build(input, p1, compress, &opts)?;
+        pass2::Pass2::build(input, p1, compress, &opts, None)?;
     log(
         verbose,
         &format!("pass2 n={}", g.n),

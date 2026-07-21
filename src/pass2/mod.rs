@@ -60,6 +60,7 @@ impl Pass2 {
         mut p1: Pass1,
         compress: crate::cvec::Codec,
         opts: &crate::AnalyzeOptions,
+        mut visitor: Option<&mut dyn crate::query::ObjectVisitor>,
     ) -> io::Result<(
         Graph,
         InboundBuilder,
@@ -70,6 +71,9 @@ impl Pass2 {
         let n = p1.id_map.len();
         let id_size = p1.id_size;
         let ptr_size = id_size as usize;
+        // Rebind mutably so the multi-segment scan loop can reborrow the visitor
+        // for each HEAP_DUMP_SEGMENT; the reborrow happens per match arm below.
+        let mut visitor = visitor;
 
         // ── Phase 0: detect ref_size ─────────────────────────────────────
         // Reuse the object-array (addr, count) data already collected in pass1
@@ -352,6 +356,7 @@ impl Pass2 {
                             &mut out_degree,
                             &mut in_degree,
                             &mut scratch,
+                            visitor.as_deref_mut(),
                         )?;
                     }
                     tags::HEAP_DUMP_END => break,
@@ -901,7 +906,7 @@ impl Pass2 {
     /// element count / class blob). Produces the degree arrays that Phase 3
     /// prefix-sums into the CSR offsets; fills no edge targets itself.
     #[allow(clippy::too_many_arguments)]
-    fn scan_heap_2a(
+    fn scan_heap_2a<'v>(
         r: &mut HprofReader,
         id_size: u8,
         mut remaining: u64,
@@ -911,6 +916,7 @@ impl Pass2 {
         out_degree: &mut Vec<u32>,
         in_degree: &mut Vec<u32>,
         scratch: &mut Vec<u8>,
+        mut visitor: Option<&mut (dyn crate::query::ObjectVisitor + 'v)>,
     ) -> io::Result<()> {
         let ids = id_size as u64;
         let mut cache = crate::id_map::IndexCache::new();
@@ -987,6 +993,10 @@ impl Pass2 {
                         Some(i) => i,
                         None => continue,
                     };
+
+                    if let Some(v) = visitor.as_deref_mut() {
+                        v.visit_instance(src_idx, class_id, scratch);
+                    }
 
                     // Edge: instance → class object
                     edge_if_valid!(src_idx, class_id, false);
@@ -1496,6 +1506,7 @@ mod tests {
             p1,
             crate::cvec::Codec::None,
             &crate::AnalyzeOptions::default(),
+            None,
         )
         .unwrap();
         assert!(!g.fwd_targets.is_empty(), "no forward edges");
@@ -1534,6 +1545,7 @@ mod tests {
             p1,
             crate::cvec::Codec::None,
             &crate::AnalyzeOptions::default(),
+            None,
         )
         .unwrap();
         let fwd_edge_count: usize = g
@@ -1730,5 +1742,56 @@ mod tests {
         )
         .expect("Thread.name must resolve");
         assert_eq!(off2, 8);
+    }
+}
+
+#[cfg(test)]
+mod visitor_hook_tests {
+    use crate::query::ObjectVisitor;
+
+    // A minimal visitor that counts instance callbacks.
+    struct Counter {
+        n: usize,
+    }
+    impl crate::query::ObjectVisitor for Counter {
+        fn visit_instance(&mut self, _src_idx: usize, _class_id: u64, _blob: &[u8]) {
+            self.n += 1;
+        }
+    }
+
+    #[test]
+    fn counter_visitor_type_checks() {
+        let mut c = Counter { n: 0 };
+        let _dyn: &mut dyn crate::query::ObjectVisitor = &mut c;
+        c.visit_instance(0, 0, &[]);
+        assert_eq!(c.n, 1);
+    }
+
+    // A visitor that records exactly what it was called with, so we can assert
+    // the trait-object dispatch forwards every argument unchanged.
+    struct Recorder {
+        calls: Vec<(usize, u64, usize)>,
+    }
+    impl crate::query::ObjectVisitor for Recorder {
+        fn visit_instance(&mut self, src_idx: usize, class_id: u64, blob: &[u8]) {
+            self.calls.push((src_idx, class_id, blob.len()));
+        }
+    }
+
+    #[test]
+    fn visitor_receives_all_args() {
+        let mut rec = Recorder { calls: Vec::new() };
+        {
+            // Drive the visitor exclusively through a &mut dyn trait object,
+            // mirroring how scan_heap_2a dispatches, to prove args pass intact.
+            let v: &mut dyn crate::query::ObjectVisitor = &mut rec;
+            v.visit_instance(0, 0x1000, &[]);
+            v.visit_instance(7, 0x2000, &[0xAA, 0xBB, 0xCC]);
+            v.visit_instance(42, 0xDEAD_BEEF, &[1, 2]);
+        }
+        assert_eq!(
+            rec.calls,
+            vec![(0, 0x1000, 0), (7, 0x2000, 3), (42, 0xDEAD_BEEF, 2)]
+        );
     }
 }

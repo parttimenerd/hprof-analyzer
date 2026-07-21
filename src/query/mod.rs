@@ -21,3 +21,12 @@ impl fmt::Display for QueryError {
 }
 
 impl std::error::Error for QueryError {}
+
+/// Per-object callback invoked once per INSTANCE_DUMP during the pass2 2a scan,
+/// while the raw instance blob and schema tables are still live. Implementors
+/// accumulate query matches. Called only when a query is active.
+pub trait ObjectVisitor {
+    /// `src_idx` is the dense object index; `class_id` the class-object address;
+    /// `blob` the raw big-endian instance field bytes.
+    fn visit_instance(&mut self, src_idx: usize, class_id: u64, blob: &[u8]);
+}
