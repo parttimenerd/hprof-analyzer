@@ -3363,6 +3363,7 @@ function CustomQueriesSection({ report }: { report: Report }) {
               <p className="subtitle">
                 {q.row_count} row(s){q.truncated ? ", truncated" : ""}
               </p>
+              {q.note && <p className="subtitle">Note: {q.note}</p>}
             </>
           )}
         </div>

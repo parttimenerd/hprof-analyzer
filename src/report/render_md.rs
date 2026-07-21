@@ -307,6 +307,9 @@ pub(crate) fn render_custom_queries(queries: &[crate::query::model::QueryResult]
             q.row_count,
             if q.truncated { ", truncated" } else { "" }
         );
+        if let Some(note) = &q.note {
+            let _ = writeln!(out, "_Note: {note}_\n");
+        }
     }
 }
 
@@ -3135,6 +3138,43 @@ mod tests {
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
         assert!(out.contains("_5000 row(s), truncated_"), "truncated footer missing: {out}");
+    }
+
+    #[test]
+    fn note_line_rendered_when_present() {
+        let q = QueryResult {
+            name: "noted".into(),
+            oql: "SELECT path(a, b) FROM C".into(),
+            columns: vec![col("v")],
+            rows: vec![vec![QueryValue::Int(1)]],
+            row_count: 1,
+            truncated: false,
+            error: None,
+            note: Some("edge retention capped at depth 5".into()),
+        };
+        let mut out = String::new();
+        render_custom_queries(std::slice::from_ref(&q), &mut out);
+        assert!(
+            out.contains("_Note: edge retention capped at depth 5_"),
+            "note advisory line missing: {out}"
+        );
+    }
+
+    #[test]
+    fn note_line_omitted_when_absent() {
+        let q = QueryResult {
+            name: "plain".into(),
+            oql: "SELECT * FROM C".into(),
+            columns: vec![col("v")],
+            rows: vec![vec![QueryValue::Int(1)]],
+            row_count: 1,
+            truncated: false,
+            error: None,
+            note: None,
+        };
+        let mut out = String::new();
+        render_custom_queries(std::slice::from_ref(&q), &mut out);
+        assert!(!out.contains("Note:"), "absent note must not emit a Note: line: {out}");
     }
 
     #[test]

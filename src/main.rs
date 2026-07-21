@@ -42,9 +42,24 @@ use std::{io, process, time::Instant};
 
 use pass1::Pass1;
 
-/// Depth cap for bounded `path()` walks in edge-query planning. A
-/// `--query-path-depth` flag will override this in a later change.
+/// Default depth cap for bounded `path()` walks in edge-query planning; the
+/// `--query-path-depth` flag overrides it.
 const DEFAULT_QUERY_PATH_DEPTH: usize = 5;
+
+/// clap `value_parser` for `--query-path-depth`: reject `0` (and non-numeric
+/// input) with an actionable message. `usize`'s parser already rejects negative
+/// and non-numeric values; we add the `> 0` guard on top.
+fn parse_query_path_depth(s: &str) -> Result<usize, String> {
+    let n: usize = s
+        .parse()
+        .map_err(|_| format!("`{s}` is not a valid non-negative integer for --query-path-depth"))?;
+    if n == 0 {
+        return Err(
+            "--query-path-depth must be > 0 (bounded path walks need at least one hop)".into(),
+        );
+    }
+    Ok(n)
+}
 
 /// A `ClassIndexResolver` that resolves nothing — used when only the boolean
 /// `RunFlags` (retain_inbound/retain_forward/outbounds_by_rescan) are needed and
@@ -102,6 +117,8 @@ pub struct AnalyzeOptions {
     pub queries: Vec<String>,
     /// Optional file of OQL queries, one per non-empty/non-comment line.
     pub query_file: Option<String>,
+    /// Max hops for OQL `path(a, b)` bounded walks (always > 0).
+    pub query_path_depth: usize,
 }
 
 impl Default for AnalyzeOptions {
@@ -210,6 +227,10 @@ struct Cli {
     /// Read one OQL query per non-empty line from a file (lines starting with `#` are comments).
     #[arg(long = "query-file", value_name = "PATH", value_hint = ValueHint::FilePath)]
     query_file: Option<String>,
+
+    /// Max hops for OQL `path(a, b)` bounded walks (must be > 0).
+    #[arg(long = "query-path-depth", value_name = "N", default_value_t = DEFAULT_QUERY_PATH_DEPTH, value_parser = parse_query_path_depth)]
+    query_path_depth: usize,
 }
 
 /// Named subcommands. The default (no subcommand) analyzes or re-renders the
@@ -242,6 +263,9 @@ enum Cmd {
         /// Read queries from a file, one per line (`#` comments allowed).
         #[arg(long = "query-file", value_name = "PATH", value_hint = ValueHint::FilePath)]
         query_file: Option<String>,
+        /// Max hops for OQL `path(a, b)` bounded walks (must be > 0).
+        #[arg(long = "query-path-depth", value_name = "N", default_value_t = DEFAULT_QUERY_PATH_DEPTH, value_parser = parse_query_path_depth)]
+        query_path_depth: usize,
         /// Start an interactive OQL REPL reading queries from stdin.
         #[arg(long)]
         repl: bool,
@@ -349,6 +373,7 @@ impl DetailLevel {
             coll_descs: Vec::new(),
             queries: Vec::new(),
             query_file: None,
+            query_path_depth: DEFAULT_QUERY_PATH_DEPTH,
         }
     }
 }
@@ -482,6 +507,7 @@ fn main() {
             input,
             query,
             query_file,
+            query_path_depth,
             repl,
         }) => {
             if !input_is_hprof(&input) {
@@ -499,6 +525,7 @@ fn main() {
                 let opts = AnalyzeOptions {
                     queries: query,
                     query_file,
+                    query_path_depth,
                     ..DetailLevel::Default.options()
                 };
                 // Reuse the analyze pipeline, printing only the query results as text.
@@ -543,6 +570,7 @@ fn run_default(cli: Cli) {
             ),
             queries: cli.query.clone(),
             query_file: cli.query_file.clone(),
+            query_path_depth: cli.query_path_depth,
             ..opts
         };
         if let Err(e) = run(
@@ -1029,7 +1057,7 @@ fn run(
     let run_flags = {
         let queries: Vec<query::ast::Query> =
             parsed_queries.iter().map(|(q, _)| q.clone()).collect();
-        query::runflags::plan_run(&queries, &NoClassIndex, DEFAULT_QUERY_PATH_DEPTH).map_err(|e| {
+        query::runflags::plan_run(&queries, &NoClassIndex, opts.query_path_depth).map_err(|e| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("OQL edge planning error: {}", e.0),
@@ -1547,4 +1575,70 @@ fn dump_pass1_json(path: &str) -> io::Result<()> {
 
     println!("}}");
     Ok(())
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn query_path_depth_default_is_5() {
+        let cli = Cli::try_parse_from(["hprof-analyzer", "heap.hprof"]).unwrap();
+        assert_eq!(cli.query_path_depth, DEFAULT_QUERY_PATH_DEPTH);
+        assert_eq!(cli.query_path_depth, 5);
+    }
+
+    #[test]
+    fn query_path_depth_custom() {
+        let cli =
+            Cli::try_parse_from(["hprof-analyzer", "heap.hprof", "--query-path-depth", "3"]).unwrap();
+        assert_eq!(cli.query_path_depth, 3);
+    }
+
+    #[test]
+    fn query_path_depth_zero_errors() {
+        let err = Cli::try_parse_from(["hprof-analyzer", "heap.hprof", "--query-path-depth", "0"])
+            .err()
+            .expect("zero depth must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("must be > 0"),
+            "zero depth must error actionably, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn query_path_depth_non_numeric_errors() {
+        let err = Cli::try_parse_from(["hprof-analyzer", "heap.hprof", "--query-path-depth", "abc"])
+            .err()
+            .expect("non-numeric depth must be rejected");
+        // clap rejects the non-numeric value at parse time.
+        assert!(!err.to_string().is_empty());
+    }
+
+    #[test]
+    fn query_subcommand_query_path_depth_zero_errors() {
+        let err = Cli::try_parse_from([
+            "hprof-analyzer",
+            "query",
+            "heap.hprof",
+            "--query-path-depth",
+            "0",
+        ])
+        .err()
+        .expect("query subcommand zero depth must be rejected");
+        assert!(
+            err.to_string().contains("must be > 0"),
+            "query subcommand zero depth must error actionably: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_query_path_depth_helper() {
+        assert_eq!(parse_query_path_depth("5").unwrap(), 5);
+        let zero = parse_query_path_depth("0").unwrap_err();
+        assert!(zero.contains("must be > 0"), "0 message: {zero}");
+        assert!(parse_query_path_depth("abc").is_err(), "non-numeric must error");
+    }
 }

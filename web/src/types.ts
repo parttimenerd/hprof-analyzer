@@ -692,6 +692,7 @@ export interface QueryResult {
   row_count: number;
   truncated: boolean;
   error?: string;
+  note?: string;
 }
 
 export interface Report {
