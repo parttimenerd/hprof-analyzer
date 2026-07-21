@@ -1,6 +1,6 @@
 {
-  "schema_version": 4,
-  "generated": "2026-07-21T07:49:00.331032000Z",
+  "schema_version": 6,
+  "generated": "2026-07-21T11:12:53.638563000Z",
   "overview": {
     "source_name": "dump_2_scala-doku.hprof",
     "file_path": "tests/fixtures/dump_2_scala-doku.hprof",
@@ -193707,7 +193707,307 @@
           7
         ]
       ]
-    }
+    },
+    "boxed_numbers": [
+      {
+        "pretty_class": "java.lang.Integer",
+        "instances": 9789,
+        "total_shallow": 156624,
+        "pct_of_heap_bp": 50,
+        "avg_shallow": 16
+      },
+      {
+        "pretty_class": "java.lang.Long",
+        "instances": 256,
+        "total_shallow": 6144,
+        "pct_of_heap_bp": 1,
+        "avg_shallow": 24
+      },
+      {
+        "pretty_class": "java.lang.Byte",
+        "instances": 256,
+        "total_shallow": 4096,
+        "pct_of_heap_bp": 1,
+        "avg_shallow": 16
+      },
+      {
+        "pretty_class": "java.lang.Short",
+        "instances": 256,
+        "total_shallow": 4096,
+        "pct_of_heap_bp": 1,
+        "avg_shallow": 16
+      },
+      {
+        "pretty_class": "java.lang.Character",
+        "instances": 128,
+        "total_shallow": 2048,
+        "pct_of_heap_bp": 0,
+        "avg_shallow": 16
+      },
+      {
+        "pretty_class": "java.lang.Boolean",
+        "instances": 2,
+        "total_shallow": 32,
+        "pct_of_heap_bp": 0,
+        "avg_shallow": 16
+      },
+      {
+        "pretty_class": "java.lang.Double",
+        "instances": 1,
+        "total_shallow": 24,
+        "pct_of_heap_bp": 0,
+        "avg_shallow": 24
+      },
+      {
+        "pretty_class": "java.lang.Float",
+        "instances": 1,
+        "total_shallow": 16,
+        "pct_of_heap_bp": 0,
+        "avg_shallow": 16
+      }
+    ],
+    "header_overhead": [
+      {
+        "pretty_class": "scala.collection.immutable.$colon$colon",
+        "instances": 146151,
+        "header_bytes": 12,
+        "total_header_bytes": 1753812,
+        "header_pct_of_shallow_bp": 5000,
+        "avg_shallow": 24
+      },
+      {
+        "pretty_class": "java.lang.Object",
+        "instances": 133780,
+        "header_bytes": 12,
+        "total_header_bytes": 1605360,
+        "header_pct_of_shallow_bp": 7500,
+        "avg_shallow": 16
+      },
+      {
+        "pretty_class": "cafesat.sat.Literal",
+        "instances": 125219,
+        "header_bytes": 12,
+        "total_header_bytes": 1502628,
+        "header_pct_of_shallow_bp": 3000,
+        "avg_shallow": 40
+      },
+      {
+        "pretty_class": "int[]",
+        "instances": 89265,
+        "header_bytes": 12,
+        "total_header_bytes": 1071180,
+        "header_pct_of_shallow_bp": 3873,
+        "avg_shallow": 30
+      },
+      {
+        "pretty_class": "cafesat.sat.Solver$Clause",
+        "instances": 65565,
+        "header_bytes": 12,
+        "total_header_bytes": 786780,
+        "header_pct_of_shallow_bp": 3750,
+        "avg_shallow": 32
+      },
+      {
+        "pretty_class": "scala.collection.immutable.Set$Set2",
+        "instances": 44628,
+        "header_bytes": 12,
+        "total_header_bytes": 535536,
+        "header_pct_of_shallow_bp": 5000,
+        "avg_shallow": 24
+      },
+      {
+        "pretty_class": "cafesat.asts.core.Trees$ConnectiveApplication",
+        "instances": 43982,
+        "header_bytes": 12,
+        "total_header_bytes": 527784,
+        "header_pct_of_shallow_bp": 5000,
+        "avg_shallow": 24
+      },
+      {
+        "pretty_class": "cafesat.sat.Vector",
+        "instances": 36614,
+        "header_bytes": 12,
+        "total_header_bytes": 439368,
+        "header_pct_of_shallow_bp": 5000,
+        "avg_shallow": 24
+      },
+      {
+        "pretty_class": "cafesat.asts.core.Trees$ConnectiveSymbol",
+        "instances": 35234,
+        "header_bytes": 12,
+        "total_header_bytes": 422808,
+        "header_pct_of_shallow_bp": 5000,
+        "avg_shallow": 24
+      },
+      {
+        "pretty_class": "java.lang.String",
+        "instances": 23997,
+        "header_bytes": 12,
+        "total_header_bytes": 287964,
+        "header_pct_of_shallow_bp": 5000,
+        "avg_shallow": 24
+      },
+      {
+        "pretty_class": "scala.collection.immutable.BitmapIndexedSetNode",
+        "instances": 22791,
+        "header_bytes": 12,
+        "total_header_bytes": 273492,
+        "header_pct_of_shallow_bp": 3000,
+        "avg_shallow": 40
+      },
+      {
+        "pretty_class": "cafesat.asts.core.Trees$PredicateApplication",
+        "instances": 19761,
+        "header_bytes": 12,
+        "total_header_bytes": 237132,
+        "header_pct_of_shallow_bp": 5000,
+        "avg_shallow": 24
+      },
+      {
+        "pretty_class": "java.util.HashMap$Node",
+        "instances": 10167,
+        "header_bytes": 12,
+        "total_header_bytes": 122004,
+        "header_pct_of_shallow_bp": 3750,
+        "avg_shallow": 32
+      },
+      {
+        "pretty_class": "java.lang.Integer",
+        "instances": 9789,
+        "header_bytes": 12,
+        "total_header_bytes": 117468,
+        "header_pct_of_shallow_bp": 7500,
+        "avg_shallow": 16
+      },
+      {
+        "pretty_class": "cafesat.api.Formulas$Formula",
+        "instances": 8908,
+        "header_bytes": 12,
+        "total_header_bytes": 106896,
+        "header_pct_of_shallow_bp": 7500,
+        "avg_shallow": 16
+      },
+      {
+        "pretty_class": "scala.collection.immutable.Set$Set3",
+        "instances": 8748,
+        "header_bytes": 12,
+        "total_header_bytes": 104976,
+        "header_pct_of_shallow_bp": 5000,
+        "avg_shallow": 24
+      },
+      {
+        "pretty_class": "java.util.concurrent.ConcurrentHashMap$Node",
+        "instances": 7007,
+        "header_bytes": 12,
+        "total_header_bytes": 84084,
+        "header_pct_of_shallow_bp": 3750,
+        "avg_shallow": 32
+      },
+      {
+        "pretty_class": "java.util.jar.Attributes",
+        "instances": 5786,
+        "header_bytes": 12,
+        "total_header_bytes": 69432,
+        "header_pct_of_shallow_bp": 7500,
+        "avg_shallow": 16
+      },
+      {
+        "pretty_class": "java.lang.Class",
+        "instances": 2860,
+        "header_bytes": 12,
+        "total_header_bytes": 34320,
+        "header_pct_of_shallow_bp": 9430,
+        "avg_shallow": 12
+      },
+      {
+        "pretty_class": "java.util.LinkedHashMap$Entry",
+        "instances": 1200,
+        "header_bytes": 12,
+        "total_header_bytes": 14400,
+        "header_pct_of_shallow_bp": 3000,
+        "avg_shallow": 40
+      },
+      {
+        "pretty_class": "java.lang.invoke.MemberName",
+        "instances": 1040,
+        "header_bytes": 12,
+        "total_header_bytes": 12480,
+        "header_pct_of_shallow_bp": 3000,
+        "avg_shallow": 40
+      },
+      {
+        "pretty_class": "jdk.internal.util.WeakReferenceKey",
+        "instances": 900,
+        "header_bytes": 12,
+        "total_header_bytes": 10800,
+        "header_pct_of_shallow_bp": 3750,
+        "avg_shallow": 32
+      },
+      {
+        "pretty_class": "java.lang.invoke.MethodType",
+        "instances": 894,
+        "header_bytes": 12,
+        "total_header_bytes": 10728,
+        "header_pct_of_shallow_bp": 3000,
+        "avg_shallow": 40
+      },
+      {
+        "pretty_class": "java.lang.invoke.ResolvedMethodName",
+        "instances": 803,
+        "header_bytes": 12,
+        "total_header_bytes": 9636,
+        "header_pct_of_shallow_bp": 7500,
+        "avg_shallow": 16
+      },
+      {
+        "pretty_class": "cafesat.asts.core.Trees$PredicateSymbol",
+        "instances": 729,
+        "header_bytes": 12,
+        "total_header_bytes": 8748,
+        "header_pct_of_shallow_bp": 5000,
+        "avg_shallow": 24
+      },
+      {
+        "pretty_class": "cafesat.api.Formulas$PropVar",
+        "instances": 729,
+        "header_bytes": 12,
+        "total_header_bytes": 8748,
+        "header_pct_of_shallow_bp": 7500,
+        "avg_shallow": 16
+      },
+      {
+        "pretty_class": "java.lang.Class[]",
+        "instances": 725,
+        "header_bytes": 12,
+        "total_header_bytes": 8700,
+        "header_pct_of_shallow_bp": 3835,
+        "avg_shallow": 31
+      },
+      {
+        "pretty_class": "java.lang.invoke.LambdaForm$Name",
+        "instances": 503,
+        "header_bytes": 12,
+        "total_header_bytes": 6036,
+        "header_pct_of_shallow_bp": 3750,
+        "avg_shallow": 32
+      },
+      {
+        "pretty_class": "java.lang.String[]",
+        "instances": 449,
+        "header_bytes": 12,
+        "total_header_bytes": 5388,
+        "header_pct_of_shallow_bp": 3095,
+        "avg_shallow": 38
+      },
+      {
+        "pretty_class": "java.lang.module.ModuleDescriptor$Exports",
+        "instances": 367,
+        "header_bytes": 12,
+        "total_header_bytes": 4404,
+        "header_pct_of_shallow_bp": 5000,
+        "avg_shallow": 24
+      }
+    ]
   },
   "leaks": {
     "total_shallow": 31252288,
@@ -234583,6 +234883,22 @@
       "detail": "134.3 MB of native memory is held by live DirectByteBuffers — not counted in heap size but can dominate RSS.",
       "anchor": "leak-indicators",
       "anchor_label": "Leak Indicators"
+    },
+    {
+      "id": "fixed-per-object-overhead",
+      "severity": "warning",
+      "title": "Fixed per-object header overhead",
+      "detail": "952,666 objects × 12 B header = 10.9 MB (36.6% of heap) is consumed by JVM object headers alone — consider value types, primitive arrays, or fewer wrapper objects.",
+      "anchor": "header-overhead",
+      "anchor_label": "Header Overhead"
+    },
+    {
+      "id": "empty-collection-cemetery",
+      "severity": "info",
+      "title": "Empty-collection cemetery",
+      "detail": "5,806 of 6,307 tracked collections (92.1%) are empty (size == 0) — pre-allocated but never populated containers waste object-header overhead; consider lazy initialisation or null.",
+      "anchor": "collections",
+      "anchor_label": "Collections"
     }
   ]
 }
