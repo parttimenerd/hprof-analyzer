@@ -44,14 +44,9 @@ pub struct LateCtx<'a> {
     pub id_map: &'a IdMap<'a>,
     /// Forward-reference CSR offsets (len = n+1): node `i`'s out-edges are
     /// `fwd_tgt[fwd_off[i]..fwd_off[i+1]]`. Empty when RefWalk is not armed.
-    /// PLAN NOTE (Task 27): the production `Graph::fwd_offsets`/`fwd_targets`
-    /// forward CSR is consumed by the inbound transpose (`build_from_fwd`) and
-    /// freed before the dominator/retained window where `resume` runs — the RSS
-    /// pipeline is tuned around freeing that ~6GB CSR early. Wiring RefWalk end
-    /// to end therefore needs the forward CSR (and a parallel per-edge field-id
-    /// column, which does NOT exist today) preserved into this window. That is a
-    /// pipeline change tracked separately; these fields default to empty slices
-    /// so the resolver degrades to "no edges" until the CSR is threaded in.
+    /// The production forward CSR is freed before this window; RefWalk instead
+    /// preserves a small query-gated per-field CSR (built only when a RefWalk
+    /// query ran) and threads it in here (see `main.rs` resume site).
     pub fwd_off: &'a [u32],
     /// Forward-reference CSR targets (dense indices), parallel to `fwd_field`.
     pub fwd_tgt: &'a [u32],
@@ -65,6 +60,10 @@ pub struct LateCtx<'a> {
     /// field tail ran; empty otherwise. The late window joins the walked-to dense
     /// index against this to project the real tail value (option (b)).
     pub refwalk_tails: &'a std::collections::HashMap<u32, QueryValue>,
+    /// True when RefWalk edge or tail capture overflowed its cap during the scan,
+    /// so the per-field CSR is incomplete and RefPath results may be partial.
+    /// OR'd into each RefPath result's `truncated` flag.
+    pub refwalk_truncated: bool,
 }
 
 impl LateCtx<'_> {
@@ -295,7 +294,7 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
         rows.push(row);
     }
 
-    let mut truncated = entry.carry.truncated();
+    let mut truncated = entry.carry.truncated() || ctx.refwalk_truncated;
     if let Some(limit) = q.limit {
         if rows.len() as u64 > limit {
             rows.truncate(limit as usize);
@@ -547,6 +546,7 @@ mod tests {
             fwd_field: &[],
             field_names: &[],
             refwalk_tails: &EMPTY_REFWALK_TAILS,
+            refwalk_truncated: false,
         }
     }
 
@@ -694,7 +694,7 @@ mod dom_ctx_tests {
         let id_map = IdMap::identity(4);
         let ctx = LateCtx { retained: &retained, idom: &idom, dc_off: &dc_off,
                             dc_tgt: &dc_tgt, shallow: &shallow, id_map: &id_map,
-                            fwd_off: &[], fwd_tgt: &[], fwd_field: &[], field_names: &[], refwalk_tails: &EMPTY_REFWALK_TAILS };
+                            fwd_off: &[], fwd_tgt: &[], fwd_field: &[], field_names: &[], refwalk_tails: &EMPTY_REFWALK_TAILS, refwalk_truncated: false };
         assert_eq!(ctx.dc_off.len(), 5);
         assert_eq!(ctx.id_map.to_addr(0), id_map.to_addr(0));
     }
@@ -712,7 +712,7 @@ mod dom_run_tests {
     fn dominator_children_emits_direct_children() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false };
         assert_eq!(run_dominator_children(&[0u32], usize::MAX, &ctx), vec![1u32, 2]);
         assert_eq!(run_dominator_children(&[1u32], usize::MAX, &ctx), vec![3u32]);
         assert!(run_dominator_children(&[2u32], usize::MAX, &ctx).is_empty());
@@ -721,14 +721,14 @@ mod dom_run_tests {
     fn dominator_children_respects_cap() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false };
         assert_eq!(run_dominator_children(&[0u32], 1, &ctx).len(), 1);
     }
     #[test]
     fn dominator_of_emits_idom() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false };
         // idom = [MAX,0,0,1]: node 3's idom is 1, node 1's idom is 0, root 0 yields nothing.
         assert_eq!(run_dominator_of(&[3u32], &ctx), vec![1u32]);
         assert_eq!(run_dominator_of(&[1u32, 2u32], &ctx), vec![0u32, 0u32]);
@@ -738,7 +738,7 @@ mod dom_run_tests {
     fn retained_set_emits_bounded_closure() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false };
         let (mut set, truncated) = run_retained_set(&[0u32], usize::MAX, &ctx);
         set.sort_unstable();
         assert_eq!(set, vec![0u32, 1, 2, 3]);
@@ -748,7 +748,7 @@ mod dom_run_tests {
     fn retained_set_overflow_marks_truncated() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false };
         let (set, truncated) = run_retained_set(&[0u32], 2, &ctx);
         assert_eq!(set.len(), 2);
         assert!(truncated);
@@ -757,7 +757,7 @@ mod dom_run_tests {
     fn retained_set_dedups_shared_roots() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false };
         let (mut set, _t) = run_retained_set(&[1u32, 0u32], usize::MAX, &ctx);
         set.sort_unstable();
         assert_eq!(set, vec![0u32, 1, 2, 3]);
@@ -767,7 +767,7 @@ mod dom_run_tests {
     fn resume_dominator_children_builds_rows() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false };
         let q = crate::query::parse::parse("SELECT dominators(s) FROM C s").unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
         let mut carry = crate::query::carry::Carry::index_only(100);
@@ -786,7 +786,7 @@ mod dom_run_tests {
     fn resume_dominator_of_builds_single_row() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false };
         let q = crate::query::parse::parse("SELECT dominatorof(s) FROM C s").unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
         let mut carry = crate::query::carry::Carry::index_only(100);
@@ -802,7 +802,7 @@ mod dom_run_tests {
     fn resume_retained_set_builds_closure_rows() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false };
         let q = crate::query::parse::parse("SELECT s AS RETAINED SET FROM C s").unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
         let mut carry = crate::query::carry::Carry::index_only(100);
@@ -833,6 +833,7 @@ mod refwalk_tests {
             id_map,
             fwd_off, fwd_tgt, fwd_field, field_names,
             refwalk_tails: &EMPTY_REFWALK_TAILS,
+            refwalk_truncated: false,
         }
     }
 
@@ -853,6 +854,7 @@ mod refwalk_tests {
             id_map,
             fwd_off, fwd_tgt, fwd_field, field_names,
             refwalk_tails: tails,
+            refwalk_truncated: false,
         }
     }
 

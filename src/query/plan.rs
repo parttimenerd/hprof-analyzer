@@ -636,7 +636,7 @@ fn collect_pred_alias_heads(pred: &Predicate, heads: &mut std::collections::Hash
 /// bind (its own FROM alias). We reject such queries with an actionable message
 /// rather than attempting per-outer-row re-execution (out of scope).
 fn reject_if_correlated(inner: &Query) -> Result<(), QueryError> {
-    for head in referenced_alias_heads(inner) {
+    if let Some(head) = referenced_alias_heads(inner).into_iter().next() {
         return Err(QueryError(format!(
             "correlated subqueries are not supported: inner query references outer alias `{head}`"
         )));

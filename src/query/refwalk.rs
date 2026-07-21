@@ -41,10 +41,12 @@ impl RefWalkEdges {
         self.truncated
     }
 
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.edges.len()
     }
 
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.edges.is_empty()
     }
@@ -108,10 +110,12 @@ impl RefWalkTails {
         self.truncated
     }
 
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.values.len()
     }
 
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.values.is_empty()
     }
@@ -127,6 +131,7 @@ impl RefWalkTails {
         self.values.insert(dense_idx, value);
     }
 
+    #[cfg(test)]
     pub fn get(&self, dense_idx: u32) -> Option<&crate::query::model::QueryValue> {
         self.values.get(&dense_idx)
     }

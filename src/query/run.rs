@@ -242,20 +242,14 @@ impl<'q, R: ClassResolver> ScanDriver<'q, R> {
         state
     }
 
-    /// The interned RefWalk hop-field table (index = `field_id`), or empty when
-    /// no RefWalk query armed capture. The late window uses this to map a hop
-    /// field name to its `field_id` when walking the captured CSR.
-    pub fn refwalk_field_names(&self) -> Vec<String> {
+    /// True if RefWalk edge OR tail capture overflowed its cap (owning query
+    /// results must be marked truncated — the per-field CSR / tail table is
+    /// incomplete so N-hop projections may miss rows).
+    pub fn refwalk_truncated(&self) -> bool {
         self.refwalk
             .as_ref()
-            .map(|s| s.field_names.clone())
-            .unwrap_or_default()
-    }
-
-    /// True if RefWalk edge capture overflowed its cap (owning query results
-    /// must be marked truncated).
-    pub fn refwalk_truncated(&self) -> bool {
-        self.refwalk.as_ref().map(|s| s.edges.truncated()).unwrap_or(false)
+            .map(|s| s.edges.truncated() || s.tails.truncated())
+            .unwrap_or(false)
     }
 
     /// Fold the captured field-labeled edges into a per-src forward CSR over `n`

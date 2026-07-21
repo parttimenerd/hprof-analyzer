@@ -1161,16 +1161,14 @@ fn run(
     // Thread the query-gated RefWalk CSR into the resume window. Built only when
     // a RefWalk query ran; otherwise the borrowed slices are empty and the shared
     // empty tail map is used, keeping non-RefWalk runs byte/RSS-identical.
-    let (rw_off, rw_tgt, rw_field, rw_names, rw_tails): (
-        &[u32],
-        &[u32],
-        &[u32],
-        &[String],
-        &std::collections::HashMap<u32, query::model::QueryValue>,
-    ) = match &refwalk_csr {
-        Some(c) => (&c.fwd_off, &c.fwd_tgt, &c.fwd_field, &c.field_names, &c.tails),
-        None => (&[], &[], &[], &[], &query::stage_runner::EMPTY_REFWALK_TAILS),
-    };
+    let rw_off: &[u32] = refwalk_csr.as_ref().map_or(&[], |c| &c.fwd_off);
+    let rw_tgt: &[u32] = refwalk_csr.as_ref().map_or(&[], |c| &c.fwd_tgt);
+    let rw_field: &[u32] = refwalk_csr.as_ref().map_or(&[], |c| &c.fwd_field);
+    let rw_names: &[String] = refwalk_csr.as_ref().map_or(&[], |c| &c.field_names);
+    let rw_tails = refwalk_csr
+        .as_ref()
+        .map_or(&*query::stage_runner::EMPTY_REFWALK_TAILS, |c| &c.tails);
+    let rw_trunc = refwalk_csr.as_ref().is_some_and(|c| c.truncated);
     let flat_results = query::stage_runner::resume(
         query_state,
         &query_asts,
@@ -1186,6 +1184,7 @@ fn run(
             fwd_field: rw_field,
             field_names: rw_names,
             refwalk_tails: rw_tails,
+            refwalk_truncated: rw_trunc,
         },
     );
     let mut query_results = query::run::collapse_union_results(flat_results, &union_groups);
