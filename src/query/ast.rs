@@ -1,7 +1,8 @@
 //! Parsed OQL query AST. Mirrors the Eclipse MAT OQL surface this analyzer
 //! supports; unsupported constructs are rejected in the planner, not here.
 
-/// A parsed query. `union` is reserved for a later slice and always empty here.
+/// A parsed query. `union_branches` holds the tail of a homogeneous `UNION`
+/// chain (empty for a single query); branches are flat, never nested.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Query {
     pub distinct: bool,
@@ -14,6 +15,9 @@ pub struct Query {
     pub where_: Option<Predicate>,
     pub order_by: Option<OrderBy>,
     pub limit: Option<u64>,
+    /// `UNION`-separated tail branches, concatenated (UNION ALL semantics).
+    /// Each branch is itself a `Query` with an empty `union_branches`.
+    pub union_branches: Vec<Query>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

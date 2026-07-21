@@ -252,7 +252,7 @@ where
         .or_not()
         .map(|r| r.unwrap_or(false));
 
-    ident_ci("SELECT")
+    let base_query = ident_ci("SELECT")
         .ignore_then(ident_ci("DISTINCT").or_not().map(|d| d.is_some()))
         .then(select_list)
         .then(retained_set)
@@ -280,7 +280,6 @@ where
                 .ignore_then(select! { Token::Int(n) if n >= 0 => n as u64 }.labelled("LIMIT count"))
                 .or_not(),
         )
-        .then_ignore(end())
         .map(
             |((((((((distinct, select), retained_set), instanceof), class_name), alias), where_), order_by), limit)| {
                 Query {
@@ -292,9 +291,27 @@ where
                     where_,
                     order_by,
                     limit,
+                    union_branches: Vec::new(),
                 }
             },
+        );
+
+    // Top level: a base query, then a flat `UNION`-separated tail folded into the
+    // head's `union_branches`. Tail branches keep empty `union_branches` (the
+    // list is flat, left-associative concatenation with UNION ALL semantics).
+    base_query
+        .clone()
+        .then(
+            ident_ci("UNION")
+                .ignore_then(base_query)
+                .repeated()
+                .collect::<Vec<_>>(),
         )
+        .then_ignore(end())
+        .map(|(mut head, tail): (Query, Vec<Query>)| {
+            head.union_branches = tail;
+            head
+        })
 }
 
 fn reserved_ident<'a, I>() -> impl Parser<'a, I, String, extra::Err<Rich<'a, Token>>> + Clone
@@ -516,6 +533,7 @@ mod tests {
             where_,
             order_by: None,
             limit,
+            union_branches: Vec::new(),
         }
     }
     fn star() -> Vec<SelectItem> {
@@ -905,6 +923,26 @@ mod tests {
     }
 
     // ---------- targeted unit tests ----------
+
+    #[test]
+    fn union_two_branches_parses() {
+        let q = parse("SELECT * FROM java.lang.String UNION SELECT * FROM java.lang.Integer").unwrap();
+        assert_eq!(q.union_branches.len(), 1);
+        assert_eq!(q.union_branches[0].from.class_name, "java.lang.Integer");
+        assert!(q.union_branches[0].union_branches.is_empty(), "branches must be flat, not nested");
+    }
+    #[test]
+    fn union_three_branches_flat() {
+        let q = parse("SELECT * FROM A UNION SELECT * FROM B UNION SELECT * FROM C").unwrap();
+        assert_eq!(q.union_branches.len(), 2);
+        assert_eq!(q.union_branches[0].from.class_name, "B");
+        assert_eq!(q.union_branches[1].from.class_name, "C");
+        assert!(q.union_branches.iter().all(|b| b.union_branches.is_empty()));
+    }
+    #[test]
+    fn no_union_leaves_branches_empty() {
+        assert!(parse("SELECT * FROM C").unwrap().union_branches.is_empty());
+    }
 
     #[test]
     fn parse_dominators_attr() {
