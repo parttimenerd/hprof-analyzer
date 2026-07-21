@@ -3,7 +3,7 @@
 /// Replaces `Vec<bool>` for the hasSameClassAncestor flag: ~64 MB vs ~0.51 GB
 /// at n=514M. `get`/`set` are branch-light bit ops; behaviour is identical to
 /// the old `has_same[i]` bool reads/writes.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct Bitset {
     words: Vec<u64>,
 }

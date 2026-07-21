@@ -13,6 +13,7 @@ pub mod run;
 pub mod repl;
 pub mod carry;
 pub mod refwalk;
+pub mod runflags;
 pub mod stage_runner;
 pub mod optimize;
 
@@ -39,6 +40,10 @@ pub const OVERALL_UNION_CAP: usize = 5_000_000;
 /// `IN (<subquery>)` inner query. Hitting it truncates the membership set
 /// (and marks the outer result truncated, since membership is then incomplete).
 pub const SUBQUERY_SET_CAP: usize = 5_000_000;
+
+/// Upper bound on the number of frontier objects held while walking a bounded
+/// forward subgraph for `path(a, b)`. Caps memory of the path-walk frontier.
+pub const PATH_FRONTIER_CAP: usize = 100_000;
 
 /// Per-object callback invoked once per INSTANCE_DUMP during the pass2 2a scan,
 /// while the raw instance blob and schema tables are still live. Implementors
