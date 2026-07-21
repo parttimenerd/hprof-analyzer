@@ -66,11 +66,34 @@ pub struct SingleScanExecutor<'a, R: ClassResolver> {
     rows: Vec<Vec<QueryValue>>,
     matched: u64,
     truncated: bool,
+    /// When `Some`, this is a cross-phase (Phase::P3) query: instead of building
+    /// result rows during the scan, matched dense indices are carried forward
+    /// and finalized later (stage_runner) once retained sizes exist. In carry
+    /// mode, `@retainedHeapSize` WHERE terms are skipped (retained size is
+    /// unknown here) and LIMIT is NOT applied (the retained-based ORDER BY +
+    /// LIMIT run in the late phase); the carry's own cap bounds memory.
+    carry: Option<Carry>,
 }
 
 impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     pub fn new(query: &'a Query, plan: &'a QueryPlan, resolver: &'a R) -> Self {
-        Self { query, plan, resolver, rows: Vec::new(), matched: 0, truncated: false }
+        Self { query, plan, resolver, rows: Vec::new(), matched: 0, truncated: false, carry: None }
+    }
+
+    /// Construct a cross-phase carry executor. `carry` should be an
+    /// `index-only` carry sized by the caller's cap; matched indices are pushed
+    /// into it during the scan and extracted with `take_carry` at scan end.
+    pub fn new_carry(query: &'a Query, plan: &'a QueryPlan, resolver: &'a R, carry: Carry) -> Self {
+        Self { query, plan, resolver, rows: Vec::new(), matched: 0, truncated: false, carry: Some(carry) }
+    }
+
+    /// True if this executor is carrying indices for a later phase.
+    pub fn is_carry(&self) -> bool { self.carry.is_some() }
+
+    /// Consume a carry executor, returning the accumulated carry. Panics if this
+    /// executor is not in carry mode (caller must check `is_carry`).
+    pub fn take_carry(self) -> Carry {
+        self.carry.expect("take_carry on a non-carry executor")
     }
     fn class_matches(&self, class_id: u64) -> bool {
         let want = &self.query.from.class_name;
@@ -161,6 +184,13 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     }
     fn where_passes(&self, class_id: u64, blob: &[u8]) -> bool {
         for term in &self.plan.where_terms {
+            // In carry mode, @retainedHeapSize WHERE terms can't be evaluated
+            // during the scan (retained size is unknown); they are applied late
+            // in stage_runner. Skip them here so a retained predicate doesn't
+            // spuriously compare against Null and drop every row.
+            if self.carry.is_some() && crate::query::plan::pred_uses_retained(&term.pred) {
+                continue;
+            }
             if !self.eval_pred(&term.pred, class_id, blob) { return false; }
         }
         true
@@ -188,6 +218,10 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     /// thus behave like the instance path's unknown-field handling).
     fn array_where_passes(&self, class_name: &str, length: u32) -> bool {
         for term in &self.plan.where_terms {
+            // See `where_passes`: skip retained terms in carry mode.
+            if self.carry.is_some() && crate::query::plan::pred_uses_retained(&term.pred) {
+                continue;
+            }
             if !self.array_eval_pred(&term.pred, class_name, length) { return false; }
         }
         true
@@ -216,6 +250,12 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
     fn visit_instance(&mut self, src_idx: usize, class_id: u64, blob: &[u8]) {
         if !self.class_matches(class_id) { return; }
         if !self.where_passes(class_id, blob) { return; }
+        if let Some(carry) = &mut self.carry {
+            // Carry mode: no LIMIT here (retained ORDER BY + LIMIT run late);
+            // the carry's own cap bounds memory and sets its truncated flag.
+            carry.push_index(src_idx as u32);
+            return;
+        }
         if let Some(limit) = self.plan.limit { if self.matched >= limit { self.truncated = true; return; } }
         self.matched += 1;
         let row = self.project_row(src_idx, class_id, blob);
@@ -225,6 +265,10 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
     fn visit_array(&mut self, src_idx: usize, class_name: &str, length: u32) {
         if !class_name_matches(class_name, &self.query.from.class_name) { return; }
         if !self.array_where_passes(class_name, length) { return; }
+        if let Some(carry) = &mut self.carry {
+            carry.push_index(src_idx as u32);
+            return;
+        }
         if let Some(limit) = self.plan.limit { if self.matched >= limit { self.truncated = true; return; } }
         self.matched += 1;
         let row = self.project_array_row(src_idx, class_name, length);
@@ -319,6 +363,71 @@ mod tests {
         assert_eq!(st.pending_len(), 1);
         assert_eq!(st.pending()[0].slot, 1);
         assert_eq!(st.pending()[0].carry.indices(), vec![42]);
+    }
+
+    #[test]
+    fn carry_mode_carries_matched_indices_not_rows() {
+        // A cross-phase query: carry mode collects matched dense indices instead
+        // of building rows. `finish` is not used; `take_carry` extracts them.
+        let q = parse("SELECT @objectId, @retainedHeapSize FROM com.acme.Foo").unwrap();
+        let plan = plan_query(&q).unwrap();
+        assert!(plan.finalize_at == crate::query::plan::Phase::P3);
+        let sc = schema(&[(10, "com.acme.Foo"), (20, "com.acme.Bar")]);
+        let carry = crate::query::carry::Carry::index_only(100);
+        let mut ex = SingleScanExecutor::new_carry(&q, &plan, &sc, carry);
+        assert!(ex.is_carry());
+        ex.visit_instance(3, 10, &[]); // Foo → carried
+        ex.visit_instance(4, 20, &[]); // Bar → skipped (class mismatch)
+        ex.visit_instance(7, 10, &[]); // Foo → carried
+        let carry = ex.take_carry();
+        assert_eq!(carry.indices(), vec![3, 7]);
+    }
+
+    #[test]
+    fn carry_mode_skips_retained_where_terms() {
+        // `WHERE @retainedHeapSize > 1000` cannot be evaluated during the scan
+        // (retained size is unknown). Carry mode must NOT drop rows on it — all
+        // class matches are carried; stage_runner applies the retained filter.
+        let q = parse("SELECT @objectId FROM com.acme.Foo WHERE @retainedHeapSize > 1000").unwrap();
+        let plan = plan_query(&q).unwrap();
+        let sc = schema(&[(10, "com.acme.Foo")]);
+        let carry = crate::query::carry::Carry::index_only(100);
+        let mut ex = SingleScanExecutor::new_carry(&q, &plan, &sc, carry);
+        ex.visit_instance(1, 10, &[]);
+        ex.visit_instance(2, 10, &[]);
+        let carry = ex.take_carry();
+        assert_eq!(carry.indices(), vec![1, 2], "retained WHERE must not filter during scan");
+    }
+
+    #[test]
+    fn carry_mode_ignores_limit_during_scan() {
+        // LIMIT applies AFTER the retained ORDER BY (in stage_runner), so carry
+        // mode must carry every match regardless of the query's LIMIT.
+        let q = parse(
+            "SELECT @objectId FROM com.acme.Foo ORDER BY @retainedHeapSize DESC LIMIT 1").unwrap();
+        let plan = plan_query(&q).unwrap();
+        let sc = schema(&[(10, "com.acme.Foo")]);
+        let carry = crate::query::carry::Carry::index_only(100);
+        let mut ex = SingleScanExecutor::new_carry(&q, &plan, &sc, carry);
+        for i in 1..=5u32 { ex.visit_instance(i as usize, 10, &[]); }
+        let carry = ex.take_carry();
+        assert_eq!(carry.indices(), vec![1, 2, 3, 4, 5], "LIMIT must be deferred to the late phase");
+    }
+
+    #[test]
+    fn carry_mode_still_applies_non_retained_where() {
+        // A non-retained WHERE term (on a class match) still filters during the
+        // scan; only retained terms are deferred. Here the class filter alone
+        // decides membership (no field blob), so a Bar instance is excluded.
+        let q = parse("SELECT @objectId FROM com.acme.Foo WHERE @retainedHeapSize > 0").unwrap();
+        let plan = plan_query(&q).unwrap();
+        let sc = schema(&[(10, "com.acme.Foo"), (20, "com.acme.Bar")]);
+        let carry = crate::query::carry::Carry::index_only(100);
+        let mut ex = SingleScanExecutor::new_carry(&q, &plan, &sc, carry);
+        ex.visit_instance(1, 10, &[]);
+        ex.visit_instance(2, 20, &[]); // wrong class → not carried
+        let carry = ex.take_carry();
+        assert_eq!(carry.indices(), vec![1]);
     }
 
     #[test]

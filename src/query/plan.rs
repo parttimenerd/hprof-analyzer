@@ -132,7 +132,10 @@ fn select_uses_retained(it: &SelectItem) -> bool {
         _ => false,
     }
 }
-fn pred_uses_retained(p: &Predicate) -> bool {
+/// True if a predicate references `@retainedHeapSize` anywhere. Reused by the
+/// scan-time carry executor to skip retained WHERE terms (retained size is
+/// unknown during the pass2 scan; those terms are applied late in stage_runner).
+pub(crate) fn pred_uses_retained(p: &Predicate) -> bool {
     match p {
         Predicate::And(a, b) | Predicate::Or(a, b) => pred_uses_retained(a) || pred_uses_retained(b),
         Predicate::Not(a) => pred_uses_retained(a),
