@@ -95,26 +95,33 @@ single most common heap question and MAT makes users do it in the UI instead.
 **Class-spec grammar** applies uniformly to `FROM` and to `INSTANCEOF` operands.
 
 **Explicitly rejected (clear error naming the MAT construct, not silent degrade)**
-- **Raw-edge** graph primitives: `inbounds(x)`, `outbounds(x)`, `path(a,b)` — the
-  forward/inbound reference CSR is *consumed* by the dominator computation
-  mid-pipeline (moved into the transpose, then freed), so per-object in/out edges
-  no longer exist at query time. Rejected with a message pointing to the
-  reference/path reports. *(Note: dominator-based primitives are NOT in this list
-  — see below; they are supported because `idom` survives.)*
-- `UNION (<query>)` in its general form (arbitrary N-way set union of independent
-  scans), correlated subqueries, `SELECT ... FROM (<subquery>)`,
-  `FROM OBJECTS <addr>` — recognized MAT forms, rejected as out of subset.
+- **Unbounded `path(a, b)`**: a full shortest-path search over the whole object
+  graph. Bounded-depth `path` (default small cap) is supported via edge retention;
+  an unbounded/large-depth request is rejected with a message stating the depth cap
+  and pointing to the path report.
+- Non-homogeneous / nested `UNION`: branches whose column shapes differ, or
+  `UNION` nested inside other clauses. Homogeneous `UNION` (matching column shapes)
+  *is* supported (see below).
+- Correlated subqueries, `SELECT ... FROM (<subquery>)`, `FROM OBJECTS <addr>` —
+  recognized MAT forms, rejected as out of subset.
 - `SELECT DISTINCT` across a projection that would require a second materialized
   set larger than the match-set cap (bounded-`DISTINCT` on a small projection is
   allowed).
 - Joins between two independently-scanned classes (only reference-path traversal
   from a single FROM class is supported, not arbitrary N×M joins).
 
-**Supported via the surviving dominator data** (see "Dominator-based primitives")
-- `dominators(x)` — immediate dominees of `x` (the dominator-tree children).
+**Supported via surviving/retained graph data**
+- `dominators(x)` — immediate dominees of `x` (dominator-tree children); reads the
+  surviving `idom`/`dc_*` (see "Dominator-based primitives").
 - `SELECT ... AS RETAINED SET` — the retained set of the matched objects.
-- `x.@retainedHeapSize` and retained-ordered results (already covered as
-  CrossPhase).
+- `x.@retainedHeapSize` and retained-ordered results (CrossPhase).
+- `outbounds(x)` / `inbounds(x)` — out/in reference edges of `x`, served by
+  **query-gated edge retention** (the planner keeps the needed CSR resident only
+  when such a query is present; see that section).
+- Bounded `path(a, b)` — a depth-capped reference path.
+- **Homogeneous `UNION`** — `SELECT <cols> FROM A UNION (SELECT <cols> FROM B)`
+  where the branches share a column shape: each branch is planned and executed as
+  its own sub-plan, and their bounded rows are concatenated under one overall cap.
 
 Each rejection is produced by the planner with the exact offending construct in
 the message, so the user learns *why* and what to change.
@@ -139,18 +146,17 @@ in:
 | `SELECT * FROM java.lang.String s WHERE s.@GCRootInfo != null` | ⚠️ partial | needs GC-root flags live at match time; served only if the query is planned onto a phase where root info is available, else rejected with a clear message |
 | `SELECT dominators(s) FROM ... s` | ✅ | DominatorStage (P3, reads surviving `idom`/`dc_off`/`dc_tgt`) |
 | `SELECT s AS RETAINED SET FROM ... s` | ✅ | RetainedSetStage (P3, dominator-subtree closure over matches) |
-| `SELECT inbounds(s) FROM ... s` / `outbounds(s)` / `path(a,b)` | ❌ rejected | raw ref CSR consumed by dominator pass; points to reference report |
-| `SELECT * FROM x UNION (SELECT * FROM y)` | ❌ rejected | general set union, out of subset, named |
+| `SELECT outbounds(s) FROM ... s` | ✅ (edge-retention) | keeps forward CSR resident to P3 when the query needs it |
+| `SELECT inbounds(s) FROM ... s` | ✅ (edge-retention) | keeps inbound CSR resident past the dominator when needed |
+| `SELECT path(a, b) FROM ...` | ⚠️ bounded | supported for bounded depth; needs both CSRs (heaviest); depth-capped |
+| `SELECT * FROM A UNION (SELECT * FROM B)` | ✅ (homogeneous) | each branch planned independently, rows concatenated; mixed-shape/nested rejected |
 
-The remaining capability gap vs. MAT is the **raw-edge family**
-(`inbounds`/`outbounds`/`path`): these need the forward/inbound reference CSR,
-which the pipeline consumes to build the dominator tree and then frees. That is
-an intentional, documented boundary — and the analyzer already ships dedicated
-reference/path reports that answer those questions directly. Crucially, the
-**dominator-based** primitives (`dominators()`, `AS RETAINED SET`) that MAT users
-reach for most are now *supported*, because the immediate-dominator array
-survives to report time (see next section). Everything else in the common-query
-set is covered.
+The former "raw-edge family" gap is closed on demand: `inbounds`/`outbounds`/
+`path` are served by **query-gated edge retention** (next section) — the edge CSRs
+are freed as before *unless* a query in the run actually needs them, in which case
+the planner keeps exactly the CSR(s) required alive to report time. The only
+remaining rejections are unbounded `path` searches and non-homogeneous/nested
+`UNION`. Everything else in the common-query set is covered.
 
 ## Dominator-based primitives (`dominators()`, `AS RETAINED SET`)
 
@@ -197,13 +203,67 @@ alone survive even past that window, so `dominatorof(x)` (single immediate
 dominator) and retained *sizes* are available report-wide; only the
 subtree-expanding forms need the `dc_*` window.
 
-**`UNION`** stays rejected in general (arbitrary set union of independent scans),
-but the common `AS RETAINED SET` idiom — the reason most `UNION`-looking MAT
-queries exist — is now served directly, removing the main motivation for it.
+**`UNION`** in its non-homogeneous/nested form stays rejected; the common
+`AS RETAINED SET` idiom — a frequent reason for `UNION`-shaped MAT queries — is
+served directly, and homogeneous `UNION` is supported by branch concatenation
+(see "Homogeneous UNION").
 
 This is a genuine capability win: it moves `dominators()` and `AS RETAINED SET`
 from "rejected" to "supported" purely by *reading data the pipeline already keeps
 resident at report time*, with zero extra memory or passes.
+
+## Query-gated edge retention (`inbounds()`, `outbounds()`, bounded `path()`)
+
+The reference CSRs are freed mid-pipeline **for a memory reason, not a logical
+one**: `main.rs` frees the forward CSR inside `build_from_fwd` and drops the
+inbound CSR right after `compute_dominators`, with comments citing a ~7.5 GB CSR
+and a ~22 GB global RSS peak. So the edges *can* be kept — it just costs RSS. The
+design serves raw-edge primitives **only when a query in the run actually needs
+them**, so the common case pays nothing:
+
+- The planner runs **before pass2** (it only needs the parsed AST + P0 schema).
+  If any query uses `outbounds`, it sets `retain_forward`; if any uses `inbounds`,
+  it sets `retain_inbound`; `path(a,b)` sets both. These flags are threaded into
+  the pipeline setup.
+- `retain_forward` → the forward CSR is **not** `mem::take`-n into the inbound
+  transpose destructively; it is cloned/kept so it survives to the P3 query window.
+  `retain_inbound` → the `drop(inb_block_off)/drop(inb_data)` after the dominator
+  is **skipped**, keeping the inbound CSR alive.
+- At the P3 query window, `outbounds(x)` reads the forward CSR slice at `x`;
+  `inbounds(x)` reads the inbound CSR slice at `x`; both are direct O(degree)
+  lookups over the retained arrays, feeding the bounded accumulator.
+- **Bounded `path(a, b)`** is a capped BFS over the retained forward (or inbound)
+  CSR from `a` toward `b`, depth-limited by a small default cap
+  (`--query-path-depth`, e.g. 5) and frontier-capped like a RefWalk. An unbounded
+  request is rejected up front naming the cap.
+
+**Cost model, made explicit.** Retaining a CSR reintroduces exactly the ~7.5 GB
+(inbound) or comparable (forward) array the pipeline worked to free, so on a very
+large dump an edge query raises peak RSS materially. This is:
+- **opt-in** — incurred only when an `inbounds`/`outbounds`/`path` query is present
+  in the run;
+- **surfaced** — `!plan`/`!explain` and a one-line note on the query result state
+  "this query retained the <forward|inbound> reference graph (+~N GB RSS)";
+- **capped** — result frontiers/rows are still bounded; retention affects the CSR
+  arrays' RSS, not unbounded query-side allocation.
+
+Because the flags are computed pre-pass2 from the AST, a run with no edge queries
+is byte-for-byte and RSS-for-RSS identical to today. This is the same
+"adaptive: pay only for what the query touches" principle as the phase planner,
+extended to the pipeline's own teardown decisions.
+
+## Homogeneous UNION
+
+`SELECT <cols> FROM A UNION (SELECT <cols> FROM B [UNION (...)])` is supported
+when every branch projects the **same column shape** (same arity and compatible
+types). Each branch is parsed and planned into its own sub-plan (with its own
+stages/carries), the executor runs them and **concatenates** their bounded rows
+into one `QueryResult`, applying a single overall row cap across branches.
+Branches may individually use different strategies (one `SingleScan`, one
+`RefWalk`) — the union is just row concatenation at the end. Non-homogeneous
+column shapes and `UNION` nested inside other clauses are rejected with a message
+naming the mismatch. This covers the common "objects of type A *or* type B"
+idiom without the complexity of full column-type reconciliation.
 
 ## Architecture
 
@@ -222,12 +282,16 @@ report renderers  QueryResult         -> md / html / json sections
 
 **Decision: hand-written recursive-descent + Pratt expression parser. No parser
 library.** See "Parser choice" below for the evaluated alternatives. Produces a
-`Query` AST: `select`, `from`, `where`, `group_by`, `order_by`, `limit`. A small
-hand-rolled tokenizer feeds a precedence-climbing (Pratt) parser for the WHERE
-expression (AND/OR/NOT, comparisons, `LIKE`, regex, `INSTANCEOF`, dotted paths).
-Path expressions parse to a `Vec<PathSegment>` (field-name hops). Every token
-carries its source column so errors read `expected <X> near column N`.
-Unsupported constructs parse-error early with the offending token and a hint.
+`Query` AST: `select`, `from`, `where`, `group_by`, `order_by`, `limit`, and an
+optional `union` tail (a boxed `Query` per homogeneous branch). Graph functions
+(`dominators`/`inbounds`/`outbounds`/`path`) and `AS RETAINED SET` parse to
+dedicated AST nodes so the planner can classify them. A small hand-rolled
+tokenizer feeds a precedence-climbing (Pratt) parser for the WHERE expression
+(AND/OR/NOT, comparisons, `LIKE`, regex, `INSTANCEOF`, dotted paths). Path
+expressions parse to a `Vec<PathSegment>` (field-name hops). Every token carries
+its source column so errors read `expected <X> near column N`. Constructs the
+planner cannot serve parse successfully but are rejected at *plan* time with a
+specific message (so the error names the semantic limit, not a syntax surprise).
 
 ### 2. Planner (`src/query/plan.rs`) — the adaptive core
 
@@ -250,14 +314,23 @@ pub struct QueryPlan {
                                   // with its compressed layout + cap
     pub caps: Caps,               // every bound the plan will enforce
     pub projection: Projection,   // final column layout + how each column is sourced
+    pub union_branches: Vec<QueryPlan>, // homogeneous-UNION sub-plans; rows
+                                  // concatenated under the shared cap (empty = no UNION)
     pub rejection: Option<String>,// unsupported construct, named
+}
+
+// Run-level flags, unioned across ALL queries in the run and consumed BEFORE
+// pass2 so the pipeline can decide what to keep resident (see edge retention).
+pub struct RunFlags {
+    pub retain_forward: bool,     // some query needs outbounds / path
+    pub retain_inbound: bool,     // some query needs inbounds / path
 }
 
 pub struct Stage {
     pub phase: Phase,             // P0 | P1 | P2 | P3 | P4
     pub reads: Vec<Requirement>,  // minimal fields/edges/attrs read at this phase
-    pub op: StageOp,              // Match | ResolveHop | JoinRetained |
-                                  // DominatorChildren | RetainedSet | Aggregate | Finalize
+    pub op: StageOp,              // Match | ResolveHop | JoinRetained | DominatorChildren
+                                  // | RetainedSet | EdgeLookup | BoundedPath | Aggregate | Finalize
     pub produces: Option<CarryId>,// the carry this stage fills (if any)
     pub consumes: Vec<CarryId>,   // carries this stage reads
 }
@@ -279,8 +352,8 @@ this exact map (verified against `main.rs::run` + `pass2::build`):
 |---|---|---|
 | **P0 schema** (pass1 done) | class table: names, superclass chain, per-field `(name, type)`; loader labels | — (schema stays cheap) |
 | **P1 field-decode scan** (in `pass2::build`, `scan_all_records`) | every object's raw blob + `class_id`; `IdMap` (addr→index) live; field offsets decodable; String-decode machinery live | `id_map`/field plans freed at end of pass2 |
-| **P2 forward CSR** (post-pass2, pre-inbound) | `fwd_offsets`/`fwd_targets` (out-edges per object) + reachability `dfn` | moved into inbound transpose, then freed |
-| **P3 dominator/retained** (late, in `main.rs`) | `idom`, `retained[]`, `shallow[]`, `class_idx[]` (restored); dominator-children CSR `dc_off`/`dc_tgt` (live *during* `build_model`, dropped just after) | `dc_*` dropped post-`build_model`; `idom`/`retained` at end of pipeline |
+| **P2 forward CSR** (post-pass2, pre-inbound) | `fwd_offsets`/`fwd_targets` (out-edges per object) + reachability `dfn` | moved into inbound transpose, then freed — *unless `retain_forward` is set* (see edge retention) |
+| **P3 dominator/retained** (late, in `main.rs`) | `idom`, `retained[]`, `shallow[]`, `class_idx[]` (restored); dominator-children CSR `dc_off`/`dc_tgt` (live *during* `build_model`); inbound CSR *if `retain_inbound` set*; forward CSR *if `retain_forward` set* | `dc_*` dropped post-`build_model`; retained edge CSRs dropped after the query window; `idom`/`retained` at end of pipeline |
 | **P4 histogram** (build_model) | per-class aggregates: instances/shallow/retained | report phase |
 
 The two load-bearing consequences the planner must encode:
@@ -308,7 +381,17 @@ Retained                   any use of @retainedHeapSize (P3-only)
 RuntimeType                @clazz / classof / INSTANCEOF on a value's *runtime* class
 DominatorTree { mode }     dominators(x) (children) or AS RETAINED SET (subtree
                            closure) — reads surviving idom/dc_*/retained at P3
+Edges { dir, path }        outbounds/inbounds/bounded-path — sets retain_forward
+                           and/or retain_inbound pre-pass2; reads the retained CSR
+                           at P3
 ```
+
+Beyond the per-query `QueryNeeds`, the planner emits **run-level pipeline flags**
+consumed *before pass2*: `retain_forward` / `retain_inbound` (set if any query
+needs `outbounds`/`inbounds`/`path`) tell the pipeline not to free the
+corresponding reference CSR (see "Query-gated edge retention"). These are unioned
+across all queries in the run, so a single edge query in a pack retains the graph
+for that run and no other.
 
 The planner unions these across SELECT, WHERE, GROUP BY, and ORDER BY. Each
 requirement carries the **minimal field/edge set** it touches — never "all fields
@@ -454,8 +537,17 @@ Stage operators:
   bitset, and emit/aggregate the deduped closure — MAT's retained-set-of-a-set.
   Bounded by the result cap; overflow sets `truncated`. Also runs in the `dc_*`
   window.
+- **`EdgeLookup` at P3 (`outbounds(x)`/`inbounds(x)`)**: consume the P1 match
+  carry; for each carried index, read its out-edges (retained forward CSR) or
+  in-edges (retained inbound CSR) and emit the referents. O(degree) per match,
+  result-capped. Requires the corresponding `retain_*` flag was set pre-pass2.
+- **`BoundedPath` at P3 (`path(a, b)`)**: capped BFS over the retained CSR from
+  `a` toward `b`, depth-limited (`--query-path-depth`) and frontier-capped; emits
+  the first path found (or rows up to the cap). Requires both CSRs retained.
 - **`Finalize`**: apply ORDER BY / LIMIT to the accumulator and emit
-  `QueryResult` rows.
+  `QueryResult` rows. For a `UNION`, run each `union_branches` sub-plan through the
+  same runner and concatenate their finalized rows under one shared cap before
+  emitting.
 
 All result buffers and carry buffers are explicitly bounded and stored compressed
 (see the planner's `CarryLayout`), so RSS stays within budget regardless of dump
@@ -600,6 +692,8 @@ Three, per the requirement:
 - **`--query-match-cap <n>`** (optional): overrides the default CrossPhase/RefWalk
   match-set and per-hop frontier cap for users who knowingly want larger (or
   smaller) bounded results. Defaults to a safe value (~200k).
+- **`--query-path-depth <n>`** (optional): max depth for bounded `path(a, b)`
+  queries. Defaults to a small value (e.g. 5); larger values raise BFS cost.
 
 Batch queries (`--query`/TOML) only run in the analyze path (hprof → report),
 never on JSON re-render (there is no dump to scan then). Re-rendering a saved
@@ -645,8 +739,15 @@ Test-driven throughout. Layers:
    - **Dominator primitives**: `SELECT dominators(s) FROM ...` (assert a P1
      `Match` → `IndexOnly` carry → P3 `DominatorChildren` stage marked to run in
      the `dc_*` window); `SELECT s AS RETAINED SET FROM ...` (assert `RetainedSet`
-     stage). Assert `inbounds`/`outbounds`/`path` are rejected with the raw-edge
-     message.
+     stage).
+   - **Edge primitives + run flags**: `SELECT outbounds(s) FROM ...` (assert
+     `RunFlags.retain_forward` set, `EdgeLookup` stage); `inbounds(s)` (assert
+     `retain_inbound`); bounded `path(a,b)` (assert both flags + `BoundedPath`
+     stage + depth cap); assert *unbounded* `path` and a run with **no** edge query
+     leaves both flags false (proving the common case is unaffected).
+   - **Homogeneous UNION**: `SELECT * FROM A UNION (SELECT * FROM B)` (assert two
+     `union_branches` sub-plans, shared cap); assert a mixed-column-shape UNION is
+     rejected naming the mismatch.
    - Every **rejection** case, asserting the message names the construct.
    The mapping `needs → stages/carries` is a finite table; there is a test per cell.
 3. **Executor tests on a tiny hand-built dump** — construct a minimal in-memory
@@ -697,6 +798,8 @@ Test-driven throughout. Layers:
      assert *we* reject while MAT accepts — documenting the boundary, not a bug.
    - Dominator primitives (`dominators()`, `AS RETAINED SET`) are included: MAT
      computes the same dominator tree, so its result set is the oracle for ours.
+     Edge primitives (`outbounds`/`inbounds`, bounded `path`) and homogeneous
+     `UNION` are likewise cross-checked against MAT's own results.
 
 ## Rollout / Phasing (still one spec, one plan)
 
@@ -717,12 +820,17 @@ shippable and independently tested:
    the same stage machinery, arbitrary 3+-phase spans.
 6. Dominator primitives (`dominators()`, `AS RETAINED SET`) as P3 stages hooked
    into the `build_model` `dc_*` window — reusing the surviving dominator tree.
-7. TOML input + CLI wiring + golden e2e fixtures.
-8. Interactive `query` subcommand (`!plan`/`!explain`/`!schema`) — a thin
-   stdin front-end over the same engine; lands once the executor is stable.
+7. Query-gated edge retention: `RunFlags` computed pre-pass2, pipeline honors
+   `retain_forward`/`retain_inbound`, `EdgeLookup` + bounded `BoundedPath` stages.
+   (Sequenced late because it touches the pipeline's teardown decisions.)
+8. Homogeneous `UNION` (sub-plan-per-branch + row concatenation).
+9. TOML input + CLI wiring + golden e2e fixtures.
+10. Interactive `query` subcommand (`!plan`/`!explain`/`!schema`) — a thin
+    stdin front-end over the same engine; lands once the executor is stable.
 
 Each step is independently valuable: many real queries are satisfied by steps
-1–3 alone; steps 4–5 unlock the "biggest X held by Y" class of questions.
+1–3 alone; steps 4–6 unlock the "biggest X held by Y" and dominator questions;
+steps 7–8 close the raw-edge and set-union gaps for the users who need them.
 
 ## Open Risks
 
@@ -744,6 +852,15 @@ Each step is independently valuable: many real queries are satisfied by steps
   payloads), not just retained joins.
 - **Grammar scope creep**: the subset is deliberately fixed; anything outside it
   errors rather than silently under-delivering.
+- **Edge-retention RSS**: an `inbounds`/`outbounds`/`path` query forces the
+  pipeline to keep a reference CSR resident that it otherwise frees at the
+  ~7.5 GB / ~22 GB peak window, so on very large dumps such a query raises peak
+  RSS materially. Mitigated by making it strictly **opt-in** (only when such a
+  query is in the run — computed pre-pass2, so no-edge runs are unaffected),
+  **surfaced** (`!plan`/`!explain` and the result note report the retention +
+  estimated GB), and **capped** on the query side. It is an explicit
+  capability-for-memory trade the user opts into by writing the query; the
+  default report path is untouched. `path(a,b)` is additionally depth-capped.
 - **MAT `LIKE` regex fidelity**: `LIKE` is a Java regex in MAT. We use the
   Rust `regex` crate, whose syntax covers the vast majority of Java patterns but
   differs on a few Java-specific constructs (e.g. certain named groups /
