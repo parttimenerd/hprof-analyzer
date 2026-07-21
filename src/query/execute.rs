@@ -61,8 +61,11 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             Attr::Field(name) => self.decode_field(class_id, name, blob),
         }
     }
+    // Stub filled in by Task 9b (field decode from the instance blob).
     fn decode_field(&self, _class_id: u64, _name: &str, _blob: &[u8]) -> QueryValue { QueryValue::Null }
+    // Stub filled in by Task 9b (WHERE predicate evaluation); matches all for now.
     fn where_passes(&self, _class_id: u64, _blob: &[u8]) -> bool { true }
+
     pub fn finish(self, name: &str) -> QueryResult {
         let columns = self.query.select.iter().map(|it| QueryColumn { name: column_name(it) }).collect();
         QueryResult { name: name.to_string(), oql: String::new(), columns, row_count: self.rows.len() as u64, rows: self.rows, truncated: self.truncated, error: None }
