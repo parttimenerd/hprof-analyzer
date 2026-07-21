@@ -15,8 +15,8 @@ use logos::Logos;
 
 use crate::query::QueryError;
 use crate::query::ast::{
-    AggFunc, Attr, ClassSpec, CompareOp, FromSource, OrderBy, Predicate, Query, SelectItem,
-    SortDir, Value,
+    AggFunc, Attr, ClassSpec, CompareOp, FromSource, OrderBy, Predicate, Query, RefRole,
+    SelectItem, SortDir, Value,
 };
 
 /// OQL token kinds, lexed directly by logos.
@@ -308,7 +308,7 @@ where
             )
             .map(
                 |(((((((distinct, select), retained_set), from), alias), where_), order_by), limit)| {
-                    Query {
+                    let mut q = Query {
                         distinct,
                         select,
                         retained_set,
@@ -318,7 +318,11 @@ where
                         order_by,
                         limit,
                         union_branches: Vec::new(),
-                    }
+                    };
+                    // Now the alias is known, rewrite dotted `Field`s into N-hop
+                    // `RefPath`s (a single segment after alias-strip stays a Field).
+                    normalize_query_ref_paths(&mut q);
+                    q
                 },
             )
     });
@@ -339,6 +343,81 @@ where
             head.union_branches = tail;
             head
         })
+}
+
+/// Rewrite dotted `Attr::Field` values in a query into N-hop `Attr::RefPath`s,
+/// now that the FROM alias is known. A field whose text contains a `.` is a
+/// reference path: strip a leading `<alias>.` (the alias denotes the FROM
+/// object itself), then split the remainder on `.`. If ≥ 2 segments remain, the
+/// last is the scalar/attr tail and the earlier ones are reference hops. A
+/// single remaining segment stays a plain `Field`. Role defaults to
+/// `ProjectionOnly`; the planner fixes it to `PredicateCritical` for WHERE uses.
+/// Only touches the query's own clauses — subqueries are normalized when they
+/// are themselves parsed.
+fn normalize_query_ref_paths(q: &mut Query) {
+    let alias = q.alias.clone();
+    for item in &mut q.select {
+        normalize_select_item(item, alias.as_deref());
+    }
+    if let Some(pred) = &mut q.where_ {
+        normalize_predicate(pred, alias.as_deref());
+    }
+    if let Some(ob) = &mut q.order_by {
+        normalize_attr(&mut ob.key, alias.as_deref());
+    }
+}
+
+fn normalize_select_item(item: &mut SelectItem, alias: Option<&str>) {
+    match item {
+        SelectItem::Attr(a) => normalize_attr(a, alias),
+        SelectItem::Aggregate { arg, .. } => normalize_select_item(arg, alias),
+        SelectItem::Star => {}
+    }
+}
+
+fn normalize_predicate(pred: &mut Predicate, alias: Option<&str>) {
+    match pred {
+        Predicate::And(a, b) | Predicate::Or(a, b) => {
+            normalize_predicate(a, alias);
+            normalize_predicate(b, alias);
+        }
+        Predicate::Not(a) => normalize_predicate(a, alias),
+        Predicate::Compare { lhs, .. } => normalize_attr(lhs, alias),
+        // The inner query of an IN-subquery is normalized against its own alias
+        // when it is parsed; the outer LHS attr is normalized here.
+        Predicate::InSubquery { lhs, .. } => normalize_attr(lhs, alias),
+        Predicate::InstanceOf(_) => {}
+    }
+}
+
+/// Rewrite a single `Attr::Field` into a `RefPath` when it is a multi-segment
+/// reference path. Non-field attrs and single-segment fields are left as-is.
+fn normalize_attr(a: &mut Attr, alias: Option<&str>) {
+    let Attr::Field(name) = a else { return };
+    if !name.contains('.') {
+        return;
+    }
+    // Strip a leading `<alias>.` — the alias is the FROM object, not a hop.
+    let stripped: &str = match alias {
+        Some(al) => name
+            .strip_prefix(al)
+            .and_then(|rest| rest.strip_prefix('.'))
+            .unwrap_or(name),
+        None => name.as_str(),
+    };
+    let segs: Vec<&str> = stripped.split('.').collect();
+    if segs.len() < 2 {
+        // Single segment after alias-strip: a plain field. Replace the text with
+        // the stripped form so `x.name` becomes `Field("name")`.
+        *a = Attr::Field(stripped.to_string());
+        return;
+    }
+    let (tail, hops) = segs.split_last().unwrap();
+    *a = Attr::RefPath {
+        hops: hops.iter().map(|s| s.to_string()).collect(),
+        tail: Box::new(Attr::Field((*tail).to_string())),
+        role: RefRole::ProjectionOnly,
+    };
 }
 
 fn reserved_ident<'a, I>() -> impl Parser<'a, I, String, extra::Err<Rich<'a, Token>>> + Clone
@@ -998,6 +1077,53 @@ mod tests {
         let q = parse("SELECT * FROM INSTANCEOF java.util.List").unwrap();
         assert!(q.from.instanceof(), "INSTANCEOF flag must survive migration");
         assert_eq!(q.from.class_name(), "java.util.List");
+    }
+
+    #[test]
+    fn refpath_two_hops_parses() {
+        let q = parse("SELECT x.parent.name FROM Node x").unwrap();
+        match &q.select[0] {
+            SelectItem::Attr(Attr::RefPath { hops, tail, .. }) => {
+                assert_eq!(hops, &vec!["parent".to_string()]);
+                assert!(matches!(**tail, Attr::Field(ref f) if f == "name"));
+            }
+            other => panic!("expected RefPath, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn refpath_bare_single_segment_stays_field() {
+        // `x.name` — one segment after alias-strip — is a plain field, not a RefPath.
+        let q = parse("SELECT x.name FROM Node x").unwrap();
+        match &q.select[0] {
+            SelectItem::Attr(Attr::Field(f)) => assert_eq!(f, "name"),
+            other => panic!("expected bare Field, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn refpath_without_alias_keeps_leading_segment() {
+        // No alias bound: `a.b.c` has three segments, all real hops+tail.
+        let q = parse("SELECT a.b.c FROM Node").unwrap();
+        match &q.select[0] {
+            SelectItem::Attr(Attr::RefPath { hops, tail, .. }) => {
+                assert_eq!(hops, &vec!["a".to_string(), "b".to_string()]);
+                assert!(matches!(**tail, Attr::Field(ref f) if f == "c"));
+            }
+            other => panic!("expected RefPath, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn refpath_in_where_parses() {
+        let q = parse("SELECT * FROM Node x WHERE x.parent.id = 7").unwrap();
+        match q.where_.as_ref().unwrap() {
+            Predicate::Compare { lhs: Attr::RefPath { hops, tail, .. }, .. } => {
+                assert_eq!(hops, &vec!["parent".to_string()]);
+                assert!(matches!(**tail, Attr::Field(ref f) if f == "id"));
+            }
+            other => panic!("expected RefPath compare, got {other:?}"),
+        }
     }
 
     #[test]

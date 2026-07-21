@@ -507,6 +507,9 @@ fn collect_pred_fields(pred: &Predicate, out: &mut Vec<String>) {
 fn attr_alias_head(a: &Attr) -> Option<&str> {
     match a {
         Attr::Field(name) => name.split_once('.').map(|(head, _)| head),
+        // A RefPath's alias head is its first hop; after the query's own alias
+        // is stripped during parse, a leftover foreign head appears here.
+        Attr::RefPath { hops, .. } => hops.first().map(|s| s.as_str()),
         _ => None,
     }
 }

@@ -188,6 +188,9 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             Attr::ClassOf | Attr::DisplayName => QueryValue::Str(self.resolver.class_name(class_id).unwrap_or("?").to_string()),
             Attr::Length => QueryValue::Null,
             Attr::Field(name) => self.decode_field(class_id, name, blob),
+            // N-hop reference paths resolve against the forward-ref graph, which
+            // only exists post-scan (P2). Filled by the stage runner, not here.
+            Attr::RefPath { .. } => QueryValue::Null,
         }
     }
     /// Project a SELECT row for an array object. Arrays carry no field blob and
@@ -220,6 +223,8 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             Attr::Length => QueryValue::Int(length as i64),
             // Arrays have no named fields; a field reference resolves to Null.
             Attr::Field(_) => QueryValue::Null,
+            // Arrays have no reference fields to walk; a RefPath is Null.
+            Attr::RefPath { .. } => QueryValue::Null,
         }
     }
     fn decode_field(&self, class_id: u64, name: &str, blob: &[u8]) -> QueryValue {
@@ -437,6 +442,12 @@ fn attr_name(a: &Attr) -> String {
         Attr::Dominators(a) => format!("dominators({a})"),
         Attr::DominatorOf(a) => format!("dominatorof({a})"),
         Attr::Field(f) => f.clone(),
+        Attr::RefPath { hops, tail, .. } => {
+            let mut s = hops.join(".");
+            s.push('.');
+            s.push_str(&attr_name(tail));
+            s
+        }
     }
 }
 

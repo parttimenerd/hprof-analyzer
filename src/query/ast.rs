@@ -63,7 +63,19 @@ pub enum Attr {
     DominatorOf(String),
     /// A bare instance field name, e.g. `count`, `value`.
     Field(String),
+    /// An N-hop reference path: `x.parent.name` (after alias-strip) becomes
+    /// `RefPath { hops: ["parent"], tail: Field("name") }`. Each hop is a
+    /// reference field to follow in the forward-reference graph; the tail is the
+    /// scalar/attr projected on the resolved object. Requires ≥ 1 hop (a single
+    /// segment after alias-strip stays a plain `Field`).
+    RefPath { hops: Vec<String>, tail: Box<Attr>, role: RefRole },
 }
+
+/// When a `RefPath` must be resolved. Predicate-critical paths (used in WHERE)
+/// resolve before row filtering; projection-only paths (used only in SELECT)
+/// resolve after filtering (cheaper — fewer rows). Assigned during planning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefRole { PredicateCritical, ProjectionOnly }
 
 /// The FROM clause target.
 #[derive(Debug, Clone, PartialEq)]
