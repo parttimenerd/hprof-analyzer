@@ -155,6 +155,11 @@ struct RefWalkState<'q, R: ClassResolver> {
     edges: crate::query::refwalk::RefWalkEdges,
     /// Interned hop field names; `field_id` is the index into this table.
     field_names: Vec<String>,
+    /// Tail (projected) field names captured per resolved-target object.
+    tail_names: Vec<String>,
+    /// `dense_idx -> tail field value`, decoded at scan time (blob is gone in
+    /// the late window). Keyed by the object that OWNS the tail field.
+    tails: crate::query::refwalk::RefWalkTails,
     resolver: &'q R,
 }
 
@@ -178,21 +183,28 @@ impl<'q, R: ClassResolver> ScanDriver<'q, R> {
     /// blob decoding. Returns `None` (no capture) when no query walks references.
     fn arm_refwalk(execs: &[SingleScanExecutor<'q, R>]) -> Option<RefWalkState<'q, R>> {
         let mut per_query_hops: Vec<Vec<String>> = Vec::new();
+        let mut per_query_tails: Vec<Vec<String>> = Vec::new();
         for ex in execs {
             if ex.plan().needs.ref_walk {
                 per_query_hops.push(crate::query::refwalk::refwalk_field_names(ex.query()));
+                per_query_tails.push(crate::query::refwalk::refwalk_tail_field_names(ex.query()));
             }
         }
         if per_query_hops.is_empty() {
             return None;
         }
         let field_names = crate::query::refwalk::intern_hop_fields(&per_query_hops);
+        let tail_names = crate::query::refwalk::intern_hop_fields(&per_query_tails);
         let resolver = execs.first().map(|e| e.resolver())?;
         Some(RefWalkState {
             edges: crate::query::refwalk::RefWalkEdges::new(
                 crate::query::refwalk::REFWALK_EDGE_CAP,
             ),
             field_names,
+            tail_names,
+            tails: crate::query::refwalk::RefWalkTails::new(
+                crate::query::refwalk::REFWALK_EDGE_CAP,
+            ),
             resolver,
         })
     }
@@ -258,8 +270,21 @@ impl<'q, R: ClassResolver> ScanDriver<'q, R> {
         Some(edges.into_csr(n))
     }
 
+    /// Take the captured tail-value side table (`dense_idx -> QueryValue`), or
+    /// `None` when RefWalk was never armed. Takes `&mut self` for the same
+    /// ordering reason as `take_refwalk_csr`.
+    pub fn take_refwalk_tails(
+        &mut self,
+    ) -> Option<std::collections::HashMap<u32, crate::query::model::QueryValue>> {
+        let tails = std::mem::replace(
+            &mut self.refwalk.as_mut()?.tails,
+            crate::query::refwalk::RefWalkTails::new(0),
+        );
+        Some(tails.into_map())
+    }
+
     /// Decode the needed reference fields from one instance blob and record their
-    /// edges. No-op when capture is unarmed.
+    /// edges; also capture any tail field this object owns. No-op when unarmed.
     fn capture_refwalk(&mut self, src_idx: usize, class_id: u64, blob: &[u8]) {
         let Some(state) = self.refwalk.as_mut() else { return };
         let width = state.resolver.ref_width();
@@ -282,6 +307,14 @@ impl<'q, R: ClassResolver> ScanDriver<'q, R> {
             }
             if let Some(dst) = state.resolver.index_of_addr(addr) {
                 state.edges.push(src_idx as u32, field_id as u32, dst as u32);
+            }
+        }
+        // Capture tail field values owned by THIS object (keyed by its own dense
+        // index — the walk resolves to it, then the late window looks it up).
+        for name in &state.tail_names {
+            let Some((off, ty)) = state.resolver.field(class_id, name) else { continue };
+            if let Some(v) = crate::query::refwalk::decode_primitive_tail(off, ty, blob) {
+                state.tails.insert(src_idx as u32, v);
             }
         }
     }

@@ -7,6 +7,13 @@ use crate::query::execute::{CrossPhaseEntry, QueryExecState};
 use crate::query::model::{QueryColumn, QueryResult, QueryValue};
 use crate::query::plan::StageOp;
 
+/// A shared empty tail-scalar table, used as the default `refwalk_tails` borrow
+/// when no RefWalk query ran (the common case). `LazyLock` derefs to a `'static`
+/// `&HashMap`, so it can back any `LateCtx` lifetime.
+pub(crate) static EMPTY_REFWALK_TAILS: std::sync::LazyLock<
+    std::collections::HashMap<u32, QueryValue>,
+> = std::sync::LazyLock::new(std::collections::HashMap::new);
+
 /// Maps a dense object index to its object address (and back, if needed) for
 /// building result rows in the late phase.
 pub struct IdMap<'a> {
@@ -53,6 +60,11 @@ pub struct LateCtx<'a> {
     pub fwd_field: &'a [u32],
     /// Field-name → interned id table (name at index `id`). `field_id` scans it.
     pub field_names: &'a [String],
+    /// Scan-captured RefWalk *tail* scalars, keyed by the resolved-target dense
+    /// index. Populated (query-gated) only when a RefWalk query with a primitive
+    /// field tail ran; empty otherwise. The late window joins the walked-to dense
+    /// index against this to project the real tail value (option (b)).
+    pub refwalk_tails: &'a std::collections::HashMap<u32, QueryValue>,
 }
 
 impl LateCtx<'_> {
@@ -60,6 +72,12 @@ impl LateCtx<'_> {
     /// scan over the (small) interning table; RefWalk resolves one id per hop.
     pub fn field_id(&self, name: &str) -> Option<u32> {
         self.field_names.iter().position(|f| f == name).map(|p| p as u32)
+    }
+
+    /// The scan-captured tail scalar for a resolved-target dense index, if one
+    /// was captured (primitive tail). `None` for object-ref tails or dead ends.
+    pub fn refwalk_tail(&self, dense: u32) -> Option<&QueryValue> {
+        self.refwalk_tails.get(&dense)
     }
 }
 
@@ -158,6 +176,12 @@ fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
                 let truncated = entry.carry.truncated() || trunc;
                 return dominator_rows(entry, q, &set, truncated, ctx);
             }
+            // The plan emits one RefWalkResolve op per hop, but the whole walk is
+            // driven off the query's RefPath AST in one pass here — the first op
+            // handles the entire path, so later per-hop ops are skipped.
+            StageOp::RefWalkResolve { .. } => {
+                return refpath_rows(entry, q, ctx);
+            }
             // Later phases add more StageOp variants; an unhandled op must fail
             // loudly rather than silently dropping the query's late work.
             #[allow(unreachable_patterns)]
@@ -192,6 +216,184 @@ fn dominator_rows(
         columns: vec![QueryColumn { name: col }],
         row_count: rows.len() as u64, rows, truncated, error: None,
         note: None,
+    }
+}
+
+/// Resolve an N-hop `RefPath` projection in the P2 late window. For each carried
+/// seed, walk the hop fields to the resolved target's dense index and project the
+/// tail: an identity attr (`@objectId`/`@objectAddress`) answered directly from
+/// the dense index; a scalar field tail looked up in the scan-captured tail table
+/// (`ctx.refwalk_tail`). Dead ends and object-ref/absent tails project `Null`; an
+/// absent tail attaches an advisory note. A predicate-critical RefPath in WHERE
+/// filters seeds by comparing the resolved tail against the predicate RHS.
+fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
+    // A predicate-critical RefPath in WHERE filters seeds before projection.
+    let where_refpath = q.where_.as_ref().and_then(find_pred_refpath);
+
+    let seeds: Vec<u32> = entry.carry.indices();
+    let mut note: Option<String> = None;
+
+    // Predicate-critical filter: keep seeds whose resolved tail passes the WHERE
+    // comparison. Only the RefPath term is evaluated here (other terms were
+    // applied in Phase 1); a seed with no comparison keeps all.
+    let kept: Vec<u32> = if let (Some(Attr::RefPath { hops, tail, .. }), Some(pred)) =
+        (where_refpath.as_ref(), q.where_.as_ref())
+    {
+        seeds
+            .iter()
+            .copied()
+            .filter(|&s| {
+                let resolved = walk_refpath(&[s], hops, ctx);
+                let val = resolved
+                    .first()
+                    .and_then(|&d| project_tail(tail, d, ctx, &mut note));
+                eval_refpath_pred(pred, val.as_ref())
+            })
+            .collect()
+    } else {
+        seeds.clone()
+    };
+
+    let columns: Vec<QueryColumn> = q
+        .select
+        .iter()
+        .map(|it| QueryColumn { name: crate::query::execute::column_name(it) })
+        .collect();
+
+    let mut rows: Vec<Vec<QueryValue>> = Vec::new();
+    for &s in &kept {
+        let row: Vec<QueryValue> = q
+            .select
+            .iter()
+            .map(|it| match it {
+                SelectItem::Attr(Attr::RefPath { hops, tail, .. }) => {
+                    let resolved = walk_refpath(&[s], hops, ctx);
+                    match resolved.first() {
+                        Some(&d) => {
+                            project_tail(tail, d, ctx, &mut note).unwrap_or(QueryValue::Null)
+                        }
+                        None => QueryValue::Null,
+                    }
+                }
+                SelectItem::Attr(Attr::ObjectId) => QueryValue::Int(s as i64),
+                SelectItem::Star => {
+                    QueryValue::ObjRef { index: ctx.id_map.to_addr(s), class: "?".to_string() }
+                }
+                _ => QueryValue::Null,
+            })
+            .collect();
+        rows.push(row);
+    }
+
+    let mut truncated = entry.carry.truncated();
+    if let Some(limit) = q.limit {
+        if rows.len() as u64 > limit {
+            rows.truncate(limit as usize);
+            truncated = true;
+        }
+    }
+
+    QueryResult {
+        name: entry.name.clone(),
+        oql: String::new(),
+        columns,
+        row_count: rows.len() as u64,
+        rows,
+        truncated,
+        error: None,
+        note,
+    }
+}
+
+/// Project a RefPath tail on a resolved-target dense index. Identity attrs answer
+/// directly from the dense index; a scalar field tail is looked up in the
+/// scan-captured tail table. Returns `None` (→ caller projects `Null` + note)
+/// when a field tail has no captured value (object-ref tail or not decoded).
+fn project_tail(
+    tail: &Attr, dense: u32, ctx: &LateCtx, note: &mut Option<String>,
+) -> Option<QueryValue> {
+    match tail {
+        Attr::ObjectId => Some(QueryValue::Int(dense as i64)),
+        Attr::ObjectAddress => Some(QueryValue::Int(ctx.id_map.to_addr(dense) as i64)),
+        Attr::Field(_) => match ctx.refwalk_tail(dense) {
+            Some(v) => Some(v.clone()),
+            None => {
+                note.get_or_insert_with(|| {
+                    "a reference-path tail resolved to an object reference (or a \
+                     field not captured during the scan); such tails project Null \
+                     in this release."
+                        .to_string()
+                });
+                None
+            }
+        },
+        // Nested RefPath tails are folded into `hops` by the parser; any other
+        // tail attr is not projectable on a walked-to object here.
+        _ => None,
+    }
+}
+
+/// The first `Attr::RefPath` referenced by a predicate, if any.
+fn find_pred_refpath(p: &Predicate) -> Option<Attr> {
+    match p {
+        Predicate::And(a, b) | Predicate::Or(a, b) => {
+            find_pred_refpath(a).or_else(|| find_pred_refpath(b))
+        }
+        Predicate::Not(a) => find_pred_refpath(a),
+        Predicate::Compare { lhs: a @ Attr::RefPath { .. }, .. } => Some(a.clone()),
+        _ => None,
+    }
+}
+
+/// Evaluate only the RefPath comparison term(s) of a predicate against the
+/// resolved tail value. Non-RefPath terms pass (they were applied in Phase 1).
+/// A `None` resolved value fails any comparison (dead end / uncaptured tail).
+fn eval_refpath_pred(p: &Predicate, val: Option<&QueryValue>) -> bool {
+    match p {
+        Predicate::And(a, b) => eval_refpath_pred(a, val) && eval_refpath_pred(b, val),
+        Predicate::Or(a, b) => eval_refpath_pred(a, val) || eval_refpath_pred(b, val),
+        Predicate::Not(a) => !eval_refpath_pred(a, val),
+        Predicate::Compare { lhs: Attr::RefPath { .. }, op, rhs } => match val {
+            Some(v) => cmp_query_value(v, *op, rhs),
+            None => false,
+        },
+        _ => true,
+    }
+}
+
+/// Compare a resolved tail `QueryValue` against a literal RHS per the operator.
+fn cmp_query_value(v: &QueryValue, op: CompareOp, rhs: &Value) -> bool {
+    match (v, rhs) {
+        (QueryValue::Int(l), Value::Int(r)) => cmp_i64(*l, op, *r),
+        (QueryValue::Int(l), Value::Float(r)) => cmp_f64(*l as f64, op, *r),
+        (QueryValue::Float(l), Value::Float(r)) => cmp_f64(*l, op, *r),
+        (QueryValue::Float(l), Value::Int(r)) => cmp_f64(*l, op, *r as f64),
+        (QueryValue::Str(l), Value::Str(r)) => match op {
+            CompareOp::Eq => l == r,
+            CompareOp::Ne => l != r,
+            _ => false,
+        },
+        (QueryValue::Bool(l), Value::Bool(r)) => match op {
+            CompareOp::Eq => l == r,
+            CompareOp::Ne => l != r,
+            _ => false,
+        },
+        // Type mismatch: only Ne is (trivially) true.
+        _ => matches!(op, CompareOp::Ne),
+    }
+}
+fn cmp_i64(l: i64, op: CompareOp, r: i64) -> bool {
+    match op {
+        CompareOp::Eq => l == r, CompareOp::Ne => l != r,
+        CompareOp::Lt => l < r, CompareOp::Le => l <= r,
+        CompareOp::Gt => l > r, CompareOp::Ge => l >= r,
+    }
+}
+fn cmp_f64(l: f64, op: CompareOp, r: f64) -> bool {
+    match op {
+        CompareOp::Eq => l == r, CompareOp::Ne => l != r,
+        CompareOp::Lt => l < r, CompareOp::Le => l <= r,
+        CompareOp::Gt => l > r, CompareOp::Ge => l >= r,
     }
 }
 
@@ -334,6 +536,7 @@ mod tests {
             fwd_tgt: &[],
             fwd_field: &[],
             field_names: &[],
+            refwalk_tails: &EMPTY_REFWALK_TAILS,
         }
     }
 
@@ -481,7 +684,7 @@ mod dom_ctx_tests {
         let id_map = IdMap::identity(4);
         let ctx = LateCtx { retained: &retained, idom: &idom, dc_off: &dc_off,
                             dc_tgt: &dc_tgt, shallow: &shallow, id_map: &id_map,
-                            fwd_off: &[], fwd_tgt: &[], fwd_field: &[], field_names: &[] };
+                            fwd_off: &[], fwd_tgt: &[], fwd_field: &[], field_names: &[], refwalk_tails: &EMPTY_REFWALK_TAILS };
         assert_eq!(ctx.dc_off.len(), 5);
         assert_eq!(ctx.id_map.to_addr(0), id_map.to_addr(0));
     }
@@ -499,7 +702,7 @@ mod dom_run_tests {
     fn dominator_children_emits_direct_children() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[] };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS };
         assert_eq!(run_dominator_children(&[0u32], usize::MAX, &ctx), vec![1u32, 2]);
         assert_eq!(run_dominator_children(&[1u32], usize::MAX, &ctx), vec![3u32]);
         assert!(run_dominator_children(&[2u32], usize::MAX, &ctx).is_empty());
@@ -508,14 +711,14 @@ mod dom_run_tests {
     fn dominator_children_respects_cap() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[] };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS };
         assert_eq!(run_dominator_children(&[0u32], 1, &ctx).len(), 1);
     }
     #[test]
     fn dominator_of_emits_idom() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[] };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS };
         // idom = [MAX,0,0,1]: node 3's idom is 1, node 1's idom is 0, root 0 yields nothing.
         assert_eq!(run_dominator_of(&[3u32], &ctx), vec![1u32]);
         assert_eq!(run_dominator_of(&[1u32, 2u32], &ctx), vec![0u32, 0u32]);
@@ -525,7 +728,7 @@ mod dom_run_tests {
     fn retained_set_emits_bounded_closure() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[] };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS };
         let (mut set, truncated) = run_retained_set(&[0u32], usize::MAX, &ctx);
         set.sort_unstable();
         assert_eq!(set, vec![0u32, 1, 2, 3]);
@@ -535,7 +738,7 @@ mod dom_run_tests {
     fn retained_set_overflow_marks_truncated() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[] };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS };
         let (set, truncated) = run_retained_set(&[0u32], 2, &ctx);
         assert_eq!(set.len(), 2);
         assert!(truncated);
@@ -544,7 +747,7 @@ mod dom_run_tests {
     fn retained_set_dedups_shared_roots() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[] };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS };
         let (mut set, _t) = run_retained_set(&[1u32, 0u32], usize::MAX, &ctx);
         set.sort_unstable();
         assert_eq!(set, vec![0u32, 1, 2, 3]);
@@ -554,7 +757,7 @@ mod dom_run_tests {
     fn resume_dominator_children_builds_rows() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[] };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS };
         let q = crate::query::parse::parse("SELECT dominators(s) FROM C s").unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
         let mut carry = crate::query::carry::Carry::index_only(100);
@@ -573,7 +776,7 @@ mod dom_run_tests {
     fn resume_dominator_of_builds_single_row() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[] };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS };
         let q = crate::query::parse::parse("SELECT dominatorof(s) FROM C s").unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
         let mut carry = crate::query::carry::Carry::index_only(100);
@@ -589,7 +792,7 @@ mod dom_run_tests {
     fn resume_retained_set_builds_closure_rows() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[] };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS };
         let q = crate::query::parse::parse("SELECT s AS RETAINED SET FROM C s").unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
         let mut carry = crate::query::carry::Carry::index_only(100);
@@ -619,6 +822,27 @@ mod refwalk_tests {
             retained: &[], idom: &[], dc_off: &[], dc_tgt: &[], shallow: &[],
             id_map,
             fwd_off, fwd_tgt, fwd_field, field_names,
+            refwalk_tails: &EMPTY_REFWALK_TAILS,
+        }
+    }
+
+    /// Like `fwd_ctx`, but with a caller-supplied tail-scalar table so the
+    /// RefWalkResolve projection tests can join the walked-to dense index against
+    /// a captured tail value.
+    #[allow(clippy::too_many_arguments)]
+    fn fwd_ctx_tails<'a>(
+        fwd_off: &'a [u32],
+        fwd_tgt: &'a [u32],
+        fwd_field: &'a [u32],
+        field_names: &'a [String],
+        id_map: &'a IdMap<'a>,
+        tails: &'a std::collections::HashMap<u32, QueryValue>,
+    ) -> LateCtx<'a> {
+        LateCtx {
+            retained: &[], idom: &[], dc_off: &[], dc_tgt: &[], shallow: &[],
+            id_map,
+            fwd_off, fwd_tgt, fwd_field, field_names,
+            refwalk_tails: tails,
         }
     }
 
@@ -707,5 +931,139 @@ mod refwalk_tests {
         let ctx = fwd_ctx(&[0, 1, 1], &[1], &[0], &names, &id_map);
         let hops = vec!["parent".to_string(), "parent".to_string()];
         assert!(walk_refpath(&[0], &hops, &ctx).is_empty());
+    }
+
+    // --- RefWalkResolve end-to-end projection (Task 4) ---
+
+    use crate::query::execute::QueryExecState;
+
+    /// Build a QueryExecState with one carried seed frontier for `oql`, seeded
+    /// with the given dense indices.
+    fn refwalk_state(oql: &str, seeds: &[u32]) -> (QueryExecState, crate::query::ast::Query) {
+        let q = crate::query::parse::parse(oql).unwrap();
+        let plan = crate::query::plan::plan_query(&q).unwrap();
+        assert!(plan.needs.ref_walk, "query must arm ref_walk: {oql}");
+        let mut carry = crate::query::carry::Carry::index_only(1000);
+        for &s in seeds {
+            carry.push_index(s);
+        }
+        let mut st = QueryExecState::new();
+        st.push_cross_phase(0, "q_rw".to_string(), plan, carry);
+        (st, q)
+    }
+
+    #[test]
+    fn refwalk_resolve_projects_primitive_tail() {
+        // SELECT x.parent.name FROM C x — one hop "parent", tail field "name".
+        // seed 0 --parent--> 3; tail table maps 3 -> Int(42).
+        let names = vec!["parent".to_string()];
+        let id_map = IdMap::identity(4);
+        let mut tails = std::collections::HashMap::new();
+        tails.insert(3u32, QueryValue::Int(42));
+        let ctx = fwd_ctx_tails(
+            &[0, 1, 1, 1, 1], // node 0 -> edge [0,1); nodes 1..3 none
+            &[3],
+            &[0],
+            &names,
+            &id_map,
+            &tails,
+        );
+        let (st, q) = refwalk_state("SELECT x.parent.name FROM C x", &[0]);
+        let out = resume(st, &[q.clone(), q], &ctx);
+        assert_eq!(out.len(), 1);
+        let r = &out[0];
+        assert!(r.error.is_none(), "unexpected error: {:?}", r.error);
+        assert_eq!(r.row_count, 1, "one seed → one resolved row");
+        assert_eq!(r.rows[0][0], QueryValue::Int(42), "tail scalar projected");
+    }
+
+    #[test]
+    fn refwalk_resolve_dead_end_yields_null() {
+        // seed 0 has NO "parent" edge → the walk resolves to nothing. Per spec a
+        // dead-end projects Null (the row is kept, cell is Null).
+        let names = vec!["parent".to_string()];
+        let id_map = IdMap::identity(2);
+        let tails = std::collections::HashMap::new();
+        let ctx = fwd_ctx_tails(&[0, 0, 0], &[], &[], &names, &id_map, &tails);
+        let (st, q) = refwalk_state("SELECT x.parent.name FROM C x", &[0]);
+        let out = resume(st, &[q.clone(), q], &ctx);
+        let r = &out[0];
+        assert!(r.error.is_none());
+        assert_eq!(r.rows[0][0], QueryValue::Null, "dead-end tail is Null");
+    }
+
+    #[test]
+    fn refwalk_resolve_empty_carry_is_empty() {
+        let names = vec!["parent".to_string()];
+        let id_map = IdMap::identity(1);
+        let tails = std::collections::HashMap::new();
+        let ctx = fwd_ctx_tails(&[0, 0], &[], &[], &names, &id_map, &tails);
+        let (st, q) = refwalk_state("SELECT x.parent.name FROM C x", &[]);
+        let out = resume(st, &[q.clone(), q], &ctx);
+        let r = &out[0];
+        assert!(r.error.is_none());
+        assert_eq!(r.row_count, 0);
+    }
+
+    #[test]
+    fn refwalk_resolve_object_ref_tail_is_null_with_note() {
+        // Resolved target 3 has NO captured tail (object-ref tail, not decoded):
+        // the cell is Null and the result carries an advisory note.
+        let names = vec!["parent".to_string()];
+        let id_map = IdMap::identity(4);
+        let tails = std::collections::HashMap::new(); // no tail captured for 3
+        let ctx = fwd_ctx_tails(&[0, 1, 1, 1, 1], &[3], &[0], &names, &id_map, &tails);
+        let (st, q) = refwalk_state("SELECT x.parent.name FROM C x", &[0]);
+        let out = resume(st, &[q.clone(), q], &ctx);
+        let r = &out[0];
+        assert!(r.error.is_none());
+        assert_eq!(r.rows[0][0], QueryValue::Null);
+        assert!(r.note.is_some(), "object-ref/absent tail should attach a note");
+    }
+
+    #[test]
+    fn refwalk_resolve_predicate_critical_filters_by_tail() {
+        // SELECT x.parent.hash FROM C x WHERE x.parent.hash > 100.
+        // seed 0 --parent--> 3 (hash 150, passes); seed 1 --parent--> 4 (hash 50,
+        // filtered out). Only the passing seed's row is emitted.
+        let names = vec!["parent".to_string()];
+        let id_map = IdMap::identity(5);
+        let mut tails = std::collections::HashMap::new();
+        tails.insert(3u32, QueryValue::Int(150));
+        tails.insert(4u32, QueryValue::Int(50));
+        let ctx = fwd_ctx_tails(
+            // node0->[0,1)=3, node1->[1,2)=4; nodes 2..4 none
+            &[0, 1, 2, 2, 2, 2],
+            &[3, 4],
+            &[0, 0],
+            &names,
+            &id_map,
+            &tails,
+        );
+        let (st, q) =
+            refwalk_state("SELECT x.parent.hash FROM C x WHERE x.parent.hash > 100", &[0, 1]);
+        let out = resume(st, &[q.clone(), q], &ctx);
+        let r = &out[0];
+        assert!(r.error.is_none(), "unexpected error: {:?}", r.error);
+        assert_eq!(r.row_count, 1, "only the seed whose tail > 100 survives");
+        assert_eq!(r.rows[0][0], QueryValue::Int(150));
+    }
+
+    #[test]
+    fn refwalk_resolve_identity_tail_projects_object_id() {
+        // A `@objectId` tail is answered directly from the resolved dense index —
+        // no scan-captured value needed. (The parser can't emit @-tails via
+        // RefPath today, but project_tail supports it for forward-compat.)
+        let names = vec!["parent".to_string()];
+        let id_map = IdMap::identity(4);
+        let tails = std::collections::HashMap::new();
+        let ctx = fwd_ctx_tails(&[0, 1, 1, 1, 1], &[3], &[0], &names, &id_map, &tails);
+        // Drive project_tail directly (no OQL surface for @-tails yet).
+        let mut note = None;
+        assert_eq!(
+            project_tail(&Attr::ObjectId, 3, &ctx, &mut note),
+            Some(QueryValue::Int(3))
+        );
+        assert!(note.is_none(), "identity tail needs no note");
     }
 }

@@ -1176,6 +1176,9 @@ fn run(
             fwd_tgt: &[],
             fwd_field: &[],
             field_names: &[],
+            // Task 4: tail-scalar table default empty; Task 5 threads the real
+            // scan-captured table when a RefWalk query ran.
+            refwalk_tails: &query::stage_runner::EMPTY_REFWALK_TAILS,
         },
     );
     let mut query_results = query::run::collapse_union_results(flat_results, &union_groups);

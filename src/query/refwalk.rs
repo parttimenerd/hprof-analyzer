@@ -87,6 +87,92 @@ impl RefWalkEdges {
 /// Overall cap on captured RefWalk edges (mirrors the `FIELD_REF_CAP` idiom).
 pub const REFWALK_EDGE_CAP: usize = 5_000_000;
 
+/// Capped side table of RefWalk *tail* field values, keyed by the resolved
+/// target object's dense index. Populated during the scan when an object
+/// declares the tail field (option (b): the P2 late window has no blob, so the
+/// value must be decoded here and carried out). Primitive tails store a real
+/// `QueryValue`; object-reference tails are left absent (projected `Null` with a
+/// note in the late window) as a follow-up.
+pub struct RefWalkTails {
+    values: std::collections::HashMap<u32, crate::query::model::QueryValue>,
+    cap: usize,
+    truncated: bool,
+}
+
+impl RefWalkTails {
+    pub fn new(cap: usize) -> Self {
+        Self { values: std::collections::HashMap::new(), cap, truncated: false }
+    }
+
+    pub fn truncated(&self) -> bool {
+        self.truncated
+    }
+
+    pub fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    /// Record the tail value for a resolved-target dense index. Drops + marks
+    /// truncated once the cap is hit. Last write wins for a repeated index (each
+    /// object is visited once, so repeats don't occur in practice).
+    pub fn insert(&mut self, dense_idx: u32, value: crate::query::model::QueryValue) {
+        if self.values.len() >= self.cap && !self.values.contains_key(&dense_idx) {
+            self.truncated = true;
+            return;
+        }
+        self.values.insert(dense_idx, value);
+    }
+
+    pub fn get(&self, dense_idx: u32) -> Option<&crate::query::model::QueryValue> {
+        self.values.get(&dense_idx)
+    }
+
+    /// Consume into the raw map for carry-out to the late window.
+    pub fn into_map(self) -> std::collections::HashMap<u32, crate::query::model::QueryValue> {
+        self.values
+    }
+}
+
+/// Decode a *primitive* tail field from an instance blob into a `QueryValue`.
+/// Object-reference fields (`HprofType::Object`) return `None` (a two-level
+/// deref, out of scope for this slice — projected `Null` + note in the late
+/// window). Returns `None` when the field is absent or the blob is too short.
+pub fn decode_primitive_tail(
+    off: u32,
+    ty: crate::types::HprofType,
+    blob: &[u8],
+) -> Option<crate::query::model::QueryValue> {
+    use crate::query::model::QueryValue;
+    use crate::types::HprofType;
+    let o = off as usize;
+    let read_be = |o: usize, n: usize| -> Option<u64> {
+        let end = o + n;
+        if end > blob.len() {
+            return None;
+        }
+        let mut v: u64 = 0;
+        for &b in &blob[o..end] {
+            v = (v << 8) | b as u64;
+        }
+        Some(v)
+    };
+    match ty {
+        HprofType::Boolean => blob.get(o).map(|&b| QueryValue::Bool(b != 0)),
+        HprofType::Byte => blob.get(o).map(|&b| QueryValue::Int(b as i8 as i64)),
+        HprofType::Short => read_be(o, 2).map(|v| QueryValue::Int(v as i16 as i64)),
+        HprofType::Char => read_be(o, 2).map(|v| QueryValue::Int(v as i64)),
+        HprofType::Int => read_be(o, 4).map(|v| QueryValue::Int(v as i32 as i64)),
+        HprofType::Long => read_be(o, 8).map(|v| QueryValue::Int(v as i64)),
+        HprofType::Float => read_be(o, 4).map(|v| QueryValue::Float(f32::from_bits(v as u32) as f64)),
+        HprofType::Double => read_be(o, 8).map(|v| QueryValue::Float(f64::from_bits(v))),
+        HprofType::Object => None,
+    }
+}
+
 /// Gather every reference-hop field name a query walks, across SELECT and WHERE
 /// `Attr::RefPath` occurrences. These are the fields whose object references
 /// must be captured as edges during the scan. Order is first-seen; duplicates
@@ -104,6 +190,56 @@ pub fn refwalk_field_names(q: &crate::query::ast::Query) -> Vec<String> {
                 }
             }
             collect_attr(tail, out);
+        }
+    }
+    fn collect_pred(p: &Predicate, out: &mut Vec<String>) {
+        match p {
+            Predicate::And(a, b) | Predicate::Or(a, b) => {
+                collect_pred(a, out);
+                collect_pred(b, out);
+            }
+            Predicate::Not(a) => collect_pred(a, out),
+            Predicate::Compare { lhs, .. } => collect_attr(lhs, out),
+            Predicate::InSubquery { .. } | Predicate::InstanceOf(_) => {}
+        }
+    }
+
+    let mut out = Vec::new();
+    for item in &q.select {
+        match item {
+            SelectItem::Attr(a) => collect_attr(a, &mut out),
+            SelectItem::Aggregate { arg, .. } => {
+                if let SelectItem::Attr(a) = arg.as_ref() {
+                    collect_attr(a, &mut out);
+                }
+            }
+            SelectItem::Star => {}
+        }
+    }
+    if let Some(pred) = &q.where_ {
+        collect_pred(pred, &mut out);
+    }
+    out
+}
+
+/// Gather the *tail* field names of every `Attr::RefPath` in a query — the final
+/// scalar field projected on the resolved object (e.g. `name` in
+/// `x.parent.name`). These are the fields whose values must be captured into
+/// `RefWalkTails` during the scan. Non-field tails (identity attrs) yield
+/// nothing here; they are answered directly in the late window.
+pub fn refwalk_tail_field_names(q: &crate::query::ast::Query) -> Vec<String> {
+    use crate::query::ast::{Attr, Predicate, SelectItem};
+
+    fn collect_attr(a: &Attr, out: &mut Vec<String>) {
+        if let Attr::RefPath { tail, .. } = a {
+            match tail.as_ref() {
+                Attr::Field(name) => {
+                    if !out.iter().any(|x| x == name) {
+                        out.push(name.clone());
+                    }
+                }
+                other => collect_attr(other, out),
+            }
         }
     }
     fn collect_pred(p: &Predicate, out: &mut Vec<String>) {
@@ -233,5 +369,36 @@ mod tests {
     fn refwalk_field_names_empty_when_no_refpath() {
         let q = crate::query::parse::parse("SELECT x.count FROM C x").unwrap();
         assert!(refwalk_field_names(&q).is_empty());
+    }
+
+    #[test]
+    fn refwalk_tail_field_names_gathers_field_tails() {
+        let q = crate::query::parse::parse(
+            "SELECT x.parent.name FROM C x WHERE x.next.hash > 0",
+        )
+        .unwrap();
+        let tails = refwalk_tail_field_names(&q);
+        assert!(tails.contains(&"name".to_string()));
+        assert!(tails.contains(&"hash".to_string()));
+        // hop fields are NOT tails.
+        assert!(!tails.contains(&"parent".to_string()));
+        assert!(!tails.contains(&"next".to_string()));
+    }
+
+    #[test]
+    fn refwalk_tails_capping_and_lookup() {
+        use crate::query::model::QueryValue;
+        let mut t = RefWalkTails::new(1);
+        t.insert(3, QueryValue::Int(42));
+        assert!(!t.truncated());
+        assert_eq!(t.get(3), Some(&QueryValue::Int(42)));
+        // cap hit on a NEW key → dropped + truncated.
+        t.insert(4, QueryValue::Int(99));
+        assert!(t.truncated());
+        assert_eq!(t.len(), 1);
+        assert_eq!(t.get(4), None);
+        // updating an existing key does not trip the cap.
+        t.insert(3, QueryValue::Int(7));
+        assert_eq!(t.get(3), Some(&QueryValue::Int(7)));
     }
 }
