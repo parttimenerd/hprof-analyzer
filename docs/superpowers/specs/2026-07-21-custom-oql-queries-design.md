@@ -39,7 +39,8 @@ FROM    <class-spec> [ <alias> ]
 
 **FROM / class-spec**
 - Exact class: `com.acme.Order`
-- Wildcard / regex: `com.acme.*`, `/.*Cache$/`
+- Wildcard: `com.acme.*` (glob; `*` = any run, `?` = any char)
+- Regex: `/.*Cache$/` (glob-subset in the first cut — see "Dependencies")
 - Subclass match: `INSTANCEOF com.acme.AbstractJob` (matches subclasses too)
 
 **SELECT list**
@@ -54,7 +55,8 @@ FROM    <class-spec> [ <alias> ]
 **WHERE predicate**
 - Comparisons on scalars: `=,!=,<,<=,>,>=` against int/long/short/byte/
   char/float/double/boolean
-- String ops: `=`, `!=`, `LIKE "sub%"`, regex `f.name =~ /.*tmp.*/`
+- String ops: `=`, `!=`, `LIKE "sub%"` (glob), regex `f.name =~ /.*tmp.*/`
+  (glob-subset in the first cut — see "Dependencies")
 - Path expressions in predicates: `WHERE f.owner.name = "root"`
 - Boolean composition: `AND`, `OR`, `NOT`, parentheses
 - `INSTANCEOF` test on a field's runtime type
@@ -79,11 +81,14 @@ report renderers  QueryResult         -> md / html / json sections
 
 ### 1. Parser (`src/query/parse.rs`)
 
-Hand-written recursive-descent parser (no new heavy dep; the grammar is small
-and we control error messages). Produces a `Query` AST: `select`, `from`,
-`where`, `group_by`, `order_by`, `limit`. Path expressions parse to a
-`Vec<PathSegment>` (field-name hops). Unsupported constructs parse-error early
-with the offending token and a hint.
+**Decision: hand-written recursive-descent + Pratt expression parser. No parser
+library.** See "Parser choice" below for the evaluated alternatives. Produces a
+`Query` AST: `select`, `from`, `where`, `group_by`, `order_by`, `limit`. A small
+hand-rolled tokenizer feeds a precedence-climbing (Pratt) parser for the WHERE
+expression (AND/OR/NOT, comparisons, `LIKE`, regex, `INSTANCEOF`, dotted paths).
+Path expressions parse to a `Vec<PathSegment>` (field-name hops). Every token
+carries its source column so errors read `expected <X> near column N`.
+Unsupported constructs parse-error early with the offending token and a hint.
 
 ### 2. Planner (`src/query/plan.rs`) — the adaptive core
 
@@ -164,6 +169,51 @@ JSON round-trips). Schema version bumps to 7.
   existing section styling.
 - **JSON**: the `queries` array, verbatim.
 
+## Parser choice (evaluated alternatives)
+
+No Rust crate parses Eclipse MAT OQL (confirmed: the `oql` crate is an unrelated
+iterator DSL; the HPROF crates ship no OQL). So the parser is net-new regardless.
+Options evaluated:
+
+- **`sqlparser-rs`** — lightweight (only `log`) but a poor structural fit. Its
+  `Dialect` trait tweaks lexing, not grammar productions; the AST is a fixed SQL
+  enum. OQL diverges structurally (regex/wildcard class-specs in FROM,
+  `INSTANCEOF`, dotted path expressions, regex operators), so we'd fork it or
+  abuse its AST. Rejected.
+- **`chumsky`** — best-in-class error messages and recovery out of the box, but
+  heavier compile times, a churning 0.x API, and three transitive deps. Worth it
+  only for large/evolving grammars.
+- **`winnow` / `nom` / `pest` / `peg` / `lalrpop`** — all viable but each adds a
+  dependency and either weaker default errors (`nom`), stringly-typed ASTs
+  (`pest`), or generator/build-script weight (`lalrpop`) for a grammar this small.
+
+**Chosen: hand-written recursive-descent + Pratt.** The grammar is small and
+fixed (it will not churn), the WHERE clause is a textbook precedence-climbing
+expression parser, and we get full control over error-message text — which
+matters because users *will* write malformed queries. Cost: a few hundred lines.
+Benefit: zero new dependencies, instant compiles, and exactly the diagnostics we
+want. This aligns with the project's lean-dependency posture (see `Cargo.toml`).
+
+## Dependencies
+
+- **No new runtime dependency for parsing** (hand-written, per above).
+- **Regex / LIKE evaluation**: the project currently has **no `regex` crate**.
+  Rather than pull in `regex` (a heavy dep for a deliberately-lean tool), the
+  first cut implements:
+  - `LIKE` via a tiny hand-rolled glob matcher (`%` = any run, `_` = any char) —
+    trivial and dependency-free.
+  - Class-spec wildcards (`com.acme.*`) via the same glob matcher.
+  - **Regex operators** (`=~ /.../`, `/.*Cache$/` class-specs) are parsed but, in
+    the first cut, evaluated by a minimal anchored-substring/`*` engine; anything
+    requiring true regex features returns a clear "regex feature unsupported"
+    error. Full regex is a deferred decision: if real demand appears, adding
+    `regex` is a one-line `Cargo.toml` change confined to the query executor.
+  This keeps the dependency graph unchanged while covering the common cases.
+- **Testing** reuses the existing `proptest` dev-dependency for parser
+  round-trip/fuzz tests (already in `Cargo.toml`). `toml` is already present
+  (`default-features = false, features = ["parse"]`), exactly what `[[query]]`
+  packs need — no change required.
+
 ## Input Surfaces
 
 Both, per the requirement:
@@ -230,3 +280,7 @@ step shippable and independently tested:
   `truncated`, consistent with existing analyses.
 - **Grammar scope creep**: the subset is deliberately fixed; anything outside it
   errors rather than silently under-delivering.
+- **Glob-vs-regex gap**: the first cut serves `LIKE`/wildcards and a glob-subset
+  of regex without the `regex` crate. Queries using true regex features get a
+  clear "regex feature unsupported" error rather than a wrong match. If demand
+  warrants, adding `regex` is a `Cargo.toml` one-liner confined to the executor.
