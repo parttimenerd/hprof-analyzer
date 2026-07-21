@@ -257,6 +257,10 @@ fn plan_single(q: &Query) -> Result<QueryPlan, QueryError> {
             }
             SelectItem::Star => {}
             SelectItem::Attr(a) => note_attr_need_attr(a, &mut needs),
+            // path(a, b) planning/execution lands in a later task.
+            SelectItem::Path { .. } => {
+                return Err(QueryError("path(a, b) is not yet supported".into()));
+            }
         }
     }
 
@@ -636,6 +640,8 @@ fn referenced_alias_heads(q: &Query) -> std::collections::HashSet<String> {
                 }
             }
             SelectItem::Star => {}
+            // Correlation detection over path(a, b) operands lands in a later task.
+            SelectItem::Path { .. } => {}
         }
     }
     if let Some(pred) = &q.where_ {
@@ -707,6 +713,10 @@ fn note_attr_need(item: &SelectItem, needs: &mut QueryNeeds) -> Result<(), Query
             "nested aggregate is deferred and not supported in this version; \
              an aggregate function may not take another aggregate as its argument"
                 .into(),
+        )),
+        // path(a, b) cannot be an aggregate argument; full support lands later.
+        SelectItem::Path { .. } => Err(QueryError(
+            "path(a, b) may not be used as an aggregate argument".into(),
         )),
     }
 }

@@ -219,6 +219,8 @@ pub fn refwalk_field_names(q: &crate::query::ast::Query) -> Vec<String> {
                 }
             }
             SelectItem::Star => {}
+            // path(a, b) carries no RefPath hops to collect.
+            SelectItem::Path { .. } => {}
         }
     }
     if let Some(pred) = &q.where_ {
@@ -269,6 +271,8 @@ pub fn refwalk_tail_field_names(q: &crate::query::ast::Query) -> Vec<String> {
                 }
             }
             SelectItem::Star => {}
+            // path(a, b) carries no RefPath hops to collect.
+            SelectItem::Path { .. } => {}
         }
     }
     if let Some(pred) = &q.where_ {

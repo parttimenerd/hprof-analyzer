@@ -15,8 +15,8 @@ use logos::Logos;
 
 use crate::query::QueryError;
 use crate::query::ast::{
-    AggFunc, Attr, ClassSpec, CompareOp, FromSource, OrderBy, Predicate, Query, RefRole,
-    SelectItem, SortDir, Value,
+    AggFunc, Attr, ClassSpec, CompareOp, FromSource, OrderBy, PathOperand, Predicate, Query,
+    RefRole, SelectItem, SortDir, Value,
 };
 
 /// OQL token kinds, lexed directly by logos.
@@ -146,6 +146,8 @@ where
         "retainedHeapSize" | "retainedHeap" => Ok(Attr::RetainedHeapSize),
         "displayName" => Ok(Attr::DisplayName),
         "length" => Ok(Attr::Length),
+        "inbounds" => Ok(Attr::Inbounds),
+        "outbounds" => Ok(Attr::Outbounds),
         other => Err(Rich::custom(span, format!("unknown @attribute: @{other}"))),
     })
     .or(ident_ci("classof")
@@ -158,7 +160,7 @@ where
     .or(any_ident().map(Attr::Field))
     .labelled("attribute");
 
-    // select item: AGG(item) | * | attr
+    // select item: AGG(item) | path(a, b) | * | attr
     let select_item = recursive(|item| {
         let agg = select! {
             Token::Ident(s) if agg_func(&s).is_some() => agg_func(&s).unwrap(),
@@ -168,9 +170,30 @@ where
         .then_ignore(just(Token::RParen))
         .map(|(func, arg): (AggFunc, SelectItem)| SelectItem::Aggregate { func, arg: Box::new(arg) });
 
+        // `path(a, b)`. Contextual: only a path function when `path` is immediately
+        // followed by `(`; otherwise `path` falls through to the bare-field attr arm.
+        // Heuristic: an operand containing `.` or `*` (a dotted/globbed class name)
+        // is a `Class`; any other bare ident is treated as an `Alias`.
+        let path_operand = any_ident().map(|s: String| {
+            if s.contains('.') || s.contains('*') {
+                PathOperand::Class(s)
+            } else {
+                PathOperand::Alias(s)
+            }
+        });
+        let path_item = ident_ci("path")
+            .ignore_then(just(Token::LParen))
+            .ignore_then(path_operand.clone())
+            .then_ignore(just(Token::Comma))
+            .then(path_operand)
+            .then_ignore(just(Token::RParen))
+            .map(|(from, to)| SelectItem::Path { from, to });
+
         let star = just(Token::Star).map(|_| SelectItem::Star);
 
-        agg.or(star).or(attr.clone().map(SelectItem::Attr))
+        // `path_item` before the bare-attr fallback so `path(` is consumed as Path
+        // rather than swallowed as a field named `path`.
+        agg.or(path_item).or(star).or(attr.clone().map(SelectItem::Attr))
     });
 
     let select_list = select_item
@@ -372,6 +395,9 @@ fn normalize_select_item(item: &mut SelectItem, alias: Option<&str>) {
         SelectItem::Attr(a) => normalize_attr(a, alias),
         SelectItem::Aggregate { arg, .. } => normalize_select_item(arg, alias),
         SelectItem::Star => {}
+        // `path(a, b)` operands are already resolved to Alias/Class at parse time;
+        // they carry no dotted RefPath to normalize.
+        SelectItem::Path { .. } => {}
     }
 }
 
@@ -448,6 +474,8 @@ pub const ATTRIBUTES: &[&str] = &[
     "@retainedHeapSize",
     "@displayName",
     "@length",
+    "@inbounds",
+    "@outbounds",
 ];
 
 /// The full set of completion candidates offered by the REPL, sourced from the
@@ -1232,6 +1260,122 @@ mod tests {
         // The caret-rendered report also carries the actionable custom message.
         let rep = parse_or_report("SELECT dominatorof() FROM C").unwrap_err();
         assert!(rep.contains("dominatorof(x) requires"), "report missing message: {rep}");
+    }
+
+    // ---------- @inbounds / @outbounds + path(a, b) ----------
+
+    #[test]
+    fn parse_inbounds_attr() {
+        let q = parse("SELECT @inbounds FROM C").unwrap();
+        assert_eq!(q.select, vec![attr_sel(Attr::Inbounds)]);
+    }
+    #[test]
+    fn parse_outbounds_attr() {
+        let q = parse("SELECT @outbounds FROM C").unwrap();
+        assert_eq!(q.select, vec![attr_sel(Attr::Outbounds)]);
+    }
+    #[test]
+    fn inbounds_usable_in_where() {
+        // Goes through the same `attr` parser, so it is a valid compare LHS.
+        let q = parse("SELECT @objectId FROM C WHERE @inbounds > 0").unwrap();
+        match q.where_.as_ref().unwrap() {
+            Predicate::Compare { lhs, .. } => assert_eq!(*lhs, Attr::Inbounds),
+            other => panic!("expected compare on @inbounds, got {other:?}"),
+        }
+    }
+    #[test]
+    fn outbounds_usable_in_where() {
+        let q = parse("SELECT @objectId FROM C WHERE @outbounds != 0").unwrap();
+        match q.where_.as_ref().unwrap() {
+            Predicate::Compare { lhs, .. } => assert_eq!(*lhs, Attr::Outbounds),
+            other => panic!("expected compare on @outbounds, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_path_alias_and_class() {
+        // `path(s, java.lang.Thread)`: bare `s` → Alias, dotted → Class.
+        let q = parse("SELECT path(s, java.lang.Thread) FROM C s").unwrap();
+        assert_eq!(
+            q.select,
+            vec![SelectItem::Path {
+                from: PathOperand::Alias("s".into()),
+                to: PathOperand::Class("java.lang.Thread".into()),
+            }]
+        );
+    }
+    #[test]
+    fn parse_path_both_aliases() {
+        // Two bare idents (no `.`, no `*`) → both Alias.
+        let q = parse("SELECT path(a, b) FROM C").unwrap();
+        assert_eq!(
+            q.select,
+            vec![SelectItem::Path {
+                from: PathOperand::Alias("a".into()),
+                to: PathOperand::Alias("b".into()),
+            }]
+        );
+    }
+    #[test]
+    fn parse_path_both_classes() {
+        let q = parse("SELECT path(java.lang.String, java.lang.Integer) FROM C").unwrap();
+        assert_eq!(
+            q.select,
+            vec![SelectItem::Path {
+                from: PathOperand::Class("java.lang.String".into()),
+                to: PathOperand::Class("java.lang.Integer".into()),
+            }]
+        );
+    }
+    #[test]
+    fn parse_path_globbed_operand_is_class() {
+        // A glob (`*`) marks a class pattern even without a `.`.
+        let q = parse("SELECT path(s, com.acme.*) FROM C s").unwrap();
+        assert_eq!(
+            q.select,
+            vec![SelectItem::Path {
+                from: PathOperand::Alias("s".into()),
+                to: PathOperand::Class("com.acme.*".into()),
+            }]
+        );
+    }
+    #[test]
+    fn path_bare_field_without_parens_stays_field() {
+        // `path` NOT followed by `(` is an ordinary field name (contextual ident).
+        let q = parse("SELECT path FROM C").unwrap();
+        assert_eq!(q.select, vec![attr_sel(field("path"))]);
+    }
+    #[test]
+    fn path_dotted_field_without_parens_stays_field() {
+        // `x.path` after alias-strip is a single-segment Field named `path`.
+        let q = parse("SELECT x.path FROM C x").unwrap();
+        assert_eq!(q.select, vec![attr_sel(field("path"))]);
+    }
+    #[test]
+    fn path_coexists_with_other_select_items() {
+        let q = parse("SELECT @objectId, path(s, C) FROM C s").unwrap();
+        assert_eq!(
+            q.select,
+            vec![
+                attr_sel(Attr::ObjectId),
+                SelectItem::Path {
+                    from: PathOperand::Alias("s".into()),
+                    to: PathOperand::Alias("C".into()),
+                },
+            ]
+        );
+    }
+    #[test]
+    fn path_one_operand_is_error() {
+        // `path(s)` — a single operand — must be a parse error, not silently accepted.
+        let err = parse("SELECT path(s) FROM C s").unwrap_err().0;
+        assert!(!err.is_empty(), "expected non-empty error for path(s)");
+        assert!(!err.contains('\n'), "expected single-line error, got: {err}");
+    }
+    #[test]
+    fn inbounds_outbounds_in_attributes_const() {
+        assert!(ATTRIBUTES.contains(&"@inbounds"), "ATTRIBUTES must include @inbounds");
+        assert!(ATTRIBUTES.contains(&"@outbounds"), "ATTRIBUTES must include @outbounds");
     }
 
     #[test]

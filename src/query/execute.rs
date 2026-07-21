@@ -188,6 +188,8 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             SelectItem::Star => QueryValue::ObjRef { index: src_idx as u64, class: self.resolver.class_name(class_id).unwrap_or("?").to_string() },
             SelectItem::Aggregate { .. } => QueryValue::Null,
             SelectItem::Attr(a) => self.project_attr(a, src_idx, class_id, blob),
+            // path(a, b) is cross-phase (needs the ref graph); filled later, not here.
+            SelectItem::Path { .. } => QueryValue::Null,
         }
     }
     fn project_attr(&self, a: &Attr, src_idx: usize, class_id: u64, blob: &[u8]) -> QueryValue {
@@ -202,6 +204,8 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             Attr::Dominators(_) | Attr::DominatorOf(_) => QueryValue::Null,
             Attr::ClassOf | Attr::DisplayName => QueryValue::Str(self.resolver.class_name(class_id).unwrap_or("?").to_string()),
             Attr::Length => QueryValue::Null,
+            // inbound/outbound reference counts need the post-scan ref graph; filled later.
+            Attr::Inbounds | Attr::Outbounds => QueryValue::Null,
             Attr::Field(name) => self.decode_field(class_id, name, blob),
             // N-hop reference paths resolve against the forward-ref graph, which
             // only exists post-scan (P2). Filled by the stage runner, not here.
@@ -223,6 +227,8 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             SelectItem::Star => QueryValue::ObjRef { index: src_idx as u64, class: class_name.to_string() },
             SelectItem::Aggregate { .. } => QueryValue::Null,
             SelectItem::Attr(a) => self.project_array_attr(a, src_idx, class_name, length),
+            // path(a, b) is cross-phase (needs the ref graph); filled later, not here.
+            SelectItem::Path { .. } => QueryValue::Null,
         }
     }
     fn project_array_attr(&self, a: &Attr, src_idx: usize, class_name: &str, length: u32) -> QueryValue {
@@ -236,6 +242,8 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             Attr::Dominators(_) | Attr::DominatorOf(_) => QueryValue::Null,
             Attr::ClassOf | Attr::DisplayName => QueryValue::Str(class_name.to_string()),
             Attr::Length => QueryValue::Int(length as i64),
+            // inbound/outbound reference counts need the post-scan ref graph; filled later.
+            Attr::Inbounds | Attr::Outbounds => QueryValue::Null,
             // Arrays have no named fields; a field reference resolves to Null.
             Attr::Field(_) => QueryValue::Null,
             // Arrays have no reference fields to walk; a RefPath is Null.
@@ -442,6 +450,14 @@ pub fn column_name(it: &SelectItem) -> String {
         SelectItem::Star => "*".to_string(),
         SelectItem::Attr(a) => attr_name(a),
         SelectItem::Aggregate { func, arg } => { let f = format!("{func:?}").to_uppercase(); format!("{f}({})", column_name(arg)) }
+        SelectItem::Path { from, to } => format!("path({}, {})", path_operand_name(from), path_operand_name(to)),
+    }
+}
+
+fn path_operand_name(p: &crate::query::ast::PathOperand) -> String {
+    use crate::query::ast::PathOperand;
+    match p {
+        PathOperand::Alias(s) | PathOperand::Class(s) => s.clone(),
     }
 }
 
@@ -453,6 +469,8 @@ fn attr_name(a: &Attr) -> String {
         Attr::RetainedHeapSize => "@retainedHeapSize".into(),
         Attr::DisplayName => "@displayName".into(),
         Attr::Length => "@length".into(),
+        Attr::Inbounds => "@inbounds".into(),
+        Attr::Outbounds => "@outbounds".into(),
         Attr::ClassOf => "classof".into(),
         Attr::Dominators(a) => format!("dominators({a})"),
         Attr::DominatorOf(a) => format!("dominatorof({a})"),

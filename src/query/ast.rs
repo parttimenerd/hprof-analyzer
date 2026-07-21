@@ -39,6 +39,18 @@ pub enum SelectItem {
     Attr(Attr),
     /// An aggregate over all matched instances, e.g. `COUNT(*)`, `SUM(@usedHeapSize)`.
     Aggregate { func: AggFunc, arg: Box<SelectItem> },
+    /// `path(a, b)` — a shortest reference path between two operands. Each operand
+    /// is either a bound alias (the FROM object) or a class name.
+    Path { from: PathOperand, to: PathOperand },
+}
+
+/// One operand of a `path(a, b)` select item: a bound alias or a class name.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PathOperand {
+    /// A bound FROM alias, e.g. the `s` in `FROM java.lang.String s`.
+    Alias(String),
+    /// A class name, e.g. `java.lang.Thread`.
+    Class(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,6 +67,10 @@ pub enum Attr {
     RetainedHeapSize,
     DisplayName,
     Length,
+    /// `@inbounds` — objects that reference this object (inbound reference edges).
+    Inbounds,
+    /// `@outbounds` — objects this object references (outbound reference edges).
+    Outbounds,
     /// `classof(x)` — the runtime class name.
     ClassOf,
     /// `dominators(alias)` — dominator-tree children of each matched object.
