@@ -35,6 +35,59 @@ pub struct LateCtx<'a> {
     pub shallow: &'a [u32],
     /// Dense-index → address mapping for building result rows.
     pub id_map: &'a IdMap<'a>,
+    /// Forward-reference CSR offsets (len = n+1): node `i`'s out-edges are
+    /// `fwd_tgt[fwd_off[i]..fwd_off[i+1]]`. Empty when RefWalk is not armed.
+    /// PLAN NOTE (Task 27): the production `Graph::fwd_offsets`/`fwd_targets`
+    /// forward CSR is consumed by the inbound transpose (`build_from_fwd`) and
+    /// freed before the dominator/retained window where `resume` runs — the RSS
+    /// pipeline is tuned around freeing that ~6GB CSR early. Wiring RefWalk end
+    /// to end therefore needs the forward CSR (and a parallel per-edge field-id
+    /// column, which does NOT exist today) preserved into this window. That is a
+    /// pipeline change tracked separately; these fields default to empty slices
+    /// so the resolver degrades to "no edges" until the CSR is threaded in.
+    pub fwd_off: &'a [u32],
+    /// Forward-reference CSR targets (dense indices), parallel to `fwd_field`.
+    pub fwd_tgt: &'a [u32],
+    /// Per-edge field id, parallel to `fwd_tgt`: the interned field name of the
+    /// reference that produced each out-edge. Used to follow a *named* hop.
+    pub fwd_field: &'a [u32],
+    /// Field-name → interned id table (name at index `id`). `field_id` scans it.
+    pub field_names: &'a [String],
+}
+
+impl LateCtx<'_> {
+    /// The interned id of a field name, or `None` if the name is unknown. Linear
+    /// scan over the (small) interning table; RefWalk resolves one id per hop.
+    pub fn field_id(&self, name: &str) -> Option<u32> {
+        self.field_names.iter().position(|f| f == name).map(|p| p as u32)
+    }
+}
+
+/// Resolve one reference hop: for each source dense index, emit the target dense
+/// indices reachable via a forward-ref edge whose field name matches `field`.
+/// An unknown field name (or an empty forward CSR) yields no targets.
+pub fn resolve_hop(sources: &[u32], field: &str, ctx: &LateCtx) -> Vec<u32> {
+    let Some(fid) = ctx.field_id(field) else { return Vec::new(); };
+    let mut out = Vec::new();
+    for &s in sources {
+        let si = s as usize;
+        if si + 1 >= ctx.fwd_off.len() { continue; }
+        let (start, end) = (ctx.fwd_off[si] as usize, ctx.fwd_off[si + 1] as usize);
+        for k in start..end {
+            if ctx.fwd_field[k] == fid { out.push(ctx.fwd_tgt[k]); }
+        }
+    }
+    out
+}
+
+/// Walk a full RefPath: fold `resolve_hop` over each hop, returning the final
+/// frontier of resolved dense indices. An empty `hops` returns the seeds.
+pub fn walk_refpath(seeds: &[u32], hops: &[String], ctx: &LateCtx) -> Vec<u32> {
+    let mut frontier = seeds.to_vec();
+    for h in hops {
+        frontier = resolve_hop(&frontier, h, ctx);
+    }
+    frontier
 }
 
 /// Finalize a Phase-1 QueryExecState: run each pending carry through its
@@ -277,6 +330,10 @@ mod tests {
             dc_tgt: &[],
             shallow: &[],
             id_map: &EMPTY_ID_MAP,
+            fwd_off: &[],
+            fwd_tgt: &[],
+            fwd_field: &[],
+            field_names: &[],
         }
     }
 
@@ -423,7 +480,8 @@ mod dom_ctx_tests {
         let (idom, dc_off, dc_tgt, retained, shallow) = tiny_ctx_parts();
         let id_map = IdMap::identity(4);
         let ctx = LateCtx { retained: &retained, idom: &idom, dc_off: &dc_off,
-                            dc_tgt: &dc_tgt, shallow: &shallow, id_map: &id_map };
+                            dc_tgt: &dc_tgt, shallow: &shallow, id_map: &id_map,
+                            fwd_off: &[], fwd_tgt: &[], fwd_field: &[], field_names: &[] };
         assert_eq!(ctx.dc_off.len(), 5);
         assert_eq!(ctx.id_map.to_addr(0), id_map.to_addr(0));
     }
@@ -441,7 +499,7 @@ mod dom_run_tests {
     fn dominator_children_emits_direct_children() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[] };
         assert_eq!(run_dominator_children(&[0u32], usize::MAX, &ctx), vec![1u32, 2]);
         assert_eq!(run_dominator_children(&[1u32], usize::MAX, &ctx), vec![3u32]);
         assert!(run_dominator_children(&[2u32], usize::MAX, &ctx).is_empty());
@@ -450,14 +508,14 @@ mod dom_run_tests {
     fn dominator_children_respects_cap() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[] };
         assert_eq!(run_dominator_children(&[0u32], 1, &ctx).len(), 1);
     }
     #[test]
     fn dominator_of_emits_idom() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[] };
         // idom = [MAX,0,0,1]: node 3's idom is 1, node 1's idom is 0, root 0 yields nothing.
         assert_eq!(run_dominator_of(&[3u32], &ctx), vec![1u32]);
         assert_eq!(run_dominator_of(&[1u32, 2u32], &ctx), vec![0u32, 0u32]);
@@ -467,7 +525,7 @@ mod dom_run_tests {
     fn retained_set_emits_bounded_closure() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[] };
         let (mut set, truncated) = run_retained_set(&[0u32], usize::MAX, &ctx);
         set.sort_unstable();
         assert_eq!(set, vec![0u32, 1, 2, 3]);
@@ -477,7 +535,7 @@ mod dom_run_tests {
     fn retained_set_overflow_marks_truncated() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[] };
         let (set, truncated) = run_retained_set(&[0u32], 2, &ctx);
         assert_eq!(set.len(), 2);
         assert!(truncated);
@@ -486,7 +544,7 @@ mod dom_run_tests {
     fn retained_set_dedups_shared_roots() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[] };
         let (mut set, _t) = run_retained_set(&[1u32, 0u32], usize::MAX, &ctx);
         set.sort_unstable();
         assert_eq!(set, vec![0u32, 1, 2, 3]);
@@ -496,7 +554,7 @@ mod dom_run_tests {
     fn resume_dominator_children_builds_rows() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[] };
         let q = crate::query::parse::parse("SELECT dominators(s) FROM C s").unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
         let mut carry = crate::query::carry::Carry::index_only(100);
@@ -515,7 +573,7 @@ mod dom_run_tests {
     fn resume_dominator_of_builds_single_row() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[] };
         let q = crate::query::parse::parse("SELECT dominatorof(s) FROM C s").unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
         let mut carry = crate::query::carry::Carry::index_only(100);
@@ -531,7 +589,7 @@ mod dom_run_tests {
     fn resume_retained_set_builds_closure_rows() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map };
+        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[] };
         let q = crate::query::parse::parse("SELECT s AS RETAINED SET FROM C s").unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
         let mut carry = crate::query::carry::Carry::index_only(100);
@@ -541,5 +599,113 @@ mod dom_run_tests {
         let out = resume(st, &[q.clone(), q], &ctx);
         let r = &out[0];
         assert_eq!(r.row_count, 4, "closure of node 0 is {{0,1,2,3}}");
+    }
+}
+
+#[cfg(test)]
+mod refwalk_tests {
+    use super::*;
+
+    /// Build a LateCtx over a tiny forward-ref graph. Field names are interned
+    /// by position: `field_names[id]` is the name of edge-field id `id`.
+    fn fwd_ctx<'a>(
+        fwd_off: &'a [u32],
+        fwd_tgt: &'a [u32],
+        fwd_field: &'a [u32],
+        field_names: &'a [String],
+        id_map: &'a IdMap<'a>,
+    ) -> LateCtx<'a> {
+        LateCtx {
+            retained: &[], idom: &[], dc_off: &[], dc_tgt: &[], shallow: &[],
+            id_map,
+            fwd_off, fwd_tgt, fwd_field, field_names,
+        }
+    }
+
+    #[test]
+    fn field_id_interns_by_position() {
+        let names = vec!["parent".to_string(), "next".to_string()];
+        let id_map = IdMap::identity(0);
+        let ctx = fwd_ctx(&[], &[], &[], &names, &id_map);
+        assert_eq!(ctx.field_id("parent"), Some(0));
+        assert_eq!(ctx.field_id("next"), Some(1));
+        assert_eq!(ctx.field_id("missing"), None);
+    }
+
+    #[test]
+    fn resolve_hop_follows_named_field() {
+        // node 0 --"parent"--> 2 ; node 1 --"parent"--> 2. CSR: each of 0,1 has
+        // one out-edge; nodes 2,3 have none. fwd_off len = n+1 = 5.
+        let names = vec!["parent".to_string()];
+        let id_map = IdMap::identity(4);
+        let ctx = fwd_ctx(
+            &[0, 1, 2, 2, 2], // out-edge ranges for nodes 0..3
+            &[2, 2],          // targets
+            &[0, 0],          // both edges are field "parent" (id 0)
+            &names,
+            &id_map,
+        );
+        assert_eq!(resolve_hop(&[0, 1], "parent", &ctx), vec![2, 2]);
+    }
+
+    #[test]
+    fn resolve_hop_filters_by_field_name() {
+        // node 0 has two out-edges: --"parent"--> 5, --"next"--> 9.
+        let names = vec!["parent".to_string(), "next".to_string()];
+        let id_map = IdMap::identity(10);
+        let ctx = fwd_ctx(
+            &[0, 2, 2], // node 0 -> edges [0,2); node 1 -> none
+            &[5, 9],
+            &[0, 1], // parent, next
+            &names,
+            &id_map,
+        );
+        assert_eq!(resolve_hop(&[0], "parent", &ctx), vec![5]);
+        assert_eq!(resolve_hop(&[0], "next", &ctx), vec![9]);
+        // Unknown field name yields nothing (no crash).
+        assert!(resolve_hop(&[0], "bogus", &ctx).is_empty());
+    }
+
+    #[test]
+    fn resolve_hop_empty_csr_is_noop() {
+        // The production default: RefWalk not threaded, all slices empty.
+        let names: Vec<String> = Vec::new();
+        let id_map = IdMap::identity(0);
+        let ctx = fwd_ctx(&[], &[], &[], &names, &id_map);
+        assert!(resolve_hop(&[0, 1, 2], "parent", &ctx).is_empty());
+    }
+
+    #[test]
+    fn walk_refpath_folds_two_hops() {
+        // 0 --"parent"--> 1 --"parent"--> 2 (chain). Two-hop walk from 0 -> [2].
+        let names = vec!["parent".to_string()];
+        let id_map = IdMap::identity(3);
+        let ctx = fwd_ctx(
+            &[0, 1, 2, 2], // node0->[0,1) node1->[1,2) node2->none
+            &[1, 2],
+            &[0, 0],
+            &names,
+            &id_map,
+        );
+        let hops = vec!["parent".to_string(), "parent".to_string()];
+        assert_eq!(walk_refpath(&[0], &hops, &ctx), vec![2]);
+    }
+
+    #[test]
+    fn walk_refpath_empty_hops_returns_seeds() {
+        let names: Vec<String> = Vec::new();
+        let id_map = IdMap::identity(0);
+        let ctx = fwd_ctx(&[], &[], &[], &names, &id_map);
+        assert_eq!(walk_refpath(&[3, 4], &[], &ctx), vec![3, 4]);
+    }
+
+    #[test]
+    fn walk_refpath_dead_end_yields_empty() {
+        // 0 --"parent"--> 1, but 1 has no "parent" edge: second hop is empty.
+        let names = vec!["parent".to_string()];
+        let id_map = IdMap::identity(2);
+        let ctx = fwd_ctx(&[0, 1, 1], &[1], &[0], &names, &id_map);
+        let hops = vec!["parent".to_string(), "parent".to_string()];
+        assert!(walk_refpath(&[0], &hops, &ctx).is_empty());
     }
 }

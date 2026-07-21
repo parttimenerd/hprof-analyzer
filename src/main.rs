@@ -1168,6 +1168,14 @@ fn run(
             dc_tgt: &dc_tgt,
             shallow: &g.shallow,
             id_map: &id_map,
+            // RefWalk (Task 27) forward-ref CSR is not live in this window — the
+            // production CSR is freed by the inbound transpose before dominators,
+            // and no per-edge field-id column is built. Empty slices make the
+            // resolver a no-op until the pipeline threads the CSR here.
+            fwd_off: &[],
+            fwd_tgt: &[],
+            fwd_field: &[],
+            field_names: &[],
         },
     );
     let mut query_results = query::run::collapse_union_results(flat_results, &union_groups);
