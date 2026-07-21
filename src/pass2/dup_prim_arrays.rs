@@ -122,9 +122,7 @@ pub(crate) fn compute_dup_prim_arrays(
                     let sub_tag = r.u1()?;
                     sub_remaining(&mut remaining, 1)?;
                     match sub_tag {
-                        heap::ROOT_UNKNOWN
-                        | heap::ROOT_MONITOR_USED
-                        | heap::ROOT_STICKY_CLASS => {
+                        heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED | heap::ROOT_STICKY_CLASS => {
                             r.skip(ids)?;
                             sub_remaining(&mut remaining, ids)?;
                         }
@@ -132,9 +130,7 @@ pub(crate) fn compute_dup_prim_arrays(
                             r.skip(2 * ids)?;
                             sub_remaining(&mut remaining, 2 * ids)?;
                         }
-                        heap::ROOT_JNI_LOCAL
-                        | heap::ROOT_JAVA_FRAME
-                        | heap::ROOT_THREAD_OBJ => {
+                        heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME | heap::ROOT_THREAD_OBJ => {
                             r.skip(ids + 8)?;
                             sub_remaining(&mut remaining, ids + 8)?;
                         }
@@ -227,11 +223,13 @@ pub(crate) fn compute_dup_prim_arrays(
 
     let mut rows: Vec<DupPrimArrayRow> = by_type
         .into_iter()
-        .map(|(code, (wasted_bytes, duplicated_groups))| DupPrimArrayRow {
-            array_class: elem_type_name(code).to_string(),
-            duplicated_groups,
-            wasted_bytes,
-        })
+        .map(
+            |(code, (wasted_bytes, duplicated_groups))| DupPrimArrayRow {
+                array_class: elem_type_name(code).to_string(),
+                duplicated_groups,
+                wasted_bytes,
+            },
+        )
         .collect();
     // Sort by wasted_bytes desc, array_class asc for stability.
     rows.sort_unstable_by(|a, b| {
@@ -263,8 +261,8 @@ pub(crate) fn compute_dup_array_holders(
     dup_addrs: &HashSet<u64>,
     id_size: u8,
 ) -> io::Result<Vec<DupArrayHolder>> {
-    use super::{build_field_plans, read_ref};
     use super::strings::scan_all_instances;
+    use super::{build_field_plans, read_ref};
 
     let obj_ref_width = id_size as usize;
     let field_plans = build_field_plans(&p1.class_map, &p1.strings, id_size as usize);
@@ -300,7 +298,10 @@ pub(crate) fn compute_dup_array_holders(
                 .and_then(|ci| strings.get(&ci.name_id))
                 .map(|s| s.replace('/', "."))
                 .unwrap_or_else(|| format!("0x{class_addr:x}"));
-            DupArrayHolder { class_name, array_refs }
+            DupArrayHolder {
+                class_name,
+                array_refs,
+            }
         })
         .collect();
     holders.sort_unstable_by(|a, b| {
@@ -311,4 +312,3 @@ pub(crate) fn compute_dup_array_holders(
     holders.truncate(DUP_ARRAY_HOLDER_TOP_N);
     Ok(holders)
 }
-

@@ -100,7 +100,10 @@ pub(crate) fn compute_boxed_holders(
                 .and_then(|ci| strings.get(&ci.name_id))
                 .map(|s| s.replace('/', "."))
                 .unwrap_or_else(|| format!("0x{class_addr:x}"));
-            crate::report::BoxedNumberHolder { class_name, boxed_refs }
+            crate::report::BoxedNumberHolder {
+                class_name,
+                boxed_refs,
+            }
         })
         .collect();
     holders.sort_unstable_by(|a, b| {

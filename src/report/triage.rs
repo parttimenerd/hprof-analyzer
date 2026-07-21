@@ -2234,7 +2234,11 @@ mod tests {
         assert!(s.detail.contains("20.0 MB"));
 
         // Below floor.
-        r.overview.duplicate_prim_arrays.as_mut().unwrap().total_wasted_bytes = 1024;
+        r.overview
+            .duplicate_prim_arrays
+            .as_mut()
+            .unwrap()
+            .total_wasted_bytes = 1024;
         assert!(DuplicatePrimArrays.eval(&r).is_none());
     }
 }

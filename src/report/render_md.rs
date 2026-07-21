@@ -751,7 +751,12 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
     render_record_census(out, &o.record_census);
     render_duplicate_strings(out, &o.duplicate_strings, false);
     render_duplicate_prim_arrays(out, &o.duplicate_prim_arrays);
-    render_boxed_numbers(out, &o.boxed_numbers, &o.boxed_number_holders, o.total_shallow);
+    render_boxed_numbers(
+        out,
+        &o.boxed_numbers,
+        &o.boxed_number_holders,
+        o.total_shallow,
+    );
     render_header_overhead(out, &o.header_overhead);
 
     out.push_str("### Class Histogram (by Retained Heap)\n\n");
@@ -2897,7 +2902,14 @@ pub(crate) fn render_boxed_numbers(
         "_Wrapper types whose instances occupy heap that could be replaced with primitives._\n\n",
     );
     let mut t = Table::new(
-        &["#", "Class", "Instances", "Total Shallow", "% of Heap", "Avg Size"],
+        &[
+            "#",
+            "Class",
+            "Instances",
+            "Total Shallow",
+            "% of Heap",
+            "Avg Size",
+        ],
         &[
             Align::Right,
             Align::Left,
@@ -2956,7 +2968,15 @@ pub(crate) fn render_header_overhead(
          (candidates for value-type / record optimisation)._\n\n",
     );
     let mut t = Table::new(
-        &["#", "Class", "Instances", "Hdr/obj", "Total Headers", "Hdr %", "Avg Size"],
+        &[
+            "#",
+            "Class",
+            "Instances",
+            "Hdr/obj",
+            "Total Headers",
+            "Hdr %",
+            "Avg Size",
+        ],
         &[
             Align::Right,
             Align::Left,
