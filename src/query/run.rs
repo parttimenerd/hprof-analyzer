@@ -9,7 +9,7 @@ use crate::pass1::ClassInfo;
 use crate::id_map::IdMap;
 use crate::query::ast::Query;
 use crate::query::execute::{ClassResolver, SingleScanExecutor};
-use crate::query::model::QueryResult;
+use crate::query::model::{QueryResult, QueryValue};
 use crate::query::plan::QueryPlan;
 use crate::query::ObjectVisitor;
 use crate::types::HprofType;
@@ -200,19 +200,176 @@ impl<'q, R: ClassResolver> ObjectVisitor for ScanDriver<'q, R> {
 /// Run the full pass1+pass2 pipeline against `path` for the given planned
 /// queries and return their results. Used by the REPL (and available to any
 /// one-shot caller). Does not build or render the full report.
+///
+/// Execution architecture (subqueries): the outer scan needs each
+/// `IN (<subquery>)` membership set to be known DURING the scan (the predicate
+/// is evaluated per object), so a single pass cannot serve it. When any query
+/// uses a subquery we run a TWO-PASS scan over the same dump: an inner pass runs
+/// every inner subquery as its own slot and materializes results; we then build
+/// the IN-membership sets and FROM-subquery dense-index sets, inject the IN sets
+/// into the outer executors, run the outer pass, and finally semi-join each
+/// FROM-subquery's outer rows against its inner dense-index set. Queries without
+/// subqueries take the ordinary single-pass path (no inner scan).
 pub fn run_single_dump(
     path: &str,
     queries: &[(Query, QueryPlan)],
 ) -> std::io::Result<Vec<QueryResult>> {
     let (flat, groups) = expand_union_queries(queries);
-    let p1 = crate::pass1::Pass1::run(path)?;
     let opts = crate::AnalyzeOptions::default();
-    let (.., state) =
-        crate::pass2::Pass2::build(path, p1, crate::cvec::Codec::Zstd3, &opts, &flat)?;
-    // Query-only path: no retained sizes / dominators are computed, so cross-phase
-    // (@retainedHeapSize) carries resolve to actionable errors rather than rows.
-    let flat_results = crate::query::stage_runner::resume_without_late_ctx(state);
+
+    // Collect the inner subqueries needing an earlier pass, tagged with their
+    // outer flat-slot and role (FROM identity vs IN membership on some LHS).
+    let inners = collect_subquery_inners(&flat);
+
+    if inners.is_empty() {
+        // Fast path: no subqueries — one scan, no injection.
+        let p1 = crate::pass1::Pass1::run(path)?;
+        let mut empty = std::collections::HashMap::new();
+        let (.., state) = crate::pass2::Pass2::build(
+            path, p1, crate::cvec::Codec::Zstd3, &opts, &flat, &mut empty,
+        )?;
+        let flat_results = crate::query::stage_runner::resume_without_late_ctx(state);
+        return Ok(collapse_union_results(flat_results, &groups));
+    }
+
+    // ── Inner pass: scan the dump once for all inner subqueries ──────────────
+    let inner_queries: Vec<(Query, QueryPlan)> =
+        inners.iter().map(|i| (i.inner.clone(), i.plan.clone())).collect();
+    let p1_inner = crate::pass1::Pass1::run(path)?;
+    let mut empty = std::collections::HashMap::new();
+    let (.., inner_state) = crate::pass2::Pass2::build(
+        path, p1_inner, crate::cvec::Codec::Zstd3, &opts, &inner_queries, &mut empty,
+    )?;
+    let inner_results = crate::query::stage_runner::resume_without_late_ctx(inner_state);
+
+    // ── Materialize inner results into injectable sets ───────────────────────
+    // IN-subqueries → per-outer-slot address membership sets (injected into the
+    // outer executors). FROM-subqueries → per-outer-slot sorted dense-index
+    // sets (applied as a post-scan semi-join).
+    let mut in_sets_by_slot: std::collections::HashMap<
+        usize,
+        Vec<crate::query::execute::InSet>,
+    > = std::collections::HashMap::new();
+    // outer_slot → (sorted inner dense indices, inner truncated)
+    let mut from_index_by_slot: std::collections::HashMap<usize, (Vec<u32>, bool)> =
+        std::collections::HashMap::new();
+    for (inner_idx, meta) in inners.iter().enumerate() {
+        let res = &inner_results[inner_idx];
+        match &meta.role {
+            SubqueryRole::In { lhs } => {
+                let addrs: Vec<u64> = res.rows.iter().filter_map(|r| row_address(r)).collect();
+                let (set, cap_trunc) =
+                    build_in_subquery_set(&addrs, crate::query::SUBQUERY_SET_CAP);
+                in_sets_by_slot.entry(meta.outer_slot).or_default().push(
+                    crate::query::execute::InSet {
+                        lhs: lhs.clone(),
+                        set,
+                        truncated: cap_trunc || res.truncated,
+                    },
+                );
+            }
+            SubqueryRole::From => {
+                let mut idx: Vec<u32> = res.rows.iter().filter_map(|r| row_dense_index(r)).collect();
+                idx.sort_unstable();
+                from_index_by_slot.insert(meta.outer_slot, (idx, res.truncated));
+            }
+        }
+    }
+
+    // ── Outer pass: scan again with IN sets injected ─────────────────────────
+    let p1_outer = crate::pass1::Pass1::run(path)?;
+    let (.., outer_state) = crate::pass2::Pass2::build(
+        path, p1_outer, crate::cvec::Codec::Zstd3, &opts, &flat, &mut in_sets_by_slot,
+    )?;
+    let mut flat_results = crate::query::stage_runner::resume_without_late_ctx(outer_state);
+
+    // ── FROM-subquery semi-join: keep only outer rows whose dense index is in
+    //    the inner result set (matched by dense index). ───────────────────────
+    for (slot, (inner_idx_sorted, inner_trunc)) in &from_index_by_slot {
+        let r = &mut flat_results[*slot];
+        // Extract this outer result's own row dense indices, sorted, then
+        // intersect. `intersect_from_subquery` returns the kept indices; we use
+        // membership to filter the rows in place (preserving row order/shape).
+        let keep: std::collections::HashSet<u32> = {
+            let mut outer_idx: Vec<u32> = r.rows.iter().filter_map(|r| row_dense_index(r)).collect();
+            outer_idx.sort_unstable();
+            let (kept, _t) = intersect_from_subquery(inner_idx_sorted, *inner_trunc, &outer_idx);
+            kept.into_iter().collect()
+        };
+        r.rows.retain(|row| row_dense_index(row).map(|i| keep.contains(&i)).unwrap_or(false));
+        r.row_count = r.rows.len() as u64;
+        if *inner_trunc {
+            r.truncated = true;
+        }
+    }
+
     Ok(collapse_union_results(flat_results, &groups))
+}
+
+/// The role an inner subquery plays for its outer query: a FROM source (semi-
+/// joined by object identity) or an IN-predicate membership set (on some LHS).
+enum SubqueryRole {
+    From,
+    In { lhs: crate::query::ast::Attr },
+}
+
+/// One inner subquery to run in the earlier pass, tagged with the outer flat-
+/// slot it belongs to and its role.
+struct SubqueryInner {
+    outer_slot: usize,
+    role: SubqueryRole,
+    inner: Query,
+    plan: QueryPlan,
+}
+
+/// Gather every inner subquery across the flattened outer queries. Only one
+/// level deep is materialized here: a nested inner's own subqueries are planned
+/// but this query subset does not run doubly-nested subqueries (the planner
+/// still rejects correlation at every level).
+fn collect_subquery_inners(flat: &[(Query, QueryPlan)]) -> Vec<SubqueryInner> {
+    let mut out = Vec::new();
+    for (slot, (_q, plan)) in flat.iter().enumerate() {
+        if let Some(fp) = &plan.from_subplan {
+            // The inner FROM AST lives on the outer query's FromSource; recover it.
+            if let Some(inner) = _q.from.as_subquery() {
+                out.push(SubqueryInner {
+                    outer_slot: slot,
+                    role: SubqueryRole::From,
+                    inner: inner.clone(),
+                    plan: (**fp).clone(),
+                });
+            }
+        }
+        for isp in &plan.in_subplans {
+            out.push(SubqueryInner {
+                outer_slot: slot,
+                role: SubqueryRole::In { lhs: isp.lhs.clone() },
+                inner: isp.inner.clone(),
+                plan: isp.plan.clone(),
+            });
+        }
+    }
+    out
+}
+
+/// Extract the dense object index a result row identifies: `SELECT *` yields an
+/// `ObjRef { index }`, `SELECT @objectId` an `Int(index)`. Rows that carry
+/// neither (e.g. a scalar projection) yield `None` and never join.
+fn row_dense_index(row: &[QueryValue]) -> Option<u32> {
+    match row.first()? {
+        QueryValue::ObjRef { index, .. } => Some(*index as u32),
+        QueryValue::Int(i) if *i >= 0 => Some(*i as u32),
+        _ => None,
+    }
+}
+
+/// Extract the object address a result row identifies for IN-membership:
+/// `SELECT @objectAddress` yields an `Int(addr)`. Non-address rows yield `None`.
+fn row_address(row: &[QueryValue]) -> Option<u64> {
+    match row.first()? {
+        QueryValue::Int(i) => Some(*i as u64),
+        _ => None,
+    }
 }
 
 /// Concatenate the results of homogeneous `UNION` branches (UNION ALL: no

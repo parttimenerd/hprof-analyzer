@@ -61,6 +61,7 @@ impl Pass2 {
         compress: crate::cvec::Codec,
         opts: &crate::AnalyzeOptions,
         queries: &[(crate::query::ast::Query, crate::query::plan::QueryPlan)],
+        in_sets_by_slot: &mut std::collections::HashMap<usize, Vec<crate::query::execute::InSet>>,
     ) -> io::Result<(
         Graph,
         InboundBuilder,
@@ -362,7 +363,7 @@ impl Pass2 {
             }
             match crate::query::plan::validate_fields(q, &query_resolver) {
                 Ok(()) => {
-                    let exec = if plan.finalize_at == crate::query::plan::Phase::P3 {
+                    let mut exec = if plan.finalize_at == crate::query::plan::Phase::P3 {
                         crate::query::execute::SingleScanExecutor::new_carry(
                             q,
                             plan,
@@ -374,6 +375,12 @@ impl Pass2 {
                     } else {
                         crate::query::execute::SingleScanExecutor::new(q, plan, &query_resolver)
                     };
+                    // Inject any resolved IN-subquery membership sets for this
+                    // slot (computed by an earlier inner scan). Absent for a
+                    // query without IN-subqueries.
+                    if let Some(sets) = in_sets_by_slot.remove(&slot) {
+                        exec.set_in_subquery_sets(sets);
+                    }
                     scan_execs.push((slot, exec));
                     scan_outcomes.push(Ok(slot));
                 }
@@ -1681,6 +1688,7 @@ mod tests {
             crate::cvec::Codec::None,
             &crate::AnalyzeOptions::default(),
             &[],
+            &mut std::collections::HashMap::new(),
         )
         .unwrap();
         assert!(!g.fwd_targets.is_empty(), "no forward edges");
@@ -1720,6 +1728,7 @@ mod tests {
             crate::cvec::Codec::None,
             &crate::AnalyzeOptions::default(),
             &[],
+            &mut std::collections::HashMap::new(),
         )
         .unwrap();
         let fwd_edge_count: usize = g

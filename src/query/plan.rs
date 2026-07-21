@@ -92,6 +92,28 @@ pub struct QueryPlan {
     /// Planned UNION tail branches (empty for a non-UNION query). Each branch
     /// plan itself has an empty `union_branches`.
     pub union_branches: Vec<QueryPlan>,
+    /// Plan for a `FROM (<subquery>)` inner query, if the FROM source is a
+    /// subquery. The driver runs this inner plan as its own scan slot, then
+    /// semi-joins the outer matches against the inner's dense indices. `None`
+    /// for a plain `FROM <class>` source. The inner AST is carried alongside so
+    /// the driver can execute it without re-deriving it from the outer query.
+    pub from_subplan: Option<Box<QueryPlan>>,
+    /// Inner plans for each `WHERE <attr> IN (<subquery>)` predicate in the
+    /// WHERE tree (empty when there are none). Each entry pairs the outer LHS
+    /// attribute with the inner plan+AST; the driver runs the inner first,
+    /// builds an address membership set, and injects it into the outer scan.
+    pub in_subplans: Vec<InSubplan>,
+}
+
+/// A planned `WHERE <lhs> IN (<subquery>)` predicate. `lhs` is the outer
+/// attribute compared for membership (must be `@objectAddress`); `plan`/`inner`
+/// are the inner subquery's plan and AST, run as their own scan slot before the
+/// outer scan so the address set is ready when the outer predicate evaluates.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InSubplan {
+    pub lhs: Attr,
+    pub plan: QueryPlan,
+    pub inner: Query,
 }
 
 /// Plan a query, including any homogeneous `UNION` tail. Each branch is planned
@@ -169,6 +191,22 @@ fn plan_single(q: &Query) -> Result<QueryPlan, QueryError> {
         reject_in_subqueries_if_correlated(pred)?;
     }
 
+    // Plan any subqueries. A FROM-subquery is semi-joined by object identity, so
+    // its inner must project whole objects; an IN-subquery is matched by address,
+    // so its inner must project a single `@objectAddress` column. Both are run as
+    // their own scan slots by the driver (see run.rs) and applied to the outer.
+    let from_subplan = match q.from.as_subquery() {
+        Some(inner) => {
+            enforce_from_subquery_projection(inner)?;
+            Some(Box::new(plan_query(inner)?))
+        }
+        None => None,
+    };
+    let mut in_subplans = Vec::new();
+    if let Some(pred) = &q.where_ {
+        collect_in_subplans(pred, &mut in_subplans)?;
+    }
+
     let select_arity = q.select.len();
     let mut needs = QueryNeeds::default();
     let mut is_aggregate = false;
@@ -224,6 +262,11 @@ fn plan_single(q: &Query) -> Result<QueryPlan, QueryError> {
             limit: q.limit,
             select_arity,
             union_branches: Vec::new(),
+            // RETAINED SET / dominator queries don't compose with subqueries in
+            // this slice (their FROM binds a class alias and their SELECT is a
+            // single graph op), so the subquery plans stay empty here.
+            from_subplan: None,
+            in_subplans: Vec::new(),
         });
     }
 
@@ -254,6 +297,8 @@ fn plan_single(q: &Query) -> Result<QueryPlan, QueryError> {
             limit: q.limit,
             select_arity,
             union_branches: Vec::new(),
+            from_subplan: None,
+            in_subplans: Vec::new(),
         });
     }
 
@@ -277,7 +322,68 @@ fn plan_single(q: &Query) -> Result<QueryPlan, QueryError> {
         limit: q.limit,
         select_arity,
         union_branches: Vec::new(),
+        from_subplan,
+        in_subplans,
     })
+}
+
+/// Enforce that a `FROM (<subquery>)` inner query projects whole-object
+/// identity: a single `SELECT *`, `@objectId`, or `@objectAddress` column. The
+/// outer query semi-joins by dense object index, so a scalar/field projection
+/// (which loses object identity) is rejected with an actionable message.
+fn enforce_from_subquery_projection(inner: &Query) -> Result<(), QueryError> {
+    let ok = inner.select.len() == 1
+        && matches!(
+            inner.select[0],
+            SelectItem::Star
+                | SelectItem::Attr(Attr::ObjectId)
+                | SelectItem::Attr(Attr::ObjectAddress)
+        );
+    if ok {
+        Ok(())
+    } else {
+        Err(QueryError(
+            "FROM-subquery must select whole objects (use SELECT * or SELECT @objectId)".into(),
+        ))
+    }
+}
+
+/// Walk a WHERE tree, plan each `IN (<subquery>)` inner, and collect the results
+/// into `out`. The inner must project a single address-valued column
+/// (`@objectAddress`, or `*` — but `*` yields an ObjRef index, not an address,
+/// so for IN we require an explicit `@objectAddress`). Nested inners' own IN
+/// predicates are handled when their plan is built (recursively via plan_query).
+fn collect_in_subplans(pred: &Predicate, out: &mut Vec<InSubplan>) -> Result<(), QueryError> {
+    match pred {
+        Predicate::And(a, b) | Predicate::Or(a, b) => {
+            collect_in_subplans(a, out)?;
+            collect_in_subplans(b, out)
+        }
+        Predicate::Not(a) => collect_in_subplans(a, out),
+        Predicate::InSubquery { lhs, inner } => {
+            enforce_in_subquery_projection(inner)?;
+            let inner_plan = plan_query(inner)?;
+            out.push(InSubplan { lhs: lhs.clone(), plan: inner_plan, inner: (**inner).clone() });
+            Ok(())
+        }
+        Predicate::Compare { .. } | Predicate::InstanceOf(_) => Ok(()),
+    }
+}
+
+/// Enforce that an `IN (<subquery>)` inner projects a single address-valued
+/// column. Membership compares the OUTER row's address against the inner's
+/// addresses, so the inner must `SELECT @objectAddress` — a scalar/field or a
+/// bare `@objectId` (a dense index, not an address) is rejected.
+fn enforce_in_subquery_projection(inner: &Query) -> Result<(), QueryError> {
+    let ok = inner.select.len() == 1
+        && matches!(inner.select[0], SelectItem::Attr(Attr::ObjectAddress));
+    if ok {
+        Ok(())
+    } else {
+        Err(QueryError(
+            "IN-subquery must select a single address-valued column (SELECT @objectAddress)".into(),
+        ))
+    }
 }
 
 fn uses_retained(q: &Query) -> bool {
@@ -1039,5 +1145,84 @@ mod tests {
         let heads = referenced_alias_heads(&q);
         assert!(heads.contains("t"), "expected foreign head `t`, got: {heads:?}");
         assert!(!heads.contains("s"), "bound alias `s` must be excluded");
+    }
+
+    // ---------- subquery plan wiring (Task 23, Steps 5-6) ----------
+
+    #[test]
+    fn from_subquery_scalar_projection_rejected() {
+        // A FROM-subquery projecting a scalar/field loses object identity, so the
+        // outer semi-join can't run; reject with the whole-objects message.
+        let q = parse("SELECT * FROM (SELECT n FROM java.lang.String s) x").unwrap();
+        let err = plan_query(&q).unwrap_err();
+        assert!(
+            err.0.contains("FROM-subquery must select whole objects"),
+            "got: {}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn from_subquery_star_projection_accepted() {
+        let q = parse("SELECT * FROM (SELECT * FROM java.lang.String s) x").unwrap();
+        let plan = plan_query(&q).unwrap();
+        assert!(plan.from_subplan.is_some(), "FROM-subquery must plan an inner subplan");
+        assert!(plan.in_subplans.is_empty());
+    }
+
+    #[test]
+    fn from_subquery_objectid_projection_accepted() {
+        let q = parse("SELECT * FROM (SELECT @objectId FROM java.lang.String s) x").unwrap();
+        let plan = plan_query(&q).unwrap();
+        assert!(plan.from_subplan.is_some());
+    }
+
+    #[test]
+    fn in_subquery_non_address_projection_rejected() {
+        // The inner projects `@objectId` (a dense index, not an address); IN
+        // compares outer addresses, so this must be rejected.
+        let q = parse(
+            "SELECT * FROM java.lang.String s WHERE @objectAddress IN \
+             (SELECT @objectId FROM java.lang.Integer i)",
+        )
+        .unwrap();
+        let err = plan_query(&q).unwrap_err();
+        assert!(
+            err.0.contains("IN-subquery must select a single address-valued column"),
+            "got: {}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn in_subquery_address_projection_accepted() {
+        let q = parse(
+            "SELECT * FROM java.lang.String s WHERE @objectAddress IN \
+             (SELECT @objectAddress FROM java.lang.Integer i)",
+        )
+        .unwrap();
+        let plan = plan_query(&q).unwrap();
+        assert_eq!(plan.in_subplans.len(), 1, "one IN-subquery must plan one InSubplan");
+        assert!(plan.from_subplan.is_none(), "no FROM-subquery here");
+        assert_eq!(plan.in_subplans[0].lhs, Attr::ObjectAddress);
+    }
+
+    #[test]
+    fn plain_query_has_no_subplans() {
+        let plan = plan_query(&parse("SELECT @objectId FROM C").unwrap()).unwrap();
+        assert!(plan.from_subplan.is_none());
+        assert!(plan.in_subplans.is_empty());
+    }
+
+    #[test]
+    fn two_in_subqueries_plan_two_subplans() {
+        let q = parse(
+            "SELECT * FROM java.lang.String s WHERE \
+             @objectAddress IN (SELECT @objectAddress FROM A a) AND \
+             @objectAddress IN (SELECT @objectAddress FROM B b)",
+        )
+        .unwrap();
+        let plan = plan_query(&q).unwrap();
+        assert_eq!(plan.in_subplans.len(), 2);
     }
 }

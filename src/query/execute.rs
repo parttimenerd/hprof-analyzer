@@ -73,18 +73,47 @@ pub struct SingleScanExecutor<'a, R: ClassResolver> {
     /// unknown here) and LIMIT is NOT applied (the retained-based ORDER BY +
     /// LIMIT run in the late phase); the carry's own cap bounds memory.
     carry: Option<Carry>,
+    /// Injected `IN (<subquery>)` membership sets, one per `InSubplan` in the
+    /// plan (same order). Each holds the inner subquery's projected addresses;
+    /// an `@objectAddress IN (...)` predicate tests the current object's address
+    /// against the set that matches its LHS. Empty for a query without any
+    /// IN-subquery, or before the driver injects them. `truncated` on any set
+    /// means membership is incomplete and the outer result must be marked so.
+    in_sets: Vec<InSet>,
+}
+
+/// A resolved `IN (<subquery>)` membership set injected before the outer scan.
+/// `lhs` is the outer attribute compared for membership (must be
+/// `@objectAddress`); `set` is the inner subquery's projected addresses; and
+/// `truncated` records whether the inner result (and thus membership) was capped.
+pub struct InSet {
+    pub lhs: Attr,
+    pub set: std::collections::HashSet<u64>,
+    pub truncated: bool,
 }
 
 impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     pub fn new(query: &'a Query, plan: &'a QueryPlan, resolver: &'a R) -> Self {
-        Self { query, plan, resolver, rows: Vec::new(), matched: 0, truncated: false, carry: None }
+        Self { query, plan, resolver, rows: Vec::new(), matched: 0, truncated: false, carry: None, in_sets: Vec::new() }
     }
 
     /// Construct a cross-phase carry executor. `carry` should be an
     /// `index-only` carry sized by the caller's cap; matched indices are pushed
     /// into it during the scan and extracted with `take_carry` at scan end.
     pub fn new_carry(query: &'a Query, plan: &'a QueryPlan, resolver: &'a R, carry: Carry) -> Self {
-        Self { query, plan, resolver, rows: Vec::new(), matched: 0, truncated: false, carry: Some(carry) }
+        Self { query, plan, resolver, rows: Vec::new(), matched: 0, truncated: false, carry: Some(carry), in_sets: Vec::new() }
+    }
+
+    /// Inject the resolved `IN (<subquery>)` membership sets (one per plan
+    /// `InSubplan`, in the same order) before the outer scan. Called by the
+    /// two-phase driver once the inner subqueries have been scanned. If any set
+    /// was truncated, the executor's own result is marked truncated (membership
+    /// is incomplete).
+    pub fn set_in_subquery_sets(&mut self, sets: Vec<InSet>) {
+        if sets.iter().any(|s| s.truncated) {
+            self.truncated = true;
+        }
+        self.in_sets = sets;
     }
 
     /// True if this executor is carrying indices for a later phase.
@@ -95,6 +124,11 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     /// consume it. Array class names end in `[]` (e.g. `char[]`,
     /// `java.lang.Object[]`); a wildcard pattern (`*`) may also match them.
     pub fn wants_arrays(&self) -> bool {
+        // A FROM-subquery matches every object (identity is constrained by the
+        // outer semi-join), so it must see arrays too.
+        if self.query.from.as_subquery().is_some() {
+            return true;
+        }
         let from = self.query.from.class_name();
         from.ends_with("[]") || from.contains('*')
     }
@@ -109,6 +143,12 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
         self.carry.expect("take_carry on a non-carry executor")
     }
     fn class_matches(&self, class_id: u64) -> bool {
+        // A FROM-subquery source has no class pattern of its own: identity is
+        // constrained by the outer semi-join against the inner result, so the
+        // scan must consider every object here.
+        if self.query.from.as_subquery().is_some() {
+            return true;
+        }
         let want = self.query.from.class_name();
         match self.resolver.class_name(class_id) { None => false, Some(name) => class_name_matches(name, want) }
     }
@@ -200,7 +240,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             HprofType::Object => QueryValue::Null,
         }
     }
-    fn where_passes(&self, class_id: u64, blob: &[u8]) -> bool {
+    fn where_passes(&self, src_idx: usize, class_id: u64, blob: &[u8]) -> bool {
         for term in &self.plan.where_terms {
             // In carry mode, @retainedHeapSize WHERE terms can't be evaluated
             // during the scan (retained size is unknown); they are applied late
@@ -209,52 +249,67 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             if self.carry.is_some() && crate::query::plan::pred_uses_retained(&term.pred) {
                 continue;
             }
-            if !self.eval_pred(&term.pred, class_id, blob) { return false; }
+            if !self.eval_pred(&term.pred, src_idx, class_id, blob) { return false; }
         }
         true
     }
-    fn eval_pred(&self, pred: &crate::query::ast::Predicate, class_id: u64, blob: &[u8]) -> bool {
+    fn eval_pred(&self, pred: &crate::query::ast::Predicate, src_idx: usize, class_id: u64, blob: &[u8]) -> bool {
         use crate::query::ast::Predicate as P;
         match pred {
-            P::And(a, b) => self.eval_pred(a, class_id, blob) && self.eval_pred(b, class_id, blob),
-            P::Or(a, b) => self.eval_pred(a, class_id, blob) || self.eval_pred(b, class_id, blob),
-            P::Not(a) => !self.eval_pred(a, class_id, blob),
+            P::And(a, b) => self.eval_pred(a, src_idx, class_id, blob) && self.eval_pred(b, src_idx, class_id, blob),
+            P::Or(a, b) => self.eval_pred(a, src_idx, class_id, blob) || self.eval_pred(b, src_idx, class_id, blob),
+            P::Not(a) => !self.eval_pred(a, src_idx, class_id, blob),
             P::InstanceOf(cname) => self.resolver.class_name(class_id).map(|n| class_name_matches(n, cname)).unwrap_or(false),
-            P::InSubquery { .. } => in_subquery_unresolved(),
+            P::InSubquery { lhs, .. } => self.eval_in_subquery(lhs, src_idx),
             P::Compare { lhs, op, rhs } => {
-                // src_idx=0 is a placeholder: WHERE in this slice only references
-                // blob-scalar fields and class/type data, none of which use the
-                // object index. Object-identity attrs (@objectId/@objectAddress) in
-                // WHERE are out of scope and would spuriously compare against 0.
-                let lv = self.project_attr(lhs, 0, class_id, blob);
+                // Pass the real `src_idx` so object-identity LHS attrs
+                // (@objectAddress/@objectId) compare against the actual object,
+                // not a placeholder. Blob-scalar and class/type LHS attrs ignore
+                // the index, so this is a no-op for them.
+                let lv = self.project_attr(lhs, src_idx, class_id, blob);
                 compare_values(&lv, *op, rhs)
             }
+        }
+    }
+
+    /// Evaluate a `WHERE <lhs> IN (<subquery>)` predicate against the injected
+    /// membership set. The set is matched to the predicate by its `lhs` attr
+    /// (the only IN LHS this slice supports is `@objectAddress`). Membership
+    /// tests the current object's real address against the set. A missing set
+    /// (driver never injected one — a wiring bug) yields the loud unreachable.
+    fn eval_in_subquery(&self, lhs: &Attr, src_idx: usize) -> bool {
+        let Some(inset) = self.in_sets.iter().find(|s| &s.lhs == lhs) else {
+            return in_subquery_unresolved();
+        };
+        match self.resolver.addr_of(src_idx) {
+            Some(addr) => crate::query::run::in_subquery_contains(&inset.set, addr),
+            None => false,
         }
     }
 
     /// WHERE evaluation for array objects: only `@length`, `@objectId`, and
     /// `INSTANCEOF` are meaningful; named-field compares resolve to Null (and
     /// thus behave like the instance path's unknown-field handling).
-    fn array_where_passes(&self, class_name: &str, length: u32) -> bool {
+    fn array_where_passes(&self, src_idx: usize, class_name: &str, length: u32) -> bool {
         for term in &self.plan.where_terms {
             // See `where_passes`: skip retained terms in carry mode.
             if self.carry.is_some() && crate::query::plan::pred_uses_retained(&term.pred) {
                 continue;
             }
-            if !self.array_eval_pred(&term.pred, class_name, length) { return false; }
+            if !self.array_eval_pred(&term.pred, src_idx, class_name, length) { return false; }
         }
         true
     }
-    fn array_eval_pred(&self, pred: &crate::query::ast::Predicate, class_name: &str, length: u32) -> bool {
+    fn array_eval_pred(&self, pred: &crate::query::ast::Predicate, src_idx: usize, class_name: &str, length: u32) -> bool {
         use crate::query::ast::Predicate as P;
         match pred {
-            P::And(a, b) => self.array_eval_pred(a, class_name, length) && self.array_eval_pred(b, class_name, length),
-            P::Or(a, b) => self.array_eval_pred(a, class_name, length) || self.array_eval_pred(b, class_name, length),
-            P::Not(a) => !self.array_eval_pred(a, class_name, length),
+            P::And(a, b) => self.array_eval_pred(a, src_idx, class_name, length) && self.array_eval_pred(b, src_idx, class_name, length),
+            P::Or(a, b) => self.array_eval_pred(a, src_idx, class_name, length) || self.array_eval_pred(b, src_idx, class_name, length),
+            P::Not(a) => !self.array_eval_pred(a, src_idx, class_name, length),
             P::InstanceOf(cname) => class_name_matches(class_name, cname),
-            P::InSubquery { .. } => in_subquery_unresolved(),
+            P::InSubquery { lhs, .. } => self.eval_in_subquery(lhs, src_idx),
             P::Compare { lhs, op, rhs } => {
-                let lv = self.project_array_attr(lhs, 0, class_name, length);
+                let lv = self.project_array_attr(lhs, src_idx, class_name, length);
                 compare_values(&lv, *op, rhs)
             }
         }
@@ -269,7 +324,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
 impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
     fn visit_instance(&mut self, src_idx: usize, class_id: u64, blob: &[u8]) {
         if !self.class_matches(class_id) { return; }
-        if !self.where_passes(class_id, blob) { return; }
+        if !self.where_passes(src_idx, class_id, blob) { return; }
         if let Some(carry) = &mut self.carry {
             // Carry mode: no LIMIT here (retained ORDER BY + LIMIT run late);
             // the carry's own cap bounds memory and sets its truncated flag.
@@ -283,8 +338,12 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
     }
 
     fn visit_array(&mut self, src_idx: usize, class_name: &str, length: u32) {
-        if !class_name_matches(class_name, self.query.from.class_name()) { return; }
-        if !self.array_where_passes(class_name, length) { return; }
+        // A FROM-subquery source matches every object (identity is constrained
+        // by the outer semi-join), so it considers arrays too.
+        let class_ok = self.query.from.as_subquery().is_some()
+            || class_name_matches(class_name, self.query.from.class_name());
+        if !class_ok { return; }
+        if !self.array_where_passes(src_idx, class_name, length) { return; }
         if let Some(carry) = &mut self.carry {
             carry.push_index(src_idx as u32);
             return;
@@ -1121,11 +1180,104 @@ mod tests {
     fn array_field_projection_is_null() {
         // A bare field has no meaning on an array element; project Null.
         let q = crate::query::parse::parse("SELECT n FROM char[]").unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = plan_query(&q).unwrap();
         let sc = FieldSchema::with_fields(&[("n", 0, crate::types::HprofType::Int)]);
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
         ex.visit_array(1, "char[]", 5);
         let res = ex.finish("q1");
         assert_eq!(res.rows[0][0], QueryValue::Null);
+    }
+
+    // --- IN(<subquery>) membership evaluation (Task 23, Step 6) ---
+
+    /// A resolver mapping class 10 = "C" and each dense index to a fixed address,
+    /// so `@objectAddress IN (set)` can be exercised end-to-end in the executor.
+    struct AddrResolver {
+        names: std::collections::HashMap<u64, String>,
+        addrs: std::collections::HashMap<usize, u64>,
+    }
+    impl ClassResolver for AddrResolver {
+        fn class_name(&self, class_id: u64) -> Option<&str> {
+            self.names.get(&class_id).map(|s| s.as_str())
+        }
+        fn addr_of(&self, src_idx: usize) -> Option<u64> {
+            self.addrs.get(&src_idx).copied()
+        }
+    }
+
+    #[test]
+    fn in_subquery_keeps_only_members() {
+        // `@objectAddress IN (<subquery>)` with an injected set {0x200, 0x400}:
+        // only objects whose address is a member survive the scan.
+        let q = crate::query::parse::parse(
+            "SELECT @objectAddress FROM C WHERE @objectAddress IN \
+             (SELECT @objectAddress FROM D)",
+        )
+        .unwrap();
+        let plan = plan_query(&q).unwrap();
+        assert_eq!(plan.in_subplans.len(), 1);
+        let sc = AddrResolver {
+            names: std::iter::once((10u64, "C".to_string())).collect(),
+            addrs: [(1usize, 0x100u64), (2, 0x200), (3, 0x400), (4, 0x800)]
+                .into_iter()
+                .collect(),
+        };
+        let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
+        let set: std::collections::HashSet<u64> = [0x200u64, 0x400].into_iter().collect();
+        ex.set_in_subquery_sets(vec![InSet {
+            lhs: Attr::ObjectAddress,
+            set,
+            truncated: false,
+        }]);
+        for i in 1..=4usize {
+            ex.visit_instance(i, 10, &[]);
+        }
+        let res = ex.finish("q1");
+        assert_eq!(res.row_count, 2, "only the two member addresses survive");
+        assert_eq!(res.rows[0][0], QueryValue::Int(0x200));
+        assert_eq!(res.rows[1][0], QueryValue::Int(0x400));
+        assert!(!res.truncated);
+    }
+
+    #[test]
+    fn in_subquery_truncated_set_marks_result_truncated() {
+        // A truncated inner membership set means membership is incomplete: the
+        // outer result must be flagged truncated even if all scanned rows match.
+        let q = crate::query::parse::parse(
+            "SELECT @objectAddress FROM C WHERE @objectAddress IN \
+             (SELECT @objectAddress FROM D)",
+        )
+        .unwrap();
+        let plan = plan_query(&q).unwrap();
+        let sc = AddrResolver {
+            names: std::iter::once((10u64, "C".to_string())).collect(),
+            addrs: std::iter::once((1usize, 0x200u64)).collect(),
+        };
+        let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
+        ex.set_in_subquery_sets(vec![InSet {
+            lhs: Attr::ObjectAddress,
+            set: std::iter::once(0x200u64).collect(),
+            truncated: true,
+        }]);
+        ex.visit_instance(1, 10, &[]);
+        let res = ex.finish("q1");
+        assert_eq!(res.row_count, 1);
+        assert!(res.truncated, "a truncated membership set taints the outer result");
+    }
+
+    #[test]
+    fn from_subquery_matches_all_classes() {
+        // A FROM-subquery source has no class pattern of its own, so the outer
+        // executor considers every object (identity is later semi-joined). Here,
+        // both class 10 and 20 objects are emitted (no WHERE, no injection).
+        let q = crate::query::parse::parse("SELECT @objectId FROM (SELECT * FROM C c) x").unwrap();
+        let plan = plan_query(&q).unwrap();
+        assert!(plan.from_subplan.is_some());
+        let sc = schema(&[(10, "C"), (20, "D")]);
+        let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
+        ex.visit_instance(1, 10, &[]);
+        ex.visit_instance(2, 20, &[]);
+        let res = ex.finish("q1");
+        assert_eq!(res.row_count, 2, "FROM-subquery outer matches all objects pre-semijoin");
     }
 }

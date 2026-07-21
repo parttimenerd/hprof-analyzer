@@ -865,25 +865,37 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
     let parsed = parse_plan_queries(&query_texts)?;
     let (flat, union_groups) = query::run::expand_union_queries(&parsed);
 
-    let p1 = pass1::Pass1::run(input)?;
-    if p1.class_ids.len() > u32::MAX as usize {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "dump has {} objects, exceeding the {} (u32::MAX) limit of the \
-                 analyzer's index scheme; cannot analyze",
-                p1.class_ids.len(),
-                u32::MAX
-            ),
-        ));
-    }
-    let (.., query_state) =
-        pass2::Pass2::build(input, p1, cvec::Codec::Zstd3, &opts, &flat)?;
+    // Subqueries need a two-phase (inner-then-outer) scan; `run_single_dump`
+    // implements that. When any query uses a FROM- or IN-subquery, route through
+    // it so the `query` subcommand fully supports subqueries. The inline path
+    // below stays for the common no-subquery case (one scan, no re-parse).
+    let uses_subqueries = parsed
+        .iter()
+        .any(|(_, p)| p.from_subplan.is_some() || !p.in_subplans.is_empty());
+    let mut query_results = if uses_subqueries {
+        query::run::run_single_dump(input, &parsed)?
+    } else {
+        let p1 = pass1::Pass1::run(input)?;
+        if p1.class_ids.len() > u32::MAX as usize {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "dump has {} objects, exceeding the {} (u32::MAX) limit of the \
+                     analyzer's index scheme; cannot analyze",
+                    p1.class_ids.len(),
+                    u32::MAX
+                ),
+            ));
+        }
+        let mut no_in_sets = std::collections::HashMap::new();
+        let (.., query_state) =
+            pass2::Pass2::build(input, p1, cvec::Codec::Zstd3, &opts, &flat, &mut no_in_sets)?;
 
-    // Query-only path: retained sizes/dominators are not computed, so cross-phase
-    // (@retainedHeapSize) queries resolve to actionable errors here.
-    let flat_results = query::stage_runner::resume_without_late_ctx(query_state);
-    let mut query_results = query::run::collapse_union_results(flat_results, &union_groups);
+        // Query-only path: retained sizes/dominators are not computed, so cross-phase
+        // (@retainedHeapSize) queries resolve to actionable errors here.
+        let flat_results = query::stage_runner::resume_without_late_ctx(query_state);
+        query::run::collapse_union_results(flat_results, &union_groups)
+    };
 
     // Fill in blank oql text and default `q{N}` names for the printed tables.
     finalize_query_labels(&mut query_results, &query_texts);
@@ -952,12 +964,30 @@ fn run(
     // fast (before the expensive graph build) with a message naming the query.
     let query_texts = collect_query_texts(&opts)?;
     let parsed_queries = parse_plan_queries(&query_texts)?;
+    // Subqueries require a two-phase (inner-then-outer) scan of the dump. The
+    // full-report pipeline scans once and immediately builds the graph +
+    // dominators atop that scan, so it cannot run the inner pass here without an
+    // invasive restructure. Per the task's accepted fallback, subqueries are
+    // supported only via the `query` subcommand (`run_single_dump`), which
+    // re-scans; surface an actionable error rather than silently wrong rows.
+    if parsed_queries
+        .iter()
+        .any(|(_, p)| p.from_subplan.is_some() || !p.in_subplans.is_empty())
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "subqueries (FROM (...) / IN (...)) are only supported via the `query` \
+             subcommand, which re-scans the dump; they are not available in the \
+             full report. Run the query with `hprof-analyzer query <dump> -e '<oql>'`.",
+        ));
+    }
     let (flat_queries, union_groups) = query::run::expand_union_queries(&parsed_queries);
 
     let t = Instant::now();
     progress::phase("building object graph (pass 2)");
+    let mut no_in_sets = std::collections::HashMap::new();
     let (mut g, mut inbound, shallow_c, class_idx_c, alloc_serial_c, query_state) =
-        pass2::Pass2::build(input, p1, compress, &opts, &flat_queries)?;
+        pass2::Pass2::build(input, p1, compress, &opts, &flat_queries, &mut no_in_sets)?;
     log(
         verbose,
         &format!("pass2 n={}", g.n),
