@@ -367,16 +367,19 @@ fn analyze_multiple_query_flags_render_all() {
 /// second — which is the REVERSE of this input order. Without the ordering
 /// restore in pass2, the `q1`/`q2` headings (and their backfilled OQL text,
 /// which stays self-consistent) end up sitting above the WRONG result body: q1
-/// would show the scan's empty `*` table and q2 the aggregate's `COUNT(*)` row.
-/// So we assert each heading sits above BOTH its matching OQL and its matching
-/// result body — the body is what actually exposes the desync.
+/// would show the scan's object rows and q2 the aggregate's `COUNT(*)` row. So
+/// we assert each heading sits above BOTH its matching OQL and its matching
+/// result body — the body is what actually exposes the desync. The scan uses a
+/// real, resolvable field (`hash`, present on modern `java.lang.String`) so it
+/// returns genuine object rows; a bogus/unresolvable field would silently match
+/// nothing and make the row-body assertions vacuous.
 #[test]
 fn analyze_mixed_kind_queries_render_in_input_order() {
     let Some(hprof) = philosophers() else { return };
     // q1: bare aggregate → HistogramOnly, yields a `COUNT(*)` column with a row.
-    // q2: WHERE clause → SingleScan, yields a `*` column with zero rows here.
+    // q2: WHERE clause → SingleScan, yields a `*` column with real object rows.
     let agg = "SELECT COUNT(*) FROM java.lang.String";
-    let scan = "SELECT * FROM java.lang.String s WHERE s.count > 0";
+    let scan = "SELECT * FROM java.lang.String WHERE hash > 0 LIMIT 2";
     let out = Command::new(BIN)
         .arg(&hprof)
         .args(["--query", agg])
@@ -396,7 +399,7 @@ fn analyze_mixed_kind_queries_render_in_input_order() {
     let q1_block = &md[q1..q2];
     let q2_block = &md[q2..];
     // q1 is the aggregate: its OQL, its `COUNT(*)` result column, and its
-    // populated row must ALL sit under the q1 heading.
+    // single populated row must ALL sit under the q1 heading.
     assert!(
         q1_block.contains(agg),
         "q1 heading is not above the aggregate OQL — ordering desync:\n{md}"
@@ -409,19 +412,24 @@ fn analyze_mixed_kind_queries_render_in_input_order() {
         q1_block.contains("_1 row(s)_"),
         "q1 block missing the aggregate's 1-row footer — ordering desync:\n{md}"
     );
-    // q2 is the scan: its OQL, its `*` result column, and its 0-row footer must
-    // ALL sit under the q2 heading — and the aggregate result must NOT be here.
+    // The scan's object rows must NOT bleed into the aggregate block.
+    assert!(
+        !q1_block.contains("java.lang.String@"),
+        "scan's object rows leaked into the q1 block — ordering desync:\n{md}"
+    );
+    // q2 is the scan: its OQL, real `java.lang.String@…` object rows, and a
+    // truncated 2-row footer must ALL sit under the q2 heading.
     assert!(
         q2_block.contains(scan),
         "q2 heading is not above the scan OQL — ordering desync:\n{md}"
     );
     assert!(
-        q2_block.contains("_0 row(s)_"),
-        "q2 block missing the scan's 0-row footer — ordering desync:\n{md}"
+        q2_block.contains("java.lang.String@"),
+        "q2 block missing the scan's object rows — ordering desync:\n{md}"
     );
     assert!(
-        !q1_block.contains("_0 row(s)_"),
-        "scan's empty result leaked into the q1 block — ordering desync:\n{md}"
+        q2_block.contains("_2 row(s), truncated_"),
+        "q2 block missing the scan's truncated 2-row footer — ordering desync:\n{md}"
     );
 }
 
