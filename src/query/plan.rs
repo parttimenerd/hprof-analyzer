@@ -88,6 +88,13 @@ pub struct Conjunct {
     pub cost: PredCost,
 }
 
+/// A projection deferred past the scan-time filter (see `deferred_projections`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeferredProj {
+    /// Index into the query's SELECT list of the deferred projected item.
+    pub select_index: usize,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct QueryPlan {
     pub kind: StageKind,
@@ -127,6 +134,11 @@ pub struct QueryPlan {
     /// attribute with the inner plan+AST; the driver runs the inner first,
     /// builds an address membership set, and injects it into the outer scan.
     pub in_subplans: Vec<InSubplan>,
+    /// SELECT-item indices whose projection is deferred past WHERE filtering
+    /// because the projection is expensive (an N-hop RefPath or retained-size
+    /// lookup) and evaluating it only for surviving rows is cheaper. Populated by
+    /// `optimize::defer_projections`; empty for a freshly-planned query.
+    pub deferred_projections: Vec<DeferredProj>,
 }
 
 /// A planned `WHERE <lhs> IN (<subquery>)` predicate. `lhs` is the outer
@@ -293,6 +305,7 @@ fn plan_single(q: &Query) -> Result<QueryPlan, QueryError> {
             // single graph op), so the subquery plans stay empty here.
             from_subplan: None,
             in_subplans: Vec::new(),
+            deferred_projections: Vec::new(),
         });
     }
 
@@ -327,6 +340,7 @@ fn plan_single(q: &Query) -> Result<QueryPlan, QueryError> {
             union_branches: Vec::new(),
             from_subplan: None,
             in_subplans: Vec::new(),
+            deferred_projections: Vec::new(),
         });
     }
 
@@ -388,6 +402,7 @@ fn plan_single(q: &Query) -> Result<QueryPlan, QueryError> {
         union_branches: Vec::new(),
         from_subplan,
         in_subplans,
+        deferred_projections: Vec::new(),
     })
 }
 

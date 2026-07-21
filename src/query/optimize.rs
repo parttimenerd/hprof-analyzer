@@ -5,7 +5,10 @@
 
 use std::collections::HashMap;
 
-use crate::query::plan::{PredCost, QueryPlan};
+use crate::query::plan::{PredCost, QueryPlan, StageOp};
+use crate::query::ast::{Query, SelectItem, Attr};
+use crate::query::plan::DeferredProj;
+use crate::query::carry::CarryLayout;
 
 /// Per-class instance counts sampled from the heap, used by the optimizer to
 /// estimate predicate selectivity. Built once and shared read-only across the
@@ -60,6 +63,73 @@ pub fn pushdown_limit(plan: &mut QueryPlan) {
     plan.scan_limit = if safe { plan.limit } else { None };
 }
 
+/// True if a SELECT item (or the attribute it contains) is deferrable:
+/// N-hop `RefPath` and `@retainedHeapSize` are expensive projection-only
+/// attributes. Recurses into `Aggregate` to inspect the wrapped argument.
+fn select_item_is_deferrable(item: &SelectItem) -> bool {
+    match item {
+        SelectItem::Attr(Attr::RefPath { .. }) | SelectItem::Attr(Attr::RetainedHeapSize) => true,
+        SelectItem::Aggregate { arg, .. } => select_item_is_deferrable(arg),
+        _ => false,
+    }
+}
+
+/// Mark projection-only expensive attributes (N-hop RefPath, `@retainedHeapSize`)
+/// for deferral past the WHERE filter: they are evaluated only for surviving
+/// rows. Idempotent — clears and recomputes `deferred_projections` each call.
+pub fn defer_projections(plan: &mut QueryPlan, query: &Query) {
+    plan.deferred_projections.clear();
+    for (i, item) in query.select.iter().enumerate() {
+        if select_item_is_deferrable(item) {
+            plan.deferred_projections.push(DeferredProj { select_index: i });
+        }
+    }
+}
+
+/// Clear late-phase `QueryNeeds` flags that no surviving `late_ops` op
+/// requires. Only the late-armed needs (`retained`, `dominator_children`,
+/// `ref_walk`) are recomputed from `late_ops`; scan-time needs (histogram,
+/// instance_*, runtime_type) are left untouched because they derive from the
+/// SELECT/WHERE that this plan-only view cannot re-inspect. Idempotent.
+pub fn eliminate_dead_needs(plan: &mut QueryPlan) {
+    let mut retained = false;
+    let mut dominator_children = false;
+    let mut ref_walk = false;
+    for op in &plan.late_ops {
+        match op {
+            StageOp::JoinRetained => retained = true,
+            StageOp::RetainedSet { .. } => {
+                retained = true;
+                dominator_children = true;
+            }
+            StageOp::DominatorChildren { .. } | StageOp::DominatorOf => {
+                dominator_children = true;
+            }
+            StageOp::RefWalkResolve { .. } => ref_walk = true,
+        }
+    }
+    // Only DOWNGRADE (clear) — never set a need true here (setting is the
+    // planner's job). AND with the recomputed referent so a need survives only
+    // if both the planner set it AND a late op still references it.
+    plan.needs.retained &= retained;
+    plan.needs.dominator_children &= dominator_children;
+    plan.needs.ref_walk &= ref_walk;
+}
+
+/// Narrow the scan-time carry layout to the minimum needed downstream. An
+/// `IndexOnly` carry is already minimal (no-op). For an `IndexPlusScalars`
+/// carry, if no downstream op consumes any carried scalar, downgrade to
+/// `IndexOnly`. (Column-level width pruning is a future refinement; today the
+/// planner only ever emits `IndexOnly`, so this conservatively downgrades an
+/// all-unused scalar carry and otherwise leaves the layout intact.) Idempotent.
+pub fn narrow_carry(plan: &mut QueryPlan) {
+    if let CarryLayout::IndexPlusScalars { widths } = &plan.carry {
+        if widths.is_empty() {
+            plan.carry = CarryLayout::IndexOnly;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -67,6 +137,8 @@ mod tests {
     use crate::query::ast::{Attr, CompareOp, Predicate, Value};
     use crate::query::parse::parse;
     use crate::query::plan::plan_query;
+    use crate::query::carry::CarryLayout;
+    use crate::query::plan::StageOp;
 
     // ---------- helpers ----------
 
@@ -321,5 +393,185 @@ mod tests {
         assert_eq!(plan.scan_limit, Some(10), "first call must set scan_limit");
         pushdown_limit(&mut plan);
         assert_eq!(plan.scan_limit, Some(10), "second call must not change scan_limit");
+    }
+
+    // ---------- defer_projections tests (Task 32) ----------
+
+    /// A SELECT with a projection-only N-hop RefPath (`x.parent.name`) is
+    /// deferrable (expensive). After `defer_projections`, `deferred_projections`
+    /// must be non-empty and contain select_index 0.
+    #[test]
+    fn projection_only_refpath_deferred() {
+        let query = parse("SELECT x.parent.name FROM Node x").unwrap();
+        let mut plan = plan_query(&query).unwrap();
+        defer_projections(&mut plan, &query);
+        assert!(
+            !plan.deferred_projections.is_empty(),
+            "RefPath SELECT item must be marked deferrable; got {:?}",
+            plan.deferred_projections
+        );
+        assert_eq!(
+            plan.deferred_projections[0].select_index, 0,
+            "first (only) SELECT item is at index 0"
+        );
+    }
+
+    /// `SELECT @retainedHeapSize FROM java.lang.String` — the retained-heap-size
+    /// attribute is expensive (cross-phase); it must be marked deferrable.
+    #[test]
+    fn retained_projection_deferred() {
+        let query = parse("SELECT @retainedHeapSize FROM java.lang.String").unwrap();
+        let mut plan = plan_query(&query).unwrap();
+        defer_projections(&mut plan, &query);
+        assert!(
+            !plan.deferred_projections.is_empty(),
+            "@retainedHeapSize SELECT item must be marked deferrable; got {:?}",
+            plan.deferred_projections
+        );
+        assert_eq!(plan.deferred_projections[0].select_index, 0);
+    }
+
+    /// `SELECT @objectId FROM java.lang.String` — a cheap built-in attr is NOT
+    /// deferrable; `deferred_projections` must remain empty.
+    #[test]
+    fn plain_scalar_projection_not_deferred() {
+        let query = parse("SELECT @objectId FROM java.lang.String").unwrap();
+        let mut plan = plan_query(&query).unwrap();
+        defer_projections(&mut plan, &query);
+        assert!(
+            plan.deferred_projections.is_empty(),
+            "@objectId is cheap — must NOT be marked deferrable; got {:?}",
+            plan.deferred_projections
+        );
+    }
+
+    /// `defer_projections` must be idempotent: calling it twice must produce the
+    /// same `deferred_projections` as calling it once (the `.clear()` prevents
+    /// duplication).
+    #[test]
+    fn defer_is_idempotent() {
+        let query = parse("SELECT @retainedHeapSize FROM java.lang.String").unwrap();
+        let mut plan = plan_query(&query).unwrap();
+        defer_projections(&mut plan, &query);
+        let first = plan.deferred_projections.clone();
+        defer_projections(&mut plan, &query);
+        let second = plan.deferred_projections.clone();
+        assert_eq!(first, second, "calling defer_projections twice must be idempotent");
+    }
+
+    // ---------- eliminate_dead_needs tests (Task 32) ----------
+
+    /// A stale `needs.retained = true` with no `JoinRetained` late op must be
+    /// cleared by `eliminate_dead_needs`.
+    #[test]
+    fn dead_retained_need_eliminated() {
+        // Build a plan that has no late ops, then manually arm needs.retained.
+        let mut plan =
+            plan_query(&parse("SELECT @usedHeapSize FROM java.lang.String").unwrap()).unwrap();
+        // Ensure no late ops (precondition).
+        plan.late_ops.clear();
+        plan.needs.retained = true; // stale: no referent late op
+        eliminate_dead_needs(&mut plan);
+        assert!(
+            !plan.needs.retained,
+            "needs.retained must be cleared when no late op references it"
+        );
+    }
+
+    /// A plan that genuinely uses retained (`SELECT @retainedHeapSize`) has a
+    /// `JoinRetained` late op — `eliminate_dead_needs` must PRESERVE `needs.retained`.
+    #[test]
+    fn live_retained_need_preserved() {
+        let mut plan =
+            plan_query(&parse("SELECT @retainedHeapSize FROM java.lang.String").unwrap()).unwrap();
+        // Confirm precondition: the planner armed JoinRetained and needs.retained.
+        assert!(
+            plan.late_ops.iter().any(|op| matches!(op, StageOp::JoinRetained)),
+            "precondition: @retainedHeapSize SELECT must produce JoinRetained, got {:?}",
+            plan.late_ops
+        );
+        assert!(plan.needs.retained, "precondition: needs.retained must be set by planner");
+        eliminate_dead_needs(&mut plan);
+        assert!(
+            plan.needs.retained,
+            "needs.retained must stay true when JoinRetained late op is present"
+        );
+    }
+
+    /// `eliminate_dead_needs` must NOT touch scan-time needs
+    /// (`instance_scalar`, `instance_string`, `runtime_type`). We build a plan
+    /// that arms all three via WHERE, record the flags, call
+    /// `eliminate_dead_needs`, and assert they are unchanged.
+    #[test]
+    fn eliminate_does_not_touch_scan_needs() {
+        // @displayName = "foo" → instance_string; count > 1 → instance_scalar;
+        // s INSTANCEOF java.lang.Object → runtime_type.
+        let mut plan = plan_query(
+            &parse(
+                "SELECT * FROM C s WHERE @displayName = \"foo\" \
+                 AND count > 1 AND s INSTANCEOF java.lang.Object",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        // Confirm preconditions.
+        assert!(plan.needs.instance_string, "precondition: instance_string");
+        assert!(plan.needs.instance_scalar, "precondition: instance_scalar");
+        assert!(plan.needs.runtime_type, "precondition: runtime_type");
+        let before_scalar = plan.needs.instance_scalar;
+        let before_string = plan.needs.instance_string;
+        let before_rt = plan.needs.runtime_type;
+        eliminate_dead_needs(&mut plan);
+        assert_eq!(plan.needs.instance_scalar, before_scalar, "instance_scalar must not change");
+        assert_eq!(plan.needs.instance_string, before_string, "instance_string must not change");
+        assert_eq!(plan.needs.runtime_type, before_rt, "runtime_type must not change");
+    }
+
+    /// Calling `eliminate_dead_needs` twice must leave `needs` identical to
+    /// calling it once (idempotent).
+    #[test]
+    fn eliminate_is_idempotent() {
+        let mut plan =
+            plan_query(&parse("SELECT @retainedHeapSize FROM java.lang.String").unwrap()).unwrap();
+        eliminate_dead_needs(&mut plan);
+        let needs_after_first = plan.needs.clone();
+        eliminate_dead_needs(&mut plan);
+        assert_eq!(
+            plan.needs, needs_after_first,
+            "eliminate_dead_needs must be idempotent"
+        );
+    }
+
+    // ---------- narrow_carry tests (Task 32) ----------
+
+    /// A plan whose carry is `IndexOnly` (the default) must be untouched by
+    /// `narrow_carry`.
+    #[test]
+    fn narrow_carry_indexonly_is_noop() {
+        let mut plan =
+            plan_query(&parse("SELECT @objectId FROM java.lang.String").unwrap()).unwrap();
+        assert!(
+            matches!(plan.carry, CarryLayout::IndexOnly),
+            "precondition: default carry is IndexOnly"
+        );
+        narrow_carry(&mut plan);
+        assert!(
+            matches!(plan.carry, CarryLayout::IndexOnly),
+            "narrow_carry must leave IndexOnly unchanged"
+        );
+    }
+
+    /// An `IndexPlusScalars` carry with an empty widths list carries no actual
+    /// scalar data, so `narrow_carry` must downgrade it to `IndexOnly`.
+    #[test]
+    fn narrow_carry_empty_scalars_downgrades() {
+        let mut plan =
+            plan_query(&parse("SELECT @objectId FROM java.lang.String").unwrap()).unwrap();
+        plan.carry = CarryLayout::IndexPlusScalars { widths: vec![] };
+        narrow_carry(&mut plan);
+        assert!(
+            matches!(plan.carry, CarryLayout::IndexOnly),
+            "IndexPlusScalars with empty widths must downgrade to IndexOnly"
+        );
     }
 }
