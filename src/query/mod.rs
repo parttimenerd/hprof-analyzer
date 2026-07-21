@@ -12,6 +12,7 @@ pub mod histogram;
 pub mod run;
 pub mod repl;
 pub mod carry;
+pub mod refwalk;
 pub mod stage_runner;
 
 use std::fmt;
