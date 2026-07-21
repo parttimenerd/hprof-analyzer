@@ -15,13 +15,20 @@ The guiding constraint from the existing analyzer: **low-memory streaming**. The
 analyzer deliberately does not keep per-object data resident. So the design must
 be *adaptive*: each query is analyzed to determine the minimum data it needs,
 and only that data is materialized, attached to the cheapest pipeline phase(s)
-that can supply it. A query that needs nothing but the class histogram pays
-nothing; a query that follows a 4-hop reference path pays for exactly that walk.
+that can supply it. This adaptivity is **per-feature and intelligent** — cost is
+armed one-to-one by what the query invokes (see "Intelligent cost gating"), with
+no baseline query tax — and **execution latency scales with what the query
+touches, not the dump size** (see "Fast execution"). A query that needs nothing
+but the class histogram pays nothing and runs in a single pass; a query that
+follows a 4-hop reference path pays for exactly that walk, over only the rows
+that survive its filter.
 
 ## Non-Goals
 
-- Full MAT OQL parity (graph primitives `dominators()`/`inbounds()`, `UNION`,
-  correlated subqueries). These are explicitly rejected with a clear message.
+- Full MAT OQL parity: correlated subqueries and non-homogeneous / nested `UNION`
+  are rejected with a clear message. (Graph primitives `dominators()`,
+  `inbounds()`/`outbounds()`, bounded `path()`, `AS RETAINED SET`, and homogeneous
+  `UNION` *are* supported — see the coverage table.)
 - A persistent query server / long-running daemon. The interactive `query`
   subcommand is a simple one-shot REPL over a single dump, not a service.
 - Mutating or re-indexing the dump. Read-only.
@@ -528,7 +535,65 @@ Because staging and carry-layout selection are pure functions of `needs`, the
 planner has a small finite decision surface — every branch of which is a unit
 test (see Testing).
 
-### 3. Executor (`src/query/execute.rs`)
+#### Intelligent cost gating — you pay only for the features you use
+
+Cost is **per-need**, not per-tier: each `QueryNeeds` flag independently arms
+exactly one piece of machinery, and an unset flag arms nothing. There is no
+baseline "query tax". The mapping is one-to-one and additive:
+
+| A query that only… | Arms | Leaves untouched |
+|---|---|---|
+| aggregates by class (`Histogram`) | one P4 read over per-class stats that already exist for the report | field decode, carries, CSR retention, dominator window |
+| filters/reads scalar fields (`InstanceScalar`) | one P1 predicate over named field offsets | String decode, ref resolution, retained/dominator, edges |
+| reads String fields (`InstanceString`) | String backing-array decode **for referenced fields only** | ref hops, retained, edges |
+| follows ref hops (`RefPath`) | P1 frontier collect + P2/P1 resolve, `AddrFrontier` carry | retained/dominator, edge retention |
+| uses `@retainedHeapSize` (`Retained`) | a P3 join against the already-resident `retained[]` | edge retention, forward scan |
+| uses `dominators()`/`AS RETAINED SET` | a P3 stage in the surviving `dc_*` window | edge retention |
+| uses `inbounds/outbounds/path` (`Edges`) | **only** the row-pruned, compressed retention (Levers 1–4) | nothing beyond the matched rows |
+
+The load-bearing property: a `Histogram`-only query never touches field decode,
+never allocates a carry, never keeps a CSR resident, never opens the dominator
+window — its cost is a single pass over aggregates the report already computes.
+Each heavier feature layers its own cost on top *only when its flag is set*.
+Because the flags are unioned across the run **before pass2**, a run containing no
+edge/dominator/retained query is byte-for-byte and RSS-for-RSS identical to today.
+`!plan`/`!explain` prints the armed needs and their cost so the trade is visible
+before running.
+
+#### Fast execution — latency scales with what the query touches, not the dump
+
+Four mechanisms keep per-query wall-clock bounded by the query's own footprint,
+independent of total heap size:
+
+1. **Early WHERE/LIMIT pruning.** WHERE predicates and the row `LIMIT` are applied
+   *during* the P1 match, so every later stage carries only survivors. Projection
+   work that is not needed to decide a match — resolving a referent, decoding a
+   `@displayName`, joining `@retainedHeapSize` — is deferred to run *after* pruning,
+   over the bounded survivor set, never the whole class. (This is the
+   predicate-critical vs projection-only split already threaded through `RefPath`.)
+
+2. **Single-pass when nothing crosses phases.** If `needs` fits within one phase
+   (`HistogramOnly`, or a `SingleScan` field filter with no retained/edge/dominator
+   projection), the plan emits **one stage, zero carries** and finishes in that
+   phase's existing traversal — no buffer flush, no second scan, no P3 window.
+
+3. **Short-circuit cheapest predicates first.** The planner orders WHERE conjuncts
+   by ascending cost — class-index / `INSTANCEOF` and scalar compares first, then
+   String decode, then ref resolution, then `LIKE` regex — so a row that fails a
+   cheap test never pays for the expensive ones. Expensive operands are evaluated
+   lazily per-row behind the cheap guards.
+
+4. **Bounded work everywhere.** Every frontier, carry, group table, and result set
+   has a cap (`caps`); total work is bounded by `caps × max_degree`, never by heap
+   size. Hitting a cap sets `truncated` and returns a bounded top-N rather than
+   silently doing unbounded work — the one place a result is a sample, made honest
+   by the flag.
+
+Together these mean the *common* interactive query — a field filter with a LIMIT —
+runs in a single bounded P1 pass with no carries, and even a cross-phase query only
+carries (compressed) the rows that survived WHERE+LIMIT.
+
+
 
 The executor is a **stage runner**, not a set of per-strategy drivers. It holds
 the plan's carry buffers and, at each pipeline phase, runs whatever `Stage`s the
@@ -801,6 +866,20 @@ Test-driven throughout. Layers:
      rejected naming the mismatch.
    - Every **rejection** case, asserting the message names the construct.
    The mapping `needs → stages/carries` is a finite table; there is a test per cell.
+   - **Cost gating** (per-need, additive): a `Histogram`-only query arms *no* carry,
+     *no* CSR retention, *no* dominator window, *no* field decode (assert one P4
+     stage and all retain flags false / `needs` minimal); a scalar field filter
+     arms P1 decode but leaves String-decode, ref, retained, and edge machinery
+     off. One assertion per row of the cost-gating table, proving each feature's
+     cost is armed *only* by its own flag.
+   - **Fast-path shape**: a `SELECT ... FROM C WHERE <scalar> LIMIT n` plans to a
+     **single P1 stage with zero carries** (assert `stages.len() == 1`,
+     `carries.is_empty()`), and the LIMIT/WHERE are marked applied *in* that scan.
+     Assert that a projection-only referent/`@displayName`/`@retainedHeapSize` is
+     tagged to resolve after WHERE+LIMIT, not before.
+   - **Predicate ordering**: a WHERE mixing a class/scalar test with a `LIKE` regex
+     and a ref-hop test plans the conjuncts cheap-first (assert the evaluation order:
+     class-index/scalar → String decode → ref resolve → regex).
 3. **Executor tests on a tiny hand-built dump** — construct a minimal in-memory
    graph fixture (a few classes with known scalar/String/ref fields and known
    sizes) and assert exact query results: counts, sums, top-N ordering, path
