@@ -179,6 +179,33 @@ fn pred_cost_rank(c: PredCost) -> u8 {
     }
 }
 
+impl QueryPlan {
+    /// Human-readable plan summary for `!explain` / `!plan`.
+    pub fn explain(&self) -> String {
+        let mut s = String::new();
+        s.push_str(&format!("stage: {:?}\n", self.kind));
+        let mut armed = Vec::new();
+        if self.needs.histogram { armed.push("histogram"); }
+        if self.needs.instance_scalar { armed.push("instance_scalar"); }
+        if self.needs.instance_string { armed.push("instance_string"); }
+        if self.needs.runtime_type { armed.push("runtime_type"); }
+        s.push_str(&format!(
+            "needs (armed): {}\n",
+            if armed.is_empty() { "none".into() } else { armed.join(", ") }
+        ));
+        if let Some(n) = self.limit {
+            s.push_str(&format!("limit: {n}\n"));
+        }
+        if !self.where_terms.is_empty() {
+            s.push_str("where (cheapest-first):\n");
+            for c in &self.where_terms {
+                s.push_str(&format!("  [{:?}] {:?}\n", c.cost, c.pred));
+            }
+        }
+        s
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,6 +317,41 @@ mod tests {
         assert!(plan.needs.instance_scalar);
         assert!(plan.needs.instance_string);
         assert!(plan.needs.runtime_type);
+    }
+
+    #[test]
+    fn explain_lists_kind_and_needs() {
+        let plan = plan_query(&parse("SELECT @objectId FROM C WHERE count > 3").unwrap()).unwrap();
+        let text = plan.explain();
+        assert!(text.contains("SingleScan"));
+        assert!(text.contains("instance_scalar"));
+        assert!(text.contains("cheapest-first"));
+    }
+
+    #[test]
+    fn explain_histogram_only_no_where() {
+        let plan =
+            plan_query(&parse("SELECT COUNT(*) FROM java.lang.String").unwrap()).unwrap();
+        let text = plan.explain();
+        assert!(text.contains("HistogramOnly"), "got: {text}");
+        assert!(text.contains("histogram"), "got: {text}");
+        assert!(!text.contains("where (cheapest-first)"), "got: {text}");
+        assert!(!text.contains("limit:"), "got: {text}");
+    }
+
+    #[test]
+    fn explain_shows_limit() {
+        let plan = plan_query(&parse("SELECT * FROM C LIMIT 10").unwrap()).unwrap();
+        let text = plan.explain();
+        assert!(text.contains("limit: 10"), "got: {text}");
+    }
+
+    #[test]
+    fn explain_no_needs_shows_none() {
+        // @objectId does not arm any field-decode need; no WHERE either.
+        let plan = plan_query(&parse("SELECT @objectId FROM C").unwrap()).unwrap();
+        let text = plan.explain();
+        assert!(text.contains("needs (armed): none"), "got: {text}");
     }
 
     #[test]
