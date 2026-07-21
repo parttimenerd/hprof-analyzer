@@ -90,7 +90,7 @@ Five components, each independently testable:
 
 ```
 query::parse      OQL text            -> Query AST
-query::plan       Query AST + schema  -> QueryPlan (what data, which phases, depth)
+query::plan       Query AST + schema  -> QueryPlan (staged: which phases, carries, caps, depth)
 query::execute    QueryPlan + dump    -> QueryResult (bounded rows/aggregates)
 query::model      QueryResult         -> serde structs on the Report
 report renderers  QueryResult         -> md / html / json sections
@@ -112,8 +112,40 @@ Unsupported constructs parse-error early with the offending token and a hint.
 This is where "be adaptive; analyze the query" lives. The planner is a pure
 function (AST + schema → plan) and therefore fully unit-testable without a dump.
 It does three things: derive the query's data requirements, bind each requirement
-to the *earliest* pipeline phase where that data is live, and decide the
-execution strategy (including cross-phase hand-offs).
+to the *earliest* pipeline phase where that data is live, and compile a
+**multi-phase plan** — an ordered set of per-phase *stages* connected by
+*compressed carry buffers* — rather than picking one of a few hardcoded
+strategies.
+
+A "proper planner" here means the plan is a first-class, inspectable structure,
+not an opaque enum branch:
+
+```rust
+pub struct QueryPlan {
+    pub stages: Vec<Stage>,       // one per pipeline phase this query touches,
+                                  // in pipeline order (P0..P4)
+    pub carries: Vec<CarrySpec>,  // data handed from stage[i] to a later stage,
+                                  // with its compressed layout + cap
+    pub caps: Caps,               // every bound the plan will enforce
+    pub projection: Projection,   // final column layout + how each column is sourced
+    pub rejection: Option<String>,// unsupported construct, named
+}
+
+pub struct Stage {
+    pub phase: Phase,             // P0 | P1 | P2 | P3 | P4
+    pub reads: Vec<Requirement>,  // minimal fields/edges/attrs read at this phase
+    pub op: StageOp,              // Match | ResolveHop | JoinRetained | Aggregate | Finalize
+    pub produces: Option<CarryId>,// the carry this stage fills (if any)
+    pub consumes: Vec<CarryId>,   // carries this stage reads
+}
+```
+
+The old "strategy" names (`HistogramOnly`, `SingleScan`, `RefWalk`,
+`CrossPhase`) survive only as *derived labels* for the shape of the stage list —
+useful in tests and diagnostics — but the executor is driven by the stages
+themselves. This generalizes cleanly: a query that filters fields (P1), follows a
+ref hop (P2), *and* orders by retained (P3) is just a three-stage plan with two
+carries; there is no bespoke "P1→P3" special case to special-case again.
 
 #### Pipeline data-liveness map (the substrate adaptivity plans against)
 
@@ -158,81 +190,146 @@ requirement carries the **minimal field/edge set** it touches — never "all fie
 of the class", only the ones the query names. That minimality is the whole point:
 a query over one `int` field decodes one `int`.
 
-#### Binding requirements to phases + the strategy
+#### Binding requirements to phases — staging
 
-The planner emits a `QueryPlan { strategy, needs, caps, projection, rejection }`.
-Strategy is chosen by the highest phase any requirement forces:
+For each `Requirement`, the planner looks up the **earliest** phase in the
+liveness map that can supply it, and appends its read to that phase's `Stage`.
+Requirements that only *project* (never gate a match) are deferred to the latest
+phase that still has the survivors, so their reads run over the pruned set, not
+the whole class. This produces the ordered stage list directly from `needs`; the
+"strategy" is just the observed shape:
 
-- **`HistogramOnly`** — needs ⊆ {Histogram}. Zero scans; evaluated at P4.
-- **`SingleScan`** — needs ⊆ {InstanceScalar, InstanceString, RuntimeType} and
-  **no** Retained and **no** RefPath. Fully answered in one P1 visit: decode,
-  filter, project, feed bounded accumulators. Cost = zero extra scans (rides the
-  always-on field-decode scan).
-- **`RefWalk { depth }`** — has RefPath. Adaptive resolution (see executor). The
-  planner records, per hop, whether that hop is *predicate-critical* (must be
-  resolved for all candidates) or *projection-only* (resolve lazily for only the
-  rows that survive WHERE + LIMIT) — so a 4-hop SELECT path over a filtered set
-  resolves 4 hops for only the surviving handful of rows, not the whole class.
-- **`CrossPhase { match_at, finalize_at }`** — needs both P1 (field match) and P3
-  (Retained). The planner splits the query: at P1 it records the bounded set of
-  **matched object indices** + any P1-decoded projection values into a carry
-  buffer (capped); at P3 it joins those indices against `retained[]`/`idom` to
-  finish ORDER BY/SELECT. The carry buffer is bounded by an explicit cap
-  (`--query-match-cap`, default e.g. 200k indices ≈ 800 KB), and overflow sets
-  `truncated` — never unbounded.
+- reads ⊆ {Histogram} → single P4 stage (derived label `HistogramOnly`).
+- reads ⊆ P1 field/type data, nothing later → single P1 stage (`SingleScan`).
+- any `RefPath` hop → adds P1 (frontier collection) + P2/P1 resolve stages
+  (`RefWalk`); each hop is tagged predicate-critical (resolve for all candidates)
+  or projection-only (resolve after WHERE+LIMIT prunes survivors).
+- any `Retained` use → adds a P3 stage that consumes the carry from the P1 match
+  stage and joins it against `retained[]`/`idom` (`CrossPhase`).
 
-`caps` collects every bound the plan will apply (match-set cap, per-hop frontier
+Nothing is hardcoded to two phases: a query needing P1 + P2 + P3 emits three
+stages and two carries, composed the same way as any two-phase plan.
+
+#### Carries + compression — spanning phases without holding the heap
+
+A stage that must feed a *later* stage cannot keep the full per-object data alive
+across the intervening teardown (that would defeat the streaming design). Instead
+each cross-phase hand-off is an explicit **carry buffer** with a **compressed,
+phase-appropriate layout** the planner chooses up front — mirroring the codebase's
+existing "compress cold data, free early" discipline:
+
+```rust
+pub struct CarrySpec {
+    pub id: CarryId,
+    pub from: Phase, pub to: Phase,
+    pub layout: CarryLayout,   // how each retained record is packed
+    pub cap: usize,            // max records before `truncated` trips
+}
+
+pub enum CarryLayout {
+    // just the dense object index — 4/8 bytes each. For "match here, look up
+    // an attribute (retained) later" joins. Sorted+delta-varint on flush so a
+    // monotonic index set costs ~1-2 bytes/entry.
+    IndexOnly,
+    // index + a small fixed tuple of already-decoded scalars, bit-packed to the
+    // field widths the query actually named (an i32 field carries as 4 bytes,
+    // a bool as 1 bit). For "decode cheap fields at P1, combine with retained
+    // at P3".
+    IndexPlusScalars { widths: Vec<ScalarWidth> },
+    // target addresses to resolve at the next phase, deduped into a sorted set
+    // (many candidates point at the same referent) then delta-varint encoded.
+    // For ref-hop frontiers.
+    AddrFrontier,
+}
+```
+
+The planner picks the layout from what actually crosses the boundary, so the
+carry holds the *minimum* needed to finish, in its most compact form:
+
+- **Index-only** for the common "filter on fields at P1, order/print retained at
+  P3" query — the carry is a sorted `Vec<u32>` of matched indices, delta+varint
+  encoded on flush. Millions of matches compress to a few MB; the cap still bounds
+  it, but compression pushes the truncation point far out so most real queries are
+  exact.
+- **Index + packed scalars** when the query also projects a P1-decoded field
+  alongside a P3 attribute — the scalars ride along bit-packed to their declared
+  widths, not as tagged `QueryValue`s.
+- **Address-frontier** for ref hops resolved at a later phase — deduped (collapsing
+  fan-in) then delta-varint encoded, which is where most of the shrink comes from
+  on real object graphs.
+
+Carries are write-once at their producing stage and read-once (streamed, decoded
+lazily) at the consuming stage, so peak extra RSS is one compressed buffer, not
+the decoded rows. Every carry is capped; overflow sets `truncated` and the result
+becomes a bounded sample rather than growing unbounded.
+
+`caps` collects every bound the plan will apply (per-carry caps, per-hop frontier
 cap, group cap, top-N). `rejection` is `Some(msg)` when a requirement is
 unsupported (graph primitives, multi-hop *aggregation* joins, etc.), naming the
 exact construct.
 
-Because strategy selection is a pure function of `needs`, the planner has a small
-finite decision table — every branch of which is a unit test (see Testing).
+Because staging and carry-layout selection are pure functions of `needs`, the
+planner has a small finite decision surface — every branch of which is a unit
+test (see Testing).
 
 ### 3. Executor (`src/query/execute.rs`)
 
-One executor per strategy; each is a thin driver over existing scan hooks and the
-bounded accumulators. The accumulators (top-N heap, grouped aggregators) are
-shared across strategies.
+The executor is a **stage runner**, not a set of per-strategy drivers. It holds
+the plan's carry buffers and, at each pipeline phase, runs whatever `Stage`s the
+plan bound to that phase — reading the carries they consume and filling the carry
+they produce. Because the plan is an ordered stage list with explicit carries,
+the same runner handles a one-stage histogram query and a four-stage
+P1→P2→P3→finalize query with no special cases. The bounded accumulators (top-N
+heap, grouped aggregators) and the compressed-carry codec are shared by all
+stages.
 
-- **`HistogramOnly`**: fold the in-memory per-class histogram through the
-  aggregators. No dump access.
-- **`SingleScan`**: register a `(predicate, projector)` on the P1 field-decode
-  `scan_all_records` callback. Per matched instance: decode only the named scalar
-  fields (offset read) and String fields (via the existing String→backing-array
-  decode), evaluate WHERE, and on pass, project SELECT into the accumulator
-  (top-N for ORDER BY+LIMIT; grouped aggregators for GROUP BY). Class matching
-  (`INSTANCEOF`, wildcard) is precompiled to a class-index bitset at P0 so the
-  hot loop does an O(1) membership test.
-- **`RefWalk { depth }`**: adaptive, breadth-first over hops, HPROF-order-safe
-  (HPROF gives no record ordering, so referents are resolved in a *later* batch,
-  never inline).
+Stage operators:
+
+- **`Aggregate` at P4 (`HistogramOnly` shape)**: fold the in-memory per-class
+  histogram through the aggregators. No dump access.
+- **`Match` at P1 (`SingleScan` shape)**: register a `(predicate, projector)` on
+  the P1 field-decode `scan_all_records` callback. Per matched instance: decode
+  only the named scalar fields (offset read) and String fields (via the existing
+  String→backing-array decode), evaluate WHERE, and on pass either project into
+  the accumulator (if this is the terminal stage) or append to the produced carry
+  in its compressed layout. Class matching (`INSTANCEOF`, wildcard) is precompiled
+  to a class-index bitset at P0 so the hot loop does an O(1) membership test.
+- **`ResolveHop` (`RefWalk` shape)**: adaptive, breadth-first over hops,
+  HPROF-order-safe (HPROF gives no record ordering, so referents are resolved in a
+  *later* batch, never inline).
   - **Frontier collection (P1):** while scanning, for each candidate object,
-    record `(candidate_index, first_hop_target_addr)` for each path used. This is
-    the level-0 frontier, bounded by the match-set cap.
-  - **Hop resolution:** two mechanisms, planner picks the cheaper per hop:
+    append `(candidate_index, first_hop_target_addr)` to the hop's `AddrFrontier`
+    carry — deduped and delta-varint encoded on flush, bounded by the frontier cap.
+  - **Hop resolution:** two mechanisms, the planner picks the cheaper per hop and
+    encodes the choice in the stage:
     (a) **CSR hop** — when the needed edge is an object-reference field and the
-    forward CSR is still available (P2), follow `fwd_targets`; addr→index via the
-    live map. (b) **Batched resolve-scan** — collect the frontier's target
-    *addresses* into a hash set, then in one more P1-style pass decode just those
-    objects' needed fields. One extra scan per resolve *batch*, not per object.
-  - **Predicate-critical vs projection-only hops:** predicate hops resolve for
-    the whole frontier (needed to filter); projection-only hops resolve *after*
-    WHERE + LIMIT have pruned the survivors, so deep SELECT paths cost O(surviving
-    rows), not O(class). This is the sharpest adaptivity lever.
+    forward CSR is still live (P2), follow `fwd_targets`; addr→index via the live
+    map. (b) **Batched resolve-scan** — decode the frontier's deduped target set in
+    one more P1-style pass. One extra scan per resolve *batch*, not per object.
+  - **Predicate-critical vs projection-only hops:** predicate hops resolve for the
+    whole frontier (needed to filter); projection-only hops resolve *after* WHERE +
+    LIMIT have pruned the survivors, so deep SELECT paths cost O(surviving rows),
+    not O(class). This is the sharpest adaptivity lever.
   - Every hop frontier is capped; hitting a cap sets `truncated`.
-- **`CrossPhase`**: run the `SingleScan`/`RefWalk` matcher at P1 into a **carry
-  buffer** of `(object_index, partial_projection)` (capped). Persist it past the
-  pass2 teardown (it is tiny — indices + a few decoded scalars). At P3, once
-  `retained[]`/`idom` exist, join each carried index to its retained size,
-  complete the projection, apply ORDER BY/LIMIT, emit rows.
+- **`JoinRetained` at P3 (`CrossPhase` shape)**: stream the carry produced by an
+  earlier `Match`/`ResolveHop` stage (decoding the compressed layout lazily), and
+  for each carried index look up `retained[]`/`idom`. Complete the projection
+  (combining any packed-scalar payload from the carry with the freshly-read
+  retained size), feed the accumulator. Because the carry is index-only or
+  index+packed-scalars, this stage never re-reads object blobs — the blob
+  machinery is already gone by P3, which is exactly why the needed scalars were
+  compressed into the carry at P1.
+- **`Finalize`**: apply ORDER BY / LIMIT to the accumulator and emit
+  `QueryResult` rows.
 
-All result buffers and carry buffers are explicitly bounded, so RSS stays within
-budget regardless of dump size — matching every other analysis in the codebase.
-When a query needs no dump-scan data at all (`HistogramOnly`), no scan is added;
-when it needs only P1 data, it rides the always-on field-decode scan with zero
-extra passes; only ref-walks and cross-phase joins add work, and only in
-proportion to what the query touches.
+All result buffers and carry buffers are explicitly bounded and stored compressed
+(see the planner's `CarryLayout`), so RSS stays within budget regardless of dump
+size — matching every other analysis in the codebase. When a query needs no
+dump-scan data at all (`HistogramOnly` shape), no scan is added; when it needs
+only P1 data, it rides the always-on field-decode scan with zero extra passes;
+only ref-walks and cross-phase joins add work, and only in proportion to what the
+query touches. Spanning three or more phases is just three or more stages chained
+by compressed carries — the same machinery, not a new code path.
 
 ### 4. Result model (`src/query/model.rs`)
 
@@ -344,24 +441,39 @@ Test-driven throughout. Layers:
    expected AST; each unsupported construct produces the expected parse error.
    Property-ish fuzz: random-but-valid queries round-trip parse→display→parse.
 2. **Planner unit tests** (no dump) — the planner is a pure function, so its
-   decision table is exhaustively testable. For a fixed synthetic schema, assert
-   the derived `QueryNeeds`, the chosen **strategy**, path depth, per-hop
-   predicate-critical/projection-only classification, and the caps for a matrix of
-   queries:
-   - `HistogramOnly`: `SELECT COUNT(*)`, `SUM(@retainedHeap) GROUP BY class`.
-   - `SingleScan`: scalar-only filter; String-only filter; `@usedHeapSize`
-     predicate; `@type`/`INSTANCEOF`; `IN (...)`; arithmetic projection.
-   - `RefWalk`: 1-hop predicate; 3-hop predicate; deep **projection-only** path
-     over a filtered set (assert deep hops are marked projection-only so they
-     resolve lazily).
-   - `CrossPhase`: field filter + `ORDER BY @retainedHeap LIMIT n` (assert
-     match_at=P1, finalize_at=P3); field filter + `SELECT @retainedHeap`.
+   decision surface is exhaustively testable. For a fixed synthetic schema, assert
+   the derived `QueryNeeds`, the compiled **stage list** (which phases, in order),
+   the **carries** (which `CarryLayout` + cap for each hand-off), path depth,
+   per-hop predicate-critical/projection-only classification, and caps for a
+   matrix of queries:
+   - `HistogramOnly` shape (single P4 stage, no carries): `SELECT COUNT(*)`,
+     `SUM(@retainedHeap) GROUP BY class`.
+   - `SingleScan` shape (single P1 stage): scalar-only filter; String-only filter;
+     `@usedHeapSize` predicate; `@type`/`INSTANCEOF`; `IN (...)`; arithmetic
+     projection.
+   - `RefWalk` shape: 1-hop predicate (assert an `AddrFrontier` carry); 3-hop
+     predicate; deep **projection-only** path over a filtered set (assert deep hops
+     are marked projection-only so they resolve lazily).
+   - `CrossPhase` shape: field filter + `ORDER BY @retainedHeap LIMIT n` (assert a
+     P1 `Match` stage → `IndexOnly` carry → P3 `JoinRetained` stage); field filter
+     that also projects a P1 scalar + `SELECT @retainedHeap` (assert the carry is
+     `IndexPlusScalars` with the correct packed widths).
+   - **Three-phase** span: field filter (P1) + ref hop (P2) + `ORDER BY
+     @retainedHeap` (P3) — assert three stages and two carries chain correctly,
+     proving no two-phase special-casing.
    - Every **rejection** case, asserting the message names the construct.
-   The mapping `needs → strategy` is a finite table; there is a test per cell.
+   The mapping `needs → stages/carries` is a finite table; there is a test per cell.
 3. **Executor tests on a tiny hand-built dump** — construct a minimal in-memory
    graph fixture (a few classes with known scalar/String/ref fields and known
    sizes) and assert exact query results: counts, sums, top-N ordering, path
-   traversal correctness, null handling, truncation flags.
+   traversal correctness, null handling, truncation flags. Include a multi-stage
+   query (field filter → ref hop → order by retained) to exercise carry chaining.
+3a. **Carry codec unit tests** — round-trip each `CarryLayout` (index-only
+   delta-varint, index+packed-scalars at each width, deduped address frontier):
+   encode → decode yields the exact records; assert the encoded size for a
+   monotonic/duplicate-heavy input is a small fraction of the naive size (the
+   compression claim is tested, not assumed); assert cap overflow trips
+   `truncated` deterministically.
 4. **End-to-end CLI tests** (`tests/`) — run the binary against the existing
    benchmark fixtures with representative `--query` flags and TOML packs; assert
    the rendered md/json contains the expected sections/rows. Add golden fixtures.
@@ -375,16 +487,18 @@ Test-driven throughout. Layers:
 The strategy ladder gives a natural implementation order that keeps each step
 shippable and independently tested:
 
-1. Parser + AST + planner (pure, no dump), incl. the full `needs → strategy`
-   decision table — fully unit tested first.
+1. Parser + AST + planner (pure, no dump), incl. the full `needs → stages/carries`
+   decision surface and the compressed-carry codec — fully unit tested first.
 2. `HistogramOnly` execution + result model + renderers — smallest end-to-end
-   slice.
+   slice (single stage, no carries).
 3. `SingleScan` (scalar, then String, then `@type`/`INSTANCEOF`/`IN`) on the P1
-   field-decode scan.
-4. `CrossPhase` (field match at P1 → carry buffer → join `retained[]` at P3),
-   enabling `ORDER BY @retainedHeap` / `SELECT @retainedHeap`.
+   field-decode scan (single stage).
+4. `CrossPhase` (P1 `Match` → compressed `IndexOnly`/`IndexPlusScalars` carry →
+   P3 `JoinRetained`), enabling `ORDER BY @retainedHeap` / `SELECT @retainedHeap`.
+   This lands the general stage-runner + carry codec.
 5. `RefWalk` (1-hop, then adaptive N-hop; CSR-hop and batched-resolve-scan;
-   predicate-critical vs projection-only).
+   `AddrFrontier` carries; predicate-critical vs projection-only) — and, riding
+   the same stage machinery, arbitrary 3+-phase spans.
 6. TOML input + CLI wiring + golden e2e fixtures.
 
 Each step is independently valuable: many real queries are satisfied by steps
@@ -398,12 +512,16 @@ Each step is independently valuable: many real queries are satisfied by steps
 - **Path resolution on huge frontiers**: a broad `com.acme.*` FROM with a deep
   path could produce a large hop frontier. Mitigated by per-hop caps +
   `truncated`, and by resolving projection-only hops *after* WHERE+LIMIT pruning.
-- **CrossPhase carry-buffer overflow**: a field filter matching millions of
-  objects before an `ORDER BY @retainedHeap` would overflow the carry buffer.
-  Mitigated by the match-set cap: overflow sets `truncated`, and the result is
-  the top-N by the *available* ordering signal, documented as approximate when
-  truncated. This is the one place a query result can be a bounded sample rather
-  than exact; the flag makes it honest.
+- **Carry-buffer overflow across phases**: a field filter matching millions of
+  objects before an `ORDER BY @retainedHeap` fills the P1→P3 carry. Mitigated
+  first by *compression* — the index-only carry is delta-varint encoded, so a
+  monotonic match set costs ~1–2 bytes/entry and the cap is reached far later than
+  with naive 8-byte indices — and then by the cap itself: overflow sets
+  `truncated`, and the result is the top-N by the *available* ordering signal,
+  documented as approximate when truncated. This is the one place a query result
+  can be a bounded sample rather than exact; the flag makes it honest. The same
+  bound applies to any cross-phase carry (address frontiers, packed-scalar
+  payloads), not just retained joins.
 - **Grammar scope creep**: the subset is deliberately fixed; anything outside it
   errors rather than silently under-delivering.
 - **Glob-vs-regex gap**: the first cut serves `LIKE`/wildcards and a glob-subset
