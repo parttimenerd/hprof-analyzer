@@ -888,7 +888,7 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
             ));
         }
         let mut no_in_sets = std::collections::HashMap::new();
-        let (.., query_state) =
+        let (.., query_state, _refwalk_csr) =
             pass2::Pass2::build(input, p1, cvec::Codec::Zstd3, &opts, &flat, &mut no_in_sets)?;
 
         // Query-only path: retained sizes/dominators are not computed, so cross-phase
@@ -986,7 +986,7 @@ fn run(
     let t = Instant::now();
     progress::phase("building object graph (pass 2)");
     let mut no_in_sets = std::collections::HashMap::new();
-    let (mut g, mut inbound, shallow_c, class_idx_c, alloc_serial_c, query_state) =
+    let (mut g, mut inbound, shallow_c, class_idx_c, alloc_serial_c, query_state, refwalk_csr) =
         pass2::Pass2::build(input, p1, compress, &opts, &flat_queries, &mut no_in_sets)?;
     log(
         verbose,
@@ -1158,6 +1158,19 @@ fn run(
     // the RSS peak), and dominator result rows assert on dense indices, not
     // addresses. A later stage that genuinely needs addresses will thread them.
     let id_map = query::stage_runner::IdMap::new(&[]);
+    // Thread the query-gated RefWalk CSR into the resume window. Built only when
+    // a RefWalk query ran; otherwise the borrowed slices are empty and the shared
+    // empty tail map is used, keeping non-RefWalk runs byte/RSS-identical.
+    let (rw_off, rw_tgt, rw_field, rw_names, rw_tails): (
+        &[u32],
+        &[u32],
+        &[u32],
+        &[String],
+        &std::collections::HashMap<u32, query::model::QueryValue>,
+    ) = match &refwalk_csr {
+        Some(c) => (&c.fwd_off, &c.fwd_tgt, &c.fwd_field, &c.field_names, &c.tails),
+        None => (&[], &[], &[], &[], &query::stage_runner::EMPTY_REFWALK_TAILS),
+    };
     let flat_results = query::stage_runner::resume(
         query_state,
         &query_asts,
@@ -1168,17 +1181,11 @@ fn run(
             dc_tgt: &dc_tgt,
             shallow: &g.shallow,
             id_map: &id_map,
-            // RefWalk (Task 27) forward-ref CSR is not live in this window — the
-            // production CSR is freed by the inbound transpose before dominators,
-            // and no per-edge field-id column is built. Empty slices make the
-            // resolver a no-op until the pipeline threads the CSR here.
-            fwd_off: &[],
-            fwd_tgt: &[],
-            fwd_field: &[],
-            field_names: &[],
-            // Task 4: tail-scalar table default empty; Task 5 threads the real
-            // scan-captured table when a RefWalk query ran.
-            refwalk_tails: &query::stage_runner::EMPTY_REFWALK_TAILS,
+            fwd_off: rw_off,
+            fwd_tgt: rw_tgt,
+            fwd_field: rw_field,
+            field_names: rw_names,
+            refwalk_tails: rw_tails,
         },
     );
     let mut query_results = query::run::collapse_union_results(flat_results, &union_groups);

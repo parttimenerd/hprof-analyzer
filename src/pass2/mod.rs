@@ -69,6 +69,7 @@ impl Pass2 {
         crate::cvec::CompressedU32,
         Option<crate::cvec::CompressedU32>,
         crate::query::execute::QueryExecState,
+        Option<crate::query::refwalk::RefWalkCsr>,
     )> {
         let n = p1.id_map.len();
         let id_size = p1.id_size;
@@ -482,6 +483,24 @@ impl Pass2 {
         // errors and histogram results are pushed as finished at their slots.
         // The caller reassembles by slot after the late stage, so no positional
         // `query_order` reorder is needed here.
+        // Build the query-gated RefWalk CSR + tail table BEFORE `finish_state`
+        // consumes the driver. `None` on a non-RefWalk run — the late window
+        // then keeps its empty slices (byte/RSS-identical to before). `n` is the
+        // dense object count, so `fwd_off` has the standard `n+1` length.
+        let refwalk_csr = scan_driver.take_refwalk_csr(n).map(|(off, tgt, fid)| {
+            let truncated = scan_driver.refwalk_truncated();
+            let field_names = scan_driver.take_refwalk_field_names().unwrap_or_default();
+            let tails = scan_driver.take_refwalk_tails().unwrap_or_default();
+            crate::query::refwalk::RefWalkCsr {
+                fwd_off: off,
+                fwd_tgt: tgt,
+                fwd_field: fid,
+                field_names,
+                tails,
+                truncated,
+            }
+        });
+
         let mut query_state = scan_driver.finish_state();
         for outcome in scan_outcomes {
             if let Err((slot, err_result)) = outcome {
@@ -1047,7 +1066,7 @@ impl Pass2 {
         // Query results are tagged by slot inside `query_state`; the caller
         // reassembles them in input order after the late (retained) stage runs,
         // so no positional reorder happens here.
-        Ok((graph, inbound, shallow_c, class_idx_c, alloc_serial_c, query_state))
+        Ok((graph, inbound, shallow_c, class_idx_c, alloc_serial_c, query_state, refwalk_csr))
     }
 
     /// First-scan heap walker that COUNTS out/in degrees per node and finalizes
@@ -1682,7 +1701,7 @@ mod tests {
             return;
         }
         let p1 = Pass1::run(DUMP).unwrap();
-        let (g, inbound, _sc, _ci, _as, _q) = Pass2::build(
+        let (g, inbound, _sc, _ci, _as, _q, _rw) = Pass2::build(
             DUMP,
             p1,
             crate::cvec::Codec::None,
@@ -1722,7 +1741,7 @@ mod tests {
             return;
         }
         let p1 = Pass1::run(DUMP).unwrap();
-        let (g, _inbound, _sc, _ci, _as, _q) = Pass2::build(
+        let (g, _inbound, _sc, _ci, _as, _q, _rw) = Pass2::build(
             DUMP,
             p1,
             crate::cvec::Codec::None,

@@ -272,6 +272,21 @@ pub fn refwalk_tail_field_names(q: &crate::query::ast::Query) -> Vec<String> {
     out
 }
 
+/// The query-gated RefWalk artifacts carried out of pass2 into the P2 late
+/// window: the per-field forward CSR, the interned hop field-name table (the
+/// `fwd_field` column's decoder), the captured tail-scalar side table, and
+/// whether edge capture overflowed its cap. Built only when a RefWalk query
+/// ran; `None` otherwise (the late window keeps empty slices / the shared empty
+/// tail map, byte/RSS-identical to a non-RefWalk run).
+pub struct RefWalkCsr {
+    pub fwd_off: Vec<u32>,
+    pub fwd_tgt: Vec<u32>,
+    pub fwd_field: Vec<u32>,
+    pub field_names: Vec<String>,
+    pub tails: std::collections::HashMap<u32, crate::query::model::QueryValue>,
+    pub truncated: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

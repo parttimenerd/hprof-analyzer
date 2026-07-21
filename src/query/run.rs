@@ -283,6 +283,13 @@ impl<'q, R: ClassResolver> ScanDriver<'q, R> {
         Some(tails.into_map())
     }
 
+    /// Take the interned hop field-name table (`field_id` → name), parallel to
+    /// the CSR's `fwd_field` column. `None` when RefWalk was never armed. Takes
+    /// `&mut self` for the same ordering reason as `take_refwalk_csr`.
+    pub fn take_refwalk_field_names(&mut self) -> Option<Vec<String>> {
+        Some(std::mem::take(&mut self.refwalk.as_mut()?.field_names))
+    }
+
     /// Decode the needed reference fields from one instance blob and record their
     /// edges; also capture any tail field this object owns. No-op when unarmed.
     fn capture_refwalk(&mut self, src_idx: usize, class_id: u64, blob: &[u8]) {
@@ -362,7 +369,7 @@ pub fn run_single_dump(
         // Fast path: no subqueries — one scan, no injection.
         let p1 = crate::pass1::Pass1::run(path)?;
         let mut empty = std::collections::HashMap::new();
-        let (.., state) = crate::pass2::Pass2::build(
+        let (.., state, _refwalk_csr) = crate::pass2::Pass2::build(
             path, p1, crate::cvec::Codec::Zstd3, &opts, &flat, &mut empty,
         )?;
         let flat_results = crate::query::stage_runner::resume_without_late_ctx(state);
@@ -374,7 +381,7 @@ pub fn run_single_dump(
         inners.iter().map(|i| (i.inner.clone(), i.plan.clone())).collect();
     let p1_inner = crate::pass1::Pass1::run(path)?;
     let mut empty = std::collections::HashMap::new();
-    let (.., inner_state) = crate::pass2::Pass2::build(
+    let (.., inner_state, _inner_refwalk_csr) = crate::pass2::Pass2::build(
         path, p1_inner, crate::cvec::Codec::Zstd3, &opts, &inner_queries, &mut empty,
     )?;
     let inner_results = crate::query::stage_runner::resume_without_late_ctx(inner_state);
@@ -415,7 +422,7 @@ pub fn run_single_dump(
 
     // ── Outer pass: scan again with IN sets injected ─────────────────────────
     let p1_outer = crate::pass1::Pass1::run(path)?;
-    let (.., outer_state) = crate::pass2::Pass2::build(
+    let (.., outer_state, _outer_refwalk_csr) = crate::pass2::Pass2::build(
         path, p1_outer, crate::cvec::Codec::Zstd3, &opts, &flat, &mut in_sets_by_slot,
     )?;
     let mut flat_results = crate::query::stage_runner::resume_without_late_ctx(outer_state);
