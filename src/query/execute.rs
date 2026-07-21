@@ -220,6 +220,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             P::Or(a, b) => self.eval_pred(a, class_id, blob) || self.eval_pred(b, class_id, blob),
             P::Not(a) => !self.eval_pred(a, class_id, blob),
             P::InstanceOf(cname) => self.resolver.class_name(class_id).map(|n| class_name_matches(n, cname)).unwrap_or(false),
+            P::InSubquery { .. } => in_subquery_unresolved(),
             P::Compare { lhs, op, rhs } => {
                 // src_idx=0 is a placeholder: WHERE in this slice only references
                 // blob-scalar fields and class/type data, none of which use the
@@ -251,6 +252,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             P::Or(a, b) => self.array_eval_pred(a, class_name, length) || self.array_eval_pred(b, class_name, length),
             P::Not(a) => !self.array_eval_pred(a, class_name, length),
             P::InstanceOf(cname) => class_name_matches(class_name, cname),
+            P::InSubquery { .. } => in_subquery_unresolved(),
             P::Compare { lhs, op, rhs } => {
                 let lv = self.project_array_attr(lhs, 0, class_name, length);
                 compare_values(&lv, *op, rhs)
@@ -292,6 +294,14 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
         let row = self.project_array_row(src_idx, class_name, length);
         self.rows.push(row);
     }
+}
+
+/// A `WHERE <attr> IN (<subquery>)` predicate must be resolved into an
+/// address-set membership filter at plan time (see the subquery planner) before
+/// the pass2 scan runs; the scan executor never evaluates it directly. Reaching
+/// this means the planner failed to rewrite the predicate — a wiring bug.
+fn in_subquery_unresolved() -> bool {
+    unreachable!("IN(<subquery>) predicate must be resolved at plan time, not during the scan")
 }
 
 /// Match an object's dotted class name against a FROM pattern (exact, or a

@@ -411,6 +411,11 @@ fn collect_pred_needs(pred: &Predicate, needs: &mut QueryNeeds) -> Result<(), Qu
         }
         Predicate::Not(a) => collect_pred_needs(a, needs),
         Predicate::InstanceOf(_) => { needs.runtime_type = true; Ok(()) }
+        Predicate::InSubquery { .. } => {
+            // Membership is tested against the inner result's address set; the
+            // outer LHS is an address/id attribute, needing no instance data.
+            Ok(())
+        }
         Predicate::Compare { lhs, rhs, .. } => {
             match lhs {
                 Attr::Field(_) => {
@@ -445,6 +450,7 @@ fn flatten_and(pred: Predicate, out: &mut Vec<Conjunct>) {
 fn pred_cost(pred: &Predicate) -> PredCost {
     match pred {
         Predicate::InstanceOf(_) => PredCost::Type,
+        Predicate::InSubquery { .. } => PredCost::Str,
         Predicate::Not(a) => pred_cost(a),
         Predicate::And(a, b) | Predicate::Or(a, b) => {
             pred_cost(a).max_cost(pred_cost(b))

@@ -199,44 +199,6 @@ where
     }
     .labelled("comparison operator");
 
-    // predicate grammar: OR < AND < NOT < primary
-    let predicate = recursive(|pred| {
-        let paren = just(Token::LParen)
-            .ignore_then(pred.clone())
-            .then_ignore(just(Token::RParen));
-
-        let instanceof = attr
-            .clone()
-            .then_ignore(ident_ci("INSTANCEOF"))
-            .then(any_ident())
-            .map(|(_lhs, cname)| Predicate::InstanceOf(cname));
-
-        let compare = attr
-            .clone()
-            .then(op)
-            .then(value)
-            .map(|((lhs, op), rhs)| Predicate::Compare { lhs, op, rhs });
-
-        let primary = paren.or(instanceof).or(compare);
-
-        let not = recursive(|not| {
-            ident_ci("NOT")
-                .ignore_then(not)
-                .map(|p| Predicate::Not(Box::new(p)))
-                .or(primary)
-        });
-
-        let and = not.clone().foldl(
-            ident_ci("AND").ignore_then(not).repeated(),
-            |l, r| Predicate::And(Box::new(l), Box::new(r)),
-        );
-
-        and.clone().foldl(
-            ident_ci("OR").ignore_then(and).repeated(),
-            |l, r| Predicate::Or(Box::new(l), Box::new(r)),
-        )
-    });
-
     // Optional `AS RETAINED SET` select modifier. `AS RETAINED` without a
     // trailing `SET` is a hard, actionable error rather than a silent miss.
     let retained_set = ident_ci("AS")
@@ -259,7 +221,7 @@ where
         // reachable inside the parens (base_query has no UNION tail), so
         // `UNION` inside a subquery fails to parse — the intended rejection.
         let from_subquery = just(Token::LParen)
-            .ignore_then(base_query)
+            .ignore_then(base_query.clone())
             .then_ignore(just(Token::RParen))
             .map(|inner: Query| FromSource::Subquery(Box::new(inner)));
         let from_class = ident_ci("INSTANCEOF")
@@ -270,6 +232,52 @@ where
                 FromSource::Class(ClassSpec { instanceof, class_name })
             });
         let from_source = from_subquery.or(from_class);
+
+        // Predicate grammar. Defined inside the `base_query` recursive closure so
+        // the `IN (<subquery>)` alternative can reuse `base_query` for the inner
+        // (non-correlated) query. UNION is unreachable inside the parens, so
+        // `IN (... UNION ...)` fails to parse — the intended rejection.
+        let predicate = recursive(|pred| {
+            let paren = just(Token::LParen)
+                .ignore_then(pred.clone())
+                .then_ignore(just(Token::RParen));
+            let instanceof = attr
+                .clone()
+                .then_ignore(ident_ci("INSTANCEOF"))
+                .then(any_ident())
+                .map(|(_lhs, cname)| Predicate::InstanceOf(cname));
+            let in_subquery = attr
+                .clone()
+                .then_ignore(ident_ci("IN"))
+                .then_ignore(just(Token::LParen))
+                .then(base_query.clone())
+                .then_ignore(just(Token::RParen))
+                .map(|(lhs, inner): (Attr, Query)| Predicate::InSubquery {
+                    lhs,
+                    inner: Box::new(inner),
+                });
+            let compare = attr
+                .clone()
+                .then(op)
+                .then(value)
+                .map(|((lhs, op), rhs)| Predicate::Compare { lhs, op, rhs });
+            // `in_subquery` before `compare` so `IN` isn't consumed as a bare field.
+            let primary = paren.or(instanceof).or(in_subquery).or(compare);
+            let not = recursive(|not| {
+                ident_ci("NOT")
+                    .ignore_then(not)
+                    .map(|p| Predicate::Not(Box::new(p)))
+                    .or(primary)
+            });
+            let and = not.clone().foldl(
+                ident_ci("AND").ignore_then(not).repeated(),
+                |l, r| Predicate::And(Box::new(l), Box::new(r)),
+            );
+            and.clone().foldl(
+                ident_ci("OR").ignore_then(and).repeated(),
+                |l, r| Predicate::Or(Box::new(l), Box::new(r)),
+            )
+        });
 
         ident_ci("SELECT")
             .ignore_then(ident_ci("DISTINCT").or_not().map(|d| d.is_some()))
@@ -346,7 +354,7 @@ pub const KEYWORDS: &[&str] = &["SELECT", "DISTINCT", "FROM", "classof"];
 
 /// Words reserved in predicate/clause position (`is_reserved`'s source set).
 pub const RESERVED: &[&str] = &[
-    "WHERE", "LIMIT", "UNION", "AND", "OR", "NOT", "INSTANCEOF", "ORDER", "BY", "ASC", "DESC",
+    "WHERE", "LIMIT", "UNION", "AND", "OR", "NOT", "INSTANCEOF", "IN", "ORDER", "BY", "ASC", "DESC",
 ];
 
 /// Aggregate function names (`agg_func`'s source set), upper-cased.
@@ -999,6 +1007,62 @@ mod tests {
         let err = parse("SELECT * FROM (SELECT * FROM A UNION SELECT * FROM B) x")
             .unwrap_err()
             .to_string();
+        assert!(err.contains("unexpected"), "expected a located parse error, got: {err}");
+        assert!(err.contains(':'), "error should carry a line:col location, got: {err}");
+    }
+
+    #[test]
+    fn in_subquery_parses() {
+        let q = parse("SELECT * FROM java.lang.String s WHERE @objectAddress IN (SELECT * FROM java.lang.Integer)").unwrap();
+        match q.where_.as_ref().unwrap() {
+            Predicate::InSubquery { lhs, inner } => {
+                assert!(matches!(lhs, Attr::ObjectAddress));
+                assert_eq!(inner.from.class_name(), "java.lang.Integer");
+                assert!(inner.union_branches.is_empty());
+            }
+            other => panic!("expected InSubquery, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn in_subquery_combines_with_and() {
+        // `IN (...)` composes as a normal primary inside a boolean predicate.
+        let q = parse(
+            "SELECT * FROM java.lang.String s WHERE hash > 0 AND @objectAddress IN (SELECT * FROM C)",
+        )
+        .unwrap();
+        match q.where_.as_ref().unwrap() {
+            Predicate::And(l, r) => {
+                assert!(matches!(**l, Predicate::Compare { .. }));
+                assert!(matches!(**r, Predicate::InSubquery { .. }));
+            }
+            other => panic!("expected AND(compare, InSubquery), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn in_subquery_on_object_id_parses() {
+        let q =
+            parse("SELECT * FROM C WHERE @objectId IN (SELECT @objectId FROM java.lang.Integer)")
+                .unwrap();
+        match q.where_.as_ref().unwrap() {
+            Predicate::InSubquery { lhs, inner } => {
+                assert!(matches!(lhs, Attr::ObjectId));
+                assert_eq!(inner.from.class_name(), "java.lang.Integer");
+            }
+            other => panic!("expected InSubquery, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn union_inside_in_subquery_is_rejected() {
+        // UNION is unreachable inside the parenthesized base_query, so a UNION
+        // within an IN-subquery is a located parse error, not a silent nesting.
+        let err = parse(
+            "SELECT * FROM C WHERE @objectAddress IN (SELECT * FROM A UNION SELECT * FROM B)",
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("unexpected"), "expected a located parse error, got: {err}");
         assert!(err.contains(':'), "error should carry a line:col location, got: {err}");
     }

@@ -122,6 +122,10 @@ pub enum Predicate {
     Compare { lhs: Attr, op: CompareOp, rhs: Value },
     /// `x INSTANCEOF C`
     InstanceOf(String),
+    /// `<lhs> IN ( <inner> )` — keep rows whose `lhs` attribute is a member of
+    /// the (non-correlated) inner query's result set. `inner` has an empty
+    /// `union_branches` (UNION is not allowed inside a subquery).
+    InSubquery { lhs: Attr, inner: Box<Query> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
