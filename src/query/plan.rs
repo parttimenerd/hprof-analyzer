@@ -30,15 +30,17 @@ pub struct QueryNeeds {
     pub ref_walk: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum StageKind {
     HistogramOnly,
+    #[default]
     SingleScan,
 }
 
 /// Which pipeline phase finalizes a query's rows. See canonical vocabulary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
+    #[default]
     P1,
     /// N-hop `RefPath` resolution: the forward-reference graph is live in the
     /// post-scan window before dominators/retained (P3) are computed.
@@ -95,7 +97,7 @@ pub struct DeferredProj {
     pub select_index: usize,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct QueryPlan {
     pub kind: StageKind,
     pub needs: QueryNeeds,

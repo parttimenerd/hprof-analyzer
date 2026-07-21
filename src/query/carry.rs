@@ -12,9 +12,10 @@ use crate::vbyte;
 pub const DEFAULT_CARRY_CAP: usize = 1_000_000;
 
 /// How Phase 1 packed the matched objects for a later phase to consume.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub enum CarryLayout {
     /// Just the matched dense indices, delta-varint encoded.
+    #[default]
     IndexOnly,
     /// Matched indices plus one packed scalar column per width (bytes-per-value).
     IndexPlusScalars { widths: Vec<u8> },

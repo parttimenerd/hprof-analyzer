@@ -130,10 +130,69 @@ pub fn narrow_carry(plan: &mut QueryPlan) {
     }
 }
 
+/// Reorder candidate class scans by estimated selectivity (smallest instance
+/// count first), so the narrower scan drives a semi-join. Currently a no-op:
+/// the planner commits to a single scan source, leaving no choice to reorder.
+/// Kept as the extension point for subquery-driven scan selection; consults
+/// `stats.count_of` once multiple candidates are recorded on the plan.
+pub fn order_by_selectivity(_plan: &mut QueryPlan, _stats: &SchemaStats) {
+    // No multi-candidate scan choice is recorded on QueryPlan yet. When one is
+    // added, sort candidates ascending by stats.count_of(class).
+}
+
+/// The full optimizer pass: reorder predicates, push LIMIT to the scan when
+/// safe, defer expensive projections past the filter, prune dead needs, narrow
+/// the carry layout, then recurse into FROM-subplans, IN-subplans, and UNION
+/// branches so nested plans are optimized too. Idempotent: every rewrite is a
+/// no-op on already-optimized input (stable sorts, clear-then-recompute,
+/// downgrade-only), so `optimize(optimize(p)) == optimize(p)`.
+pub fn optimize(mut plan: QueryPlan, query: &Query, stats: &SchemaStats) -> QueryPlan {
+    reorder_predicates(&mut plan);
+    order_by_selectivity(&mut plan, stats);
+    pushdown_limit(&mut plan);
+    defer_projections(&mut plan, query);
+    eliminate_dead_needs(&mut plan);
+    narrow_carry(&mut plan);
+
+    // Recurse into the FROM-subplan, if any. We take the subplan out first to
+    // avoid a simultaneous mutable/immutable borrow on `plan`.
+    if let Some(sub) = plan.from_subplan.take() {
+        plan.from_subplan = Some(Box::new(match query.from.as_subquery() {
+            Some(sub_ast) => optimize(*sub, sub_ast, stats),
+            // Defensive: from_subplan is Some but FROM is not a subquery — shouldn't
+            // happen (planner builds them in lockstep) but we must not drop the plan.
+            None => *sub,
+        }));
+    }
+
+    // Recurse into each IN-subplan. Clone the inner AST to avoid a split borrow
+    // (`isp.inner` immutable while `isp.plan` is taken mutably).
+    for isp in &mut plan.in_subplans {
+        let inner = isp.inner.clone();
+        let sub = std::mem::take(&mut isp.plan);
+        isp.plan = optimize(sub, &inner, stats);
+    }
+
+    // Recurse into UNION branches; positionally matched with query.union_branches.
+    let branch_asts = &query.union_branches;
+    plan.union_branches = plan
+        .union_branches
+        .into_iter()
+        .enumerate()
+        .map(|(i, b)| match branch_asts.get(i) {
+            Some(bast) => optimize(b, bast, stats),
+            // Defensive: no matching AST branch — leave as-is rather than dropping.
+            None => b,
+        })
+        .collect();
+
+    plan
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::query::plan::{Conjunct, PredCost};
+    use crate::query::plan::{Conjunct, PredCost, Phase, StageKind};
     use crate::query::ast::{Attr, CompareOp, Predicate, Value};
     use crate::query::parse::parse;
     use crate::query::plan::plan_query;
@@ -540,6 +599,104 @@ mod tests {
             plan.needs, needs_after_first,
             "eliminate_dead_needs must be idempotent"
         );
+    }
+
+    // ---------- optimize (Task 33) tests ----------
+
+    /// Calling optimize twice must produce the same plan as calling it once.
+    /// Also verifies that a simple LIMIT query has scan_limit pushed down.
+    #[test]
+    fn optimize_is_idempotent_and_composes() {
+        let src = "SELECT @objectId FROM java.lang.String LIMIT 3";
+        let q = parse(src).unwrap();
+        let plan = plan_query(&q).unwrap();
+        let once = optimize(plan.clone(), &q, &SchemaStats::default());
+        let twice = optimize(once.clone(), &q, &SchemaStats::default());
+        assert_eq!(once, twice, "optimize must be idempotent");
+        assert_eq!(once.scan_limit, Some(3), "scan_limit must be pushed down");
+    }
+
+    /// After optimize, where_terms must be sorted cheapest-first and scan_limit set.
+    #[test]
+    fn optimize_reorders_and_pushes_limit() {
+        // Build a plan from a LIMIT query, then manually inject worst-first predicates.
+        let src = "SELECT @objectId FROM java.lang.String LIMIT 5";
+        let q = parse(src).unwrap();
+        let mut plan = plan_query(&q).unwrap();
+        // Inject Ref > Str > Scalar > Type (worst-first) to verify reorder.
+        plan.where_terms = vec![
+            scalar_conjunct("d", PredCost::Ref),
+            scalar_conjunct("c", PredCost::Str),
+            scalar_conjunct("b", PredCost::Scalar),
+            scalar_conjunct("a", PredCost::Type),
+        ];
+        // With where_terms injected, pushdown_limit sees a non-empty plan; but
+        // late_ops, union_branches, from_subplan and in_subplans are empty for
+        // this query, so pushdown is still safe (order_sensitive is false too).
+        let optimized = optimize(plan, &q, &SchemaStats::default());
+        let ranks: Vec<u8> = optimized.where_terms.iter().map(|c| pred_cost_rank(c.cost)).collect();
+        assert!(
+            ranks.windows(2).all(|w| w[0] <= w[1]),
+            "where_terms must be sorted cheapest-first after optimize, got ranks: {:?}", ranks
+        );
+        assert_eq!(optimized.scan_limit, Some(5), "scan_limit must be pushed down by optimize");
+    }
+
+    /// optimize must recurse into union_branches so each branch is also optimized.
+    #[test]
+    fn optimize_recurses_into_union_branches() {
+        let src = "SELECT @objectId FROM java.lang.String UNION SELECT @objectId FROM java.lang.Object";
+        let q = parse(src).unwrap();
+        let plan = plan_query(&q).unwrap();
+        assert_eq!(plan.union_branches.len(), 1, "precondition: one union branch");
+        let once = optimize(plan.clone(), &q, &SchemaStats::default());
+        let twice = optimize(once.clone(), &q, &SchemaStats::default());
+        // Idempotence holds across the full UNION plan.
+        assert_eq!(once, twice, "optimize must be idempotent for UNION queries");
+        // Branch count is preserved.
+        assert_eq!(once.union_branches.len(), 1, "union branch must be preserved after optimize");
+    }
+
+    /// QueryPlan::default() must compile and produce sensible zero/empty values.
+    #[test]
+    fn optimize_default_queryplan_constructs() {
+        let d = QueryPlan::default();
+        assert_eq!(d.kind, StageKind::SingleScan, "default kind must be SingleScan");
+        assert_eq!(d.carry, CarryLayout::IndexOnly, "default carry must be IndexOnly");
+        assert_eq!(d.finalize_at, Phase::P1, "default finalize_at must be P1");
+        assert!(d.where_terms.is_empty(), "default where_terms must be empty");
+        assert!(d.late_ops.is_empty(), "default late_ops must be empty");
+        assert!(d.union_branches.is_empty(), "default union_branches must be empty");
+        assert!(d.in_subplans.is_empty(), "default in_subplans must be empty");
+        assert!(d.deferred_projections.is_empty(), "default deferred_projections must be empty");
+        assert!(d.from_subplan.is_none(), "default from_subplan must be None");
+        assert!(d.limit.is_none(), "default limit must be None");
+        assert!(d.scan_limit.is_none(), "default scan_limit must be None");
+        assert!(!d.order_sensitive, "default order_sensitive must be false");
+        assert_eq!(d.select_arity, 0, "default select_arity must be 0");
+    }
+
+    /// order_by_selectivity must be a no-op: calling it must not change the plan.
+    #[test]
+    fn order_by_selectivity_is_noop() {
+        let q = parse("SELECT @objectId FROM java.lang.String").unwrap();
+        let mut plan = plan_query(&q).unwrap();
+        let snapshot = plan.clone();
+        order_by_selectivity(&mut plan, &SchemaStats::default());
+        assert_eq!(plan, snapshot, "order_by_selectivity must not change the plan");
+    }
+
+    /// optimize must leave an empty WHERE and absent LIMIT unchanged.
+    #[test]
+    fn optimize_empty_where_and_no_limit() {
+        let src = "SELECT @objectId FROM java.lang.String";
+        let q = parse(src).unwrap();
+        let plan = plan_query(&q).unwrap();
+        let once = optimize(plan.clone(), &q, &SchemaStats::default());
+        assert!(once.where_terms.is_empty(), "empty WHERE must remain empty after optimize");
+        assert_eq!(once.scan_limit, None, "absent LIMIT must leave scan_limit None after optimize");
+        let twice = optimize(once.clone(), &q, &SchemaStats::default());
+        assert_eq!(once, twice, "optimize must be idempotent on a simple no-WHERE no-LIMIT plan");
     }
 
     // ---------- narrow_carry tests (Task 32) ----------
