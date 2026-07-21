@@ -22,8 +22,8 @@ nothing; a query that follows a 4-hop reference path pays for exactly that walk.
 
 - Full MAT OQL parity (graph primitives `dominators()`/`inbounds()`, `UNION`,
   correlated subqueries). These are explicitly rejected with a clear message.
-- Interactive/REPL querying. Queries are supplied up front (CLI or TOML) and run
-  once during report generation.
+- A persistent query server / long-running daemon. The interactive `query`
+  subcommand is a simple one-shot REPL over a single dump, not a service.
 - Mutating or re-indexing the dump. Read-only.
 
 ## Supported OQL Subset (target)
@@ -86,13 +86,14 @@ the message, so the user learns *why* and what to change.
 
 ## Architecture
 
-Five components, each independently testable:
+Six components, each independently testable:
 
 ```
 query::parse      OQL text            -> Query AST
 query::plan       Query AST + schema  -> QueryPlan (staged: which phases, carries, caps, depth)
 query::execute    QueryPlan + dump    -> QueryResult (bounded rows/aggregates)
 query::model      QueryResult         -> serde structs on the Report
+query::repl       dump + stdin        -> interactive queries + !plan/!explain
 report renderers  QueryResult         -> md / html / json sections
 ```
 
@@ -363,6 +364,39 @@ JSON round-trips). Schema version bumps to 7.
   existing section styling.
 - **JSON**: the `queries` array, verbatim.
 
+### 6. Interactive `query` subcommand (`src/query/repl.rs`)
+
+A small REPL for authoring and testing queries against a dump without
+regenerating a full report — the fast feedback loop while writing OQL.
+
+```
+hprof-analyzer query <dump.hprof>
+```
+
+On start it runs the pipeline once up to the point where the queried data can be
+served, then reads lines from stdin. Because re-running the pipeline per query is
+expensive, the REPL keeps the analyzed state resident for the session (this is the
+one place we deliberately hold more than the streaming path — acceptable for an
+interactive, user-invoked session, not the batch report path). A plain line is
+treated as an OQL query, parsed → planned → executed, and its result table is
+printed. Lines beginning with `!` are meta-commands:
+
+- `!plan <query>` — parse + plan only; pretty-print the `QueryPlan`: the derived
+  `QueryNeeds`, the ordered stage list (phase + `StageOp` + reads), the carries
+  (`CarryLayout` + cap) and the derived shape label. This is the insight tool —
+  it shows *how* a query would run without running it.
+- `!explain <query>` — run the query, then print the plan **plus** actuals: rows
+  matched, whether `truncated` tripped, per-stage/carry counts.
+- `!schema [<class-glob>]` — list matching classes and their queryable fields
+  (name + type), so the user knows what to filter on.
+- `!help` — list commands. `!quit` / Ctrl-D — exit.
+
+Kept intentionally simple: line-based stdin (no readline/history dependency), no
+new crates, output reuses the Markdown table renderer. It shares the exact
+`parse`/`plan`/`execute`/`model` code the report path uses, so a query that works
+in the REPL works identically in a report — the REPL is a thin front-end, not a
+second engine.
+
 ## Parser choice (evaluated alternatives)
 
 No Rust crate parses Eclipse MAT OQL (confirmed: the `oql` crate is an unrelated
@@ -410,20 +444,24 @@ want. This aligns with the project's lean-dependency posture (see `Cargo.toml`).
 
 ## Input Surfaces
 
-Both, per the requirement:
+Three, per the requirement:
 
 - **CLI**: `--query 'SELECT ...'` (repeatable). Ad-hoc. Title auto-assigned
   (`query 1`, `query 2`) unless the query provides one.
 - **TOML**: a `[[query]]` array-of-tables in the existing config file
   (`.hprof-analyzer.toml` / `$HOME/.config/hprof-analyzer/...`), each with
   `name` and `oql`. Saved reusable query packs. Merged with any `--query` flags.
+- **Interactive `query` subcommand**: `hprof-analyzer query <dump.hprof>` — a
+  line-based REPL (see component 6) for authoring/testing queries and inspecting
+  their plans via `!plan` / `!explain`. Shares the report path's engine.
 - **`--query-match-cap <n>`** (optional): overrides the default CrossPhase/RefWalk
   match-set and per-hop frontier cap for users who knowingly want larger (or
   smaller) bounded results. Defaults to a safe value (~200k).
 
-Queries only run in the analyze path (hprof → report), never on JSON re-render
-(there is no dump to scan then). Re-rendering a saved report shows the stored
-`queries` results as-is.
+Batch queries (`--query`/TOML) only run in the analyze path (hprof → report),
+never on JSON re-render (there is no dump to scan then). Re-rendering a saved
+report shows the stored `queries` results as-is. The `query` subcommand always
+needs a dump argument for the same reason.
 
 ## Error Handling
 
@@ -477,6 +515,8 @@ Test-driven throughout. Layers:
 4. **End-to-end CLI tests** (`tests/`) — run the binary against the existing
    benchmark fixtures with representative `--query` flags and TOML packs; assert
    the rendered md/json contains the expected sections/rows. Add golden fixtures.
+   Also drive the `query` subcommand by piping stdin (`echo "SELECT ...\n!plan SELECT ..." | hprof-analyzer query <dump>`) and assert the query table and the
+   `!plan` output (stage list + carries) appear as expected.
 5. **Determinism** — same query + same dump ⇒ byte-identical output (stable
    sort, stable group order). Covered by the golden fixtures.
 6. **Bounds** — a query with no LIMIT on a large fixture must not blow the JSON
@@ -500,6 +540,8 @@ shippable and independently tested:
    `AddrFrontier` carries; predicate-critical vs projection-only) — and, riding
    the same stage machinery, arbitrary 3+-phase spans.
 6. TOML input + CLI wiring + golden e2e fixtures.
+7. Interactive `query` subcommand (`!plan`/`!explain`/`!schema`) — a thin
+   stdin front-end over the same engine; lands once the executor is stable.
 
 Each step is independently valuable: many real queries are satisfied by steps
 1–3 alone; steps 4–5 unlock the "biggest X held by Y" class of questions.
