@@ -16,6 +16,7 @@ pub mod refwalk;
 pub mod runflags;
 pub mod stage_runner;
 pub mod optimize;
+pub mod retained_edges;
 
 use std::fmt;
 
