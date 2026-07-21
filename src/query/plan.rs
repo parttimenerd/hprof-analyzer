@@ -264,7 +264,6 @@ fn plan_single(q: &Query) -> Result<QueryPlan, QueryError> {
     if let Some(pred) = &q.where_ {
         collect_pred_needs(pred, &mut needs)?;
         flatten_and(pred.clone(), &mut where_terms);
-        where_terms.sort_by_key(|c| pred_cost_rank(c.cost));
     }
 
     let kind = if is_aggregate
@@ -825,7 +824,7 @@ impl QueryPlan {
             s.push_str(&format!("scan_limit: {n}\n"));
         }
         if !self.where_terms.is_empty() {
-            s.push_str("where (cheapest-first):\n");
+            s.push_str("where:\n");
             for c in &self.where_terms {
                 s.push_str(&format!("  [{:?}] {:?}\n", c.cost, c.pred));
             }
@@ -934,10 +933,9 @@ mod tests {
 
     #[test]
     fn predicates_ordered_cheapest_first() {
-        let plan = plan_query(
-            &parse("SELECT * FROM C WHERE name = \"x\" AND count > 1").unwrap(),
-        )
-        .unwrap();
+        let q = parse("SELECT * FROM C WHERE name = \"x\" AND count > 1").unwrap();
+        let plan = plan_query(&q).unwrap();
+        let plan = crate::query::optimize::optimize(plan, &q, &crate::query::optimize::SchemaStats::default());
         assert!(matches!(
             plan.where_terms.first(),
             Some(Conjunct { cost: PredCost::Scalar, .. })
@@ -1116,15 +1114,14 @@ mod tests {
 
     #[test]
     fn mixed_where_full_cheapest_first_order() {
-        // Written worst-first on purpose: Str, Scalar, Type. Expect Type, Scalar, Str.
-        let plan = plan_query(
-            &parse(
-                "SELECT * FROM C WHERE name = \"x\" AND count > 1 \
-                 AND s INSTANCEOF java.lang.String",
-            )
-            .unwrap(),
+        // Written worst-first on purpose: Str, Scalar, Type. Expect Type, Scalar, Str after optimize.
+        let q = parse(
+            "SELECT * FROM C WHERE name = \"x\" AND count > 1 \
+             AND s INSTANCEOF java.lang.String",
         )
         .unwrap();
+        let plan = plan_query(&q).unwrap();
+        let plan = crate::query::optimize::optimize(plan, &q, &crate::query::optimize::SchemaStats::default());
         let costs: Vec<PredCost> = plan.where_terms.iter().map(|c| c.cost).collect();
         assert_eq!(
             costs,
@@ -1142,7 +1139,7 @@ mod tests {
         let text = plan.explain();
         assert!(text.contains("SingleScan"));
         assert!(text.contains("instance_scalar"));
-        assert!(text.contains("cheapest-first"));
+        assert!(text.contains("where:"));
     }
 
     #[test]
@@ -1152,7 +1149,7 @@ mod tests {
         let text = plan.explain();
         assert!(text.contains("HistogramOnly"), "got: {text}");
         assert!(text.contains("histogram"), "got: {text}");
-        assert!(!text.contains("where (cheapest-first)"), "got: {text}");
+        assert!(!text.contains("where:"), "got: {text}");
         assert!(!text.contains("limit:"), "got: {text}");
     }
 
