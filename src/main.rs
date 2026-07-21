@@ -1119,11 +1119,22 @@ fn run(
     // g.retained, then all results reassemble in original query order.
     let query_asts: Vec<query::ast::Query> =
         parsed_queries.iter().map(|(q, _)| q.clone()).collect();
+    // Dominator stages read idom + the dominator-children CSR (dc_off/dc_tgt),
+    // both live in this window. The IdMap is built empty: the dense address
+    // table was compressed away at ~L973 (its 4.1GB dense form must not rejoin
+    // the RSS peak), and dominator result rows assert on dense indices, not
+    // addresses. A later stage that genuinely needs addresses will thread them.
+    let id_map = query::stage_runner::IdMap::new(&[]);
     let mut query_results = query::stage_runner::resume(
         query_state,
         &query_asts,
         &query::stage_runner::LateCtx {
             retained: &g.retained,
+            idom: &g.idom,
+            dc_off: &dc_off,
+            dc_tgt: &dc_tgt,
+            shallow: &g.shallow,
+            id_map: &id_map,
         },
     );
 

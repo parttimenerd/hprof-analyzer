@@ -7,12 +7,34 @@ use crate::query::execute::{CrossPhaseEntry, QueryExecState};
 use crate::query::model::{QueryColumn, QueryResult, QueryValue};
 use crate::query::plan::StageOp;
 
+/// Maps a dense object index to its object address (and back, if needed) for
+/// building result rows in the late phase.
+pub struct IdMap<'a> {
+    /// Object address per dense index. Borrowed from the pass2 id tables.
+    addr_of: &'a [u64],
+}
+impl<'a> IdMap<'a> {
+    pub fn new(addr_of: &'a [u64]) -> Self { Self { addr_of } }
+    pub fn to_addr(&self, dense: u32) -> u64 { self.addr_of.get(dense as usize).copied().unwrap_or(0) }
+    #[cfg(test)]
+    pub fn identity(_n: usize) -> Self { Self { addr_of: &[] } }
+}
+
 /// Borrowed late-phase context. Lives only inside the `dc_*`/retained window in
-/// main. This step reads only `retained`; later stages grow this struct —
-/// never remove fields.
+/// main. Later stages grow this struct — never remove fields.
 pub struct LateCtx<'a> {
     /// Retained size per dense object index (bytes).
     pub retained: &'a [u64],
+    /// Immediate dominator per dense index (`u32::MAX` for roots).
+    pub idom: &'a [u32],
+    /// Dominator-children CSR offsets (len = n+1).
+    pub dc_off: &'a [u32],
+    /// Dominator-children CSR targets (dense indices).
+    pub dc_tgt: &'a [u32],
+    /// Shallow size per dense index (bytes).
+    pub shallow: &'a [u32],
+    /// Dense-index → address mapping for building result rows.
+    pub id_map: &'a IdMap<'a>,
 }
 
 /// Finalize a Phase-1 QueryExecState: run each pending carry through its
@@ -145,7 +167,20 @@ mod tests {
     use crate::query::execute::QueryExecState;
     use crate::query::model::{QueryResult, QueryValue};
 
-    fn ctx(retained: &[u64]) -> LateCtx<'_> { LateCtx { retained } }
+    fn ctx(retained: &[u64]) -> LateCtx<'_> {
+        // Dominator/shallow/id_map fields are unread by the retained-join tests;
+        // populate with empty slices and an identity IdMap.
+        LateCtx {
+            retained,
+            idom: &[],
+            dc_off: &[],
+            dc_tgt: &[],
+            shallow: &[],
+            id_map: &EMPTY_ID_MAP,
+        }
+    }
+
+    static EMPTY_ID_MAP: IdMap<'static> = IdMap { addr_of: &[] };
 
     fn q_slice(q: &crate::query::ast::Query) -> Vec<crate::query::ast::Query> {
         vec![q.clone(), q.clone()]
@@ -271,5 +306,24 @@ mod tests {
         assert!(r.error.is_none());
         // Columns are still projected even with no rows.
         assert_eq!(r.columns.len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod dom_ctx_tests {
+    use super::*;
+    /// Dominator tree: 0->{1,2}, 1->{3}. CSR dc_off=[0,2,3,3,3], dc_tgt=[1,2,3].
+    pub(super) fn tiny_ctx_parts() -> (Vec<u32>, Vec<u32>, Vec<u32>, Vec<u64>, Vec<u32>) {
+        (vec![u32::MAX,0,0,1], vec![0u32,2,3,3,3], vec![1u32,2,3],
+         vec![100u64,40,10,20], vec![10u32,10,10,20])
+    }
+    #[test]
+    fn late_ctx_exposes_dominator_fields() {
+        let (idom, dc_off, dc_tgt, retained, shallow) = tiny_ctx_parts();
+        let id_map = IdMap::identity(4);
+        let ctx = LateCtx { retained: &retained, idom: &idom, dc_off: &dc_off,
+                            dc_tgt: &dc_tgt, shallow: &shallow, id_map: &id_map };
+        assert_eq!(ctx.dc_off.len(), 5);
+        assert_eq!(ctx.id_map.to_addr(0), id_map.to_addr(0));
     }
 }
