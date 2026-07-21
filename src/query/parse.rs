@@ -1,322 +1,280 @@
-//! Hand-written tokenizer + recursive-descent/Pratt parser for the supported
-//! OQL subset. No parser-generator dependency; the grammar is small and fixed.
+//! OQL parser for the supported subset: a logos-derived lexer feeding a chumsky
+//! combinator parser, with ariadne caret diagnostics for error rendering.
+//!
+//! Public entry points:
+//!   - [`parse`] — production parse returning a compact single-line
+//!     [`QueryError`] (`unexpected <found> at <line>:<col>`) for programmatic
+//!     callers and tests.
+//!   - [`parse_or_report`] — same parse but on failure returns a rendered
+//!     ariadne diagnostic (caret + red underline) for CLI/REPL display.
+
+use ariadne::{Color, Label, Report, ReportKind, Source};
+use chumsky::input::{Stream, ValueInput};
+use chumsky::prelude::*;
+use logos::Logos;
 
 use crate::query::QueryError;
+use crate::query::ast::{
+    AggFunc, Attr, ClassSpec, CompareOp, Predicate, Query, SelectItem, Value,
+};
 
-#[derive(Debug, Clone, PartialEq)]
+/// OQL token kinds, lexed directly by logos.
+///   - identifiers may contain `.`, `$`, and a trailing/embedded `*` glob
+///   - `@attr` stores the name without the leading `@`
+///   - strings are double-quoted, stored without quotes
+///   - a bare `*` (not part of an ident) is `Star`
+///
+/// Derives `Debug, Clone, PartialEq` — chumsky and the tests rely on them.
+#[derive(Logos, Debug, Clone, PartialEq)]
+#[logos(skip r"[ \t\r\n]+")]
 pub enum Token {
-    Ident(String),      // keywords and dotted class/field names (case preserved)
-    At(String),         // @attr, stored without the leading @
-    Int(i64),
-    Float(f64),
-    Str(String),
-    Star,
+    #[token("(")]
     LParen,
+    #[token(")")]
     RParen,
+    #[token(",")]
     Comma,
+    #[token("=")]
     Eq,
+    #[token("!=")]
     Ne,
-    Lt,
+    #[token("<=")]
     Le,
-    Gt,
+    #[token("<")]
+    Lt,
+    #[token(">=")]
     Ge,
+    #[token(">")]
+    Gt,
+    #[token("*")]
+    Star,
+
+    // @attribute — capture the name after '@' (must be non-empty).
+    #[regex(r"@[A-Za-z_][A-Za-z0-9_.$]*", |lex| lex.slice()[1..].to_string())]
+    At(String),
+
+    // double-quoted string — capture inner text (no escapes).
+    #[regex(r#""[^"]*""#, |lex| { let s = lex.slice(); s[1..s.len()-1].to_string() })]
+    Str(String),
+
+    // float before int so "1.5" isn't split; optional leading '-'.
+    #[regex(r"-?[0-9]+\.[0-9]*", |lex| lex.slice().parse::<f64>().ok())]
+    Float(f64),
+    #[regex(r"-?[0-9]+", |lex| lex.slice().parse::<i64>().ok())]
+    Int(i64),
+
+    // identifier / keyword / dotted class or field name, optional embedded '*'
+    // glob, optional trailing '[]' pairs so array classes (e.g. `char[]`,
+    // `java.lang.String[]`) are nameable in the FROM clause.
+    #[regex(r"[A-Za-z_][A-Za-z0-9_.$*]*(\[\])*", |lex| lex.slice().to_string())]
+    Ident(String),
 }
 
-/// Split query text into tokens. Identifiers may contain `.` and `*` (for
-/// `com.acme.*` class globs) and `$` (inner classes). Strings are double-quoted.
-pub fn tokenize(src: &str) -> Result<Vec<Token>, QueryError> {
+/// Tokenize with byte-span tracking, producing the `(Token, SimpleSpan)` stream
+/// consumed by the chumsky parser. On an unrecognized byte the error carries the
+/// offending offset and slice.
+pub fn tokenize_spanned(src: &str) -> Result<Vec<(Token, SimpleSpan)>, String> {
     let mut out = Vec::new();
-    let bytes = src.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        let c = bytes[i] as char;
-        match c {
-            ' ' | '\t' | '\n' | '\r' => { i += 1; }
-            '(' => { out.push(Token::LParen); i += 1; }
-            ')' => { out.push(Token::RParen); i += 1; }
-            ',' => { out.push(Token::Comma); i += 1; }
-            '=' => { out.push(Token::Eq); i += 1; }
-            '!' if bytes.get(i + 1) == Some(&b'=') => { out.push(Token::Ne); i += 2; }
-            '<' if bytes.get(i + 1) == Some(&b'=') => { out.push(Token::Le); i += 2; }
-            '<' => { out.push(Token::Lt); i += 1; }
-            '>' if bytes.get(i + 1) == Some(&b'=') => { out.push(Token::Ge); i += 2; }
-            '>' => { out.push(Token::Gt); i += 1; }
-            '@' => {
-                let start = i + 1;
-                let mut j = start;
-                while j < bytes.len() && is_ident_byte(bytes[j]) { j += 1; }
-                if j == start {
-                    return Err(QueryError("empty @attribute".into()));
-                }
-                out.push(Token::At(src[start..j].to_string()));
-                i = j;
+    let mut lex = Token::lexer(src);
+    while let Some(res) = lex.next() {
+        let span = lex.span();
+        match res {
+            Ok(tok) => out.push((tok, (span.start..span.end).into())),
+            Err(()) => {
+                return Err(format!(
+                    "unexpected character(s) at offset {}: {:?}",
+                    span.start,
+                    &src[span.clone()]
+                ));
             }
-            '"' => {
-                let start = i + 1;
-                let mut j = start;
-                while j < bytes.len() && bytes[j] != b'"' { j += 1; }
-                if j >= bytes.len() {
-                    return Err(QueryError("unterminated string literal".into()));
-                }
-                out.push(Token::Str(src[start..j].to_string()));
-                i = j + 1;
-            }
-            '*' => { out.push(Token::Star); i += 1; }
-            c if c.is_ascii_digit()
-                || (c == '-' && bytes.get(i + 1).is_some_and(|b| b.is_ascii_digit())) =>
-            {
-                let start = i;
-                let mut j = i + 1;
-                let mut is_float = false;
-                while j < bytes.len() {
-                    let b = bytes[j];
-                    if b.is_ascii_digit() { j += 1; }
-                    else if b == b'.' && !is_float { is_float = true; j += 1; }
-                    else { break; }
-                }
-                let text = &src[start..j];
-                if is_float {
-                    out.push(Token::Float(text.parse().map_err(|_| {
-                        QueryError(format!("bad number: {text}"))
-                    })?));
-                } else {
-                    out.push(Token::Int(text.parse().map_err(|_| {
-                        QueryError(format!("bad number: {text}"))
-                    })?));
-                }
-                i = j;
-            }
-            c if is_ident_start(c as u8) => {
-                let start = i;
-                let mut j = i;
-                while j < bytes.len() && (is_ident_byte(bytes[j]) || bytes[j] == b'*') { j += 1; }
-                out.push(Token::Ident(src[start..j].to_string()));
-                i = j;
-            }
-            other => return Err(QueryError(format!("unexpected character '{other}'"))),
         }
     }
     Ok(out)
 }
 
-fn is_ident_start(b: u8) -> bool {
-    b.is_ascii_alphabetic() || b == b'_'
+fn ident_ci<'a, I>(kw: &'static str) -> impl Parser<'a, I, String, extra::Err<Rich<'a, Token>>> + Clone
+where
+    I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
+{
+    select! { Token::Ident(s) if s.eq_ignore_ascii_case(kw) => s }.labelled(kw)
 }
 
-fn is_ident_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'$'
+fn any_ident<'a, I>() -> impl Parser<'a, I, String, extra::Err<Rich<'a, Token>>> + Clone
+where
+    I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
+{
+    select! { Token::Ident(s) => s }
 }
 
-use crate::query::ast::{
-    AggFunc, Attr, ClassSpec, CompareOp, Predicate, Query, SelectItem, Value,
-};
+fn parser<'a, I>() -> impl Parser<'a, I, Query, extra::Err<Rich<'a, Token>>>
+where
+    I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
+{
+    // attribute: @built-in | classof(x) | bare field
+    let attr = select! {
+        Token::At(name) => name,
+    }
+    .try_map(|name, span| match name.as_str() {
+        "objectId" => Ok(Attr::ObjectId),
+        "objectAddress" => Ok(Attr::ObjectAddress),
+        "usedHeapSize" => Ok(Attr::UsedHeapSize),
+        "retainedHeapSize" | "retainedHeap" => Ok(Attr::RetainedHeapSize),
+        "displayName" => Ok(Attr::DisplayName),
+        "length" => Ok(Attr::Length),
+        other => Err(Rich::custom(span, format!("unknown @attribute: @{other}"))),
+    })
+    .or(ident_ci("classof")
+        .ignore_then(just(Token::LParen))
+        .ignore_then(any_ident())
+        .then_ignore(just(Token::RParen))
+        .map(|_| Attr::ClassOf))
+    .or(any_ident().map(Attr::Field))
+    .labelled("attribute");
 
-struct Parser {
-    toks: Vec<Token>,
-    pos: usize,
+    // select item: AGG(item) | * | attr
+    let select_item = recursive(|item| {
+        let agg = select! {
+            Token::Ident(s) if agg_func(&s).is_some() => agg_func(&s).unwrap(),
+        }
+        .then_ignore(just(Token::LParen))
+        .then(item.clone())
+        .then_ignore(just(Token::RParen))
+        .map(|(func, arg): (AggFunc, SelectItem)| SelectItem::Aggregate { func, arg: Box::new(arg) });
+
+        let star = just(Token::Star).map(|_| SelectItem::Star);
+
+        agg.or(star).or(attr.clone().map(SelectItem::Attr))
+    });
+
+    let select_list = select_item
+        .separated_by(just(Token::Comma))
+        .at_least(1)
+        .collect::<Vec<_>>();
+
+    // value literal
+    let value = select! {
+        Token::Int(n) => Value::Int(n),
+        Token::Float(f) => Value::Float(f),
+        Token::Str(s) => Value::Str(s),
+        Token::Ident(s) if s.eq_ignore_ascii_case("true") => Value::Bool(true),
+        Token::Ident(s) if s.eq_ignore_ascii_case("false") => Value::Bool(false),
+        Token::Ident(s) if s.eq_ignore_ascii_case("null") => Value::Null,
+    }
+    .labelled("literal value");
+
+    let op = select! {
+        Token::Eq => CompareOp::Eq,
+        Token::Ne => CompareOp::Ne,
+        Token::Lt => CompareOp::Lt,
+        Token::Le => CompareOp::Le,
+        Token::Gt => CompareOp::Gt,
+        Token::Ge => CompareOp::Ge,
+    }
+    .labelled("comparison operator");
+
+    // predicate grammar: OR < AND < NOT < primary
+    let predicate = recursive(|pred| {
+        let paren = just(Token::LParen)
+            .ignore_then(pred.clone())
+            .then_ignore(just(Token::RParen));
+
+        let instanceof = attr
+            .clone()
+            .then_ignore(ident_ci("INSTANCEOF"))
+            .then(any_ident())
+            .map(|(_lhs, cname)| Predicate::InstanceOf(cname));
+
+        let compare = attr
+            .clone()
+            .then(op)
+            .then(value)
+            .map(|((lhs, op), rhs)| Predicate::Compare { lhs, op, rhs });
+
+        let primary = paren.or(instanceof).or(compare);
+
+        let not = recursive(|not| {
+            ident_ci("NOT")
+                .ignore_then(not)
+                .map(|p| Predicate::Not(Box::new(p)))
+                .or(primary)
+        });
+
+        let and = not.clone().foldl(
+            ident_ci("AND").ignore_then(not).repeated(),
+            |l, r| Predicate::And(Box::new(l), Box::new(r)),
+        );
+
+        and.clone().foldl(
+            ident_ci("OR").ignore_then(and).repeated(),
+            |l, r| Predicate::Or(Box::new(l), Box::new(r)),
+        )
+    });
+
+    ident_ci("SELECT")
+        .ignore_then(ident_ci("DISTINCT").or_not().map(|d| d.is_some()))
+        .then(select_list)
+        .then_ignore(ident_ci("FROM"))
+        .then(ident_ci("INSTANCEOF").or_not().map(|i| i.is_some()))
+        .then(any_ident())
+        .then(any_ident().and_is(reserved_ident().not()).or_not())
+        .then(ident_ci("WHERE").ignore_then(predicate).or_not())
+        .then(
+            ident_ci("LIMIT")
+                .ignore_then(select! { Token::Int(n) if n >= 0 => n as u64 }.labelled("LIMIT count"))
+                .or_not(),
+        )
+        .then_ignore(end())
+        .map(
+            |((((((distinct, select), instanceof), class_name), alias), where_), limit)| Query {
+                distinct,
+                select,
+                from: ClassSpec { instanceof, class_name },
+                alias,
+                where_,
+                limit,
+            },
+        )
 }
 
-/// Parse a full query. Errors carry a human-readable message.
-pub fn parse(src: &str) -> Result<Query, QueryError> {
-    let toks = tokenize(src)?;
-    let mut p = Parser { toks, pos: 0 };
-    let q = p.query()?;
-    if p.pos != p.toks.len() {
-        return Err(QueryError(format!(
-            "unexpected trailing token: {:?}",
-            p.toks[p.pos]
-        )));
-    }
-    Ok(q)
+fn reserved_ident<'a, I>() -> impl Parser<'a, I, String, extra::Err<Rich<'a, Token>>> + Clone
+where
+    I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
+{
+    select! { Token::Ident(s) if is_reserved(&s) => s }
 }
 
-impl Parser {
-    fn peek(&self) -> Option<&Token> {
-        self.toks.get(self.pos)
-    }
-    fn bump(&mut self) -> Option<Token> {
-        let t = self.toks.get(self.pos).cloned();
-        if t.is_some() {
-            self.pos += 1;
-        }
-        t
-    }
-    /// Consume an identifier equal (case-insensitively) to `kw`.
-    fn eat_kw(&mut self, kw: &str) -> bool {
-        if let Some(Token::Ident(s)) = self.peek() {
-            if s.eq_ignore_ascii_case(kw) {
-                self.pos += 1;
-                return true;
-            }
-        }
-        false
-    }
-    fn expect_kw(&mut self, kw: &str) -> Result<(), QueryError> {
-        if self.eat_kw(kw) {
-            Ok(())
-        } else {
-            Err(QueryError(format!("expected `{kw}`, found {:?}", self.peek())))
-        }
-    }
+/// Clause/grammar keywords that open or structure a query but are not reserved
+/// words in predicate position. `classof` is the pseudo-function attribute form.
+pub const KEYWORDS: &[&str] = &["SELECT", "DISTINCT", "FROM", "classof"];
 
-    fn query(&mut self) -> Result<Query, QueryError> {
-        self.expect_kw("SELECT")?;
-        let distinct = self.eat_kw("DISTINCT");
-        let select = self.select_list()?;
-        self.expect_kw("FROM")?;
-        let instanceof = self.eat_kw("INSTANCEOF");
-        let class_name = match self.bump() {
-            Some(Token::Ident(s)) => s,
-            other => return Err(QueryError(format!("expected class name, found {other:?}"))),
-        };
-        // Optional alias: a bare identifier that is not a reserved keyword.
-        let alias = match self.peek() {
-            Some(Token::Ident(s))
-                if !is_reserved(s) =>
-            {
-                let a = s.clone();
-                self.pos += 1;
-                Some(a)
-            }
-            _ => None,
-        };
-        let where_ = if self.eat_kw("WHERE") {
-            Some(self.pred_or()?)
-        } else {
-            None
-        };
-        let limit = if self.eat_kw("LIMIT") {
-            match self.bump() {
-                Some(Token::Int(n)) if n >= 0 => Some(n as u64),
-                other => return Err(QueryError(format!("expected LIMIT count, found {other:?}"))),
-            }
-        } else {
-            None
-        };
-        Ok(Query { distinct, select, from: ClassSpec { instanceof, class_name }, alias, where_, limit })
-    }
+/// Words reserved in predicate/clause position (`is_reserved`'s source set).
+pub const RESERVED: &[&str] = &["WHERE", "LIMIT", "UNION", "AND", "OR", "NOT", "INSTANCEOF"];
 
-    fn select_list(&mut self) -> Result<Vec<SelectItem>, QueryError> {
-        let mut items = vec![self.select_item()?];
-        while matches!(self.peek(), Some(Token::Comma)) {
-            self.pos += 1;
-            items.push(self.select_item()?);
-        }
-        Ok(items)
-    }
+/// Aggregate function names (`agg_func`'s source set), upper-cased.
+pub const AGG_FUNCS: &[&str] = &["COUNT", "SUM", "MIN", "MAX", "AVG"];
 
-    fn select_item(&mut self) -> Result<SelectItem, QueryError> {
-        // Aggregate? COUNT/SUM/MIN/MAX/AVG '(' item ')'
-        if let Some(Token::Ident(s)) = self.peek() {
-            if let Some(func) = agg_func(s) {
-                self.pos += 1;
-                self.expect_lparen()?;
-                let arg = Box::new(self.select_item()?);
-                self.expect_rparen()?;
-                return Ok(SelectItem::Aggregate { func, arg });
-            }
-        }
-        if matches!(self.peek(), Some(Token::Star)) {
-            self.pos += 1;
-            return Ok(SelectItem::Star);
-        }
-        Ok(SelectItem::Attr(self.attr()?))
-    }
+/// `@`-prefixed built-in attribute names (matching the `attr` parser's arms),
+/// including the leading `@` so they can be offered as completions directly.
+pub const ATTRIBUTES: &[&str] = &[
+    "@objectId",
+    "@objectAddress",
+    "@usedHeapSize",
+    "@retainedHeapSize",
+    "@displayName",
+    "@length",
+];
 
-    fn attr(&mut self) -> Result<Attr, QueryError> {
-        match self.bump() {
-            Some(Token::At(name)) => Ok(match name.as_str() {
-                "objectId" => Attr::ObjectId,
-                "objectAddress" => Attr::ObjectAddress,
-                "usedHeapSize" => Attr::UsedHeapSize,
-                "displayName" => Attr::DisplayName,
-                "length" => Attr::Length,
-                other => return Err(QueryError(format!("unknown @attribute: @{other}"))),
-            }),
-            Some(Token::Ident(s)) if s.eq_ignore_ascii_case("classof") => {
-                self.expect_lparen()?;
-                // consume the single alias argument (ignored; classof is on the row)
-                let _ = self.bump();
-                self.expect_rparen()?;
-                Ok(Attr::ClassOf)
-            }
-            Some(Token::Ident(s)) => Ok(Attr::Field(s)),
-            other => Err(QueryError(format!("expected attribute, found {other:?}"))),
-        }
-    }
-
-    // Pratt-ish predicate grammar: OR < AND < NOT < primary.
-    fn pred_or(&mut self) -> Result<Predicate, QueryError> {
-        let mut left = self.pred_and()?;
-        while self.eat_kw("OR") {
-            let right = self.pred_and()?;
-            left = Predicate::Or(Box::new(left), Box::new(right));
-        }
-        Ok(left)
-    }
-    fn pred_and(&mut self) -> Result<Predicate, QueryError> {
-        let mut left = self.pred_not()?;
-        while self.eat_kw("AND") {
-            let right = self.pred_not()?;
-            left = Predicate::And(Box::new(left), Box::new(right));
-        }
-        Ok(left)
-    }
-    fn pred_not(&mut self) -> Result<Predicate, QueryError> {
-        if self.eat_kw("NOT") {
-            return Ok(Predicate::Not(Box::new(self.pred_not()?)));
-        }
-        self.pred_primary()
-    }
-    fn pred_primary(&mut self) -> Result<Predicate, QueryError> {
-        if matches!(self.peek(), Some(Token::LParen)) {
-            self.pos += 1;
-            let inner = self.pred_or()?;
-            self.expect_rparen()?;
-            return Ok(inner);
-        }
-        // `<alias-or-attr> INSTANCEOF C`  OR  `<attr> <op> <value>`
-        let lhs = self.attr()?;
-        if self.eat_kw("INSTANCEOF") {
-            let cname = match self.bump() {
-                Some(Token::Ident(s)) => s,
-                other => return Err(QueryError(format!("expected class after INSTANCEOF, found {other:?}"))),
-            };
-            return Ok(Predicate::InstanceOf(cname));
-        }
-        let op = match self.bump() {
-            Some(Token::Eq) => CompareOp::Eq,
-            Some(Token::Ne) => CompareOp::Ne,
-            Some(Token::Lt) => CompareOp::Lt,
-            Some(Token::Le) => CompareOp::Le,
-            Some(Token::Gt) => CompareOp::Gt,
-            Some(Token::Ge) => CompareOp::Ge,
-            other => return Err(QueryError(format!("expected comparison operator, found {other:?}"))),
-        };
-        let rhs = match self.bump() {
-            Some(Token::Int(n)) => Value::Int(n),
-            Some(Token::Float(f)) => Value::Float(f),
-            Some(Token::Str(s)) => Value::Str(s),
-            Some(Token::Ident(s)) if s.eq_ignore_ascii_case("true") => Value::Bool(true),
-            Some(Token::Ident(s)) if s.eq_ignore_ascii_case("false") => Value::Bool(false),
-            Some(Token::Ident(s)) if s.eq_ignore_ascii_case("null") => Value::Null,
-            other => return Err(QueryError(format!("expected literal value, found {other:?}"))),
-        };
-        Ok(Predicate::Compare { lhs, op, rhs })
-    }
-
-    fn expect_lparen(&mut self) -> Result<(), QueryError> {
-        match self.bump() {
-            Some(Token::LParen) => Ok(()),
-            other => Err(QueryError(format!("expected `(`, found {other:?}"))),
-        }
-    }
-    fn expect_rparen(&mut self) -> Result<(), QueryError> {
-        match self.bump() {
-            Some(Token::RParen) => Ok(()),
-            other => Err(QueryError(format!("expected `)`, found {other:?}"))),
-        }
-    }
+/// The full set of completion candidates offered by the REPL, sourced from the
+/// same const slices the parser matches against — the single point of truth for
+/// keyword knowledge, so completions can never drift from the grammar.
+pub fn completion_words() -> Vec<&'static str> {
+    KEYWORDS
+        .iter()
+        .chain(RESERVED.iter())
+        .chain(AGG_FUNCS.iter())
+        .chain(ATTRIBUTES.iter())
+        .copied()
+        .collect()
 }
 
 fn agg_func(s: &str) -> Option<AggFunc> {
@@ -331,182 +289,644 @@ fn agg_func(s: &str) -> Option<AggFunc> {
 }
 
 fn is_reserved(s: &str) -> bool {
-    ["WHERE", "LIMIT", "UNION", "AND", "OR", "NOT", "INSTANCEOF"]
-        .iter()
-        .any(|k| s.eq_ignore_ascii_case(k))
+    RESERVED.iter().any(|k| s.eq_ignore_ascii_case(k))
 }
+
+/// 1-based (line, column) of a byte offset within `src`, for compact error
+/// messages. A byte offset at or past `src.len()` reports the position just
+/// past the last character.
+fn line_col(src: &str, byte_offset: usize) -> (usize, usize) {
+    let capped = byte_offset.min(src.len());
+    let mut line = 1;
+    let mut col = 1;
+    for (i, ch) in src.char_indices() {
+        if i >= capped {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
+    }
+    (line, col)
+}
+
+/// Tokenize (logos) → chumsky parse, returning a compact single-line message
+/// `unexpected <found> at <line>:<col>` (or the tokenizer's offset message) on
+/// failure. Backs [`parse`]; [`parse_or_report`] renders errors differently.
+fn parse_internal(src: &str) -> Result<Query, String> {
+    let toks = tokenize_spanned(src)?;
+    let eoi: SimpleSpan = (src.len()..src.len()).into();
+    let stream = Stream::from_iter(toks).map(eoi, |(t, s): (Token, SimpleSpan)| (t, s));
+    parser().parse(stream).into_result().map_err(|errs| {
+        errs.iter()
+            .map(|e| {
+                let span = *e.span();
+                let found = e
+                    .found()
+                    .map(|t| format!("{t:?}"))
+                    .unwrap_or_else(|| "end of input".to_string());
+                let (line, col) = line_col(src, span.start);
+                format!("unexpected {found} at {line}:{col}")
+            })
+            .collect::<Vec<_>>()
+            .join("; ")
+    })
+}
+
+/// Production parse: chumsky over logos tokens. Returns a [`QueryError`] whose
+/// message is a compact single-line description (no caret art) for programmatic
+/// callers and tests. Production CLI/REPL paths use [`parse_or_report`] instead
+/// for caret diagnostics, so this is currently reached only from tests.
+#[allow(dead_code)]
+pub fn parse(src: &str) -> Result<Query, QueryError> {
+    parse_internal(src).map_err(QueryError)
+}
+
+/// Parse, returning either the [`Query`] or a rendered ariadne diagnostic string
+/// (caret + red underline) for CLI/REPL display.
+pub fn parse_or_report(src: &str) -> Result<Query, String> {
+    // Tokenizer errors have no chumsky span to underline; surface the message.
+    let toks = match tokenize_spanned(src) {
+        Ok(t) => t,
+        Err(e) => return Err(format!("tokenize error: {e}")),
+    };
+    let eoi: SimpleSpan = (src.len()..src.len()).into();
+    let stream = Stream::from_iter(toks).map(eoi, |(t, s): (Token, SimpleSpan)| (t, s));
+    match parser().parse(stream).into_result() {
+        Ok(q) => Ok(q),
+        Err(errs) => {
+            let mut buf = Vec::new();
+            for e in &errs {
+                let span = *e.span();
+                let found = e
+                    .found()
+                    .map(|t| format!("{t:?}"))
+                    .unwrap_or_else(|| "end of input".to_string());
+                let msg = format!("unexpected {found}");
+                let mut out = Vec::new();
+                Report::build(ReportKind::Error, ("query", span.into_range()))
+                    .with_message(&msg)
+                    .with_label(
+                        Label::new(("query", span.into_range()))
+                            .with_message(&msg)
+                            .with_color(Color::Red),
+                    )
+                    .finish()
+                    .write(("query", Source::from(src)), &mut out)
+                    .ok();
+                buf.push(String::from_utf8_lossy(&out).into_owned());
+            }
+            Err(buf.join("\n"))
+        }
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn tokenize_simple_select() {
-        let toks = tokenize("SELECT * FROM java.lang.String s").unwrap();
-        assert_eq!(
-            toks,
-            vec![
-                Token::Ident("SELECT".into()),
-                Token::Star,
-                Token::Ident("FROM".into()),
-                Token::Ident("java.lang.String".into()),
-                Token::Ident("s".into()),
-            ]
-        );
-    }
-
-    #[test]
-    fn tokenize_attr_and_string_literal() {
-        let toks = tokenize("WHERE @usedHeapSize > 100 AND name = \"foo\"").unwrap();
-        assert_eq!(toks[0], Token::Ident("WHERE".into()));
-        assert_eq!(toks[1], Token::At("usedHeapSize".into()));
-        assert_eq!(toks[2], Token::Gt);
-        assert_eq!(toks[3], Token::Int(100));
-        assert_eq!(toks[4], Token::Ident("AND".into()));
-        assert_eq!(toks[5], Token::Ident("name".into()));
-        assert_eq!(toks[6], Token::Eq);
-        assert_eq!(toks[7], Token::Str("foo".into()));
-    }
-
     use crate::query::ast::*;
 
-    #[test]
-    fn parse_star_from() {
-        let q = parse("SELECT * FROM java.lang.String s").unwrap();
-        assert_eq!(q.select, vec![SelectItem::Star]);
-        assert_eq!(q.from.class_name, "java.lang.String");
-        assert!(!q.from.instanceof);
-        assert_eq!(q.alias.as_deref(), Some("s"));
-        assert!(q.where_.is_none());
+    // ---------- helpers ----------
+
+    fn toks(src: &str) -> Vec<Token> {
+        tokenize_spanned(src)
+            .unwrap_or_else(|e| panic!("tokenize failed for {src:?}: {e}"))
+            .into_iter()
+            .map(|(t, _)| t)
+            .collect()
+    }
+    fn id(s: &str) -> Token {
+        Token::Ident(s.into())
+    }
+    // AST builders
+    fn field(s: &str) -> Attr {
+        Attr::Field(s.into())
+    }
+    fn cmp(lhs: Attr, op: CompareOp, rhs: Value) -> Predicate {
+        Predicate::Compare { lhs, op, rhs }
+    }
+    fn and(a: Predicate, b: Predicate) -> Predicate {
+        Predicate::And(Box::new(a), Box::new(b))
+    }
+    fn or(a: Predicate, b: Predicate) -> Predicate {
+        Predicate::Or(Box::new(a), Box::new(b))
+    }
+    fn not(a: Predicate) -> Predicate {
+        Predicate::Not(Box::new(a))
+    }
+    fn q(
+        distinct: bool,
+        select: Vec<SelectItem>,
+        instanceof: bool,
+        class_name: &str,
+        alias: Option<&str>,
+        where_: Option<Predicate>,
+        limit: Option<u64>,
+    ) -> Query {
+        Query {
+            distinct,
+            select,
+            from: ClassSpec { instanceof, class_name: class_name.into() },
+            alias: alias.map(|s| s.into()),
+            where_,
+            limit,
+        }
+    }
+    fn star() -> Vec<SelectItem> {
+        vec![SelectItem::Star]
+    }
+    fn attr_sel(a: Attr) -> SelectItem {
+        SelectItem::Attr(a)
+    }
+    fn agg(func: AggFunc, arg: SelectItem) -> SelectItem {
+        SelectItem::Aggregate { func, arg: Box::new(arg) }
     }
 
+    // ============================================================
+    // Group 1 — token-stream cases (input → expected Vec<Token>)
+    // 15 cases exercising each token kind + lexer edge cases.
+    // ============================================================
+
     #[test]
-    fn parse_instanceof_and_where_and_limit() {
-        let q = parse(
-            "SELECT @objectId, name FROM INSTANCEOF java.lang.Thread t \
-             WHERE @usedHeapSize >= 100 AND name != \"main\" LIMIT 5",
-        )
-        .unwrap();
-        assert!(q.from.instanceof);
-        assert_eq!(q.limit, Some(5));
-        assert_eq!(q.select.len(), 2);
-        // WHERE is AND(Compare(usedHeapSize >= 100), Compare(name != "main"))
-        match q.where_.unwrap() {
-            Predicate::And(a, b) => {
-                assert!(matches!(*a, Predicate::Compare { op: CompareOp::Ge, .. }));
-                assert!(matches!(*b, Predicate::Compare { op: CompareOp::Ne, .. }));
-            }
-            other => panic!("expected AND, got {other:?}"),
+    fn token_stream_cases() {
+        let cases: Vec<(&str, Vec<Token>)> = vec![
+            // 1: keywords + star + dotted ident + alias
+            (
+                "SELECT * FROM java.lang.String s",
+                vec![id("SELECT"), Token::Star, id("FROM"), id("java.lang.String"), id("s")],
+            ),
+            // 2: @attr, comparison, int, AND, ident, eq, string
+            (
+                "WHERE @usedHeapSize > 100 AND name = \"foo\"",
+                vec![
+                    id("WHERE"),
+                    Token::At("usedHeapSize".into()),
+                    Token::Gt,
+                    Token::Int(100),
+                    id("AND"),
+                    id("name"),
+                    Token::Eq,
+                    Token::Str("foo".into()),
+                ],
+            ),
+            // 3: all comparison operators
+            (
+                "= != < <= > >=",
+                vec![Token::Eq, Token::Ne, Token::Lt, Token::Le, Token::Gt, Token::Ge],
+            ),
+            // 4: parens + comma
+            ("( , )", vec![Token::LParen, Token::Comma, Token::RParen]),
+            // 5: negative float
+            ("-3.5", vec![Token::Float(-3.5)]),
+            // 6: negative int
+            ("-42", vec![Token::Int(-42)]),
+            // 7: float before int (no split of 1.5)
+            ("1.5", vec![Token::Float(1.5)]),
+            // 8: trailing-dot float (regex allows empty fraction)
+            ("7.", vec![Token::Float(7.0)]),
+            // 9: glob class name with '*'
+            ("com.acme.*", vec![id("com.acme.*")]),
+            // 10: embedded glob
+            ("com.a*b.C", vec![id("com.a*b.C")]),
+            // 11: inner-class '$'
+            ("Outer$Inner", vec![id("Outer$Inner")]),
+            // 12: underscore leading ident
+            ("_hidden", vec![id("_hidden")]),
+            // 13: empty string literal
+            ("\"\"", vec![Token::Str("".into())]),
+            // 14: string with spaces preserved
+            ("\"a b c\"", vec![Token::Str("a b c".into())]),
+            // 15: @attr with dot/dollar in name
+            ("@a.b$c", vec![Token::At("a.b$c".into())]),
+            // 16: bare star vs glob-ident disambiguation
+            ("* x*", vec![Token::Star, id("x*")]),
+            // 17: whitespace (tabs/newlines) skipped
+            ("SELECT\t*\nFROM\rC", vec![id("SELECT"), Token::Star, id("FROM"), id("C")]),
+            // 18: primitive array class name (trailing '[]')
+            ("char[]", vec![id("char[]")]),
+            // 19: object array class name (dotted + trailing '[]')
+            ("java.lang.String[]", vec![id("java.lang.String[]")]),
+            // 20: multi-dimensional array class name (repeated '[]')
+            ("int[][]", vec![id("int[][]")]),
+        ];
+        for (src, expected) in cases {
+            assert_eq!(toks(src), expected, "token stream mismatch for {src:?}");
+        }
+    }
+
+    // ============================================================
+    // Group 2 — full-AST cases (input → expected Query)
+    // 22 cases covering select/from/alias/where/limit combinations.
+    // ============================================================
+
+    #[test]
+    fn ast_cases() {
+        let cases: Vec<(&str, Query)> = vec![
+            // 1: bare star + alias
+            (
+                "SELECT * FROM java.lang.String s",
+                q(false, star(), false, "java.lang.String", Some("s"), None, None),
+            ),
+            // 2: star, no alias
+            ("SELECT * FROM C", q(false, star(), false, "C", None, None, None)),
+            // 3: DISTINCT
+            (
+                "SELECT DISTINCT name FROM C",
+                q(false, vec![attr_sel(field("name"))], false, "C", None, None, None)
+                    .tap_distinct(),
+            ),
+            // 4: INSTANCEOF in FROM
+            (
+                "SELECT * FROM INSTANCEOF java.util.List",
+                q(false, star(), true, "java.util.List", None, None, None),
+            ),
+            // 5: LIMIT
+            (
+                "SELECT * FROM C LIMIT 5",
+                q(false, star(), false, "C", None, None, Some(5)),
+            ),
+            // 6: LIMIT 0 (zero allowed)
+            (
+                "SELECT * FROM C LIMIT 0",
+                q(false, star(), false, "C", None, None, Some(0)),
+            ),
+            // 7: multiple select items
+            (
+                "SELECT @objectId, name, @usedHeapSize FROM C",
+                q(
+                    false,
+                    vec![
+                        attr_sel(Attr::ObjectId),
+                        attr_sel(field("name")),
+                        attr_sel(Attr::UsedHeapSize),
+                    ],
+                    false,
+                    "C",
+                    None,
+                    None,
+                    None,
+                ),
+            ),
+            // 8: all built-in attrs
+            (
+                "SELECT @objectId, @objectAddress, @usedHeapSize, @displayName, @length FROM C",
+                q(
+                    false,
+                    vec![
+                        attr_sel(Attr::ObjectId),
+                        attr_sel(Attr::ObjectAddress),
+                        attr_sel(Attr::UsedHeapSize),
+                        attr_sel(Attr::DisplayName),
+                        attr_sel(Attr::Length),
+                    ],
+                    false,
+                    "C",
+                    None,
+                    None,
+                    None,
+                ),
+            ),
+            // 9: classof(alias)
+            (
+                "SELECT classof(s) FROM java.lang.String s",
+                q(false, vec![attr_sel(Attr::ClassOf)], false, "java.lang.String", Some("s"), None, None),
+            ),
+            // 10: COUNT(*)
+            (
+                "SELECT COUNT(*) FROM C",
+                q(false, vec![agg(AggFunc::Count, SelectItem::Star)], false, "C", None, None, None),
+            ),
+            // 11: SUM(@usedHeapSize)
+            (
+                "SELECT SUM(@usedHeapSize) FROM C",
+                q(
+                    false,
+                    vec![agg(AggFunc::Sum, attr_sel(Attr::UsedHeapSize))],
+                    false,
+                    "C",
+                    None,
+                    None,
+                    None,
+                ),
+            ),
+            // 12: MIN/MAX/AVG mixed
+            (
+                "SELECT MIN(x), MAX(x), AVG(x) FROM C",
+                q(
+                    false,
+                    vec![
+                        agg(AggFunc::Min, attr_sel(field("x"))),
+                        agg(AggFunc::Max, attr_sel(field("x"))),
+                        agg(AggFunc::Avg, attr_sel(field("x"))),
+                    ],
+                    false,
+                    "C",
+                    None,
+                    None,
+                    None,
+                ),
+            ),
+            // 13: simple WHERE compare int
+            (
+                "SELECT * FROM C WHERE hash > 0",
+                q(false, star(), false, "C", None, Some(cmp(field("hash"), CompareOp::Gt, Value::Int(0))), None),
+            ),
+            // 14: WHERE compare string
+            (
+                "SELECT * FROM C WHERE name = \"main\"",
+                q(false, star(), false, "C", None, Some(cmp(field("name"), CompareOp::Eq, Value::Str("main".into()))), None),
+            ),
+            // 15: WHERE compare float
+            (
+                "SELECT * FROM C WHERE ratio <= 1.5",
+                q(false, star(), false, "C", None, Some(cmp(field("ratio"), CompareOp::Le, Value::Float(1.5))), None),
+            ),
+            // 16: WHERE bool true
+            (
+                "SELECT * FROM C WHERE flag = true",
+                q(false, star(), false, "C", None, Some(cmp(field("flag"), CompareOp::Eq, Value::Bool(true))), None),
+            ),
+            // 17: WHERE bool false + null (case-insensitive keywords)
+            (
+                "SELECT * FROM C WHERE a = FALSE AND b != NULL",
+                q(
+                    false,
+                    star(),
+                    false,
+                    "C",
+                    None,
+                    Some(and(
+                        cmp(field("a"), CompareOp::Eq, Value::Bool(false)),
+                        cmp(field("b"), CompareOp::Ne, Value::Null),
+                    )),
+                    None,
+                ),
+            ),
+            // 18: precedence NOT/AND/OR
+            (
+                "SELECT * FROM C WHERE NOT a = 1 OR b = 2 AND c = 3",
+                q(
+                    false,
+                    star(),
+                    false,
+                    "C",
+                    None,
+                    Some(or(
+                        not(cmp(field("a"), CompareOp::Eq, Value::Int(1))),
+                        and(
+                            cmp(field("b"), CompareOp::Eq, Value::Int(2)),
+                            cmp(field("c"), CompareOp::Eq, Value::Int(3)),
+                        ),
+                    )),
+                    None,
+                ),
+            ),
+            // 19: parenthesized predicate overrides precedence
+            (
+                "SELECT * FROM C WHERE (a = 1 OR b = 2) AND c = 3",
+                q(
+                    false,
+                    star(),
+                    false,
+                    "C",
+                    None,
+                    Some(and(
+                        or(
+                            cmp(field("a"), CompareOp::Eq, Value::Int(1)),
+                            cmp(field("b"), CompareOp::Eq, Value::Int(2)),
+                        ),
+                        cmp(field("c"), CompareOp::Eq, Value::Int(3)),
+                    )),
+                    None,
+                ),
+            ),
+            // 20: predicate-level INSTANCEOF
+            (
+                "SELECT * FROM C WHERE s INSTANCEOF java.lang.String",
+                q(
+                    false,
+                    star(),
+                    false,
+                    "C",
+                    None,
+                    Some(Predicate::InstanceOf("java.lang.String".into())),
+                    None,
+                ),
+            ),
+            // 21: double negation
+            (
+                "SELECT * FROM C WHERE NOT NOT a = 1",
+                q(
+                    false,
+                    star(),
+                    false,
+                    "C",
+                    None,
+                    Some(not(not(cmp(field("a"), CompareOp::Eq, Value::Int(1))))),
+                    None,
+                ),
+            ),
+            // 22: everything at once — DISTINCT + INSTANCEOF + alias + WHERE + LIMIT
+            (
+                "SELECT DISTINCT @objectId, name FROM INSTANCEOF java.lang.Thread t \
+                 WHERE @usedHeapSize >= 100 AND name != \"main\" LIMIT 5",
+                q(
+                    true,
+                    vec![attr_sel(Attr::ObjectId), attr_sel(field("name"))],
+                    true,
+                    "java.lang.Thread",
+                    Some("t"),
+                    Some(and(
+                        cmp(Attr::UsedHeapSize, CompareOp::Ge, Value::Int(100)),
+                        cmp(field("name"), CompareOp::Ne, Value::Str("main".into())),
+                    )),
+                    Some(5),
+                ),
+            ),
+            // 23: negative int literal in WHERE
+            (
+                "SELECT * FROM C WHERE delta = -7",
+                q(false, star(), false, "C", None, Some(cmp(field("delta"), CompareOp::Eq, Value::Int(-7))), None),
+            ),
+            // 24: nested aggregate arg (AGG over attr)
+            (
+                "SELECT COUNT(name) FROM C",
+                q(false, vec![agg(AggFunc::Count, attr_sel(field("name")))], false, "C", None, None, None),
+            ),
+        ];
+        for (src, expected) in cases {
+            let got = parse(src).unwrap_or_else(|e| panic!("parse failed for {src:?}: {}", e.0));
+            assert_eq!(got, expected, "AST mismatch for {src:?}");
+        }
+    }
+
+    // ============================================================
+    // Group 3 — error cases: compact single-line message w/ line:col
+    // 12 cases of malformed input.
+    // ============================================================
+
+    #[test]
+    fn error_cases() {
+        // Each entry: (src, substring the message must contain)
+        let cases: Vec<(&str, &str)> = vec![
+            ("", "unexpected"),                                   // 1 empty
+            ("SELECT", "unexpected"),                             // 2 select only
+            ("SELECT *", "unexpected"),                           // 3 missing FROM
+            ("SELECT * FROM", "unexpected"),                      // 4 FROM no class
+            ("SELECT * FROM C bogus extra", "unexpected"),        // 5 trailing garbage
+            ("SELECT @bogus FROM C", "bogus"),                   // 6 unknown builtin attr
+            ("SELECT * FROM C WHERE hash >", "unexpected"),       // 7 dangling operator
+            ("SELECT * FROM C WHERE hash", "unexpected"),         // 8 missing operator+rhs
+            ("SELECT * FROM C LIMIT abc", "unexpected"),          // 9 non-int limit
+            ("SELECT * FROM C LIMIT -1", "unexpected"),           // 10 negative limit rejected
+            ("SELECT COUNT * FROM C", "unexpected"),              // 11 agg missing paren
+            ("SELECT * FROM C WHERE (a = 1", "unexpected"),       // 12 unbalanced paren
+            ("SELECT , FROM C", "unexpected"),                    // 13 empty select item
+            ("SELECT * FROM C WHERE a = ", "unexpected"),         // 14 missing rhs value
+            ("SELECT * FROM C WHERE a == 1", "unexpected"),       // 15 bad operator ==
+        ];
+        for (src, needle) in cases {
+            let err = parse(src)
+                .err()
+                .unwrap_or_else(|| panic!("expected parse error for {src:?}"))
+                .0;
+            assert!(!err.is_empty(), "empty error for {src:?}");
+            assert!(!err.contains('\n'), "expected single-line error for {src:?}, got: {err}");
+            assert!(
+                err.contains(needle),
+                "error for {src:?} should contain {needle:?}, got: {err}"
+            );
+            // Compact messages carry a line:col (except tokenizer-offset errors).
+            assert!(
+                err.contains(':') || err.contains("offset"),
+                "error for {src:?} should carry a location, got: {err}"
+            );
         }
     }
 
     #[test]
-    fn parse_aggregate() {
-        let q = parse("SELECT COUNT(*) FROM java.lang.String").unwrap();
-        assert!(matches!(
-            q.select[0],
-            SelectItem::Aggregate { func: AggFunc::Count, .. }
-        ));
-        assert!(q.alias.is_none());
+    fn tokenizer_error_cases() {
+        // Bytes logos can't lex: report an offset. `#` and `&` are not in any regex.
+        for src in ["SELECT * FROM C WHERE a = #", "a & b", "SELECT ~ FROM C"] {
+            let err = tokenize_spanned(src)
+                .err()
+                .unwrap_or_else(|| panic!("expected tokenize error for {src:?}"));
+            assert!(err.contains("offset"), "got: {err}");
+        }
+        // Unterminated string: the lone `"` cannot start a valid string token.
+        let err = tokenize_spanned("name = \"foo").unwrap_err();
+        assert!(err.contains("offset"), "got: {err}");
+    }
+
+    // ---------- targeted unit tests ----------
+
+    #[test]
+    fn parses_retained_heap_size_attr() {
+        let q = parse("SELECT @retainedHeapSize FROM C").unwrap();
+        assert_eq!(q.select, vec![SelectItem::Attr(Attr::RetainedHeapSize)]);
+    }
+    #[test]
+    fn retained_heap_alias_normalizes_to_retained_heap_size() {
+        let q = parse("SELECT @retainedHeap FROM C").unwrap();
+        assert_eq!(q.select, vec![SelectItem::Attr(Attr::RetainedHeapSize)]);
+    }
+    #[test]
+    fn retained_heap_size_usable_in_where() {
+        let q = parse("SELECT @objectId FROM C WHERE @retainedHeapSize > 1024").unwrap();
+        assert!(q.where_.is_some());
     }
 
     #[test]
-    fn parse_rejects_trailing_garbage() {
-        let err = parse("SELECT * FROM C bogus extra tokens").unwrap_err();
-        assert!(err.0.contains("unexpected"), "got: {}", err.0);
+    fn span_tracks_byte_offsets() {
+        let lg = tokenize_spanned("@usedHeapSize").expect("logos tokenizes");
+        assert_eq!(lg.len(), 1);
+        let (tok, span) = &lg[0];
+        assert_eq!(*tok, Token::At("usedHeapSize".into()));
+        assert_eq!((span.start, span.end), (0, 13));
     }
 
     #[test]
-    fn parse_or_and_not_precedence() {
-        // NOT binds tighter than AND, AND tighter than OR.
-        let q = parse("SELECT * FROM C WHERE NOT a = 1 OR b = 2 AND c = 3").unwrap();
-        // => Or( Not(a=1), And(b=2, c=3) )
-        match q.where_.unwrap() {
-            Predicate::Or(l, r) => {
-                assert!(matches!(*l, Predicate::Not(_)));
-                assert!(matches!(*r, Predicate::And(_, _)));
-            }
-            other => panic!("expected OR at top, got {other:?}"),
+    fn line_col_basic() {
+        assert_eq!(line_col("abc", 0), (1, 1));
+        assert_eq!(line_col("abc", 2), (1, 3));
+        assert_eq!(line_col("ab\ncd", 3), (2, 1));
+        assert_eq!(line_col("ab\ncd", 4), (2, 2));
+        assert_eq!(line_col("abc", 99), (1, 4)); // clamps past end
+    }
+
+    #[test]
+    fn report_contains_caret_marker() {
+        let rep = parse_or_report("SELCT * FROM C").unwrap_err();
+        assert!(rep.contains("query:1:"), "expected caret location, got:\n{rep}");
+    }
+
+    #[test]
+    fn report_ok_on_valid_query() {
+        assert!(parse_or_report("SELECT * FROM C").is_ok());
+    }
+
+    #[test]
+    fn report_tokenizer_error_surfaced() {
+        let rep = parse_or_report("SELECT * FROM C WHERE a = #").unwrap_err();
+        assert!(rep.contains("tokenize error"), "got: {rep}");
+    }
+
+    // The canonical keyword slices must stay in sync with the parser's actual
+    // matching logic — otherwise the REPL completer (which sources them via
+    // `completion_words`) would drift from what the grammar accepts.
+
+    #[test]
+    fn agg_funcs_const_matches_parser() {
+        for &f in AGG_FUNCS {
+            assert!(agg_func(f).is_some(), "agg_func rejects declared AGG_FUNC {f:?}");
+            // ...and the query actually parses as an aggregate.
+            assert!(
+                parse(&format!("SELECT {f}(*) FROM C")).is_ok(),
+                "parser rejects aggregate {f:?}"
+            );
         }
     }
 
     #[test]
-    fn parse_rejects_missing_from() {
-        let err = parse("SELECT *").unwrap_err();
-        assert!(err.0.contains("FROM"), "got: {}", err.0);
-    }
-
-    #[test]
-    fn parse_rejects_unknown_attribute() {
-        let err = parse("SELECT @bogus FROM C").unwrap_err();
-        assert!(
-            err.0.contains("unknown @attribute") && err.0.contains("bogus"),
-            "got: {}",
-            err.0
-        );
-    }
-
-    #[test]
-    fn parse_rejects_bad_comparison_operator() {
-        // `name LIMIT 1` after WHERE: `LIMIT` is not a comparison operator, and
-        // the tokenizer produces an Ident, so the operator match must reject it.
-        let err = parse("SELECT * FROM C WHERE name name").unwrap_err();
-        assert!(
-            err.0.contains("comparison operator"),
-            "got: {}",
-            err.0
-        );
-    }
-
-    #[test]
-    fn parse_rejects_non_literal_rhs() {
-        let err = parse("SELECT * FROM C WHERE a = @objectId").unwrap_err();
-        assert!(err.0.contains("literal value"), "got: {}", err.0);
-    }
-
-    #[test]
-    fn parse_rejects_negative_limit() {
-        let err = parse("SELECT * FROM C LIMIT -1").unwrap_err();
-        assert!(err.0.contains("LIMIT count"), "got: {}", err.0);
-    }
-
-    #[test]
-    fn parse_aggregate_missing_paren_reports_found_token() {
-        // COUNT without `(` should report what it found instead, not a bare message.
-        let err = parse("SELECT COUNT * FROM C").unwrap_err();
-        assert!(
-            err.0.contains("expected `(`") && err.0.contains("found"),
-            "got: {}",
-            err.0
-        );
-    }
-
-    #[test]
-    fn parse_classof_attr() {
-        let q = parse("SELECT classof(s) FROM java.lang.String s").unwrap();
-        assert_eq!(q.select, vec![SelectItem::Attr(Attr::ClassOf)]);
-    }
-
-    #[test]
-    fn parse_distinct_and_parenthesized_predicate() {
-        let q = parse("SELECT DISTINCT name FROM C WHERE (a = 1 OR b = 2) AND c = 3").unwrap();
-        assert!(q.distinct);
-        // Top-level AND with left = Or(...), right = Compare(c = 3).
-        match q.where_.unwrap() {
-            Predicate::And(l, r) => {
-                assert!(matches!(*l, Predicate::Or(_, _)));
-                assert!(matches!(*r, Predicate::Compare { op: CompareOp::Eq, .. }));
-            }
-            other => panic!("expected AND at top, got {other:?}"),
+    fn reserved_const_matches_parser() {
+        for &r in RESERVED {
+            assert!(is_reserved(r), "is_reserved rejects declared RESERVED {r:?}");
         }
     }
 
     #[test]
-    fn parse_predicate_instanceof() {
-        let q = parse("SELECT * FROM C WHERE s INSTANCEOF java.lang.String").unwrap();
-        match q.where_.unwrap() {
-            Predicate::InstanceOf(name) => assert_eq!(name, "java.lang.String"),
-            other => panic!("expected InstanceOf, got {other:?}"),
+    fn attributes_const_all_parse() {
+        for &a in ATTRIBUTES {
+            // Each declared @attribute must parse as a SELECT column.
+            assert!(
+                parse(&format!("SELECT {a} FROM C")).is_ok(),
+                "parser rejects declared attribute {a:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn completion_words_covers_all_sources() {
+        let words = completion_words();
+        for set in [KEYWORDS, RESERVED, AGG_FUNCS, ATTRIBUTES] {
+            for &w in set {
+                assert!(words.contains(&w), "completion_words missing {w:?}");
+            }
+        }
+    }
+
+    // small helper: fluent DISTINCT flip for the ast_cases table
+    trait TapDistinct {
+        fn tap_distinct(self) -> Self;
+    }
+    impl TapDistinct for Query {
+        fn tap_distinct(mut self) -> Self {
+            self.distinct = true;
+            self
         }
     }
 }

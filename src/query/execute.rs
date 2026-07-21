@@ -41,6 +41,19 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
         let want = &self.query.from.class_name;
         match self.resolver.class_name(class_id) { None => false, Some(name) => class_name_matches(name, want) }
     }
+    /// Strip a leading `<alias>.` from a field reference so `s.count` resolves as
+    /// the bare field `count` when the FROM clause binds alias `s`. Fields with
+    /// no matching alias prefix (or no alias in scope) pass through unchanged.
+    fn strip_alias<'n>(&self, name: &'n str) -> &'n str {
+        if let Some(alias) = &self.query.alias {
+            if let Some(rest) = name.strip_prefix(alias.as_str()) {
+                if let Some(field) = rest.strip_prefix('.') {
+                    return field;
+                }
+            }
+        }
+        name
+    }
     fn project_row(&self, src_idx: usize, class_id: u64, blob: &[u8]) -> Vec<QueryValue> {
         self.query.select.iter().map(|item| self.project_item(item, src_idx, class_id, blob)).collect()
     }
@@ -56,13 +69,46 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             Attr::ObjectId => QueryValue::Int(src_idx as i64),
             Attr::ObjectAddress => self.resolver.addr_of(src_idx).map(|x| QueryValue::Int(x as i64)).unwrap_or(QueryValue::Null),
             Attr::UsedHeapSize => self.resolver.shallow_of(src_idx).map(|x| QueryValue::Int(x as i64)).unwrap_or(QueryValue::Null),
+            // filled cross-phase (stage runner) — retained size is unknown during the pass2 scan.
+            Attr::RetainedHeapSize => QueryValue::Null,
             Attr::ClassOf | Attr::DisplayName => QueryValue::Str(self.resolver.class_name(class_id).unwrap_or("?").to_string()),
             Attr::Length => QueryValue::Null,
             Attr::Field(name) => self.decode_field(class_id, name, blob),
         }
     }
+    /// Project a SELECT row for an array object. Arrays carry no field blob and
+    /// no resolvable class-object address, so identity/class attrs are served
+    /// from `class_name`, `@length` from `length`, and named fields are Null.
+    fn project_array_row(&self, src_idx: usize, class_name: &str, length: u32) -> Vec<QueryValue> {
+        self.query
+            .select
+            .iter()
+            .map(|item| self.project_array_item(item, src_idx, class_name, length))
+            .collect()
+    }
+    fn project_array_item(&self, item: &SelectItem, src_idx: usize, class_name: &str, length: u32) -> QueryValue {
+        match item {
+            SelectItem::Star => QueryValue::ObjRef { index: src_idx as u64, class: class_name.to_string() },
+            SelectItem::Aggregate { .. } => QueryValue::Null,
+            SelectItem::Attr(a) => self.project_array_attr(a, src_idx, class_name, length),
+        }
+    }
+    fn project_array_attr(&self, a: &Attr, src_idx: usize, class_name: &str, length: u32) -> QueryValue {
+        match a {
+            Attr::ObjectId => QueryValue::Int(src_idx as i64),
+            Attr::ObjectAddress => self.resolver.addr_of(src_idx).map(|x| QueryValue::Int(x as i64)).unwrap_or(QueryValue::Null),
+            Attr::UsedHeapSize => self.resolver.shallow_of(src_idx).map(|x| QueryValue::Int(x as i64)).unwrap_or(QueryValue::Null),
+            // filled cross-phase (stage runner) — retained size is unknown during the pass2 scan.
+            Attr::RetainedHeapSize => QueryValue::Null,
+            Attr::ClassOf | Attr::DisplayName => QueryValue::Str(class_name.to_string()),
+            Attr::Length => QueryValue::Int(length as i64),
+            // Arrays have no named fields; a field reference resolves to Null.
+            Attr::Field(_) => QueryValue::Null,
+        }
+    }
     fn decode_field(&self, class_id: u64, name: &str, blob: &[u8]) -> QueryValue {
         use crate::types::HprofType;
+        let name = self.strip_alias(name);
         let Some((off, ty)) = self.resolver.field(class_id, name) else { return QueryValue::Null; };
         let o = off as usize;
         match ty {
@@ -102,6 +148,29 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
         }
     }
 
+    /// WHERE evaluation for array objects: only `@length`, `@objectId`, and
+    /// `INSTANCEOF` are meaningful; named-field compares resolve to Null (and
+    /// thus behave like the instance path's unknown-field handling).
+    fn array_where_passes(&self, class_name: &str, length: u32) -> bool {
+        for term in &self.plan.where_terms {
+            if !self.array_eval_pred(&term.pred, class_name, length) { return false; }
+        }
+        true
+    }
+    fn array_eval_pred(&self, pred: &crate::query::ast::Predicate, class_name: &str, length: u32) -> bool {
+        use crate::query::ast::Predicate as P;
+        match pred {
+            P::And(a, b) => self.array_eval_pred(a, class_name, length) && self.array_eval_pred(b, class_name, length),
+            P::Or(a, b) => self.array_eval_pred(a, class_name, length) || self.array_eval_pred(b, class_name, length),
+            P::Not(a) => !self.array_eval_pred(a, class_name, length),
+            P::InstanceOf(cname) => class_name_matches(class_name, cname),
+            P::Compare { lhs, op, rhs } => {
+                let lv = self.project_array_attr(lhs, 0, class_name, length);
+                compare_values(&lv, *op, rhs)
+            }
+        }
+    }
+
     pub fn finish(self, name: &str) -> QueryResult {
         let columns = self.query.select.iter().map(|it| QueryColumn { name: column_name(it) }).collect();
         QueryResult { name: name.to_string(), oql: String::new(), columns, row_count: self.rows.len() as u64, rows: self.rows, truncated: self.truncated, error: None }
@@ -115,6 +184,15 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
         if let Some(limit) = self.plan.limit { if self.matched >= limit { self.truncated = true; return; } }
         self.matched += 1;
         let row = self.project_row(src_idx, class_id, blob);
+        self.rows.push(row);
+    }
+
+    fn visit_array(&mut self, src_idx: usize, class_name: &str, length: u32) {
+        if !class_name_matches(class_name, &self.query.from.class_name) { return; }
+        if !self.array_where_passes(class_name, length) { return; }
+        if let Some(limit) = self.plan.limit { if self.matched >= limit { self.truncated = true; return; } }
+        self.matched += 1;
+        let row = self.project_array_row(src_idx, class_name, length);
         self.rows.push(row);
     }
 }
@@ -167,6 +245,7 @@ fn attr_name(a: &Attr) -> String {
         Attr::ObjectId => "@objectId".into(),
         Attr::ObjectAddress => "@objectAddress".into(),
         Attr::UsedHeapSize => "@usedHeapSize".into(),
+        Attr::RetainedHeapSize => "@retainedHeapSize".into(),
         Attr::DisplayName => "@displayName".into(),
         Attr::Length => "@length".into(),
         Attr::ClassOf => "classof".into(),
@@ -703,5 +782,123 @@ mod tests {
         ex.visit_instance(1, 10, &[0, 0, 0, 1]);
         let res = ex.finish("q1");
         assert_eq!(res.row_count, 0);
+    }
+
+    // --- C2: alias-prefix stripping ---
+
+    #[test]
+    fn alias_prefixed_field_projects_same_as_bare() {
+        // `FROM C c` binds alias `c`; `SELECT c.n` must resolve field `n`.
+        let q = crate::query::parse::parse("SELECT c.n FROM C c").unwrap();
+        assert_eq!(q.alias.as_deref(), Some("c"), "parser must bind alias `c`");
+        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let sc = FieldSchema::with_fields(&[("n", 0, crate::types::HprofType::Int)]);
+        let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
+        ex.visit_instance(1, 10, &[0, 0, 0, 7]);
+        let res = ex.finish("q1");
+        assert_eq!(res.rows[0][0], QueryValue::Int(7));
+    }
+
+    #[test]
+    fn alias_prefixed_field_filters_in_where() {
+        // `WHERE c.count > 5` must strip the `c.` prefix and resolve `count`.
+        let q = crate::query::parse::parse("SELECT @objectId FROM C c WHERE c.count > 5").unwrap();
+        assert_eq!(q.alias.as_deref(), Some("c"));
+        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let sc = FieldSchema::count_only();
+        let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
+        ex.visit_instance(1, 10, &[0, 0, 0, 3]); // count=3 fails >5
+        ex.visit_instance(2, 10, &[0, 0, 0, 9]); // count=9 passes
+        let res = ex.finish("q1");
+        assert_eq!(res.row_count, 1);
+        assert_eq!(res.rows[0][0], QueryValue::Int(2));
+    }
+
+    #[test]
+    fn strip_alias_only_strips_matching_prefix() {
+        // Directly exercise strip_alias: matching prefix stripped, others intact.
+        let q = crate::query::parse::parse("SELECT n FROM C c").unwrap();
+        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let sc = FieldSchema::count_only();
+        let ex = SingleScanExecutor::new(&q, &plan, &sc);
+        assert_eq!(ex.strip_alias("c.count"), "count");
+        // Different leading identifier is left alone (not this query's alias).
+        assert_eq!(ex.strip_alias("d.count"), "d.count");
+        // A field whose name merely starts with the alias letters but no dot.
+        assert_eq!(ex.strip_alias("count"), "count");
+        // Nested dotted path only strips the first `<alias>.` segment.
+        assert_eq!(ex.strip_alias("c.a.b"), "a.b");
+    }
+
+    #[test]
+    fn strip_alias_noop_without_alias() {
+        // No alias bound: field names pass through untouched.
+        let q = crate::query::parse::parse("SELECT n FROM C").unwrap();
+        assert!(q.alias.is_none());
+        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let sc = FieldSchema::count_only();
+        let ex = SingleScanExecutor::new(&q, &plan, &sc);
+        assert_eq!(ex.strip_alias("c.count"), "c.count");
+    }
+
+    // --- Array path (@length projection + array WHERE) ---
+
+    #[test]
+    fn array_length_projects_real_count() {
+        // `FROM char[]` matches the array class NAME passed to visit_array; the
+        // `@length` column must project the element count as an Int.
+        let q = crate::query::parse::parse("SELECT @length FROM char[]").unwrap();
+        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let sc = FieldSchema::count_only();
+        let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
+        ex.visit_array(1, "char[]", 42);
+        ex.visit_array(2, "char[]", 7);
+        // A non-matching array class is ignored.
+        ex.visit_array(3, "int[]", 99);
+        let res = ex.finish("q1");
+        assert_eq!(res.row_count, 2);
+        assert_eq!(res.rows[0][0], QueryValue::Int(42));
+        assert_eq!(res.rows[1][0], QueryValue::Int(7));
+    }
+
+    #[test]
+    fn array_length_filters_in_where() {
+        // WHERE over @length filters array rows just like scalar fields.
+        let q = crate::query::parse::parse("SELECT @length FROM char[] WHERE @length > 8").unwrap();
+        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let sc = FieldSchema::count_only();
+        let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
+        ex.visit_array(1, "char[]", 4); // fails >8
+        ex.visit_array(2, "char[]", 16); // passes
+        let res = ex.finish("q1");
+        assert_eq!(res.row_count, 1);
+        assert_eq!(res.rows[0][0], QueryValue::Int(16));
+    }
+
+    #[test]
+    fn array_respects_limit() {
+        // The LIMIT cap applies to array rows and sets truncated.
+        let q = crate::query::parse::parse("SELECT @length FROM char[] LIMIT 2").unwrap();
+        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let sc = FieldSchema::count_only();
+        let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
+        ex.visit_array(1, "char[]", 1);
+        ex.visit_array(2, "char[]", 2);
+        ex.visit_array(3, "char[]", 3); // over the cap
+        let res = ex.finish("q1");
+        assert_eq!(res.row_count, 2);
+        assert!(res.truncated, "hitting the LIMIT cap must set truncated");
+    }
+
+    #[test]
+    fn array_field_projection_is_null() {
+        // A bare field has no meaning on an array element; project Null.
+        let q = crate::query::parse::parse("SELECT n FROM char[]").unwrap();
+        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let sc = FieldSchema::with_fields(&[("n", 0, crate::types::HprofType::Int)]);
+        let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
+        ex.visit_array(1, "char[]", 5);
+        let res = ex.finish("q1");
+        assert_eq!(res.rows[0][0], QueryValue::Null);
     }
 }

@@ -32,6 +32,9 @@ pub enum Attr {
     ObjectId,
     ObjectAddress,
     UsedHeapSize,
+    /// `@retainedHeapSize` — the object's retained (dominator-subtree) size.
+    /// Cross-phase: cannot be answered during the pass2 scan.
+    RetainedHeapSize,
     DisplayName,
     Length,
     /// `classof(x)` — the runtime class name.

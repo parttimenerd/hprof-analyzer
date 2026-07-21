@@ -87,6 +87,85 @@ pub fn plan_query(q: &Query) -> Result<QueryPlan, QueryError> {
     Ok(QueryPlan { kind, needs, where_terms, limit: q.limit })
 }
 
+/// Schema lookup used for plan-time field validation. Implemented by the live
+/// pass2 resolver; a fake version backs the unit tests. `class_field_names`
+/// returns the full super-chain field-name set for an EXACT (non-glob) class
+/// name, or `None` when the class is unknown or the name is a glob pattern
+/// (in which case field validation is skipped, since the concrete runtime
+/// classes vary per instance).
+pub trait FieldSchema {
+    fn class_field_names(&self, exact_class_name: &str) -> Option<Vec<String>>;
+}
+
+/// Reject any bare field referenced in SELECT/WHERE that is absent from the
+/// FROM class's field set. Skipped for glob FROM patterns and for classes the
+/// schema can't resolve (validation is best-effort: an unresolvable class means
+/// we can't prove a field is missing, so we let the scan proceed).
+pub fn validate_fields(q: &Query, schema: &dyn FieldSchema) -> Result<(), QueryError> {
+    let class = &q.from.class_name;
+    if class.contains('*') {
+        return Ok(());
+    }
+    let Some(known) = schema.class_field_names(class) else {
+        return Ok(());
+    };
+
+    let mut referenced = Vec::new();
+    for item in &q.select {
+        collect_select_fields(item, &mut referenced);
+    }
+    if let Some(pred) = &q.where_ {
+        collect_pred_fields(pred, &mut referenced);
+    }
+
+    for name in referenced {
+        let bare = strip_alias(&name, q.alias.as_deref());
+        if !known.iter().any(|f| f == bare) {
+            return Err(QueryError(format!(
+                "unknown field `{bare}` on {class}; \
+                 known fields: {}",
+                if known.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    known.join(", ")
+                }
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn strip_alias<'n>(name: &'n str, alias: Option<&str>) -> &'n str {
+    if let Some(a) = alias {
+        if let Some(rest) = name.strip_prefix(a) {
+            if let Some(field) = rest.strip_prefix('.') {
+                return field;
+            }
+        }
+    }
+    name
+}
+
+fn collect_select_fields(item: &SelectItem, out: &mut Vec<String>) {
+    match item {
+        SelectItem::Attr(Attr::Field(name)) => out.push(name.clone()),
+        SelectItem::Aggregate { arg, .. } => collect_select_fields(arg, out),
+        _ => {}
+    }
+}
+
+fn collect_pred_fields(pred: &Predicate, out: &mut Vec<String>) {
+    match pred {
+        Predicate::And(a, b) | Predicate::Or(a, b) => {
+            collect_pred_fields(a, out);
+            collect_pred_fields(b, out);
+        }
+        Predicate::Not(a) => collect_pred_fields(a, out),
+        Predicate::Compare { lhs: Attr::Field(name), .. } => out.push(name.clone()),
+        _ => {}
+    }
+}
+
 fn note_attr_need(item: &SelectItem, needs: &mut QueryNeeds) -> Result<(), QueryError> {
     match item {
         SelectItem::Star => Ok(()),
@@ -237,9 +316,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_retained_heap() {
-        // @retainedHeapSize is not a known @attr in this slice -> parser rejects it.
-        assert!(parse("SELECT @retainedHeapSize FROM C").is_err());
+    fn retained_heap_size_now_parses() {
+        assert!(parse("SELECT @retainedHeapSize FROM C").is_ok());
     }
 
     #[test]
@@ -373,5 +451,85 @@ mod tests {
         .unwrap();
         assert_eq!(plan.kind, StageKind::SingleScan);
         assert!(!plan.needs.histogram);
+    }
+
+    // --- Field validation (unknown-field rejection) ---
+
+    struct FakeSchema {
+        class: &'static str,
+        fields: Vec<&'static str>,
+    }
+    impl FieldSchema for FakeSchema {
+        fn class_field_names(&self, exact_class_name: &str) -> Option<Vec<String>> {
+            if exact_class_name.replace('/', ".") == self.class {
+                Some(self.fields.iter().map(|s| s.to_string()).collect())
+            } else {
+                None
+            }
+        }
+    }
+
+    #[test]
+    fn validate_accepts_known_field() {
+        let schema = FakeSchema { class: "java.lang.String", fields: vec!["count", "hash", "value"] };
+        let q = parse("SELECT count FROM java.lang.String WHERE hash > 0").unwrap();
+        assert!(validate_fields(&q, &schema).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_unknown_select_field() {
+        let schema = FakeSchema { class: "java.lang.String", fields: vec!["count", "hash"] };
+        let q = parse("SELECT bogusfield FROM java.lang.String").unwrap();
+        let err = validate_fields(&q, &schema).unwrap_err();
+        assert!(err.0.contains("unknown field"), "got: {}", err.0);
+        assert!(err.0.contains("bogusfield"), "got: {}", err.0);
+        assert!(err.0.contains("java.lang.String"), "got: {}", err.0);
+        // Actionable: lists the known fields.
+        assert!(err.0.contains("count"), "should list known fields: {}", err.0);
+    }
+
+    #[test]
+    fn validate_rejects_unknown_where_field() {
+        let schema = FakeSchema { class: "java.lang.String", fields: vec!["count"] };
+        let q = parse("SELECT * FROM java.lang.String WHERE nope > 3").unwrap();
+        let err = validate_fields(&q, &schema).unwrap_err();
+        assert!(err.0.contains("unknown field"), "got: {}", err.0);
+        assert!(err.0.contains("nope"), "got: {}", err.0);
+    }
+
+    #[test]
+    fn validate_strips_alias_before_lookup() {
+        let schema = FakeSchema { class: "java.lang.String", fields: vec!["count", "hash"] };
+        // `s.count`/`s.hash` must resolve as bare `count`/`hash`.
+        let q = parse("SELECT s.count FROM java.lang.String s WHERE s.hash > 0").unwrap();
+        assert!(validate_fields(&q, &schema).is_ok());
+        // Alias-stripped unknown field is still rejected, reported bare.
+        let q2 = parse("SELECT s.bogus FROM java.lang.String s").unwrap();
+        let err = validate_fields(&q2, &schema).unwrap_err();
+        assert!(err.0.contains("unknown field `bogus`"), "got: {}", err.0);
+    }
+
+    #[test]
+    fn validate_skips_glob_from() {
+        // Glob FROM classes vary per instance; field validation is skipped.
+        let schema = FakeSchema { class: "irrelevant", fields: vec![] };
+        let q = parse("SELECT anything FROM com.acme.*").unwrap();
+        assert!(validate_fields(&q, &schema).is_ok());
+    }
+
+    #[test]
+    fn validate_skips_unresolvable_class() {
+        // Unknown class → schema returns None → we can't prove a field missing.
+        let schema = FakeSchema { class: "java.lang.String", fields: vec!["count"] };
+        let q = parse("SELECT whatever FROM com.other.Unknown").unwrap();
+        assert!(validate_fields(&q, &schema).is_ok());
+    }
+
+    #[test]
+    fn validate_ignores_builtin_attrs() {
+        // @-attrs are not bare fields and must never be flagged.
+        let schema = FakeSchema { class: "java.lang.String", fields: vec![] };
+        let q = parse("SELECT @objectId, @usedHeapSize, @displayName FROM java.lang.String").unwrap();
+        assert!(validate_fields(&q, &schema).is_ok());
     }
 }
