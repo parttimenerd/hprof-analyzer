@@ -57,6 +57,54 @@ impl Carry {
         encode_indices_delta(&self.idx, &mut buf);
         decode_indices_delta(&buf, self.idx.len())
     }
+
+    /// A carry that stores matched indices plus one packed scalar column per entry
+    /// in `widths` (bytes-per-value: 1,2,4,8). Values are validated to fit width.
+    pub fn index_plus_scalars(cap: usize, widths: Vec<u8>) -> Self {
+        let n = widths.len();
+        Self {
+            layout: CarryLayout::IndexPlusScalars { widths },
+            cap, truncated: false, idx: Vec::new(),
+            cols: vec![Vec::new(); n],
+            addrs: std::collections::BTreeSet::new(),
+        }
+    }
+
+    /// Record a matched index plus one value per scalar column. Panics if
+    /// `vals.len()` mismatches the column count or a value exceeds its byte width
+    /// (both are planner/executor invariants, not user input).
+    pub fn push_row(&mut self, dense_idx: u32, vals: &[u64]) {
+        let CarryLayout::IndexPlusScalars { widths } = &self.layout else {
+            panic!("push_row is only valid for IndexPlusScalars, got {:?}", self.layout);
+        };
+        assert_eq!(vals.len(), widths.len(),
+            "push_row expected {} scalar column(s) but got {}", widths.len(), vals.len());
+        if self.idx.len() >= self.cap { self.truncated = true; return; }
+        for (k, (&v, &w)) in vals.iter().zip(widths.iter()).enumerate() {
+            let max = if w >= 8 { u64::MAX } else { (1u64 << (w as u32 * 8)) - 1 };
+            assert!(v <= max,
+                "scalar column {k}: value {v} does not fit declared width {w} byte(s) (max {max})");
+            self.cols[k].push(v);
+        }
+        self.idx.push(dense_idx);
+    }
+
+    /// Decode scalar column `k`, round-tripping through the fixed-width packed form.
+    pub fn scalar_column(&self, k: usize) -> Vec<u64> {
+        let CarryLayout::IndexPlusScalars { widths } = &self.layout else {
+            panic!("scalar_column is only valid for IndexPlusScalars");
+        };
+        let w = widths[k] as usize;
+        let mut buf = Vec::with_capacity(self.cols[k].len() * w);
+        for &v in &self.cols[k] { buf.extend_from_slice(&v.to_be_bytes()[8 - w..]); }
+        let mut out = Vec::with_capacity(self.cols[k].len());
+        for chunk in buf.chunks_exact(w) {
+            let mut acc = 0u64;
+            for &b in chunk { acc = (acc << 8) | b as u64; }
+            out.push(acc);
+        }
+        out
+    }
 }
 
 /// Delta-varint encode indices in push order. `wrapping_sub` makes even a
@@ -121,5 +169,25 @@ mod tests {
         let mut c = Carry::index_only(100);
         for &i in &[100u32, 5, 5, 42, 0] { c.push_index(i); }
         assert_eq!(c.indices(), vec![100, 5, 5, 42, 0]);
+    }
+
+    #[test]
+    fn index_plus_scalars_roundtrips_columns() {
+        let mut c = Carry::index_plus_scalars(1000, vec![1, 4]);
+        c.push_row(10, &[7, 0x0001_0000]);
+        c.push_row(11, &[255, 42]);
+        assert!(!c.truncated());
+        assert_eq!(c.indices(), vec![10, 11]);
+        assert_eq!(c.scalar_column(0), vec![7, 255]);
+        assert_eq!(c.scalar_column(1), vec![0x0001_0000, 42]);
+    }
+
+    #[test]
+    fn scalar_width_overflow_panics_with_message() {
+        let mut c = Carry::index_plus_scalars(10, vec![1]);
+        let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            c.push_row(0, &[256]); // 256 does not fit in 1 byte
+        }));
+        assert!(err.is_err(), "over-wide scalar must panic");
     }
 }
