@@ -101,6 +101,14 @@ impl<'a> ClassResolver for LiveResolver<'a> {
     fn shallow_of(&self, src_idx: usize) -> Option<u32> {
         self.shallow.get(src_idx).copied()
     }
+
+    fn index_of_addr(&self, addr: u64) -> Option<usize> {
+        self.id_map.index_of(addr)
+    }
+
+    fn ref_width(&self) -> usize {
+        self.id_size
+    }
 }
 
 impl<'a> crate::query::plan::FieldSchema for LiveResolver<'a> {
@@ -577,6 +585,17 @@ mod tests {
     fn empty_driver_is_empty() {
         let driver: ScanDriver<'_, FakeResolver> = ScanDriver::new(Vec::new());
         assert!(driver.is_empty());
+    }
+
+    #[test]
+    fn index_of_addr_default_is_none() {
+        struct Bare;
+        impl crate::query::execute::ClassResolver for Bare {
+            fn class_name(&self, _c: u64) -> Option<&str> {
+                None
+            }
+        }
+        assert_eq!(Bare.index_of_addr(0x1000), None);
     }
 
     #[test]

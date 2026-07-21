@@ -49,6 +49,13 @@ pub trait ClassResolver {
     fn field(&self, _class_id: u64, _name: &str) -> Option<(u32, crate::types::HprofType)> { None }
     fn addr_of(&self, _src_idx: usize) -> Option<u64> { None }
     fn shallow_of(&self, _src_idx: usize) -> Option<u32> { None }
+    /// Reverse of `addr_of`: the dense object index for a heap address, or `None`
+    /// if the address is not a live object. Backs RefWalk edge resolution.
+    fn index_of_addr(&self, _addr: u64) -> Option<usize> { None }
+    /// Reference (object-pointer) width in bytes, used to decode ref fields from
+    /// an instance blob. Defaults to 8; `LiveResolver` returns the dump's real
+    /// `id_size`.
+    fn ref_width(&self) -> usize { 8 }
 }
 
 #[cfg(test)]
