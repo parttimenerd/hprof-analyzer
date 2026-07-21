@@ -5,6 +5,7 @@
 
 pub mod ast;
 pub mod parse;
+pub mod plan;
 
 use std::fmt;
 
