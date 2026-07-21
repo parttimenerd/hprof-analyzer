@@ -28,6 +28,11 @@ impl fmt::Display for QueryError {
 
 impl std::error::Error for QueryError {}
 
+/// Upper bound on the combined row count of a `UNION` result. Each branch is
+/// already row-capped individually; this caps the concatenated total so a
+/// pathological many-branch union can't blow up memory.
+pub const OVERALL_UNION_CAP: usize = 5_000_000;
+
 /// Per-object callback invoked once per INSTANCE_DUMP during the pass2 2a scan,
 /// while the raw instance blob and schema tables are still live. Implementors
 /// accumulate query matches. Called only when a query is active.

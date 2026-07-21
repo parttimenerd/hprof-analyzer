@@ -863,6 +863,7 @@ fn fmt_query_value(v: &query::model::QueryValue) -> String {
 fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
     let query_texts = collect_query_texts(&opts)?;
     let parsed = parse_plan_queries(&query_texts)?;
+    let (flat, union_groups) = query::run::expand_union_queries(&parsed);
 
     let p1 = pass1::Pass1::run(input)?;
     if p1.class_ids.len() > u32::MAX as usize {
@@ -877,11 +878,12 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
         ));
     }
     let (.., query_state) =
-        pass2::Pass2::build(input, p1, cvec::Codec::Zstd3, &opts, &parsed)?;
+        pass2::Pass2::build(input, p1, cvec::Codec::Zstd3, &opts, &flat)?;
 
     // Query-only path: retained sizes/dominators are not computed, so cross-phase
     // (@retainedHeapSize) queries resolve to actionable errors here.
-    let mut query_results = query::stage_runner::resume_without_late_ctx(query_state);
+    let flat_results = query::stage_runner::resume_without_late_ctx(query_state);
+    let mut query_results = query::run::collapse_union_results(flat_results, &union_groups);
 
     // Fill in blank oql text and default `q{N}` names for the printed tables.
     finalize_query_labels(&mut query_results, &query_texts);
@@ -950,11 +952,12 @@ fn run(
     // fast (before the expensive graph build) with a message naming the query.
     let query_texts = collect_query_texts(&opts)?;
     let parsed_queries = parse_plan_queries(&query_texts)?;
+    let (flat_queries, union_groups) = query::run::expand_union_queries(&parsed_queries);
 
     let t = Instant::now();
     progress::phase("building object graph (pass 2)");
     let (mut g, mut inbound, shallow_c, class_idx_c, alloc_serial_c, query_state) =
-        pass2::Pass2::build(input, p1, compress, &opts, &parsed_queries)?;
+        pass2::Pass2::build(input, p1, compress, &opts, &flat_queries)?;
     log(
         verbose,
         &format!("pass2 n={}", g.n),
@@ -1118,14 +1121,14 @@ fn run(
     // exist. Phase-1 results pass through; carried indices are joined against
     // g.retained, then all results reassemble in original query order.
     let query_asts: Vec<query::ast::Query> =
-        parsed_queries.iter().map(|(q, _)| q.clone()).collect();
+        flat_queries.iter().map(|(q, _)| q.clone()).collect();
     // Dominator stages read idom + the dominator-children CSR (dc_off/dc_tgt),
     // both live in this window. The IdMap is built empty: the dense address
     // table was compressed away at ~L973 (its 4.1GB dense form must not rejoin
     // the RSS peak), and dominator result rows assert on dense indices, not
     // addresses. A later stage that genuinely needs addresses will thread them.
     let id_map = query::stage_runner::IdMap::new(&[]);
-    let mut query_results = query::stage_runner::resume(
+    let flat_results = query::stage_runner::resume(
         query_state,
         &query_asts,
         &query::stage_runner::LateCtx {
@@ -1137,6 +1140,7 @@ fn run(
             id_map: &id_map,
         },
     );
+    let mut query_results = query::run::collapse_union_results(flat_results, &union_groups);
 
     // Restore + aggregate + free the alloc stack serials in a bounded window
     // right after compute_retained (needs g.shallow + g.retained, both live

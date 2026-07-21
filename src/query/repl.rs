@@ -1,41 +1,126 @@
-//! Minimal interactive OQL REPL. One query per stdin line. Lines beginning with
-//! `!` are meta-commands (`!help`, `!plan <oql>`, `!explain <oql>`, `!quit`).
-//! Everything else is parsed, planned, executed against the dump at `path`, and
-//! printed as a table. Each query triggers a fresh pass1+pass2 (keeping tables
-//! resident across queries is out of scope for the foundation slice).
+//! The interactive OQL REPL: a reedline line editor providing persistent
+//! history, line editing, and Tab-completion of OQL keywords, plus the
+//! query-execution / meta-command / formatting helpers it drives. Keyword
+//! completions are sourced from [`crate::query::parse::completion_words`] so
+//! they can never drift from the grammar. Each query triggers a fresh
+//! pass1+pass2 (keeping tables resident across queries is out of scope for the
+//! foundation slice).
 
-use std::io::{self, BufRead, Write};
+use std::io::{self, Write};
+
+use reedline::{
+    default_emacs_keybindings, ColumnarMenu, Completer, DefaultPrompt, Emacs, FileBackedHistory,
+    KeyCode, KeyModifiers, MenuBuilder, Reedline, ReedlineEvent, ReedlineMenu, Signal, Span,
+    Suggestion,
+};
 
 use crate::query::model::{QueryResult, QueryValue};
 
-/// Enter the interactive REPL loop, reading one line at a time from stdin and
-/// writing prompts/results to stdout. Returns `Ok(())` on clean EOF or `!quit`.
+/// A trivial prefix completer over the parser's canonical keyword/attribute set
+/// ([`crate::query::parse::completion_words`]), case-insensitive, completing the
+/// final whitespace- or `(`-delimited word at the cursor.
+struct KeywordCompleter;
+
+impl Completer for KeywordCompleter {
+    fn complete(&mut self, line: &str, pos: usize) -> Vec<Suggestion> {
+        let upto = &line[..pos];
+        let start = upto
+            .rfind(|c: char| c.is_whitespace() || c == '(')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let frag = &upto[start..];
+        if frag.is_empty() {
+            return Vec::new();
+        }
+        let lower = frag.to_ascii_lowercase();
+        crate::query::parse::completion_words()
+            .into_iter()
+            .filter(|kw| kw.to_ascii_lowercase().starts_with(&lower))
+            .map(|kw| Suggestion {
+                value: kw.to_string(),
+                description: None,
+                style: None,
+                extra: None,
+                span: Span { start, end: pos },
+                append_whitespace: true,
+            })
+            .collect()
+    }
+}
+
+/// Build a `Reedline` editor wired with the keyword completer, a Tab-driven
+/// completion menu, and persistent history at `~/.hprof_oql_history` (falling
+/// back to in-memory history if the file cannot be opened). Returned rather than
+/// run so a smoke test can construct it without needing a live TTY.
+pub fn build_editor() -> Reedline {
+    let completer = Box::new(KeywordCompleter);
+    let completion_menu = Box::new(ColumnarMenu::default().with_name("completion_menu"));
+
+    let mut keybindings = default_emacs_keybindings();
+    keybindings.add_binding(
+        KeyModifiers::NONE,
+        KeyCode::Tab,
+        ReedlineEvent::UntilFound(vec![
+            ReedlineEvent::Menu("completion_menu".to_string()),
+            ReedlineEvent::MenuNext,
+        ]),
+    );
+    let edit_mode = Box::new(Emacs::new(keybindings));
+
+    let editor = Reedline::create()
+        .with_completer(completer)
+        .with_menu(ReedlineMenu::EngineCompleter(completion_menu))
+        .with_edit_mode(edit_mode);
+
+    // Persistent history: keep the REPL alive even if the home dir is missing or
+    // unwritable — a failed `with_file` just means no cross-session history.
+    match history_path().and_then(|p| FileBackedHistory::with_file(1000, p).ok()) {
+        Some(hist) => editor.with_history(Box::new(hist)),
+        None => editor,
+    }
+}
+
+/// `~/.hprof_oql_history`, or `None` if the home directory can't be determined.
+fn history_path() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME").map(|home| std::path::Path::new(&home).join(".hprof_oql_history"))
+}
+
+/// The interactive OQL REPL: reedline read-line with history + Tab-completion.
+/// `!`-prefixed lines are meta-commands; everything else is run against the dump
+/// at `path`. Exits on Ctrl-D/Ctrl-C.
 pub fn run_repl(path: &str) -> io::Result<()> {
-    let stdin = io::stdin();
+    let mut line_editor = build_editor();
+    let prompt = DefaultPrompt::default();
     let mut stdout = io::stdout();
     writeln!(
         stdout,
-        "hprof-analyzer OQL REPL. Type !help for commands, !quit to exit."
+        "hprof-analyzer OQL REPL. Type !help for commands, !quit or Ctrl-D to exit."
     )?;
-    write!(stdout, "oql> ")?;
-    stdout.flush()?;
-    for line in stdin.lock().lines() {
-        let line = line?;
-        let t = line.trim();
-        if t.is_empty() {
-            // blank line: just reprompt
-        } else if let Some(cmd) = t.strip_prefix('!') {
-            if handle_meta(cmd, &mut stdout)? {
+    loop {
+        match line_editor.read_line(&prompt) {
+            Ok(Signal::Success(buffer)) => {
+                let t = buffer.trim();
+                if t.is_empty() {
+                    continue;
+                }
+                if let Some(cmd) = t.strip_prefix('!') {
+                    if handle_meta(cmd, &mut stdout)? {
+                        break;
+                    }
+                } else {
+                    match run_one(path, t) {
+                        Ok(res) => print_result(&res, &mut stdout)?,
+                        Err(e) => writeln!(stdout, "error: {e}")?,
+                    }
+                }
+                stdout.flush()?;
+            }
+            Ok(Signal::CtrlD) | Ok(Signal::CtrlC) => break,
+            Err(e) => {
+                eprintln!("readline error: {e}");
                 break;
             }
-        } else {
-            match run_one(path, t) {
-                Ok(res) => print_result(&res, &mut stdout)?,
-                Err(e) => writeln!(stdout, "error: {e}")?,
-            }
         }
-        write!(stdout, "oql> ")?;
-        stdout.flush()?;
     }
     Ok(())
 }
@@ -57,12 +142,12 @@ fn handle_meta(cmd: &str, out: &mut impl Write) -> io::Result<bool> {
             writeln!(out, "  !quit              exit")?;
             writeln!(out, "  <oql>              run a query and print results")?;
         }
-        "plan" | "explain" => match crate::query::parse::parse(rest) {
+        "plan" | "explain" => match crate::query::parse::parse_or_report(rest) {
             Ok(q) => match crate::query::plan::plan_query(&q) {
                 Ok(plan) => write!(out, "{}", plan.explain())?,
                 Err(e) => writeln!(out, "plan error: {}", e.0)?,
             },
-            Err(e) => writeln!(out, "parse error: {}", e.0)?,
+            Err(report) => writeln!(out, "parse error: {report}")?,
         },
         other => writeln!(out, "unknown command: !{other} (try !help)")?,
     }
@@ -73,8 +158,8 @@ fn handle_meta(cmd: &str, out: &mut impl Write) -> io::Result<bool> {
 /// returning the (single) query result. Parse/plan failures are surfaced as
 /// `io::Error` so the caller prints `error: <msg>` and stays alive.
 fn run_one(path: &str, text: &str) -> io::Result<QueryResult> {
-    let q = crate::query::parse::parse(text)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("parse error: {}", e.0)))?;
+    let q = crate::query::parse::parse_or_report(text)
+        .map_err(|report| io::Error::new(io::ErrorKind::InvalidInput, format!("parse error: {report}")))?;
     let plan = crate::query::plan::plan_query(&q)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("plan error: {}", e.0)))?;
     let mut results = crate::query::run::run_single_dump(path, &[(q, plan)])?;
@@ -86,6 +171,7 @@ fn run_one(path: &str, text: &str) -> io::Result<QueryResult> {
         row_count: 0,
         truncated: false,
         error: Some("no result produced".into()),
+        note: None,
     }))
 }
 
@@ -213,6 +299,7 @@ mod tests {
             row_count: 2,
             truncated: false,
             error: None,
+            note: None,
         };
         let out = print_to_string(&res);
         assert!(out.contains("a | b"), "header missing:\n{out}");
@@ -231,6 +318,7 @@ mod tests {
             row_count: 1,
             truncated: false,
             error: None,
+            note: None,
         };
         let out = print_to_string(&res);
         assert!(out.contains("(1 row)"), "singular footer missing:\n{out}");
@@ -247,6 +335,7 @@ mod tests {
             row_count: 0,
             truncated: false,
             error: Some("boom".into()),
+            note: None,
         };
         let out = print_to_string(&res);
         assert_eq!(out, "error: boom\n");
@@ -262,6 +351,7 @@ mod tests {
             row_count: 1,
             truncated: true,
             error: None,
+            note: None,
         };
         let out = print_to_string(&res);
         assert!(
@@ -285,5 +375,48 @@ mod tests {
             }),
             "java.lang.String@7"
         );
+    }
+
+    // --- reedline completer + editor construction ---
+
+    /// The keyword completer offers case-insensitive prefix matches, spanning
+    /// the current word so the menu replaces it in place.
+    #[test]
+    fn completer_offers_prefix_matches() {
+        let mut c = KeywordCompleter;
+        // "SEL" → SELECT
+        let s = c.complete("SEL", 3);
+        assert!(
+            s.iter().any(|x| x.value == "SELECT"),
+            "expected SELECT, got {:?}",
+            s.iter().map(|x| &x.value).collect::<Vec<_>>()
+        );
+        // case-insensitive: "co" → COUNT
+        let s = c.complete("SELECT co", 9);
+        assert!(s.iter().any(|x| x.value == "COUNT"), "expected COUNT");
+        // "@u" → @usedHeapSize
+        let s = c.complete("WHERE @u", 8);
+        assert!(
+            s.iter().any(|x| x.value == "@usedHeapSize"),
+            "expected @usedHeapSize"
+        );
+        // span replaces just the final fragment
+        let s = c.complete("SELECT co", 9);
+        assert_eq!(s[0].span, Span { start: 7, end: 9 });
+    }
+
+    /// Empty fragment (cursor after whitespace) yields no suggestions rather
+    /// than dumping the whole keyword list.
+    #[test]
+    fn completer_empty_fragment_is_silent() {
+        let mut c = KeywordCompleter;
+        assert!(c.complete("SELECT ", 7).is_empty());
+        assert!(c.complete("", 0).is_empty());
+    }
+
+    /// The editor builds without a live TTY (construction smoke test).
+    #[test]
+    fn editor_builds() {
+        let _ = build_editor();
     }
 }

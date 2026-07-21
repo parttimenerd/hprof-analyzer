@@ -43,6 +43,7 @@ pub fn run_histogram(q: &Query, plan: &QueryPlan, classes: &[ClassSummary]) -> Q
         row_count: 1,
         truncated: false,
         error: None,
+        note: None,
     }
 }
 

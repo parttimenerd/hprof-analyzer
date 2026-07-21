@@ -260,7 +260,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
 
     pub fn finish(self, name: &str) -> QueryResult {
         let columns = self.query.select.iter().map(|it| QueryColumn { name: column_name(it) }).collect();
-        QueryResult { name: name.to_string(), oql: String::new(), columns, row_count: self.rows.len() as u64, rows: self.rows, truncated: self.truncated, error: None }
+        QueryResult { name: name.to_string(), oql: String::new(), columns, row_count: self.rows.len() as u64, rows: self.rows, truncated: self.truncated, error: None, note: None }
     }
 }
 
@@ -390,7 +390,7 @@ mod tests {
         let mut st = QueryExecState::new();
         st.push_finished(0, QueryResult {
             name: "q1".into(), oql: String::new(), columns: vec![],
-            rows: vec![], row_count: 0, truncated: false, error: None,
+            rows: vec![], row_count: 0, truncated: false, error: None, note: None,
         });
         let q = crate::query::parse::parse("SELECT @retainedHeapSize FROM C").unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();

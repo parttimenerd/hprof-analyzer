@@ -204,13 +204,104 @@ pub fn run_single_dump(
     path: &str,
     queries: &[(Query, QueryPlan)],
 ) -> std::io::Result<Vec<QueryResult>> {
+    let (flat, groups) = expand_union_queries(queries);
     let p1 = crate::pass1::Pass1::run(path)?;
     let opts = crate::AnalyzeOptions::default();
     let (.., state) =
-        crate::pass2::Pass2::build(path, p1, crate::cvec::Codec::Zstd3, &opts, queries)?;
+        crate::pass2::Pass2::build(path, p1, crate::cvec::Codec::Zstd3, &opts, &flat)?;
     // Query-only path: no retained sizes / dominators are computed, so cross-phase
     // (@retainedHeapSize) carries resolve to actionable errors rather than rows.
-    Ok(crate::query::stage_runner::resume_without_late_ctx(state))
+    let flat_results = crate::query::stage_runner::resume_without_late_ctx(state);
+    Ok(collapse_union_results(flat_results, &groups))
+}
+
+/// Concatenate the results of homogeneous `UNION` branches (UNION ALL: no
+/// dedup). The first result supplies the column headers; every branch's rows
+/// are appended in branch order up to `overall_cap`, past which `truncated` is
+/// set. `truncated` also propagates if any individual branch was truncated.
+pub fn concat_union(mut branches: Vec<QueryResult>, overall_cap: usize) -> QueryResult {
+    let mut out = branches.remove(0);
+    for b in branches {
+        out.truncated |= b.truncated;
+        for row in b.rows {
+            if out.rows.len() >= overall_cap {
+                out.truncated = true;
+                return finalize(out);
+            }
+            out.rows.push(row);
+        }
+    }
+    finalize(out)
+}
+
+fn finalize(mut r: QueryResult) -> QueryResult {
+    r.row_count = r.rows.len() as u64;
+    r
+}
+
+/// One original query's footprint in the flattened scan list: `count`
+/// consecutive slots starting at `head`. `count == 1` for a plain query;
+/// `1 + N` when the query has N `UNION` branches (head slot followed by one
+/// slot per branch, in branch order).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnionGroup {
+    pub head: usize,
+    pub count: usize,
+}
+
+/// Flatten a caller's query list so every `UNION` branch becomes its own scan
+/// slot (head first, then each branch). Branches are cloned with their own
+/// `union_branches` cleared (both AST and plan) so each runs as an ordinary
+/// single query through the normal execute/carry/histogram path. Returns the
+/// flat `(Query, QueryPlan)` list plus, in caller order, the `UnionGroup`
+/// describing how to re-collapse each original query's slots.
+pub fn expand_union_queries(
+    queries: &[(Query, QueryPlan)],
+) -> (Vec<(Query, QueryPlan)>, Vec<UnionGroup>) {
+    let mut flat: Vec<(Query, QueryPlan)> = Vec::with_capacity(queries.len());
+    let mut groups: Vec<UnionGroup> = Vec::with_capacity(queries.len());
+    for (q, plan) in queries {
+        let head = flat.len();
+        // Head slot: same query/plan but without the branch tail (branches run
+        // as their own slots below).
+        let mut head_q = q.clone();
+        head_q.union_branches.clear();
+        let mut head_plan = plan.clone();
+        let branch_plans = std::mem::take(&mut head_plan.union_branches);
+        flat.push((head_q, head_plan));
+        // One slot per branch, AST paired with its pre-planned counterpart.
+        for (bq, bplan) in q.union_branches.iter().zip(branch_plans.into_iter()) {
+            let mut bq = bq.clone();
+            bq.union_branches.clear();
+            flat.push((bq, bplan));
+        }
+        groups.push(UnionGroup { head, count: 1 + q.union_branches.len() });
+    }
+    (flat, groups)
+}
+
+/// Re-collapse flat scan results (in flattened-slot order) back to one result
+/// per original query, applying `concat_union` to each `UnionGroup` that spans
+/// more than one slot. `results` must be exactly the `flat` list produced by
+/// [`expand_union_queries`], in the same order.
+pub fn collapse_union_results(
+    mut results: Vec<QueryResult>,
+    groups: &[UnionGroup],
+) -> Vec<QueryResult> {
+    // Drain by group so slot indices stay valid regardless of per-group counts.
+    let mut it = results.drain(..);
+    let mut out: Vec<QueryResult> = Vec::with_capacity(groups.len());
+    for g in groups {
+        let branch_results: Vec<QueryResult> = (0..g.count)
+            .map(|_| it.next().expect("flat results shorter than groups describe"))
+            .collect();
+        if g.count == 1 {
+            out.push(branch_results.into_iter().next().unwrap());
+        } else {
+            out.push(concat_union(branch_results, crate::query::OVERALL_UNION_CAP));
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -282,6 +373,170 @@ mod tests {
     fn empty_driver_is_empty() {
         let driver: ScanDriver<'_, FakeResolver> = ScanDriver::new(Vec::new());
         assert!(driver.is_empty());
+    }
+
+    #[test]
+    fn concat_union_appends_and_caps() {
+        use crate::query::model::{QueryColumn, QueryValue};
+        let col = || vec![QueryColumn { name: "c".into() }];
+        let a = QueryResult {
+            name: "q".into(),
+            oql: "".into(),
+            columns: col(),
+            rows: vec![vec![QueryValue::Int(1)], vec![QueryValue::Int(2)]],
+            row_count: 2,
+            truncated: false,
+            error: None,
+            note: None,
+        };
+        let b = QueryResult {
+            name: "q".into(),
+            oql: "".into(),
+            columns: col(),
+            rows: vec![vec![QueryValue::Int(3)]],
+            row_count: 1,
+            truncated: false,
+            error: None,
+            note: None,
+        };
+        let out = concat_union(vec![a, b], 10);
+        assert_eq!(out.row_count, 3);
+        assert_eq!(out.rows.len(), 3);
+        assert!(!out.truncated);
+        assert_eq!(out.columns.len(), 1, "headers come from the head branch");
+
+        let big = concat_union(
+            vec![
+                QueryResult {
+                    name: "q".into(),
+                    oql: "".into(),
+                    columns: col(),
+                    rows: (0..8).map(|i| vec![QueryValue::Int(i)]).collect(),
+                    row_count: 8,
+                    truncated: false,
+                    error: None,
+                    note: None,
+                },
+                QueryResult {
+                    name: "q".into(),
+                    oql: "".into(),
+                    columns: col(),
+                    rows: (0..8).map(|i| vec![QueryValue::Int(i)]).collect(),
+                    row_count: 8,
+                    truncated: false,
+                    error: None,
+                    note: None,
+                },
+            ],
+            10,
+        );
+        assert_eq!(big.rows.len(), 10);
+        assert!(big.truncated, "cap exceeded sets truncated");
+    }
+
+    #[test]
+    fn concat_union_propagates_branch_truncation() {        use crate::query::model::{QueryColumn, QueryValue};
+        let col = || vec![QueryColumn { name: "c".into() }];
+        let a = QueryResult {
+            name: "q".into(),
+            oql: "".into(),
+            columns: col(),
+            rows: vec![vec![QueryValue::Int(1)]],
+            row_count: 1,
+            truncated: false,
+            error: None,
+            note: None,
+        };
+        // Second branch was itself truncated at scan time; UNION must carry that.
+        let b = QueryResult {
+            name: "q".into(),
+            oql: "".into(),
+            columns: col(),
+            rows: vec![vec![QueryValue::Int(2)]],
+            row_count: 1,
+            truncated: true,
+            error: None,
+            note: None,
+        };
+        let out = concat_union(vec![a, b], 100);
+        assert_eq!(out.rows.len(), 2);
+        assert!(out.truncated, "a truncated branch taints the union even under cap");
+    }
+
+    fn one_col_result(vals: &[i64]) -> QueryResult {
+        use crate::query::model::{QueryColumn, QueryValue};
+        QueryResult {
+            name: String::new(),
+            oql: String::new(),
+            columns: vec![QueryColumn { name: "c".into() }],
+            rows: vals.iter().map(|&v| vec![QueryValue::Int(v)]).collect(),
+            row_count: vals.len() as u64,
+            truncated: false,
+            error: None,
+            note: None,
+        }
+    }
+
+    #[test]
+    fn expand_union_flattens_head_then_branches() {
+        // q0: plain; q1: 2 UNION branches (head + 2). Grouping must record
+        // 1 slot for q0 and 3 consecutive slots for q1.
+        let q_plain = parse("SELECT * FROM com.acme.Foo").unwrap();
+        let p_plain = plan_query(&q_plain).unwrap();
+        let q_union = parse(
+            "SELECT * FROM com.acme.Foo UNION SELECT * FROM com.acme.Bar UNION SELECT * FROM com.acme.Baz",
+        )
+        .unwrap();
+        let p_union = plan_query(&q_union).unwrap();
+
+        let (flat, groups) = expand_union_queries(&[(q_plain, p_plain), (q_union, p_union)]);
+        assert_eq!(flat.len(), 4, "1 plain + 3 union slots");
+        // Every flat entry must carry no residual branch tail.
+        for (q, p) in &flat {
+            assert!(q.union_branches.is_empty(), "flattened AST keeps no branch tail");
+            assert!(p.union_branches.is_empty(), "flattened plan keeps no branch tail");
+        }
+        assert_eq!(groups, vec![
+            UnionGroup { head: 0, count: 1 },
+            UnionGroup { head: 1, count: 3 },
+        ]);
+    }
+
+    #[test]
+    fn collapse_union_merges_branch_slots_only() {
+        // Flat results for the layout above: slot0 plain (1 row), slots1-3 the
+        // union branches (2 + 1 + 3 rows). After collapse: q0 untouched (1 row),
+        // q1 concatenated (6 rows).
+        let flat = vec![
+            one_col_result(&[10]),
+            one_col_result(&[1, 2]),
+            one_col_result(&[3]),
+            one_col_result(&[4, 5, 6]),
+        ];
+        let groups = vec![
+            UnionGroup { head: 0, count: 1 },
+            UnionGroup { head: 1, count: 3 },
+        ];
+        let out = collapse_union_results(flat, &groups);
+        assert_eq!(out.len(), 2, "one result per original query");
+        assert_eq!(out[0].row_count, 1);
+        assert_eq!(out[1].row_count, 6, "2 + 1 + 3 rows concatenated");
+        assert!(!out[1].truncated);
+    }
+
+    #[test]
+    fn expand_collapse_roundtrip_preserves_plain_query_order() {
+        // Two plain queries: flatten is a no-op grouping and collapse returns
+        // them in the same order with contents intact.
+        let flat = vec![one_col_result(&[1]), one_col_result(&[2, 3])];
+        let groups = vec![
+            UnionGroup { head: 0, count: 1 },
+            UnionGroup { head: 1, count: 1 },
+        ];
+        let out = collapse_union_results(flat, &groups);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].row_count, 1);
+        assert_eq!(out[1].row_count, 2);
     }
 }
 

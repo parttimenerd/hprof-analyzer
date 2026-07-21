@@ -3081,6 +3081,7 @@ mod tests {
             row_count: 2,
             truncated: false,
             error: None,
+            note: None,
         };
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
@@ -3109,6 +3110,7 @@ mod tests {
             row_count: 0,
             truncated: false,
             error: Some("parse failed near 'bogus'".into()),
+            note: None,
         };
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
@@ -3128,6 +3130,7 @@ mod tests {
             row_count: 5000,
             truncated: true,
             error: None,
+            note: None,
         };
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
@@ -3144,6 +3147,7 @@ mod tests {
             row_count: 1,
             truncated: false,
             error: None,
+            note: None,
         };
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
@@ -3161,6 +3165,7 @@ mod tests {
                 row_count: 1,
                 truncated: false,
                 error: None,
+                note: None,
             },
             QueryResult {
                 name: "second".into(),
@@ -3170,6 +3175,7 @@ mod tests {
                 row_count: 1,
                 truncated: false,
                 error: None,
+                note: None,
             },
         ];
         let mut out = String::new();
@@ -3192,6 +3198,7 @@ mod tests {
             row_count: 0,
             truncated: false,
             error: None,
+            note: None,
         };
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
@@ -3226,6 +3233,7 @@ mod tests {
             row_count: 0,
             truncated: false,
             error: None,
+            note: None,
         };
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
@@ -3251,6 +3259,7 @@ mod tests {
             row_count: 1,
             truncated: false,
             error: None,
+            note: None,
         };
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);

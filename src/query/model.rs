@@ -34,6 +34,10 @@ pub struct QueryResult {
     /// Set (with rows empty) when the query failed to parse/plan/execute.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Optional advisory note (e.g. "edge retention capped"); populated by later
+    /// phases, harmless (`None`) otherwise. Omitted from JSON when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 #[cfg(test)]
@@ -50,6 +54,7 @@ mod tests {
             row_count: 1,
             truncated: false,
             error: None,
+            note: None,
         };
         let j = serde_json::to_string(&r).unwrap();
         assert!(j.contains("\"row_count\":1"));
@@ -76,6 +81,7 @@ mod tests {
             row_count: 6,
             truncated: false,
             error: None,
+            note: None,
         };
         let j = serde_json::to_string(&r).unwrap();
         let back: QueryResult = serde_json::from_str(&j).unwrap();
@@ -101,6 +107,7 @@ mod tests {
             row_count: 0,
             truncated: false,
             error: Some("boom".into()),
+            note: None,
         };
         let j = serde_json::to_string(&r).unwrap();
         assert!(j.contains("\"error\":\"boom\""), "error field must appear in JSON, got: {j}");

@@ -74,6 +74,7 @@ pub fn resume_without_late_ctx(state: QueryExecState) -> Vec<QueryResult> {
                      report (drop --query-only) to use retained-size queries."
                         .to_string(),
                 ),
+                note: None,
             },
         ));
     }
@@ -111,6 +112,7 @@ fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
                 name: entry.name.clone(), oql: String::new(), columns: Vec::new(),
                 rows: Vec::new(), row_count: 0, truncated: false,
                 error: Some(format!("stage op {other:?} not supported in this phase")),
+                note: None,
             },
         }
     }
@@ -136,6 +138,7 @@ fn dominator_rows(
         name: entry.name.clone(), oql: String::new(),
         columns: vec![QueryColumn { name: col }],
         row_count: rows.len() as u64, rows, truncated, error: None,
+        note: None,
     }
 }
 
@@ -164,6 +167,7 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
     QueryResult {
         name: entry.name.clone(), oql: String::new(), columns,
         row_count: out_rows.len() as u64, rows: out_rows, truncated, error: None,
+        note: None,
     }
 }
 
@@ -329,6 +333,7 @@ mod tests {
         st.push_finished(1, QueryResult {
             name: "q_hist".into(), oql: String::new(), columns: vec![],
             rows: vec![vec![QueryValue::Int(99)]], row_count: 1, truncated: false, error: None,
+            note: None,
         });
         st.push_cross_phase(0, "q_ret".to_string(), plan, carry);
         let retained = { let mut v = vec![0u64; 10]; v[5]=777; v };

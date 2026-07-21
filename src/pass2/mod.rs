@@ -388,6 +388,7 @@ impl Pass2 {
                             row_count: 0,
                             truncated: false,
                             error: Some(e.0),
+                            note: None,
                         },
                     )));
                 }
