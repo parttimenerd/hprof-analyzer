@@ -1613,14 +1613,10 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
                 } else {
                     0
                 },
-                avg_shallow: if r.instances > 0 {
-                    r.shallow / r.instances
-                } else {
-                    0
-                },
+                avg_shallow: r.shallow.checked_div(r.instances).unwrap_or(0),
             })
             .collect();
-        rows.sort_unstable_by(|a, b| b.total_shallow.cmp(&a.total_shallow));
+        rows.sort_unstable_by_key(|r| std::cmp::Reverse(r.total_shallow));
         rows
     };
 
@@ -1650,7 +1646,7 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
                 }
             })
             .collect();
-        rows.sort_unstable_by(|a, b| b.total_header_bytes.cmp(&a.total_header_bytes));
+        rows.sort_unstable_by_key(|r| std::cmp::Reverse(r.total_header_bytes));
         rows.truncate(30);
         rows
     };

@@ -1,10 +1,12 @@
 //! Boxed-number holder ranking (`--collections` opt-in).
 //!
 //! Two-pass scan:
-//!   1. Collect addresses of all live boxed-type instances
-//!      (java.lang.Integer, Long, Double, …).
-//!   2. FieldPlan scan to count how many object-reference fields
-//!      of each class point at those addresses.
+//!
+//! 1. Collect addresses of all live boxed-type instances
+//!    (java.lang.Integer, Long, Double, …).
+//! 2. FieldPlan scan to count how many object-reference fields
+//!    of each class point at those addresses.
+//!
 //! Returns the top-20 holder classes sorted by `boxed_refs` descending.
 
 use std::collections::{HashMap, HashSet};
