@@ -9,6 +9,7 @@ pub mod plan;
 pub mod model;
 pub mod execute;
 pub mod histogram;
+pub mod run;
 
 use std::fmt;
 

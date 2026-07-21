@@ -27,7 +27,7 @@ mod fielddecode;
 mod meta;
 mod model;
 mod scan;
-mod sizing;
+pub(crate) mod sizing;
 mod strings;
 
 pub(crate) use boxed::compute_boxed_holders;
@@ -60,13 +60,14 @@ impl Pass2 {
         mut p1: Pass1,
         compress: crate::cvec::Codec,
         opts: &crate::AnalyzeOptions,
-        mut visitor: Option<&mut dyn crate::query::ObjectVisitor>,
+        queries: &[(crate::query::ast::Query, crate::query::plan::QueryPlan)],
     ) -> io::Result<(
         Graph,
         InboundBuilder,
         crate::cvec::CompressedU32,
         crate::cvec::CompressedU32,
         Option<crate::cvec::CompressedU32>,
+        Vec<crate::query::model::QueryResult>,
     )> {
         let n = p1.id_map.len();
         let id_size = p1.id_size;
@@ -307,6 +308,42 @@ impl Pass2 {
         }
         drop(field_plans);
 
+        // ── OQL: build live resolver, answer HistogramOnly now, arm SingleScan ──
+        // Built here (not at the return) because class_idx/shallow are compressed
+        // and emptied below (class_idx just after this block, shallow after the
+        // scan), while class_map/strings are freed only much later. class_names is
+        // the live Vec that moves into Graph at the end.
+        let query_resolver =
+            crate::query::run::LiveResolver::new(&p1.class_map, &p1.strings, id_size as usize);
+        let has_histogram = queries
+            .iter()
+            .any(|(_, p)| p.kind == crate::query::plan::StageKind::HistogramOnly);
+        // Tally per-class counts/shallow NOW (class_idx & shallow are live and about
+        // to be compressed/emptied). Vectors are sized by the max histogram index
+        // seen and padded to class_names.len() in the deferred build below; we
+        // cannot read class_names.len() here because the `get_or_insert_class`
+        // closure still holds a mutable borrow of `class_names`.
+        let hist_tally: Option<(Vec<u64>, Vec<u64>)> = if has_histogram {
+            let cap = class_idx.iter().copied().max().map(|m| m as usize + 1).unwrap_or(0);
+            let mut counts = vec![0u64; cap];
+            let mut shallow_totals = vec![0u64; cap];
+            for i in 0..n {
+                let ci = class_idx[i] as usize;
+                counts[ci] += 1;
+                shallow_totals[ci] += shallow[i] as u64;
+            }
+            Some((counts, shallow_totals))
+        } else {
+            None
+        };
+        let mut scan_execs = Vec::new();
+        for (q, plan) in queries {
+            if plan.kind == crate::query::plan::StageKind::SingleScan {
+                scan_execs.push(crate::query::execute::SingleScanExecutor::new(q, plan, &query_resolver));
+            }
+        }
+        let mut scan_driver = crate::query::run::ScanDriver::new(scan_execs);
+
         // Compress class_idx and alloc_stack_serial NOW — before the 2a scan
         // allocates out_degree and in_degree (~4 GB). Both arrays are final at
         // this point and not read again until the retained/report phases. Freeing
@@ -353,7 +390,11 @@ impl Pass2 {
                             &mut out_degree,
                             &mut in_degree,
                             &mut scratch,
-                            visitor.as_deref_mut(),
+                            if scan_driver.is_empty() {
+                                None
+                            } else {
+                                Some(&mut scan_driver as &mut dyn crate::query::ObjectVisitor)
+                            },
                         )?;
                     }
                     tags::HEAP_DUMP_END => break,
@@ -364,6 +405,20 @@ impl Pass2 {
             }
         }
         crate::trace::probe("pass2: after 2a scan (out+in_degree filled)");
+
+        // Finalize SingleScan query results while class metadata is still live.
+        // (No name/OQL source yet — the CLI wiring task fills these; empty slices
+        // are safe.) Dropping the driver + resolver here ends their borrows of
+        // p1.class_map / p1.strings before those maps are freed below.
+        let mut query_results: Vec<crate::query::model::QueryResult> = Vec::new();
+        if scan_driver.is_empty() {
+            drop(scan_driver);
+        } else {
+            let names: [String; 0] = [];
+            let oqls: [String; 0] = [];
+            query_results.extend(scan_driver.finish(&names, &oqls));
+        }
+        drop(query_resolver);
 
         // Class objects already map to the java/lang/Class row (JLC_KEY) from Phase 0c.
         let jlc_idx = get_or_insert_class(JLC_KEY, &|| "java/lang/Class".to_string(), &|| 0);
@@ -389,6 +444,31 @@ impl Pass2 {
             }
         }
         let _ = jlc_idx;
+
+        // ── OQL HistogramOnly: build ClassSummary + run now ──────────────────
+        // Deferred to here (after `get_or_insert_class`'s last use) because that
+        // closure mutably borrows `class_names`; the per-class tally was captured
+        // above while class_idx/shallow were still live. Results are appended so
+        // histogram queries land alongside the SingleScan results in the return.
+        if let Some((mut counts, mut shallow_totals)) = hist_tally {
+            let n_classes = class_names.len();
+            counts.resize(n_classes, 0);
+            shallow_totals.resize(n_classes, 0);
+            let summaries: Vec<crate::query::histogram::ClassSummary> = (0..n_classes)
+                .map(|ci| crate::query::histogram::ClassSummary {
+                    name: class_names[ci].as_str(),
+                    count: counts[ci],
+                    shallow_total: shallow_totals[ci],
+                })
+                .collect();
+            let mut hist_results: Vec<crate::query::model::QueryResult> = Vec::new();
+            for (q, plan) in queries {
+                if plan.kind == crate::query::plan::StageKind::HistogramOnly {
+                    hist_results.push(crate::query::histogram::run_histogram(q, plan, &summaries));
+                }
+            }
+            query_results.extend(hist_results);
+        }
 
         // Resolve each distinct non-boot class-loader OBJECT address to the
         // class NAME of that loader object (e.g.
@@ -895,7 +975,7 @@ impl Pass2 {
             synthetic_edges,
         };
 
-        Ok((graph, inbound, shallow_c, class_idx_c, alloc_serial_c))
+        Ok((graph, inbound, shallow_c, class_idx_c, alloc_serial_c, query_results))
     }
 
     /// First-scan heap walker that COUNTS out/in degrees per node and finalizes
@@ -1498,12 +1578,12 @@ mod tests {
             return;
         }
         let p1 = Pass1::run(DUMP).unwrap();
-        let (g, inbound, _sc, _ci, _as) = Pass2::build(
+        let (g, inbound, _sc, _ci, _as, _q) = Pass2::build(
             DUMP,
             p1,
             crate::cvec::Codec::None,
             &crate::AnalyzeOptions::default(),
-            None,
+            &[],
         )
         .unwrap();
         assert!(!g.fwd_targets.is_empty(), "no forward edges");
@@ -1537,12 +1617,12 @@ mod tests {
             return;
         }
         let p1 = Pass1::run(DUMP).unwrap();
-        let (g, _inbound, _sc, _ci, _as) = Pass2::build(
+        let (g, _inbound, _sc, _ci, _as, _q) = Pass2::build(
             DUMP,
             p1,
             crate::cvec::Codec::None,
             &crate::AnalyzeOptions::default(),
-            None,
+            &[],
         )
         .unwrap();
         let fwd_edge_count: usize = g
