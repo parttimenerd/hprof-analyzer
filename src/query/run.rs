@@ -239,6 +239,53 @@ fn finalize(mut r: QueryResult) -> QueryResult {
     r
 }
 
+/// Semi-join by dense object index for a `FROM (<subquery>)` source: keep outer
+/// rows whose dense index appears in the inner query's result set. Both inputs
+/// must be sorted ascending. Inner truncation propagates: a truncated inner set
+/// means the membership test is incomplete, so the outer result is truncated too.
+pub fn intersect_from_subquery(
+    inner_sorted: &[u32],
+    inner_truncated: bool,
+    outer_sorted: &[u32],
+) -> (Vec<u32>, bool) {
+    let (mut i, mut j) = (0usize, 0usize);
+    let mut out = Vec::new();
+    while i < inner_sorted.len() && j < outer_sorted.len() {
+        match inner_sorted[i].cmp(&outer_sorted[j]) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                out.push(outer_sorted[j]);
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    (out, inner_truncated)
+}
+
+/// Build an object-address membership set from an `IN (<subquery>)` inner
+/// query's projected addresses, capped at `cap` distinct entries. Returns the
+/// set and whether the cap was hit (truncated — membership is then incomplete).
+pub fn build_in_subquery_set(addrs: &[u64], cap: usize) -> (std::collections::HashSet<u64>, bool) {
+    let mut set = std::collections::HashSet::with_capacity(addrs.len().min(cap));
+    let mut truncated = false;
+    for &a in addrs {
+        if set.len() >= cap {
+            truncated = true;
+            break;
+        }
+        set.insert(a);
+    }
+    (set, truncated)
+}
+
+/// Membership test for an `IN (<subquery>)` predicate: is the outer row's LHS
+/// address present in the inner result's address set?
+pub fn in_subquery_contains(set: &std::collections::HashSet<u64>, lhs_addr: u64) -> bool {
+    set.contains(&lhs_addr)
+}
+
 /// One original query's footprint in the flattened scan list: `count`
 /// consecutive slots starting at `head`. `count == 1` for a plain query;
 /// `1 + N` when the query has N `UNION` branches (head slot followed by one
@@ -537,6 +584,47 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].row_count, 1);
         assert_eq!(out[1].row_count, 2);
+    }
+
+    // ---------- subquery helpers (Task 23) ----------
+
+    #[test]
+    fn intersect_from_subquery_semijoin() {
+        // outer scan produced dense idx [1,2,3,5]; inner produced [2,3,4]
+        let (kept, trunc) = intersect_from_subquery(&[2, 3, 4], false, &[1, 2, 3, 5]);
+        assert_eq!(kept, vec![2, 3]);
+        assert!(!trunc);
+    }
+
+    #[test]
+    fn intersect_from_subquery_propagates_truncation() {
+        let (_k, trunc) = intersect_from_subquery(&[2, 3], true, &[2, 3]);
+        assert!(trunc, "inner truncation must propagate — result is incomplete");
+    }
+
+    #[test]
+    fn intersect_from_subquery_disjoint_is_empty() {
+        let (kept, _t) = intersect_from_subquery(&[10, 11], false, &[1, 2, 3]);
+        assert!(kept.is_empty());
+    }
+
+    #[test]
+    fn in_subquery_set_membership() {
+        let (set, trunc) = build_in_subquery_set(&[10, 20, 30], 100);
+        assert!(!trunc);
+        assert!(in_subquery_contains(&set, 20));
+        assert!(!in_subquery_contains(&set, 99));
+        let (_s, t) = build_in_subquery_set(&[1, 2, 3, 4], 2);
+        assert!(t, "cap exceeded sets truncated");
+    }
+
+    #[test]
+    fn in_subquery_set_dedups() {
+        // Duplicate addresses collapse; membership unaffected, cap counts uniques.
+        let (set, trunc) = build_in_subquery_set(&[5, 5, 5], 100);
+        assert!(!trunc);
+        assert_eq!(set.len(), 1);
+        assert!(in_subquery_contains(&set, 5));
     }
 }
 

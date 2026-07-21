@@ -33,6 +33,11 @@ impl std::error::Error for QueryError {}
 /// pathological many-branch union can't blow up memory.
 pub const OVERALL_UNION_CAP: usize = 5_000_000;
 
+/// Upper bound on the number of distinct addresses materialized from an
+/// `IN (<subquery>)` inner query. Hitting it truncates the membership set
+/// (and marks the outer result truncated, since membership is then incomplete).
+pub const SUBQUERY_SET_CAP: usize = 5_000_000;
+
 /// Per-object callback invoked once per INSTANCE_DUMP during the pass2 2a scan,
 /// while the raw instance blob and schema tables are still live. Implementors
 /// accumulate query matches. Called only when a query is active.
