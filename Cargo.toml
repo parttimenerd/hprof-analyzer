@@ -12,6 +12,12 @@ keywords = ["hprof", "heap-dump", "java", "memory", "oom"]
 categories = ["command-line-utilities", "development-tools::profiling"]
 exclude = ["tests/fixtures/*.hprof", ".git-worktrees/*", "docs/*", "*.png"]
 
+[features]
+# Opt-in Eclipse MAT differential-oracle test harness (tests/mat_oracle.rs).
+# No extra deps: the harness shells out to scripts/mat-oracle.sh. Compiled only
+# under `--features mat-oracle`; its tests are #[ignore]d and gated on MAT_HOME.
+mat-oracle = []
+
 [dependencies]
 base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
