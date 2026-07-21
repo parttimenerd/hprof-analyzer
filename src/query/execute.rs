@@ -2,16 +2,10 @@
 //! ObjectVisitor and accumulates bounded rows during the pass2 2a scan.
 //! HistogramExecutor answers aggregate-only queries from per-class stats.
 
-use crate::query::ast::{Attr, Query, SelectItem, Value};
+use crate::query::ast::{Attr, Query, SelectItem};
 use crate::query::model::{QueryColumn, QueryResult, QueryValue};
 use crate::query::plan::QueryPlan;
 use crate::query::ObjectVisitor;
-
-// `Value` is consumed by field-decode / WHERE evaluation added in a later slice
-// (9b). Import it now so that task is a pure addition; suppress the interim
-// unused warning without a crate-wide allow.
-#[allow(unused_imports)]
-use Value as _KeepValueImport;
 
 /// Abstracts class-name resolution + field-offset lookup so the executor can be
 /// unit-tested against a fake and run against the real pass2 schema in prod.
