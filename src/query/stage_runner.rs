@@ -234,16 +234,33 @@ pub fn resume_without_late_ctx(state: QueryExecState) -> Vec<QueryResult> {
     let (finished, pending) = state.into_parts();
     let mut slotted: Vec<(usize, QueryResult)> = finished;
     for entry in pending {
-        // Tailor the error to what the entry actually needs: a RefWalk query
-        // needs the reference CSR (built only in the full analyze scan), whereas
-        // a retained/dominator query needs post-scan sizes. Both are unavailable
-        // in the query-only path, but the message must point the user at the
-        // right cause.
+        // Tailor the error to what the entry actually needs so the message names
+        // the real cause (a generic "@retainedHeapSize" message would mislead a
+        // user running an edge or dominator query). Every one of these features
+        // needs a structure built only in the full analyze scan (reference CSR,
+        // inbound/forward edge store, dominator tree, or post-scan retained
+        // sizes), none of which the query-only path builds. Classify by the plan
+        // so the fix ("run the full report") is attached to the right feature.
         let error = if entry.plan.needs.ref_walk {
             "reference-path (N-hop `x.field.tail`) queries require the full \
              analysis pipeline; the reference graph is not built in the \
              query-only path. Run the full report (drop --query-only) to use \
              reference-path queries."
+        } else if entry
+            .plan
+            .late_ops
+            .iter()
+            .any(|op| matches!(op, StageOp::EdgeLookup { .. } | StageOp::BoundedPath { .. }))
+        {
+            "edge queries (`@inbounds`/`@outbounds`/`path(a, b)`) require the \
+             full analysis pipeline; the reference edge index is not built in \
+             the query-only path. Run the full report (drop --query-only) to \
+             use edge queries."
+        } else if entry.plan.needs.dominator_children {
+            "dominator queries (`dominators(x)`/`AS RETAINED SET`) require the \
+             full analysis pipeline; the dominator tree is not built in the \
+             query-only path. Run the full report (drop --query-only) to use \
+             dominator queries."
         } else {
             "@retainedHeapSize requires the full analysis pipeline; \
              it is not available in the query-only path. Run the full \

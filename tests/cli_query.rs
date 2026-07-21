@@ -127,6 +127,42 @@ fn query_subcommand_plan_error_when_rejected() {
     );
 }
 
+/// An edge query (`@inbounds`) on the query-only `query` subcommand cannot be
+/// answered (the reference edge index is only built by the full analyze scan),
+/// so it must surface an EDGE-specific actionable error — not the misleading
+/// generic `@retainedHeapSize` message it used to emit. The process still exits
+/// 0 (the per-query error is printed in the result table), so we assert on the
+/// stdout message content.
+#[test]
+fn query_subcommand_edge_query_reports_edge_specific_error() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query", "SELECT @inbounds FROM java.lang.String LIMIT 5"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("edge queries"),
+        "edge query should surface an edge-specific error, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("@inbounds"),
+        "edge error should name the edge feature:\n{stdout}"
+    );
+    // Regression: it must NOT misattribute the failure to retained-size support.
+    assert!(
+        !stdout.contains("@retainedHeapSize"),
+        "edge query error must not mention @retainedHeapSize:\n{stdout}"
+    );
+    // And it must point the user at the fix (run the full report).
+    assert!(
+        stdout.contains("drop --query-only"),
+        "edge error should tell the user how to fix it:\n{stdout}"
+    );
+}
+
 /// `--query-file` skips `#` comments and blank lines and runs the real query.
 #[test]
 fn query_subcommand_query_file_skips_comments_and_blanks() {
