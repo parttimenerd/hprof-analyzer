@@ -26,6 +26,7 @@ mod md_test;
 mod pass1;
 mod pass2;
 mod progress;
+mod query;
 mod reader;
 mod report;
 mod retained;
