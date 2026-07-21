@@ -105,6 +105,33 @@ impl Carry {
         }
         out
     }
+
+    /// A carry that accumulates a deduplicated, sorted address frontier. The cap
+    /// bounds the number of DISTINCT addresses.
+    pub fn addr_frontier(cap: usize) -> Self {
+        Self {
+            layout: CarryLayout::AddrFrontier, cap, truncated: false,
+            idx: Vec::new(), cols: Vec::new(),
+            addrs: std::collections::BTreeSet::new(),
+        }
+    }
+
+    /// Add an address. Duplicates are ignored (never count against the cap); a new
+    /// distinct address past the cap sets `truncated`.
+    pub fn push_addr(&mut self, addr: u64) {
+        if self.addrs.contains(&addr) { return; }
+        if self.addrs.len() >= self.cap { self.truncated = true; return; }
+        self.addrs.insert(addr);
+    }
+
+    /// Decode the sorted, deduplicated frontier, round-tripping through the
+    /// delta-varint u64 wire form.
+    pub fn addresses(&self) -> Vec<u64> {
+        let sorted: Vec<u64> = self.addrs.iter().copied().collect();
+        let mut buf = Vec::new();
+        vbyte::encode_delta_u64(&sorted, &mut buf);
+        vbyte::decode_delta_u64(&buf, sorted.len())
+    }
 }
 
 /// Delta-varint encode indices in push order. `wrapping_sub` makes even a
@@ -189,5 +216,24 @@ mod tests {
             c.push_row(0, &[256]); // 256 does not fit in 1 byte
         }));
         assert!(err.is_err(), "over-wide scalar must panic");
+    }
+
+    #[test]
+    fn addr_frontier_dedups_and_sorts() {
+        let mut c = Carry::addr_frontier(100);
+        for &a in &[0x5000u64, 0x1000, 0x5000, 0x1000, 0x9abc] { c.push_addr(a); }
+        assert_eq!(c.addresses(), vec![0x1000, 0x5000, 0x9abc]);
+        assert!(!c.truncated());
+    }
+
+    #[test]
+    fn addr_frontier_cap_counts_distinct() {
+        let mut c = Carry::addr_frontier(2);
+        c.push_addr(0x10);
+        c.push_addr(0x10); // dup, still 1 distinct
+        c.push_addr(0x20); // 2 distinct — at cap
+        c.push_addr(0x30); // over the distinct cap
+        assert!(c.truncated());
+        assert_eq!(c.addresses(), vec![0x10, 0x20]);
     }
 }
