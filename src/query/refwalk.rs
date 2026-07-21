@@ -87,6 +87,55 @@ impl RefWalkEdges {
 /// Overall cap on captured RefWalk edges (mirrors the `FIELD_REF_CAP` idiom).
 pub const REFWALK_EDGE_CAP: usize = 5_000_000;
 
+/// Gather every reference-hop field name a query walks, across SELECT and WHERE
+/// `Attr::RefPath` occurrences. These are the fields whose object references
+/// must be captured as edges during the scan. Order is first-seen; duplicates
+/// within one query are kept out here so `intern_hop_fields` can dedup across
+/// queries. The `tail` of a RefPath is a projection, not a hop, so it is not
+/// included (unless it is itself a nested RefPath, which the recursion covers).
+pub fn refwalk_field_names(q: &crate::query::ast::Query) -> Vec<String> {
+    use crate::query::ast::{Attr, Predicate, SelectItem};
+
+    fn collect_attr(a: &Attr, out: &mut Vec<String>) {
+        if let Attr::RefPath { hops, tail, .. } = a {
+            for h in hops {
+                if !out.iter().any(|x| x == h) {
+                    out.push(h.clone());
+                }
+            }
+            collect_attr(tail, out);
+        }
+    }
+    fn collect_pred(p: &Predicate, out: &mut Vec<String>) {
+        match p {
+            Predicate::And(a, b) | Predicate::Or(a, b) => {
+                collect_pred(a, out);
+                collect_pred(b, out);
+            }
+            Predicate::Not(a) => collect_pred(a, out),
+            Predicate::Compare { lhs, .. } => collect_attr(lhs, out),
+            Predicate::InSubquery { .. } | Predicate::InstanceOf(_) => {}
+        }
+    }
+
+    let mut out = Vec::new();
+    for item in &q.select {
+        match item {
+            SelectItem::Attr(a) => collect_attr(a, &mut out),
+            SelectItem::Aggregate { arg, .. } => {
+                if let SelectItem::Attr(a) = arg.as_ref() {
+                    collect_attr(a, &mut out);
+                }
+            }
+            SelectItem::Star => {}
+        }
+    }
+    if let Some(pred) = &q.where_ {
+        collect_pred(pred, &mut out);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,5 +213,25 @@ mod tests {
         // push order preserved within src: (fid,dst) pairs stay aligned.
         assert_eq!(fid, vec![0, 2, 1]);
         assert_eq!(tgt, vec![100, 200, 300]);
+    }
+
+    #[test]
+    fn refwalk_field_names_gathers_select_and_where_hops() {
+        let q = crate::query::parse::parse(
+            "SELECT x.parent.name FROM C x WHERE x.next.hash > 0",
+        )
+        .unwrap();
+        let names = refwalk_field_names(&q);
+        // hop fields only (parent, next); tails name/hash are projections, not hops.
+        assert!(names.contains(&"parent".to_string()));
+        assert!(names.contains(&"next".to_string()));
+        assert!(!names.contains(&"name".to_string()));
+        assert!(!names.contains(&"hash".to_string()));
+    }
+
+    #[test]
+    fn refwalk_field_names_empty_when_no_refpath() {
+        let q = crate::query::parse::parse("SELECT x.count FROM C x").unwrap();
+        assert!(refwalk_field_names(&q).is_empty());
     }
 }

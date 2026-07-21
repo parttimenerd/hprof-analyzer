@@ -144,6 +144,14 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     /// carried query with its plan for the late phase.
     pub fn plan(&self) -> &QueryPlan { self.plan }
 
+    /// The query AST this executor runs (borrowed). Used by the driver to gather
+    /// RefWalk hop field names when arming edge capture.
+    pub fn query(&self) -> &Query { self.query }
+
+    /// The resolver this executor borrows. Used by the driver to decode ref
+    /// fields from instance blobs during RefWalk edge capture.
+    pub fn resolver(&self) -> &'a R { self.resolver }
+
     /// Consume a carry executor, returning the accumulated carry. Panics if this
     /// executor is not in carry mode (caller must check `is_carry`).
     pub fn take_carry(self) -> Carry {

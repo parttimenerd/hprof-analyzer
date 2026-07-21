@@ -144,11 +144,24 @@ impl<'a> crate::query::plan::FieldSchema for LiveResolver<'a> {
 pub struct ScanDriver<'q, R: ClassResolver> {
     execs: Vec<SingleScanExecutor<'q, R>>,
     slots: Vec<usize>,
+    /// Armed only when at least one exec's plan has `needs.ref_walk`. Holds the
+    /// interned hop-field table + the resolver used to decode ref fields from
+    /// each instance blob. `None` on non-RefWalk runs → zero capture cost.
+    refwalk: Option<RefWalkState<'q, R>>,
+}
+
+/// Sidecar edge-capture state for RefWalk queries (see `refwalk.rs`).
+struct RefWalkState<'q, R: ClassResolver> {
+    edges: crate::query::refwalk::RefWalkEdges,
+    /// Interned hop field names; `field_id` is the index into this table.
+    field_names: Vec<String>,
+    resolver: &'q R,
 }
 
 impl<'q, R: ClassResolver> ScanDriver<'q, R> {
     /// Construct a driver from `(slot, executor)` pairs. `slot` is the query's
-    /// index in the caller's list.
+    /// index in the caller's list. Arms RefWalk edge capture iff any executor's
+    /// plan requests it.
     pub fn new(entries: Vec<(usize, SingleScanExecutor<'q, R>)>) -> Self {
         let mut execs = Vec::with_capacity(entries.len());
         let mut slots = Vec::with_capacity(entries.len());
@@ -156,8 +169,34 @@ impl<'q, R: ClassResolver> ScanDriver<'q, R> {
             slots.push(slot);
             execs.push(ex);
         }
-        Self { execs, slots }
+        let refwalk = Self::arm_refwalk(&execs);
+        Self { execs, slots, refwalk }
     }
+
+    /// Build the RefWalk sidecar if any exec needs it: intern the union of hop
+    /// field names across all RefWalk queries, and grab a resolver reference for
+    /// blob decoding. Returns `None` (no capture) when no query walks references.
+    fn arm_refwalk(execs: &[SingleScanExecutor<'q, R>]) -> Option<RefWalkState<'q, R>> {
+        let mut per_query_hops: Vec<Vec<String>> = Vec::new();
+        for ex in execs {
+            if ex.plan().needs.ref_walk {
+                per_query_hops.push(crate::query::refwalk::refwalk_field_names(ex.query()));
+            }
+        }
+        if per_query_hops.is_empty() {
+            return None;
+        }
+        let field_names = crate::query::refwalk::intern_hop_fields(&per_query_hops);
+        let resolver = execs.first().map(|e| e.resolver())?;
+        Some(RefWalkState {
+            edges: crate::query::refwalk::RefWalkEdges::new(
+                crate::query::refwalk::REFWALK_EDGE_CAP,
+            ),
+            field_names,
+            resolver,
+        })
+    }
+
     pub fn is_empty(&self) -> bool {
         self.execs.is_empty()
     }
@@ -190,10 +229,67 @@ impl<'q, R: ClassResolver> ScanDriver<'q, R> {
         }
         state
     }
+
+    /// The interned RefWalk hop-field table (index = `field_id`), or empty when
+    /// no RefWalk query armed capture. The late window uses this to map a hop
+    /// field name to its `field_id` when walking the captured CSR.
+    pub fn refwalk_field_names(&self) -> Vec<String> {
+        self.refwalk
+            .as_ref()
+            .map(|s| s.field_names.clone())
+            .unwrap_or_default()
+    }
+
+    /// True if RefWalk edge capture overflowed its cap (owning query results
+    /// must be marked truncated).
+    pub fn refwalk_truncated(&self) -> bool {
+        self.refwalk.as_ref().map(|s| s.edges.truncated()).unwrap_or(false)
+    }
+
+    /// Fold the captured field-labeled edges into a per-src forward CSR over `n`
+    /// nodes: `(fwd_off[n+1], fwd_tgt, fwd_field)`. Returns `None` when RefWalk
+    /// was never armed (non-RefWalk run → the late window keeps empty slices).
+    /// Takes `&mut self` so it can run before `finish_state` consumes the driver.
+    pub fn take_refwalk_csr(&mut self, n: usize) -> Option<(Vec<u32>, Vec<u32>, Vec<u32>)> {
+        let edges = std::mem::replace(
+            &mut self.refwalk.as_mut()?.edges,
+            crate::query::refwalk::RefWalkEdges::new(0),
+        );
+        Some(edges.into_csr(n))
+    }
+
+    /// Decode the needed reference fields from one instance blob and record their
+    /// edges. No-op when capture is unarmed.
+    fn capture_refwalk(&mut self, src_idx: usize, class_id: u64, blob: &[u8]) {
+        let Some(state) = self.refwalk.as_mut() else { return };
+        let width = state.resolver.ref_width();
+        for (field_id, name) in state.field_names.iter().enumerate() {
+            let Some((off, ty)) = state.resolver.field(class_id, name) else { continue };
+            if ty != HprofType::Object {
+                continue;
+            }
+            let start = off as usize;
+            let end = start + width;
+            if end > blob.len() {
+                continue;
+            }
+            let mut addr: u64 = 0;
+            for &b in &blob[start..end] {
+                addr = (addr << 8) | b as u64;
+            }
+            if addr == 0 {
+                continue; // null reference → no edge
+            }
+            if let Some(dst) = state.resolver.index_of_addr(addr) {
+                state.edges.push(src_idx as u32, field_id as u32, dst as u32);
+            }
+        }
+    }
 }
 
 impl<'q, R: ClassResolver> ObjectVisitor for ScanDriver<'q, R> {
     fn visit_instance(&mut self, src_idx: usize, class_id: u64, blob: &[u8]) {
+        self.capture_refwalk(src_idx, class_id, blob);
         for ex in &mut self.execs {
             ex.visit_instance(src_idx, class_id, blob);
         }
@@ -596,6 +692,85 @@ mod tests {
             }
         }
         assert_eq!(Bare.index_of_addr(0x1000), None);
+    }
+
+    /// Resolver for RefWalk edge-capture tests: class 1 is "C" with a "parent"
+    /// object field at offset 0 (ref width 8); addresses map to dense indices.
+    struct RefFakeResolver {
+        names: HashMap<u64, String>,
+        addr_to_idx: HashMap<u64, usize>,
+    }
+    impl ClassResolver for RefFakeResolver {
+        fn class_name(&self, class_id: u64) -> Option<&str> {
+            self.names.get(&class_id).map(String::as_str)
+        }
+        fn field(&self, _class_id: u64, name: &str) -> Option<(u32, HprofType)> {
+            if name == "parent" {
+                Some((0, HprofType::Object))
+            } else {
+                None
+            }
+        }
+        fn index_of_addr(&self, addr: u64) -> Option<usize> {
+            self.addr_to_idx.get(&addr).copied()
+        }
+        fn ref_width(&self) -> usize {
+            8
+        }
+    }
+
+    fn be8(v: u64) -> [u8; 8] {
+        v.to_be_bytes()
+    }
+
+    #[test]
+    fn scan_driver_captures_refwalk_edges() {
+        let resolver = RefFakeResolver {
+            names: [(1u64, "C".to_string())].into_iter().collect(),
+            addr_to_idx: [(0x100u64, 5usize), (0x200u64, 6usize)]
+                .into_iter()
+                .collect(),
+        };
+        let q = parse("SELECT x.parent.name FROM C x").unwrap();
+        let p = plan_query(&q).unwrap();
+        assert!(p.needs.ref_walk, "query must arm ref_walk");
+
+        let entries = vec![(0usize, SingleScanExecutor::new(&q, &p, &resolver))];
+        let mut driver = ScanDriver::new(entries);
+
+        driver.visit_instance(0, 1, &be8(0x100));
+        driver.visit_instance(1, 1, &be8(0x200));
+
+        let csr = driver.take_refwalk_csr(8);
+        assert!(csr.is_some(), "armed driver yields a CSR");
+        let (_off, tgt, fid) = csr.unwrap();
+        assert_eq!(tgt, vec![5, 6]);
+        assert_eq!(fid, vec![0, 0]);
+    }
+
+    #[test]
+    fn scan_driver_null_ref_and_absent_field_and_unarmed() {
+        // null ref (addr 0) → no edge; absent field → no edge (no panic).
+        let resolver = RefFakeResolver {
+            names: [(1u64, "C".to_string())].into_iter().collect(),
+            addr_to_idx: [(0x100u64, 5usize)].into_iter().collect(),
+        };
+        let q = parse("SELECT x.parent.name FROM C x").unwrap();
+        let p = plan_query(&q).unwrap();
+        let entries = vec![(0usize, SingleScanExecutor::new(&q, &p, &resolver))];
+        let mut driver = ScanDriver::new(entries);
+        driver.visit_instance(0, 1, &be8(0)); // null → no edge
+        driver.visit_instance(1, 1, &be8(0x100)); // real → dense 5
+        let (_off, tgt, _fid) = driver.take_refwalk_csr(8).unwrap();
+        assert_eq!(tgt, vec![5], "only the non-null ref becomes an edge");
+
+        // Unarmed (no RefWalk query) → take_refwalk_csr is None.
+        let q2 = parse("SELECT @objectId FROM C").unwrap();
+        let p2 = plan_query(&q2).unwrap();
+        let entries2 = vec![(0usize, SingleScanExecutor::new(&q2, &p2, &resolver))];
+        let mut driver2 = ScanDriver::new(entries2);
+        driver2.visit_instance(0, 1, &be8(0x100));
+        assert!(driver2.take_refwalk_csr(8).is_none());
     }
 
     #[test]
