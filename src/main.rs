@@ -78,9 +78,8 @@ pub struct AnalyzeOptions {
     pub query_file: Option<String>,
 }
 
-#[cfg(test)]
 impl Default for AnalyzeOptions {
-    /// Test-only default: the `--detail default` preset (historical cap values).
+    /// The `--detail default` preset (historical cap values).
     fn default() -> Self {
         DetailLevel::Default.options()
     }
@@ -217,6 +216,9 @@ enum Cmd {
         /// Read queries from a file, one per line (`#` comments allowed).
         #[arg(long = "query-file", value_name = "PATH", value_hint = ValueHint::FilePath)]
         query_file: Option<String>,
+        /// Start an interactive OQL REPL reading queries from stdin.
+        #[arg(long)]
+        repl: bool,
     },
 }
 
@@ -454,20 +456,29 @@ fn main() {
             input,
             query,
             query_file,
+            repl,
         }) => {
             if !input_is_hprof(&input) {
                 fail(format!(
                     "'{input}' is not an HPROF dump; the `query` subcommand needs a .hprof[.zip] file"
                 ));
             }
-            let opts = AnalyzeOptions {
-                queries: query,
-                query_file,
-                ..DetailLevel::Default.options()
-            };
-            // Reuse the analyze pipeline, printing only the query results as text.
-            if let Err(e) = run_queries(&input, opts) {
-                fail(analyze_error_hint(&input, &e));
+            if repl {
+                // Interactive mode reads queries from stdin; --query/--query-file
+                // are ignored.
+                if let Err(e) = crate::query::repl::run_repl(&input) {
+                    fail(analyze_error_hint(&input, &e));
+                }
+            } else {
+                let opts = AnalyzeOptions {
+                    queries: query,
+                    query_file,
+                    ..DetailLevel::Default.options()
+                };
+                // Reuse the analyze pipeline, printing only the query results as text.
+                if let Err(e) = run_queries(&input, opts) {
+                    fail(analyze_error_hint(&input, &e));
+                }
             }
         }
     }

@@ -10,6 +10,7 @@ pub mod model;
 pub mod execute;
 pub mod histogram;
 pub mod run;
+pub mod repl;
 
 use std::fmt;
 

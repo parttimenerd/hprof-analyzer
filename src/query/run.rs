@@ -6,8 +6,10 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use crate::pass1::ClassInfo;
+use crate::query::ast::Query;
 use crate::query::execute::{ClassResolver, SingleScanExecutor};
 use crate::query::model::QueryResult;
+use crate::query::plan::QueryPlan;
 use crate::query::ObjectVisitor;
 use crate::types::HprofType;
 
@@ -113,6 +115,20 @@ impl<'q, R: ClassResolver> ObjectVisitor for ScanDriver<'q, R> {
             ex.visit_instance(src_idx, class_id, blob);
         }
     }
+}
+
+/// Run the full pass1+pass2 pipeline against `path` for the given planned
+/// queries and return their results. Used by the REPL (and available to any
+/// one-shot caller). Does not build or render the full report.
+pub fn run_single_dump(
+    path: &str,
+    queries: &[(Query, QueryPlan)],
+) -> std::io::Result<Vec<QueryResult>> {
+    let p1 = crate::pass1::Pass1::run(path)?;
+    let opts = crate::AnalyzeOptions::default();
+    let (.., results) =
+        crate::pass2::Pass2::build(path, p1, crate::cvec::Codec::Zstd3, &opts, queries)?;
+    Ok(results)
 }
 
 #[cfg(test)]
