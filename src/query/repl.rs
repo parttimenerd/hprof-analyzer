@@ -136,19 +136,39 @@ fn handle_meta(cmd: &str, out: &mut impl Write) -> io::Result<bool> {
         "quit" | "q" | "exit" => return Ok(true),
         "help" | "h" => {
             writeln!(out, "commands:")?;
-            writeln!(out, "  !help              show this help")?;
-            writeln!(out, "  !plan <oql>        show the query plan (no scan)")?;
-            writeln!(out, "  !explain <oql>     alias for !plan")?;
-            writeln!(out, "  !quit              exit")?;
-            writeln!(out, "  <oql>              run a query and print results")?;
+            writeln!(out, "  !help                 show this help")?;
+            writeln!(out, "  !plan [--raw] <oql>   show the query plan (no scan); --raw shows unoptimized plan")?;
+            writeln!(out, "  !explain [--raw] <oql> alias for !plan")?;
+            writeln!(out, "  !quit                 exit")?;
+            writeln!(out, "  <oql>                 run a query and print results")?;
         }
-        "plan" | "explain" => match crate::query::parse::parse_or_report(rest) {
-            Ok(q) => match crate::query::plan::plan_query(&q) {
-                Ok(plan) => write!(out, "{}", plan.explain())?,
-                Err(e) => writeln!(out, "plan error: {}", e.0)?,
-            },
-            Err(report) => writeln!(out, "parse error: {report}")?,
-        },
+        "plan" | "explain" => {
+            // Detect optional --raw flag.
+            let (raw, query_text) = if rest.starts_with("--raw") {
+                let remainder = rest["--raw".len()..].trim_start();
+                (true, remainder)
+            } else {
+                (false, rest)
+            };
+            match crate::query::parse::parse_or_report(query_text) {
+                Ok(q) => match crate::query::plan::plan_query(&q) {
+                    Ok(plan) => {
+                        let plan = if raw {
+                            plan
+                        } else {
+                            crate::query::optimize::optimize(
+                                plan,
+                                &q,
+                                &crate::query::optimize::SchemaStats::default(),
+                            )
+                        };
+                        write!(out, "{}", plan.explain())?;
+                    }
+                    Err(e) => writeln!(out, "plan error: {}", e.0)?,
+                },
+                Err(report) => writeln!(out, "parse error: {report}")?,
+            }
+        }
         other => writeln!(out, "unknown command: !{other} (try !help)")?,
     }
     Ok(false)
@@ -162,6 +182,7 @@ fn run_one(path: &str, text: &str) -> io::Result<QueryResult> {
         .map_err(|report| io::Error::new(io::ErrorKind::InvalidInput, format!("parse error: {report}")))?;
     let plan = crate::query::plan::plan_query(&q)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("plan error: {}", e.0)))?;
+    let plan = crate::query::optimize::optimize(plan, &q, &crate::query::optimize::SchemaStats::default());
     let mut results = crate::query::run::run_single_dump(path, &[(q, plan)])?;
     Ok(results.pop().unwrap_or_else(|| QueryResult {
         name: "q1".into(),
@@ -418,5 +439,53 @@ mod tests {
     #[test]
     fn editor_builds() {
         let _ = build_editor();
+    }
+
+    // ---------- Task 34: !plan --raw and optimizer wiring tests ----------
+
+    /// `!plan SELECT @objectId FROM java.lang.String LIMIT 5` must show
+    /// `scan_limit: 5` because the optimizer pushes the limit to the scan.
+    #[test]
+    fn plan_meta_shows_optimized_scan_limit() {
+        let (_, out) = meta_out("plan SELECT @objectId FROM java.lang.String LIMIT 5");
+        assert!(
+            out.contains("scan_limit: 5"),
+            "optimized plan must show scan_limit: 5, got:\n{out}"
+        );
+    }
+
+    /// `!plan --raw SELECT @objectId FROM java.lang.String LIMIT 5` must NOT
+    /// show `scan_limit:` (raw = unoptimized), but MUST still show `limit: 5`.
+    #[test]
+    fn plan_raw_meta_omits_scan_limit() {
+        let (_, out) = meta_out("plan --raw SELECT @objectId FROM java.lang.String LIMIT 5");
+        assert!(
+            !out.contains("scan_limit:"),
+            "raw plan must NOT show scan_limit:, got:\n{out}"
+        );
+        assert!(
+            out.contains("limit: 5"),
+            "raw plan must still show limit: 5, got:\n{out}"
+        );
+    }
+
+    /// Raw plan output must still contain `stage:` — it is a real plan, just unoptimized.
+    #[test]
+    fn plan_raw_still_parses_and_plans() {
+        let (_, out) = meta_out("plan --raw SELECT @objectId FROM java.lang.String LIMIT 5");
+        assert!(
+            out.contains("stage:"),
+            "raw plan must still show stage:, got:\n{out}"
+        );
+    }
+
+    /// Regression: `!plan SELCT bad` must still produce `parse error:` prefix.
+    #[test]
+    fn plan_meta_parse_error_prefix() {
+        let (_, out) = meta_out("plan SELCT bad");
+        assert!(
+            out.contains("parse error:"),
+            "malformed query must produce 'parse error:', got:\n{out}"
+        );
     }
 }

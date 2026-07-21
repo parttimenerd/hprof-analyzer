@@ -824,6 +824,7 @@ fn parse_plan_queries(
                 format!("OQL plan error in `{text}`: {}", e.0),
             )
         })?;
+        let plan = query::optimize::optimize(plan, &q, &query::optimize::SchemaStats::default());
         parsed_queries.push((q, plan));
     }
     Ok(parsed_queries)

@@ -811,6 +811,8 @@ impl QueryPlan {
         if self.needs.instance_string { armed.push("instance_string"); }
         if self.needs.runtime_type { armed.push("runtime_type"); }
         if self.needs.retained { armed.push("retained"); }
+        if self.needs.dominator_children { armed.push("dominator_children"); }
+        if self.needs.ref_walk { armed.push("ref_walk"); }
         s.push_str(&format!(
             "needs (armed): {}\n",
             if armed.is_empty() { "none".into() } else { armed.join(", ") }
@@ -819,13 +821,45 @@ impl QueryPlan {
         if let Some(n) = self.limit {
             s.push_str(&format!("limit: {n}\n"));
         }
+        if let Some(n) = self.scan_limit {
+            s.push_str(&format!("scan_limit: {n}\n"));
+        }
         if !self.where_terms.is_empty() {
             s.push_str("where (cheapest-first):\n");
             for c in &self.where_terms {
                 s.push_str(&format!("  [{:?}] {:?}\n", c.cost, c.pred));
             }
         }
+        if !self.late_ops.is_empty() {
+            let names: Vec<String> = self.late_ops.iter().map(|op| format!("{op:?}")).collect();
+            s.push_str(&format!("late_ops: {}\n", names.join(", ")));
+        }
+        if !self.deferred_projections.is_empty() {
+            let indices: Vec<String> = self.deferred_projections.iter()
+                .map(|d| d.select_index.to_string())
+                .collect();
+            s.push_str(&format!("deferred_projections: [{}]\n", indices.join(", ")));
+        }
         s
+    }
+
+    /// Machine-friendly plan summary: one short descriptor per active stage/feature.
+    /// Used by `!plan` output and tests to assert optimizer effects (e.g. that a
+    /// LIMIT was pushed to the scan).
+    pub fn stage_list(&self) -> Vec<String> {
+        let mut v = Vec::new();
+        v.push(format!("stage={:?}", self.kind));
+        if let Some(n) = self.limit { v.push(format!("limit={n}")); }
+        if let Some(n) = self.scan_limit { v.push(format!("scan_limit={n}")); }
+        for op in &self.late_ops { v.push(format!("late_op={op:?}")); }
+        if !self.where_terms.is_empty() {
+            let costs: Vec<String> = self.where_terms.iter().map(|c| format!("{:?}", c.cost)).collect();
+            v.push(format!("where_costs=[{}]", costs.join(",")));
+        }
+        if !self.deferred_projections.is_empty() {
+            v.push(format!("deferred={}", self.deferred_projections.len()));
+        }
+        v
     }
 }
 
@@ -1408,5 +1442,51 @@ mod tests {
         .unwrap();
         let plan = plan_query(&q).unwrap();
         assert_eq!(plan.in_subplans.len(), 2);
+    }
+
+    // ---------- Task 34: explain() / stage_list() tests ----------
+
+    /// After optimize, explain() must contain `scan_limit: 5` when the limit
+    /// was pushed down to the scan by the optimizer.
+    #[test]
+    fn explain_shows_scan_limit_after_optimize() {
+        let q = parse("SELECT @objectId FROM java.lang.String LIMIT 5").unwrap();
+        let plan = plan_query(&q).unwrap();
+        let plan = crate::query::optimize::optimize(plan, &q, &Default::default());
+        let out = plan.explain();
+        assert!(
+            out.contains("scan_limit: 5"),
+            "explain() must show scan_limit: 5 after optimize, got:\n{out}"
+        );
+    }
+
+    /// stage_list() on an optimized plan with LIMIT 5 must contain "scan_limit=5".
+    #[test]
+    fn stage_list_reports_scan_limit() {
+        let q = parse("SELECT @objectId FROM java.lang.String LIMIT 5").unwrap();
+        let plan = plan_query(&q).unwrap();
+        let plan = crate::query::optimize::optimize(plan, &q, &Default::default());
+        let list = plan.stage_list();
+        assert!(
+            list.iter().any(|s| s == "scan_limit=5"),
+            "stage_list() must contain 'scan_limit=5', got: {:?}", list
+        );
+    }
+
+    /// An unoptimized plan (plan_query only, no optimize) for LIMIT 5 must have
+    /// 'limit=5' in stage_list() but NO 'scan_limit=' entry.
+    #[test]
+    fn stage_list_raw_has_no_scan_limit() {
+        let q = parse("SELECT @objectId FROM java.lang.String LIMIT 5").unwrap();
+        let plan = plan_query(&q).unwrap();
+        let list = plan.stage_list();
+        assert!(
+            list.iter().any(|s| s == "limit=5"),
+            "stage_list() must contain 'limit=5', got: {:?}", list
+        );
+        assert!(
+            !list.iter().any(|s| s.starts_with("scan_limit=")),
+            "unoptimized plan must NOT contain 'scan_limit=', got: {:?}", list
+        );
     }
 }
