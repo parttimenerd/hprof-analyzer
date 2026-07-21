@@ -72,6 +72,10 @@ pub struct AnalyzeOptions {
     pub collections: bool,
     pub collection_config: Option<std::path::PathBuf>,
     pub(crate) coll_descs: Vec<crate::pass2::CollDesc>,
+    /// Inline OQL query strings (from `--query`, repeatable).
+    pub queries: Vec<String>,
+    /// Optional file of OQL queries, one per non-empty/non-comment line.
+    pub query_file: Option<String>,
 }
 
 #[cfg(test)]
@@ -172,6 +176,15 @@ struct Cli {
     /// Auto-discovers .hprof-analyzer.toml (CWD) or $HOME/.config/hprof-analyzer/collections.toml.
     #[arg(long, value_name = "PATH")]
     collection_config: Option<std::path::PathBuf>,
+
+    /// Run an OQL query against the heap and include results in the report.
+    /// May be repeated. Example: --query "SELECT * FROM java.lang.String"
+    #[arg(long = "query", value_name = "OQL")]
+    query: Vec<String>,
+
+    /// Read one OQL query per non-empty line from a file (lines starting with `#` are comments).
+    #[arg(long = "query-file", value_name = "PATH", value_hint = ValueHint::FilePath)]
+    query_file: Option<String>,
 }
 
 /// Named subcommands. The default (no subcommand) analyzes or re-renders the
@@ -192,6 +205,18 @@ enum Cmd {
     Dev {
         #[command(subcommand)]
         cmd: DevCmd,
+    },
+    /// Run one or more OQL queries against a heap dump and print the results.
+    Query {
+        /// Path to the .hprof (or .hprof.zip) dump.
+        #[arg(value_hint = ValueHint::FilePath)]
+        input: String,
+        /// OQL query text (may be repeated).
+        #[arg(long = "query", value_name = "OQL")]
+        query: Vec<String>,
+        /// Read queries from a file, one per line (`#` comments allowed).
+        #[arg(long = "query-file", value_name = "PATH", value_hint = ValueHint::FilePath)]
+        query_file: Option<String>,
     },
 }
 
@@ -294,6 +319,8 @@ impl DetailLevel {
             collections: false,
             collection_config: None,
             coll_descs: Vec::new(),
+            queries: Vec::new(),
+            query_file: None,
         }
     }
 }
@@ -423,6 +450,26 @@ fn main() {
                 }
             }
         },
+        Some(Cmd::Query {
+            input,
+            query,
+            query_file,
+        }) => {
+            if !input_is_hprof(&input) {
+                fail(format!(
+                    "'{input}' is not an HPROF dump; the `query` subcommand needs a .hprof[.zip] file"
+                ));
+            }
+            let opts = AnalyzeOptions {
+                queries: query,
+                query_file,
+                ..DetailLevel::Default.options()
+            };
+            // Reuse the analyze pipeline, printing only the query results as text.
+            if let Err(e) = run_queries(&input, opts) {
+                fail(analyze_error_hint(&input, &e));
+            }
+        }
     }
 }
 
@@ -457,6 +504,8 @@ fn run_default(cli: Cli) {
             coll_descs: crate::collection_config::load_collection_descs(
                 cli.collection_config.as_deref(),
             ),
+            queries: cli.query.clone(),
+            query_file: cli.query_file.clone(),
             ..opts
         };
         if let Err(e) = run(
@@ -725,6 +774,122 @@ fn render_report(path: &str, format: OutputFormat) -> io::Result<String> {
     })
 }
 
+/// Collect the OQL query strings for a run: inline `--query` flags first, then
+/// each non-empty, non-comment (`#`) line of `--query-file`. A missing or
+/// unreadable query file is a hard error naming the path.
+fn collect_query_texts(opts: &AnalyzeOptions) -> io::Result<Vec<String>> {
+    let mut query_texts: Vec<String> = opts.queries.clone();
+    if let Some(ref qf) = opts.query_file {
+        let body = std::fs::read_to_string(qf)
+            .map_err(|e| io::Error::new(e.kind(), format!("cannot read --query-file '{qf}': {e}")))?;
+        for line in body.lines() {
+            let t = line.trim();
+            if t.is_empty() || t.starts_with('#') {
+                continue;
+            }
+            query_texts.push(t.to_string());
+        }
+    }
+    Ok(query_texts)
+}
+
+/// Parse and plan each OQL text, failing fast with an actionable message that
+/// names the offending query text and includes the parser/planner detail.
+fn parse_plan_queries(
+    query_texts: &[String],
+) -> io::Result<Vec<(query::ast::Query, query::plan::QueryPlan)>> {
+    let mut parsed_queries: Vec<(query::ast::Query, query::plan::QueryPlan)> =
+        Vec::with_capacity(query_texts.len());
+    for text in query_texts {
+        let q = query::parse::parse(text).map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("OQL parse error in `{text}`: {}", e.0),
+            )
+        })?;
+        let plan = query::plan::plan_query(&q).map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("OQL plan error in `{text}`: {}", e.0),
+            )
+        })?;
+        parsed_queries.push((q, plan));
+    }
+    Ok(parsed_queries)
+}
+
+/// Format a single query cell for plain-text table output.
+fn fmt_query_value(v: &query::model::QueryValue) -> String {
+    use query::model::QueryValue::*;
+    match v {
+        Null => "null".to_string(),
+        Bool(b) => b.to_string(),
+        Int(i) => i.to_string(),
+        Float(f) => f.to_string(),
+        Str(s) => s.clone(),
+        ObjRef { index, class } => format!("{class}@{index}"),
+    }
+}
+
+/// The `query` subcommand: run pass1+pass2 with the parsed queries and print
+/// each result as a simple aligned text table to stdout. Never writes a file.
+fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
+    let query_texts = collect_query_texts(&opts)?;
+    let parsed = parse_plan_queries(&query_texts)?;
+
+    let p1 = pass1::Pass1::run(input)?;
+    if p1.class_ids.len() > u32::MAX as usize {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "dump has {} objects, exceeding the {} (u32::MAX) limit of the \
+                 analyzer's index scheme; cannot analyze",
+                p1.class_ids.len(),
+                u32::MAX
+            ),
+        ));
+    }
+    let (.., mut query_results) =
+        pass2::Pass2::build(input, p1, cvec::Codec::Zstd3, &opts, &parsed)?;
+
+    // Backfill blank oql text (Task 10 leaves it empty); order matches query_texts.
+    for (r, text) in query_results.iter_mut().zip(query_texts.iter()) {
+        if r.oql.is_empty() {
+            r.oql = text.clone();
+        }
+    }
+
+    let mut out = String::new();
+    for (i, r) in query_results.iter().enumerate() {
+        let label = if r.name.is_empty() {
+            format!("q{}", i + 1)
+        } else {
+            r.name.clone()
+        };
+        out.push_str(&format!("== {label} ==\n"));
+        if !r.oql.is_empty() {
+            out.push_str(&format!("  {}\n", r.oql));
+        }
+        if let Some(err) = &r.error {
+            out.push_str(&format!("error: {err}\n\n"));
+            continue;
+        }
+        let header: Vec<String> = r.columns.iter().map(|c| c.name.clone()).collect();
+        out.push_str(&header.join(" | "));
+        out.push('\n');
+        for row in &r.rows {
+            let cells: Vec<String> = row.iter().map(fmt_query_value).collect();
+            out.push_str(&cells.join(" | "));
+            out.push('\n');
+        }
+        let plural = if r.row_count == 1 { "row" } else { "rows" };
+        let trunc = if r.truncated { ", truncated" } else { "" };
+        out.push_str(&format!("({} {}{})\n\n", r.row_count, plural, trunc));
+    }
+    print!("{out}");
+    Ok(())
+}
+
 /// Run the full `analyze` pipeline end-to-end and write the report.
 /// Phase order and the interleaved allocation/free/compress steps are tuned
 /// for the peak-RSS budget; the inline comments flag the load-bearing points.
@@ -759,10 +924,15 @@ fn run(
         ));
     }
 
+    // Collect + parse + plan any OQL queries before pass2, so a bad query fails
+    // fast (before the expensive graph build) with a message naming the query.
+    let query_texts = collect_query_texts(&opts)?;
+    let parsed_queries = parse_plan_queries(&query_texts)?;
+
     let t = Instant::now();
     progress::phase("building object graph (pass 2)");
-    let (mut g, mut inbound, shallow_c, class_idx_c, alloc_serial_c, _query_results) =
-        pass2::Pass2::build(input, p1, compress, &opts, &[])?;
+    let (mut g, mut inbound, shallow_c, class_idx_c, alloc_serial_c, mut query_results) =
+        pass2::Pass2::build(input, p1, compress, &opts, &parsed_queries)?;
     log(
         verbose,
         &format!("pass2 n={}", g.n),
@@ -958,7 +1128,7 @@ fn run(
     // so both can be freed immediately after it returns. depth_counts is the
     // B2 dominator-depth histogram tallied during compute_retained's DFS (no
     // separate ~2GB per-object memo scan).
-    let report = report::build_model(
+    let mut report = report::build_model(
         &g,
         &dc_off,
         &dc_tgt,
@@ -972,6 +1142,13 @@ fn run(
     drop(dc_off);
     drop(dc_tgt);
     crate::trace::trim();
+    // Backfill blank oql text (Task 10 leaves it empty); order matches query_texts.
+    for (r, text) in query_results.iter_mut().zip(query_texts.iter()) {
+        if r.oql.is_empty() {
+            r.oql = text.clone();
+        }
+    }
+    report.queries = std::mem::take(&mut query_results);
     let out_text = match format {
         OutputFormat::Md => {
             let md = report::render_markdown(&report);
