@@ -829,12 +829,18 @@ fn parse_plan_queries(
     Ok(parsed_queries)
 }
 
-/// Backfill each result's OQL text from the source query (Task 10 leaves `oql`
-/// blank on the executor side); order matches `query_texts`.
-fn backfill_oql(results: &mut [query::model::QueryResult], query_texts: &[String]) {
-    for (r, text) in results.iter_mut().zip(query_texts.iter()) {
+/// Fill in each result's display metadata: the OQL text from the source query
+/// (the executor leaves `oql` blank) and a default `q{N}` name when unnamed.
+/// Relies on `query_results` already being restored to the caller's input
+/// order (pass2 sorts it), so the positional zip against `query_texts` and the
+/// 1-based `q{N}` labels line up with the queries the user supplied.
+fn finalize_query_labels(results: &mut [query::model::QueryResult], query_texts: &[String]) {
+    for (i, (r, text)) in results.iter_mut().zip(query_texts.iter()).enumerate() {
         if r.oql.is_empty() {
             r.oql = text.clone();
+        }
+        if r.name.is_empty() {
+            r.name = format!("q{}", i + 1);
         }
     }
 }
@@ -873,17 +879,12 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
     let (.., mut query_results) =
         pass2::Pass2::build(input, p1, cvec::Codec::Zstd3, &opts, &parsed)?;
 
-    // Backfill blank oql text (Task 10 leaves it empty); order matches query_texts.
-    backfill_oql(&mut query_results, &query_texts);
+    // Fill in blank oql text and default `q{N}` names for the printed tables.
+    finalize_query_labels(&mut query_results, &query_texts);
 
     let mut out = String::new();
-    for (i, r) in query_results.iter().enumerate() {
-        let label = if r.name.is_empty() {
-            format!("q{}", i + 1)
-        } else {
-            r.name.clone()
-        };
-        out.push_str(&format!("== {label} ==\n"));
+    for r in query_results.iter() {
+        out.push_str(&format!("== {} ==\n", r.name));
         if !r.oql.is_empty() {
             out.push_str(&format!("  {}\n", r.oql));
         }
@@ -1159,8 +1160,8 @@ fn run(
     drop(dc_off);
     drop(dc_tgt);
     crate::trace::trim();
-    // Backfill blank oql text (Task 10 leaves it empty); order matches query_texts.
-    backfill_oql(&mut query_results, &query_texts);
+    // Fill in blank oql text and default `q{N}` names for the printed tables.
+    finalize_query_labels(&mut query_results, &query_texts);
     report.queries = std::mem::take(&mut query_results);
     let out_text = match format {
         OutputFormat::Md => {

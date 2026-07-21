@@ -217,7 +217,10 @@ mod tests {
         assert_eq!(toks[1], Token::At("usedHeapSize".into()));
         assert_eq!(toks[2], Token::Gt);
         assert_eq!(toks[3], Token::Int(100));
-        assert_eq!(toks[5], Token::Str("foo".into()));
+        assert_eq!(toks[4], Token::Ident("AND".into()));
+        assert_eq!(toks[5], Token::Ident("name".into()));
+        assert_eq!(toks[6], Token::Eq);
+        assert_eq!(toks[7], Token::Str("foo".into()));
     }
 }
 ```

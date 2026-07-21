@@ -46,6 +46,36 @@ fn query_subcommand_count_prints_table() {
         .lines()
         .any(|l| l.trim().parse::<u64>().is_ok());
     assert!(has_count, "no integer count row found:\n{stdout}");
+    // An unnamed query is printed under a default `== q1 ==` label header.
+    assert!(
+        stdout.contains("== q1 =="),
+        "missing default `q1` label header:\n{stdout}"
+    );
+}
+
+/// Two `--query` flags on the subcommand each print under their own sequential
+/// `== q1 ==` / `== q2 ==` label header (guards default-name assignment for the
+/// stdout table path, distinct from the rendered report path).
+#[test]
+fn query_subcommand_two_queries_get_sequential_labels() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query", "SELECT COUNT(*) FROM java.lang.String"])
+        .args(["--query", "SELECT COUNT(*) FROM java.lang.Object"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "two-query subcommand failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("== q1 ==") && stdout.contains("== q2 =="),
+        "missing sequential q1/q2 label headers:\n{stdout}"
+    );
 }
 
 /// A malformed query exits non-zero and the stderr names the offending text AND
@@ -202,6 +232,11 @@ fn analyze_with_query_flag_still_produces_report() {
         md.contains("COUNT(*)"),
         "query result table missing COUNT(*) column:\n{md}"
     );
+    // An unnamed query gets a `q<N>` label, rendered as its `###` heading.
+    assert!(
+        md.contains("### q1"),
+        "query heading missing its default `q1` name:\n{md}"
+    );
 }
 
 /// An invalid `--query` on the analyze path fails fast (before the expensive
@@ -318,6 +353,75 @@ fn analyze_multiple_query_flags_render_all() {
     assert!(
         md.matches("COUNT(*)").count() >= 2,
         "expected both queries to render (>=2 COUNT(*) columns):\n{md}"
+    );
+    // Unnamed queries get sequential `q<N>` labels rendered as `###` headings.
+    assert!(
+        md.contains("### q1") && md.contains("### q2"),
+        "expected both queries to render with default q1/q2 headings:\n{md}"
+    );
+}
+
+/// Mixed-kind ordering: an aggregate query (HistogramOnly plan) FIRST and a
+/// scan query (SingleScan plan, forced by a WHERE clause) SECOND. pass2 appends
+/// results in two kind-partitioned batches — SingleScan first, HistogramOnly
+/// second — which is the REVERSE of this input order. Without the ordering
+/// restore in pass2, the `q1`/`q2` headings (and their backfilled OQL text,
+/// which stays self-consistent) end up sitting above the WRONG result body: q1
+/// would show the scan's empty `*` table and q2 the aggregate's `COUNT(*)` row.
+/// So we assert each heading sits above BOTH its matching OQL and its matching
+/// result body — the body is what actually exposes the desync.
+#[test]
+fn analyze_mixed_kind_queries_render_in_input_order() {
+    let Some(hprof) = philosophers() else { return };
+    // q1: bare aggregate → HistogramOnly, yields a `COUNT(*)` column with a row.
+    // q2: WHERE clause → SingleScan, yields a `*` column with zero rows here.
+    let agg = "SELECT COUNT(*) FROM java.lang.String";
+    let scan = "SELECT * FROM java.lang.String s WHERE s.count > 0";
+    let out = Command::new(BIN)
+        .arg(&hprof)
+        .args(["--query", agg])
+        .args(["--query", scan])
+        .args(["-f", "md"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "analyze with mixed-kind queries failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let md = String::from_utf8_lossy(&out.stdout);
+    let q1 = md.find("### q1").expect("missing ### q1 heading");
+    let q2 = md.find("### q2").expect("missing ### q2 heading");
+    assert!(q1 < q2, "q1 heading must precede q2 heading:\n{md}");
+    let q1_block = &md[q1..q2];
+    let q2_block = &md[q2..];
+    // q1 is the aggregate: its OQL, its `COUNT(*)` result column, and its
+    // populated row must ALL sit under the q1 heading.
+    assert!(
+        q1_block.contains(agg),
+        "q1 heading is not above the aggregate OQL — ordering desync:\n{md}"
+    );
+    assert!(
+        q1_block.contains("| COUNT(*) |"),
+        "q1 block missing the aggregate result column — ordering desync:\n{md}"
+    );
+    assert!(
+        q1_block.contains("_1 row(s)_"),
+        "q1 block missing the aggregate's 1-row footer — ordering desync:\n{md}"
+    );
+    // q2 is the scan: its OQL, its `*` result column, and its 0-row footer must
+    // ALL sit under the q2 heading — and the aggregate result must NOT be here.
+    assert!(
+        q2_block.contains(scan),
+        "q2 heading is not above the scan OQL — ordering desync:\n{md}"
+    );
+    assert!(
+        q2_block.contains("_0 row(s)_"),
+        "q2 block missing the scan's 0-row footer — ordering desync:\n{md}"
+    );
+    assert!(
+        !q1_block.contains("_0 row(s)_"),
+        "scan's empty result leaked into the q1 block — ordering desync:\n{md}"
     );
 }
 

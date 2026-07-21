@@ -411,12 +411,20 @@ impl Pass2 {
         // are safe.) Dropping the driver + resolver here ends their borrows of
         // p1.class_map / p1.strings before those maps are freed below.
         let mut query_results: Vec<crate::query::model::QueryResult> = Vec::new();
+        // Original index in `queries` for each appended result. Results are
+        // appended in two kind-partitioned batches (SingleScan then Histogram),
+        // so this lets us restore the caller's input order before returning —
+        // otherwise a mixed-kind query set would render/label out of order.
+        let mut query_order: Vec<usize> = Vec::new();
         if scan_driver.is_empty() {
             drop(scan_driver);
         } else {
             let names: [String; 0] = [];
             let oqls: [String; 0] = [];
             query_results.extend(scan_driver.finish(&names, &oqls));
+            query_order.extend(queries.iter().enumerate().filter_map(|(i, (_, plan))| {
+                (plan.kind == crate::query::plan::StageKind::SingleScan).then_some(i)
+            }));
         }
         drop(query_resolver);
 
@@ -462,9 +470,10 @@ impl Pass2 {
                 })
                 .collect();
             let mut hist_results: Vec<crate::query::model::QueryResult> = Vec::new();
-            for (q, plan) in queries {
+            for (i, (q, plan)) in queries.iter().enumerate() {
                 if plan.kind == crate::query::plan::StageKind::HistogramOnly {
                     hist_results.push(crate::query::histogram::run_histogram(q, plan, &summaries));
+                    query_order.push(i);
                 }
             }
             query_results.extend(hist_results);
@@ -974,6 +983,15 @@ impl Pass2 {
             total_inb,
             synthetic_edges,
         };
+
+        // Restore the caller's query order (results were appended in two
+        // kind-partitioned batches above).
+        if query_order.len() == query_results.len() {
+            let mut paired: Vec<(usize, crate::query::model::QueryResult)> =
+                query_order.into_iter().zip(query_results.into_iter()).collect();
+            paired.sort_by_key(|(i, _)| *i);
+            query_results = paired.into_iter().map(|(_, r)| r).collect();
+        }
 
         Ok((graph, inbound, shallow_c, class_idx_c, alloc_serial_c, query_results))
     }
