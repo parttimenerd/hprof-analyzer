@@ -236,9 +236,26 @@ where
         )
     });
 
+    // Optional `AS RETAINED SET` select modifier. `AS RETAINED` without a
+    // trailing `SET` is a hard, actionable error rather than a silent miss.
+    let retained_set = ident_ci("AS")
+        .ignore_then(ident_ci("RETAINED"))
+        .ignore_then(
+            ident_ci("SET").to(true).or(any().or_not().validate(|_, e, emitter| {
+                emitter.emit(Rich::custom(
+                    e.span(),
+                    "expected SET after 'AS RETAINED' (usage: SELECT <expr> AS RETAINED SET FROM ...)",
+                ));
+                true
+            })),
+        )
+        .or_not()
+        .map(|r| r.unwrap_or(false));
+
     ident_ci("SELECT")
         .ignore_then(ident_ci("DISTINCT").or_not().map(|d| d.is_some()))
         .then(select_list)
+        .then(retained_set)
         .then_ignore(ident_ci("FROM"))
         .then(ident_ci("INSTANCEOF").or_not().map(|i| i.is_some()))
         .then(any_ident())
@@ -265,10 +282,11 @@ where
         )
         .then_ignore(end())
         .map(
-            |(((((((distinct, select), instanceof), class_name), alias), where_), order_by), limit)| {
+            |((((((((distinct, select), retained_set), instanceof), class_name), alias), where_), order_by), limit)| {
                 Query {
                     distinct,
                     select,
+                    retained_set,
                     from: ClassSpec { instanceof, class_name },
                     alias,
                     where_,
@@ -492,6 +510,7 @@ mod tests {
         Query {
             distinct,
             select,
+            retained_set: false,
             from: ClassSpec { instanceof, class_name: class_name.into() },
             alias: alias.map(|s| s.into()),
             where_,
@@ -926,6 +945,37 @@ mod tests {
         // The caret-rendered report also carries the actionable custom message.
         let rep = parse_or_report("SELECT dominatorof() FROM C").unwrap_err();
         assert!(rep.contains("dominatorof(x) requires"), "report missing message: {rep}");
+    }
+
+    #[test]
+    fn parse_as_retained_set() {
+        let q = parse("SELECT s AS RETAINED SET FROM java.lang.String s").unwrap();
+        assert!(q.retained_set);
+        assert_eq!(q.select.len(), 1);
+    }
+    #[test]
+    fn parse_no_retained_set_default_false() {
+        assert!(!parse("SELECT s FROM java.lang.String s").unwrap().retained_set);
+    }
+    #[test]
+    fn parse_as_retained_missing_set() {
+        let err = parse("SELECT s AS RETAINED FROM java.lang.String s").unwrap_err();
+        assert!(err.to_string().contains("expected SET after 'AS RETAINED'"), "unexpected: {err}");
+    }
+    #[test]
+    fn parse_as_retained_set_with_where_and_limit() {
+        // The modifier composes with the rest of the clause chain.
+        let q = parse(
+            "SELECT s AS RETAINED SET FROM java.lang.String s WHERE @retainedHeapSize > 0 LIMIT 5",
+        )
+        .unwrap();
+        assert!(q.retained_set);
+        assert!(q.where_.is_some());
+        assert_eq!(q.limit, Some(5));
+    }
+    #[test]
+    fn parse_as_retained_case_insensitive() {
+        assert!(parse("SELECT s as retained set FROM C s").unwrap().retained_set);
     }
 
     #[test]

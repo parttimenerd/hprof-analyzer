@@ -6,6 +6,9 @@
 pub struct Query {
     pub distinct: bool,
     pub select: Vec<SelectItem>,
+    /// `SELECT ... AS RETAINED SET`: expand each result into its full
+    /// dominator-retained object set. `false` for a plain projection.
+    pub retained_set: bool,
     pub from: ClassSpec,
     pub alias: Option<String>,
     pub where_: Option<Predicate>,
