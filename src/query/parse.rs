@@ -15,7 +15,8 @@ use logos::Logos;
 
 use crate::query::QueryError;
 use crate::query::ast::{
-    AggFunc, Attr, ClassSpec, CompareOp, OrderBy, Predicate, Query, SelectItem, SortDir, Value,
+    AggFunc, Attr, ClassSpec, CompareOp, FromSource, OrderBy, Predicate, Query, SelectItem,
+    SortDir, Value,
 };
 
 /// OQL token kinds, lexed directly by logos.
@@ -252,49 +253,67 @@ where
         .or_not()
         .map(|r| r.unwrap_or(false));
 
-    let base_query = ident_ci("SELECT")
-        .ignore_then(ident_ci("DISTINCT").or_not().map(|d| d.is_some()))
-        .then(select_list)
-        .then(retained_set)
-        .then_ignore(ident_ci("FROM"))
-        .then(ident_ci("INSTANCEOF").or_not().map(|i| i.is_some()))
-        .then(any_ident())
-        .then(any_ident().and_is(reserved_ident().not()).or_not())
-        .then(ident_ci("WHERE").ignore_then(predicate).or_not())
-        .then(
-            ident_ci("ORDER")
-                .ignore_then(ident_ci("BY"))
-                .ignore_then(attr.clone())
-                .then(
-                    ident_ci("ASC")
-                        .to(SortDir::Asc)
-                        .or(ident_ci("DESC").to(SortDir::Desc))
-                        .or_not()
-                        .map(|d| d.unwrap_or(SortDir::Asc)),
-                )
-                .map(|(key, dir)| OrderBy { key, dir })
-                .or_not(),
-        )
-        .then(
-            ident_ci("LIMIT")
-                .ignore_then(select! { Token::Int(n) if n >= 0 => n as u64 }.labelled("LIMIT count"))
-                .or_not(),
-        )
-        .map(
-            |((((((((distinct, select), retained_set), instanceof), class_name), alias), where_), order_by), limit)| {
-                Query {
-                    distinct,
-                    select,
-                    retained_set,
-                    from: ClassSpec { instanceof, class_name },
-                    alias,
-                    where_,
-                    order_by,
-                    limit,
-                    union_branches: Vec::new(),
-                }
-            },
-        );
+    let base_query = recursive(|base_query| {
+        // FROM target: a parenthesized subquery `( <base_query> )`, or a class
+        // pattern. INSTANCEOF applies only to the class form. UNION is not
+        // reachable inside the parens (base_query has no UNION tail), so
+        // `UNION` inside a subquery fails to parse — the intended rejection.
+        let from_subquery = just(Token::LParen)
+            .ignore_then(base_query)
+            .then_ignore(just(Token::RParen))
+            .map(|inner: Query| (false, FromSource::Subquery(Box::new(inner))));
+        let from_class = ident_ci("INSTANCEOF")
+            .or_not()
+            .map(|i| i.is_some())
+            .then(any_ident())
+            .map(|(instanceof, class_name)| {
+                (false, FromSource::Class(ClassSpec { instanceof, class_name }))
+            });
+        let from_source = from_subquery.or(from_class).map(|(_, fs)| fs);
+
+        ident_ci("SELECT")
+            .ignore_then(ident_ci("DISTINCT").or_not().map(|d| d.is_some()))
+            .then(select_list.clone())
+            .then(retained_set.clone())
+            .then_ignore(ident_ci("FROM"))
+            .then(from_source)
+            .then(any_ident().and_is(reserved_ident().not()).or_not())
+            .then(ident_ci("WHERE").ignore_then(predicate.clone()).or_not())
+            .then(
+                ident_ci("ORDER")
+                    .ignore_then(ident_ci("BY"))
+                    .ignore_then(attr.clone())
+                    .then(
+                        ident_ci("ASC")
+                            .to(SortDir::Asc)
+                            .or(ident_ci("DESC").to(SortDir::Desc))
+                            .or_not()
+                            .map(|d| d.unwrap_or(SortDir::Asc)),
+                    )
+                    .map(|(key, dir)| OrderBy { key, dir })
+                    .or_not(),
+            )
+            .then(
+                ident_ci("LIMIT")
+                    .ignore_then(select! { Token::Int(n) if n >= 0 => n as u64 }.labelled("LIMIT count"))
+                    .or_not(),
+            )
+            .map(
+                |(((((((distinct, select), retained_set), from), alias), where_), order_by), limit)| {
+                    Query {
+                        distinct,
+                        select,
+                        retained_set,
+                        from,
+                        alias,
+                        where_,
+                        order_by,
+                        limit,
+                        union_branches: Vec::new(),
+                    }
+                },
+            )
+    });
 
     // Top level: a base query, then a flat `UNION`-separated tail folded into the
     // head's `union_branches`. Tail branches keep empty `union_branches` (the
@@ -528,7 +547,7 @@ mod tests {
             distinct,
             select,
             retained_set: false,
-            from: ClassSpec { instanceof, class_name: class_name.into() },
+            from: FromSource::Class(ClassSpec { instanceof, class_name: class_name.into() }),
             alias: alias.map(|s| s.into()),
             where_,
             order_by: None,
@@ -928,20 +947,57 @@ mod tests {
     fn union_two_branches_parses() {
         let q = parse("SELECT * FROM java.lang.String UNION SELECT * FROM java.lang.Integer").unwrap();
         assert_eq!(q.union_branches.len(), 1);
-        assert_eq!(q.union_branches[0].from.class_name, "java.lang.Integer");
+        assert_eq!(q.union_branches[0].from.class_name(), "java.lang.Integer");
         assert!(q.union_branches[0].union_branches.is_empty(), "branches must be flat, not nested");
     }
     #[test]
     fn union_three_branches_flat() {
         let q = parse("SELECT * FROM A UNION SELECT * FROM B UNION SELECT * FROM C").unwrap();
         assert_eq!(q.union_branches.len(), 2);
-        assert_eq!(q.union_branches[0].from.class_name, "B");
-        assert_eq!(q.union_branches[1].from.class_name, "C");
+        assert_eq!(q.union_branches[0].from.class_name(), "B");
+        assert_eq!(q.union_branches[1].from.class_name(), "C");
         assert!(q.union_branches.iter().all(|b| b.union_branches.is_empty()));
     }
     #[test]
     fn no_union_leaves_branches_empty() {
         assert!(parse("SELECT * FROM C").unwrap().union_branches.is_empty());
+    }
+
+    #[test]
+    fn from_subquery_parses() {
+        let q = parse("SELECT * FROM (SELECT * FROM java.lang.String) x").unwrap();
+        match &q.from {
+            FromSource::Subquery(inner) => {
+                assert_eq!(inner.from.class_name(), "java.lang.String");
+                assert!(inner.union_branches.is_empty());
+            }
+            other => panic!("expected subquery FROM, got {other:?}"),
+        }
+        assert_eq!(q.alias.as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn from_class_still_parses_after_migration() {
+        let q = parse("SELECT * FROM java.lang.String s").unwrap();
+        assert_eq!(q.from.class_name(), "java.lang.String");
+        assert!(!q.from.instanceof());
+        assert!(q.from.as_subquery().is_none());
+        assert_eq!(q.alias.as_deref(), Some("s"));
+    }
+
+    #[test]
+    fn from_instanceof_class_sets_flag() {
+        let q = parse("SELECT * FROM INSTANCEOF java.util.List").unwrap();
+        assert!(q.from.instanceof(), "INSTANCEOF flag must survive migration");
+        assert_eq!(q.from.class_name(), "java.util.List");
+    }
+
+    #[test]
+    fn union_inside_subquery_is_rejected() {
+        // UNION is unreachable inside the parenthesized base_query, so the inner
+        // UNION fails to parse rather than silently nesting.
+        let err = parse("SELECT * FROM (SELECT * FROM A UNION SELECT * FROM B) x").unwrap_err();
+        assert!(!err.to_string().is_empty(), "UNION-in-subquery must be a parse error");
     }
 
     #[test]

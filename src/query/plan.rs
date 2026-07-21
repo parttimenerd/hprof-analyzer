@@ -311,7 +311,7 @@ pub trait FieldSchema {
 /// classes the schema can't resolve (validation is best-effort: an unresolvable
 /// class means we can't prove a field is missing, so we let the scan proceed).
 pub fn validate_fields(q: &Query, schema: &dyn FieldSchema) -> Result<(), QueryError> {
-    let class = &q.from.class_name;
+    let class = q.from.class_name();
     if class.contains('*') {
         return Ok(());
     }

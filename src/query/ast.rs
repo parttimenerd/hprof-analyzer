@@ -10,7 +10,7 @@ pub struct Query {
     /// `SELECT ... AS RETAINED SET`: expand each result into its full
     /// dominator-retained object set. `false` for a plain projection.
     pub retained_set: bool,
-    pub from: ClassSpec,
+    pub from: FromSource,
     pub alias: Option<String>,
     pub where_: Option<Predicate>,
     pub order_by: Option<OrderBy>,
@@ -72,6 +72,45 @@ pub struct ClassSpec {
     pub instanceof: bool,
     /// The class name as written, e.g. `java.lang.String` or `com.acme.*`.
     pub class_name: String,
+}
+
+/// A FROM source: either a class pattern or a nested (non-correlated) subquery
+/// whose result set the outer query scans. `Subquery` boxes the inner `Query`
+/// to keep `Query` a fixed size.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FromSource {
+    Class(ClassSpec),
+    Subquery(Box<Query>),
+}
+
+impl FromSource {
+    /// The FROM class pattern as written, or `""` for a subquery source (which
+    /// has no class name of its own — its shape comes from the inner query).
+    pub fn class_name(&self) -> &str {
+        match self {
+            FromSource::Class(c) => &c.class_name,
+            FromSource::Subquery(_) => "",
+        }
+    }
+    /// The class spec for a class FROM, or `None` for a subquery source.
+    pub fn class_spec(&self) -> Option<&ClassSpec> {
+        match self {
+            FromSource::Class(c) => Some(c),
+            FromSource::Subquery(_) => None,
+        }
+    }
+    /// Whether this is `FROM INSTANCEOF C` (subclasses included). `false` for a
+    /// subquery source.
+    pub fn instanceof(&self) -> bool {
+        matches!(self, FromSource::Class(c) if c.instanceof)
+    }
+    /// The inner query for a subquery source, else `None`.
+    pub fn as_subquery(&self) -> Option<&Query> {
+        match self {
+            FromSource::Subquery(q) => Some(q),
+            FromSource::Class(_) => None,
+        }
+    }
 }
 
 /// A WHERE predicate tree.

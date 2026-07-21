@@ -95,7 +95,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     /// consume it. Array class names end in `[]` (e.g. `char[]`,
     /// `java.lang.Object[]`); a wildcard pattern (`*`) may also match them.
     pub fn wants_arrays(&self) -> bool {
-        let from = &self.query.from.class_name;
+        let from = self.query.from.class_name();
         from.ends_with("[]") || from.contains('*')
     }
 
@@ -109,7 +109,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
         self.carry.expect("take_carry on a non-carry executor")
     }
     fn class_matches(&self, class_id: u64) -> bool {
-        let want = &self.query.from.class_name;
+        let want = self.query.from.class_name();
         match self.resolver.class_name(class_id) { None => false, Some(name) => class_name_matches(name, want) }
     }
     /// Strip a leading `<alias>.` from a field reference so `s.count` resolves as
@@ -281,7 +281,7 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
     }
 
     fn visit_array(&mut self, src_idx: usize, class_name: &str, length: u32) {
-        if !class_name_matches(class_name, &self.query.from.class_name) { return; }
+        if !class_name_matches(class_name, self.query.from.class_name()) { return; }
         if !self.array_where_passes(class_name, length) { return; }
         if let Some(carry) = &mut self.carry {
             carry.push_index(src_idx as u32);

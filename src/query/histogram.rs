@@ -23,7 +23,7 @@ pub fn run_histogram(q: &Query, plan: &QueryPlan, classes: &[ClassSummary]) -> Q
     let mut count = 0u64;
     let mut shallow = 0u64;
     for c in classes {
-        if class_name_matches(c.name, &q.from.class_name) {
+        if class_name_matches(c.name, q.from.class_name()) {
             count += c.count;
             shallow += c.shallow_total;
         }
