@@ -86,9 +86,72 @@ pub struct QueryPlan {
     pub carry: CarryLayout,
     pub late_ops: Vec<StageOp>,
     pub limit: Option<u64>,
+    /// Number of projected columns (`[Star]` counts as 1). Used to verify
+    /// UNION branch homogeneity.
+    pub select_arity: usize,
+    /// Planned UNION tail branches (empty for a non-UNION query). Each branch
+    /// plan itself has an empty `union_branches`.
+    pub union_branches: Vec<QueryPlan>,
 }
 
+/// Plan a query, including any homogeneous `UNION` tail. Each branch is planned
+/// independently via [`plan_single`]; the branches must share the head's column
+/// arity, and no branch may use `RETAINED SET` or aggregates (they change the
+/// row shape / arity of a UNION arm).
 pub fn plan_query(q: &Query) -> Result<QueryPlan, QueryError> {
+    let mut head = plan_single(q)?;
+    if q.union_branches.is_empty() {
+        return Ok(head);
+    }
+    if head.select_arity == 0 {
+        // unreachable: select_list requires >= 1 item, but guard defensively.
+        return Err(QueryError("UNION head has no projected columns".into()));
+    }
+    let head_arity = head.select_arity;
+    let mut planned = Vec::with_capacity(q.union_branches.len());
+    // Guard the head first: a UNION head may not use RETAINED SET or aggregates.
+    if q.retained_set {
+        return Err(QueryError("RETAINED SET is not allowed in a UNION branch".into()));
+    }
+    if select_has_aggregate(&q.select) {
+        return Err(QueryError("aggregates are not allowed in a UNION branch".into()));
+    }
+    for (i, branch) in q.union_branches.iter().enumerate() {
+        // Branches parse flat, but clear defensively so plan_single never
+        // recurses into a branch's own (empty) union tail.
+        let mut b = branch.clone();
+        b.union_branches.clear();
+        if b.retained_set {
+            return Err(QueryError("RETAINED SET is not allowed in a UNION branch".into()));
+        }
+        if select_has_aggregate(&b.select) {
+            return Err(QueryError("aggregates are not allowed in a UNION branch".into()));
+        }
+        let bp = plan_single(&b)?;
+        if bp.select_arity != head_arity {
+            return Err(QueryError(format!(
+                "UNION branches must project the same number of columns \
+                 (branch 0 has {head_arity}, branch {} has {})",
+                i + 1,
+                bp.select_arity
+            )));
+        }
+        planned.push(bp);
+    }
+    head.union_branches = planned;
+    Ok(head)
+}
+
+/// True if any projected item is an aggregate (recursively, so `COUNT(SUM(x))`
+/// counts). Used to reject aggregates inside UNION arms.
+fn select_has_aggregate(select: &[SelectItem]) -> bool {
+    select.iter().any(item_is_aggregate)
+}
+fn item_is_aggregate(it: &SelectItem) -> bool {
+    matches!(it, SelectItem::Aggregate { .. })
+}
+
+fn plan_single(q: &Query) -> Result<QueryPlan, QueryError> {
     if q.distinct {
         return Err(QueryError(
             "DISTINCT is deferred and not supported in this version; \
@@ -97,6 +160,7 @@ pub fn plan_query(q: &Query) -> Result<QueryPlan, QueryError> {
         ));
     }
 
+    let select_arity = q.select.len();
     let mut needs = QueryNeeds::default();
     let mut is_aggregate = false;
 
@@ -149,6 +213,8 @@ pub fn plan_query(q: &Query) -> Result<QueryPlan, QueryError> {
             carry: CarryLayout::IndexOnly,
             late_ops: vec![StageOp::RetainedSet { cap: DEFAULT_RETAINED_CAP }],
             limit: q.limit,
+            select_arity,
+            union_branches: Vec::new(),
         });
     }
 
@@ -177,6 +243,8 @@ pub fn plan_query(q: &Query) -> Result<QueryPlan, QueryError> {
             carry: CarryLayout::IndexOnly,
             late_ops: vec![op],
             limit: q.limit,
+            select_arity,
+            union_branches: Vec::new(),
         });
     }
 
@@ -198,6 +266,8 @@ pub fn plan_query(q: &Query) -> Result<QueryPlan, QueryError> {
         carry: CarryLayout::IndexOnly,
         late_ops,
         limit: q.limit,
+        select_arity,
+        union_branches: Vec::new(),
     })
 }
 
@@ -547,6 +617,46 @@ mod tests {
     fn plan_retained_set_with_aggregate_rejected() {
         let err = plan_query(&parse("SELECT count(s) AS RETAINED SET FROM java.lang.String s").unwrap()).unwrap_err();
         assert!(err.to_string().contains("RETAINED SET cannot be combined with aggregate"), "got: {err}");
+    }
+
+    #[test]
+    fn union_arity_mismatch_rejected() {
+        let q = parse("SELECT @objectId FROM java.lang.String UNION SELECT @objectId, @usedHeapSize FROM java.lang.Integer").unwrap();
+        let err = plan_query(&q).unwrap_err();
+        assert!(err.0.contains("UNION branches must project the same number of columns"), "got: {}", err.0);
+        assert!(err.0.contains('1') && err.0.contains('2'), "message names both arities: {}", err.0);
+    }
+    #[test]
+    fn union_retained_set_arm_rejected() {
+        let q = parse("SELECT * FROM java.lang.String UNION SELECT * AS RETAINED SET FROM java.lang.Integer").unwrap();
+        let err = plan_query(&q).unwrap_err();
+        assert!(err.0.contains("RETAINED SET"), "got: {}", err.0);
+    }
+    #[test]
+    fn union_retained_set_head_rejected() {
+        let q = parse("SELECT * AS RETAINED SET FROM java.lang.String UNION SELECT * FROM java.lang.Integer").unwrap();
+        let err = plan_query(&q).unwrap_err();
+        assert!(err.0.contains("RETAINED SET"), "got: {}", err.0);
+    }
+    #[test]
+    fn union_aggregate_arm_rejected() {
+        let q = parse("SELECT * FROM java.lang.String UNION SELECT COUNT(*) FROM java.lang.Integer").unwrap();
+        let err = plan_query(&q).unwrap_err();
+        assert!(err.0.contains("aggregates are not allowed in a UNION"), "got: {}", err.0);
+    }
+    #[test]
+    fn union_two_branches_plans() {
+        let q = parse("SELECT * FROM java.lang.String UNION SELECT * FROM java.lang.Integer").unwrap();
+        let plan = plan_query(&q).unwrap();
+        assert_eq!(plan.union_branches.len(), 1);
+        assert_eq!(plan.select_arity, 1); // Star = arity 1 sentinel (whole-row)
+        assert!(plan.union_branches[0].union_branches.is_empty(), "branch plans stay flat");
+    }
+    #[test]
+    fn non_union_plan_has_empty_branches() {
+        let plan = plan_query(&parse("SELECT @objectId, name FROM C").unwrap()).unwrap();
+        assert!(plan.union_branches.is_empty());
+        assert_eq!(plan.select_arity, 2);
     }
 
     #[test]
