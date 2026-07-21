@@ -142,6 +142,9 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             Attr::UsedHeapSize => self.resolver.shallow_of(src_idx).map(|x| QueryValue::Int(x as i64)).unwrap_or(QueryValue::Null),
             // filled cross-phase (stage runner) — retained size is unknown during the pass2 scan.
             Attr::RetainedHeapSize => QueryValue::Null,
+            // dominator-tree attrs are cross-phase: the dominator tree exists only
+            // post-scan, so these are filled by the stage runner, not here.
+            Attr::Dominators(_) | Attr::DominatorOf(_) => QueryValue::Null,
             Attr::ClassOf | Attr::DisplayName => QueryValue::Str(self.resolver.class_name(class_id).unwrap_or("?").to_string()),
             Attr::Length => QueryValue::Null,
             Attr::Field(name) => self.decode_field(class_id, name, blob),
@@ -171,6 +174,8 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             Attr::UsedHeapSize => self.resolver.shallow_of(src_idx).map(|x| QueryValue::Int(x as i64)).unwrap_or(QueryValue::Null),
             // filled cross-phase (stage runner) — retained size is unknown during the pass2 scan.
             Attr::RetainedHeapSize => QueryValue::Null,
+            // dominator-tree attrs are cross-phase: filled by the stage runner.
+            Attr::Dominators(_) | Attr::DominatorOf(_) => QueryValue::Null,
             Attr::ClassOf | Attr::DisplayName => QueryValue::Str(class_name.to_string()),
             Attr::Length => QueryValue::Int(length as i64),
             // Arrays have no named fields; a field reference resolves to Null.
@@ -360,6 +365,8 @@ fn attr_name(a: &Attr) -> String {
         Attr::DisplayName => "@displayName".into(),
         Attr::Length => "@length".into(),
         Attr::ClassOf => "classof".into(),
+        Attr::Dominators(a) => format!("dominators({a})"),
+        Attr::DominatorOf(a) => format!("dominatorof({a})"),
         Attr::Field(f) => f.clone(),
     }
 }

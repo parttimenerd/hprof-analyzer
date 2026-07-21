@@ -50,6 +50,10 @@ pub enum Attr {
     Length,
     /// `classof(x)` — the runtime class name.
     ClassOf,
+    /// `dominators(alias)` — dominator-tree children of each matched object.
+    Dominators(String),
+    /// `dominatorof(alias)` — immediate dominator (idom) of each matched object.
+    DominatorOf(String),
     /// A bare instance field name, e.g. `count`, `value`.
     Field(String),
 }

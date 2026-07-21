@@ -106,6 +106,30 @@ where
     select! { Token::Ident(s) => s }
 }
 
+/// Parses a `name ( ident )` dominator function form, yielding the single alias
+/// identifier. A missing/malformed argument (e.g. `dominators()`) produces the
+/// actionable `"<name>(x) requires a single alias argument, e.g. <name>(s)"`
+/// error the callers assert on.
+fn dom_fn<'a, I>(name: &'static str) -> impl Parser<'a, I, String, extra::Err<Rich<'a, Token>>> + Clone
+where
+    I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
+{
+    ident_ci(name)
+        .ignore_then(just(Token::LParen))
+        .ignore_then(any_ident().or_not())
+        .then_ignore(just(Token::RParen))
+        .validate(move |arg, e, emitter| match arg {
+            Some(a) => a,
+            None => {
+                emitter.emit(Rich::custom(
+                    e.span(),
+                    format!("{name}(x) requires a single alias argument, e.g. {name}(s)"),
+                ));
+                String::new()
+            }
+        })
+}
+
 fn parser<'a, I>() -> impl Parser<'a, I, Query, extra::Err<Rich<'a, Token>>>
 where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
@@ -128,6 +152,8 @@ where
         .ignore_then(any_ident())
         .then_ignore(just(Token::RParen))
         .map(|_| Attr::ClassOf))
+    .or(dom_fn("dominators").map(Attr::Dominators))
+    .or(dom_fn("dominatorof").map(Attr::DominatorOf))
     .or(any_ident().map(Attr::Field))
     .labelled("attribute");
 
@@ -332,6 +358,26 @@ fn line_col(src: &str, byte_offset: usize) -> (usize, usize) {
     (line, col)
 }
 
+/// Compact single-line message for one chumsky error. Custom (`Rich::custom`)
+/// reasons — e.g. `dominators(x) requires ...` — are surfaced verbatim with a
+/// trailing `at <line>:<col>`; positional errors keep the `unexpected <found>`
+/// form. Shared by [`parse_internal`] and [`parse_or_report`] so custom
+/// diagnostics never get flattened into a generic "unexpected" message.
+fn compact_error(src: &str, e: &Rich<'_, Token>) -> String {
+    let span = *e.span();
+    let (line, col) = line_col(src, span.start);
+    match e.reason() {
+        chumsky::error::RichReason::Custom(msg) => format!("{msg} at {line}:{col}"),
+        _ => {
+            let found = e
+                .found()
+                .map(|t| format!("{t:?}"))
+                .unwrap_or_else(|| "end of input".to_string());
+            format!("unexpected {found} at {line}:{col}")
+        }
+    }
+}
+
 /// Tokenize (logos) → chumsky parse, returning a compact single-line message
 /// `unexpected <found> at <line>:<col>` (or the tokenizer's offset message) on
 /// failure. Backs [`parse`]; [`parse_or_report`] renders errors differently.
@@ -341,15 +387,7 @@ fn parse_internal(src: &str) -> Result<Query, String> {
     let stream = Stream::from_iter(toks).map(eoi, |(t, s): (Token, SimpleSpan)| (t, s));
     parser().parse(stream).into_result().map_err(|errs| {
         errs.iter()
-            .map(|e| {
-                let span = *e.span();
-                let found = e
-                    .found()
-                    .map(|t| format!("{t:?}"))
-                    .unwrap_or_else(|| "end of input".to_string());
-                let (line, col) = line_col(src, span.start);
-                format!("unexpected {found} at {line}:{col}")
-            })
+            .map(|e| compact_error(src, e))
             .collect::<Vec<_>>()
             .join("; ")
     })
@@ -380,11 +418,16 @@ pub fn parse_or_report(src: &str) -> Result<Query, String> {
             let mut buf = Vec::new();
             for e in &errs {
                 let span = *e.span();
-                let found = e
-                    .found()
-                    .map(|t| format!("{t:?}"))
-                    .unwrap_or_else(|| "end of input".to_string());
-                let msg = format!("unexpected {found}");
+                let msg = match e.reason() {
+                    chumsky::error::RichReason::Custom(m) => m.clone(),
+                    _ => {
+                        let found = e
+                            .found()
+                            .map(|t| format!("{t:?}"))
+                            .unwrap_or_else(|| "end of input".to_string());
+                        format!("unexpected {found}")
+                    }
+                };
                 let mut out = Vec::new();
                 Report::build(ReportKind::Error, ("query", span.into_range()))
                     .with_message(&msg)
@@ -845,11 +888,51 @@ mod tests {
     // ---------- targeted unit tests ----------
 
     #[test]
+    fn parse_dominators_attr() {
+        let q = parse("SELECT dominators(s) FROM java.lang.String s").unwrap();
+        assert_eq!(q.select.len(), 1);
+        match &q.select[0] {
+            SelectItem::Attr(Attr::Dominators(v)) => assert_eq!(v, "s"),
+            other => panic!("expected Attr::Dominators, got {other:?}"),
+        }
+    }
+    #[test]
+    fn parse_dominatorof_attr() {
+        let q = parse("SELECT dominatorof(s) FROM java.lang.String s").unwrap();
+        match &q.select[0] {
+            SelectItem::Attr(Attr::DominatorOf(v)) => assert_eq!(v, "s"),
+            other => panic!("expected Attr::DominatorOf, got {other:?}"),
+        }
+    }
+    #[test]
+    fn parse_dominators_requires_arg() {
+        let err = parse("SELECT dominators() FROM java.lang.String s").unwrap_err();
+        assert!(err.to_string().contains("dominators(x) requires"), "unexpected error: {err}");
+    }
+    #[test]
+    fn parse_dominatorof_requires_arg() {
+        let err = parse("SELECT dominatorof() FROM java.lang.String s").unwrap_err();
+        assert!(err.to_string().contains("dominatorof(x) requires"), "unexpected error: {err}");
+    }
+    #[test]
+    fn dominators_in_select_list_with_other_items() {
+        // A dominator attr coexists with a plain attr in the projection list.
+        let q = parse("SELECT @objectId, dominators(s) FROM java.lang.String s").unwrap();
+        assert_eq!(q.select.len(), 2);
+        assert!(matches!(&q.select[1], SelectItem::Attr(Attr::Dominators(v)) if v == "s"));
+    }
+    #[test]
+    fn dominatorof_report_error_names_function() {
+        // The caret-rendered report also carries the actionable custom message.
+        let rep = parse_or_report("SELECT dominatorof() FROM C").unwrap_err();
+        assert!(rep.contains("dominatorof(x) requires"), "report missing message: {rep}");
+    }
+
+    #[test]
     fn parses_retained_heap_size_attr() {
         let q = parse("SELECT @retainedHeapSize FROM C").unwrap();
         assert_eq!(q.select, vec![SelectItem::Attr(Attr::RetainedHeapSize)]);
     }
-    #[test]
     fn retained_heap_alias_normalizes_to_retained_heap_size() {
         let q = parse("SELECT @retainedHeap FROM C").unwrap();
         assert_eq!(q.select, vec![SelectItem::Attr(Attr::RetainedHeapSize)]);
