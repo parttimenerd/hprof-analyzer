@@ -3,9 +3,44 @@
 //! HistogramExecutor answers aggregate-only queries from per-class stats.
 
 use crate::query::ast::{Attr, CompareOp, Query, SelectItem, Value};
+use crate::query::carry::Carry;
 use crate::query::model::{QueryColumn, QueryResult, QueryValue};
 use crate::query::plan::QueryPlan;
 use crate::query::ObjectVisitor;
+
+/// A cross-phase query whose Phase-1 matches were carried; finalized after
+/// retained sizes exist. `slot` is the query's index in the caller's list so
+/// results reassemble in input order.
+pub struct CrossPhaseEntry {
+    pub slot: usize,
+    pub name: String,
+    pub plan: QueryPlan,
+    pub carry: Carry,
+}
+
+/// The output of Phase 1 for a batch: results finished during the scan plus
+/// cross-phase carries awaiting a late stage, each tagged with its slot.
+#[derive(Default)]
+pub struct QueryExecState {
+    finished: Vec<(usize, QueryResult)>,
+    pending: Vec<CrossPhaseEntry>,
+}
+
+impl QueryExecState {
+    pub fn new() -> Self { Self::default() }
+    pub fn push_finished(&mut self, slot: usize, r: QueryResult) { self.finished.push((slot, r)); }
+    pub fn push_cross_phase(&mut self, slot: usize, name: String, plan: QueryPlan, carry: Carry) {
+        self.pending.push(CrossPhaseEntry { slot, name, plan, carry });
+    }
+    pub fn finished_len(&self) -> usize { self.finished.len() }
+    pub fn pending_len(&self) -> usize { self.pending.len() }
+    pub fn pending(&self) -> &[CrossPhaseEntry] { &self.pending }
+    pub fn has_pending(&self) -> bool { !self.pending.is_empty() }
+    /// Consume into (finished slots, pending entries) for the stage runner.
+    pub fn into_parts(self) -> (Vec<(usize, QueryResult)>, Vec<CrossPhaseEntry>) {
+        (self.finished, self.pending)
+    }
+}
 
 /// Abstracts class-name resolution + field-offset lookup so the executor can be
 /// unit-tested against a fake and run against the real pass2 schema in prod.
@@ -264,6 +299,26 @@ mod tests {
         TestSchema {
             names: pairs.iter().map(|(id, n)| (*id, n.to_string())).collect(),
         }
+    }
+
+    #[test]
+    fn exec_state_separates_finished_and_pending() {
+        use crate::query::plan::Phase;
+        let mut st = QueryExecState::new();
+        st.push_finished(0, QueryResult {
+            name: "q1".into(), oql: String::new(), columns: vec![],
+            rows: vec![], row_count: 0, truncated: false, error: None,
+        });
+        let q = crate::query::parse::parse("SELECT @retainedHeapSize FROM C").unwrap();
+        let plan = crate::query::plan::plan_query(&q).unwrap();
+        assert_eq!(plan.finalize_at, Phase::P3);
+        let mut carry = crate::query::carry::Carry::index_only(100);
+        carry.push_index(42);
+        st.push_cross_phase(1, "q2".to_string(), plan.clone(), carry);
+        assert_eq!(st.finished_len(), 1);
+        assert_eq!(st.pending_len(), 1);
+        assert_eq!(st.pending()[0].slot, 1);
+        assert_eq!(st.pending()[0].carry.indices(), vec![42]);
     }
 
     #[test]
