@@ -14,12 +14,26 @@ pub struct QueryNeeds {
     pub instance_scalar: bool,
     pub instance_string: bool,
     pub runtime_type: bool,
+    pub retained: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StageKind {
     HistogramOnly,
     SingleScan,
+}
+
+/// Which pipeline phase finalizes a query's rows. See canonical vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Phase { P1, P2, P3 }
+
+/// A late-phase operation applied when resuming a cross-phase query.
+/// (Extended with more variants in later phases.)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StageOp {
+    /// Join each carried dense index against `retained`, then apply retained
+    /// WHERE terms, ORDER BY, and LIMIT.
+    JoinRetained,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +54,8 @@ pub struct QueryPlan {
     pub kind: StageKind,
     pub needs: QueryNeeds,
     pub where_terms: Vec<Conjunct>,
+    pub finalize_at: Phase,
+    pub late_ops: Vec<StageOp>,
     pub limit: Option<u64>,
 }
 
@@ -84,7 +100,39 @@ pub fn plan_query(q: &Query) -> Result<QueryPlan, QueryError> {
         StageKind::SingleScan
     };
 
-    Ok(QueryPlan { kind, needs, where_terms, limit: q.limit })
+    let cross_phase = uses_retained(q);
+    if cross_phase {
+        needs.retained = true;
+    }
+    let (finalize_at, late_ops) = if cross_phase {
+        (Phase::P3, vec![StageOp::JoinRetained])
+    } else {
+        (Phase::P1, Vec::new())
+    };
+
+    Ok(QueryPlan { kind, needs, where_terms, finalize_at, late_ops, limit: q.limit })
+}
+
+fn uses_retained(q: &Query) -> bool {
+    let in_select = q.select.iter().any(select_uses_retained);
+    let in_where = q.where_.as_ref().map(pred_uses_retained).unwrap_or(false);
+    let in_order = matches!(&q.order_by, Some(ob) if ob.key == Attr::RetainedHeapSize);
+    in_select || in_where || in_order
+}
+fn select_uses_retained(it: &SelectItem) -> bool {
+    match it {
+        SelectItem::Attr(Attr::RetainedHeapSize) => true,
+        SelectItem::Aggregate { arg, .. } => select_uses_retained(arg),
+        _ => false,
+    }
+}
+fn pred_uses_retained(p: &Predicate) -> bool {
+    match p {
+        Predicate::And(a, b) | Predicate::Or(a, b) => pred_uses_retained(a) || pred_uses_retained(b),
+        Predicate::Not(a) => pred_uses_retained(a),
+        Predicate::Compare { lhs: Attr::RetainedHeapSize, .. } => true,
+        _ => false,
+    }
 }
 
 /// Schema lookup used for plan-time field validation. Implemented by the live
@@ -268,10 +316,12 @@ impl QueryPlan {
         if self.needs.instance_scalar { armed.push("instance_scalar"); }
         if self.needs.instance_string { armed.push("instance_string"); }
         if self.needs.runtime_type { armed.push("runtime_type"); }
+        if self.needs.retained { armed.push("retained"); }
         s.push_str(&format!(
             "needs (armed): {}\n",
             if armed.is_empty() { "none".into() } else { armed.join(", ") }
         ));
+        s.push_str(&format!("finalize: {:?}\n", self.finalize_at));
         if let Some(n) = self.limit {
             s.push_str(&format!("limit: {n}\n"));
         }
@@ -318,6 +368,34 @@ mod tests {
     #[test]
     fn retained_heap_size_now_parses() {
         assert!(parse("SELECT @retainedHeapSize FROM C").is_ok());
+    }
+
+    #[test]
+    fn retained_in_select_sets_retained_need_and_p3_finalize() {
+        let plan = plan_query(&parse("SELECT @retainedHeapSize FROM C").unwrap()).unwrap();
+        assert!(plan.needs.retained, "SELECT @retainedHeapSize must arm the retained need");
+        assert_eq!(plan.finalize_at, Phase::P3);
+        assert_eq!(plan.late_ops, vec![StageOp::JoinRetained]);
+    }
+    #[test]
+    fn retained_in_where_is_cross_phase() {
+        let plan = plan_query(&parse("SELECT @objectId FROM C WHERE @retainedHeapSize > 1024").unwrap()).unwrap();
+        assert!(plan.needs.retained);
+        assert_eq!(plan.finalize_at, Phase::P3);
+    }
+    #[test]
+    fn retained_in_order_by_is_cross_phase() {
+        let plan = plan_query(&parse("SELECT @objectId FROM C ORDER BY @retainedHeapSize DESC").unwrap()).unwrap();
+        assert!(plan.needs.retained);
+        assert_eq!(plan.finalize_at, Phase::P3);
+        assert_eq!(plan.late_ops, vec![StageOp::JoinRetained]);
+    }
+    #[test]
+    fn non_retained_query_finalizes_in_p1() {
+        let plan = plan_query(&parse("SELECT @objectId FROM C WHERE count > 3").unwrap()).unwrap();
+        assert!(!plan.needs.retained);
+        assert_eq!(plan.finalize_at, Phase::P1);
+        assert!(plan.late_ops.is_empty());
     }
 
     #[test]
