@@ -247,8 +247,59 @@ pub struct DuplicateClass {
     pub per_loader: Vec<DuplicateClassLoaderRow>,
 }
 
+/// One boxed-number class row (java.lang.Integer, Long, etc.) surfaced in the
+/// Boxed Numbers section. Data derived from the histogram at report-build time.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct BoxedNumberRow {
+    pub pretty_class: String,
+    pub instances: u64,
+    pub total_shallow: u64,
+    /// Share of total reachable shallow heap, in integer basis points (100 bp = 1%).
+    pub pct_of_heap_bp: u32,
+    /// Average shallow bytes per instance (total_shallow / instances).
+    pub avg_shallow: u64,
+}
+
+/// One row of the Object Header Overhead breakdown: classes where object headers
+/// (12 or 16 bytes each, depending on compressed OOPs) are a significant fraction
+/// of the class's total shallow heap. Data derived from the histogram.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct HeaderOverheadRow {
+    pub pretty_class: String,
+    pub instances: u64,
+    /// Object header size in bytes for this JVM: 12 (compressed OOPs / 32-bit) or 16.
+    pub header_bytes: u8,
+    /// `instances * header_bytes` — total bytes consumed by headers for this class.
+    pub total_header_bytes: u64,
+    /// Header overhead as a share of the class's total shallow heap,
+    /// in integer basis points (100 bp = 1%).
+    pub header_pct_of_shallow_bp: u32,
+    /// Average shallow bytes per instance (class's total shallow / instances).
+    pub avg_shallow: u64,
+}
+
+/// One holder-class row for the "who holds the most boxed-number references" ranking.
+/// Only populated when `--collections` is also enabled (FieldPlan available).
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct BoxedNumberHolder {
+    /// Fully-qualified class name whose instances hold the most references to boxed
+    /// primitive types (Integer, Long, Double, etc.).
+    pub class_name: String,
+    /// Number of object-reference fields pointing at boxed-number instances across all
+    /// live instances of this class.
+    pub boxed_refs: u64,
+}
+
 /// Aggregates for the "System Overview" section.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct SystemOverview {
     pub source_name: String,
     /// Full path the dump was opened from (superset of `source_name`).
@@ -351,10 +402,29 @@ pub struct SystemOverview {
     /// (which lack the field) still deserialize.
     #[serde(default)]
     pub record_census: crate::pass2::RecordCensus,
-    /// Approximate duplicate-String analysis, present only when `--dup-strings`
+    /// Approximate duplicate-String analysis, present only when `--find-duplicates`
     /// was passed; `None` otherwise. Additive; not parity-compared.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duplicate_strings: Option<crate::pass2::DupStrings>,
+    /// Approximate duplicate-primitive-array analysis, present only when
+    /// `--find-duplicates` was passed; `None` otherwise. Additive; not parity-compared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duplicate_prim_arrays: Option<crate::pass2::DupPrimArrays>,
+    /// Boxed-number classes (java.lang.Integer, Long, etc.) found in the histogram,
+    /// sorted by total shallow heap descending. Empty when no boxed types appear.
+    /// Additive; not parity-compared.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub boxed_numbers: Vec<BoxedNumberRow>,
+    /// Per-class object-header overhead: classes where headers account for a large
+    /// fraction of shallow heap or represent a large absolute overhead. Top-30
+    /// sorted by total_header_bytes descending. Additive; not parity-compared.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub header_overhead: Vec<HeaderOverheadRow>,
+    /// Top classes holding the most references to boxed-number objects
+    /// (Integer, Long, etc.). Populated only when `--collections` is on.
+    /// Additive; not parity-compared.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub boxed_number_holders: Vec<BoxedNumberHolder>,
 }
 
 /// One step of a single-suspect accumulation path.
@@ -422,7 +492,9 @@ pub struct MergedPathNode {
 }
 
 /// One leak suspect (single large object or class group).
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct Suspect {
     pub is_single: bool,
     pub pretty_class: String,
@@ -481,14 +553,18 @@ pub struct Suspect {
 }
 
 /// Aggregates for the "Leak Suspects" section.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct LeakSuspects {
     pub total_shallow: u64,
     pub suspects: Vec<Suspect>,
 }
 
 /// One row of "Biggest Objects".
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct ObjRow {
     pub obj_index_1based: usize,
     pub display_class: String,
@@ -504,6 +580,10 @@ pub struct ObjRow {
     #[serde(skip)]
     #[schemars(skip)]
     pub pct: f64,
+    /// Dominant incoming reference (`Class#field`) that holds this object.
+    /// `None` when `--collections` was off or no attributed field points at it.
+    #[serde(default)]
+    pub owner: Option<String>,
 }
 
 /// One row of "Biggest Classes".
@@ -516,7 +596,9 @@ pub struct ClassRow {
 
 /// One node of the pruned package tree (MAT PackageTreeResult parity).
 /// Totals are CUMULATIVE over all top-level dominators in this node's subtree.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct PackageNode {
     /// This segment's name (e.g. "util"); the root node's name is "".
     pub name: String,
@@ -531,7 +613,9 @@ pub struct PackageNode {
 }
 
 /// Aggregates for the "Top Consumers" section.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct TopConsumers {
     pub biggest_objects: Vec<ObjRow>,
     pub biggest_classes: Vec<ClassRow>,
@@ -548,7 +632,9 @@ pub struct TopConsumers {
 /// A single thread's call stack, resolved from HPROF STACK_TRACE/STACK_FRAME
 /// records. Identifies the thread by its heap object (index + class) since the
 /// thread NAME requires decoding java.lang.Thread fields (a later step).
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct ThreadInfo {
     /// HPROF thread serial (stable within the dump).
     pub thread_serial: u32,
@@ -639,7 +725,9 @@ pub struct ThreadLocalObj {
 }
 
 /// Aggregates for the "Threads" section: one entry per resolved stack trace.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct ThreadOverview {
     /// Threads with call stacks, sorted by thread serial for determinism.
     pub threads: Vec<ThreadInfo>,
@@ -808,6 +896,10 @@ pub struct ConstantArrayRow {
     pub value: i64,
     pub objects: u64,
     pub shallow: u64,
+    /// Dominant incoming reference (`Class#field`) across the group's member
+    /// arrays. `None` when `--collections` was off or no field holds them.
+    #[serde(default)]
+    pub owner: Option<String>,
 }
 
 /// Primitive arrays whose every element is the same constant. `truncated` =
@@ -1122,9 +1214,44 @@ pub struct LeakIndicators {
     pub direct_byte_buffer_capacity_sum: u64,
 }
 
+/// Severity of a fired OOM-triage signal. Currently carried for future HTML
+/// styling (colour per severity); rule order, not severity, drives ordering.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum TriageSeverity {
+    Info,
+    Warning,
+    Critical,
+}
+
+/// One fired OOM-triage signal. Rules evaluate the finished `Report` once (see
+/// `triage.rs`) and emit these; both the Markdown and HTML renderers are dumb
+/// formatters over `Report.triage`, so rule logic lives in exactly one place.
+///
+/// `detail` may contain `` `code spans` `` in backticks: Markdown keeps them
+/// verbatim, HTML splits them into `<code>` elements.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct TriageSignal {
+    /// Stable slug identifying the rule, e.g. `"off-heap"`.
+    pub id: String,
+    pub severity: TriageSeverity,
+    /// Bold label, e.g. `"Off-heap (DirectByteBuffer)"`.
+    pub title: String,
+    /// One-sentence explanation; may contain backtick code spans.
+    pub detail: String,
+    /// Target section id to link to, e.g. `"leak-indicators"`. `None` = no link.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<String>,
+    /// Link text for `anchor`, e.g. `"Leak Indicators"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor_label: Option<String>,
+}
+
 /// Schema version for the machine-readable JSON output. Bump on any
 /// breaking change to the `Report` shape; the JSON always carries this.
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 6;
 
 /// One allocation site: a distinct HPROF stack-trace serial, its resolved frame
 /// lines, and the aggregate footprint of the objects allocated there.
@@ -1197,4 +1324,9 @@ pub struct Report {
     /// round-trip with older JSON.
     #[serde(default)]
     pub leak_indicators: LeakIndicators,
+    /// Fired OOM-triage signals, evaluated once over the finished report by the
+    /// rule framework in `triage.rs`. Order is the registry order (render order).
+    /// `#[serde(default)]` keeps pre-v4 JSON (which lacks the field) loadable.
+    #[serde(default)]
+    pub triage: Vec<TriageSignal>,
 }

@@ -1,4 +1,5 @@
 import React from "react";
+import { hierarchy, treemap, treemapSquarify } from "d3-hierarchy";
 import type {
   DepthBucket,
   GcRootTypeRow,
@@ -435,6 +436,127 @@ export function TreemapBar({ root, onSelect }: { root: PackageNode; onSelect: (i
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+// ── Retained-Heap Treemap ────────────────────────────────────────────────────
+// Squarified treemap of the package tree from report.top.biggest_packages.
+// Uses d3-hierarchy for layout; renders with absolute-positioned divs (no SVG).
+const TREEMAP_W = 700;
+const TREEMAP_H = 420;
+
+export function RetainedTreemap({ root }: { root: PackageNode }) {
+  const [tooltip, setTooltip] = React.useState<{
+    name: string;
+    retained: number;
+    x: number;
+    y: number;
+  } | null>(null);
+
+  const nodes = React.useMemo(() => {
+    const h = hierarchy<PackageNode>(root, (d) => d.children)
+      .sum((d) => (d.children && d.children.length > 0 ? 0 : d.retained_heap))
+      .sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
+
+    const layout = treemap<PackageNode>()
+      .tile(treemapSquarify)
+      .size([TREEMAP_W, TREEMAP_H])
+      .paddingOuter(2)
+      .paddingInner(1);
+
+    layout(h);
+    return h.leaves();
+  }, [root]);
+
+  // Assign colors by top-level package (depth-1 ancestor).
+  const topLevelNames = React.useMemo(() => {
+    const seen = new Map<string, number>();
+    for (const leaf of nodes) {
+      const topName = leaf.ancestors().slice(-2)[0]?.data.name ?? leaf.data.name;
+      if (!seen.has(topName)) seen.set(topName, seen.size);
+    }
+    return seen;
+  }, [nodes]);
+
+  const totalRetained = root.retained_heap || 1;
+
+  return (
+    <div style={{ position: "relative", width: TREEMAP_W, height: TREEMAP_H, overflow: "hidden" }}>
+      {nodes.map((leaf, i) => {
+        const x0 = (leaf as any).x0 as number;
+        const y0 = (leaf as any).y0 as number;
+        const x1 = (leaf as any).x1 as number;
+        const y1 = (leaf as any).y1 as number;
+        const w = x1 - x0;
+        const h = y1 - y0;
+        if (w < 1 || h < 1) return null;
+        const topName = leaf.ancestors().slice(-2)[0]?.data.name ?? leaf.data.name;
+        const colorIdx = topLevelNames.get(topName) ?? 0;
+        const leafColor = PALETTE[colorIdx % PALETTE.length];
+        const label = leaf.data.name;
+        const retained = leaf.data.retained_heap;
+        return (
+          <div
+            key={i}
+            title={`${label}: ${formatBytes(retained)} (${((retained / totalRetained) * 100).toFixed(1)}%)`}
+            onMouseEnter={(e) => {
+              const rect = (e.currentTarget.closest("[data-treemap]") as HTMLElement | null)?.getBoundingClientRect();
+              setTooltip({ name: label, retained, x: x0 + w / 2, y: y0 });
+            }}
+            onMouseLeave={() => setTooltip(null)}
+            style={{
+              position: "absolute",
+              left: x0,
+              top: y0,
+              width: w,
+              height: h,
+              background: leafColor,
+              opacity: 0.82,
+              boxSizing: "border-box",
+              overflow: "hidden",
+              cursor: "default",
+            }}
+          >
+            {w > 40 && h > 20 && (
+              <span
+                style={{
+                  display: "block",
+                  padding: "2px 3px",
+                  fontSize: Math.min(11, w / 8),
+                  color: "#fff",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                {label}
+              </span>
+            )}
+          </div>
+        );
+      })}
+      {tooltip && (
+        <div
+          style={{
+            position: "absolute",
+            left: Math.min(tooltip.x, TREEMAP_W - 160),
+            top: Math.max(0, tooltip.y - 36),
+            background: "rgba(0,0,0,0.8)",
+            color: "#fff",
+            padding: "4px 8px",
+            borderRadius: 4,
+            fontSize: 12,
+            pointerEvents: "none",
+            whiteSpace: "nowrap",
+            zIndex: 10,
+          }}
+        >
+          <strong>{tooltip.name}</strong>
+          <br />
+          {formatBytes(tooltip.retained)} ({((tooltip.retained / totalRetained) * 100).toFixed(1)}%)
+        </div>
+      )}
     </div>
   );
 }

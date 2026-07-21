@@ -67,9 +67,8 @@ pub struct AnalyzeOptions {
     pub dominator_tree_max_depth: usize,
     pub leak_children_cap: usize,
     pub top_consumers: usize,
-    pub dup_strings: bool,
+    pub find_duplicates: bool,
     pub collections: bool,
-    pub unreachable_retained: bool,
     pub collection_config: Option<std::path::PathBuf>,
     pub(crate) coll_descs: Vec<crate::pass2::CollDesc>,
 }
@@ -155,23 +154,18 @@ struct Cli {
     #[arg(long, value_enum, default_value_t = ProgressWhen::Auto)]
     progress: ProgressWhen,
 
-    /// Compute an approximate duplicate-`java.lang.String` report (opt-in).
-    /// Decodes every String's backing array, hashes the value to 64 bits and
-    /// counts collisions — never retains the strings, so RSS stays bounded.
-    /// Adds two extra heap-file scans; off by default. Analyze-only.
+    /// Compute approximate duplicate-object analysis: finds content-identical
+    /// `java.lang.String` values and content-identical primitive arrays
+    /// (byte[], int[], etc.), then reports wasted bytes and top offenders.
+    /// Hashes content to 64 bits — never retains the raw data, so RSS stays
+    /// bounded. Adds a few extra heap-file scans; off by default. Analyze-only.
     #[arg(long)]
-    dup_strings: bool,
+    find_duplicates: bool,
 
     /// Compute container attribution by holder Class#field (opt-in; adds
     /// ~300MB peak RSS). Analyze-only.
     #[arg(long)]
     collections: bool,
-
-    /// Compute retained size within the unreachable-object forest (opt-in;
-    /// adds ~`n * 4` bytes peak RSS where n is the total object count — up to
-    /// several GB on large dumps). Analyze-only.
-    #[arg(long)]
-    unreachable_retained: bool,
 
     /// Path to a TOML file defining custom collection handlers.
     /// Auto-discovers .hprof-analyzer.toml (CWD) or $HOME/.config/hprof-analyzer/collections.toml.
@@ -295,9 +289,8 @@ impl DetailLevel {
             dominator_tree_max_depth: dd,
             leak_children_cap: lc,
             top_consumers: tc,
-            dup_strings: false,
+            find_duplicates: false,
             collections: false,
-            unreachable_retained: false,
             collection_config: None,
             coll_descs: Vec::new(),
         }
@@ -457,9 +450,8 @@ fn run_default(cli: Cli) {
         let fmt = resolve_format(cli.format, cli.output.as_deref());
         let opts = cli.detail.options();
         let opts = AnalyzeOptions {
-            dup_strings: cli.dup_strings,
+            find_duplicates: cli.find_duplicates,
             collections: cli.collections,
-            unreachable_retained: cli.unreachable_retained,
             collection_config: cli.collection_config.clone(),
             coll_descs: crate::collection_config::load_collection_descs(
                 cli.collection_config.as_deref(),
@@ -485,21 +477,15 @@ fn run_default(cli: Cli) {
                   re-run on the .hprof dump to include it",
             );
         }
-        if cli.unreachable_retained {
-            fail(
-                "--unreachable-retained has no effect when re-rendering a saved report; \
-                  re-run on the .hprof dump to include it",
-            );
-        }
         if cli.collection_config.is_some() {
             fail(
                 "--collection-config has no effect when re-rendering a saved report; \
                   re-run on the .hprof dump to use it",
             );
         }
-        if cli.dup_strings {
+        if cli.find_duplicates {
             fail(
-                "--dup-strings has no effect when re-rendering a saved report; \
+                "--find-duplicates has no effect when re-rendering a saved report; \
                   re-run on the .hprof dump to include it",
             );
         }
@@ -812,11 +798,10 @@ fn run(
     // unreachable subgraph here, run a self-contained dominator + retained pass
     // on it, and keep only a bounded per-class aggregate on `g` for the report
     // phase. shallow/class_idx are streamed out of their compressed blobs (never
-    // re-inflated dense) so this adds no large array to the rpo/inbound peak.
-    //
-    // Gated behind --unreachable-retained because `dense: Vec<u32>` allocates
-    // n * 4 bytes (all objects), adding several GB on large dumps.
-    if opts.unreachable_retained {
+    // re-inflated dense), and the node→dense-id map is a binary search over the
+    // sorted unreachable-id list (no n-sized array), so this adds no allocation
+    // proportional to the whole heap — it is always on.
+    {
         let t = Instant::now();
         progress::phase("retained size (unreachable forest)");
         g.unreachable_retained = unreachable_retained::compute_unreachable_retained(

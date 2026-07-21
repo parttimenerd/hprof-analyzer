@@ -635,9 +635,13 @@ mod tests {
                 duplicate_classes: vec![],
                 record_census: Default::default(),
                 duplicate_strings: None,
+                duplicate_prim_arrays: None,
                 heap_fragmentation_ratio: 0.0,
                 top_class_concentration_bp: 0,
                 gc_roots_retained_by_type: vec![],
+                boxed_numbers: vec![],
+                header_overhead: vec![],
+                boxed_number_holders: vec![],
             },
             leaks: LeakSuspects {
                 total_shallow,
@@ -668,6 +672,7 @@ mod tests {
             biggest_collections: None,
             collection_contents: None,
             leak_indicators: Default::default(),
+            triage: Vec::new(),
         }
     }
 

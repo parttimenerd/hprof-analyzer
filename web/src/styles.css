@@ -183,6 +183,55 @@ td:hover .copy-btn { visibility: visible; }
   body { background: #fff; color: #000; }
 }
 
+/* Responsive tables: make every table scroll horizontally rather than overflow */
+/* display:block + overflow-x:auto is the only CSS-only approach that works on <table> */
+section table, .thread-overview-detail table, .thread-locals-detail table,
+details > table, .sysprops table {
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+}
+/* tfoot/thead/tbody stay as table components inside the block table */
+section table thead, section table tbody, section table tfoot,
+.thread-overview-detail table thead, .thread-overview-detail table tbody, .thread-overview-detail table tfoot,
+details > table thead, details > table tbody, details > table tfoot,
+.thread-locals-detail table thead, .thread-locals-detail table tbody, .thread-locals-detail table tfoot {
+  display: table;
+  width: 100%;
+}
+
+/* Resizable tables must stay as display:table so table-layout:fixed works.
+   Restore display:table and use an outer wrapper for scroll instead.       */
+table.resizable-table {
+  display: table;
+  table-layout: fixed;
+  overflow-x: visible;
+}
+.resizable-table-wrap {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+/* Resizable-table column resize handle */
+.col-resize-handle {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  cursor: col-resize;
+  user-select: none;
+  z-index: 1;
+}
+.col-resize-handle:hover, .col-resize-handle.dragging {
+  background: var(--accent);
+  opacity: 0.5;
+}
+th.resizable {
+  position: relative;
+  overflow: hidden;
+}
+
 /* Mobile: single-column grids, tighter padding, scrollable wide tables. */
 @media (max-width: 640px) {
   .app { padding: 1rem 0.75rem 3rem; }

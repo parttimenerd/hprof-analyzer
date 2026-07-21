@@ -77,7 +77,7 @@ pub struct RecordCensus {
 /// bounded regardless of dump size. Hash collisions merge distinct values (an
 /// accepted approximation). The unit of dedup is the String INSTANCE: two
 /// String instances with the same decoded value count as a duplicate even
-/// though they usually hold separate backing arrays. Opt-in via `--dup-strings`.
+/// though they usually hold separate backing arrays. Opt-in via `--find-duplicates`.
 #[derive(
     Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
 )]
@@ -106,11 +106,11 @@ pub struct DupStrings {
     #[serde(default)]
     pub top_string_holders: Vec<StringHolder>,
     /// Top-N longest distinct String values by decoded byte length, sorted by
-    /// len desc then text asc. Only populated with `--dup-strings`.
+    /// len desc then text asc. Only populated with `--find-duplicates`.
     #[serde(default)]
     pub top_by_length: Vec<DupStringSample>,
     /// Wasted space in char[]/byte[] arrays backing Strings. `None` unless
-    /// `--dup-strings` computed it.
+    /// `--find-duplicates` computed it.
     #[serde(default)]
     pub char_array_waste: Option<CharArrayWaste>,
 }
@@ -380,9 +380,15 @@ pub struct Graph {
     /// carried from pass1's cheap scalar counters. Additive; not parity-compared.
     pub record_census: RecordCensus,
     /// Approximate duplicate-`java.lang.String` analysis. `Some` only when the
-    /// opt-in `--dup-strings` flag is set; `None` otherwise (zero extra work,
+    /// opt-in `--find-duplicates` flag is set; `None` otherwise (zero extra work,
     /// zero RSS on the default path). See [`DupStrings`].
     pub dup_strings: Option<DupStrings>,
+    /// Approximate duplicate-primitive-array analysis. `Some` only when
+    /// `--find-duplicates` was passed; `None` otherwise.
+    pub dup_prim_arrays: Option<super::DupPrimArrays>,
+    /// Top classes holding the most references to boxed-number objects.
+    /// Populated only when `--collections` was passed; empty otherwise.
+    pub boxed_number_holders: Vec<crate::report::BoxedNumberHolder>,
     /// Power-of-two array-length histogram (object vs primitive arrays), folded
     /// during pass2 from `p1.elem_count`/`p1.kind` before those arrays are freed.
     /// Always populated; additive, not parity-compared.

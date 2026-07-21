@@ -164,6 +164,14 @@
       "default": {
         "components": []
       }
+    },
+    "triage": {
+      "description": "Fired OOM-triage signals, evaluated once over the finished report by the\nrule framework in `triage.rs`. Order is the registry order (render order).\n`#[serde(default)]` keeps pre-v4 JSON (which lacks the field) loadable.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/TriageSignal"
+      }
     }
   },
   "required": [
@@ -431,6 +439,64 @@
         "combined",
         "by_kind",
         "truncated"
+      ]
+    },
+    "BoxedNumberHolder": {
+      "description": "One holder-class row for the \"who holds the most boxed-number references\" ranking.\nOnly populated when `--collections` is also enabled (FieldPlan available).",
+      "type": "object",
+      "properties": {
+        "boxed_refs": {
+          "description": "Number of object-reference fields pointing at boxed-number instances across all\nlive instances of this class.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "class_name": {
+          "description": "Fully-qualified class name whose instances hold the most references to boxed\nprimitive types (Integer, Long, Double, etc.).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "class_name",
+        "boxed_refs"
+      ]
+    },
+    "BoxedNumberRow": {
+      "description": "One boxed-number class row (java.lang.Integer, Long, etc.) surfaced in the\nBoxed Numbers section. Data derived from the histogram at report-build time.",
+      "type": "object",
+      "properties": {
+        "avg_shallow": {
+          "description": "Average shallow bytes per instance (total_shallow / instances).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "instances": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "pct_of_heap_bp": {
+          "description": "Share of total reachable shallow heap, in integer basis points (100 bp = 1%).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "pretty_class": {
+          "type": "string"
+        },
+        "total_shallow": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "pretty_class",
+        "instances",
+        "total_shallow",
+        "pct_of_heap_bp",
+        "avg_shallow"
       ]
     },
     "CharArrayWaste": {
@@ -855,6 +921,14 @@
           "format": "uint64",
           "minimum": 0
         },
+        "owner": {
+          "description": "Dominant incoming reference (`Class#field`) across the group's member\narrays. `None` when `--collections` was off or no field holds them.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
         "shallow": {
           "type": "integer",
           "format": "uint64",
@@ -995,6 +1069,83 @@
         "immediate_dominators"
       ]
     },
+    "DupArrayHolder": {
+      "description": "One holder-class row for the \"who holds the most duplicate arrays\" ranking.\nOnly populated when `--collections` is also enabled (FieldPlan available).",
+      "type": "object",
+      "properties": {
+        "array_refs": {
+          "description": "Number of object-reference fields pointing at duplicate arrays across all\ninstances of this class.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "class_name": {
+          "description": "Fully-qualified class name whose instances hold the most references to\nduplicate primitive arrays.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "class_name",
+        "array_refs"
+      ]
+    },
+    "DupPrimArrayRow": {
+      "description": "One element-type row in the duplicate-primitive-array breakdown.",
+      "type": "object",
+      "properties": {
+        "array_class": {
+          "description": "Element type class name, e.g. `\"byte[]\"`, `\"int[]\"`, `\"long[]\"`.",
+          "type": "string"
+        },
+        "duplicated_groups": {
+          "description": "Number of distinct content groups that have at least one duplicate.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "wasted_bytes": {
+          "description": "Total wasted bytes for this element type:\nΣ over duplicated groups of `(count - 1) * shallow`.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "array_class",
+        "duplicated_groups",
+        "wasted_bytes"
+      ]
+    },
+    "DupPrimArrays": {
+      "description": "Approximate duplicate-primitive-array analysis. Top-N per-type breakdown\nsorted by wasted bytes descending.",
+      "type": "object",
+      "properties": {
+        "rows": {
+          "description": "Per-element-type breakdown, sorted by wasted_bytes descending, capped.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DupPrimArrayRow"
+          }
+        },
+        "top_array_holders": {
+          "description": "Top-N classes whose instances hold the most references to duplicate arrays.\nPopulated only when `--collections` is also on (requires a FieldPlan scan).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DupArrayHolder"
+          }
+        },
+        "total_wasted_bytes": {
+          "description": "Total wasted bytes across all element types.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "total_wasted_bytes",
+        "rows"
+      ]
+    },
     "DupStringSample": {
       "description": "One of the most-duplicated String values: its exact text (truncated to\n`MAX_STR_SAMPLE` bytes), how many String instances share the value, the\ndecoded byte length of the value, and the approximate wasted bytes.",
       "type": "object",
@@ -1030,7 +1181,7 @@
       ]
     },
     "DupStrings": {
-      "description": "Approximate duplicate-`java.lang.String` analysis. Each String value is\ndecoded, hashed to a 64-bit value, and only the hash + length + occurrence\ncount is retained — the decoded bytes are dropped immediately, so RSS stays\nbounded regardless of dump size. Hash collisions merge distinct values (an\naccepted approximation). The unit of dedup is the String INSTANCE: two\nString instances with the same decoded value count as a duplicate even\nthough they usually hold separate backing arrays. Opt-in via `--dup-strings`.",
+      "description": "Approximate duplicate-`java.lang.String` analysis. Each String value is\ndecoded, hashed to a 64-bit value, and only the hash + length + occurrence\ncount is retained — the decoded bytes are dropped immediately, so RSS stays\nbounded regardless of dump size. Hash collisions merge distinct values (an\naccepted approximation). The unit of dedup is the String INSTANCE: two\nString instances with the same decoded value count as a duplicate even\nthough they usually hold separate backing arrays. Opt-in via `--find-duplicates`.",
       "type": "object",
       "properties": {
         "approx_wasted_bytes": {
@@ -1040,7 +1191,7 @@
           "minimum": 0
         },
         "char_array_waste": {
-          "description": "Wasted space in char[]/byte[] arrays backing Strings. `None` unless\n`--dup-strings` computed it.",
+          "description": "Wasted space in char[]/byte[] arrays backing Strings. `None` unless\n`--find-duplicates` computed it.",
           "anyOf": [
             {
               "$ref": "#/$defs/CharArrayWaste"
@@ -1082,7 +1233,7 @@
           }
         },
         "top_by_length": {
-          "description": "Top-N longest distinct String values by decoded byte length, sorted by\nlen desc then text asc. Only populated with `--dup-strings`.",
+          "description": "Top-N longest distinct String values by decoded byte length, sorted by\nlen desc then text asc. Only populated with `--find-duplicates`.",
           "type": "array",
           "default": [],
           "items": {
@@ -1442,6 +1593,53 @@
         "count"
       ]
     },
+    "HeaderOverheadRow": {
+      "description": "One row of the Object Header Overhead breakdown: classes where object headers\n(12 or 16 bytes each, depending on compressed OOPs) are a significant fraction\nof the class's total shallow heap. Data derived from the histogram.",
+      "type": "object",
+      "properties": {
+        "avg_shallow": {
+          "description": "Average shallow bytes per instance (class's total shallow / instances).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "header_bytes": {
+          "description": "Object header size in bytes for this JVM: 12 (compressed OOPs / 32-bit) or 16.",
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "header_pct_of_shallow_bp": {
+          "description": "Header overhead as a share of the class's total shallow heap,\nin integer basis points (100 bp = 1%).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "instances": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "pretty_class": {
+          "type": "string"
+        },
+        "total_header_bytes": {
+          "description": "`instances * header_bytes` — total bytes consumed by headers for this class.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "pretty_class",
+        "instances",
+        "header_bytes",
+        "total_header_bytes",
+        "header_pct_of_shallow_bp",
+        "avg_shallow"
+      ]
+    },
     "HeapComposition": {
       "description": "B5: reachable-heap composition split by object kind (instances vs. arrays\nvs. class objects). Rows are in fixed kind order; empty buckets are omitted.",
       "type": "object",
@@ -1771,6 +1969,14 @@
           "type": "integer",
           "format": "uint",
           "minimum": 0
+        },
+        "owner": {
+          "description": "Dominant incoming reference (`Class#field`) that holds this object.\n`None` when `--collections` was off or no attributed field points at it.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         },
         "pct_bp": {
           "description": "Retained share of total reachable shallow heap, in integer basis\npoints (bp = round(retained / total_shallow * 10000)). Deterministic\ninteger for JSON output; the Markdown renderer uses `pct` instead.",
@@ -2449,6 +2655,20 @@
       "description": "Aggregates for the \"System Overview\" section.",
       "type": "object",
       "properties": {
+        "boxed_number_holders": {
+          "description": "Top classes holding the most references to boxed-number objects\n(Integer, Long, etc.). Populated only when `--collections` is on.\nAdditive; not parity-compared.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BoxedNumberHolder"
+          }
+        },
+        "boxed_numbers": {
+          "description": "Boxed-number classes (java.lang.Integer, Long, etc.) found in the histogram,\nsorted by total shallow heap descending. Empty when no boxed types appear.\nAdditive; not parity-compared.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BoxedNumberRow"
+          }
+        },
         "classes_loaded": {
           "type": "integer",
           "format": "uint64",
@@ -2489,8 +2709,19 @@
             "$ref": "#/$defs/DuplicateClass"
           }
         },
+        "duplicate_prim_arrays": {
+          "description": "Approximate duplicate-primitive-array analysis, present only when\n`--find-duplicates` was passed; `None` otherwise. Additive; not parity-compared.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DupPrimArrays"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "duplicate_strings": {
-          "description": "Approximate duplicate-String analysis, present only when `--dup-strings`\nwas passed; `None` otherwise. Additive; not parity-compared.",
+          "description": "Approximate duplicate-String analysis, present only when `--find-duplicates`\nwas passed; `None` otherwise. Additive; not parity-compared.",
           "anyOf": [
             {
               "$ref": "#/$defs/DupStrings"
@@ -2530,6 +2761,13 @@
           "default": [],
           "items": {
             "$ref": "#/$defs/GcRootRetainedRow"
+          }
+        },
+        "header_overhead": {
+          "description": "Per-class object-header overhead: classes where headers account for a large\nfraction of shallow heap or represent a large absolute overhead. Top-30\nsorted by total_header_bytes descending. Additive; not parity-compared.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HeaderOverheadRow"
           }
         },
         "heap_composition": {
@@ -3029,6 +3267,56 @@
         "max",
         "median",
         "total"
+      ]
+    },
+    "TriageSeverity": {
+      "description": "Severity of a fired OOM-triage signal. Currently carried for future HTML\nstyling (colour per severity); rule order, not severity, drives ordering.",
+      "type": "string",
+      "enum": [
+        "info",
+        "warning",
+        "critical"
+      ]
+    },
+    "TriageSignal": {
+      "description": "One fired OOM-triage signal. Rules evaluate the finished `Report` once (see\n`triage.rs`) and emit these; both the Markdown and HTML renderers are dumb\nformatters over `Report.triage`, so rule logic lives in exactly one place.\n\n`detail` may contain `` `code spans` `` in backticks: Markdown keeps them\nverbatim, HTML splits them into `<code>` elements.",
+      "type": "object",
+      "properties": {
+        "anchor": {
+          "description": "Target section id to link to, e.g. `\"leak-indicators\"`. `None` = no link.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "anchor_label": {
+          "description": "Link text for `anchor`, e.g. `\"Leak Indicators\"`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "detail": {
+          "description": "One-sentence explanation; may contain backtick code spans.",
+          "type": "string"
+        },
+        "id": {
+          "description": "Stable slug identifying the rule, e.g. `\"off-heap\"`.",
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/TriageSeverity"
+        },
+        "title": {
+          "description": "Bold label, e.g. `\"Off-heap (DirectByteBuffer)\"`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "severity",
+        "title",
+        "detail"
       ]
     },
     "UnreachableClassRow": {

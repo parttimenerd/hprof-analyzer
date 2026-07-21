@@ -81,7 +81,7 @@ pub fn build_model(
     let fields_by_size = build_fields_by_size(g, &overview);
     let biggest_collections = build_biggest_collections(g);
     let collection_contents = build_collection_contents(g);
-    Report {
+    let mut report = Report {
         schema_version: SCHEMA_VERSION,
         generated,
         overview,
@@ -99,7 +99,11 @@ pub fn build_model(
         biggest_collections,
         collection_contents,
         leak_indicators: build_leak_indicators(g),
-    }
+        triage: Vec::new(),
+    };
+    // Evaluate the OOM-triage rule framework once over the finished report.
+    report.triage = crate::report::evaluate_triage(&report);
+    report
 }
 
 fn is_anonymous_class(name: &str) -> bool {
@@ -1468,7 +1472,10 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
                 shallow_heap: sh[b],
             })
             .collect();
-        HeapComposition { by_kind, prim_array_by_type: vec![] }
+        HeapComposition {
+            by_kind,
+            prim_array_by_type: vec![],
+        }
     };
     // Unreachable-heap composition by kind (mirrors heap_composition; no
     // synthetic class-loader injection — that object is always reachable).
@@ -1493,11 +1500,14 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
                 shallow_heap,
             })
             .collect();
-        prim_array_by_type.sort_by(|a, b| b.shallow_heap.cmp(&a.shallow_heap));
+        prim_array_by_type.sort_by_key(|k| std::cmp::Reverse(k.shallow_heap));
         if prim_array_by_type.len() < 2 {
             prim_array_by_type.clear();
         }
-        HeapComposition { by_kind, prim_array_by_type }
+        HeapComposition {
+            by_kind,
+            prim_array_by_type,
+        }
     };
     // B2: dominator-depth histogram (depth = # idom hops up to vroot; 1 =
     // directly under vroot). The per-depth counts were tallied for free during
@@ -1576,6 +1586,74 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
             },
         })
         .collect();
+
+    // ── Boxed Numbers: filter histogram for Java boxed types ─────────────────
+    const BOXED_TYPES: &[&str] = &[
+        "java.lang.Integer",
+        "java.lang.Long",
+        "java.lang.Double",
+        "java.lang.Boolean",
+        "java.lang.Short",
+        "java.lang.Byte",
+        "java.lang.Character",
+        "java.lang.Float",
+        "java.lang.BigInteger",
+        "java.lang.BigDecimal",
+    ];
+    let boxed_numbers: Vec<crate::report::BoxedNumberRow> = {
+        let mut rows: Vec<crate::report::BoxedNumberRow> = histogram
+            .iter()
+            .filter(|r| BOXED_TYPES.contains(&r.pretty_class.as_str()))
+            .map(|r| crate::report::BoxedNumberRow {
+                pretty_class: r.pretty_class.clone(),
+                instances: r.instances,
+                total_shallow: r.shallow,
+                pct_of_heap_bp: if total_shallow > 0 {
+                    ((r.shallow as f64 / total_shallow as f64) * 10_000.0) as u32
+                } else {
+                    0
+                },
+                avg_shallow: if r.instances > 0 {
+                    r.shallow / r.instances
+                } else {
+                    0
+                },
+            })
+            .collect();
+        rows.sort_unstable_by(|a, b| b.total_shallow.cmp(&a.total_shallow));
+        rows
+    };
+
+    // ── Header Overhead: per-class header cost (12/16 B × instances) ─────────
+    // compressed_oops is computed later from g.ref_size / g.id_size; derive here.
+    let header_bytes: u8 = if g.ref_size < g.id_size { 12 } else { 16 };
+    let header_overhead: Vec<crate::report::HeaderOverheadRow> = {
+        const HEADER_FLOOR_BYTES: u64 = 1024 * 1024; // 1 MiB total header cost
+        const HEADER_PCT_BP_FLOOR: u32 = 3_000; // 30% of shallow
+        let mut rows: Vec<crate::report::HeaderOverheadRow> = histogram
+            .iter()
+            .filter(|r| r.instances > 0 && r.shallow > 0)
+            .filter_map(|r| {
+                let total_header = r.instances * header_bytes as u64;
+                let header_pct_bp = ((total_header as f64 / r.shallow as f64) * 10_000.0) as u32;
+                if header_pct_bp >= HEADER_PCT_BP_FLOOR || total_header >= HEADER_FLOOR_BYTES {
+                    Some(crate::report::HeaderOverheadRow {
+                        pretty_class: r.pretty_class.clone(),
+                        instances: r.instances,
+                        header_bytes,
+                        total_header_bytes: total_header,
+                        header_pct_of_shallow_bp: header_pct_bp,
+                        avg_shallow: r.shallow / r.instances,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+        rows.sort_unstable_by(|a, b| b.total_header_bytes.cmp(&a.total_header_bytes));
+        rows.truncate(30);
+        rows
+    };
 
     // Per-class unreachable-objects histogram: capped, shallow-desc. Only
     // canonical rows (remap[ci] == ci) with unreachable objects are emitted.
@@ -1832,6 +1910,10 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
         duplicate_classes,
         record_census: g.record_census.clone(),
         duplicate_strings: g.dup_strings.clone(),
+        duplicate_prim_arrays: g.dup_prim_arrays.clone(),
+        boxed_numbers,
+        header_overhead,
+        boxed_number_holders: g.boxed_number_holders.clone(),
         heap_fragmentation_ratio,
         top_class_concentration_bp,
         gc_roots_retained_by_type,
@@ -2555,6 +2637,30 @@ fn build_top_consumers(g: &Graph, top_n: usize) -> TopConsumers {
     let size_distribution = build_size_distribution(&sorted_retained);
 
     // Biggest Objects
+    // Owner attribution (Class#field) for the biggest objects, resolved only
+    // under `--collections` (fields_by_size_raw is None otherwise). Build a
+    // reverse map pointee-dense-idx -> Class#field, restricted to the top-N
+    // object indices we're about to emit so it stays small. First writer wins
+    // (raw groups are already deterministically ordered).
+    let biggest_owner: std::collections::HashMap<u32, String> = {
+        use std::collections::{HashMap, HashSet};
+        match g.fields_by_size_raw.as_ref() {
+            Some(raw) => {
+                let targets: HashSet<u32> = sorted_top.iter().take(top_n).copied().collect();
+                let mut m: HashMap<u32, String> = HashMap::new();
+                for fs in raw {
+                    for &p in &fs.pointee_indices {
+                        if targets.contains(&p) {
+                            m.entry(p)
+                                .or_insert_with(|| format!("{}#{}", fs.holder_class, fs.field));
+                        }
+                    }
+                }
+                m
+            }
+            None => std::collections::HashMap::new(),
+        }
+    };
     let biggest_objects: Vec<ObjRow> = sorted_top
         .iter()
         .take(top_n)
@@ -2598,6 +2704,7 @@ fn build_top_consumers(g: &Graph, top_n: usize) -> TopConsumers {
                 retained: g.retained[idx],
                 pct_bp,
                 pct,
+                owner: biggest_owner.get(&i).cloned(),
             }
         })
         .collect();

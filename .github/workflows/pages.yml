@@ -5,6 +5,10 @@ on:
     branches: [main]
     paths:
       - "docs/**"
+      - "web/**"
+      - "src/**"
+      - "tests/fixtures/dump_2_scala-doku.hprof"
+      - "scripts/gen-samples.sh"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -25,6 +29,27 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # build.rs bundles web/ (esbuild) into web/dist/bundle.js that src/html.rs
+      # embeds, so node/npm are required to compile the crate.
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # Regenerate the eight docs/samples/ files from the committed scala-doku
+      # dump so the published gallery always matches the current binary output.
+      - name: Generate sample reports
+        run: ./scripts/gen-samples.sh
+
       - uses: actions/configure-pages@v5
         with:
           enablement: true

@@ -1,6 +1,6 @@
 {
-  "schema_version": 3,
-  "generated": "2026-07-20T16:01:30.154531000Z",
+  "schema_version": 6,
+  "generated": "2026-07-21T09:42:11.288443000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
     "file_path": "tests/fixtures/dump_4_philosophers.hprof",
@@ -175,7 +175,7 @@
     "classloaders_loaded": 5,
     "unreachable_count": 5970,
     "unreachable_shallow": 836392,
-    "unreachable_retained": 0,
+    "unreachable_retained": 836392,
     "unreachable_composition": {
       "by_kind": [
         {
@@ -212,7 +212,569 @@
         }
       ]
     },
-    "unreachable_garbage_roots": [],
+    "unreachable_garbage_roots": [
+      {
+        "pretty_class": "int[]",
+        "retained": 524272,
+        "objects": 1,
+        "children": []
+      },
+      {
+        "pretty_class": "int[]",
+        "retained": 19624,
+        "objects": 1,
+        "children": []
+      },
+      {
+        "pretty_class": "java.lang.ref.SoftReference",
+        "retained": 12240,
+        "objects": 250,
+        "children": [
+          {
+            "pretty_class": "java.lang.Class$ReflectionData",
+            "retained": 12200,
+            "objects": 249,
+            "children": [
+              {
+                "pretty_class": "java.lang.reflect.Method[]",
+                "retained": 12136,
+                "objects": 248,
+                "children": [
+                  {
+                    "pretty_class": "java.lang.reflect.Method",
+                    "retained": 504,
+                    "objects": 6,
+                    "children": [
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 328,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 304,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 48,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 24,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "pretty_class": "java.lang.Class[]",
+                        "retained": 40,
+                        "objects": 1,
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "pretty_class": "java.lang.reflect.Method",
+                    "retained": 360,
+                    "objects": 6,
+                    "children": [
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 176,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 152,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 64,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 40,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "pretty_class": "java.lang.Class[]",
+                        "retained": 32,
+                        "objects": 1,
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "pretty_class": "java.lang.reflect.Method",
+                    "retained": 352,
+                    "objects": 6,
+                    "children": [
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 176,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 152,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 56,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 32,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "pretty_class": "java.lang.Class[]",
+                        "retained": 32,
+                        "objects": 1,
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "pretty_class": "java.lang.reflect.Method",
+                    "retained": 352,
+                    "objects": 6,
+                    "children": [
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 184,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 160,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "pretty_class": "java.lang.Class[]",
+                        "retained": 32,
+                        "objects": 1,
+                        "children": []
+                      },
+                      {
+                        "pretty_class": "java.lang.Class[]",
+                        "retained": 24,
+                        "objects": 1,
+                        "children": []
+                      },
+                      {
+                        "pretty_class": "byte[]",
+                        "retained": 24,
+                        "objects": 1,
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "pretty_class": "java.lang.reflect.Method",
+                    "retained": 320,
+                    "objects": 6,
+                    "children": [
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 144,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 120,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 64,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 40,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "pretty_class": "java.lang.Class[]",
+                        "retained": 24,
+                        "objects": 1,
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "pretty_class": "java.lang.reflect.Method",
+                    "retained": 304,
+                    "objects": 6,
+                    "children": [
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 128,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 104,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 64,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 40,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "pretty_class": "java.lang.Class[]",
+                        "retained": 24,
+                        "objects": 1,
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "pretty_class": "java.lang.reflect.Method",
+                    "retained": 296,
+                    "objects": 6,
+                    "children": [
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 120,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 96,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 64,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 40,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "pretty_class": "java.lang.Class[]",
+                        "retained": 24,
+                        "objects": 1,
+                        "children": []
+                      }
+                    ]
+                  },
+                  {
+                    "pretty_class": "java.lang.reflect.Method",
+                    "retained": 296,
+                    "objects": 6,
+                    "children": [
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 128,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 104,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 56,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 32,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      },
+                      {
+                        "pretty_class": "java.lang.Class[]",
+                        "retained": 24,
+                        "objects": 1,
+                        "children": []
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "pretty_class": "int[]",
+        "retained": 4112,
+        "objects": 1,
+        "children": []
+      },
+      {
+        "pretty_class": "int[]",
+        "retained": 4112,
+        "objects": 1,
+        "children": []
+      },
+      {
+        "pretty_class": "int[]",
+        "retained": 3728,
+        "objects": 1,
+        "children": []
+      },
+      {
+        "pretty_class": "java.lang.ref.SoftReference",
+        "retained": 3272,
+        "objects": 70,
+        "children": [
+          {
+            "pretty_class": "java.lang.Class$ReflectionData",
+            "retained": 3232,
+            "objects": 69,
+            "children": [
+              {
+                "pretty_class": "java.lang.reflect.Field[]",
+                "retained": 3168,
+                "objects": 68,
+                "children": [
+                  {
+                    "pretty_class": "java.lang.reflect.Field",
+                    "retained": 200,
+                    "objects": 4,
+                    "children": [
+                      {
+                        "pretty_class": "jdk.internal.reflect.MethodHandleObjectFieldAccessorImpl",
+                        "retained": 128,
+                        "objects": 3,
+                        "children": [
+                          {
+                            "pretty_class": "java.lang.invoke.DirectMethodHandle$StaticAccessor",
+                            "retained": 96,
+                            "objects": 2,
+                            "children": []
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "pretty_class": "java.lang.reflect.Field",
+                    "retained": 144,
+                    "objects": 3,
+                    "children": [
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 72,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 48,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "pretty_class": "java.lang.reflect.Field",
+                    "retained": 144,
+                    "objects": 3,
+                    "children": [
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 72,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 48,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "pretty_class": "java.lang.reflect.Field",
+                    "retained": 136,
+                    "objects": 3,
+                    "children": [
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 64,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 40,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "pretty_class": "java.lang.reflect.Field",
+                    "retained": 136,
+                    "objects": 3,
+                    "children": [
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 64,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 40,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "pretty_class": "java.lang.reflect.Field",
+                    "retained": 136,
+                    "objects": 3,
+                    "children": [
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 64,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 40,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "pretty_class": "java.lang.reflect.Field",
+                    "retained": 136,
+                    "objects": 3,
+                    "children": [
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 64,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 40,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "pretty_class": "java.lang.reflect.Field",
+                    "retained": 136,
+                    "objects": 3,
+                    "children": [
+                      {
+                        "pretty_class": "java.lang.String",
+                        "retained": 64,
+                        "objects": 2,
+                        "children": [
+                          {
+                            "pretty_class": "byte[]",
+                            "retained": 40,
+                            "objects": 1,
+                            "children": []
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "pretty_class": "int[]",
+        "retained": 3224,
+        "objects": 1,
+        "children": []
+      },
+      {
+        "pretty_class": "int[]",
+        "retained": 2216,
+        "objects": 1,
+        "children": []
+      },
+      {
+        "pretty_class": "int[]",
+        "retained": 2064,
+        "objects": 1,
+        "children": []
+      }
+    ],
     "heap_fragmentation_ratio": 0.06422193050942514,
     "top_class_concentration_bp": 3193,
     "gc_roots_retained_by_type": [
@@ -242,49 +804,49 @@
         "pretty_class": "int[]",
         "objects": 2142,
         "shallow": 679064,
-        "retained": 0
+        "retained": 679064
       },
       {
         "pretty_class": "byte[]",
         "objects": 1437,
         "shallow": 87432,
-        "retained": 0
+        "retained": 87432
       },
       {
         "pretty_class": "java.lang.String",
         "objects": 1429,
         "shallow": 34296,
-        "retained": 0
+        "retained": 121520
       },
       {
         "pretty_class": "java.lang.Object[]",
         "objects": 181,
         "shallow": 7752,
-        "retained": 0
+        "retained": 7752
       },
       {
         "pretty_class": "java.lang.reflect.Method",
         "objects": 80,
         "shallow": 7040,
-        "retained": 0
+        "retained": 15488
       },
       {
         "pretty_class": "java.lang.reflect.Field",
         "objects": 79,
         "shallow": 5688,
-        "retained": 0
+        "retained": 9152
       },
       {
         "pretty_class": "java.lang.Class$ReflectionData",
         "objects": 34,
         "shallow": 2176,
-        "retained": 0
+        "retained": 30512
       },
       {
         "pretty_class": "java.lang.Class[]",
         "objects": 75,
         "shallow": 1960,
-        "retained": 0
+        "retained": 1960
       },
       {
         "pretty_class": "java.lang.Class",
@@ -296,127 +858,127 @@
         "pretty_class": "java.lang.ref.SoftReference",
         "objects": 34,
         "shallow": 1360,
-        "retained": 0
+        "retained": 31872
       },
       {
         "pretty_class": "java.lang.invoke.MemberName",
         "objects": 23,
         "shallow": 920,
-        "retained": 0
+        "retained": 984
       },
       {
         "pretty_class": "java.lang.ClassValue$Entry[]",
         "objects": 6,
         "shallow": 864,
-        "retained": 0
+        "retained": 864
       },
       {
         "pretty_class": "java.lang.reflect.Constructor",
         "objects": 11,
         "shallow": 792,
-        "retained": 0
+        "retained": 2272
       },
       {
         "pretty_class": "java.lang.reflect.Field[]",
         "objects": 14,
         "shallow": 552,
-        "retained": 0
+        "retained": 9704
       },
       {
         "pretty_class": "java.lang.reflect.Method[]",
         "objects": 12,
         "shallow": 536,
-        "retained": 0
+        "retained": 16200
       },
       {
         "pretty_class": "java.util.WeakHashMap$Entry[]",
         "objects": 6,
         "shallow": 480,
-        "retained": 0
+        "retained": 640
       },
       {
         "pretty_class": "java.lang.invoke.DirectMethodHandle$Constructor",
         "objects": 9,
         "shallow": 432,
-        "retained": 0
+        "retained": 1296
       },
       {
         "pretty_class": "java.lang.ClassValue$ClassValueMap",
         "objects": 6,
         "shallow": 384,
-        "retained": 0
+        "retained": 2704
       },
       {
         "pretty_class": "java.lang.reflect.Constructor[]",
         "objects": 11,
         "shallow": 264,
-        "retained": 0
+        "retained": 2360
       },
       {
         "pretty_class": "java.util.HashMap$Node",
         "objects": 7,
         "shallow": 224,
-        "retained": 0
+        "retained": 224
       },
       {
         "pretty_class": "jdk.internal.reflect.DirectConstructorHandleAccessor",
         "objects": 9,
         "shallow": 216,
-        "retained": 0
+        "retained": 1592
       },
       {
         "pretty_class": "java.lang.invoke.ResolvedMethodName",
         "objects": 13,
         "shallow": 208,
-        "retained": 0
+        "retained": 208
       },
       {
         "pretty_class": "java.lang.Thread",
         "objects": 2,
         "shallow": 208,
-        "retained": 0
+        "retained": 520
       },
       {
         "pretty_class": "java.lang.ref.ReferenceQueue",
         "objects": 6,
         "shallow": 192,
-        "retained": 0
+        "retained": 624
       },
       {
         "pretty_class": "java.util.concurrent.locks.ReentrantLock$NonfairSync",
         "objects": 6,
         "shallow": 192,
-        "retained": 0
+        "retained": 192
       },
       {
         "pretty_class": "java.lang.invoke.DirectMethodHandle",
         "objects": 4,
         "shallow": 160,
-        "retained": 0
+        "retained": 384
       },
       {
         "pretty_class": "java.lang.invoke.BoundMethodHandle$Species_L",
         "objects": 4,
         "shallow": 160,
-        "retained": 0
+        "retained": 544
       },
       {
         "pretty_class": "java.util.WeakHashMap$Entry",
         "objects": 4,
         "shallow": 160,
-        "retained": 0
+        "retained": 160
       },
       {
         "pretty_class": "java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject",
         "objects": 6,
         "shallow": 144,
-        "retained": 0
+        "retained": 144
       },
       {
         "pretty_class": "jdk.internal.reflect.DirectMethodHandleAccessor",
         "objects": 4,
         "shallow": 128,
-        "retained": 0
+        "retained": 672
       }
     ],
     "histogram": [
@@ -28656,7 +29218,307 @@
           109
         ]
       ]
-    }
+    },
+    "boxed_numbers": [
+      {
+        "pretty_class": "java.lang.Long",
+        "instances": 256,
+        "total_shallow": 6144,
+        "pct_of_heap_bp": 5,
+        "avg_shallow": 24
+      },
+      {
+        "pretty_class": "java.lang.Integer",
+        "instances": 301,
+        "total_shallow": 4816,
+        "pct_of_heap_bp": 3,
+        "avg_shallow": 16
+      },
+      {
+        "pretty_class": "java.lang.Byte",
+        "instances": 256,
+        "total_shallow": 4096,
+        "pct_of_heap_bp": 3,
+        "avg_shallow": 16
+      },
+      {
+        "pretty_class": "java.lang.Short",
+        "instances": 256,
+        "total_shallow": 4096,
+        "pct_of_heap_bp": 3,
+        "avg_shallow": 16
+      },
+      {
+        "pretty_class": "java.lang.Character",
+        "instances": 128,
+        "total_shallow": 2048,
+        "pct_of_heap_bp": 1,
+        "avg_shallow": 16
+      },
+      {
+        "pretty_class": "java.lang.Boolean",
+        "instances": 2,
+        "total_shallow": 32,
+        "pct_of_heap_bp": 0,
+        "avg_shallow": 16
+      },
+      {
+        "pretty_class": "java.lang.Double",
+        "instances": 1,
+        "total_shallow": 24,
+        "pct_of_heap_bp": 0,
+        "avg_shallow": 24
+      },
+      {
+        "pretty_class": "java.lang.Float",
+        "instances": 1,
+        "total_shallow": 16,
+        "pct_of_heap_bp": 0,
+        "avg_shallow": 16
+      }
+    ],
+    "header_overhead": [
+      {
+        "pretty_class": "java.lang.Object",
+        "instances": 134275,
+        "header_bytes": 12,
+        "total_header_bytes": 1611300,
+        "header_pct_of_shallow_bp": 7500,
+        "avg_shallow": 16
+      },
+      {
+        "pretty_class": "java.lang.String",
+        "instances": 23331,
+        "header_bytes": 12,
+        "total_header_bytes": 279972,
+        "header_pct_of_shallow_bp": 5000,
+        "avg_shallow": 24
+      },
+      {
+        "pretty_class": "java.util.HashMap$Node",
+        "instances": 9876,
+        "header_bytes": 12,
+        "total_header_bytes": 118512,
+        "header_pct_of_shallow_bp": 3750,
+        "avg_shallow": 32
+      },
+      {
+        "pretty_class": "java.util.concurrent.ConcurrentHashMap$Node",
+        "instances": 7160,
+        "header_bytes": 12,
+        "total_header_bytes": 85920,
+        "header_pct_of_shallow_bp": 3750,
+        "avg_shallow": 32
+      },
+      {
+        "pretty_class": "java.util.jar.Attributes",
+        "instances": 5477,
+        "header_bytes": 12,
+        "total_header_bytes": 65724,
+        "header_pct_of_shallow_bp": 7500,
+        "avg_shallow": 16
+      },
+      {
+        "pretty_class": "java.lang.Class",
+        "instances": 2793,
+        "header_bytes": 12,
+        "total_header_bytes": 33516,
+        "header_pct_of_shallow_bp": 9554,
+        "avg_shallow": 12
+      },
+      {
+        "pretty_class": "java.util.LinkedHashMap$Entry",
+        "instances": 1199,
+        "header_bytes": 12,
+        "total_header_bytes": 14388,
+        "header_pct_of_shallow_bp": 3000,
+        "avg_shallow": 40
+      },
+      {
+        "pretty_class": "scala.concurrent.stm.skel.CallbackList",
+        "instances": 774,
+        "header_bytes": 12,
+        "total_header_bytes": 9288,
+        "header_pct_of_shallow_bp": 5000,
+        "avg_shallow": 24
+      },
+      {
+        "pretty_class": "java.lang.invoke.MemberName",
+        "instances": 763,
+        "header_bytes": 12,
+        "total_header_bytes": 9156,
+        "header_pct_of_shallow_bp": 3000,
+        "avg_shallow": 40
+      },
+      {
+        "pretty_class": "jdk.internal.util.WeakReferenceKey",
+        "instances": 669,
+        "header_bytes": 12,
+        "total_header_bytes": 8028,
+        "header_pct_of_shallow_bp": 3750,
+        "avg_shallow": 32
+      },
+      {
+        "pretty_class": "java.lang.invoke.MethodType",
+        "instances": 666,
+        "header_bytes": 12,
+        "total_header_bytes": 7992,
+        "header_pct_of_shallow_bp": 3000,
+        "avg_shallow": 40
+      },
+      {
+        "pretty_class": "java.lang.invoke.ResolvedMethodName",
+        "instances": 578,
+        "header_bytes": 12,
+        "total_header_bytes": 6936,
+        "header_pct_of_shallow_bp": 7500,
+        "avg_shallow": 16
+      },
+      {
+        "pretty_class": "java.lang.Class[]",
+        "instances": 523,
+        "header_bytes": 12,
+        "total_header_bytes": 6276,
+        "header_pct_of_shallow_bp": 4096,
+        "avg_shallow": 29
+      },
+      {
+        "pretty_class": "java.lang.String[]",
+        "instances": 450,
+        "header_bytes": 12,
+        "total_header_bytes": 5400,
+        "header_pct_of_shallow_bp": 3096,
+        "avg_shallow": 38
+      },
+      {
+        "pretty_class": "java.lang.invoke.LambdaForm$Name",
+        "instances": 367,
+        "header_bytes": 12,
+        "total_header_bytes": 4404,
+        "header_pct_of_shallow_bp": 3750,
+        "avg_shallow": 32
+      },
+      {
+        "pretty_class": "java.lang.module.ModuleDescriptor$Exports",
+        "instances": 367,
+        "header_bytes": 12,
+        "total_header_bytes": 4404,
+        "header_pct_of_shallow_bp": 5000,
+        "avg_shallow": 24
+      },
+      {
+        "pretty_class": "jdk.internal.math.FDBigInteger",
+        "instances": 341,
+        "header_bytes": 12,
+        "total_header_bytes": 4092,
+        "header_pct_of_shallow_bp": 3750,
+        "avg_shallow": 32
+      },
+      {
+        "pretty_class": "java.lang.Integer",
+        "instances": 301,
+        "header_bytes": 12,
+        "total_header_bytes": 3612,
+        "header_pct_of_shallow_bp": 7500,
+        "avg_shallow": 16
+      },
+      {
+        "pretty_class": "sun.security.util.KnownOIDs",
+        "instances": 264,
+        "header_bytes": 12,
+        "total_header_bytes": 3168,
+        "header_pct_of_shallow_bp": 3000,
+        "avg_shallow": 40
+      },
+      {
+        "pretty_class": "java.lang.ThreadLocal$ThreadLocalMap$Entry",
+        "instances": 261,
+        "header_bytes": 12,
+        "total_header_bytes": 3132,
+        "header_pct_of_shallow_bp": 3750,
+        "avg_shallow": 32
+      },
+      {
+        "pretty_class": "java.lang.Long",
+        "instances": 256,
+        "header_bytes": 12,
+        "total_header_bytes": 3072,
+        "header_pct_of_shallow_bp": 5000,
+        "avg_shallow": 24
+      },
+      {
+        "pretty_class": "java.lang.Byte",
+        "instances": 256,
+        "header_bytes": 12,
+        "total_header_bytes": 3072,
+        "header_pct_of_shallow_bp": 7500,
+        "avg_shallow": 16
+      },
+      {
+        "pretty_class": "java.lang.Short",
+        "instances": 256,
+        "header_bytes": 12,
+        "total_header_bytes": 3072,
+        "header_pct_of_shallow_bp": 7500,
+        "avg_shallow": 16
+      },
+      {
+        "pretty_class": "java.util.ImmutableCollections$Set12",
+        "instances": 245,
+        "header_bytes": 12,
+        "total_header_bytes": 2940,
+        "header_pct_of_shallow_bp": 5000,
+        "avg_shallow": 24
+      },
+      {
+        "pretty_class": "java.util.HashSet",
+        "instances": 212,
+        "header_bytes": 12,
+        "total_header_bytes": 2544,
+        "header_pct_of_shallow_bp": 7500,
+        "avg_shallow": 16
+      },
+      {
+        "pretty_class": "java.lang.invoke.DirectMethodHandle",
+        "instances": 196,
+        "header_bytes": 12,
+        "total_header_bytes": 2352,
+        "header_pct_of_shallow_bp": 3000,
+        "avg_shallow": 40
+      },
+      {
+        "pretty_class": "jdk.internal.module.ServicesCatalog$ServiceProvider",
+        "instances": 190,
+        "header_bytes": 12,
+        "total_header_bytes": 2280,
+        "header_pct_of_shallow_bp": 5000,
+        "avg_shallow": 24
+      },
+      {
+        "pretty_class": "java.security.AccessControlContext",
+        "instances": 162,
+        "header_bytes": 12,
+        "total_header_bytes": 1944,
+        "header_pct_of_shallow_bp": 3000,
+        "avg_shallow": 40
+      },
+      {
+        "pretty_class": "java.lang.Thread$FieldHolder",
+        "instances": 160,
+        "header_bytes": 12,
+        "total_header_bytes": 1920,
+        "header_pct_of_shallow_bp": 3000,
+        "avg_shallow": 40
+      },
+      {
+        "pretty_class": "java.lang.invoke.MethodTypeForm",
+        "instances": 159,
+        "header_bytes": 12,
+        "total_header_bytes": 1908,
+        "header_pct_of_shallow_bp": 3750,
+        "avg_shallow": 32
+      }
+    ]
   },
   "leaks": {
     "total_shallow": 12187072,
@@ -64086,140 +64948,160 @@
         "display_class": "scala.runtime.LazyVals$",
         "shallow": 32,
         "retained": 2622376,
-        "pct_bp": 2152
+        "pct_bp": 2152,
+        "owner": null
       },
       {
         "obj_index_1based": 39276,
         "display_class": "java.util.jar.JarFile",
         "shallow": 64,
         "retained": 598600,
-        "pct_bp": 491
+        "pct_bp": 491,
+        "owner": null
       },
       {
         "obj_index_1based": 73228,
         "display_class": "java.util.jar.JarFile",
         "shallow": 64,
         "retained": 534584,
-        "pct_bp": 439
+        "pct_bp": 439,
+        "owner": null
       },
       {
         "obj_index_1based": 182024,
         "display_class": "java.lang.Thread",
         "shallow": 104,
         "retained": 309608,
-        "pct_bp": 254
+        "pct_bp": 254,
+        "owner": null
       },
       {
         "obj_index_1based": 182101,
         "display_class": "java.util.zip.ZipFile$Source",
         "shallow": 80,
         "retained": 302304,
-        "pct_bp": 248
+        "pct_bp": 248,
+        "owner": null
       },
       {
         "obj_index_1based": 73266,
         "display_class": "java.util.zip.ZipFile$Source",
         "shallow": 80,
         "retained": 274360,
-        "pct_bp": 225
+        "pct_bp": 225,
+        "owner": null
       },
       {
         "obj_index_1based": 73254,
         "display_class": "java.util.zip.ZipFile$Source",
         "shallow": 80,
         "retained": 266816,
-        "pct_bp": 219
+        "pct_bp": 219,
+        "owner": null
       },
       {
         "obj_index_1based": 32971,
         "display_class": "java.time.zone.ZoneRulesProvider",
         "shallow": 16,
         "retained": 203112,
-        "pct_bp": 167
+        "pct_bp": 167,
+        "owner": null
       },
       {
         "obj_index_1based": 60393,
         "display_class": "java.net.URLClassLoader",
         "shallow": 88,
         "retained": 174528,
-        "pct_bp": 143
+        "pct_bp": 143,
+        "owner": null
       },
       {
         "obj_index_1based": 72629,
         "display_class": "java.util.zip.ZipFile$Source",
         "shallow": 80,
         "retained": 164696,
-        "pct_bp": 135
+        "pct_bp": 135,
+        "owner": null
       },
       {
         "obj_index_1based": 96323,
         "display_class": "org.renaissance.scala.stm.RealityShowPhilosophers$CameraThread",
         "shallow": 120,
         "retained": 159016,
-        "pct_bp": 130
+        "pct_bp": 130,
+        "owner": null
       },
       {
         "obj_index_1based": 235715,
         "display_class": "sun.util.calendar.ZoneInfoFile",
         "shallow": 120,
         "retained": 148840,
-        "pct_bp": 122
+        "pct_bp": 122,
+        "owner": null
       },
       {
         "obj_index_1based": 148338,
         "display_class": "sun.security.util.KnownOIDs",
         "shallow": 1112,
         "retained": 90616,
-        "pct_bp": 74
+        "pct_bp": 74,
+        "owner": null
       },
       {
         "obj_index_1based": 70448,
         "display_class": "java.lang.Object[]",
         "shallow": 9160,
         "retained": 77320,
-        "pct_bp": 63
+        "pct_bp": 63,
+        "owner": null
       },
       {
         "obj_index_1based": 182197,
         "display_class": "java.net.URLClassLoader",
         "shallow": 88,
         "retained": 74800,
-        "pct_bp": 61
+        "pct_bp": 61,
+        "owner": null
       },
       {
         "obj_index_1based": 182182,
         "display_class": "java.util.zip.ZipFile$Source",
         "shallow": 80,
         "retained": 69856,
-        "pct_bp": 57
+        "pct_bp": 57,
+        "owner": null
       },
       {
         "obj_index_1based": 240793,
         "display_class": "jdk.internal.loader.ClassLoaders$AppClassLoader",
         "shallow": 96,
         "retained": 67504,
-        "pct_bp": 55
+        "pct_bp": 55,
+        "owner": null
       },
       {
         "obj_index_1based": 72669,
         "display_class": "scala.concurrent.stm.skel.SimpleRandom$",
         "shallow": 24,
         "retained": 65576,
-        "pct_bp": 54
+        "pct_bp": 54,
+        "owner": null
       },
       {
         "obj_index_1based": 235675,
         "display_class": "sun.util.locale.provider.LocaleProviderAdapter",
         "shallow": 24,
         "retained": 63840,
-        "pct_bp": 52
+        "pct_bp": 52,
+        "owner": null
       },
       {
         "obj_index_1based": 151928,
         "display_class": "sun.security.provider.Sun",
         "shallow": 104,
         "retained": 54968,
-        "pct_bp": 45
+        "pct_bp": 45,
+        "owner": null
       }
     ],
     "biggest_classes": [
@@ -89176,448 +90058,512 @@
           "length": 131064,
           "value": 0,
           "objects": 1,
-          "shallow": 524272
+          "shallow": 524272,
+          "owner": null
         },
         {
           "array_class": "int[]",
           "length": 4902,
           "value": 0,
           "objects": 1,
-          "shallow": 19624
+          "shallow": 19624,
+          "owner": null
         },
         {
           "array_class": "char[]",
           "length": 8192,
           "value": 0,
           "objects": 1,
-          "shallow": 16400
+          "shallow": 16400,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 8192,
           "value": 0,
           "objects": 1,
-          "shallow": 8208
+          "shallow": 8208,
+          "owner": null
         },
         {
           "array_class": "int[]",
           "length": 802,
           "value": 0,
           "objects": 1,
-          "shallow": 3224
+          "shallow": 3224,
+          "owner": null
         },
         {
           "array_class": "int[]",
           "length": 770,
           "value": 0,
           "objects": 1,
-          "shallow": 3096
+          "shallow": 3096,
+          "owner": null
         },
         {
           "array_class": "int[]",
           "length": 550,
           "value": 0,
           "objects": 1,
-          "shallow": 2216
+          "shallow": 2216,
+          "owner": null
         },
         {
           "array_class": "long[]",
           "length": 32,
           "value": 0,
           "objects": 4,
-          "shallow": 1088
+          "shallow": 1088,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 2,
           "value": 49,
           "objects": 31,
-          "shallow": 744
+          "shallow": 744,
+          "owner": null
         },
         {
           "array_class": "int[]",
           "length": 32,
           "value": 0,
           "objects": 4,
-          "shallow": 576
+          "shallow": 576,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 256,
           "value": 0,
           "objects": 2,
-          "shallow": 544
+          "shallow": 544,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 512,
           "value": 0,
           "objects": 1,
-          "shallow": 528
+          "shallow": 528,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 8,
           "value": 0,
           "objects": 19,
-          "shallow": 456
+          "shallow": 456,
+          "owner": null
         },
         {
           "array_class": "int[]",
           "length": 2,
           "value": 0,
           "objects": 15,
-          "shallow": 360
+          "shallow": 360,
+          "owner": null
         },
         {
           "array_class": "short[]",
           "length": 32,
           "value": 0,
           "objects": 4,
-          "shallow": 320
+          "shallow": 320,
+          "owner": null
         },
         {
           "array_class": "int[]",
           "length": 74,
           "value": 0,
           "objects": 1,
-          "shallow": 312
+          "shallow": 312,
+          "owner": null
         },
         {
           "array_class": "int[]",
           "length": 4,
           "value": 0,
           "objects": 9,
-          "shallow": 288
+          "shallow": 288,
+          "owner": null
         },
         {
           "array_class": "int[]",
           "length": 10,
           "value": 0,
           "objects": 4,
-          "shallow": 224
+          "shallow": 224,
+          "owner": null
         },
         {
           "array_class": "int[]",
           "length": 48,
           "value": 0,
           "objects": 1,
-          "shallow": 208
+          "shallow": 208,
+          "owner": null
         },
         {
           "array_class": "char[]",
           "length": 26,
           "value": 0,
           "objects": 2,
-          "shallow": 144
+          "shallow": 144,
+          "owner": null
         },
         {
           "array_class": "int[]",
           "length": 6,
           "value": 0,
           "objects": 3,
-          "shallow": 120
+          "shallow": 120,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 63,
           "value": 48,
           "objects": 1,
-          "shallow": 80
+          "shallow": 80,
+          "owner": null
         },
         {
           "array_class": "int[]",
           "length": 16,
           "value": -1881356936,
           "objects": 1,
-          "shallow": 80
+          "shallow": 80,
+          "owner": null
         },
         {
           "array_class": "int[]",
           "length": 16,
           "value": -1881356440,
           "objects": 1,
-          "shallow": 80
+          "shallow": 80,
+          "owner": null
         },
         {
           "array_class": "int[]",
           "length": 16,
           "value": -1881355944,
           "objects": 1,
-          "shallow": 80
+          "shallow": 80,
+          "owner": null
         },
         {
           "array_class": "int[]",
           "length": 16,
           "value": -1881004352,
           "objects": 1,
-          "shallow": 80
+          "shallow": 80,
+          "owner": null
         },
         {
           "array_class": "int[]",
           "length": 16,
           "value": 0,
           "objects": 1,
-          "shallow": 80
+          "shallow": 80,
+          "owner": null
         },
         {
           "array_class": "int[]",
           "length": 12,
           "value": 0,
           "objects": 1,
-          "shallow": 64
+          "shallow": 64,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 2,
           "value": 76,
           "objects": 2,
-          "shallow": 48
+          "shallow": 48,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 2,
           "value": 110,
           "objects": 2,
-          "shallow": 48
+          "shallow": 48,
+          "owner": null
         },
         {
           "array_class": "char[]",
           "length": 2,
           "value": 83,
           "objects": 2,
-          "shallow": 48
+          "shallow": 48,
+          "owner": null
         },
         {
           "array_class": "int[]",
           "length": 8,
           "value": 0,
           "objects": 1,
-          "shallow": 48
+          "shallow": 48,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 10,
           "value": 32,
           "objects": 1,
-          "shallow": 32
+          "shallow": 32,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 13,
           "value": 48,
           "objects": 1,
-          "shallow": 32
+          "shallow": 32,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 16,
           "value": 0,
           "objects": 1,
-          "shallow": 32
+          "shallow": 32,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 2,
           "value": 10,
           "objects": 1,
-          "shallow": 24
+          "shallow": 24,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 2,
           "value": 32,
           "objects": 1,
-          "shallow": 24
+          "shallow": 24,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 2,
           "value": 34,
           "objects": 1,
-          "shallow": 24
+          "shallow": 24,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 2,
           "value": 37,
           "objects": 1,
-          "shallow": 24
+          "shallow": 24,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 2,
           "value": 39,
           "objects": 1,
-          "shallow": 24
+          "shallow": 24,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 2,
           "value": 45,
           "objects": 1,
-          "shallow": 24
+          "shallow": 24,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 2,
           "value": 46,
           "objects": 1,
-          "shallow": 24
+          "shallow": 24,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 2,
           "value": 47,
           "objects": 1,
-          "shallow": 24
+          "shallow": 24,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 2,
           "value": 58,
           "objects": 1,
-          "shallow": 24
+          "shallow": 24,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 2,
           "value": 72,
           "objects": 1,
-          "shallow": 24
+          "shallow": 24,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 2,
           "value": 95,
           "objects": 1,
-          "shallow": 24
+          "shallow": 24,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 2,
           "value": 101,
           "objects": 1,
-          "shallow": 24
+          "shallow": 24,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 2,
           "value": 102,
           "objects": 1,
-          "shallow": 24
+          "shallow": 24,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 2,
           "value": 105,
           "objects": 1,
-          "shallow": 24
+          "shallow": 24,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 2,
           "value": 107,
           "objects": 1,
-          "shallow": 24
+          "shallow": 24,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 2,
           "value": 112,
           "objects": 1,
-          "shallow": 24
+          "shallow": 24,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 2,
           "value": 116,
           "objects": 1,
-          "shallow": 24
+          "shallow": 24,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 3,
           "value": 46,
           "objects": 1,
-          "shallow": 24
+          "shallow": 24,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 3,
           "value": 76,
           "objects": 1,
-          "shallow": 24
+          "shallow": 24,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 3,
           "value": 88,
           "objects": 1,
-          "shallow": 24
+          "shallow": 24,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 3,
           "value": 99,
           "objects": 1,
-          "shallow": 24
+          "shallow": 24,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 4,
           "value": 32,
           "objects": 1,
-          "shallow": 24
+          "shallow": 24,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 4,
           "value": 76,
           "objects": 1,
-          "shallow": 24
+          "shallow": 24,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 4,
           "value": 90,
           "objects": 1,
-          "shallow": 24
+          "shallow": 24,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 5,
           "value": 76,
           "objects": 1,
-          "shallow": 24
+          "shallow": 24,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 7,
           "value": 32,
           "objects": 1,
-          "shallow": 24
+          "shallow": 24,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 8,
           "value": 32,
           "objects": 1,
-          "shallow": 24
+          "shallow": 24,
+          "owner": null
         },
         {
           "array_class": "byte[]",
           "length": 8,
           "value": 48,
           "objects": 1,
-          "shallow": 24
+          "shallow": 24,
+          "owner": null
         },
         {
           "array_class": "char[]",
           "length": 2,
           "value": 70,
           "objects": 1,
-          "shallow": 24
+          "shallow": 24,
+          "owner": null
         }
       ],
       "truncated": false
@@ -90146,5 +91092,71 @@
     "anonymous_class_count": 204,
     "thread_local_null_key_count": 0,
     "direct_byte_buffer_capacity_sum": 140862014
-  }
+  },
+  "triage": [
+    {
+      "id": "headline-retainer",
+      "severity": "critical",
+      "title": "Headline retainer",
+      "detail": "`scala.concurrent.stm.ccstm.InTxnImpl` (a class group) retains 2.7 MB (22.9% of reachable heap).",
+      "anchor": "leak-suspects",
+      "anchor_label": "Leak Suspects"
+    },
+    {
+      "id": "concentration",
+      "severity": "info",
+      "title": "Concentration",
+      "detail": "diffuse — retention is spread across multiple roots, so there is no single object to free.",
+      "anchor": "leak-suspects",
+      "anchor_label": "Leak Suspects"
+    },
+    {
+      "id": "shape",
+      "severity": "info",
+      "title": "Shape",
+      "detail": "deep (retention flows through long dominator chains — often nested collections or linked structures) — 90% of objects within depth 7, max depth 28.",
+      "anchor": "dominator-depth-distribution",
+      "anchor_label": "Dominator-Depth Distribution"
+    },
+    {
+      "id": "one-leak-or-many",
+      "severity": "info",
+      "title": "One leak or many",
+      "detail": "the single biggest object, `scala.runtime.LazyVals$`, retains 21.5% and the top 10 retain 44.7% of the heap; 12 object(s) each hold >=1%.",
+      "anchor": "top-consumers",
+      "anchor_label": "Top Consumers"
+    },
+    {
+      "id": "classloader-leak",
+      "severity": "warning",
+      "title": "Classloader leak",
+      "detail": "`scala.collection.mutable.ArrayBuffer` is loaded by 2 class loaders (126.9 KB retained) — classic reload leak.",
+      "anchor": "duplicate-classes",
+      "anchor_label": "Duplicate Classes"
+    },
+    {
+      "id": "off-heap",
+      "severity": "warning",
+      "title": "Off-heap (DirectByteBuffer)",
+      "detail": "134.3 MB of native memory is held by live DirectByteBuffers — not counted in heap size but can dominate RSS.",
+      "anchor": "leak-indicators",
+      "anchor_label": "Leak Indicators"
+    },
+    {
+      "id": "fixed-per-object-overhead",
+      "severity": "warning",
+      "title": "Fixed per-object header overhead",
+      "detail": "236,457 objects × 12 B header = 2.7 MB (23.3% of heap) is consumed by JVM object headers alone — consider value types, primitive arrays, or fewer wrapper objects.",
+      "anchor": "header-overhead",
+      "anchor_label": "Header Overhead"
+    },
+    {
+      "id": "empty-collection-cemetery",
+      "severity": "info",
+      "title": "Empty-collection cemetery",
+      "detail": "5,497 of 5,998 tracked collections (91.6%) are empty (size == 0) — pre-allocated but never populated containers waste object-header overhead; consider lazy initialisation or null.",
+      "anchor": "collections",
+      "anchor_label": "Collections"
+    }
+  ]
 }

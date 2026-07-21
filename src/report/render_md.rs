@@ -54,13 +54,13 @@ pub(crate) fn render_duplicate_strings(
     out.push_str("### Duplicate Strings (approximate)\n\n");
     let d = match d {
         None => {
-            out.push_str("_Duplicate-string analysis not run (pass `--dup-strings`)._\n\n");
+            out.push_str("_Duplicate-string analysis not run (pass `--find-duplicates`)._\n\n");
             return;
         }
         Some(d) => d,
     };
     out.push_str(
-        "_Opt-in (`--dup-strings`): each `java.lang.String` value hashed to \
+        "_Opt-in (`--find-duplicates`): each `java.lang.String` value hashed to \
          64 bits; collisions accepted as approximation._\n\n",
     );
     out.push_str(&format!(
@@ -197,7 +197,8 @@ pub(crate) fn render_duplicate_strings(
 }
 
 /// If the single largest suspect retains at least this share of the reachable
-/// heap, the OOM-triage lead-in calls the heap "dominated" by one retainer.
+/// heap, the executive-summary verdict calls it the "likely problem". (The OOM
+/// Triage rules use their own copy of this threshold in `triage.rs`.)
 const CONCENTRATION_PCT: f64 = 50.0;
 
 // ── Rendering ────────────────────────────────────────────────────────────────
@@ -450,126 +451,26 @@ pub(crate) fn render_executive_summary(r: &Report, out: &mut String) {
     out.push_str("\n\n");
 }
 
-/// OOM-triage lead-in: a short, human-readable summary re-projecting data
-/// already in the model (no new model fields). Names the dominant retainer
-/// and characterises how concentrated retention is. Pure function of `Report`.
+/// OOM-triage lead-in: a short, human-readable summary of the fired triage
+/// signals (evaluated once by the rule framework in `triage.rs` and stored on
+/// `Report.triage`). This renderer is a dumb formatter over that list.
 pub(crate) fn render_oom_triage(r: &Report, out: &mut String) {
     out.push_str("## OOM Triage\n\n");
     out.push_str("_Where the reachable heap is concentrated, at a glance._\n\n");
-
-    // Percentage basis matches the existing tables: retained / total reachable
-    // shallow heap. Reuse the leak-suspects total (identical to top-consumers').
-    let total = r.leaks.total_shallow;
-    let pct_of = |retained: u64| -> f64 {
-        if total > 0 {
-            retained as f64 / total as f64 * 100.0
-        } else {
-            0.0
-        }
-    };
-
-    // Headline retainer: prefer the #1 leak suspect; fall back to the biggest
-    // top-level consumer; otherwise report that nothing dominates.
-    if let Some(s) = r.leaks.suspects.first() {
-        let kind = if s.is_single {
-            "a single object"
-        } else {
-            "a class group"
-        };
-        out.push_str(&format!(
-            "- **Headline retainer:** `{}` ({}) retains {} ({:.1}% of reachable heap). See [Leak Suspects](#leak-suspects).\n",
-            s.pretty_class,
-            kind,
-            format_bytes(s.retained),
-            pct_of(s.retained),
-        ));
-    } else if let Some(o) = r.top.biggest_objects.first() {
-        out.push_str(&format!(
-            "- **Headline retainer:** `{}` retains {} ({:.1}% of reachable heap). See [Top Consumers](#top-consumers).\n",
-            o.display_class,
-            format_bytes(o.retained),
-            pct_of(o.retained),
-        ));
-    } else {
-        out.push_str("- **Headline retainer:** No dominant retainer found.\n");
-    }
-
-    // Concentration hint: derived purely from the suspects list. Names the
-    // dominating group and links to Leak Suspects so the reader can jump to it.
-    match r.leaks.suspects.first() {
-        Some(s) if pct_of(s.retained) >= CONCENTRATION_PCT => {
-            let kind = if s.is_single {
-                "a single object"
-            } else {
-                "a class group"
-            };
-            out.push_str(&format!(
-                "- **Concentration:** highly concentrated — `{}` ({}) holds {:.1}% of the heap, so freeing it would reclaim most memory. See [Leak Suspects](#leak-suspects).\n",
-                s.pretty_class,
-                kind,
-                pct_of(s.retained),
-            ));
-        }
-        Some(_) => {
-            out.push_str(
-                "- **Concentration:** diffuse — retention is spread across multiple roots, so there is no single object to free. See [Leak Suspects](#leak-suspects).\n",
-            );
-        }
-        None => {
-            out.push_str(
-                "- **Concentration:** diffuse — no suspect exceeds the threshold; retention is spread across many roots.\n",
-            );
-        }
-    }
-
-    // Shape (B2): shallow vs. deep retention, from the dominator-depth histogram.
-    let hist = &r.overview.dominator_depth_histogram;
-    if !hist.is_empty() {
-        let total: u64 = hist.iter().map(|b| b.objects).sum();
-        let max_depth = hist.iter().map(|b| b.depth).max().unwrap_or(0);
-        // p90 depth: smallest depth whose cumulative count reaches 90%.
-        let mut cum = 0u64;
-        let mut p90 = max_depth;
-        for b in hist {
-            cum += b.objects;
-            if cum * 10 >= total * 9 {
-                p90 = b.depth;
-                break;
-            }
-        }
-        let shape = if p90 <= 3 {
-            "shallow (most objects are held within a few hops of a GC root)"
-        } else {
-            "deep (retention flows through long dominator chains — often nested collections or linked structures)"
-        };
-        out.push_str(&format!(
-            "- **Shape:** {shape} — 90% of objects within depth {p90}, max depth {max_depth}. See [Dominator-Depth Distribution](#dominator-depth-distribution).\n"
-        ));
-    }
-
-    // One leak or many (B3): from the retention-concentration summary. Names the
-    // single biggest object (from Top Consumers) and links to that section.
-    let rc = &r.overview.retention_concentration;
-    if rc.top1_bp > 0 || rc.num_objects_ge_1pct > 0 {
-        let top1_pct = rc.top1_bp as f64 / 100.0;
-        let top10_pct = rc.top10_bp as f64 / 100.0;
-        let biggest = r
-            .top
-            .biggest_objects
-            .first()
-            .map(|o| format!("`{}`", o.display_class));
-        match biggest {
-            Some(name) => out.push_str(&format!(
-                "- **One leak or many:** the single biggest object, {}, retains {:.1}% and the top 10 retain {:.1}% of the heap; {} object(s) each hold >=1%. See [Top Consumers](#top-consumers).\n",
-                name, top1_pct, top10_pct, rc.num_objects_ge_1pct,
-            )),
-            None => out.push_str(&format!(
-                "- **One leak or many:** the single biggest object retains {:.1}% and the top 10 retain {:.1}% of the heap; {} object(s) each hold >=1%. See [Top Consumers](#top-consumers).\n",
-                top1_pct, top10_pct, rc.num_objects_ge_1pct,
-            )),
-        }
+    for s in &r.triage {
+        out.push_str(&format_signal_md(s));
     }
     out.push('\n');
+}
+
+/// Format one triage signal as a Markdown bullet. `detail` may contain backtick
+/// code spans, which Markdown renders verbatim, so it is emitted as-is.
+fn format_signal_md(s: &crate::report::TriageSignal) -> String {
+    let link = match (&s.anchor, &s.anchor_label) {
+        (Some(anchor), Some(label)) => format!(" See [{label}](#{anchor})."),
+        _ => String::new(),
+    };
+    format!("- **{}:** {}{}\n", s.title, s.detail, link)
 }
 
 /// Whether the Retention Concentration section has any data to render. Shared by
@@ -849,6 +750,9 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
 
     render_record_census(out, &o.record_census);
     render_duplicate_strings(out, &o.duplicate_strings, false);
+    render_duplicate_prim_arrays(out, &o.duplicate_prim_arrays);
+    render_boxed_numbers(out, &o.boxed_numbers, &o.boxed_number_holders, o.total_shallow);
+    render_header_overhead(out, &o.header_overhead);
 
     out.push_str("### Class Histogram (by Retained Heap)\n\n");
     out.push_str(
@@ -1803,6 +1707,13 @@ pub(crate) fn render_collections(c: &CollectionsAnalysis, graphs: bool, out: &mu
             .map(|r| r.objects)
             .max()
             .unwrap_or(0);
+        // The Owner column (dominant `Class#field` referrer) is present only when
+        // attribution data exists (i.e. `--collections` was passed).
+        let has_owner = c
+            .constant_primitive_arrays
+            .rows
+            .iter()
+            .any(|r| r.owner.is_some());
         let mut headers: Vec<&str> = vec!["Array class", "Length", "Value", "Objects", "Shallow"];
         let mut aligns = vec![
             Align::Left,
@@ -1811,6 +1722,10 @@ pub(crate) fn render_collections(c: &CollectionsAnalysis, graphs: bool, out: &mu
             Align::Right,
             Align::Right,
         ];
+        if has_owner {
+            headers.push("Owner (Class#field)");
+            aligns.push(Align::Left);
+        }
         if graphs {
             headers.push("");
             aligns.push(Align::Left);
@@ -1824,6 +1739,12 @@ pub(crate) fn render_collections(c: &CollectionsAnalysis, graphs: bool, out: &mu
                 fmt_count(r.objects),
                 format_bytes(r.shallow),
             ];
+            if has_owner {
+                row.push(match &r.owner {
+                    Some(o) => format!("`{o}`"),
+                    None => "—".to_string(),
+                });
+            }
             if graphs {
                 row.push(bar(r.objects, obj_max, render_graphs::GRAPH_BAR_WIDTH));
             }
@@ -2898,6 +2819,164 @@ pub(crate) fn render_alloc_sites(a: &AllocSites, graphs: bool, out: &mut String)
                 format_bytes(site.retained_total),
             ]);
         }
+    }
+    t.render(out);
+    out.push('\n');
+}
+
+pub(crate) fn render_duplicate_prim_arrays(
+    out: &mut String,
+    d: &Option<crate::pass2::DupPrimArrays>,
+) {
+    use crate::md::{Align, Table};
+    out.push_str("### Duplicate Primitive Arrays (approximate)\n\n");
+    let d = match d {
+        None => {
+            out.push_str(
+                "_Duplicate primitive-array analysis not run (pass `--find-duplicates`)._\n\n",
+            );
+            return;
+        }
+        Some(d) => d,
+    };
+    out.push_str(
+        "_Opt-in (`--find-duplicates`): each primitive array hashed to 64 bits by content and \
+         element type; collisions accepted as approximation._\n\n",
+    );
+    out.push_str(&format!(
+        "- Approx wasted bytes: {}\n\n",
+        format_bytes(d.total_wasted_bytes)
+    ));
+    if !d.rows.is_empty() {
+        out.push_str("#### Waste by Array Element Type\n\n");
+        let mut t = Table::new(
+            &["#", "Array type", "Dup groups", "Wasted"],
+            &[Align::Right, Align::Left, Align::Right, Align::Right],
+        );
+        for (i, row) in d.rows.iter().enumerate() {
+            t.row([
+                format!("{}", i + 1),
+                format!("`{}`", row.array_class),
+                fmt_count(row.duplicated_groups),
+                format_bytes(row.wasted_bytes),
+            ]);
+        }
+        t.render(out);
+        out.push('\n');
+    }
+    if !d.top_array_holders.is_empty() {
+        out.push_str("#### Classes Holding the Most Duplicate Arrays\n\n");
+        let mut t = Table::new(
+            &["#", "Class", "Array refs"],
+            &[Align::Right, Align::Left, Align::Right],
+        );
+        for (i, h) in d.top_array_holders.iter().enumerate() {
+            t.row([
+                format!("{}", i + 1),
+                format!("`{}`", h.class_name),
+                fmt_count(h.array_refs),
+            ]);
+        }
+        t.render(out);
+        out.push('\n');
+    }
+}
+
+pub(crate) fn render_boxed_numbers(
+    out: &mut String,
+    rows: &[crate::report::model::BoxedNumberRow],
+    holders: &[crate::report::model::BoxedNumberHolder],
+    total_shallow: u64,
+) {
+    use crate::md::{Align, Table};
+    if rows.is_empty() {
+        return;
+    }
+    out.push_str("### Boxed Numbers\n\n");
+    out.push_str(
+        "_Wrapper types whose instances occupy heap that could be replaced with primitives._\n\n",
+    );
+    let mut t = Table::new(
+        &["#", "Class", "Instances", "Total Shallow", "% of Heap", "Avg Size"],
+        &[
+            Align::Right,
+            Align::Left,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+        ],
+    );
+    for (i, row) in rows.iter().enumerate() {
+        let pct = if total_shallow > 0 {
+            format!("{:.2}%", row.pct_of_heap_bp as f64 / 100.0)
+        } else {
+            "—".to_string()
+        };
+        t.row([
+            format!("{}", i + 1),
+            format!("`{}`", row.pretty_class),
+            fmt_count(row.instances),
+            format_bytes(row.total_shallow),
+            pct,
+            format_bytes(row.avg_shallow),
+        ]);
+    }
+    t.render(out);
+    out.push('\n');
+    if !holders.is_empty() {
+        out.push_str("#### Classes Holding the Most Boxed-Number References\n\n");
+        let mut t = Table::new(
+            &["#", "Class", "Boxed refs"],
+            &[Align::Right, Align::Left, Align::Right],
+        );
+        for (i, h) in holders.iter().enumerate() {
+            t.row([
+                format!("{}", i + 1),
+                format!("`{}`", h.class_name),
+                fmt_count(h.boxed_refs),
+            ]);
+        }
+        t.render(out);
+        out.push('\n');
+    }
+}
+
+pub(crate) fn render_header_overhead(
+    out: &mut String,
+    rows: &[crate::report::model::HeaderOverheadRow],
+) {
+    use crate::md::{Align, Table};
+    if rows.is_empty() {
+        return;
+    }
+    out.push_str("### Object Header Overhead\n\n");
+    out.push_str(
+        "_Classes where object headers consume a large share of shallow heap \
+         (candidates for value-type / record optimisation)._\n\n",
+    );
+    let mut t = Table::new(
+        &["#", "Class", "Instances", "Hdr/obj", "Total Headers", "Hdr %", "Avg Size"],
+        &[
+            Align::Right,
+            Align::Left,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+        ],
+    );
+    for (i, row) in rows.iter().enumerate() {
+        t.row([
+            format!("{}", i + 1),
+            format!("`{}`", row.pretty_class),
+            fmt_count(row.instances),
+            format!("{} B", row.header_bytes),
+            format_bytes(row.total_header_bytes),
+            format!("{:.1}%", row.header_pct_of_shallow_bp as f64 / 100.0),
+            format_bytes(row.avg_shallow),
+        ]);
     }
     t.render(out);
     out.push('\n');

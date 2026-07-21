@@ -85,9 +85,13 @@ mod tests {
                 duplicate_classes: vec![],
                 record_census: Default::default(),
                 duplicate_strings: None,
+                duplicate_prim_arrays: None,
                 heap_fragmentation_ratio: 0.0,
                 top_class_concentration_bp: 0,
                 gc_roots_retained_by_type: vec![],
+                boxed_numbers: vec![],
+                header_overhead: vec![],
+                boxed_number_holders: vec![],
             },
             leaks: LeakSuspects {
                 total_shallow: 1000,
@@ -118,6 +122,7 @@ mod tests {
             biggest_collections: None,
             collection_contents: None,
             leak_indicators: Default::default(),
+            triage: Vec::new(),
         }
     }
 
@@ -619,6 +624,7 @@ mod tests {
             retained: ret,
             pct_bp: 0,
             pct: 0.0,
+            owner: None,
         }
     }
     fn classrow(name: &str, inst: u64, ret: u64) -> report::ClassRow {

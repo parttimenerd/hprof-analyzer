@@ -101,6 +101,45 @@ export interface StrLenStats { min: number; max: number; median: number; total: 
 export interface StringHolder { class_name: string; string_refs: number; }
 export interface CharArrayWasteRow { array_obj_1based: number; length: number; used: number; wasted_bytes: number; }
 export interface CharArrayWaste { arrays_examined: number; wasteful_arrays: number; total_wasted_bytes: number; top: CharArrayWasteRow[]; }
+export interface DupPrimArrayRow {
+  array_class: string;
+  duplicated_groups: number;
+  wasted_bytes: number;
+}
+
+export interface DupArrayHolder {
+  class_name: string;
+  array_refs: number;
+}
+
+export interface DupPrimArrays {
+  total_wasted_bytes: number;
+  rows: DupPrimArrayRow[];
+  top_array_holders?: DupArrayHolder[];
+}
+
+export interface BoxedNumberHolder {
+  class_name: string;
+  boxed_refs: number;
+}
+
+export interface BoxedNumberRow {
+  pretty_class: string;
+  instances: number;
+  total_shallow: number;
+  pct_of_heap_bp: number;
+  avg_shallow: number;
+}
+
+export interface HeaderOverheadRow {
+  pretty_class: string;
+  instances: number;
+  header_bytes: number;
+  total_header_bytes: number;
+  header_pct_of_shallow_bp: number;
+  avg_shallow: number;
+}
+
 export interface DupStrings {
   distinct_values: number;
   duplicated_values: number;
@@ -154,8 +193,16 @@ export interface SystemOverview {
   gc_roots_retained_by_type?: GcRootRetainedRow[];
   // Raw HPROF record-type composition (pass-1 counts); always present.
   record_census: RecordCensus;
-  // Opt-in approximate duplicate-String analysis (--dup-strings). Absent/null otherwise.
+  // Opt-in approximate duplicate-String analysis (--find-duplicates). Absent/null otherwise.
   duplicate_strings?: DupStrings | null;
+  // Opt-in approximate duplicate-primitive-array analysis (--find-duplicates). Absent/null otherwise.
+  duplicate_prim_arrays?: DupPrimArrays | null;
+  // Boxed-number wrapper-type rows (java.lang.Integer etc). Empty when none present.
+  boxed_numbers?: BoxedNumberRow[];
+  // Object-header overhead per class. Empty when no class crosses the threshold.
+  header_overhead?: HeaderOverheadRow[];
+  // Top classes holding the most boxed-number references. Populated with --collections.
+  boxed_number_holders?: BoxedNumberHolder[];
 }
 
 export interface PathStep {
@@ -266,6 +313,9 @@ export interface ObjRow {
   shallow: number;
   retained: number;
   pct_bp: number;
+  // Dominant incoming reference (`Class#field`) that holds this object. Absent
+  // when --collections was off or no attributed field points at it.
+  owner?: string | null;
 }
 
 export interface ClassRow {
@@ -458,6 +508,9 @@ export interface ConstantArrayRow {
   value: number;
   objects: number;
   shallow: number;
+  // Dominant incoming reference (`Class#field`) across the group's members.
+  // Absent when --collections was off or no field holds them.
+  owner?: string | null;
 }
 
 export interface ConstantPrimitiveArrays {
@@ -604,6 +657,20 @@ export interface LeakIndicators {
   direct_byte_buffer_capacity_sum: number;
 }
 
+export type TriageSeverity = "info" | "warning" | "critical";
+
+// One fired OOM-triage signal (mirrors src/report/model.rs TriageSignal). Rules
+// are evaluated once in Rust; this UI is a dumb formatter over the list.
+// `detail` may contain `code spans` in backticks, split into <code> at render.
+export interface TriageSignal {
+  id: string;
+  severity: TriageSeverity;
+  title: string;
+  detail: string;
+  anchor?: string | null;
+  anchor_label?: string | null;
+}
+
 export interface Report {
   schema_version: number;
   generated: string;
@@ -631,6 +698,8 @@ export interface Report {
   references: ReferencesAnalysis;
   // Scalar leak-pattern indicators. Always-on; zero fields omitted.
   leak_indicators?: LeakIndicators;
+  // Fired OOM-triage signals, evaluated once in Rust (order = render order).
+  triage?: TriageSignal[];
 }
 
 declare global {

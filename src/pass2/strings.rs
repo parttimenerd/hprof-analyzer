@@ -131,7 +131,7 @@ pub(crate) fn scan_all_instances<F: FnMut(u64, u64, &[u8])>(
 }
 
 /// Compute an approximate duplicate-`java.lang.String` report. Opt-in
-/// (`--dup-strings`); adds up to four extra full-file scans. RSS stays bounded
+/// (`--find-duplicates`); adds up to four extra full-file scans. RSS stays bounded
 /// because decoded String bytes are NEVER retained wholesale — each value is
 /// hashed to 64 bits and only `(hash -> (count, len))` is kept; exact text is
 /// recovered for only the ≤N winners (each capped at `MAX_STR_SAMPLE` bytes).

@@ -16,12 +16,14 @@ pub(crate) mod format;
 mod model;
 mod render_graphs;
 mod render_md;
+mod triage;
 
 pub use build::*;
 pub use format::*;
 pub use model::*;
 pub use render_graphs::*;
 pub use render_md::*;
+pub use triage::*;
 
 // ── Unit tests ─────────────────────────────────────────────────────────────
 
@@ -213,6 +215,8 @@ mod tests {
                 ],
             },
             dup_strings: None,
+            dup_prim_arrays: None,
+            boxed_number_holders: Vec::new(),
             arrays_by_size: Default::default(),
             collections: crate::report::CollectionsAnalysis::default(),
             references: crate::report::ReferencesAnalysis::default(),
@@ -1415,7 +1419,7 @@ mod tests {
     fn schema_version_guard() {
         let r = fixture_report();
         assert_eq!(r.schema_version, SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 3);
+        assert_eq!(SCHEMA_VERSION, 6);
     }
 
     #[test]

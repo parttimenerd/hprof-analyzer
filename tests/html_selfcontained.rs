@@ -209,9 +209,9 @@ fn html_all_flags_philosophers() {
     // Smoke-test each flag combination: CLI must succeed and produce valid HTML.
     let flag_combos: &[&[&str]] = &[
         &[],
-        &["--dup-strings"],
+        &["--find-duplicates"],
         &["--collections"],
-        &["--dup-strings", "--collections"],
+        &["--find-duplicates", "--collections"],
         &["--detail", "minimal"],
         &["--detail", "max"],
     ];

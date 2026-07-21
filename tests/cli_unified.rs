@@ -278,14 +278,14 @@ fn truncated_dump_hints_corrupt() {
     );
 }
 
-/// `--dup-strings` Markdown output must be valid text, never leaking raw control
+/// `--find-duplicates` Markdown output must be valid text, never leaking raw control
 /// bytes from decoded String values that would make it a "binary file" (Bug 1).
 #[test]
 fn dup_strings_markdown_has_no_control_bytes() {
     let Some(hprof) = philosophers() else { return };
     let out = Command::new(BIN)
         .arg(&hprof)
-        .arg("--dup-strings")
+        .arg("--find-duplicates")
         .output()
         .unwrap();
     assert!(

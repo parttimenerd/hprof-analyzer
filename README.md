@@ -34,7 +34,7 @@ Run one command and get a report with these sections:
   under the right owner.
 - **Threads**: maps each thread's stack frames to the local variables they keep
   alive, so thread-local accumulation is visible without a GUI.
-- **Duplicate strings** (opt-in, `--dup-strings`): quantifies wasted memory
+- **Duplicate strings** (opt-in, `--find-duplicates`): quantifies wasted memory
   from identical `java.lang.String` values — how many bytes are duplicated, the
   top 25 offending values, a string-length histogram, and the top 25 classes
   holding the most String references.
@@ -56,9 +56,13 @@ A live viewer shows all four output formats side by side, built from the public
 
 **➡ [Open the sample report viewer](https://parttimenerd.github.io/hprof-analyzer/)**
 
+In the HTML report, long tables are capped to their top 20 rows with a "Show N
+more" control to expand a single table; a "Expand all tables" toggle at the top
+of the page unfolds every capped table at once.
+
 Switch formats in the top-left; the *Default* / *All features* toggle beside
 them swaps between a default-options run and one with every optional analysis on
-(`--dup-strings --collections`). On either Markdown view, hit *Render to HTML*
+(`--find-duplicates --collections`). On either Markdown view, hit *Render to HTML*
 in the top-right to see it formatted. The raw files are here:
 
 | Format | Default options | All optional features |
@@ -236,12 +240,12 @@ hprof-analyzer heap.hprof -f md-graphs       # Markdown with ASCII graphs
 `md-graphs` shares the `.md` extension with plain Markdown, so it is never
 inferred; ask for it explicitly with `-f md-graphs`.
 
-**Duplicate strings.** Add `--dup-strings` to include the duplicate-`String`
+**Duplicate strings.** Add `--find-duplicates` to include the duplicate-`String`
 section (see [What you get](#what-you-get)). It adds two extra scans of the heap
 file, so it is off by default:
 
 ```sh
-hprof-analyzer heap.hprof report.html --dup-strings
+hprof-analyzer heap.hprof report.html --find-duplicates
 ```
 
 **Progress.** Long runs on multi-GB dumps print a live phase line to stderr when
@@ -317,7 +321,7 @@ hprof-analyzer report.json report.html        # HTML (inferred from .html)
 hprof-analyzer report.json -f md-graphs       # Markdown with ASCII graphs
 ```
 
-The analyze-only flags (`--dup-strings`, `--collections`, non-default
+The analyze-only flags (`--find-duplicates`, `--collections`, non-default
 `--detail`) have no effect when re-rendering, because those sections are baked
 into the JSON at analyze time, so passing one on a report input is an error with
 a hint to re-run on the `.hprof` dump.

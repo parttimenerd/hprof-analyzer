@@ -36,6 +36,10 @@ const WANTED_CAP: usize = 1_500_000;
 /// Max distinct (type,len,value) groups tracked for constant primitive arrays.
 /// Beyond this remaining groups fold into one "other" row (truncated=true).
 const CONST_ARRAY_CAP: usize = 100_000;
+/// Max member array addresses sampled per constant-array group for owner
+/// attribution. The dominant `Class#field` is picked from this sample; a small
+/// cap keeps memory bounded while still identifying the common holder.
+const CONST_ARRAY_OWNER_SAMPLE: usize = 64;
 /// Max referent object indices pushed per reference kind for the later
 /// only-weakly-retained computation.
 const REFERENT_CAP: usize = 1_000_000;
@@ -977,6 +981,11 @@ pub(crate) fn build_field_decode_views(
     let mut const_groups: HashMap<(u8, u64, i64), (u64, u64)> = HashMap::new();
     let mut const_other: (u64, u64) = (0, 0);
     let mut const_truncated = false;
+    // Per-group sample of member array addresses, used post-scan to resolve the
+    // dominant `Class#field` owner via `owner_by_addr`. Only populated under
+    // `--collections`; each group samples at most `CONST_ARRAY_OWNER_SAMPLE`
+    // addresses so memory stays bounded on heaps with huge constant-array groups.
+    let mut const_owner_samples: HashMap<(u8, u64, i64), Vec<u64>> = HashMap::new();
     let mut array_fill = FillAcc::default();
     // Raw per-obj-array (addr, non_null, count) collected during the pass; the
     // `wanted_arrays` collection-fill/map-collision fold runs AFTER the pass, in
@@ -1240,6 +1249,13 @@ pub(crate) fn build_field_decode_views(
                 let e = const_groups.entry(key).or_insert((0, 0));
                 e.0 += 1;
                 e.1 += sh;
+                // Sample this array's address for post-scan owner attribution.
+                if collect_attribution {
+                    let s = const_owner_samples.entry(key).or_default();
+                    if s.len() < CONST_ARRAY_OWNER_SAMPLE {
+                        s.push(addr);
+                    }
+                }
             } else {
                 const_truncated = true;
                 const_other.0 += 1;
@@ -1470,6 +1486,8 @@ pub(crate) fn build_field_decode_views(
         },
         constant_primitive_arrays: assemble_const_arrays(
             const_groups,
+            const_owner_samples,
+            owner_by_addr.as_ref(),
             const_other,
             const_truncated,
         ),
@@ -1552,20 +1570,39 @@ impl FillAcc {
 /// "other" fold row when the cap was hit.
 fn assemble_const_arrays(
     groups: HashMap<(u8, u64, i64), (u64, u64)>,
+    owner_samples: HashMap<(u8, u64, i64), Vec<u64>>,
+    owner_by_addr: Option<&HashMap<u64, String>>,
     other: (u64, u64),
     truncated: bool,
 ) -> ConstantPrimitiveArrays {
     let mut rows: Vec<ConstantArrayRow> = groups
         .into_iter()
-        .map(
-            |((elem_type, length, value), (objects, shallow))| ConstantArrayRow {
+        .map(|((elem_type, length, value), (objects, shallow))| {
+            // Dominant `Class#field` across this group's sampled member
+            // arrays: tally owners, pick the most frequent (ties broken by
+            // lexicographically smallest owner for determinism).
+            let owner = owner_by_addr.and_then(|m| {
+                let sample = owner_samples.get(&(elem_type, length, value))?;
+                let mut counts: HashMap<&str, u64> = HashMap::new();
+                for addr in sample {
+                    if let Some(o) = m.get(addr) {
+                        *counts.entry(o.as_str()).or_insert(0) += 1;
+                    }
+                }
+                counts
+                    .into_iter()
+                    .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(a.0)))
+                    .map(|(o, _)| o.to_string())
+            });
+            ConstantArrayRow {
                 array_class: crate::report::pretty_class_name(prim_array_class_name(elem_type)),
                 length,
                 value,
                 objects,
                 shallow,
-            },
-        )
+                owner,
+            }
+        })
         .collect();
     rows.sort_by(|a, b| {
         b.shallow
@@ -1582,6 +1619,7 @@ fn assemble_const_arrays(
             value: 0,
             objects: other.0,
             shallow: other.1,
+            owner: None,
         });
     }
     ConstantPrimitiveArrays { rows, truncated }

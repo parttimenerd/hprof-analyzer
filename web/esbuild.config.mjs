@@ -10,9 +10,9 @@
 import { build } from "esbuild";
 import { readFileSync, statSync } from "node:fs";
 
-// ≤ 600 KB minified bundle budget (raised from 450 KB to accommodate d3-dag
-// for the unreachable dominator-tree SVG visualization).
-const BUDGET_BYTES = 600 * 1024;
+// ≤ 660 KB minified bundle budget (raised from 600 KB to accommodate d3-hierarchy
+// for the retained-heap treemap visualization).
+const BUDGET_BYTES = 660 * 1024;
 
 await build({
   entryPoints: ["src/index.tsx"],

@@ -21,6 +21,8 @@ use crate::{
     types::{HprofType, heap, tags},
 };
 
+mod boxed;
+mod dup_prim_arrays;
 mod fielddecode;
 mod meta;
 mod model;
@@ -28,6 +30,10 @@ mod scan;
 mod sizing;
 mod strings;
 
+pub(crate) use boxed::compute_boxed_holders;
+pub(crate) use dup_prim_arrays::{
+    DupPrimArrays, compute_dup_array_holders, compute_dup_prim_arrays,
+};
 pub(crate) use fielddecode::ATTRIBUTION_TOP_N;
 pub(crate) use fielddecode::{CollDesc, CollKind, builtin_coll_descs};
 pub(crate) use meta::*;
@@ -522,10 +528,34 @@ impl Pass2 {
         // decoded bytes), so RSS stays bounded. Must run while class_map/strings
         // are still alive (freed just below). `None` on the default path = zero
         // extra work, zero RSS.
-        let dup_strings = if opts.dup_strings {
+        let dup_strings = if opts.find_duplicates {
             Some(resolve_duplicate_strings(path, &p1)?)
         } else {
             None
+        };
+
+        // Opt-in duplicate-primitive-array waste scan. One extra full-file pass
+        // alongside --find-duplicates; keeps only a hash→(count,type) map plus
+        // an addr→hash map so we can later compute holder classes.
+        let dup_prim_arrays: Option<DupPrimArrays> = if opts.find_duplicates {
+            let (mut dpa, dup_addrs) = compute_dup_prim_arrays(path, p1.id_size)?;
+            // If --collections is also on we have the class_map/strings needed
+            // to build FieldPlans and find which classes hold the most dup arrays.
+            if opts.collections && !dup_addrs.is_empty() {
+                dpa.top_array_holders =
+                    compute_dup_array_holders(path, &p1, &dup_addrs, p1.id_size)?;
+            }
+            Some(dpa)
+        } else {
+            None
+        };
+
+        // Opt-in boxed-number holder scan. Two extra full-file passes (collect
+        // boxed-type addresses, then count references) when --collections is on.
+        let boxed_number_holders: Vec<crate::report::BoxedNumberHolder> = if opts.collections {
+            compute_boxed_holders(path, &p1, p1.id_size)?
+        } else {
+            Vec::new()
         };
 
         // Capture java.lang.System's static `props` (a Properties/Hashtable of
@@ -830,6 +860,8 @@ impl Pass2 {
             alloc_frames_by_serial,
             record_census,
             dup_strings,
+            dup_prim_arrays,
+            boxed_number_holders,
             arrays_by_size,
             collections: fd_collections,
             references: fd_references,

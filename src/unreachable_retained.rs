@@ -20,7 +20,10 @@
 //! objects are 0.4%–9.8% of the heap, so the compact sub-CSR and the per-node
 //! work arrays are a small fraction of `n`. `shallow`/`class_idx` are streamed
 //! out of their compressed blobs (never re-inflated dense) into arrays indexed
-//! by the dense unreachable id.
+//! by the dense unreachable id. The node→dense-id map is *not* an `n`-sized
+//! array: it is a binary search over the sorted `orig` list (length `u`), and
+//! the "is this node unreachable" test reuses the caller's `dfn` (`== u32::MAX`).
+//! So the pass adds no allocation proportional to the whole heap.
 //!
 //! ## Algorithm
 //!
@@ -87,13 +90,15 @@ pub fn compute_unreachable_retained(
 ) -> std::io::Result<Option<UnreachableRetained>> {
     let undef = u32::MAX;
 
-    // ── Step 1: dense remap of unreachable nodes (original id -> 0..u) ────────
-    // `dense[orig] = dense id` for unreachable nodes; `undef` for reachable ones.
-    let mut dense = vec![undef; n];
+    // ── Step 1: enumerate unreachable nodes (dense id -> original id) ─────────
+    // `orig` is the sorted list of unreachable node ids; `dfn[node] == undef`
+    // *is* the "unreachable" predicate, so we need no `dense: Vec<u32>` array of
+    // size `n` (that array alone was ~n*4 bytes — the pass's whole RSS overhead).
+    // Because `dfn` is scanned in ascending node order, `orig` is strictly
+    // ascending, so the dense id of a node is `orig.binary_search(&node)`.
     let mut orig: Vec<u32> = Vec::new(); // dense id -> original id
     for (node, &d) in dfn.iter().take(n).enumerate() {
         if d == undef {
-            dense[node] = orig.len() as u32;
             orig.push(node as u32);
         }
     }
@@ -101,34 +106,35 @@ pub fn compute_unreachable_retained(
     if u == 0 {
         return Ok(None);
     }
+    // node -> dense id via binary search over the sorted `orig` (O(log u), no
+    // n-sized allocation). Only called for intra-forest edge targets.
+    let dense_of = |node: u32| -> Option<u32> { orig.binary_search(&node).ok().map(|i| i as u32) };
 
     // ── Step 2: stream shallow + class_idx for unreachable nodes only ─────────
-    // Never materializes the full dense arrays; keeps only the `u` values we need
-    // (indexed by dense id), plus the whole-forest shallow total.
+    // A lockstep cursor over the sorted `orig` routes each streamed value to its
+    // dense slot in O(1) (sequential, cache-friendly) — no per-node index array.
     let mut u_shallow = vec![0u32; u];
     let mut total: u64 = 0;
     {
+        let mut di_cursor = 0usize;
         let mut node: usize = 0;
         shallow_c.for_each_u32(|s| {
-            if node < n {
-                let di = dense[node];
-                if di != undef {
-                    u_shallow[di as usize] = s;
-                    total += s as u64;
-                }
+            if di_cursor < u && orig[di_cursor] as usize == node {
+                u_shallow[di_cursor] = s;
+                total += s as u64;
+                di_cursor += 1;
             }
             node += 1;
         })?;
     }
     let mut u_class = vec![undef; u];
     {
+        let mut di_cursor = 0usize;
         let mut node: usize = 0;
         class_idx_c.for_each_u32(|c| {
-            if node < n {
-                let di = dense[node];
-                if di != undef {
-                    u_class[di as usize] = c;
-                }
+            if di_cursor < u && orig[di_cursor] as usize == node {
+                u_class[di_cursor] = c;
+                di_cursor += 1;
             }
             node += 1;
         })?;
@@ -137,7 +143,9 @@ pub fn compute_unreachable_retained(
     // ── Step 3: build the compact forward sub-CSR (unreachable -> unreachable) ─
     // An unreachable node can only point to reachable or unreachable nodes; edges
     // to reachable nodes are dropped (they never dominate within the forest). The
-    // synthetic root (dense index `u`) is wired separately in Step 4.
+    // "is target unreachable" test is the free `dfn[tgt] == undef`; only kept
+    // edges pay the `dense_of` binary search. The synthetic root (dense index
+    // `u`) is wired separately in Step 4.
     let mut sub_off = vec![0u32; u + 1];
     for di in 0..u {
         let node = orig[di] as usize;
@@ -146,7 +154,7 @@ pub fn compute_unreachable_retained(
         let mut deg = 0u32;
         for pos in lo..hi {
             let tgt = fwd_tgt.get(pos);
-            if (tgt as usize) < n && dense[tgt as usize] != undef {
+            if (tgt as usize) < n && dfn[tgt as usize] == undef {
                 deg += 1;
             }
         }
@@ -165,9 +173,8 @@ pub fn compute_unreachable_retained(
             let hi = fwd_off[node + 1] as usize;
             for pos in lo..hi {
                 let tgt = fwd_tgt.get(pos);
-                if (tgt as usize) < n {
-                    let dt = dense[tgt as usize];
-                    if dt != undef {
+                if (tgt as usize) < n && dfn[tgt as usize] == undef {
+                    if let Some(dt) = dense_of(tgt) {
                         sub_tgt[cursor[di] as usize] = dt;
                         cursor[di] += 1;
                     }
