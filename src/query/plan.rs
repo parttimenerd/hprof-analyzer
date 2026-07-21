@@ -3,7 +3,14 @@
 //! rejected here (not in the parser) with a message naming the construct.
 
 use crate::query::ast::{Attr, Predicate, Query, SelectItem, Value};
+use crate::query::carry::CarryLayout;
 use crate::query::QueryError;
+
+/// Default cap on late-phase emitted rows (dominator children) and retained-set
+/// closures, mirroring the scan-time `DEFAULT_CARRY_CAP`. Bounds late output so
+/// a pathological query can't blow up memory in the retained-live window.
+pub const DEFAULT_LATE_CAP: usize = 1_000_000;
+pub const DEFAULT_RETAINED_CAP: usize = 1_000_000;
 
 /// Per-need cost flags. Each flag independently arms exactly one piece of
 /// machinery; an unset flag arms nothing. (Foundation subset — ref/retained/
@@ -15,6 +22,9 @@ pub struct QueryNeeds {
     pub instance_string: bool,
     pub runtime_type: bool,
     pub retained: bool,
+    /// Arms the dominator-children CSR (dc_off/dc_tgt) in the late phase, for
+    /// `dominators(x)` / `dominatorof(x)` / `AS RETAINED SET`.
+    pub dominator_children: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +50,16 @@ pub enum StageOp {
     /// Join each carried dense index against `retained`, then apply retained
     /// WHERE terms, ORDER BY, and LIMIT.
     JoinRetained,
+    /// Emit the dominator-tree children of each carried dense index (bounded by
+    /// `cap`). Backs `dominators(x)`.
+    DominatorChildren { cap: usize },
+    /// Emit the immediate dominator (idom) of each carried dense index — one row
+    /// per input (the tree root has no idom and yields nothing). Backs
+    /// `dominatorof(x)`.
+    DominatorOf,
+    /// Bounded DFS over the dominator-children CSR from each carried index,
+    /// emitting the retained closure. Backs `SELECT ... AS RETAINED SET`.
+    RetainedSet { cap: usize },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +81,9 @@ pub struct QueryPlan {
     pub needs: QueryNeeds,
     pub where_terms: Vec<Conjunct>,
     pub finalize_at: Phase,
+    /// Scan-time carry layout for cross-phase queries. `IndexOnly` for the
+    /// current retained/dominator stages (only dense indices are carried).
+    pub carry: CarryLayout,
     pub late_ops: Vec<StageOp>,
     pub limit: Option<u64>,
 }
@@ -106,6 +129,57 @@ pub fn plan_query(q: &Query) -> Result<QueryPlan, QueryError> {
         StageKind::SingleScan
     };
 
+    // `AS RETAINED SET`: expand each match to its dominator-retained closure.
+    // Incompatible with aggregates (there is no closure of an aggregate scalar).
+    if q.retained_set {
+        if is_aggregate {
+            return Err(QueryError(
+                "RETAINED SET cannot be combined with aggregate functions; \
+                 SELECT the objects (e.g. SELECT s AS RETAINED SET FROM ... s), \
+                 not an aggregate over them"
+                    .into(),
+            ));
+        }
+        needs.dominator_children = true;
+        return Ok(QueryPlan {
+            kind: StageKind::SingleScan,
+            needs,
+            where_terms,
+            finalize_at: Phase::P3,
+            carry: CarryLayout::IndexOnly,
+            late_ops: vec![StageOp::RetainedSet { cap: DEFAULT_RETAINED_CAP }],
+            limit: q.limit,
+        });
+    }
+
+    // `dominators(alias)`: dominator-tree children of each matched object. The
+    // sole argument must name the FROM alias; anything else is a hard error.
+    if let [SelectItem::Attr(Attr::Dominators(a) | Attr::DominatorOf(a))] = q.select.as_slice() {
+        if Some(a.as_str()) != q.alias.as_deref() {
+            return Err(QueryError(format!(
+                "unknown alias '{a}'; the FROM clause binds {}",
+                match &q.alias {
+                    Some(al) => format!("alias '{al}'"),
+                    None => "no alias".to_string(),
+                }
+            )));
+        }
+        needs.dominator_children = true;
+        let op = match &q.select[0] {
+            SelectItem::Attr(Attr::DominatorOf(_)) => StageOp::DominatorOf,
+            _ => StageOp::DominatorChildren { cap: DEFAULT_LATE_CAP },
+        };
+        return Ok(QueryPlan {
+            kind: StageKind::SingleScan,
+            needs,
+            where_terms,
+            finalize_at: Phase::P3,
+            carry: CarryLayout::IndexOnly,
+            late_ops: vec![op],
+            limit: q.limit,
+        });
+    }
+
     let cross_phase = uses_retained(q);
     if cross_phase {
         needs.retained = true;
@@ -116,7 +190,15 @@ pub fn plan_query(q: &Query) -> Result<QueryPlan, QueryError> {
         (Phase::P1, Vec::new())
     };
 
-    Ok(QueryPlan { kind, needs, where_terms, finalize_at, late_ops, limit: q.limit })
+    Ok(QueryPlan {
+        kind,
+        needs,
+        where_terms,
+        finalize_at,
+        carry: CarryLayout::IndexOnly,
+        late_ops,
+        limit: q.limit,
+    })
 }
 
 fn uses_retained(q: &Query) -> bool {
@@ -431,6 +513,41 @@ mod tests {
     }
 
     // --- Additional tests requested by the user ---
+
+    #[test]
+    fn plan_dominators_emits_dominator_children_stage() {
+        let plan = plan_query(&parse("SELECT dominators(s) FROM java.lang.String s").unwrap()).unwrap();
+        assert!(matches!(plan.carry, CarryLayout::IndexOnly));
+        assert_eq!(plan.late_ops.len(), 1);
+        assert!(matches!(plan.late_ops[0], StageOp::DominatorChildren { .. }));
+        assert_eq!(plan.finalize_at, Phase::P3);
+        assert!(plan.needs.dominator_children);
+    }
+    #[test]
+    fn plan_dominators_unknown_alias_rejected() {
+        let err = plan_query(&parse("SELECT dominators(x) FROM java.lang.String s").unwrap()).unwrap_err();
+        assert!(err.to_string().contains("unknown alias 'x'"), "got: {err}");
+    }
+    #[test]
+    fn plan_dominatorof_emits_dominator_of_stage() {
+        let plan = plan_query(&parse("SELECT dominatorof(s) FROM java.lang.String s").unwrap()).unwrap();
+        assert_eq!(plan.late_ops.len(), 1);
+        assert!(matches!(plan.late_ops[0], StageOp::DominatorOf));
+        assert_eq!(plan.finalize_at, Phase::P3);
+        assert!(plan.needs.dominator_children);
+    }
+    #[test]
+    fn plan_retained_set_emits_retained_set_stage() {
+        let plan = plan_query(&parse("SELECT s AS RETAINED SET FROM java.lang.String s").unwrap()).unwrap();
+        assert!(matches!(plan.late_ops[0], StageOp::RetainedSet { .. }));
+        assert_eq!(plan.finalize_at, Phase::P3);
+        assert!(plan.needs.dominator_children);
+    }
+    #[test]
+    fn plan_retained_set_with_aggregate_rejected() {
+        let err = plan_query(&parse("SELECT count(s) AS RETAINED SET FROM java.lang.String s").unwrap()).unwrap_err();
+        assert!(err.to_string().contains("RETAINED SET cannot be combined with aggregate"), "got: {err}");
+    }
 
     #[test]
     fn classof_projection_sets_runtime_type() {
