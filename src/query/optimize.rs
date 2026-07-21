@@ -43,6 +43,23 @@ pub fn reorder_predicates(plan: &mut QueryPlan) {
     plan.where_terms.sort_by_key(|c| pred_cost_rank(c.cost));
 }
 
+/// Push a query's LIMIT down to the physical scan as an early-stop bound, but
+/// ONLY when doing so cannot change results. Unsafe when: there is no LIMIT;
+/// the query is order-sensitive (ORDER BY must see the full match set before
+/// truncating); or any late-phase op / UNION / subquery needs the complete
+/// match set (dominators, retained joins, refwalk, semi-joins all force a full
+/// scan). In those cases `scan_limit` stays `None` and the full semantic LIMIT
+/// is applied later.
+pub fn pushdown_limit(plan: &mut QueryPlan) {
+    let safe = plan.limit.is_some()
+        && !plan.order_sensitive
+        && plan.late_ops.is_empty()
+        && plan.union_branches.is_empty()
+        && plan.from_subplan.is_none()
+        && plan.in_subplans.is_empty();
+    plan.scan_limit = if safe { plan.limit } else { None };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,5 +205,121 @@ mod tests {
     #[test]
     fn schema_stats_default_is_empty() {
         assert!(SchemaStats::default().instance_counts.is_empty());
+    }
+
+    // ---------- pushdown_limit tests (Task 31) ----------
+
+    /// A simple LIMIT query with no ORDER BY and no late ops: pushdown_limit must
+    /// set scan_limit to the same value as limit.
+    #[test]
+    fn limit_pushed_to_scan_when_safe() {
+        let mut plan =
+            plan_query(&parse("SELECT @objectId FROM java.lang.String LIMIT 10").unwrap())
+                .unwrap();
+        pushdown_limit(&mut plan);
+        assert_eq!(
+            plan.scan_limit,
+            Some(10),
+            "scan_limit must equal limit when pushdown is safe"
+        );
+    }
+
+    /// ORDER BY @retainedHeapSize triggers a JoinRetained late op AND sets
+    /// order_sensitive. Either condition alone blocks pushdown; this tests both.
+    #[test]
+    fn limit_not_pushed_with_order_by() {
+        let mut plan = plan_query(
+            &parse(
+                "SELECT @objectId FROM java.lang.String ORDER BY @retainedHeapSize LIMIT 10",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        pushdown_limit(&mut plan);
+        assert_eq!(
+            plan.scan_limit, None,
+            "ORDER BY @retainedHeapSize must block limit pushdown (order_sensitive + late_ops)"
+        );
+    }
+
+    /// ORDER BY a plain scalar (@usedHeapSize) parses, does NOT produce a late op
+    /// (no cross-phase), but sets order_sensitive = true. That alone must be
+    /// enough to block pushdown. This exercises the order_sensitive guard in
+    /// isolation (no late_ops are present).
+    #[test]
+    fn limit_not_pushed_with_scalar_order_by() {
+        let mut plan = plan_query(
+            &parse(
+                "SELECT @objectId FROM java.lang.String ORDER BY @usedHeapSize LIMIT 10",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        // Verify precondition: no late ops (so order_sensitive is the ONLY blocker).
+        assert!(
+            plan.late_ops.is_empty(),
+            "precondition: ORDER BY @usedHeapSize must not produce late ops, got {:?}",
+            plan.late_ops
+        );
+        assert!(
+            plan.order_sensitive,
+            "precondition: ORDER BY must set order_sensitive"
+        );
+        pushdown_limit(&mut plan);
+        assert_eq!(
+            plan.scan_limit, None,
+            "order_sensitive alone (no late ops) must block limit pushdown"
+        );
+    }
+
+    /// A query with no LIMIT produces no scan_limit regardless.
+    #[test]
+    fn no_limit_means_no_scan_limit() {
+        let mut plan =
+            plan_query(&parse("SELECT @objectId FROM java.lang.String").unwrap()).unwrap();
+        pushdown_limit(&mut plan);
+        assert_eq!(plan.scan_limit, None, "absent LIMIT must leave scan_limit None");
+    }
+
+    /// A query with late ops (JoinRetained due to @retainedHeapSize in SELECT)
+    /// must not have its limit pushed down even though there is no ORDER BY on
+    /// a retained key (we add a LIMIT but no ORDER BY so order_sensitive is
+    /// false, but late_ops is non-empty).
+    #[test]
+    fn limit_not_pushed_with_late_ops() {
+        // @retainedHeapSize in SELECT → JoinRetained late op; no ORDER BY so
+        // order_sensitive is false; LIMIT 5 is present. The late op blocks pushdown.
+        let mut plan = plan_query(
+            &parse("SELECT @retainedHeapSize FROM java.lang.String LIMIT 5").unwrap(),
+        )
+        .unwrap();
+        // Verify precondition: late ops non-empty and order_sensitive false.
+        assert!(
+            !plan.late_ops.is_empty(),
+            "precondition: @retainedHeapSize in SELECT must produce late ops, got {:?}",
+            plan.late_ops
+        );
+        assert!(
+            !plan.order_sensitive,
+            "precondition: no ORDER BY → order_sensitive must be false"
+        );
+        pushdown_limit(&mut plan);
+        assert_eq!(
+            plan.scan_limit, None,
+            "non-empty late_ops must block limit pushdown"
+        );
+    }
+
+    /// Calling pushdown_limit twice on a safe plan must leave scan_limit
+    /// unchanged (idempotent).
+    #[test]
+    fn pushdown_is_idempotent() {
+        let mut plan =
+            plan_query(&parse("SELECT @objectId FROM java.lang.String LIMIT 10").unwrap())
+                .unwrap();
+        pushdown_limit(&mut plan);
+        assert_eq!(plan.scan_limit, Some(10), "first call must set scan_limit");
+        pushdown_limit(&mut plan);
+        assert_eq!(plan.scan_limit, Some(10), "second call must not change scan_limit");
     }
 }

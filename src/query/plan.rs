@@ -99,6 +99,17 @@ pub struct QueryPlan {
     pub carry: CarryLayout,
     pub late_ops: Vec<StageOp>,
     pub limit: Option<u64>,
+    /// Physical early-stop bound set by the optimizer's `pushdown_limit` pass.
+    /// When `Some(n)`, the executor may stop the heap scan as soon as `n`
+    /// matches are found. `None` means no early-stop (full scan required).
+    /// Initialized to `None` by the planner; the optimizer sets it later only
+    /// when doing so is provably safe (see `optimize::pushdown_limit`).
+    pub scan_limit: Option<u64>,
+    /// True iff the query has an ORDER BY clause. Recorded at plan time so the
+    /// optimizer's `pushdown_limit` pass can check safety without re-deriving it
+    /// from the AST: an ORDER BY requires the full match set to be materialized
+    /// and sorted before LIMIT applies, so the scan cannot be stopped early.
+    pub order_sensitive: bool,
     /// Number of projected columns (`[Star]` counts as 1). Used to verify
     /// UNION branch homogeneity.
     pub select_arity: usize,
@@ -273,6 +284,8 @@ fn plan_single(q: &Query) -> Result<QueryPlan, QueryError> {
             carry: CarryLayout::IndexOnly,
             late_ops: vec![StageOp::RetainedSet { cap: DEFAULT_RETAINED_CAP }],
             limit: q.limit,
+            scan_limit: None,
+            order_sensitive: q.order_by.is_some(),
             select_arity,
             union_branches: Vec::new(),
             // RETAINED SET / dominator queries don't compose with subqueries in
@@ -308,6 +321,8 @@ fn plan_single(q: &Query) -> Result<QueryPlan, QueryError> {
             carry: CarryLayout::IndexOnly,
             late_ops: vec![op],
             limit: q.limit,
+            scan_limit: None,
+            order_sensitive: q.order_by.is_some(),
             select_arity,
             union_branches: Vec::new(),
             from_subplan: None,
@@ -367,6 +382,8 @@ fn plan_single(q: &Query) -> Result<QueryPlan, QueryError> {
         carry: CarryLayout::IndexOnly,
         late_ops,
         limit: q.limit,
+        scan_limit: None,
+        order_sensitive: q.order_by.is_some(),
         select_arity,
         union_branches: Vec::new(),
         from_subplan,
