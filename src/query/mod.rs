@@ -7,6 +7,7 @@ pub mod ast;
 pub mod parse;
 pub mod plan;
 pub mod model;
+pub mod execute;
 
 use std::fmt;
 
