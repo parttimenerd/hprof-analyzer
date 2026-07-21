@@ -9,7 +9,18 @@ pub struct Query {
     pub from: ClassSpec,
     pub alias: Option<String>,
     pub where_: Option<Predicate>,
+    pub order_by: Option<OrderBy>,
     pub limit: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortDir { Asc, Desc }
+
+/// Our extension over MAT OQL: `ORDER BY <attr> [ASC|DESC]`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OrderBy {
+    pub key: Attr,
+    pub dir: SortDir,
 }
 
 /// One projected column.

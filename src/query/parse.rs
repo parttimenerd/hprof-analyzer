@@ -15,7 +15,7 @@ use logos::Logos;
 
 use crate::query::QueryError;
 use crate::query::ast::{
-    AggFunc, Attr, ClassSpec, CompareOp, Predicate, Query, SelectItem, Value,
+    AggFunc, Attr, ClassSpec, CompareOp, OrderBy, Predicate, Query, SelectItem, SortDir, Value,
 };
 
 /// OQL token kinds, lexed directly by logos.
@@ -219,19 +219,36 @@ where
         .then(any_ident().and_is(reserved_ident().not()).or_not())
         .then(ident_ci("WHERE").ignore_then(predicate).or_not())
         .then(
+            ident_ci("ORDER")
+                .ignore_then(ident_ci("BY"))
+                .ignore_then(attr.clone())
+                .then(
+                    ident_ci("ASC")
+                        .to(SortDir::Asc)
+                        .or(ident_ci("DESC").to(SortDir::Desc))
+                        .or_not()
+                        .map(|d| d.unwrap_or(SortDir::Asc)),
+                )
+                .map(|(key, dir)| OrderBy { key, dir })
+                .or_not(),
+        )
+        .then(
             ident_ci("LIMIT")
                 .ignore_then(select! { Token::Int(n) if n >= 0 => n as u64 }.labelled("LIMIT count"))
                 .or_not(),
         )
         .then_ignore(end())
         .map(
-            |((((((distinct, select), instanceof), class_name), alias), where_), limit)| Query {
-                distinct,
-                select,
-                from: ClassSpec { instanceof, class_name },
-                alias,
-                where_,
-                limit,
+            |(((((((distinct, select), instanceof), class_name), alias), where_), order_by), limit)| {
+                Query {
+                    distinct,
+                    select,
+                    from: ClassSpec { instanceof, class_name },
+                    alias,
+                    where_,
+                    order_by,
+                    limit,
+                }
             },
         )
 }
@@ -248,7 +265,9 @@ where
 pub const KEYWORDS: &[&str] = &["SELECT", "DISTINCT", "FROM", "classof"];
 
 /// Words reserved in predicate/clause position (`is_reserved`'s source set).
-pub const RESERVED: &[&str] = &["WHERE", "LIMIT", "UNION", "AND", "OR", "NOT", "INSTANCEOF"];
+pub const RESERVED: &[&str] = &[
+    "WHERE", "LIMIT", "UNION", "AND", "OR", "NOT", "INSTANCEOF", "ORDER", "BY", "ASC", "DESC",
+];
 
 /// Aggregate function names (`agg_func`'s source set), upper-cased.
 pub const AGG_FUNCS: &[&str] = &["COUNT", "SUM", "MIN", "MAX", "AVG"];
@@ -433,6 +452,7 @@ mod tests {
             from: ClassSpec { instanceof, class_name: class_name.into() },
             alias: alias.map(|s| s.into()),
             where_,
+            order_by: None,
             limit,
         }
     }
@@ -838,6 +858,30 @@ mod tests {
     fn retained_heap_size_usable_in_where() {
         let q = parse("SELECT @objectId FROM C WHERE @retainedHeapSize > 1024").unwrap();
         assert!(q.where_.is_some());
+    }
+
+    #[test]
+    fn parses_order_by_desc() {
+        let q = parse("SELECT @objectId FROM C ORDER BY @retainedHeapSize DESC").unwrap();
+        let ob = q.order_by.expect("ORDER BY parsed");
+        assert_eq!(ob.key, Attr::RetainedHeapSize);
+        assert_eq!(ob.dir, SortDir::Desc);
+    }
+    #[test]
+    fn order_by_defaults_to_asc() {
+        let q = parse("SELECT @objectId FROM C ORDER BY @usedHeapSize").unwrap();
+        assert_eq!(q.order_by.unwrap().dir, SortDir::Asc);
+    }
+    #[test]
+    fn order_by_before_limit() {
+        let q = parse("SELECT @objectId FROM C ORDER BY @retainedHeapSize DESC LIMIT 10").unwrap();
+        assert!(q.order_by.is_some());
+        assert_eq!(q.limit, Some(10));
+    }
+    #[test]
+    fn no_order_by_is_none() {
+        let q = parse("SELECT @objectId FROM C").unwrap();
+        assert!(q.order_by.is_none());
     }
 
     #[test]
