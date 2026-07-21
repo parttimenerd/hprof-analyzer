@@ -47,6 +47,32 @@ pub struct RunFlags {
     pub outbounds_by_rescan: bool,
 }
 
+impl RunFlags {
+    /// A one-line, human-readable disclosure of which edge structures this run
+    /// retains (and roughly the memory cost implied), or `None` when no edge
+    /// feature is used (the zero-cost path). Surfaced to the user so an edge query
+    /// makes its added RSS cost visible.
+    pub fn retention_note(&self) -> Option<String> {
+        let mut frags: Vec<&str> = Vec::new();
+        if self.retain_inbound {
+            frags.push("inbound reference index");
+        }
+        if self.retain_forward {
+            frags.push("forward reference graph rows");
+        }
+        if self.outbounds_by_rescan {
+            frags.push("outbound edges via rescan");
+        }
+        if frags.is_empty() {
+            return None;
+        }
+        Some(format!(
+            "edge query: retaining {} (added heap cost)",
+            frags.join(", ")
+        ))
+    }
+}
+
 /// Resolves a FROM class name/pattern (possibly a glob such as `com.acme.*`,
 /// and possibly `INSTANCEOF`) to the dense class-index bits it matches, and
 /// reports the total class count for sizing the bitset. Abstracts over the real
@@ -315,6 +341,57 @@ mod tests {
         let rows = f.retain_rows.expect("edge query retains rows");
         assert!(rows.get(0));
         assert!(rows.get(1));
+    }
+
+    #[test]
+    fn retention_note_describes_what_is_kept() {
+        let f = plan("SELECT @inbounds FROM java.lang.String");
+        let note = f.retention_note().expect("edge query discloses retention");
+        assert!(note.contains("inbound"), "note should mention inbound: {note}");
+
+        let none = plan("SELECT * FROM java.lang.String");
+        assert!(
+            none.retention_note().is_none(),
+            "no-edge run discloses nothing"
+        );
+    }
+
+    #[test]
+    fn retention_note_none_for_no_edge_run() {
+        let f = plan("SELECT @displayName FROM java.lang.String WHERE count > 3");
+        assert!(f.retention_note().is_none());
+    }
+
+    #[test]
+    fn retention_note_mentions_forward_for_path() {
+        let f = plan("SELECT path(s, java.lang.Integer) FROM java.lang.String s");
+        let note = f.retention_note().expect("path query discloses retention");
+        assert!(note.contains("forward"), "note should mention forward: {note}");
+    }
+
+    #[test]
+    fn retention_note_mentions_outbound() {
+        let f = plan("SELECT @outbounds FROM java.lang.String");
+        let note = f.retention_note().expect("outbound query discloses retention");
+        assert!(note.contains("outbound"), "note should mention outbound: {note}");
+    }
+
+    #[test]
+    fn retention_note_is_single_line() {
+        let f = plan("SELECT @inbounds FROM java.lang.String");
+        let note = f.retention_note().expect("edge query discloses retention");
+        assert!(!note.is_empty(), "note must be non-empty");
+        assert!(!note.contains('\n'), "note must be a single line: {note:?}");
+    }
+
+    #[test]
+    fn retention_note_combines_multiple() {
+        let q1 = parse("SELECT @inbounds FROM java.lang.String").unwrap();
+        let q2 = parse("SELECT @outbounds FROM java.lang.Integer").unwrap();
+        let f = plan_run(&[q1, q2], &fake_class_index(), 8).unwrap();
+        let note = f.retention_note().expect("edge queries disclose retention");
+        assert!(note.contains("inbound"), "note should mention inbound: {note}");
+        assert!(note.contains("outbound"), "note should mention outbound: {note}");
     }
 
     #[test]
