@@ -261,15 +261,15 @@ where
         let from_subquery = just(Token::LParen)
             .ignore_then(base_query)
             .then_ignore(just(Token::RParen))
-            .map(|inner: Query| (false, FromSource::Subquery(Box::new(inner))));
+            .map(|inner: Query| FromSource::Subquery(Box::new(inner)));
         let from_class = ident_ci("INSTANCEOF")
             .or_not()
             .map(|i| i.is_some())
             .then(any_ident())
             .map(|(instanceof, class_name)| {
-                (false, FromSource::Class(ClassSpec { instanceof, class_name }))
+                FromSource::Class(ClassSpec { instanceof, class_name })
             });
-        let from_source = from_subquery.or(from_class).map(|(_, fs)| fs);
+        let from_source = from_subquery.or(from_class);
 
         ident_ci("SELECT")
             .ignore_then(ident_ci("DISTINCT").or_not().map(|d| d.is_some()))
@@ -995,9 +995,12 @@ mod tests {
     #[test]
     fn union_inside_subquery_is_rejected() {
         // UNION is unreachable inside the parenthesized base_query, so the inner
-        // UNION fails to parse rather than silently nesting.
-        let err = parse("SELECT * FROM (SELECT * FROM A UNION SELECT * FROM B) x").unwrap_err();
-        assert!(!err.to_string().is_empty(), "UNION-in-subquery must be a parse error");
+        // UNION fails to parse (located error) rather than silently nesting.
+        let err = parse("SELECT * FROM (SELECT * FROM A UNION SELECT * FROM B) x")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unexpected"), "expected a located parse error, got: {err}");
+        assert!(err.contains(':'), "error should carry a line:col location, got: {err}");
     }
 
     #[test]
