@@ -160,6 +160,15 @@ fn plan_single(q: &Query) -> Result<QueryPlan, QueryError> {
         ));
     }
 
+    // Subqueries (FROM (...) and WHERE ... IN (...)) must be non-correlated:
+    // the inner query may not reference an alias bound by the outer query.
+    if let Some(inner) = q.from.as_subquery() {
+        reject_if_correlated(inner)?;
+    }
+    if let Some(pred) = &q.where_ {
+        reject_in_subqueries_if_correlated(pred)?;
+    }
+
     let select_arity = q.select.len();
     let mut needs = QueryNeeds::default();
     let mut is_aggregate = false;
@@ -379,6 +388,99 @@ fn collect_pred_fields(pred: &Predicate, out: &mut Vec<String>) {
         _ => {}
     }
 }
+
+/// The alias head of a dotted field reference, e.g. `s.count` → `Some("s")`.
+/// Bare fields (`count`) and non-field attrs yield `None`. A dotted `@`-attr is
+/// impossible (the lexer captures `@a.b` whole), so only `Attr::Field` matters.
+fn attr_alias_head(a: &Attr) -> Option<&str> {
+    match a {
+        Attr::Field(name) => name.split_once('.').map(|(head, _)| head),
+        _ => None,
+    }
+}
+
+/// Collect the alias heads (`a` in `a.field`) referenced by SELECT + WHERE of a
+/// query, excluding the query's own bound alias and any bare (dot-free) field.
+/// A head left over after excluding the bound alias came from *outside* this
+/// query — the signature of a correlated subquery.
+fn referenced_alias_heads(q: &Query) -> std::collections::HashSet<String> {
+    let mut heads = std::collections::HashSet::new();
+    let mut push = |a: &Attr, heads: &mut std::collections::HashSet<String>| {
+        if let Some(h) = attr_alias_head(a) {
+            heads.insert(h.to_string());
+        }
+    };
+    for item in &q.select {
+        match item {
+            SelectItem::Attr(a) => push(a, &mut heads),
+            SelectItem::Aggregate { arg, .. } => {
+                if let SelectItem::Attr(a) = arg.as_ref() {
+                    push(a, &mut heads);
+                }
+            }
+            SelectItem::Star => {}
+        }
+    }
+    if let Some(pred) = &q.where_ {
+        collect_pred_alias_heads(pred, &mut heads);
+    }
+    if let Some(a) = q.alias.as_deref() {
+        heads.remove(a);
+    }
+    heads
+}
+
+fn collect_pred_alias_heads(pred: &Predicate, heads: &mut std::collections::HashSet<String>) {
+    match pred {
+        Predicate::And(a, b) | Predicate::Or(a, b) => {
+            collect_pred_alias_heads(a, heads);
+            collect_pred_alias_heads(b, heads);
+        }
+        Predicate::Not(a) => collect_pred_alias_heads(a, heads),
+        Predicate::Compare { lhs, .. } => {
+            if let Some(h) = attr_alias_head(lhs) {
+                heads.insert(h.to_string());
+            }
+        }
+        // A nested IN-subquery is checked on its own via reject_if_correlated;
+        // its inner heads are relative to the inner query, not this one.
+        Predicate::InSubquery { .. } | Predicate::InstanceOf(_) => {}
+    }
+}
+
+/// A subquery is correlated iff it references an alias head it does not itself
+/// bind (its own FROM alias). We reject such queries with an actionable message
+/// rather than attempting per-outer-row re-execution (out of scope).
+fn reject_if_correlated(inner: &Query) -> Result<(), QueryError> {
+    for head in referenced_alias_heads(inner) {
+        return Err(QueryError(format!(
+            "correlated subqueries are not supported: inner query references outer alias `{head}`"
+        )));
+    }
+    Ok(())
+}
+
+/// Walk a WHERE predicate tree and reject any `IN (<subquery>)` whose inner
+/// query is correlated. Nested inners are checked recursively so a correlated
+/// subquery buried inside another subquery is still caught.
+fn reject_in_subqueries_if_correlated(pred: &Predicate) -> Result<(), QueryError> {
+    match pred {
+        Predicate::And(a, b) | Predicate::Or(a, b) => {
+            reject_in_subqueries_if_correlated(a)?;
+            reject_in_subqueries_if_correlated(b)
+        }
+        Predicate::Not(a) => reject_in_subqueries_if_correlated(a),
+        Predicate::InSubquery { inner, .. } => {
+            reject_if_correlated(inner)?;
+            if let Some(p) = &inner.where_ {
+                reject_in_subqueries_if_correlated(p)?;
+            }
+            Ok(())
+        }
+        Predicate::Compare { .. } | Predicate::InstanceOf(_) => Ok(()),
+    }
+}
+
 
 fn note_attr_need(item: &SelectItem, needs: &mut QueryNeeds) -> Result<(), QueryError> {
     match item {
@@ -872,5 +974,70 @@ mod tests {
         let schema = FakeSchema { class: "java.lang.String", fields: vec![] };
         let q = parse("SELECT @objectId, @usedHeapSize, @displayName FROM java.lang.String").unwrap();
         assert!(validate_fields(&q, &schema).is_ok());
+    }
+
+    // ---------- correlated-subquery rejection (Task 22) ----------
+
+    #[test]
+    fn correlated_from_subquery_rejected() {
+        // inner references outer alias `s` via a dotted LHS head `s.y` it doesn't
+        // bind (its own alias is `o`). RHS must be a literal in our grammar, so
+        // correlation surfaces on the compared attribute, not the value.
+        let q =
+            parse("SELECT * FROM (SELECT * FROM java.lang.Object o WHERE s.y > 0) x").unwrap();
+        let err = plan_query(&q).unwrap_err();
+        assert!(
+            err.0.contains("correlated") || err.0.contains("references"),
+            "got: {}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn noncorrelated_from_subquery_ok() {
+        let q =
+            parse("SELECT * FROM (SELECT * FROM java.lang.String s WHERE s.count > 0) x").unwrap();
+        assert!(plan_query(&q).is_ok());
+    }
+
+    #[test]
+    fn correlated_in_subquery_rejected() {
+        // The IN-subquery's inner references an unbound dotted head `t.v`.
+        let q = parse(
+            "SELECT * FROM java.lang.String s WHERE @objectAddress IN \
+             (SELECT * FROM java.lang.Integer i WHERE t.v > 0)",
+        )
+        .unwrap();
+        let err = plan_query(&q).unwrap_err();
+        assert!(
+            err.0.contains("correlated") || err.0.contains("references"),
+            "got: {}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn noncorrelated_in_subquery_ok() {
+        let q = parse(
+            "SELECT * FROM java.lang.String s WHERE @objectAddress IN \
+             (SELECT @objectAddress FROM java.lang.Integer i WHERE i.v > 0)",
+        )
+        .unwrap();
+        assert!(plan_query(&q).is_ok());
+    }
+
+    #[test]
+    fn referenced_alias_heads_skips_own_alias_and_bare_fields() {
+        // `s.count` head `s` is the bound alias (excluded); `count` is bare (no head).
+        let q = parse("SELECT s.count FROM java.lang.String s WHERE count > 0").unwrap();
+        assert!(referenced_alias_heads(&q).is_empty());
+    }
+
+    #[test]
+    fn referenced_alias_heads_collects_foreign_head() {
+        let q = parse("SELECT * FROM java.lang.String s WHERE s.a = 1 AND t.b = 2").unwrap();
+        let heads = referenced_alias_heads(&q);
+        assert!(heads.contains("t"), "expected foreign head `t`, got: {heads:?}");
+        assert!(!heads.contains("s"), "bound alias `s` must be excluded");
     }
 }
