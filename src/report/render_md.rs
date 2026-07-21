@@ -281,7 +281,7 @@ pub fn render_markdown(r: &Report) -> String {
 /// and either an error line or a result table with a row-count footer. Emits
 /// nothing when there are no queries so the document structure is unchanged for
 /// the common (no `--query`) case.
-fn render_custom_queries(queries: &[crate::query::model::QueryResult], out: &mut String) {
+pub(crate) fn render_custom_queries(queries: &[crate::query::model::QueryResult], out: &mut String) {
     use std::fmt::Write;
     if queries.is_empty() {
         return;
@@ -3212,6 +3212,51 @@ mod tests {
                 class: "java.lang.String".into()
             }),
             "java.lang.String@7"
+        );
+    }
+
+    #[test]
+    fn columns_but_zero_rows_emits_header_separator_and_footer_only() {
+        // A query that matched nothing: header + separator + empty body + footer.
+        let q = QueryResult {
+            name: "empty".into(),
+            oql: "SELECT name FROM C WHERE 1 = 0".into(),
+            columns: vec![col("name")],
+            rows: vec![],
+            row_count: 0,
+            truncated: false,
+            error: None,
+        };
+        let mut out = String::new();
+        render_custom_queries(std::slice::from_ref(&q), &mut out);
+        assert!(out.contains("| name |"), "header row missing: {out}");
+        assert!(out.contains("| --- |"), "separator row missing: {out}");
+        assert!(out.contains("_0 row(s)_"), "zero-row footer missing: {out}");
+        // No stray body row between the separator and the footer.
+        assert!(!out.contains("| null |"), "must not emit a body row for a rowless result: {out}");
+    }
+
+    #[test]
+    fn float_and_objref_render_through_the_table_path() {
+        // Exercise Float and ObjRef via the full table renderer, not just the
+        // fmt_query_value unit — the cells must appear formatted in a data row.
+        let q = QueryResult {
+            name: "mixed".into(),
+            oql: "SELECT @usedHeapSize, this FROM C".into(),
+            columns: vec![col("size"), col("obj")],
+            rows: vec![vec![
+                QueryValue::Float(2.5),
+                QueryValue::ObjRef { index: 12, class: "java.lang.String".into() },
+            ]],
+            row_count: 1,
+            truncated: false,
+            error: None,
+        };
+        let mut out = String::new();
+        render_custom_queries(std::slice::from_ref(&q), &mut out);
+        assert!(
+            out.contains("| 2.5 | java.lang.String@12 |"),
+            "Float and ObjRef cells must render in the data row: {out}"
         );
     }
 }

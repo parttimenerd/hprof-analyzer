@@ -34,6 +34,7 @@ pub fn render_markdown_graphs(r: &Report) -> String {
     render_retention_concentration_graphs(&r.overview, &mut out);
     render_dominator_depth_graphs(&r.overview, &mut out);
     render_leak_indicators(&r.leak_indicators, &mut out);
+    render_custom_queries(&r.queries, &mut out);
     render_glossary(&mut out);
     out
 }
