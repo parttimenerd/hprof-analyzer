@@ -271,8 +271,58 @@ pub fn render_markdown(r: &Report) -> String {
     render_retention_concentration(&r.overview, &mut out);
     render_dominator_depth(&r.overview, &mut out);
     render_leak_indicators(&r.leak_indicators, &mut out);
+    render_custom_queries(&r.queries, &mut out);
     render_glossary(&mut out);
     out
+}
+
+/// Render the "Custom Queries" section (plain Markdown): one sub-section per
+/// user-supplied OQL query — the query name, the OQL text in a fenced block,
+/// and either an error line or a result table with a row-count footer. Emits
+/// nothing when there are no queries so the document structure is unchanged for
+/// the common (no `--query`) case.
+fn render_custom_queries(queries: &[crate::query::model::QueryResult], out: &mut String) {
+    use std::fmt::Write;
+    if queries.is_empty() {
+        return;
+    }
+    let _ = writeln!(out, "\n## Custom Queries\n");
+    for q in queries {
+        let _ = writeln!(out, "### {}\n", q.name);
+        let _ = writeln!(out, "```\n{}\n```\n", q.oql);
+        if let Some(err) = &q.error {
+            let _ = writeln!(out, "**Error:** {err}\n");
+            continue;
+        }
+        let header: Vec<&str> = q.columns.iter().map(|c| c.name.as_str()).collect();
+        let _ = writeln!(out, "| {} |", header.join(" | "));
+        let _ = writeln!(out, "|{}", " --- |".repeat(header.len().max(1)));
+        for row in &q.rows {
+            let cells: Vec<String> = row.iter().map(fmt_query_value).collect();
+            let _ = writeln!(out, "| {} |", cells.join(" | "));
+        }
+        let _ = writeln!(
+            out,
+            "\n_{} row(s){}_\n",
+            q.row_count,
+            if q.truncated { ", truncated" } else { "" }
+        );
+    }
+}
+
+/// Format a single `QueryValue` cell for a Markdown table. Pipes inside string
+/// values are escaped so they don't break the table; object references render
+/// as `class@index`.
+fn fmt_query_value(v: &crate::query::model::QueryValue) -> String {
+    use crate::query::model::QueryValue as V;
+    match v {
+        V::Null => "null".into(),
+        V::Bool(b) => b.to_string(),
+        V::Int(i) => i.to_string(),
+        V::Float(f) => format!("{f}"),
+        V::Str(s) => s.replace('|', "\\|"),
+        V::ObjRef { index, class } => format!("{class}@{index}"),
+    }
 }
 
 /// Linked in-document table of contents (top-level sections only). Anchors use
@@ -3000,4 +3050,168 @@ pub(crate) fn render_header_overhead(
     }
     t.render(out);
     out.push('\n');
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{fmt_query_value, render_custom_queries};
+    use crate::query::model::{QueryColumn, QueryResult, QueryValue};
+
+    fn col(name: &str) -> QueryColumn {
+        QueryColumn { name: name.into() }
+    }
+
+    #[test]
+    fn empty_queries_produce_empty_string() {
+        let mut out = String::new();
+        render_custom_queries(&[], &mut out);
+        assert_eq!(out, "", "the is_empty gate must emit nothing");
+    }
+
+    #[test]
+    fn normal_result_renders_full_table() {
+        let q = QueryResult {
+            name: "q1".into(),
+            oql: "SELECT a, b FROM C".into(),
+            columns: vec![col("a"), col("b")],
+            rows: vec![
+                vec![QueryValue::Int(1), QueryValue::Str("x".into())],
+                vec![QueryValue::Int(2), QueryValue::Str("y".into())],
+            ],
+            row_count: 2,
+            truncated: false,
+            error: None,
+        };
+        let mut out = String::new();
+        render_custom_queries(std::slice::from_ref(&q), &mut out);
+        assert!(out.contains("## Custom Queries"), "section heading missing: {out}");
+        assert!(out.contains("### q1"), "query name heading missing: {out}");
+        // Fenced OQL block.
+        assert!(out.contains("```\nSELECT a, b FROM C\n```"), "fenced OQL block missing: {out}");
+        // Header row + separator.
+        assert!(out.contains("| a | b |"), "header row missing: {out}");
+        assert!(out.contains("| --- | --- |"), "separator row missing: {out}");
+        // Both data rows.
+        assert!(out.contains("| 1 | x |"), "first data row missing: {out}");
+        assert!(out.contains("| 2 | y |"), "second data row missing: {out}");
+        // Footer.
+        assert!(out.contains("_2 row(s)_"), "row-count footer missing: {out}");
+        assert!(!out.contains("truncated"), "non-truncated result must not say truncated: {out}");
+    }
+
+    #[test]
+    fn error_result_shows_error_and_no_table() {
+        let q = QueryResult {
+            name: "bad".into(),
+            oql: "SELECT bogus".into(),
+            columns: vec![col("x")],
+            rows: vec![],
+            row_count: 0,
+            truncated: false,
+            error: Some("parse failed near 'bogus'".into()),
+        };
+        let mut out = String::new();
+        render_custom_queries(std::slice::from_ref(&q), &mut out);
+        assert!(out.contains("**Error:** parse failed near 'bogus'"), "error line missing: {out}");
+        // No table header/separator emitted for the errored query.
+        assert!(!out.contains("| x |"), "errored query must not emit a header row: {out}");
+        assert!(!out.contains("| --- |"), "errored query must not emit a separator row: {out}");
+    }
+
+    #[test]
+    fn truncated_result_footer_notes_truncation() {
+        let q = QueryResult {
+            name: "big".into(),
+            oql: "SELECT * FROM C".into(),
+            columns: vec![col("v")],
+            rows: vec![vec![QueryValue::Int(1)]],
+            row_count: 5000,
+            truncated: true,
+            error: None,
+        };
+        let mut out = String::new();
+        render_custom_queries(std::slice::from_ref(&q), &mut out);
+        assert!(out.contains("_5000 row(s), truncated_"), "truncated footer missing: {out}");
+    }
+
+    #[test]
+    fn str_cell_pipe_is_escaped() {
+        let q = QueryResult {
+            name: "pipes".into(),
+            oql: "SELECT s FROM C".into(),
+            columns: vec![col("s")],
+            rows: vec![vec![QueryValue::Str("a|b".into())]],
+            row_count: 1,
+            truncated: false,
+            error: None,
+        };
+        let mut out = String::new();
+        render_custom_queries(std::slice::from_ref(&q), &mut out);
+        assert!(out.contains("| a\\|b |"), "pipe in Str cell must be escaped as \\|: {out}");
+    }
+
+    #[test]
+    fn multiple_queries_each_get_a_section() {
+        let queries = vec![
+            QueryResult {
+                name: "first".into(),
+                oql: "SELECT 1".into(),
+                columns: vec![col("a")],
+                rows: vec![vec![QueryValue::Int(1)]],
+                row_count: 1,
+                truncated: false,
+                error: None,
+            },
+            QueryResult {
+                name: "second".into(),
+                oql: "SELECT 2".into(),
+                columns: vec![col("b")],
+                rows: vec![vec![QueryValue::Int(2)]],
+                row_count: 1,
+                truncated: false,
+                error: None,
+            },
+        ];
+        let mut out = String::new();
+        render_custom_queries(&queries, &mut out);
+        assert!(out.contains("### first"), "first query heading missing: {out}");
+        assert!(out.contains("### second"), "second query heading missing: {out}");
+        // Only one top-level section heading regardless of query count.
+        assert_eq!(out.matches("## Custom Queries").count(), 1, "exactly one section heading: {out}");
+    }
+
+    #[test]
+    fn zero_column_result_still_emits_a_separator() {
+        // A pathological result with no columns should not produce a broken
+        // separator row; the .max(1) keeps at least one `--- |` cell.
+        let q = QueryResult {
+            name: "nocols".into(),
+            oql: "SELECT".into(),
+            columns: vec![],
+            rows: vec![],
+            row_count: 0,
+            truncated: false,
+            error: None,
+        };
+        let mut out = String::new();
+        render_custom_queries(std::slice::from_ref(&q), &mut out);
+        assert!(out.contains("| --- |"), "empty-column result must still emit a valid separator: {out}");
+    }
+
+    #[test]
+    fn fmt_query_value_covers_all_variants() {
+        assert_eq!(fmt_query_value(&QueryValue::Null), "null");
+        assert_eq!(fmt_query_value(&QueryValue::Bool(true)), "true");
+        assert_eq!(fmt_query_value(&QueryValue::Bool(false)), "false");
+        assert_eq!(fmt_query_value(&QueryValue::Int(-42)), "-42");
+        assert_eq!(fmt_query_value(&QueryValue::Float(1.5)), "1.5");
+        assert_eq!(fmt_query_value(&QueryValue::Str("hi".into())), "hi");
+        assert_eq!(
+            fmt_query_value(&QueryValue::ObjRef {
+                index: 7,
+                class: "java.lang.String".into()
+            }),
+            "java.lang.String@7"
+        );
+    }
 }

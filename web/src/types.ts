@@ -671,6 +671,29 @@ export interface TriageSignal {
   anchor_label?: string | null;
 }
 
+export interface QueryColumn {
+  name: string;
+}
+
+// Mirrors the Rust QueryValue tagged enum (#[serde(tag="kind", content="v")]).
+export type QueryValue =
+  | { kind: "null" }
+  | { kind: "bool"; v: boolean }
+  | { kind: "int"; v: number }
+  | { kind: "float"; v: number }
+  | { kind: "str"; v: string }
+  | { kind: "obj_ref"; v: { index: number; class: string } };
+
+export interface QueryResult {
+  name: string;
+  oql: string;
+  columns: QueryColumn[];
+  rows: QueryValue[][];
+  row_count: number;
+  truncated: boolean;
+  error?: string;
+}
+
 export interface Report {
   schema_version: number;
   generated: string;
@@ -700,6 +723,8 @@ export interface Report {
   leak_indicators?: LeakIndicators;
   // Fired OOM-triage signals, evaluated once in Rust (order = render order).
   triage?: TriageSignal[];
+  // Custom OQL query results. Absent/empty when no queries were run.
+  queries?: QueryResult[];
 }
 
 declare global {

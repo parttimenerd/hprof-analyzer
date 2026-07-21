@@ -1,5 +1,5 @@
 import React from "react";
-import type { AllocSites, ArraysBySize, BiggestCollectionRow, BiggestCollections, ClassRow, CollectionAttribution, CollectionContents, CollectionsAnalysis, Component, DominatorAnalysis, DuplicateClass, FieldsBySize, FillRatioBucket, HeapComposition, HistRow, KindStat, LeakIndicators, LoaderRollup, MergedPathNode, ObjRow, PackageNode, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalObj, TopArrays, TopComponents, UnreachableClassRow } from "./types";
+import type { AllocSites, ArraysBySize, BiggestCollectionRow, BiggestCollections, ClassRow, CollectionAttribution, CollectionContents, CollectionsAnalysis, Component, DominatorAnalysis, DuplicateClass, FieldsBySize, FillRatioBucket, HeapComposition, HistRow, KindStat, LeakIndicators, LoaderRollup, MergedPathNode, ObjRow, PackageNode, QueryResult, QueryValue, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalObj, TopArrays, TopComponents, UnreachableClassRow } from "./types";
 import { fmtCount, fmtExactBytes, formatBytes, formatEpochMs, pctOf, shortLoader } from "./format";
 import {
   CompositionStackedBar,
@@ -142,6 +142,7 @@ function Nav({ report }: { report: Report }) {
   addData("references", "References");
   addData("unreachable-objects", "Unreachable Objects");
   if (report.alloc_sites) addData("alloc-sites", "Allocation Sites");
+  if (report.queries?.length) addData("custom-queries", "Custom Queries");
 
   // ── Distribution group ──
   let distGroupSet = false;
@@ -3302,6 +3303,74 @@ function LeakIndicatorsSection({ data }: { data?: LeakIndicators }) {
 }
 
 // ── Glossary (end section, mirrors the Markdown glossary) ─────────────────────
+// ── Custom Queries ───────────────────────────────────────────────────────────
+// Renders report.queries (user-supplied OQL results). Query results are already
+// LIMIT-capped server-side, so every row is rendered (no ShowMore). React
+// escapes each {cell} text child automatically — no manual HTML escaping.
+
+// Format a single QueryValue cell for display. Mirrors fmt_query_value in
+// src/report/render_md.rs (ObjRef renders as `class@index`).
+function fmtCell(v: QueryValue): string {
+  switch (v.kind) {
+    case "null":
+      return "null";
+    case "bool":
+    case "int":
+    case "float":
+      return String(v.v);
+    case "str":
+      return v.v;
+    case "obj_ref":
+      return `${v.v.class}@${v.v.index}`;
+  }
+}
+
+function CustomQueriesSection({ report }: { report: Report }) {
+  const queries = report.queries;
+  if (!queries?.length) return null;
+  return (
+    <section id="custom-queries">
+      <h2>Custom Queries</h2>
+      <p className="subtitle">Results of the OQL queries supplied on the command line.</p>
+      {queries.map((q: QueryResult, qi) => (
+        <div key={qi}>
+          <h3>{q.name}</h3>
+          <pre>{q.oql}</pre>
+          {q.error ? (
+            <p className="subtitle">
+              <strong>Error:</strong> {q.error}
+            </p>
+          ) : (
+            <>
+              <table>
+                <thead>
+                  <tr>
+                    {q.columns.map((c, ci) => (
+                      <th key={ci}>{c.name}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {q.rows.map((row, ri) => (
+                    <tr key={ri}>
+                      {row.map((cell, ci) => (
+                        <td key={ci}>{fmtCell(cell)}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="subtitle">
+                {q.row_count} row(s){q.truncated ? ", truncated" : ""}
+              </p>
+            </>
+          )}
+        </div>
+      ))}
+    </section>
+  );
+}
+
 function GlossarySection() {
   const entries: [string, React.ReactNode][] = [
     ["Shallow size", <>the memory an object occupies by itself: its header plus its own fields (and, for an array, its elements). It does <em>not</em> include the objects it points to.</>],
@@ -3620,6 +3689,7 @@ export default function App({ report }: { report: Report }) {
       <RetentionConcentrationSection report={report} />
       <DominatorDepthSection report={report} />
       <LeakIndicatorsSection data={report.leak_indicators} />
+      <CustomQueriesSection report={report} />
       <GlossarySection />
       <BackToTop />
     </div>
