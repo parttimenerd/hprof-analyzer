@@ -6,6 +6,7 @@
 pub mod ast;
 pub mod parse;
 pub mod plan;
+pub mod model;
 
 use std::fmt;
 
