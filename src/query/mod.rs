@@ -11,6 +11,7 @@ pub mod execute;
 pub mod histogram;
 pub mod run;
 pub mod repl;
+pub mod carry;
 
 use std::fmt;
 
@@ -33,4 +34,11 @@ pub trait ObjectVisitor {
     /// `src_idx` is the dense object index; `class_id` the class-object address;
     /// `blob` the raw big-endian instance field bytes.
     fn visit_instance(&mut self, src_idx: usize, class_id: u64, blob: &[u8]);
+
+    /// Per-array callback for OBJECT_ARRAY_DUMP / PRIMITIVE_ARRAY_DUMP records.
+    /// `class_name` is the array's own dotted class name (e.g. `java.lang.Object[]`
+    /// or `char[]`) — primitive arrays carry no resolvable class-object address,
+    /// so the name is passed directly. `length` is the element count, projected
+    /// as `@length`. Defaulted to a no-op so instance-only visitors ignore arrays.
+    fn visit_array(&mut self, _src_idx: usize, _class_name: &str, _length: u32) {}
 }
