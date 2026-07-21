@@ -28,61 +28,182 @@ nothing; a query that follows a 4-hop reference path pays for exactly that walk.
 
 ## Supported OQL Subset (target)
 
+The grammar tracks **Eclipse MAT OQL** so real MAT queries paste in unchanged
+wherever the underlying data exists. MAT's own grammar is:
+
 ```
-SELECT  <select-list>
-FROM    <class-spec> [ <alias> ]
+SELECT [ DISTINCT | AS RETAINED SET | OBJECTS ] <select-list>
+FROM   [ INSTANCEOF | OBJECTS ] <class-spec> [ <alias> ]
 [ WHERE <predicate> ]
-[ GROUP BY <class> ]
-[ ORDER BY <expr> [ASC|DESC] ]
-[ LIMIT <n> ]
+[ UNION ( <query> ) ]
 ```
 
-**FROM / class-spec**
-- Exact class: `com.acme.Order`
-- Wildcard: `com.acme.*` (glob; `*` = any run, `?` = any char)
-- Regex: `/.*Cache$/` (glob-subset in the first cut — see "Dependencies")
-- Subclass match: `INSTANCEOF com.acme.AbstractJob` (matches subclasses too)
+MAT has **no** `GROUP BY` / `ORDER BY` / `LIMIT` — those are our additive
+extensions (flagged as such below), chosen because "top N by retained" is the
+single most common heap question and MAT makes users do it in the UI instead.
 
-**SELECT list**
-- `*` (default row: object index + class + shallow + retained)
-- Scalar/String field references: `f.status`, `f.name`
+**FROM / class-spec** (MAT-compatible)
+- Exact class: `com.acme.Order`
+- Array types: `char[]`, `byte[]`, `java.lang.Object[]` (first-class in MAT; the
+  canonical "biggest arrays" queries use these)
+- Subclass match: `FROM INSTANCEOF com.acme.AbstractJob` (MAT keyword form;
+  matches subclasses too)
+- Wildcard / regex class-spec: `com.acme.*`, `"com\.acme\..*Cache"` — **MAT
+  treats a quoted class-spec as a Java regex.** We accept both a glob form
+  (`com.acme.*`) and a regex form; see "Regex compatibility" in Dependencies.
+- *(Extension, not MAT)* `FROM OBJECTS <addr>` and `FROM (<subquery>)` are
+  recognized and **rejected** with a clear message (see rejected list).
+
+**SELECT list** (MAT attribute names — this is a hard compatibility point)
+- `*` (MAT default row) and `SELECT OBJECTS <expr>` (the whole object, not columns)
+- Scalar/String field references and instance fields: `s.value`, `f.status`,
+  `m.size` (collection sizes are plain field reads, exactly as in MAT)
 - Path expressions (any depth, adaptive): `f.owner.department.name`
-- Attributes: `@objectId`, `@usedHeapSize` (shallow), `@retainedHeap`, `@type`
-  (runtime class name), `@displayName`
+- **Built-in attributes, spelled as MAT spells them**:
+  - `@objectId` — dense object id
+  - `@objectAddress` — heap address (hex via `toHex(...)`)
+  - `@usedHeapSize` — shallow size
+  - `@retainedHeapSize` — retained size *(MAT's name; we accept `@retainedHeap`
+    as an alias for ergonomics but echo the canonical name)*
+  - `@displayName` — MAT-style label
+  - `@length` — array length (`arr.@length`), a very common filter
+  - `@clazz` / `classof(x)` — the object's class (runtime type)
+  - `@GCRootInfo` — GC-root kind, when the object is a root
 - Arithmetic on numeric expressions: `f.count * 8`, `@usedHeapSize + f.pad`
-- Aggregate functions with `GROUP BY`: `COUNT(*)`, `SUM(<expr>)`,
-  `MIN/MAX/AVG(<expr>)`; and top-level aggregates without `GROUP BY` that fold to
-  a single row (`SELECT COUNT(*) FROM ...`, `SELECT SUM(@retainedHeap) FROM ...`)
-- `toString(f)` for String-typed values
+- `toString(x)` for String/CharSequence values; `toHex(@objectAddress)`
+- *(Extension)* Aggregates with `GROUP BY`: `COUNT(*)`, `SUM(<expr>)`,
+  `MIN/MAX/AVG(<expr>)`; and top-level aggregates without `GROUP BY` folding to a
+  single row (`SELECT COUNT(*) FROM ...`, `SELECT SUM(@retainedHeapSize) FROM ...`)
 - Column aliasing: `SELECT f.name AS owner`
 
-**WHERE predicate**
+**WHERE predicate** (MAT operators)
 - Comparisons on scalars: `=,!=,<,<=,>,>=` against int/long/short/byte/
   char/float/double/boolean
-- String ops: `=`, `!=`, `LIKE "sub%"` (glob), regex `f.name =~ /.*tmp.*/`
-  (glob-subset in the first cut — see "Dependencies")
-- Numeric/attribute predicates: `WHERE @retainedHeap > 1048576`,
-  `WHERE @usedHeapSize > 64` (retained predicates force the CrossPhase strategy)
+- String matching: **`LIKE` is a Java regex in MAT**, e.g.
+  `WHERE toString(s) LIKE ".*passwd.*"` — we implement `LIKE` as regex to match
+  MAT (see "Regex compatibility"); `=`/`!=` are exact string compares
+- Attribute predicates: `WHERE @retainedHeapSize > 1048576`,
+  `WHERE s.@length > 100000`, `WHERE @usedHeapSize > 64` (retained predicates
+  force a P3 stage)
 - Path expressions in predicates, any depth: `WHERE f.owner.name = "root"`
-- Boolean composition: `AND`, `OR`, `NOT`, parentheses (full precedence via Pratt)
-- Set membership: `f.status IN ("OPEN", "PENDING")`
+- Boolean composition: `and`, `or`, `not`, parentheses (MAT keywords; we also
+  accept `AND`/`OR`/`NOT`. Full precedence via Pratt)
+- Set membership *(extension)*: `f.status IN ("OPEN", "PENDING")`
 - `INSTANCEOF` test on a field's runtime type
 - Null tests: `f.ref = null`, `f.ref != null`
 
 **Class-spec grammar** applies uniformly to `FROM` and to `INSTANCEOF` operands.
 
-**Explicitly rejected (clear error naming the construct, not silent degrade)**
-- Graph primitives as query functions: `dominators(x)`, `inbounds(x)`,
-  `outbounds(x)`, `path(a,b)` — the analyzer does not expose the raw graph to
-  queries (the CSR is torn down mid-pipeline).
-- `UNION`, correlated subqueries, `SELECT ... FROM (subquery)`.
+**Explicitly rejected (clear error naming the MAT construct, not silent degrade)**
+- **Raw-edge** graph primitives: `inbounds(x)`, `outbounds(x)`, `path(a,b)` — the
+  forward/inbound reference CSR is *consumed* by the dominator computation
+  mid-pipeline (moved into the transpose, then freed), so per-object in/out edges
+  no longer exist at query time. Rejected with a message pointing to the
+  reference/path reports. *(Note: dominator-based primitives are NOT in this list
+  — see below; they are supported because `idom` survives.)*
+- `UNION (<query>)` in its general form (arbitrary N-way set union of independent
+  scans), correlated subqueries, `SELECT ... FROM (<subquery>)`,
+  `FROM OBJECTS <addr>` — recognized MAT forms, rejected as out of subset.
+- `SELECT DISTINCT` across a projection that would require a second materialized
+  set larger than the match-set cap (bounded-`DISTINCT` on a small projection is
+  allowed).
 - Joins between two independently-scanned classes (only reference-path traversal
   from a single FROM class is supported, not arbitrary N×M joins).
-- `DISTINCT` across a projection that would require a second materialized set
-  larger than the match-set cap.
+
+**Supported via the surviving dominator data** (see "Dominator-based primitives")
+- `dominators(x)` — immediate dominees of `x` (the dominator-tree children).
+- `SELECT ... AS RETAINED SET` — the retained set of the matched objects.
+- `x.@retainedHeapSize` and retained-ordered results (already covered as
+  CrossPhase).
 
 Each rejection is produced by the planner with the exact offending construct in
 the message, so the user learns *why* and what to change.
+
+## Coverage vs. real-world MAT OQL
+
+The subset above is sized against the queries people actually run in MAT. Each
+row is a common query pattern, its status here, and the strategy shape it lands
+in:
+
+| Common MAT query | Status | Shape |
+|---|---|---|
+| `SELECT * FROM java.lang.String s WHERE toString(s) LIKE ".*passwd.*"` | ✅ | SingleScan (String decode + regex) |
+| `SELECT * FROM char[] s WHERE s.@length > 100000` | ✅ | SingleScan (array `@length`) |
+| `SELECT * FROM byte[] b WHERE b.@usedHeapSize > 1048576` | ✅ | SingleScan (shallow attr) |
+| `SELECT * FROM INSTANCEOF java.util.HashMap m WHERE m.size > 1000` | ✅ | SingleScan (INSTANCEOF + field) |
+| `SELECT x, x.@retainedHeapSize FROM ... ORDER BY x.@retainedHeapSize DESC` (ext.) | ✅ | CrossPhase (match P1 → join P3) |
+| `SELECT toString(s.name), s.@objectAddress FROM com.acme.Job s` | ✅ | SingleScan (String + attr projection) |
+| `SELECT * FROM INSTANCEOF java.lang.ClassLoader k` | ✅ | SingleScan (class bitset) |
+| `SELECT f.owner.name FROM com.acme.File f WHERE f.owner.name = "root"` | ✅ | RefWalk (1 hop) |
+| `SELECT COUNT(*) FROM com.acme.Order` (ext.) | ✅ | HistogramOnly |
+| `SELECT * FROM java.lang.String s WHERE s.@GCRootInfo != null` | ⚠️ partial | needs GC-root flags live at match time; served only if the query is planned onto a phase where root info is available, else rejected with a clear message |
+| `SELECT dominators(s) FROM ... s` | ✅ | DominatorStage (P3, reads surviving `idom`/`dc_off`/`dc_tgt`) |
+| `SELECT s AS RETAINED SET FROM ... s` | ✅ | RetainedSetStage (P3, dominator-subtree closure over matches) |
+| `SELECT inbounds(s) FROM ... s` / `outbounds(s)` / `path(a,b)` | ❌ rejected | raw ref CSR consumed by dominator pass; points to reference report |
+| `SELECT * FROM x UNION (SELECT * FROM y)` | ❌ rejected | general set union, out of subset, named |
+
+The remaining capability gap vs. MAT is the **raw-edge family**
+(`inbounds`/`outbounds`/`path`): these need the forward/inbound reference CSR,
+which the pipeline consumes to build the dominator tree and then frees. That is
+an intentional, documented boundary — and the analyzer already ships dedicated
+reference/path reports that answer those questions directly. Crucially, the
+**dominator-based** primitives (`dominators()`, `AS RETAINED SET`) that MAT users
+reach for most are now *supported*, because the immediate-dominator array
+survives to report time (see next section). Everything else in the common-query
+set is covered.
+
+## Dominator-based primitives (`dominators()`, `AS RETAINED SET`)
+
+The initial reject-everything-graph stance was too conservative. Reading the
+actual pipeline (`main.rs::run`) shows which graph structures *survive* to report
+time, and they are exactly the dominator ones:
+
+| Structure | Built at | Freed at | Live at report build? |
+|---|---|---|---|
+| forward CSR (`fwd_offsets`/`fwd_targets`) | pass2 | moved into inbound transpose (~L849) | **no** |
+| inbound CSR | transpose | consumed by dominator (~L883-884) | **no** |
+| `g.idom` (immediate dominator per object) | ~L876 | *not freed* | **yes** |
+| dominator-children CSR (`dc_off`/`dc_tgt`) | ~L894 | dropped after `build_model` (~L971) | **yes** (during build) |
+| `g.retained[]` | ~L920 | end of pipeline | **yes** |
+
+So the *raw edges* are gone (killing `inbounds`/`outbounds`/`path`), but the
+**dominator tree is intact**. That is enough for the two primitives MAT users
+actually want:
+
+- **`dominators(x)`** = the dominator-tree children of `x` = the `dc_tgt` slice at
+  `dc_off[x]`. A direct O(children) lookup, no graph walk.
+- **`SELECT ... AS RETAINED SET`** = the union of the dominator *subtrees* rooted
+  at the matched objects (MAT's definition of a set's retained set). A bounded DFS
+  over `dc_off`/`dc_tgt` from each match, deduped via a visited bitset — the same
+  traversal `compute_retained` already performs, reused read-only.
+
+**Planner/executor integration.** Both become **P3/P4 stages** that consume the
+match carry from P1 (`IndexOnly`) and read the surviving `idom`/`dc_*`/`retained`
+structures — no new pipeline data, no new pass, just a read of state that is
+already resident when the report is built:
+
+- `DominatorChildrenStage` (for `dominators(x)`): for each carried match index,
+  emit its `dc` children (bounded by the result cap).
+- `RetainedSetStage` (for `AS RETAINED SET`): seed a work queue with the carried
+  matches, DFS the dominator children, mark a visited bitset, emit/aggregate the
+  closure (bounded; overflow sets `truncated`).
+
+**Constraint — timing.** These stages must run while `dc_off`/`dc_tgt` are alive,
+i.e. *inside or before* `build_model` (they are dropped just after). The executor
+therefore hooks the query stages into the same window `build_model` uses, rather
+than after it. The planner marks such a query `finalize_at = P3(dom)` and the
+runner schedules the dominator stages in that window. `idom` and `retained[]`
+alone survive even past that window, so `dominatorof(x)` (single immediate
+dominator) and retained *sizes* are available report-wide; only the
+subtree-expanding forms need the `dc_*` window.
+
+**`UNION`** stays rejected in general (arbitrary set union of independent scans),
+but the common `AS RETAINED SET` idiom — the reason most `UNION`-looking MAT
+queries exist — is now served directly, removing the main motivation for it.
+
+This is a genuine capability win: it moves `dominators()` and `AS RETAINED SET`
+from "rejected" to "supported" purely by *reading data the pipeline already keeps
+resident at report time*, with zero extra memory or passes.
 
 ## Architecture
 
@@ -135,7 +256,8 @@ pub struct QueryPlan {
 pub struct Stage {
     pub phase: Phase,             // P0 | P1 | P2 | P3 | P4
     pub reads: Vec<Requirement>,  // minimal fields/edges/attrs read at this phase
-    pub op: StageOp,              // Match | ResolveHop | JoinRetained | Aggregate | Finalize
+    pub op: StageOp,              // Match | ResolveHop | JoinRetained |
+                                  // DominatorChildren | RetainedSet | Aggregate | Finalize
     pub produces: Option<CarryId>,// the carry this stage fills (if any)
     pub consumes: Vec<CarryId>,   // carries this stage reads
 }
@@ -158,12 +280,12 @@ this exact map (verified against `main.rs::run` + `pass2::build`):
 | **P0 schema** (pass1 done) | class table: names, superclass chain, per-field `(name, type)`; loader labels | — (schema stays cheap) |
 | **P1 field-decode scan** (in `pass2::build`, `scan_all_records`) | every object's raw blob + `class_id`; `IdMap` (addr→index) live; field offsets decodable; String-decode machinery live | `id_map`/field plans freed at end of pass2 |
 | **P2 forward CSR** (post-pass2, pre-inbound) | `fwd_offsets`/`fwd_targets` (out-edges per object) + reachability `dfn` | moved into inbound transpose, then freed |
-| **P3 dominator/retained** (late, in `main.rs`) | `idom`, `retained[]`, `shallow[]`, `class_idx[]` (restored) | end of pipeline |
+| **P3 dominator/retained** (late, in `main.rs`) | `idom`, `retained[]`, `shallow[]`, `class_idx[]` (restored); dominator-children CSR `dc_off`/`dc_tgt` (live *during* `build_model`, dropped just after) | `dc_*` dropped post-`build_model`; `idom`/`retained` at end of pipeline |
 | **P4 histogram** (build_model) | per-class aggregates: instances/shallow/retained | report phase |
 
 The two load-bearing consequences the planner must encode:
 
-1. **`@retainedHeap` and `@objectId`-dominator data do not exist during the field
+1. **`@retainedHeapSize` and `@objectId`-dominator data do not exist during the field
    scan (P1).** They first exist at P3. So any query that *filters/decodes fields*
    (needs P1) **and** *projects or orders by retained* (needs P3) is inherently
    **cross-phase**: it cannot be answered in a single visit.
@@ -182,8 +304,10 @@ InstanceString { fields }  String fields (decode String -> backing array)
 RefPath { hops }           per-hop: the field dereferenced and whether the hop's
                            target contributes to WHERE (must resolve) or only to
                            SELECT projection (resolve only for surviving rows)
-Retained                   any use of @retainedHeap (P3-only)
-RuntimeType                @type / INSTANCEOF on a field's *runtime* class
+Retained                   any use of @retainedHeapSize (P3-only)
+RuntimeType                @clazz / classof / INSTANCEOF on a value's *runtime* class
+DominatorTree { mode }     dominators(x) (children) or AS RETAINED SET (subtree
+                           closure) — reads surviving idom/dc_*/retained at P3
 ```
 
 The planner unions these across SELECT, WHERE, GROUP BY, and ORDER BY. Each
@@ -320,6 +444,16 @@ Stage operators:
   index+packed-scalars, this stage never re-reads object blobs — the blob
   machinery is already gone by P3, which is exactly why the needed scalars were
   compressed into the carry at P1.
+- **`DominatorChildren` at P3 (`dominators(x)`)**: consume the P1 match carry; for
+  each carried index, read its dominator-tree children from the surviving
+  `dc_off`/`dc_tgt` and emit them (with any requested attribute like retained
+  size). O(children) per match, result-capped. Must run in the `build_model`
+  window where `dc_*` are alive.
+- **`RetainedSet` at P3 (`AS RETAINED SET`)**: seed a work queue with the carried
+  matches, DFS the dominator children over `dc_off`/`dc_tgt` marking a visited
+  bitset, and emit/aggregate the deduped closure — MAT's retained-set-of-a-set.
+  Bounded by the result cap; overflow sets `truncated`. Also runs in the `dc_*`
+  window.
 - **`Finalize`**: apply ORDER BY / LIMIT to the accumulator and emit
   `QueryResult` rows.
 
@@ -419,24 +553,33 @@ Options evaluated:
 fixed (it will not churn), the WHERE clause is a textbook precedence-climbing
 expression parser, and we get full control over error-message text — which
 matters because users *will* write malformed queries. Cost: a few hundred lines.
-Benefit: zero new dependencies, instant compiles, and exactly the diagnostics we
-want. This aligns with the project's lean-dependency posture (see `Cargo.toml`).
+Benefit: no new *parsing* dependency, instant compiles, and exactly the
+diagnostics we want (the one dep this feature adds is `regex`, for MAT-compatible
+`LIKE`/class-spec matching — see Dependencies). This aligns with the project's
+lean-dependency posture (see `Cargo.toml`).
 
 ## Dependencies
 
 - **No new runtime dependency for parsing** (hand-written, per above).
-- **Regex / LIKE evaluation**: the project currently has **no `regex` crate**.
-  Rather than pull in `regex` (a heavy dep for a deliberately-lean tool), the
-  first cut implements:
-  - `LIKE` via a tiny hand-rolled glob matcher (`%` = any run, `_` = any char) —
-    trivial and dependency-free.
-  - Class-spec wildcards (`com.acme.*`) via the same glob matcher.
-  - **Regex operators** (`=~ /.../`, `/.*Cache$/` class-specs) are parsed but, in
-    the first cut, evaluated by a minimal anchored-substring/`*` engine; anything
-    requiring true regex features returns a clear "regex feature unsupported"
-    error. Full regex is a deferred decision: if real demand appears, adding
-    `regex` is a one-line `Cargo.toml` change confined to the query executor.
-  This keeps the dependency graph unchanged while covering the common cases.
+- **Regex compatibility (`LIKE` and class-specs)**: this is a real MAT-fidelity
+  decision, not a nicety. In MAT, `LIKE` takes a **Java regular expression**
+  (`toString(s) LIKE ".*passwd.*"`), and a quoted class-spec is also a Java
+  regex. So `LIKE` cannot be a SQL-style glob (`%`/`_`) — that would silently
+  mismatch every pasted MAT query. The project currently has **no `regex`
+  crate**. Options:
+  - **(Chosen) add the `regex` crate**, scoped to the query executor. `LIKE`,
+    `=~`, and quoted regex class-specs compile to `regex::Regex` with MAT
+    semantics (unanchored `find`, as MAT uses `Matcher.find()`). This is the only
+    way to be *actually* MAT-compatible on the single most common query family
+    (String content search). `regex` is pure-Rust, widely used, and pulls
+    `aho-corasick`/`memchr` (both already common transitively); the cost is
+    justified by correctness on the flagship use case. It is feature-gateable if
+    binary size ever matters.
+  - The convenience glob class-spec (`com.acme.*`) is still handled by a tiny
+    hand-rolled matcher (no regex needed for the common `pkg.*` case); only true
+    regex forms hit the `regex` crate.
+  Bumping `regex` into the runtime deps is the one dependency change this feature
+  makes; it is confined to `src/query/` and does not touch the hot analysis path.
 - **Testing** reuses the existing `proptest` dev-dependency for parser
   round-trip/fuzz tests (already in `Cargo.toml`). `toml` is already present
   (`default-features = false, features = ["parse"]`), exactly what `[[query]]`
@@ -485,20 +628,25 @@ Test-driven throughout. Layers:
    per-hop predicate-critical/projection-only classification, and caps for a
    matrix of queries:
    - `HistogramOnly` shape (single P4 stage, no carries): `SELECT COUNT(*)`,
-     `SUM(@retainedHeap) GROUP BY class`.
+     `SUM(@retainedHeapSize) GROUP BY class`.
    - `SingleScan` shape (single P1 stage): scalar-only filter; String-only filter;
-     `@usedHeapSize` predicate; `@type`/`INSTANCEOF`; `IN (...)`; arithmetic
-     projection.
+     `@usedHeapSize` predicate; `@clazz`/`INSTANCEOF`; array `@length`; `IN (...)`;
+     `LIKE` regex on a String field; arithmetic projection.
    - `RefWalk` shape: 1-hop predicate (assert an `AddrFrontier` carry); 3-hop
      predicate; deep **projection-only** path over a filtered set (assert deep hops
      are marked projection-only so they resolve lazily).
-   - `CrossPhase` shape: field filter + `ORDER BY @retainedHeap LIMIT n` (assert a
-     P1 `Match` stage → `IndexOnly` carry → P3 `JoinRetained` stage); field filter
-     that also projects a P1 scalar + `SELECT @retainedHeap` (assert the carry is
-     `IndexPlusScalars` with the correct packed widths).
+   - `CrossPhase` shape: field filter + `ORDER BY @retainedHeapSize LIMIT n`
+     (assert a P1 `Match` stage → `IndexOnly` carry → P3 `JoinRetained` stage);
+     field filter that also projects a P1 scalar + `SELECT @retainedHeapSize`
+     (assert the carry is `IndexPlusScalars` with the correct packed widths).
    - **Three-phase** span: field filter (P1) + ref hop (P2) + `ORDER BY
-     @retainedHeap` (P3) — assert three stages and two carries chain correctly,
-     proving no two-phase special-casing.
+     @retainedHeapSize` (P3) — assert three stages and two carries chain
+     correctly, proving no two-phase special-casing.
+   - **Dominator primitives**: `SELECT dominators(s) FROM ...` (assert a P1
+     `Match` → `IndexOnly` carry → P3 `DominatorChildren` stage marked to run in
+     the `dc_*` window); `SELECT s AS RETAINED SET FROM ...` (assert `RetainedSet`
+     stage). Assert `inbounds`/`outbounds`/`path` are rejected with the raw-edge
+     message.
    - Every **rejection** case, asserting the message names the construct.
    The mapping `needs → stages/carries` is a finite table; there is a test per cell.
 3. **Executor tests on a tiny hand-built dump** — construct a minimal in-memory
@@ -531,16 +679,18 @@ shippable and independently tested:
    decision surface and the compressed-carry codec — fully unit tested first.
 2. `HistogramOnly` execution + result model + renderers — smallest end-to-end
    slice (single stage, no carries).
-3. `SingleScan` (scalar, then String, then `@type`/`INSTANCEOF`/`IN`) on the P1
-   field-decode scan (single stage).
+3. `SingleScan` (scalar, then String + `LIKE` regex, then `@clazz`/`INSTANCEOF`/
+   array `@length`/`IN`) on the P1 field-decode scan (single stage).
 4. `CrossPhase` (P1 `Match` → compressed `IndexOnly`/`IndexPlusScalars` carry →
-   P3 `JoinRetained`), enabling `ORDER BY @retainedHeap` / `SELECT @retainedHeap`.
-   This lands the general stage-runner + carry codec.
+   P3 `JoinRetained`), enabling `ORDER BY @retainedHeapSize` /
+   `SELECT @retainedHeapSize`. This lands the general stage-runner + carry codec.
 5. `RefWalk` (1-hop, then adaptive N-hop; CSR-hop and batched-resolve-scan;
    `AddrFrontier` carries; predicate-critical vs projection-only) — and, riding
    the same stage machinery, arbitrary 3+-phase spans.
-6. TOML input + CLI wiring + golden e2e fixtures.
-7. Interactive `query` subcommand (`!plan`/`!explain`/`!schema`) — a thin
+6. Dominator primitives (`dominators()`, `AS RETAINED SET`) as P3 stages hooked
+   into the `build_model` `dc_*` window — reusing the surviving dominator tree.
+7. TOML input + CLI wiring + golden e2e fixtures.
+8. Interactive `query` subcommand (`!plan`/`!explain`/`!schema`) — a thin
    stdin front-end over the same engine; lands once the executor is stable.
 
 Each step is independently valuable: many real queries are satisfied by steps
@@ -555,7 +705,7 @@ Each step is independently valuable: many real queries are satisfied by steps
   path could produce a large hop frontier. Mitigated by per-hop caps +
   `truncated`, and by resolving projection-only hops *after* WHERE+LIMIT pruning.
 - **Carry-buffer overflow across phases**: a field filter matching millions of
-  objects before an `ORDER BY @retainedHeap` fills the P1→P3 carry. Mitigated
+  objects before an `ORDER BY @retainedHeapSize` fills the P1→P3 carry. Mitigated
   first by *compression* — the index-only carry is delta-varint encoded, so a
   monotonic match set costs ~1–2 bytes/entry and the cap is reached far later than
   with naive 8-byte indices — and then by the cap itself: overflow sets
@@ -566,7 +716,8 @@ Each step is independently valuable: many real queries are satisfied by steps
   payloads), not just retained joins.
 - **Grammar scope creep**: the subset is deliberately fixed; anything outside it
   errors rather than silently under-delivering.
-- **Glob-vs-regex gap**: the first cut serves `LIKE`/wildcards and a glob-subset
-  of regex without the `regex` crate. Queries using true regex features get a
-  clear "regex feature unsupported" error rather than a wrong match. If demand
-  warrants, adding `regex` is a `Cargo.toml` one-liner confined to the executor.
+- **MAT `LIKE` regex fidelity**: `LIKE` is a Java regex in MAT. We use the
+  Rust `regex` crate, whose syntax covers the vast majority of Java patterns but
+  differs on a few Java-specific constructs (e.g. certain named groups /
+  backreferences). Such a pattern yields a clear "unsupported regex construct"
+  error at plan time rather than a wrong match.
