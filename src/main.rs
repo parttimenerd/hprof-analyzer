@@ -818,6 +818,16 @@ fn parse_plan_queries(
     Ok(parsed_queries)
 }
 
+/// Backfill each result's OQL text from the source query (Task 10 leaves `oql`
+/// blank on the executor side); order matches `query_texts`.
+fn backfill_oql(results: &mut [query::model::QueryResult], query_texts: &[String]) {
+    for (r, text) in results.iter_mut().zip(query_texts.iter()) {
+        if r.oql.is_empty() {
+            r.oql = text.clone();
+        }
+    }
+}
+
 /// Format a single query cell for plain-text table output.
 fn fmt_query_value(v: &query::model::QueryValue) -> String {
     use query::model::QueryValue::*;
@@ -853,11 +863,7 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
         pass2::Pass2::build(input, p1, cvec::Codec::Zstd3, &opts, &parsed)?;
 
     // Backfill blank oql text (Task 10 leaves it empty); order matches query_texts.
-    for (r, text) in query_results.iter_mut().zip(query_texts.iter()) {
-        if r.oql.is_empty() {
-            r.oql = text.clone();
-        }
-    }
+    backfill_oql(&mut query_results, &query_texts);
 
     let mut out = String::new();
     for (i, r) in query_results.iter().enumerate() {
@@ -1143,11 +1149,7 @@ fn run(
     drop(dc_tgt);
     crate::trace::trim();
     // Backfill blank oql text (Task 10 leaves it empty); order matches query_texts.
-    for (r, text) in query_results.iter_mut().zip(query_texts.iter()) {
-        if r.oql.is_empty() {
-            r.oql = text.clone();
-        }
-    }
+    backfill_oql(&mut query_results, &query_texts);
     report.queries = std::mem::take(&mut query_results);
     let out_text = match format {
         OutputFormat::Md => {
