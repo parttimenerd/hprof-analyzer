@@ -42,6 +42,32 @@ use std::{io, process, time::Instant};
 
 use pass1::Pass1;
 
+/// Depth cap for bounded `path()` walks in edge-query planning. A
+/// `--query-path-depth` flag will override this in a later change.
+const DEFAULT_QUERY_PATH_DEPTH: usize = 5;
+
+/// A `ClassIndexResolver` that resolves nothing — used when only the boolean
+/// `RunFlags` (retain_inbound/retain_forward/outbounds_by_rescan) are needed and
+/// the dense class universe is unavailable (row filtering is done post-pass2 by
+/// class-name match).
+struct NoClassIndex;
+impl query::runflags::ClassIndexResolver for NoClassIndex {
+    fn class_bits(&self, _pattern: &str, _instanceof: bool) -> Vec<usize> {
+        Vec::new()
+    }
+    fn universe_len(&self) -> usize {
+        0
+    }
+}
+
+/// True if this query (or any UNION branch) uses an edge feature
+/// (`@inbounds` / `@outbounds` / `path()`).
+fn query_uses_edges(q: &query::ast::Query) -> bool {
+    query::runflags::plan_run(std::slice::from_ref(q), &NoClassIndex, DEFAULT_QUERY_PATH_DEPTH)
+        .map(|f| f.retain_inbound || f.retain_forward || f.outbounds_by_rescan)
+        .unwrap_or(false)
+}
+
 /// Output format for the analysis report.
 #[derive(Clone, Copy, PartialEq)]
 enum OutputFormat {
@@ -1001,19 +1027,9 @@ fn run(
     // filtering (L1) is done AFTER pass2 by matching each source row's class name
     // against the edge queries' FROM patterns, so `retain_rows` is not consulted.
     let run_flags = {
-        struct NoClassIndex;
-        impl query::runflags::ClassIndexResolver for NoClassIndex {
-            fn class_bits(&self, _pattern: &str, _instanceof: bool) -> Vec<usize> {
-                Vec::new()
-            }
-            fn universe_len(&self) -> usize {
-                0
-            }
-        }
         let queries: Vec<query::ast::Query> =
             parsed_queries.iter().map(|(q, _)| q.clone()).collect();
-        // Default depth cap (a `--query-path-depth` flag is added in a later change).
-        query::runflags::plan_run(&queries, &NoClassIndex, 5).map_err(|e| {
+        query::runflags::plan_run(&queries, &NoClassIndex, DEFAULT_QUERY_PATH_DEPTH).map_err(|e| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("OQL edge planning error: {}", e.0),
@@ -1110,7 +1126,7 @@ fn run(
     let t = Instant::now();
     progress::phase("building inbound references");
 
-    // MEMORY-CRITICAL edge-retention hook (Task 41). This is the ONLY point where
+    // MEMORY-CRITICAL edge-retention hook. This is the ONLY point where
     // the forward CSR (`g.fwd_offsets`/`g.fwd_targets`) is still alive — it is
     // consumed by `build_from_fwd` just below. When (and ONLY when) an edge query
     // is armed, we build the two bounded, class-filtered edge structures the
@@ -1140,24 +1156,7 @@ fn run(
         // an edge feature; class rows are retained only for these (L1).
         let edge_froms: Vec<(String, bool)> = flat_queries
             .iter()
-            .filter(|(q, _)| {
-                query::runflags::plan_run(std::slice::from_ref(q), &{
-                    struct NoIdx;
-                    impl query::runflags::ClassIndexResolver for NoIdx {
-                        fn class_bits(&self, _: &str, _: bool) -> Vec<usize> {
-                            Vec::new()
-                        }
-                        fn universe_len(&self) -> usize {
-                            0
-                        }
-                    }
-                    NoIdx
-                }, 5)
-                .map(|f| {
-                    f.retain_inbound || f.retain_forward || f.outbounds_by_rescan
-                })
-                .unwrap_or(false)
-            })
+            .filter(|(q, _)| query_uses_edges(q))
             .map(|(q, _)| (q.from.class_name().to_string(), q.from.instanceof()))
             .collect();
 
@@ -1387,29 +1386,16 @@ fn run(
     );
     let mut query_results = query::run::collapse_union_results(flat_results, &union_groups);
 
-    // Step D: surface the edge-retention note (Task 42 renders it). Only present
-    // when an edge feature is armed; attaching it to edge-using result rows keeps
-    // a no-edge run's JSON byte-identical (`note` is skipped when `None`). After
-    // `collapse_union_results`, `query_results` is one row per ORIGINAL top-level
-    // query, in `parsed_queries` order — zip against that (a UNION branch's edge
-    // use is detected because `plan_run` scans branches too).
+    // Step D: surface the edge-retention note on edge-using result rows. Only
+    // present when an edge feature is armed; attaching it to edge-using result
+    // rows keeps a no-edge run's JSON byte-identical (`note` is skipped when
+    // `None`). After `collapse_union_results`, `query_results` is one row per
+    // ORIGINAL top-level query, in `parsed_queries` order — zip against that (a
+    // UNION branch's edge use is detected because `plan_run` scans branches too).
+    debug_assert_eq!(query_results.len(), parsed_queries.len());
     if let Some(note) = run_flags.retention_note() {
         for (r, (q, _)) in query_results.iter_mut().zip(parsed_queries.iter()) {
-            let edge_used = query::runflags::plan_run(std::slice::from_ref(q), &{
-                struct NoIdx;
-                impl query::runflags::ClassIndexResolver for NoIdx {
-                    fn class_bits(&self, _: &str, _: bool) -> Vec<usize> {
-                        Vec::new()
-                    }
-                    fn universe_len(&self) -> usize {
-                        0
-                    }
-                }
-                NoIdx
-            }, 5)
-            .map(|f| f.retain_inbound || f.retain_forward || f.outbounds_by_rescan)
-            .unwrap_or(false);
-            if edge_used && r.note.is_none() {
+            if query_uses_edges(q) && r.note.is_none() {
                 r.note = Some(note.clone());
             }
         }
