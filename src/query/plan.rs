@@ -25,7 +25,13 @@ pub enum StageKind {
 
 /// Which pipeline phase finalizes a query's rows. See canonical vocabulary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Phase { P1, P2, P3 }
+pub enum Phase {
+    P1,
+    // P2 is constructed by later rollout phases (RefWalk); reserved here.
+    #[allow(dead_code)]
+    P2,
+    P3,
+}
 
 /// A late-phase operation applied when resuming a cross-phase query.
 /// (Extended with more variants in later phases.)
@@ -145,10 +151,10 @@ pub trait FieldSchema {
     fn class_field_names(&self, exact_class_name: &str) -> Option<Vec<String>>;
 }
 
-/// Reject any bare field referenced in SELECT/WHERE that is absent from the
-/// FROM class's field set. Skipped for glob FROM patterns and for classes the
-/// schema can't resolve (validation is best-effort: an unresolvable class means
-/// we can't prove a field is missing, so we let the scan proceed).
+/// Reject any bare field referenced in SELECT/WHERE/ORDER BY that is absent
+/// from the FROM class's field set. Skipped for glob FROM patterns and for
+/// classes the schema can't resolve (validation is best-effort: an unresolvable
+/// class means we can't prove a field is missing, so we let the scan proceed).
 pub fn validate_fields(q: &Query, schema: &dyn FieldSchema) -> Result<(), QueryError> {
     let class = &q.from.class_name;
     if class.contains('*') {
@@ -164,6 +170,11 @@ pub fn validate_fields(q: &Query, schema: &dyn FieldSchema) -> Result<(), QueryE
     }
     if let Some(pred) = &q.where_ {
         collect_pred_fields(pred, &mut referenced);
+    }
+    if let Some(ob) = &q.order_by {
+        if let Attr::Field(name) = &ob.key {
+            referenced.push(name.clone());
+        }
     }
 
     for name in referenced {
@@ -585,6 +596,22 @@ mod tests {
         let q2 = parse("SELECT s.bogus FROM java.lang.String s").unwrap();
         let err = validate_fields(&q2, &schema).unwrap_err();
         assert!(err.0.contains("unknown field `bogus`"), "got: {}", err.0);
+    }
+
+    #[test]
+    fn validate_rejects_unknown_order_by_field() {
+        let schema = FakeSchema { class: "java.lang.String", fields: vec!["count", "hash"] };
+        let q = parse("SELECT * FROM java.lang.String ORDER BY bogus").unwrap();
+        let err = validate_fields(&q, &schema).unwrap_err();
+        assert!(err.0.contains("unknown field"), "got: {}", err.0);
+        assert!(err.0.contains("bogus"), "got: {}", err.0);
+    }
+
+    #[test]
+    fn validate_accepts_known_order_by_field() {
+        let schema = FakeSchema { class: "java.lang.String", fields: vec!["count", "hash"] };
+        let q = parse("SELECT * FROM java.lang.String ORDER BY count DESC").unwrap();
+        assert!(validate_fields(&q, &schema).is_ok());
     }
 
     #[test]
