@@ -14,6 +14,7 @@ pub mod repl;
 pub mod carry;
 pub mod refwalk;
 pub mod stage_runner;
+pub mod optimize;
 
 use std::fmt;
 
