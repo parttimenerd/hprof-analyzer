@@ -95,4 +95,31 @@ mod tests {
         assert!(!c.truncated());
         assert_eq!(c.indices(), vec![3, 3, 10, 4096, 4097, 999_999]);
     }
+
+    #[test]
+    fn cap_trips_truncated_and_bounds_len() {
+        let mut c = Carry::index_only(2);
+        c.push_index(1);
+        c.push_index(2);
+        assert!(!c.truncated(), "at-cap but not over yet");
+        c.push_index(3); // over the cap
+        assert!(c.truncated());
+        assert_eq!(c.len(), 2, "cap must bound stored indices");
+        assert_eq!(c.indices(), vec![1, 2]);
+    }
+
+    #[test]
+    fn empty_carry_roundtrips_to_empty() {
+        let c = Carry::index_only(10);
+        assert!(c.is_empty());
+        assert!(!c.truncated());
+        assert_eq!(c.indices(), Vec::<u32>::new());
+    }
+
+    #[test]
+    fn descending_pushes_still_roundtrip_exactly() {
+        let mut c = Carry::index_only(100);
+        for &i in &[100u32, 5, 5, 42, 0] { c.push_index(i); }
+        assert_eq!(c.indices(), vec![100, 5, 5, 42, 0]);
+    }
 }
