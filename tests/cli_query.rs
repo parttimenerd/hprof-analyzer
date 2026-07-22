@@ -3150,3 +3150,163 @@ fn order_by_limit_returns_true_top_n() {
     // And top5 is exactly the first 5 of top500.
     assert_eq!(&top5[..], &top500[..top5.len().min(top500.len())]);
 }
+
+// ============================================================
+// PERCENTILE / MEDIAN aggregates (Component 4)
+// ============================================================
+
+/// p95 of a shallow-size distribution must be >= the median (p50). Both are
+/// computed over the same scan-time attribute set, so monotonicity holds.
+#[test]
+fn percentile_p95_at_least_median() {
+    let Some(hprof) = philosophers() else { return };
+    let p95 = query_single_i64(
+        &hprof,
+        "SELECT PERCENTILE(s.@usedHeapSize, 95) FROM java.lang.String s",
+    )
+    .expect("p95 must return a numeric value");
+    let median = query_single_i64(
+        &hprof,
+        "SELECT MEDIAN(s.@usedHeapSize) FROM java.lang.String s",
+    )
+    .expect("median must return a numeric value");
+    assert!(
+        p95 >= median,
+        "p95 ({p95}) must be >= median ({median})"
+    );
+}
+
+/// MEDIAN(@x) must equal PERCENTILE(@x, 50) — MEDIAN is defined as p50.
+#[test]
+fn median_equals_percentile_50() {
+    let Some(hprof) = philosophers() else { return };
+    let median = query_single_i64(
+        &hprof,
+        "SELECT MEDIAN(s.@usedHeapSize) FROM java.lang.String s",
+    )
+    .expect("median value");
+    let p50 = query_single_i64(
+        &hprof,
+        "SELECT PERCENTILE(s.@usedHeapSize, 50) FROM java.lang.String s",
+    )
+    .expect("p50 value");
+    assert_eq!(median, p50, "MEDIAN must equal PERCENTILE(_, 50)");
+}
+
+/// PERCENTILE(@x, 100) is the maximum value (nearest-rank picks the last
+/// element after sorting). Must equal MAX(@x).
+#[test]
+fn percentile_100_equals_max() {
+    let Some(hprof) = philosophers() else { return };
+    let p100 = query_single_i64(
+        &hprof,
+        "SELECT PERCENTILE(s.@usedHeapSize, 100) FROM java.lang.String s",
+    )
+    .expect("p100 value");
+    let max = query_single_i64(
+        &hprof,
+        "SELECT MAX(s.@usedHeapSize) FROM java.lang.String s",
+    )
+    .expect("max value");
+    assert_eq!(p100, max, "PERCENTILE(_, 100) must equal MAX");
+}
+
+/// PERCENTILE(@x, 1) is near the minimum (nearest-rank rounds up, so p1 is the
+/// value at index ceil(0.01*n)-1). Must be >= MIN and <= median.
+#[test]
+fn percentile_1_near_min() {
+    let Some(hprof) = philosophers() else { return };
+    let p1 = query_single_i64(
+        &hprof,
+        "SELECT PERCENTILE(s.@usedHeapSize, 1) FROM java.lang.String s",
+    )
+    .expect("p1 value");
+    let min = query_single_i64(
+        &hprof,
+        "SELECT MIN(s.@usedHeapSize) FROM java.lang.String s",
+    )
+    .expect("min value");
+    let median = query_single_i64(
+        &hprof,
+        "SELECT MEDIAN(s.@usedHeapSize) FROM java.lang.String s",
+    )
+    .expect("median value");
+    assert!(p1 >= min, "p1 ({p1}) must be >= min ({min})");
+    assert!(p1 <= median, "p1 ({p1}) must be <= median ({median})");
+}
+
+/// PERCENTILE over an empty result set returns Null (rendered, not a crash).
+#[test]
+fn percentile_empty_set_is_null() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        // A class that does not exist yields zero matches.
+        .args([
+            "--query",
+            "SELECT PERCENTILE(@usedHeapSize, 95) FROM com.example.DoesNotExist",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "empty-set percentile must not error: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.to_lowercase().contains("null") || stdout.contains("(1 row)"),
+        "empty-set percentile should render a null aggregate row, got:\n{stdout}"
+    );
+}
+
+/// PERCENTILE with an out-of-range p is a hard parse error (not a silent clamp
+/// at runtime — the message must name the valid range).
+#[test]
+fn percentile_out_of_range_is_cli_error() {
+    let Some(hprof) = philosophers() else { return };
+    for bad in ["0", "101"] {
+        let oql = format!("SELECT PERCENTILE(@usedHeapSize, {bad}) FROM java.lang.String");
+        let out = Command::new(BIN)
+            .arg("query")
+            .arg(&hprof)
+            .args(["--query", &oql])
+            .output()
+            .unwrap();
+        assert!(
+            !out.status.success(),
+            "PERCENTILE p={bad} must be rejected"
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("between 1 and 100"),
+            "error must name the valid p range, got:\n{stderr}"
+        );
+    }
+}
+
+/// PERCENTILE over @retainedHeapSize is rejected at plan time (retained size is
+/// computed in a later phase where per-value collection is unavailable).
+#[test]
+fn percentile_over_retained_is_cli_error() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
+            "SELECT PERCENTILE(@retainedHeapSize, 95) FROM java.lang.String",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "percentile over @retainedHeapSize must be rejected"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("@retainedHeapSize"),
+        "error must explain the retained-size restriction, got:\n{stderr}"
+    );
+}

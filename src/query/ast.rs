@@ -77,6 +77,11 @@ pub enum AggFunc {
     Min,
     Max,
     Avg,
+    /// PERCENTILE(<arg>, p): the p-th percentile (nearest-rank) of the numeric
+    /// values, p in 1..=100. Collects all values, so it is armed only when used.
+    Percentile(u8),
+    /// MEDIAN(<arg>): equivalent to PERCENTILE(<arg>, 50).
+    Median,
 }
 
 /// An attribute reference. `@`-prefixed built-ins plus bare named fields.

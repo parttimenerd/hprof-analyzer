@@ -517,6 +517,20 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
     let cross_phase = uses_retained(q);
     if cross_phase {
         needs.retained = true;
+        // PERCENTILE/MEDIAN collect their argument's values at scan time, but a
+        // cross-phase (retained) query scans in index-only carry mode with no
+        // scan-time accumulator — the values would never be gathered. Reject at
+        // plan time with an actionable message rather than returning an empty
+        // percentile. (Mirrors the toString-late aggregate guard below.)
+        if q.select.iter().any(select_uses_percentile) {
+            return Err(QueryError(
+                "PERCENTILE/MEDIAN cannot be combined with @retainedHeapSize; \
+                 retained size is computed in a later phase where per-value \
+                 collection is unavailable. Compute the percentile over a \
+                 scan-time attribute (e.g. @usedHeapSize) instead"
+                    .into(),
+            ));
+        }
     }
     let (mut finalize_at, mut late_ops) = if cross_phase {
         (Phase::P3, vec![StageOp::JoinRetained])
@@ -715,6 +729,17 @@ fn select_uses_retained(it: &SelectItem) -> bool {
         SelectItem::Expr(e) => expr_any_attr(e, |a| matches!(a, Attr::RetainedHeapSize)),
         _ => false,
     }
+}
+/// True if a SELECT item is (or wraps) a PERCENTILE/MEDIAN aggregate. Used to
+/// reject percentiles over the retained-late path at plan time.
+fn select_uses_percentile(it: &SelectItem) -> bool {
+    matches!(
+        it,
+        SelectItem::Aggregate {
+            func: AggFunc::Percentile(_) | AggFunc::Median,
+            ..
+        }
+    )
 }
 /// True if a predicate references `@retainedHeapSize` anywhere. Reused by the
 /// scan-time carry executor to skip retained WHERE terms (retained size is
@@ -1506,6 +1531,34 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("RETAINED SET cannot be combined with aggregate"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn plan_percentile_over_scan_attr_ok() {
+        // PERCENTILE over a plain scan-time attribute plans fine (no late phase).
+        let plan = pq(&parse("SELECT PERCENTILE(@usedHeapSize, 95) FROM C").unwrap()).unwrap();
+        assert_eq!(plan.finalize_at, Phase::P1, "percentile over @usedHeapSize is scan-time");
+        assert!(plan.late_ops.is_empty(), "no late ops, got: {:?}", plan.late_ops);
+    }
+
+    #[test]
+    fn plan_percentile_over_retained_rejected() {
+        let err =
+            pq(&parse("SELECT PERCENTILE(@retainedHeapSize, 95) FROM C").unwrap()).unwrap_err();
+        assert!(
+            err.to_string().contains("PERCENTILE/MEDIAN cannot be combined with @retainedHeapSize"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn plan_median_over_retained_rejected() {
+        let err =
+            pq(&parse("SELECT MEDIAN(@retainedHeapSize) FROM C").unwrap()).unwrap_err();
+        assert!(
+            err.to_string().contains("PERCENTILE/MEDIAN cannot be combined with @retainedHeapSize"),
             "got: {err}"
         );
     }

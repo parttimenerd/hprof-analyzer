@@ -266,6 +266,36 @@ where
             )
         });
 
+        // `PERCENTILE(<arg>, <p>)` — two-arg aggregate. `p` is an integer literal
+        // in 1..=100 (nearest-rank). Placed before `agg`; `PERCENTILE` is NOT in
+        // `agg_func`, so the generic `agg` never matches it and a missing/extra arg
+        // or an out-of-range `p` produces an actionable error instead of a generic
+        // "unexpected token".
+        let percentile_item = ident_ci("PERCENTILE")
+            .ignore_then(just(Token::LParen))
+            .ignore_then(item.clone())
+            .then_ignore(just(Token::Comma))
+            .then(select! { Token::Int(n) => n })
+            .then_ignore(just(Token::RParen))
+            .validate(|((arg, _alias), p): ((SelectItem, Option<String>), i64), e, emitter| {
+                if !(1..=100).contains(&p) {
+                    emitter.emit(Rich::custom(
+                        e.span(),
+                        format!(
+                            "PERCENTILE(<arg>, p): p must be an integer between 1 and 100, got {p}"
+                        ),
+                    ));
+                }
+                let clamped = p.clamp(1, 100) as u8;
+                (
+                    SelectItem::Aggregate {
+                        func: AggFunc::Percentile(clamped),
+                        arg: Box::new(arg),
+                    },
+                    None::<String>,
+                )
+            });
+
         // `path(a, b)`. Contextual: only a path function when `path` is immediately
         // followed by `(`; otherwise `path` falls through to the bare-field attr arm.
         // Heuristic: an operand containing `.` or `*` (a dotted/globbed class name)
@@ -306,7 +336,8 @@ where
         });
         // IMPORTANT: `star` must come before `expr_item` so a lone `*` stays
         // `SelectItem::Star` (Star token is also ArithOp::Mul in expr; ordering wins).
-        let base_item = agg
+        let base_item = percentile_item
+            .or(agg)
             .or(path_item)
             .or(tostring_item)
             .or(star)
@@ -737,7 +768,7 @@ pub const RESERVED: &[&str] = &[
 ];
 
 /// Aggregate function names (`agg_func`'s source set), upper-cased.
-pub const AGG_FUNCS: &[&str] = &["COUNT", "SUM", "MIN", "MAX", "AVG"];
+pub const AGG_FUNCS: &[&str] = &["COUNT", "SUM", "MIN", "MAX", "AVG", "PERCENTILE", "MEDIAN"];
 
 /// Built-in scalar/graph function names used in SELECT/predicate position.
 /// Source of truth for REPL completion; matches the `dom_fn` / `path` / `classof`
@@ -780,6 +811,7 @@ fn agg_func(s: &str) -> Option<AggFunc> {
         _ if s.eq_ignore_ascii_case("MIN") => Some(AggFunc::Min),
         _ if s.eq_ignore_ascii_case("MAX") => Some(AggFunc::Max),
         _ if s.eq_ignore_ascii_case("AVG") => Some(AggFunc::Avg),
+        _ if s.eq_ignore_ascii_case("MEDIAN") => Some(AggFunc::Median),
         _ => None,
     }
 }
@@ -1574,6 +1606,70 @@ mod tests {
         assert_eq!(q.union_limit, Some(0));
     }
 
+    // ---------- PERCENTILE / MEDIAN aggregates ----------
+
+    #[test]
+    fn median_parses_as_single_arg_aggregate() {
+        let q = parse("SELECT MEDIAN(@usedHeapSize) FROM C").unwrap();
+        assert_eq!(
+            q.select,
+            vec![agg(AggFunc::Median, attr_sel(Attr::UsedHeapSize))]
+        );
+    }
+
+    #[test]
+    fn percentile_parses_with_integer_arg() {
+        let q = parse("SELECT PERCENTILE(@usedHeapSize, 95) FROM C").unwrap();
+        assert_eq!(
+            q.select,
+            vec![agg(AggFunc::Percentile(95), attr_sel(Attr::UsedHeapSize))]
+        );
+    }
+
+    #[test]
+    fn percentile_boundary_values_parse() {
+        assert_eq!(
+            parse("SELECT PERCENTILE(@usedHeapSize, 1) FROM C")
+                .unwrap()
+                .select,
+            vec![agg(AggFunc::Percentile(1), attr_sel(Attr::UsedHeapSize))]
+        );
+        assert_eq!(
+            parse("SELECT PERCENTILE(@usedHeapSize, 100) FROM C")
+                .unwrap()
+                .select,
+            vec![agg(AggFunc::Percentile(100), attr_sel(Attr::UsedHeapSize))]
+        );
+    }
+
+    #[test]
+    fn percentile_out_of_range_is_actionable_error() {
+        for bad in ["0", "101", "200"] {
+            let src = format!("SELECT PERCENTILE(@usedHeapSize, {bad}) FROM C");
+            let err = parse(&src).unwrap_err().0;
+            assert!(
+                err.contains("between 1 and 100"),
+                "p={bad} should give an actionable range error, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn percentile_missing_second_arg_is_error() {
+        // A lone-arg PERCENTILE is not a valid MEDIAN alias; the comma+int are
+        // required and its absence must not silently fall through to a field.
+        assert!(parse("SELECT PERCENTILE(@usedHeapSize) FROM C").is_err());
+    }
+
+    #[test]
+    fn percentile_case_insensitive() {
+        let q = parse("SELECT percentile(@usedHeapSize, 50) FROM C").unwrap();
+        assert_eq!(
+            q.select,
+            vec![agg(AggFunc::Percentile(50), attr_sel(Attr::UsedHeapSize))]
+        );
+    }
+
     #[test]
     fn union_branch_inner_limit_preserved_with_union_wide_limit() {
         // A parenthesized branch may carry its OWN LIMIT (inside the parens) AND
@@ -2192,6 +2288,19 @@ mod tests {
     #[test]
     fn agg_funcs_const_matches_parser() {
         for &f in AGG_FUNCS {
+            // PERCENTILE is a two-arg aggregate with its own parser production
+            // (not routed through `agg_func`), so it is validated separately.
+            if f.eq_ignore_ascii_case("PERCENTILE") {
+                assert!(
+                    agg_func(f).is_none(),
+                    "PERCENTILE should not be a single-arg agg_func"
+                );
+                assert!(
+                    parse(&format!("SELECT {f}(@usedHeapSize, 50) FROM C")).is_ok(),
+                    "parser rejects two-arg aggregate {f:?}"
+                );
+                continue;
+            }
             assert!(
                 agg_func(f).is_some(),
                 "agg_func rejects declared AGG_FUNC {f:?}"

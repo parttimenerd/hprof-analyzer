@@ -168,6 +168,10 @@ pub(crate) enum AggAcc {
     Min { best: Option<QueryValue> },
     /// MAX: running maximum over numeric values; Null until first non-Null value.
     Max { best: Option<QueryValue> },
+    /// PERCENTILE/MEDIAN: collects every non-null numeric value (as f64), then at
+    /// finalize sorts and picks the p-th percentile (nearest-rank). The Vec is
+    /// bounded by the matched set and armed ONLY for percentile queries.
+    Percentile { p: u8, values: Vec<f64> },
 }
 
 /// Build the initial `AggAcc` for one SELECT item. Non-aggregate items get
@@ -189,6 +193,14 @@ pub(crate) fn init_agg_acc(item: &SelectItem) -> AggAcc {
             AggFunc::Avg => AggAcc::Avg { sum: 0.0, count: 0 },
             AggFunc::Min => AggAcc::Min { best: None },
             AggFunc::Max => AggAcc::Max { best: None },
+            AggFunc::Percentile(p) => AggAcc::Percentile {
+                p: *p,
+                values: Vec::new(),
+            },
+            AggFunc::Median => AggAcc::Percentile {
+                p: 50,
+                values: Vec::new(),
+            },
         },
         _ => AggAcc::None,
     }
@@ -289,6 +301,14 @@ pub(crate) fn fold_agg_acc(acc: &mut AggAcc, value: QueryValue) {
                 };
             }
         }
+        AggAcc::Percentile { values, .. } => {
+            // Collect numeric values only; ignore Null/non-numeric (as SUM/AVG do).
+            match value {
+                QueryValue::Int(v) => values.push(v as f64),
+                QueryValue::Float(v) => values.push(v),
+                _ => {}
+            }
+        }
     }
 }
 
@@ -319,6 +339,17 @@ pub(crate) fn finalize_agg_acc(acc: AggAcc) -> QueryValue {
         }
         AggAcc::Min { best } => best.unwrap_or(QueryValue::Null),
         AggAcc::Max { best } => best.unwrap_or(QueryValue::Null),
+        AggAcc::Percentile { p, mut values } => {
+            if values.is_empty() {
+                return QueryValue::Null;
+            }
+            values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            // Nearest-rank: rank = ceil(p/100 * n), 1-based; index = rank-1.
+            let n = values.len();
+            let rank = ((p as f64 / 100.0) * n as f64).ceil() as usize;
+            let idx = rank.saturating_sub(1).min(n - 1);
+            QueryValue::Float(values[idx])
+        }
     }
 }
 
