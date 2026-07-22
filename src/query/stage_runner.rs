@@ -3,8 +3,8 @@
 //! late_ops, and reassembles all results in original query order.
 
 use crate::query::PATH_FRONTIER_CAP;
-use crate::query::ast::{Attr, CompareOp, Expr, Predicate, Query, SelectItem, SortDir, Value};
-use crate::query::execute::{CrossPhaseEntry, QueryExecState};
+use crate::query::ast::{Attr, CompareOp, Expr, Predicate, Query, SelectItem, SortDir};
+use crate::query::execute::{CrossPhaseEntry, QueryExecState, arith, compare_values, unary, value_to_qv};
 use crate::query::model::{QueryColumn, QueryResult, QueryValue};
 use crate::query::plan::StageOp;
 use crate::query::runflags::EdgeDir;
@@ -596,17 +596,88 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
     }
 }
 
+// ── Late-phase arithmetic helpers ────────────────────────────────────────────
+
+/// Walk an Expr tree and return `true` if ANY `Attr` leaf satisfies `pred`.
+/// Used to detect whether a Compare arm involves a specific late attr.
+fn expr_has_attr(e: &Expr, pred: &impl Fn(&Attr) -> bool) -> bool {
+    match e {
+        Expr::Attr(a) => pred(a),
+        Expr::Lit(_) => false,
+        Expr::Binary { lhs, rhs, .. } => expr_has_attr(lhs, pred) || expr_has_attr(rhs, pred),
+        Expr::Unary { arg, .. } => expr_has_attr(arg, pred),
+    }
+}
+
+/// Walk an Expr tree and return the first `Attr` leaf matching `pred`, if any.
+fn expr_find_attr<'e>(e: &'e Expr, pred: &impl Fn(&Attr) -> bool) -> Option<&'e Attr> {
+    match e {
+        Expr::Attr(a) if pred(a) => Some(a),
+        Expr::Attr(_) | Expr::Lit(_) => None,
+        Expr::Binary { lhs, rhs, .. } => {
+            expr_find_attr(lhs, pred).or_else(|| expr_find_attr(rhs, pred))
+        }
+        Expr::Unary { arg, .. } => expr_find_attr(arg, pred),
+    }
+}
+
+/// Evaluate an `Expr` in the late phase, where exactly one category of Attr is
+/// "known" (its resolved value passed as `known`), identified by `is_known`.
+/// Any other Attr leaf is unknown at late phase → `QueryValue::Null`. Literals
+/// fold; Binary/Unary compose with Java arithmetic semantics (from execute.rs).
+fn eval_late_expr(
+    e: &Expr,
+    is_known: &impl Fn(&Attr) -> bool,
+    known: &QueryValue,
+) -> QueryValue {
+    match e {
+        Expr::Attr(a) if is_known(a) => known.clone(),
+        Expr::Attr(_) => QueryValue::Null, // unknown at late phase
+        Expr::Lit(v) => value_to_qv(v),
+        Expr::Binary { op, lhs, rhs } => arith(
+            &eval_late_expr(lhs, is_known, known),
+            *op,
+            &eval_late_expr(rhs, is_known, known),
+        ),
+        Expr::Unary { op, arg } => unary(*op, &eval_late_expr(arg, is_known, known)),
+    }
+}
+
+/// Compare two `QueryValue`s using the given operator. For `LIKE`/`NOT LIKE`,
+/// the RHS is expected to be a `QueryValue::Str` containing the pattern, and
+/// `like_regexes` is consulted. Null operands: only `Ne` and `NotLike` are true
+/// (type-mismatch behaviour consistent with `cmp_query_value`).
+fn cmp_late_qv(
+    lv: &QueryValue,
+    op: CompareOp,
+    rv: &QueryValue,
+    like_regexes: &std::collections::HashMap<String, regex::Regex>,
+) -> bool {
+    let like_re: Option<&regex::Regex> = if matches!(op, CompareOp::Like | CompareOp::NotLike) {
+        if let QueryValue::Str(pattern) = rv {
+            like_regexes.get(pattern.as_str())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    compare_values(lv, op, rv, like_re)
+}
+
 /// True if the predicate tree contains any `Attr::ToString` comparison.
+/// Widened: the ToString attr may appear anywhere inside the Compare's lhs or
+/// rhs expression (e.g. `toString(s) + 1 = 5` has it buried in a Binary).
 fn has_to_string_pred(p: &Predicate) -> bool {
+    fn is_tostring(a: &Attr) -> bool { matches!(a, Attr::ToString(_)) }
     match p {
         Predicate::And(a, b) | Predicate::Or(a, b) => {
             has_to_string_pred(a) || has_to_string_pred(b)
         }
         Predicate::Not(a) => has_to_string_pred(a),
-        Predicate::Compare {
-            lhs: Expr::Attr(Attr::ToString(_)),
-            ..
-        } => true,
+        Predicate::Compare { lhs, rhs, .. } => {
+            expr_has_attr(lhs, &is_tostring) || expr_has_attr(rhs, &is_tostring)
+        }
         _ => false,
     }
 }
@@ -629,16 +700,21 @@ fn eval_tostring_pred(
                 || eval_tostring_pred(b, dense, ctx, like_regexes)
         }
         Predicate::Not(a) => !eval_tostring_pred(a, dense, ctx, like_regexes),
-        Predicate::Compare {
-            lhs: Expr::Attr(Attr::ToString(_)),
-            op,
-            rhs,
-        } => {
-            let rhs_val = rhs.as_lit().expect("Compare rhs is a single literal before arithmetic wiring");
-            match ctx.string_value(dense) {
-                Some(s) => cmp_query_value(&QueryValue::Str(s.to_string()), *op, rhs_val, like_regexes),
-                None => false, // String instance not in capture (cap overflow) → no match
+        Predicate::Compare { lhs, op, rhs } => {
+            // Detect whether this Compare involves a ToString attr anywhere in
+            // lhs or rhs. If not, it was applied in Phase 1 and passes here.
+            let is_tostring = |a: &Attr| matches!(a, Attr::ToString(_));
+            if !expr_has_attr(lhs, &is_tostring) && !expr_has_attr(rhs, &is_tostring) {
+                return true;
             }
+            // Resolve the toString attr for this dense index.
+            let string_qv = match ctx.string_value(dense) {
+                Some(s) => QueryValue::Str(s.to_string()),
+                None => return false, // not captured → no match
+            };
+            let lv = eval_late_expr(lhs, &is_tostring, &string_qv);
+            let rv = eval_late_expr(rhs, &is_tostring, &string_qv);
+            cmp_late_qv(&lv, *op, &rv, like_regexes)
         }
         // Non-toString predicates were already applied at scan time (Phase 1).
         _ => true,
@@ -694,16 +770,20 @@ fn project_tail(
 }
 
 /// The first `Attr::RefPath` referenced by a predicate, if any.
+/// Widened: finds the RefPath attr wherever it appears in the Compare's
+/// lhs or rhs expression (e.g. `x.parent.hash * 2 > 100`).
 fn find_pred_refpath(p: &Predicate) -> Option<Attr> {
+    let is_refpath = |a: &Attr| matches!(a, Attr::RefPath { .. });
     match p {
         Predicate::And(a, b) | Predicate::Or(a, b) => {
             find_pred_refpath(a).or_else(|| find_pred_refpath(b))
         }
         Predicate::Not(a) => find_pred_refpath(a),
-        Predicate::Compare {
-            lhs: Expr::Attr(a @ Attr::RefPath { .. }),
-            ..
-        } => Some(a.clone()),
+        Predicate::Compare { lhs, rhs, .. } => {
+            expr_find_attr(lhs, &is_refpath)
+                .or_else(|| expr_find_attr(rhs, &is_refpath))
+                .cloned()
+        }
         _ => None,
     }
 }
@@ -716,6 +796,7 @@ fn eval_refpath_pred(
     val: Option<&QueryValue>,
     like_regexes: &std::collections::HashMap<String, regex::Regex>,
 ) -> bool {
+    let is_refpath = |a: &Attr| matches!(a, Attr::RefPath { .. });
     match p {
         Predicate::And(a, b) => {
             eval_refpath_pred(a, val, like_regexes) && eval_refpath_pred(b, val, like_regexes)
@@ -724,82 +805,23 @@ fn eval_refpath_pred(
             eval_refpath_pred(a, val, like_regexes) || eval_refpath_pred(b, val, like_regexes)
         }
         Predicate::Not(a) => !eval_refpath_pred(a, val, like_regexes),
-        Predicate::Compare {
-            lhs: Expr::Attr(Attr::RefPath { .. }),
-            op,
-            rhs,
-        } => match val {
-            Some(v) => {
-                let rhs_val = rhs.as_lit().expect("Compare rhs is a single literal before arithmetic wiring");
-                cmp_query_value(v, *op, rhs_val, like_regexes)
+        Predicate::Compare { lhs, op, rhs } => {
+            // Only handle this Compare if it involves a RefPath attr.
+            if !expr_has_attr(lhs, &is_refpath) && !expr_has_attr(rhs, &is_refpath) {
+                return true;
             }
-            None => false,
-        },
+            let known = match val {
+                Some(v) => v.clone(),
+                None => return false, // dead end / uncaptured tail → no match
+            };
+            let lv = eval_late_expr(lhs, &is_refpath, &known);
+            let rv = eval_late_expr(rhs, &is_refpath, &known);
+            cmp_late_qv(&lv, *op, &rv, like_regexes)
+        }
         _ => true,
     }
 }
-
-/// Compare a resolved tail `QueryValue` against a literal RHS per the operator.
-/// `like_regexes` backs LIKE/NOT LIKE for string tails — looked up by pattern
-/// string, never compiled per row.
-fn cmp_query_value(
-    v: &QueryValue,
-    op: CompareOp,
-    rhs: &Value,
-    like_regexes: &std::collections::HashMap<String, regex::Regex>,
-) -> bool {
-    match (v, rhs) {
-        (QueryValue::Int(l), Value::Int(r)) => cmp_i64(*l, op, *r),
-        (QueryValue::Int(l), Value::Float(r)) => cmp_f64(*l as f64, op, *r),
-        (QueryValue::Float(l), Value::Float(r)) => cmp_f64(*l, op, *r),
-        (QueryValue::Float(l), Value::Int(r)) => cmp_f64(*l, op, *r as f64),
-        (QueryValue::Str(l), Value::Str(r)) => match op {
-            CompareOp::Eq => l == r,
-            CompareOp::Ne => l != r,
-            CompareOp::Like => like_regexes
-                .get(r.as_str())
-                .is_some_and(|re| re.is_match(l)),
-            CompareOp::NotLike => like_regexes
-                .get(r.as_str())
-                .is_none_or(|re| !re.is_match(l)),
-            _ => false,
-        },
-        (QueryValue::Bool(l), Value::Bool(r)) => match op {
-            CompareOp::Eq => l == r,
-            CompareOp::Ne => l != r,
-            _ => false,
-        },
-        // Type mismatch: only Ne is (trivially) true. Non-string LHS with LIKE
-        // never matches; NOT LIKE on non-string is trivially true.
-        _ => matches!(op, CompareOp::Ne | CompareOp::NotLike),
-    }
-}
-fn cmp_i64(l: i64, op: CompareOp, r: i64) -> bool {
-    match op {
-        CompareOp::Eq => l == r,
-        CompareOp::Ne => l != r,
-        CompareOp::Lt => l < r,
-        CompareOp::Le => l <= r,
-        CompareOp::Gt => l > r,
-        CompareOp::Ge => l >= r,
-        // LIKE/NOT LIKE are string-only; a numeric LHS never matches a regex.
-        CompareOp::Like => false,
-        CompareOp::NotLike => true,
-    }
-}
-fn cmp_f64(l: f64, op: CompareOp, r: f64) -> bool {
-    match op {
-        CompareOp::Eq => l == r,
-        CompareOp::Ne => l != r,
-        CompareOp::Lt => l < r,
-        CompareOp::Le => l <= r,
-        CompareOp::Gt => l > r,
-        CompareOp::Ge => l >= r,
-        // LIKE/NOT LIKE are string-only; a numeric LHS never matches a regex.
-        CompareOp::Like => false,
-        CompareOp::NotLike => true,
-    }
-}
+// cmp_query_value / cmp_i64 / cmp_f64 removed: callers now use cmp_late_qv.
 
 fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
     let mut rows: Vec<(u32, u64)> = Vec::new();
@@ -850,41 +872,30 @@ fn retained_where_passes(q: &Query, ret: u64) -> bool {
     }
 }
 fn eval_retained_pred(p: &Predicate, ret: u64) -> bool {
+    let is_retained = |a: &Attr| matches!(a, Attr::RetainedHeapSize);
+    // The retained size is represented as an i64 (safe: Java heap sizes fit in
+    // 63 bits for any JVM process that doesn't OOM before analysis) for arithmetic
+    // with the standard `arith` helper which returns Int/Float/Null.
+    let retained_qv = QueryValue::Int(ret as i64);
     match p {
         Predicate::And(a, b) => eval_retained_pred(a, ret) && eval_retained_pred(b, ret),
         Predicate::Or(a, b) => eval_retained_pred(a, ret) || eval_retained_pred(b, ret),
         Predicate::Not(a) => !eval_retained_pred(a, ret),
-        Predicate::Compare {
-            lhs: Expr::Attr(Attr::RetainedHeapSize),
-            op,
-            rhs,
-        } => {
-            let rhs_val = rhs.as_lit().expect("Compare rhs is a single literal before arithmetic wiring");
-            cmp_u64(ret, *op, rhs_val)
+        Predicate::Compare { lhs, op, rhs } => {
+            // Only handle this Compare if it involves @retainedHeapSize.
+            // Non-retained terms were applied in Phase 1 and pass here.
+            if !expr_has_attr(lhs, &is_retained) && !expr_has_attr(rhs, &is_retained) {
+                return true;
+            }
+            let lv = eval_late_expr(lhs, &is_retained, &retained_qv);
+            let rv = eval_late_expr(rhs, &is_retained, &retained_qv);
+            // No LIKE regex map for retained-size comparisons (numeric only).
+            cmp_late_qv(&lv, *op, &rv, &std::collections::HashMap::new())
         }
         _ => true,
     }
 }
-fn cmp_u64(lv: u64, op: CompareOp, rhs: &Value) -> bool {
-    let rv = match rhs {
-        Value::Int(i) => *i as f64,
-        Value::Float(f) => *f,
-        _ => return matches!(op, CompareOp::Ne),
-    };
-    let l = lv as f64;
-    match op {
-        CompareOp::Eq => l == rv,
-        CompareOp::Ne => l != rv,
-        CompareOp::Lt => l < rv,
-        CompareOp::Le => l <= rv,
-        CompareOp::Gt => l > rv,
-        CompareOp::Ge => l >= rv,
-        // LIKE/NOT LIKE are string-only; a numeric retained-size LHS never
-        // matches a regex, so LIKE is false and NOT LIKE is true.
-        CompareOp::Like => false,
-        CompareOp::NotLike => true,
-    }
-}
+// cmp_u64 removed: callers now use cmp_late_qv via eval_retained_pred.
 
 /// Project a late row. IndexOnly carries answer only @objectId / @retainedHeapSize;
 /// blob-dependent attrs need an IndexPlusScalars carry (later step) and are Null.
@@ -2333,5 +2344,378 @@ mod tostring_tests {
             r.truncated,
             "cap-overflow during scan must set QueryResult.truncated"
         );
+    }
+}
+
+#[cfg(test)]
+mod arith_late_tests {
+    //! Unit tests for the late-phase arithmetic-expression evaluator introduced in
+    //! Task 6. These tests cover:
+    //!   - `eval_late_expr` directly (the building-block helper)
+    //!   - Case A: arithmetic on the RHS only (literal-only RHS folds at late time)
+    //!   - Case B: arithmetic on the LHS (the late attr is buried inside a Binary)
+    //!   - RHS containing a non-late Attr (yields Null → comparison false, no panic)
+    //!   - Non-arithmetic queries still work exactly as before (regression guard)
+    //!   - Detector widening: `has_to_string_pred` and `find_pred_refpath` find the
+    //!     late attr when it is buried inside a Binary/Unary expression.
+
+    use super::*;
+    use crate::query::ast::{Attr, CompareOp, Expr, ArithOp, UnaryOp, Predicate, Value};
+    use crate::query::model::QueryValue;
+
+    // ── eval_late_expr ────────────────────────────────────────────────────────
+
+    /// A plain Attr that IS the known attr resolves to the supplied known value.
+    #[test]
+    fn eval_late_expr_known_attr_resolves_to_known() {
+        let e = Expr::Attr(Attr::RetainedHeapSize);
+        let known = QueryValue::Int(50);
+        let result = eval_late_expr(
+            &e,
+            &|a| matches!(a, Attr::RetainedHeapSize),
+            &known,
+        );
+        assert_eq!(result, QueryValue::Int(50));
+    }
+
+    /// An unknown Attr resolves to Null.
+    #[test]
+    fn eval_late_expr_unknown_attr_is_null() {
+        let e = Expr::Attr(Attr::UsedHeapSize);
+        let known = QueryValue::Int(999);
+        let result = eval_late_expr(
+            &e,
+            &|a| matches!(a, Attr::RetainedHeapSize),
+            &known,
+        );
+        assert_eq!(result, QueryValue::Null);
+    }
+
+    /// A literal folds to the corresponding QueryValue.
+    #[test]
+    fn eval_late_expr_lit_folds() {
+        let e = Expr::Lit(Value::Int(42));
+        let result = eval_late_expr(
+            &e,
+            &|a| matches!(a, Attr::RetainedHeapSize),
+            &QueryValue::Null,
+        );
+        assert_eq!(result, QueryValue::Int(42));
+    }
+
+    /// `@retainedHeapSize * 2` with known=Int(50) → Int(100).
+    #[test]
+    fn eval_late_expr_retained_mul_2() {
+        let e = Expr::Binary {
+            op: ArithOp::Mul,
+            lhs: Box::new(Expr::Attr(Attr::RetainedHeapSize)),
+            rhs: Box::new(Expr::Lit(Value::Int(2))),
+        };
+        let result = eval_late_expr(
+            &e,
+            &|a| matches!(a, Attr::RetainedHeapSize),
+            &QueryValue::Int(50),
+        );
+        assert_eq!(result, QueryValue::Int(100));
+    }
+
+    /// Unary negation: `-@retainedHeapSize` with known=Int(5) → Int(-5).
+    #[test]
+    fn eval_late_expr_unary_neg() {
+        let e = Expr::Unary {
+            op: UnaryOp::Neg,
+            arg: Box::new(Expr::Attr(Attr::RetainedHeapSize)),
+        };
+        let result = eval_late_expr(
+            &e,
+            &|a| matches!(a, Attr::RetainedHeapSize),
+            &QueryValue::Int(5),
+        );
+        assert_eq!(result, QueryValue::Int(-5));
+    }
+
+    /// Unary pos: `+@retainedHeapSize` is identity.
+    #[test]
+    fn eval_late_expr_unary_pos_is_identity() {
+        let e = Expr::Unary {
+            op: UnaryOp::Pos,
+            arg: Box::new(Expr::Attr(Attr::RetainedHeapSize)),
+        };
+        let result = eval_late_expr(
+            &e,
+            &|a| matches!(a, Attr::RetainedHeapSize),
+            &QueryValue::Int(7),
+        );
+        assert_eq!(result, QueryValue::Int(7));
+    }
+
+    // ── cmp_late_qv (QueryValue vs QueryValue comparator) ────────────────────
+
+    /// Int vs Int ordered compare.
+    #[test]
+    fn cmp_late_qv_int_gt() {
+        assert!(cmp_late_qv(&QueryValue::Int(101), CompareOp::Gt, &QueryValue::Int(100), &std::collections::HashMap::new()));
+        assert!(!cmp_late_qv(&QueryValue::Int(99), CompareOp::Gt, &QueryValue::Int(100), &std::collections::HashMap::new()));
+    }
+
+    /// Int vs Float cross-type compare.
+    #[test]
+    fn cmp_late_qv_int_vs_float() {
+        assert!(cmp_late_qv(&QueryValue::Int(3), CompareOp::Lt, &QueryValue::Float(3.5), &std::collections::HashMap::new()));
+        assert!(!cmp_late_qv(&QueryValue::Int(4), CompareOp::Lt, &QueryValue::Float(3.5), &std::collections::HashMap::new()));
+    }
+
+    /// Null on either side → only Ne is true (mismatch behavior).
+    #[test]
+    fn cmp_late_qv_null_is_not_equal() {
+        let no_re = std::collections::HashMap::new();
+        assert!(!cmp_late_qv(&QueryValue::Null, CompareOp::Eq, &QueryValue::Int(1), &no_re));
+        assert!(cmp_late_qv(&QueryValue::Null, CompareOp::Ne, &QueryValue::Int(1), &no_re));
+        assert!(!cmp_late_qv(&QueryValue::Null, CompareOp::Gt, &QueryValue::Int(1), &no_re));
+    }
+
+    // ── Case A: arithmetic RHS — retained_where_passes ───────────────────────
+
+    /// `@retainedHeapSize > 40 * 2` with ret=100 → passes (RHS folds to 80).
+    #[test]
+    fn retained_where_case_a_rhs_arith_passes() {
+        let q = crate::query::parse::parse(
+            "SELECT @objectId FROM C WHERE @retainedHeapSize > 40 * 2"
+        ).unwrap();
+        assert!(retained_where_passes(&q, 100));
+    }
+
+    /// `@retainedHeapSize > 40 * 2` with ret=50 → fails (50 ≤ 80).
+    #[test]
+    fn retained_where_case_a_rhs_arith_fails() {
+        let q = crate::query::parse::parse(
+            "SELECT @objectId FROM C WHERE @retainedHeapSize > 40 * 2"
+        ).unwrap();
+        assert!(!retained_where_passes(&q, 50));
+    }
+
+    // ── Case B: arithmetic LHS — retained_where_passes ───────────────────────
+
+    /// `@retainedHeapSize * 2 > 100` with ret=60 → 120 > 100 → passes.
+    #[test]
+    fn retained_where_case_b_lhs_arith_passes() {
+        let q = crate::query::parse::parse(
+            "SELECT @objectId FROM C WHERE @retainedHeapSize * 2 > 100"
+        ).unwrap();
+        assert!(retained_where_passes(&q, 60));
+    }
+
+    /// `@retainedHeapSize * 2 > 100` with ret=40 → 80 > 100 → fails.
+    #[test]
+    fn retained_where_case_b_lhs_arith_fails() {
+        let q = crate::query::parse::parse(
+            "SELECT @objectId FROM C WHERE @retainedHeapSize * 2 > 100"
+        ).unwrap();
+        assert!(!retained_where_passes(&q, 40));
+    }
+
+    // ── RHS containing a non-late Attr — no panic, returns false ─────────────
+
+    /// Build a Compare with a non-late Attr on the RHS manually (parser can't do
+    /// this, but the evaluator must not panic and must return false).
+    #[test]
+    fn retained_where_rhs_non_late_attr_no_panic_returns_false() {
+        // Construct: @retainedHeapSize > @usedHeapSize (manually)
+        let pred = Predicate::Compare {
+            lhs: Expr::Attr(Attr::RetainedHeapSize),
+            op: CompareOp::Gt,
+            rhs: Expr::Attr(Attr::UsedHeapSize), // non-late attr, unknown at late phase
+        };
+        // Must not panic; the unknown RHS attr becomes Null, so comparison is false.
+        assert!(!eval_retained_pred(&pred, 999));
+    }
+
+    // ── Non-arithmetic regression guard ──────────────────────────────────────
+
+    /// A plain `@retainedHeapSize > 100` (no arithmetic) still works exactly as
+    /// before. This is the folded-literal fast path that must be byte-identical.
+    #[test]
+    fn retained_where_plain_literal_still_works() {
+        let q = crate::query::parse::parse(
+            "SELECT @objectId FROM C WHERE @retainedHeapSize > 100"
+        ).unwrap();
+        assert!(retained_where_passes(&q, 200));
+        assert!(!retained_where_passes(&q, 50));
+        assert!(!retained_where_passes(&q, 100)); // strict >
+    }
+
+    // ── has_to_string_pred — detector widening ────────────────────────────────
+
+    /// A normal `toString(s) = "foo"` is detected.
+    #[test]
+    fn has_to_string_pred_detects_plain_compare() {
+        let p = Predicate::Compare {
+            lhs: Expr::Attr(Attr::ToString("s".to_string())),
+            op: CompareOp::Eq,
+            rhs: Expr::Lit(Value::Str("foo".to_string())),
+        };
+        assert!(has_to_string_pred(&p));
+    }
+
+    /// `toString(s) + 1 = 5` — toString buried in Binary on LHS. Must be detected
+    /// so the late phase runs (even though arith on a String→Null, the phase still
+    /// needs to evaluate to avoid silently passing all rows).
+    #[test]
+    fn has_to_string_pred_detects_buried_in_binary_lhs() {
+        let p = Predicate::Compare {
+            lhs: Expr::Binary {
+                op: ArithOp::Add,
+                lhs: Box::new(Expr::Attr(Attr::ToString("s".to_string()))),
+                rhs: Box::new(Expr::Lit(Value::Int(1))),
+            },
+            op: CompareOp::Eq,
+            rhs: Expr::Lit(Value::Int(5)),
+        };
+        assert!(has_to_string_pred(&p));
+    }
+
+    /// A plain non-toString compare is not detected.
+    #[test]
+    fn has_to_string_pred_does_not_detect_plain_attr() {
+        let p = Predicate::Compare {
+            lhs: Expr::Attr(Attr::RetainedHeapSize),
+            op: CompareOp::Gt,
+            rhs: Expr::Lit(Value::Int(100)),
+        };
+        assert!(!has_to_string_pred(&p));
+    }
+
+    // ── find_pred_refpath — detector widening ─────────────────────────────────
+
+    /// A normal `x.parent.name > 100` is found.
+    #[test]
+    fn find_pred_refpath_detects_plain_refpath() {
+        let refpath = Attr::RefPath {
+            hops: vec!["parent".to_string()],
+            tail: Box::new(Attr::Field("name".to_string())),
+            role: crate::query::ast::RefRole::PredicateCritical,
+        };
+        let p = Predicate::Compare {
+            lhs: Expr::Attr(refpath.clone()),
+            op: CompareOp::Gt,
+            rhs: Expr::Lit(Value::Int(100)),
+        };
+        let found = find_pred_refpath(&p);
+        assert!(found.is_some());
+        assert_eq!(found.unwrap(), refpath);
+    }
+
+    /// `x.parent.name * 2 > 100` — RefPath buried in Binary on LHS. Must be found.
+    #[test]
+    fn find_pred_refpath_detects_buried_in_binary() {
+        let refpath = Attr::RefPath {
+            hops: vec!["parent".to_string()],
+            tail: Box::new(Attr::Field("hash".to_string())),
+            role: crate::query::ast::RefRole::PredicateCritical,
+        };
+        let p = Predicate::Compare {
+            lhs: Expr::Binary {
+                op: ArithOp::Mul,
+                lhs: Box::new(Expr::Attr(refpath.clone())),
+                rhs: Box::new(Expr::Lit(Value::Int(2))),
+            },
+            op: CompareOp::Gt,
+            rhs: Expr::Lit(Value::Int(100)),
+        };
+        let found = find_pred_refpath(&p);
+        assert!(found.is_some(), "should find refpath buried in binary lhs");
+        assert_eq!(found.unwrap(), refpath);
+    }
+
+    /// A non-refpath compare returns None.
+    #[test]
+    fn find_pred_refpath_returns_none_for_plain_retained() {
+        let p = Predicate::Compare {
+            lhs: Expr::Attr(Attr::RetainedHeapSize),
+            op: CompareOp::Gt,
+            rhs: Expr::Lit(Value::Int(100)),
+        };
+        assert!(find_pred_refpath(&p).is_none());
+    }
+
+    // ── End-to-end via resume(): retained arithmetic ──────────────────────────
+
+    static EMPTY_ID_MAP: IdMap<'static> = IdMap { addr_of: &[] };
+
+    fn ctx_for(retained: &[u64]) -> LateCtx<'_> {
+        LateCtx {
+            retained,
+            idom: &[],
+            dc_off: &[],
+            dc_tgt: &[],
+            shallow: &[],
+            id_map: &EMPTY_ID_MAP,
+            fwd_off: &[],
+            fwd_tgt: &[],
+            fwd_field: &[],
+            field_names: &[],
+            refwalk_tails: &EMPTY_REFWALK_TAILS,
+            refwalk_truncated: false,
+            in_off: &[],
+            in_tgt: &[],
+            retained_edges: None,
+            string_values: &EMPTY_STRING_VALUES,
+            string_values_truncated: false,
+        }
+    }
+
+    fn pq(q: &crate::query::ast::Query) -> crate::query::plan::QueryPlan {
+        crate::query::plan::plan_query(q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap()
+    }
+
+    /// End-to-end: `@retainedHeapSize * 2 > 100` applied through resume().
+    /// Idx 1 (retained=60, 60*2=120>100 passes), idx 2 (retained=40, 40*2=80 fails).
+    #[test]
+    fn e2e_retained_lhs_arith_filters_correctly() {
+        let q = crate::query::parse::parse(
+            "SELECT @objectId FROM C WHERE @retainedHeapSize * 2 > 100"
+        ).unwrap();
+        let plan = pq(&q);
+        let mut carry = crate::query::carry::Carry::index_only(100);
+        carry.push_index(1);
+        carry.push_index(2);
+        let mut st = crate::query::execute::QueryExecState::new();
+        st.push_cross_phase(0, "q_arith".to_string(), plan, carry);
+        let retained = {
+            let mut v = vec![0u64; 10];
+            v[1] = 60;
+            v[2] = 40;
+            v
+        };
+        let out = resume(st, &[q.clone(), q], &ctx_for(&retained));
+        let r = &out[0];
+        assert!(r.error.is_none(), "unexpected error: {:?}", r.error);
+        assert_eq!(r.row_count, 1, "only idx 1 (retained=60, 60*2=120>100) passes");
+        assert_eq!(r.rows[0][0], QueryValue::Int(1));
+    }
+
+    /// End-to-end: `@retainedHeapSize > 40 * 2` (RHS arithmetic). Same expectation.
+    #[test]
+    fn e2e_retained_rhs_arith_filters_correctly() {
+        let q = crate::query::parse::parse(
+            "SELECT @objectId FROM C WHERE @retainedHeapSize > 40 * 2"
+        ).unwrap();
+        let plan = pq(&q);
+        let mut carry = crate::query::carry::Carry::index_only(100);
+        carry.push_index(1);
+        carry.push_index(2);
+        let mut st = crate::query::execute::QueryExecState::new();
+        st.push_cross_phase(0, "q_rhs".to_string(), plan, carry);
+        let retained = {
+            let mut v = vec![0u64; 10];
+            v[1] = 100; // 100 > 80 → passes
+            v[2] = 50;  // 50 > 80 → fails
+            v
+        };
+        let out = resume(st, &[q.clone(), q], &ctx_for(&retained));
+        let r = &out[0];
+        assert!(r.error.is_none(), "unexpected error: {:?}", r.error);
+        assert_eq!(r.row_count, 1, "only idx 1 (retained=100 > 80) passes");
+        assert_eq!(r.rows[0][0], QueryValue::Int(1));
     }
 }

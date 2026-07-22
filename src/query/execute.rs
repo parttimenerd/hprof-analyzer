@@ -793,7 +793,7 @@ fn read_be(blob: &[u8], off: usize, n: usize) -> Option<u64> {
 }
 
 /// Convert a literal AST `Value` to a `QueryValue`.
-fn value_to_qv(v: &Value) -> QueryValue {
+pub(crate) fn value_to_qv(v: &Value) -> QueryValue {
     match v {
         Value::Int(n) => QueryValue::Int(*n),
         Value::Float(f) => QueryValue::Float(*f),
@@ -813,7 +813,7 @@ fn value_to_qv(v: &Value) -> QueryValue {
 ///   Float division by zero → IEEE 754 `±inf`/`NaN` (Java parity).
 /// - Any `Null`/`Str`/`Bool`/`ObjRef` operand → `QueryValue::Null` (arithmetic
 ///   undefined on those types; no coercion).
-fn arith(lhs: &QueryValue, op: ArithOp, rhs: &QueryValue) -> QueryValue {
+pub(crate) fn arith(lhs: &QueryValue, op: ArithOp, rhs: &QueryValue) -> QueryValue {
     match (lhs, rhs) {
         (QueryValue::Int(a), QueryValue::Int(b)) => match op {
             ArithOp::Add => QueryValue::Int(a.wrapping_add(*b)),
@@ -860,7 +860,7 @@ fn arith(lhs: &QueryValue, op: ArithOp, rhs: &QueryValue) -> QueryValue {
 /// Apply a unary operator. `Pos` is identity; `Neg` negates numeric values with
 /// wrapping semantics (`i64::MIN.wrapping_neg() == i64::MIN`). Non-numeric
 /// values under `Neg` yield `QueryValue::Null`.
-fn unary(op: UnaryOp, v: &QueryValue) -> QueryValue {
+pub(crate) fn unary(op: UnaryOp, v: &QueryValue) -> QueryValue {
     match op {
         UnaryOp::Pos => v.clone(),
         UnaryOp::Neg => match v {
@@ -880,7 +880,7 @@ fn unary(op: UnaryOp, v: &QueryValue) -> QueryValue {
 /// holds for anything that isn't a matching string). A missing `like_re` for a
 /// LIKE op (a wiring bug — the actionable compile error is raised earlier at plan
 /// time) is treated as no match rather than a panic.
-fn compare_values(
+pub(crate) fn compare_values(
     lv: &QueryValue,
     op: CompareOp,
     rv: &QueryValue,
