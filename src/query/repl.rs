@@ -196,9 +196,87 @@ impl OqlCompleter {
     }
 }
 
+/// Chart kinds accepted by the `-- @viz` directive (mirrors `viz::VizKind`).
+const VIZ_KINDS: &[&str] = &["table", "histogram", "piechart", "treemap"];
+/// Argument keys accepted after the kind in a `-- @viz` directive.
+const VIZ_ARG_KEYS: &[&str] = &["label=", "value=", "cap="];
+
+/// When `upto` (the line up to the cursor) is a `-- @viz` directive line, return
+/// Tab suggestions for it: the chart kind right after `@viz`, then the arg keys
+/// (`label=`/`value=`/`cap=`) once a kind is present. Returns `None` when the
+/// line is not a `@viz` directive so the caller falls through to OQL completion.
+///
+/// `append_whitespace` is false for the arg keys so the cursor lands right after
+/// `label=` ready for a column name, and false for kinds too is undesirable (a
+/// space separates kind from args) so kinds keep the default trailing space.
+fn viz_directive_suggestions(upto: &str, pos: usize) -> Option<Vec<Suggestion>> {
+    let trimmed = upto.trim_start();
+    let lead = upto.len() - trimmed.len(); // bytes of leading whitespace
+    // Only a `--`-comment line that names @viz is a directive line.
+    let rest = trimmed.strip_prefix("--")?;
+    let rest = rest.trim_start();
+    // Accept `@viz` or `viz` (users may drop the `@`).
+    let after_viz = rest
+        .strip_prefix("@viz")
+        .or_else(|| rest.strip_prefix("viz"))?;
+    // Require a boundary after the keyword (space or end) so `@vizfoo` isn't a hit.
+    if !after_viz.is_empty() && !after_viz.starts_with(char::is_whitespace) {
+        return None;
+    }
+
+    // The fragment being typed is the trailing whitespace-delimited word.
+    let delim_pos = upto
+        .rfind(char::is_whitespace)
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let frag = &upto[delim_pos..];
+    let lower = frag.to_ascii_lowercase();
+
+    // Words already committed after `@viz` (excluding the trailing fragment).
+    let after_kw_start = lead + (trimmed.len() - after_viz.len());
+    let committed = if delim_pos > after_kw_start {
+        upto[after_kw_start..delim_pos].split_whitespace().count()
+    } else {
+        0
+    };
+
+    // No committed word yet after `@viz` → the fragment is the chart kind.
+    if committed == 0 {
+        return Some(OqlCompleter::suggestions(
+            VIZ_KINDS.iter().copied(),
+            &lower,
+            delim_pos,
+            pos,
+        ));
+    }
+    // A kind is present → offer arg keys. Skip completion once the fragment
+    // already contains `=` (the user is typing a column name / number).
+    if frag.contains('=') {
+        return Some(Vec::new());
+    }
+    let out = VIZ_ARG_KEYS
+        .iter()
+        .filter(|c| c.to_ascii_lowercase().starts_with(&lower))
+        .map(|c| Suggestion {
+            value: c.to_string(),
+            description: None,
+            style: None,
+            extra: None,
+            span: Span { start: delim_pos, end: pos },
+            append_whitespace: false,
+        })
+        .collect();
+    Some(out)
+}
+
 impl Completer for OqlCompleter {
     fn complete(&mut self, line: &str, pos: usize) -> Vec<Suggestion> {
         let upto = &line[..pos];
+        // A leading `-- @viz` directive line completes chart kinds / arg keys,
+        // not OQL grammar.
+        if let Some(sugg) = viz_directive_suggestions(upto, pos) {
+            return sugg;
+        }
         // Delimit the fragment on whitespace, '(' and ',' so `SELECT a,b` and
         // `COUNT(x` complete their trailing word.
         let delim_pos = upto
@@ -1162,5 +1240,108 @@ mod tests {
             out.contains("parse error:"),
             "malformed query must produce 'parse error:', got:\n{out}"
         );
+    }
+
+    // ---------- `-- @viz` directive completion ----------
+
+    #[test]
+    fn viz_empty_after_keyword_offers_all_kinds() {
+        let mut c = completer(&[]);
+        let line = "-- @viz ";
+        let v = values(&c.complete(line, line.len()));
+        for k in ["table", "histogram", "piechart", "treemap"] {
+            assert!(v.contains(&k.to_string()), "kind {k} missing: {v:?}");
+        }
+    }
+
+    #[test]
+    fn viz_partial_kind_prefix_filters() {
+        let mut c = completer(&[]);
+        let line = "-- @viz hist";
+        let v = values(&c.complete(line, line.len()));
+        assert_eq!(v, vec!["histogram".to_string()], "got {v:?}");
+    }
+
+    #[test]
+    fn viz_partial_kind_p_offers_piechart_only() {
+        let mut c = completer(&[]);
+        let line = "-- @viz p";
+        let v = values(&c.complete(line, line.len()));
+        assert_eq!(v, vec!["piechart".to_string()], "got {v:?}");
+    }
+
+    #[test]
+    fn viz_after_kind_offers_arg_keys() {
+        let mut c = completer(&[]);
+        let line = "-- @viz histogram ";
+        let v = values(&c.complete(line, line.len()));
+        for k in ["label=", "value=", "cap="] {
+            assert!(v.contains(&k.to_string()), "arg key {k} missing: {v:?}");
+        }
+    }
+
+    #[test]
+    fn viz_arg_key_prefix_filters() {
+        let mut c = completer(&[]);
+        let line = "-- @viz histogram la";
+        let v = values(&c.complete(line, line.len()));
+        assert_eq!(v, vec!["label=".to_string()], "got {v:?}");
+    }
+
+    #[test]
+    fn viz_arg_key_suggestion_has_no_trailing_space() {
+        // `label=` must leave the cursor right after `=` for a column name.
+        let mut c = completer(&[]);
+        let line = "-- @viz histogram v";
+        let sugg = c.complete(line, line.len());
+        assert_eq!(sugg.len(), 1);
+        assert_eq!(sugg[0].value, "value=");
+        assert!(!sugg[0].append_whitespace, "arg key must not append a space");
+    }
+
+    #[test]
+    fn viz_no_at_prefix_still_completes() {
+        // Users may drop the `@`: `-- viz ` still offers kinds.
+        let mut c = completer(&[]);
+        let line = "-- viz ";
+        let v = values(&c.complete(line, line.len()));
+        assert!(v.contains(&"treemap".to_string()), "got {v:?}");
+    }
+
+    #[test]
+    fn viz_leading_whitespace_tolerated() {
+        let mut c = completer(&[]);
+        let line = "   -- @viz tab";
+        let v = values(&c.complete(line, line.len()));
+        assert_eq!(v, vec!["table".to_string()], "got {v:?}");
+    }
+
+    #[test]
+    fn viz_after_column_value_offers_nothing() {
+        // Once a `key=` fragment is being typed, don't suggest arg keys over it.
+        let mut c = completer(&[]);
+        let line = "-- @viz histogram label=na";
+        let v = values(&c.complete(line, line.len()));
+        assert!(v.is_empty(), "column-name fragment must not complete: {v:?}");
+    }
+
+    #[test]
+    fn non_viz_comment_line_is_not_a_directive() {
+        // A plain `-- comment` (no viz) falls through to OQL completion, which in
+        // keyword position offers SELECT etc. — crucially NOT chart kinds.
+        let mut c = completer(&[]);
+        let line = "-- hello wor";
+        let v = values(&c.complete(line, line.len()));
+        assert!(!v.contains(&"histogram".to_string()), "must not offer kinds: {v:?}");
+    }
+
+    #[test]
+    fn ordinary_query_line_unaffected_by_viz_hook() {
+        // A normal SELECT line must still complete OQL, not chart kinds.
+        let mut c = completer(&["java.lang.String"]);
+        let line = "SELECT * FROM java.";
+        let v = values(&c.complete(line, line.len()));
+        assert!(v.contains(&"java.lang.String".to_string()), "got {v:?}");
+        assert!(!v.contains(&"histogram".to_string()), "must not leak kinds: {v:?}");
     }
 }
