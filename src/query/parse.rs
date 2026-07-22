@@ -2730,18 +2730,11 @@ mod tests {
     /// 5. Leading AS RETAINED without SET shares the actionable error message.
     #[test]
     fn leading_as_retained_missing_set_errors() {
-        // The grammar is ambiguous here: `AS RETAINED s` — the shared retained_set
-        // combinator emits the actionable error and recovers, so it may still
-        // produce a parse result or an error. Either way the error text is present.
-        let err = parse("SELECT AS RETAINED s FROM java.lang.String s");
-        // If it errors, the message must mention "expected SET after 'AS RETAINED'"
-        if let Err(e) = &err {
-            assert!(
-                e.to_string().contains("expected SET after 'AS RETAINED'"),
-                "leading missing-SET error must be actionable, got: {e}"
-            );
-        }
-        // (If the parser recovers and accepts, that is also acceptable behaviour.)
+        let err = parse("SELECT AS RETAINED s FROM java.lang.String s").unwrap_err();
+        assert!(
+            err.to_string().contains("expected SET after 'AS RETAINED'"),
+            "leading missing-SET error must be actionable, got: {err}"
+        );
     }
 
     /// 6. SELECT DISTINCT OBJECTS: both DISTINCT and OBJECTS together.
