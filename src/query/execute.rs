@@ -875,7 +875,8 @@ pub fn column_name(it: &SelectItem) -> String {
 }
 
 /// Build output columns for a query, applying per-item AS aliases where present.
-pub fn query_columns(q: &crate::query::ast::Query) -> Vec<crate::query::model::QueryColumn> {
+pub(crate) fn query_columns(q: &Query) -> Vec<QueryColumn> {
+    debug_assert_eq!(q.select.len(), q.select_aliases.len(), "select and select_aliases must stay parallel");
     q.select
         .iter()
         .zip(
@@ -884,7 +885,7 @@ pub fn query_columns(q: &crate::query::ast::Query) -> Vec<crate::query::model::Q
                 .map(Option::as_deref)
                 .chain(std::iter::repeat(None)),
         )
-        .map(|(it, alias)| crate::query::model::QueryColumn {
+        .map(|(it, alias)| QueryColumn {
             name: alias
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| column_name(it)),

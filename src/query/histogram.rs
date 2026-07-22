@@ -4,7 +4,7 @@
 
 use crate::query::ast::{AggFunc, Attr, Query, SelectItem};
 use crate::query::execute::{
-    class_name_matches, class_name_matches_spec, column_name, compile_from_regex,
+    class_name_matches, class_name_matches_spec, column_name, compile_from_regex, query_columns,
 };
 use crate::query::model::{QueryResult, QueryValue};
 use crate::query::plan::QueryPlan;
@@ -43,11 +43,10 @@ pub fn run_histogram(q: &Query, plan: &QueryPlan, classes: &[ClassSummary]) -> Q
             shallow += c.shallow_total;
         }
     }
-    let mut cols = Vec::new();
+    let cols = query_columns(q);
     let mut row: Vec<QueryValue> = Vec::new();
     for item in &q.select {
-        let (name, val) = eval_agg(item, count, shallow);
-        cols.push(crate::query::model::QueryColumn { name });
+        let (_name, val) = eval_agg(item, count, shallow);
         row.push(val);
     }
     QueryResult {
@@ -319,6 +318,26 @@ mod tests {
         let res2 = run_histogram(&q2, &plan2, &summaries());
         assert_eq!(res2.row_count, 1);
         assert_eq!(res2.rows.len(), 1);
+    }
+
+    /// CRITICAL regression pin: an AS alias on a histogram-path aggregate must
+    /// appear as the column header, not the derived name like `COUNT(*)`.
+    #[test]
+    fn count_star_alias_wins_in_column_header() {
+        let q = crate::query::parse::parse("SELECT COUNT(*) AS n FROM java.lang.String").unwrap();
+        let plan = crate::query::plan::plan_query(&q).unwrap();
+        assert_eq!(
+            plan.kind,
+            crate::query::plan::StageKind::HistogramOnly,
+            "COUNT(*) with no WHERE must route to HistogramOnly"
+        );
+        let cs = summaries();
+        let res = run_histogram(&q, &plan, &cs);
+        assert_eq!(
+            res.columns[0].name, "n",
+            "alias 'n' must override derived 'COUNT(*)' on the histogram path"
+        );
+        assert_eq!(res.rows[0][0], QueryValue::Int(100), "row value must be unchanged");
     }
 
     /// MAT-parity / normalization invariant: aggregate COUNT(*) over a primitive

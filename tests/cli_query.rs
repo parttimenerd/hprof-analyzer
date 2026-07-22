@@ -1862,8 +1862,8 @@ fn alias_aggregate_column_name_in_output() {
         "SELECT COUNT(*) AS n FROM java.lang.String",
     );
     assert!(
-        stdout.contains("n"),
-        "expected column header 'n' in output:\n{stdout}"
+        stdout.lines().any(|l| l == "n"),
+        "expected a line exactly 'n' as column header in output:\n{stdout}"
     );
 }
 
@@ -1926,6 +1926,27 @@ fn alias_quoted_name_appears_in_output() {
     assert!(
         stdout.contains("heap_size"),
         "expected quoted alias 'heap_size' in output:\n{stdout}"
+    );
+}
+
+/// CRITICAL: aggregate alias on histogram path — `SELECT COUNT(*) AS n` must
+/// render the column header as `n`, not `COUNT(*)`. The HistogramOnly executor
+/// must route column names through the same alias-aware helper as the scan path.
+#[test]
+fn histogram_alias_column_header_is_alias_not_derived() {
+    let Some(hprof) = philosophers() else { return };
+    let stdout = query_stdout(
+        &hprof,
+        "SELECT COUNT(*) AS n FROM java.lang.String",
+    );
+    // The column header line must be exactly "n", not "COUNT(*)".
+    assert!(
+        stdout.lines().any(|l| l == "n"),
+        "histogram alias: expected a line exactly 'n' as column header, got:\n{stdout}"
+    );
+    assert!(
+        !stdout.lines().any(|l| l == "COUNT(*)"),
+        "histogram alias: column header must not be derived 'COUNT(*)' when alias is set:\n{stdout}"
     );
 }
 
