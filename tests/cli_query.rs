@@ -3072,3 +3072,81 @@ fn sum_and_count_still_work_after_routing_fix() {
     );
 }
 
+
+/// Extract every integer-only data row (one numeric column) in output order.
+/// Skips the `(N rows)` footer (which is parenthesized) and headers.
+fn ordered_int_column(stdout: &str) -> Vec<i64> {
+    stdout
+        .lines()
+        .filter_map(|l| {
+            let t = l.trim();
+            if t.starts_with('(') {
+                return None;
+            }
+            t.parse::<i64>().ok()
+        })
+        .collect()
+}
+
+/// ORDER BY sort fix: a non-retained ORDER BY on a scan-time attr must actually
+/// sort the rows (before the fix they came back in scan order). DESC on
+/// @usedHeapSize must yield a non-increasing sequence.
+#[test]
+fn order_by_scan_attr_desc_is_sorted() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT s.@usedHeapSize FROM java.lang.String s ORDER BY s.@usedHeapSize DESC LIMIT 50",
+    );
+    let vals = ordered_int_column(&out);
+    assert!(vals.len() >= 2, "need at least 2 rows to check ordering:\n{out}");
+    for w in vals.windows(2) {
+        assert!(
+            w[0] >= w[1],
+            "DESC ORDER BY not sorted: {} came before {}\n{out}",
+            w[0],
+            w[1]
+        );
+    }
+}
+
+/// ASC direction sorts ascending.
+#[test]
+fn order_by_scan_attr_asc_is_sorted() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT s.@usedHeapSize FROM java.lang.String s ORDER BY s.@usedHeapSize ASC LIMIT 50",
+    );
+    let vals = ordered_int_column(&out);
+    assert!(vals.len() >= 2, "need at least 2 rows:\n{out}");
+    for w in vals.windows(2) {
+        assert!(w[0] <= w[1], "ASC not sorted: {} before {}\n{out}", w[0], w[1]);
+    }
+}
+
+/// The LIMIT after an ORDER BY must return the TRUE top-N by the sort key, not
+/// the first N in scan order. We verify the max of a small LIMIT equals the max
+/// of a large LIMIT (the global max must survive a DESC top-5).
+#[test]
+fn order_by_limit_returns_true_top_n() {
+    let Some(hprof) = philosophers() else { return };
+    let top5 = ordered_int_column(&run_query_stdout(
+        &hprof,
+        "SELECT s.@usedHeapSize FROM java.lang.String s ORDER BY s.@usedHeapSize DESC LIMIT 5",
+    ));
+    let top500 = ordered_int_column(&run_query_stdout(
+        &hprof,
+        "SELECT s.@usedHeapSize FROM java.lang.String s ORDER BY s.@usedHeapSize DESC LIMIT 500",
+    ));
+    assert!(!top5.is_empty() && !top500.is_empty(), "expected rows");
+    // The single largest value must be identical regardless of LIMIT: proves the
+    // top-5 was taken AFTER sorting the whole matched set, not from scan order.
+    assert_eq!(
+        top5[0], top500[0],
+        "top-5 max ({}) != top-500 max ({}): LIMIT applied before sort",
+        top5[0], top500[0]
+    );
+    // And top5 is exactly the first 5 of top500.
+    assert_eq!(&top5[..], &top500[..top5.len().min(top500.len())]);
+}

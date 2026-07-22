@@ -856,15 +856,53 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 note: None,
             }
         } else {
+            let mut rows = self.rows;
+            let mut note = None;
+            // Apply a general ORDER BY sort for the scan-time (non-carry) path.
+            // The retained-late path carries indices forward and sorts in
+            // stage_runner, so it never reaches here with rows to sort; guard on
+            // carry so we never emit a spurious note for a late-sorted query.
+            if self.carry.is_none() {
+                if let Some(ob) = &self.query.order_by {
+                    match order_by_column_index(self.query, &columns, &ob.key) {
+                        Some(idx) => {
+                            sort_rows_by_column(&mut rows, idx, ob.dir);
+                            if let Some(limit) = self.plan.limit {
+                                if rows.len() > limit as usize {
+                                    rows.truncate(limit as usize);
+                                    // Truncation after an explicit sort is the intended
+                                    // top-N, not a lost-data warning: leave `truncated`
+                                    // reflecting only scan-cap loss (none on this path).
+                                }
+                            }
+                        }
+                        None => {
+                            // Key is not a projected column we can order by here
+                            // (e.g. a non-selected field). Keep scan order and say so,
+                            // rather than silently pretending the sort happened.
+                            note = Some(format!(
+                                "ORDER BY `{}` was not applied: the sort key must be a \
+                                 selected column on this query path; rows are in scan order",
+                                attr_name(&ob.key)
+                            ));
+                            if let Some(limit) = self.plan.limit {
+                                if rows.len() > limit as usize {
+                                    rows.truncate(limit as usize);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             QueryResult {
                 name: name.to_string(),
                 oql: String::new(),
                 columns,
-                row_count: self.rows.len() as u64,
-                rows: self.rows,
+                row_count: rows.len() as u64,
+                rows,
                 truncated: self.truncated,
                 error: None,
-                note: None,
+                note,
             }
         }
     }
@@ -945,10 +983,16 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
             }
             return;
         }
-        if let Some(limit) = self.plan.limit {
-            if self.matched >= limit {
-                self.truncated = true;
-                return;
+        // When ORDER BY is present we must sort the FULL matched set in
+        // `finish()` before applying LIMIT, so we cannot early-stop here — doing
+        // so would take the first N in scan order, not the top N by the sort key.
+        // No-ORDER-BY queries keep the byte-identical early-stop.
+        if self.query.order_by.is_none() {
+            if let Some(limit) = self.plan.limit {
+                if self.matched >= limit {
+                    self.truncated = true;
+                    return;
+                }
             }
         }
         self.matched += 1;
@@ -996,10 +1040,14 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
             }
             return;
         }
-        if let Some(limit) = self.plan.limit {
-            if self.matched >= limit {
-                self.truncated = true;
-                return;
+        // See the ORDER BY note in `visit_instance`: don't early-stop when a
+        // sort is pending.
+        if self.query.order_by.is_none() {
+            if let Some(limit) = self.plan.limit {
+                if self.matched >= limit {
+                    self.truncated = true;
+                    return;
+                }
             }
         }
         self.matched += 1;
@@ -1291,6 +1339,94 @@ fn collect_like_regexes(
         P::Compare { .. } | P::InstanceOf(_) | P::InSubquery { .. } => {}
     }
     Ok(())
+}
+
+/// Find the output-column index that an ORDER BY key refers to, if any.
+/// Matches the key's rendered name (e.g. `@usedHeapSize`, a field name, or an
+/// alias) against the query's output column names. Returns None when the key is
+/// not a projected column (the caller then keeps scan order + notes it).
+pub(crate) fn order_by_column_index(
+    q: &Query,
+    columns: &[QueryColumn],
+    key: &Attr,
+) -> Option<usize> {
+    let key_name = attr_name(key);
+    let bare = strip_leading_alias(&key_name, q.alias.as_deref());
+    columns.iter().position(|c| {
+        c.name == key_name || strip_leading_alias(&c.name, q.alias.as_deref()) == bare
+    })
+}
+
+/// Strip a leading `alias.` prefix from a rendered name so `s.name` and `name`
+/// compare equal when `s` is the FROM alias.
+fn strip_leading_alias<'n>(name: &'n str, alias: Option<&str>) -> &'n str {
+    if let Some(a) = alias {
+        if let Some(rest) = name.strip_prefix(a).and_then(|r| r.strip_prefix('.')) {
+            return rest;
+        }
+    }
+    name
+}
+
+/// Stable in-place sort of result rows by a single column index, honoring
+/// direction. Uses a total ordering over `QueryValue` (Null sorts first in ASC).
+pub(crate) fn sort_rows_by_column(
+    rows: &mut [Vec<QueryValue>],
+    idx: usize,
+    dir: crate::query::ast::SortDir,
+) {
+    use crate::query::ast::SortDir;
+    rows.sort_by(|a, b| {
+        let av = a.get(idx).unwrap_or(&QueryValue::Null);
+        let bv = b.get(idx).unwrap_or(&QueryValue::Null);
+        let ord = total_cmp_query_value(av, bv);
+        match dir {
+            SortDir::Asc => ord,
+            SortDir::Desc => ord.reverse(),
+        }
+    });
+}
+
+/// A TOTAL ordering over `QueryValue` for sorting. Numeric values compare
+/// numerically (Int/Float mixed via f64); strings lexicographically; bools
+/// false<true; Null sorts before everything. Cross-type falls back to a stable
+/// kind rank so the sort never panics on `f64` NaN or mixed columns.
+fn total_cmp_query_value(a: &QueryValue, b: &QueryValue) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    fn num(v: &QueryValue) -> Option<f64> {
+        match v {
+            QueryValue::Int(i) => Some(*i as f64),
+            QueryValue::Float(f) => Some(*f),
+            _ => None,
+        }
+    }
+    if let (Some(x), Some(y)) = (num(a), num(b)) {
+        return x.partial_cmp(&y).unwrap_or_else(|| {
+            // NaN handling: push NaN to the end deterministically.
+            match (x.is_nan(), y.is_nan()) {
+                (true, true) => Ordering::Equal,
+                (true, false) => Ordering::Greater,
+                (false, true) => Ordering::Less,
+                _ => Ordering::Equal,
+            }
+        });
+    }
+    match (a, b) {
+        (QueryValue::Str(x), QueryValue::Str(y)) => x.cmp(y),
+        (QueryValue::Bool(x), QueryValue::Bool(y)) => x.cmp(y),
+        (QueryValue::Null, QueryValue::Null) => Ordering::Equal,
+        _ => kind_rank(a).cmp(&kind_rank(b)),
+    }
+}
+
+fn kind_rank(v: &QueryValue) -> u8 {
+    match v {
+        QueryValue::Null => 0,
+        QueryValue::Bool(_) => 1,
+        QueryValue::Int(_) | QueryValue::Float(_) => 2,
+        QueryValue::Str(_) => 3,
+        QueryValue::ObjRef { .. } => 4,
+    }
 }
 
 pub fn column_name(it: &SelectItem) -> String {
