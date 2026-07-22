@@ -342,6 +342,21 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
         }
     }
 
+    // An aggregate over a FROM-subquery cannot be answered correctly: aggregates
+    // fold during the outer scan, but the subquery semi-join runs post-scan, so
+    // the fold would cover every scanned object (the subquery source matches all)
+    // rather than the semi-joined subset. Reject with an actionable error instead
+    // of silently returning a wrong count / zero rows.
+    if is_aggregate && from_subplan.is_some() {
+        return Err(QueryError(
+            "aggregates over a FROM-subquery are not supported: an aggregate folds \
+             during the scan, before the subquery semi-join is applied, so the result \
+             would not reflect the subquery. Aggregate the inner query instead, e.g. \
+             `SELECT COUNT(*) FROM <class> WHERE ...`, or select whole objects from the \
+             subquery and aggregate a wrapping query."
+                .into(),
+        ));
+    }
     let mut where_terms = Vec::new();
     if let Some(pred) = &q.where_ {
         collect_pred_needs(pred, &mut needs)?;
@@ -2062,6 +2077,20 @@ mod tests {
         let q = parse("SELECT * FROM (SELECT @objectId FROM java.lang.String s) x").unwrap();
         let plan = pq(&q).unwrap();
         assert!(plan.from_subplan.is_some());
+    }
+
+    #[test]
+    fn from_subquery_aggregate_rejected() {
+        // An aggregate folds during the scan, before the FROM-subquery semi-join
+        // is applied, so the result would ignore the subquery. Reject it.
+        let q = parse("SELECT COUNT(*) FROM (SELECT * FROM java.lang.String s) x").unwrap();
+        let err = pq(&q).unwrap_err();
+        assert!(
+            err.0
+                .contains("aggregates over a FROM-subquery are not supported"),
+            "got: {}",
+            err.0
+        );
     }
 
     #[test]
