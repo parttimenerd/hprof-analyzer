@@ -338,18 +338,18 @@ fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
                 let idx: Vec<u32> = entry.carry.indices();
                 let children = run_dominator_children(&idx, *cap, ctx);
                 let truncated = entry.carry.truncated() || children.len() >= *cap;
-                return dominator_rows(entry, q, &children, truncated, ctx);
+                return dominator_rows(entry, q, &children, truncated);
             }
             StageOp::DominatorOf => {
                 let idx: Vec<u32> = entry.carry.indices();
                 let idoms = run_dominator_of(&idx, ctx);
-                return dominator_rows(entry, q, &idoms, entry.carry.truncated(), ctx);
+                return dominator_rows(entry, q, &idoms, entry.carry.truncated());
             }
             StageOp::RetainedSet { cap } => {
                 let seeds: Vec<u32> = entry.carry.indices();
                 let (set, trunc) = run_retained_set(&seeds, *cap, ctx);
                 let truncated = entry.carry.truncated() || trunc;
-                return dominator_rows(entry, q, &set, truncated, ctx);
+                return dominator_rows(entry, q, &set, truncated);
             }
             // The plan emits one RefWalkResolve op per hop, but the whole walk is
             // driven off the query's RefPath AST in one pass here — the first op
@@ -360,7 +360,7 @@ fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
             StageOp::EdgeLookup { dir } => {
                 let idx: Vec<u32> = entry.carry.indices();
                 let neighbours = edge_lookup(&idx, *dir, ctx);
-                return dominator_rows(entry, q, &neighbours, entry.carry.truncated(), ctx);
+                return dominator_rows(entry, q, &neighbours, entry.carry.truncated());
             }
             StageOp::BoundedPath { depth_cap } => {
                 // Bounded forward walk from each carried seed; concatenate reached
@@ -376,7 +376,7 @@ fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
                     reached.extend(nodes);
                     capped |= c;
                 }
-                return dominator_rows(entry, q, &reached, entry.carry.truncated() || capped, ctx);
+                return dominator_rows(entry, q, &reached, entry.carry.truncated() || capped);
             }
             StageOp::ResolveStringValues => {
                 return string_values_rows(entry, q, ctx);
@@ -409,7 +409,6 @@ fn dominator_rows(
     q: &Query,
     indices: &[u32],
     mut truncated: bool,
-    ctx: &LateCtx,
 ) -> QueryResult {
     let mut indices = indices.to_vec();
     if let Some(limit) = q.limit {
@@ -433,7 +432,9 @@ fn dominator_rows(
         .iter()
         .map(|&i| {
             vec![QueryValue::ObjRef {
-                index: ctx.id_map.to_addr(i),
+                // Dense index (see the string/scan `SELECT *` note): the late
+                // id_map is empty, so `to_addr` would render every row as `@0`.
+                index: i as u64,
                 class: "?".to_string(),
             }]
         })
@@ -509,7 +510,11 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
                 }
                 SelectItem::Attr(Attr::ObjectId) => QueryValue::Int(s as i64),
                 SelectItem::Star => QueryValue::ObjRef {
-                    index: ctx.id_map.to_addr(s),
+                    // Emit the DENSE object index (matching the scan path's
+                    // `SELECT *`, execute.rs), not an address: the late id_map is
+                    // intentionally empty (the dense address table is compressed
+                    // away to protect the RSS peak), so `to_addr` would yield 0.
+                    index: s as u64,
                     class: "?".to_string(),
                 },
                 _ => QueryValue::Null,
@@ -766,7 +771,10 @@ fn project_string_row_item(it: &SelectItem, dense: u32, ctx: &LateCtx) -> QueryV
         SelectItem::Attr(Attr::ObjectId) => QueryValue::Int(dense as i64),
         SelectItem::Attr(Attr::ObjectAddress) => QueryValue::Int(ctx.id_map.to_addr(dense) as i64),
         SelectItem::Star => QueryValue::ObjRef {
-            index: ctx.id_map.to_addr(dense),
+            // Dense index, matching the scan-path `SELECT *` convention: the late
+            // id_map is empty (address table compressed away), so `to_addr` here
+            // would yield a misleading `@0` for every row.
+            index: dense as u64,
             class: "java.lang.String".to_string(),
         },
         _ => QueryValue::Null,

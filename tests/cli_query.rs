@@ -256,6 +256,52 @@ fn query_subcommand_tostring_where_rejects_unsupported_aggregates() {
     }
 }
 
+/// SW-7 regression: in the late (toString) phase, `SELECT *` must render the
+/// dense object index (matching the scan path's `Class@<idx>` convention), not
+/// `Class@0`. The late id_map is intentionally empty (the dense address table
+/// is compressed away to protect the RSS peak), so an address lookup would yield
+/// 0 for every row. The `SELECT *` object id must equal the `@objectId` value
+/// of the same filtered rows.
+#[test]
+fn query_subcommand_tostring_late_select_star_uses_dense_index() {
+    let Some(hprof) = philosophers() else { return };
+    let filter = "WHERE toString(s) LIKE \".*philosopher.*\" LIMIT 5";
+
+    let star = run_query_stdout(
+        &hprof,
+        &format!("SELECT * FROM java.lang.String s {filter}"),
+    );
+    // Collect the `@<n>` suffixes from the `java.lang.String@<n>` rows.
+    let star_ids: Vec<u64> = star
+        .lines()
+        .filter_map(|l| l.trim().rsplit_once('@'))
+        .filter_map(|(_, n)| n.parse::<u64>().ok())
+        .collect();
+    assert!(
+        !star_ids.is_empty(),
+        "SELECT * must yield at least one object-ref row:\n{star}"
+    );
+    // No row may render as `@0` — the bug signature.
+    assert!(
+        star_ids.iter().all(|&id| id != 0),
+        "late SELECT * must not render Class@0 (dense index expected):\n{star}"
+    );
+
+    // The object ids from `SELECT *` must match `@objectId` for the same filter.
+    let ids = run_query_stdout(
+        &hprof,
+        &format!("SELECT @objectId FROM java.lang.String s {filter}"),
+    );
+    let obj_ids: Vec<u64> = ids
+        .lines()
+        .filter_map(|l| l.trim().parse::<u64>().ok())
+        .collect();
+    assert_eq!(
+        star_ids, obj_ids,
+        "SELECT * object ids ({star_ids:?}) must equal @objectId values ({obj_ids:?})"
+    );
+}
+
 /// Alias-qualified `@attr` (MAT syntax `s.@objectId`) reaches execution: the
 /// query runs without an `OQL parse error` and exits successfully.
 #[test]
