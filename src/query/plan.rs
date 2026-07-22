@@ -800,7 +800,7 @@ fn attr_alias_head(a: &Attr) -> Option<&str> {
 /// query — the signature of a correlated subquery.
 fn referenced_alias_heads(q: &Query) -> std::collections::HashSet<String> {
     let mut heads = std::collections::HashSet::new();
-    let mut push = |a: &Attr, heads: &mut std::collections::HashSet<String>| {
+    let push = |a: &Attr, heads: &mut std::collections::HashSet<String>| {
         if let Some(h) = attr_alias_head(a) {
             heads.insert(h.to_string());
         }

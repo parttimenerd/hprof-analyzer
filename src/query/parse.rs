@@ -652,9 +652,11 @@ pub const ATTRIBUTES: &[&str] = &[
     "@outbounds",
 ];
 
-/// The full set of completion candidates offered by the REPL, sourced from the
-/// same const slices the parser matches against — the single point of truth for
-/// keyword knowledge, so completions can never drift from the grammar.
+/// The union of every completion-candidate slice the parser exposes. The
+/// context-aware REPL completer draws from the individual slices directly; this
+/// helper exists so a test can assert the slices stay collectively exhaustive
+/// and mutually disjoint (the single point of truth for keyword knowledge).
+#[cfg(test)]
 pub fn completion_words() -> Vec<&'static str> {
     KEYWORDS
         .iter()

@@ -313,6 +313,7 @@ fn history_path() -> Option<std::path::PathBuf> {
 /// Run pass1 over the dump once to collect:
 /// - a sorted, deduped list of dotted class names for FROM/INSTANCEOF completion.
 /// - a sorted, deduped union of all instance field names across all classes.
+///
 /// On failure, warn once to stderr and return empty lists so the REPL still
 /// completes keywords/attributes. Pass1 is run ONCE; both name sets are harvested
 /// from the same result to avoid a second scan.
