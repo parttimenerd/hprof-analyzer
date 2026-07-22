@@ -49,9 +49,10 @@ pub const PATH_FRONTIER_CAP: usize = 100_000;
 
 /// Default maximum BFS depth for a `path(a, b)` bounded forward walk. Bounds the
 /// reachable subgraph so a deep object graph can't produce an unbounded result.
-/// Matches the CLI `--query-path-depth` default (see `runflags::plan_run`) so the
-/// planner and the CLI agree on the default depth when no flag is given.
-pub const DEFAULT_PATH_DEPTH_CAP: usize = 20;
+/// This is the single canonical default: the CLI `--query-path-depth` flag defaults
+/// to this value, and internal callers (tests, REPL `!plan`) pass it explicitly.
+/// Override per-run with `--query-path-depth N`.
+pub const DEFAULT_PATH_DEPTH_CAP: usize = 5;
 
 /// Per-object callback invoked once per INSTANCE_DUMP during the pass2 2a scan,
 /// while the raw instance blob and schema tables are still live. Implementors

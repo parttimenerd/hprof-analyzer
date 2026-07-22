@@ -43,8 +43,9 @@ use std::{io, process, time::Instant};
 use pass1::Pass1;
 
 /// Default depth cap for bounded `path()` walks in edge-query planning; the
-/// `--query-path-depth` flag overrides it.
-const DEFAULT_QUERY_PATH_DEPTH: usize = 5;
+/// `--query-path-depth` flag overrides it. Aliases `query::DEFAULT_PATH_DEPTH_CAP`
+/// so there is exactly one numeric source of truth.
+const DEFAULT_QUERY_PATH_DEPTH: usize = query::DEFAULT_PATH_DEPTH_CAP;
 
 /// clap `value_parser` for `--query-path-depth`: reject `0` (and non-numeric
 /// input) with an actionable message. `usize`'s parser already rejects negative
@@ -522,7 +523,7 @@ fn main() {
             if repl {
                 // Interactive mode reads queries from stdin; --query/--query-file
                 // are ignored.
-                if let Err(e) = crate::query::repl::run_repl(&input) {
+                if let Err(e) = crate::query::repl::run_repl(&input, query_path_depth) {
                     fail(analyze_error_hint(&input, &e));
                 }
             } else {
@@ -865,8 +866,11 @@ fn collect_query_texts(opts: &AnalyzeOptions) -> io::Result<Vec<String>> {
 
 /// Parse and plan each OQL text, failing fast with an actionable message that
 /// names the offending query text and includes the parser/planner detail.
+/// `depth_cap` is threaded into the planner so `path(a, b)` BFS depth honours
+/// the `--query-path-depth` CLI flag.
 fn parse_plan_queries(
     query_texts: &[String],
+    depth_cap: usize,
 ) -> io::Result<Vec<(query::ast::Query, query::plan::QueryPlan)>> {
     let mut parsed_queries: Vec<(query::ast::Query, query::plan::QueryPlan)> =
         Vec::with_capacity(query_texts.len());
@@ -877,7 +881,7 @@ fn parse_plan_queries(
                 format!("OQL parse error in `{text}`:\n{report}"),
             )
         })?;
-        let plan = query::plan::plan_query(&q).map_err(|e| {
+        let plan = query::plan::plan_query(&q, depth_cap).map_err(|e| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("OQL plan error in `{text}`: {}", e.0),
@@ -922,7 +926,7 @@ fn fmt_query_value(v: &query::model::QueryValue) -> String {
 /// each result as a simple aligned text table to stdout. Never writes a file.
 fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
     let query_texts = collect_query_texts(&opts)?;
-    let parsed = parse_plan_queries(&query_texts)?;
+    let parsed = parse_plan_queries(&query_texts, opts.query_path_depth)?;
     let (flat, union_groups) = query::run::expand_union_queries(&parsed);
 
     // Subqueries need a two-phase (inner-then-outer) scan; `run_single_dump`
@@ -1032,7 +1036,7 @@ fn run(
     // Collect + parse + plan any OQL queries before pass2, so a bad query fails
     // fast (before the expensive graph build) with a message naming the query.
     let query_texts = collect_query_texts(&opts)?;
-    let parsed_queries = parse_plan_queries(&query_texts)?;
+    let parsed_queries = parse_plan_queries(&query_texts, opts.query_path_depth)?;
     // Subqueries require a two-phase (inner-then-outer) scan of the dump. The
     // full-report pipeline scans once and immediately builds the graph +
     // dominators atop that scan, so it cannot run the inner pass here without an

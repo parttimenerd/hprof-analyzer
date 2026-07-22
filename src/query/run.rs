@@ -975,9 +975,9 @@ mod tests {
 
         // Two independent SingleScan queries over the same fake resolver.
         let q_foo = parse("SELECT @objectId FROM com.acme.Foo").unwrap();
-        let p_foo = plan_query(&q_foo).unwrap();
+        let p_foo = plan_query(&q_foo, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let q_bar = parse("SELECT @objectId FROM com.acme.Bar").unwrap();
-        let p_bar = plan_query(&q_bar).unwrap();
+        let p_bar = plan_query(&q_bar, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
 
         let entries = vec![
             (0usize, SingleScanExecutor::new(&q_foo, &p_foo, &resolver)),
@@ -1064,7 +1064,7 @@ mod tests {
                 .collect(),
         };
         let q = parse("SELECT x.parent.name FROM C x").unwrap();
-        let p = plan_query(&q).unwrap();
+        let p = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         assert!(p.needs.ref_walk, "query must arm ref_walk");
 
         let entries = vec![(0usize, SingleScanExecutor::new(&q, &p, &resolver))];
@@ -1088,7 +1088,7 @@ mod tests {
             addr_to_idx: [(0x100u64, 5usize)].into_iter().collect(),
         };
         let q = parse("SELECT x.parent.name FROM C x").unwrap();
-        let p = plan_query(&q).unwrap();
+        let p = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let entries = vec![(0usize, SingleScanExecutor::new(&q, &p, &resolver))];
         let mut driver = ScanDriver::new(entries);
         driver.visit_instance(0, 1, &be8(0)); // null → no edge
@@ -1098,7 +1098,7 @@ mod tests {
 
         // Unarmed (no RefWalk query) → take_refwalk_csr is None.
         let q2 = parse("SELECT @objectId FROM C").unwrap();
-        let p2 = plan_query(&q2).unwrap();
+        let p2 = plan_query(&q2, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let entries2 = vec![(0usize, SingleScanExecutor::new(&q2, &p2, &resolver))];
         let mut driver2 = ScanDriver::new(entries2);
         driver2.visit_instance(0, 1, &be8(0x100));
@@ -1216,12 +1216,12 @@ mod tests {
         // q0: plain; q1: 2 UNION branches (head + 2). Grouping must record
         // 1 slot for q0 and 3 consecutive slots for q1.
         let q_plain = parse("SELECT * FROM com.acme.Foo").unwrap();
-        let p_plain = plan_query(&q_plain).unwrap();
+        let p_plain = plan_query(&q_plain, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let q_union = parse(
             "SELECT * FROM com.acme.Foo UNION SELECT * FROM com.acme.Bar UNION SELECT * FROM com.acme.Baz",
         )
         .unwrap();
-        let p_union = plan_query(&q_union).unwrap();
+        let p_union = plan_query(&q_union, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
 
         let (flat, groups) = expand_union_queries(&[(q_plain, p_plain), (q_union, p_union)]);
         assert_eq!(flat.len(), 4, "1 plain + 3 union slots");
@@ -1401,7 +1401,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(q.union_limit, Some(7), "parser sets union_limit");
-        let p = plan_query(&q).unwrap();
+        let p = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         assert_eq!(p.union_limit, Some(7), "planner propagates union_limit");
         let (_flat, groups) = expand_union_queries(&[(q, p)]);
         assert_eq!(groups.len(), 1);
@@ -1588,7 +1588,7 @@ mod tests {
         let q = parse("SELECT DISTINCT @objectId FROM java.lang.String LIMIT 5").unwrap();
         assert!(q.distinct, "parser must set distinct");
         assert_eq!(q.limit, Some(5));
-        let p = plan_query(&q).unwrap();
+        let p = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         // Scan-time limit is cleared for DISTINCT (deferred to collapse).
         assert_eq!(p.limit, None, "scan-time limit cleared for DISTINCT");
         let (_flat, groups) = expand_union_queries(&[(q, p)]);
@@ -1602,7 +1602,7 @@ mod tests {
         // A non-DISTINCT query with LIMIT must NOT set the distinct flag.
         let q = parse("SELECT @objectId FROM java.lang.String LIMIT 5").unwrap();
         assert!(!q.distinct);
-        let p = plan_query(&q).unwrap();
+        let p = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         assert_eq!(p.limit, Some(5), "non-distinct keeps scan-time limit");
         let (_flat, groups) = expand_union_queries(&[(q, p)]);
         assert!(!groups[0].distinct);

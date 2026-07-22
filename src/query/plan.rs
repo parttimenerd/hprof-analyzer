@@ -6,7 +6,6 @@ use crate::query::QueryError;
 use crate::query::ast::{Attr, Predicate, Query, RefRole, SelectItem, Value};
 use crate::query::carry::CarryLayout;
 use crate::query::runflags::EdgeDir;
-use crate::query::{DEFAULT_PATH_DEPTH_CAP};
 
 /// Default cap on late-phase emitted rows (dominator children) and retained-set
 /// closures, mirroring the scan-time `DEFAULT_CARRY_CAP`. Bounds late output so
@@ -183,8 +182,13 @@ pub struct InSubplan {
 /// independently via [`plan_single`]; the branches must share the head's column
 /// arity, and no branch may use `RETAINED SET` or aggregates (they change the
 /// row shape / arity of a UNION arm).
-pub fn plan_query(q: &Query) -> Result<QueryPlan, QueryError> {
-    let mut head = plan_single(q)?;
+///
+/// `depth_cap` sets the BFS depth limit for `path(a, b)` operations in this
+/// query and all its UNION branches. Pass `DEFAULT_PATH_DEPTH_CAP` for the
+/// canonical default; CLI callers pass the user-supplied `--query-path-depth`
+/// value so the flag actually controls path() BFS depth end-to-end.
+pub fn plan_query(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
+    let mut head = plan_single(q, depth_cap)?;
     if q.union_branches.is_empty() {
         return Ok(head);
     }
@@ -220,7 +224,7 @@ pub fn plan_query(q: &Query) -> Result<QueryPlan, QueryError> {
                 "aggregates are not allowed in a UNION branch".into(),
             ));
         }
-        let bp = plan_single(&b)?;
+        let bp = plan_single(&b, depth_cap)?;
         if bp.select_arity != head_arity {
             return Err(QueryError(format!(
                 "UNION branches must project the same number of columns \
@@ -248,7 +252,7 @@ fn item_is_aggregate(it: &SelectItem) -> bool {
     matches!(it, SelectItem::Aggregate { .. })
 }
 
-fn plan_single(q: &Query) -> Result<QueryPlan, QueryError> {
+fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
     // Subqueries (FROM (...) and WHERE ... IN (...)) must be non-correlated:
     // the inner query may not reference an alias bound by the outer query.
     if let Some(inner) = q.from.as_subquery() {
@@ -279,13 +283,13 @@ fn plan_single(q: &Query) -> Result<QueryPlan, QueryError> {
     let from_subplan = match q.from.as_subquery() {
         Some(inner) => {
             enforce_from_subquery_projection(inner)?;
-            Some(Box::new(plan_query(inner)?))
+            Some(Box::new(plan_query(inner, depth_cap)?))
         }
         None => None,
     };
     let mut in_subplans = Vec::new();
     if let Some(pred) = &q.where_ {
-        collect_in_subplans(pred, &mut in_subplans)?;
+        collect_in_subplans(pred, &mut in_subplans, depth_cap)?;
     }
 
     let select_arity = q.select.len();
@@ -418,9 +422,7 @@ fn plan_single(q: &Query) -> Result<QueryPlan, QueryError> {
             where_terms,
             finalize_at: Phase::P2,
             carry: CarryLayout::IndexOnly,
-            late_ops: vec![StageOp::BoundedPath {
-                depth_cap: DEFAULT_PATH_DEPTH_CAP,
-            }],
+            late_ops: vec![StageOp::BoundedPath { depth_cap }],
             limit: q.limit,
             scan_limit: None,
             order_sensitive: q.order_by.is_some(),
@@ -594,16 +596,16 @@ fn enforce_from_subquery_projection(inner: &Query) -> Result<(), QueryError> {
 /// (`@objectAddress`, or `*` — but `*` yields an ObjRef index, not an address,
 /// so for IN we require an explicit `@objectAddress`). Nested inners' own IN
 /// predicates are handled when their plan is built (recursively via plan_query).
-fn collect_in_subplans(pred: &Predicate, out: &mut Vec<InSubplan>) -> Result<(), QueryError> {
+fn collect_in_subplans(pred: &Predicate, out: &mut Vec<InSubplan>, depth_cap: usize) -> Result<(), QueryError> {
     match pred {
         Predicate::And(a, b) | Predicate::Or(a, b) => {
-            collect_in_subplans(a, out)?;
-            collect_in_subplans(b, out)
+            collect_in_subplans(a, out, depth_cap)?;
+            collect_in_subplans(b, out, depth_cap)
         }
-        Predicate::Not(a) => collect_in_subplans(a, out),
+        Predicate::Not(a) => collect_in_subplans(a, out, depth_cap),
         Predicate::InSubquery { lhs, inner } => {
             enforce_in_subquery_projection(inner)?;
-            let inner_plan = plan_query(inner)?;
+            let inner_plan = plan_query(inner, depth_cap)?;
             out.push(InSubplan {
                 lhs: lhs.clone(),
                 plan: inner_plan,
@@ -1098,9 +1100,14 @@ mod tests {
     use super::*;
     use crate::query::parse::parse;
 
+    /// Convenience wrapper: plan with the canonical default depth (used by all
+    /// tests that do not specifically test depth threading).
+    fn pq(q: &Query) -> Result<QueryPlan, QueryError> {
+        plan_query(q, crate::query::DEFAULT_PATH_DEPTH_CAP)
+    }
     #[test]
     fn histogram_only_needs() {
-        let plan = plan_query(&parse("SELECT COUNT(*) FROM java.lang.String").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT COUNT(*) FROM java.lang.String").unwrap()).unwrap();
         assert_eq!(plan.kind, StageKind::HistogramOnly);
         assert!(!plan.needs.instance_scalar);
         assert!(!plan.needs.instance_string);
@@ -1110,7 +1117,7 @@ mod tests {
     #[test]
     fn bad_from_regex_rejected_at_plan_time() {
         let q = parse(r#"SELECT * FROM "[""#).expect("parses; regex is validated at plan");
-        let err = plan_query(&q).expect_err("bad regex must be rejected at plan time");
+        let err = pq(&q).expect_err("bad regex must be rejected at plan time");
         assert!(
             err.0.contains("invalid regex") && err.0.contains('['),
             "plan error must name the regex problem; got: {}",
@@ -1121,13 +1128,13 @@ mod tests {
     // A valid quoted FROM regex plans cleanly (as a histogram-only aggregate).
     #[test]
     fn good_from_regex_plans_ok() {
-        let plan = plan_query(&parse(r#"SELECT COUNT(*) FROM "java\.lang\..*""#).unwrap()).unwrap();
+        let plan = pq(&parse(r#"SELECT COUNT(*) FROM "java\.lang\..*""#).unwrap()).unwrap();
         assert_eq!(plan.kind, StageKind::HistogramOnly);
     }
 
     #[test]
     fn single_scan_scalar_needs() {
-        let plan = plan_query(&parse("SELECT @objectId FROM C WHERE count > 3").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT @objectId FROM C WHERE count > 3").unwrap()).unwrap();
         assert_eq!(plan.kind, StageKind::SingleScan);
         assert!(plan.needs.instance_scalar);
         assert!(!plan.needs.instance_string);
@@ -1136,7 +1143,7 @@ mod tests {
     #[test]
     fn string_projection_sets_string_need() {
         let plan =
-            plan_query(&parse("SELECT @displayName FROM java.lang.String").unwrap()).unwrap();
+            pq(&parse("SELECT @displayName FROM java.lang.String").unwrap()).unwrap();
         assert!(plan.needs.instance_string);
     }
 
@@ -1147,7 +1154,7 @@ mod tests {
 
     #[test]
     fn retained_in_select_sets_retained_need_and_p3_finalize() {
-        let plan = plan_query(&parse("SELECT @retainedHeapSize FROM C").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT @retainedHeapSize FROM C").unwrap()).unwrap();
         assert!(
             plan.needs.retained,
             "SELECT @retainedHeapSize must arm the retained need"
@@ -1158,7 +1165,7 @@ mod tests {
     #[test]
     fn retained_in_where_is_cross_phase() {
         let plan =
-            plan_query(&parse("SELECT @objectId FROM C WHERE @retainedHeapSize > 1024").unwrap())
+            pq(&parse("SELECT @objectId FROM C WHERE @retainedHeapSize > 1024").unwrap())
                 .unwrap();
         assert!(plan.needs.retained);
         assert_eq!(plan.finalize_at, Phase::P3);
@@ -1166,7 +1173,7 @@ mod tests {
     #[test]
     fn retained_in_order_by_is_cross_phase() {
         let plan =
-            plan_query(&parse("SELECT @objectId FROM C ORDER BY @retainedHeapSize DESC").unwrap())
+            pq(&parse("SELECT @objectId FROM C ORDER BY @retainedHeapSize DESC").unwrap())
                 .unwrap();
         assert!(plan.needs.retained);
         assert_eq!(plan.finalize_at, Phase::P3);
@@ -1174,7 +1181,7 @@ mod tests {
     }
     #[test]
     fn non_retained_query_finalizes_in_p1() {
-        let plan = plan_query(&parse("SELECT @objectId FROM C WHERE count > 3").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT @objectId FROM C WHERE count > 3").unwrap()).unwrap();
         assert!(!plan.needs.retained);
         assert_eq!(plan.finalize_at, Phase::P1);
         assert!(plan.late_ops.is_empty());
@@ -1183,13 +1190,13 @@ mod tests {
     #[test]
     fn distinct_now_plans() {
         // DISTINCT is no longer rejected at plan time; the plan must succeed.
-        let plan = plan_query(&parse("SELECT DISTINCT * FROM C").unwrap());
+        let plan = pq(&parse("SELECT DISTINCT * FROM C").unwrap());
         assert!(plan.is_ok(), "DISTINCT should plan successfully, got: {:?}", plan.unwrap_err());
     }
 
     #[test]
     fn distinct_with_limit_plans_ok() {
-        let plan = plan_query(&parse("SELECT DISTINCT @objectId FROM C LIMIT 5").unwrap());
+        let plan = pq(&parse("SELECT DISTINCT @objectId FROM C LIMIT 5").unwrap());
         assert!(plan.is_ok(), "DISTINCT LIMIT should plan, got: {:?}", plan.unwrap_err());
         // For a DISTINCT query, scan-time limit is cleared so all rows flow through
         // for dedup; the limit is applied post-dedup at the choke point.
@@ -1200,14 +1207,14 @@ mod tests {
     #[test]
     fn non_distinct_limit_unchanged() {
         // Non-DISTINCT queries must keep their scan-time limit (invariant guard).
-        let plan = plan_query(&parse("SELECT @objectId FROM C LIMIT 7").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT @objectId FROM C LIMIT 7").unwrap()).unwrap();
         assert_eq!(plan.limit, Some(7), "non-distinct limit must pass through unchanged");
     }
 
     #[test]
     fn predicates_ordered_cheapest_first() {
         let q = parse("SELECT * FROM C WHERE name = \"x\" AND count > 1").unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = pq(&q).unwrap();
         let plan = crate::query::optimize::optimize(
             plan,
             &q,
@@ -1227,7 +1234,7 @@ mod tests {
     #[test]
     fn plan_dominators_emits_dominator_children_stage() {
         let plan =
-            plan_query(&parse("SELECT dominators(s) FROM java.lang.String s").unwrap()).unwrap();
+            pq(&parse("SELECT dominators(s) FROM java.lang.String s").unwrap()).unwrap();
         assert!(matches!(plan.carry, CarryLayout::IndexOnly));
         assert_eq!(plan.late_ops.len(), 1);
         assert!(matches!(
@@ -1239,14 +1246,14 @@ mod tests {
     }
     #[test]
     fn plan_dominators_unknown_alias_rejected() {
-        let err = plan_query(&parse("SELECT dominators(x) FROM java.lang.String s").unwrap())
+        let err = pq(&parse("SELECT dominators(x) FROM java.lang.String s").unwrap())
             .unwrap_err();
         assert!(err.to_string().contains("unknown alias 'x'"), "got: {err}");
     }
     #[test]
     fn plan_dominatorof_emits_dominator_of_stage() {
         let plan =
-            plan_query(&parse("SELECT dominatorof(s) FROM java.lang.String s").unwrap()).unwrap();
+            pq(&parse("SELECT dominatorof(s) FROM java.lang.String s").unwrap()).unwrap();
         assert_eq!(plan.late_ops.len(), 1);
         assert!(matches!(plan.late_ops[0], StageOp::DominatorOf));
         assert_eq!(plan.finalize_at, Phase::P3);
@@ -1254,7 +1261,7 @@ mod tests {
     }
     #[test]
     fn plan_inbounds_emits_edge_lookup_inbound() {
-        let plan = plan_query(&parse("SELECT @inbounds FROM java.lang.String").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT @inbounds FROM java.lang.String").unwrap()).unwrap();
         assert_eq!(
             plan.late_ops,
             vec![StageOp::EdgeLookup {
@@ -1268,7 +1275,7 @@ mod tests {
     }
     #[test]
     fn plan_outbounds_emits_edge_lookup_outbound() {
-        let plan = plan_query(&parse("SELECT @outbounds FROM java.lang.String").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT @outbounds FROM java.lang.String").unwrap()).unwrap();
         assert_eq!(
             plan.late_ops,
             vec![StageOp::EdgeLookup {
@@ -1283,7 +1290,7 @@ mod tests {
     fn plan_star_select_does_not_emit_edge_lookup() {
         // Regression guard: the @inbounds/@outbounds special-case must NOT fire
         // for a plain non-edge select — no EdgeLookup, empty late_ops.
-        let plan = plan_query(&parse("SELECT * FROM java.lang.String").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT * FROM java.lang.String").unwrap()).unwrap();
         assert!(
             !plan
                 .late_ops
@@ -1301,7 +1308,7 @@ mod tests {
 
     #[test]
     fn plan_retained_set_emits_retained_set_stage() {
-        let plan = plan_query(&parse("SELECT s AS RETAINED SET FROM java.lang.String s").unwrap())
+        let plan = pq(&parse("SELECT s AS RETAINED SET FROM java.lang.String s").unwrap())
             .unwrap();
         assert!(matches!(plan.late_ops[0], StageOp::RetainedSet { .. }));
         assert_eq!(plan.finalize_at, Phase::P3);
@@ -1310,7 +1317,7 @@ mod tests {
     #[test]
     fn plan_retained_set_with_aggregate_rejected() {
         let err =
-            plan_query(&parse("SELECT count(s) AS RETAINED SET FROM java.lang.String s").unwrap())
+            pq(&parse("SELECT count(s) AS RETAINED SET FROM java.lang.String s").unwrap())
                 .unwrap_err();
         assert!(
             err.to_string()
@@ -1323,7 +1330,7 @@ mod tests {
     fn refpath_in_where_is_predicate_critical() {
         use crate::query::ast::RefRole;
         let q = parse("SELECT * FROM Node x WHERE x.parent.id = 7").unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = pq(&q).unwrap();
         assert!(plan.needs.ref_walk, "ref_walk need must be set");
         assert!(
             plan.late_ops.iter().any(|op| matches!(
@@ -1344,7 +1351,7 @@ mod tests {
     fn refpath_projection_only_defers() {
         use crate::query::ast::RefRole;
         let q = parse("SELECT x.parent.name FROM Node x").unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = pq(&q).unwrap();
         assert!(plan.needs.ref_walk, "ref_walk need must be set");
         assert!(
             plan.late_ops.iter().any(|op| matches!(
@@ -1364,7 +1371,7 @@ mod tests {
     fn refpath_emits_one_resolve_op_per_hop() {
         // `x.a.b.c` after alias-strip has hops [a, b] and tail c → 2 resolve ops.
         let q = parse("SELECT x.a.b.c FROM Node x").unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = pq(&q).unwrap();
         let hops = plan
             .late_ops
             .iter()
@@ -1385,7 +1392,7 @@ mod tests {
             "SELECT x.parent.name, @retainedHeapSize FROM Node x ORDER BY @retainedHeapSize DESC",
         )
         .unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = pq(&q).unwrap();
         assert!(plan.needs.ref_walk);
         assert!(plan.needs.retained);
         assert_eq!(
@@ -1398,7 +1405,7 @@ mod tests {
     #[test]
     fn union_arity_mismatch_rejected() {
         let q = parse("SELECT @objectId FROM java.lang.String UNION SELECT @objectId, @usedHeapSize FROM java.lang.Integer").unwrap();
-        let err = plan_query(&q).unwrap_err();
+        let err = pq(&q).unwrap_err();
         assert!(
             err.0
                 .contains("UNION branches must project the same number of columns"),
@@ -1417,7 +1424,7 @@ mod tests {
             "SELECT * FROM java.lang.String UNION SELECT * AS RETAINED SET FROM java.lang.Integer",
         )
         .unwrap();
-        let err = plan_query(&q).unwrap_err();
+        let err = pq(&q).unwrap_err();
         assert!(err.0.contains("RETAINED SET"), "got: {}", err.0);
     }
     #[test]
@@ -1426,7 +1433,7 @@ mod tests {
             "SELECT * AS RETAINED SET FROM java.lang.String UNION SELECT * FROM java.lang.Integer",
         )
         .unwrap();
-        let err = plan_query(&q).unwrap_err();
+        let err = pq(&q).unwrap_err();
         assert!(err.0.contains("RETAINED SET"), "got: {}", err.0);
     }
     #[test]
@@ -1434,7 +1441,7 @@ mod tests {
         let q =
             parse("SELECT * FROM java.lang.String UNION SELECT COUNT(*) FROM java.lang.Integer")
                 .unwrap();
-        let err = plan_query(&q).unwrap_err();
+        let err = pq(&q).unwrap_err();
         assert!(
             err.0.contains("aggregates are not allowed in a UNION"),
             "got: {}",
@@ -1445,7 +1452,7 @@ mod tests {
     fn union_two_branches_plans() {
         let q =
             parse("SELECT * FROM java.lang.String UNION SELECT * FROM java.lang.Integer").unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = pq(&q).unwrap();
         assert_eq!(plan.union_branches.len(), 1);
         assert_eq!(plan.select_arity, 1); // Star = arity 1 sentinel (whole-row)
         assert!(
@@ -1455,7 +1462,7 @@ mod tests {
     }
     #[test]
     fn non_union_plan_has_empty_branches() {
-        let plan = plan_query(&parse("SELECT @objectId, name FROM C").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT @objectId, name FROM C").unwrap()).unwrap();
         assert!(plan.union_branches.is_empty());
         assert_eq!(plan.select_arity, 2);
     }
@@ -1463,7 +1470,7 @@ mod tests {
     #[test]
     fn classof_projection_sets_runtime_type() {
         let plan =
-            plan_query(&parse("SELECT classof(s) FROM java.lang.String s").unwrap()).unwrap();
+            pq(&parse("SELECT classof(s) FROM java.lang.String s").unwrap()).unwrap();
         assert!(plan.needs.runtime_type);
         assert!(!plan.needs.instance_string);
         assert!(!plan.needs.instance_scalar);
@@ -1472,7 +1479,7 @@ mod tests {
     #[test]
     fn instanceof_where_sets_runtime_type_and_type_cost() {
         let plan =
-            plan_query(&parse("SELECT * FROM C WHERE s INSTANCEOF java.lang.String").unwrap())
+            pq(&parse("SELECT * FROM C WHERE s INSTANCEOF java.lang.String").unwrap())
                 .unwrap();
         assert!(plan.needs.runtime_type);
         assert!(matches!(
@@ -1487,7 +1494,7 @@ mod tests {
     #[test]
     fn displayname_compare_sets_string_need_and_str_cost() {
         let plan =
-            plan_query(&parse("SELECT * FROM C WHERE @displayName = \"foo\"").unwrap()).unwrap();
+            pq(&parse("SELECT * FROM C WHERE @displayName = \"foo\"").unwrap()).unwrap();
         assert!(plan.needs.instance_string);
         assert!(matches!(
             plan.where_terms.first(),
@@ -1506,7 +1513,7 @@ mod tests {
              AND s INSTANCEOF java.lang.String",
         )
         .unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = pq(&q).unwrap();
         let plan = crate::query::optimize::optimize(
             plan,
             &q,
@@ -1525,7 +1532,7 @@ mod tests {
 
     #[test]
     fn explain_lists_kind_and_needs() {
-        let plan = plan_query(&parse("SELECT @objectId FROM C WHERE count > 3").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT @objectId FROM C WHERE count > 3").unwrap()).unwrap();
         let text = plan.explain();
         assert!(text.contains("SingleScan"));
         assert!(text.contains("instance_scalar"));
@@ -1534,7 +1541,7 @@ mod tests {
 
     #[test]
     fn explain_histogram_only_no_where() {
-        let plan = plan_query(&parse("SELECT COUNT(*) FROM java.lang.String").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT COUNT(*) FROM java.lang.String").unwrap()).unwrap();
         let text = plan.explain();
         assert!(text.contains("HistogramOnly"), "got: {text}");
         assert!(text.contains("histogram"), "got: {text}");
@@ -1544,7 +1551,7 @@ mod tests {
 
     #[test]
     fn explain_shows_limit() {
-        let plan = plan_query(&parse("SELECT * FROM C LIMIT 10").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT * FROM C LIMIT 10").unwrap()).unwrap();
         let text = plan.explain();
         assert!(text.contains("limit: 10"), "got: {text}");
     }
@@ -1552,21 +1559,21 @@ mod tests {
     #[test]
     fn explain_no_needs_shows_none() {
         // @objectId does not arm any field-decode need; no WHERE either.
-        let plan = plan_query(&parse("SELECT @objectId FROM C").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT @objectId FROM C").unwrap()).unwrap();
         let text = plan.explain();
         assert!(text.contains("needs (armed): none"), "got: {text}");
     }
 
     #[test]
     fn rejects_nested_aggregate() {
-        let err = plan_query(&parse("SELECT COUNT(SUM(x)) FROM C").unwrap()).unwrap_err();
+        let err = pq(&parse("SELECT COUNT(SUM(x)) FROM C").unwrap()).unwrap_err();
         assert!(err.0.to_lowercase().contains("aggregate"), "got: {}", err.0);
     }
 
     #[test]
     fn aggregate_with_where_is_single_scan() {
         // An aggregate that also filters cannot use the pre-built histogram.
-        let plan = plan_query(&parse("SELECT COUNT(*) FROM C WHERE count > 1").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT COUNT(*) FROM C WHERE count > 1").unwrap()).unwrap();
         assert_eq!(plan.kind, StageKind::SingleScan);
         assert!(!plan.needs.histogram);
     }
@@ -1728,7 +1735,7 @@ mod tests {
         // bind (its own alias is `o`). RHS must be a literal in our grammar, so
         // correlation surfaces on the compared attribute, not the value.
         let q = parse("SELECT * FROM (SELECT * FROM java.lang.Object o WHERE s.y > 0) x").unwrap();
-        let err = plan_query(&q).unwrap_err();
+        let err = pq(&q).unwrap_err();
         assert!(
             err.0.contains("correlated") || err.0.contains("references"),
             "got: {}",
@@ -1740,7 +1747,7 @@ mod tests {
     fn noncorrelated_from_subquery_ok() {
         let q =
             parse("SELECT * FROM (SELECT * FROM java.lang.String s WHERE s.count > 0) x").unwrap();
-        assert!(plan_query(&q).is_ok());
+        assert!(pq(&q).is_ok());
     }
 
     #[test]
@@ -1751,7 +1758,7 @@ mod tests {
              (SELECT * FROM java.lang.Integer i WHERE t.v > 0)",
         )
         .unwrap();
-        let err = plan_query(&q).unwrap_err();
+        let err = pq(&q).unwrap_err();
         assert!(
             err.0.contains("correlated") || err.0.contains("references"),
             "got: {}",
@@ -1766,7 +1773,7 @@ mod tests {
              (SELECT @objectAddress FROM java.lang.Integer i WHERE i.v > 0)",
         )
         .unwrap();
-        assert!(plan_query(&q).is_ok());
+        assert!(pq(&q).is_ok());
     }
 
     #[test]
@@ -1794,7 +1801,7 @@ mod tests {
         // A FROM-subquery projecting a scalar/field loses object identity, so the
         // outer semi-join can't run; reject with the whole-objects message.
         let q = parse("SELECT * FROM (SELECT n FROM java.lang.String s) x").unwrap();
-        let err = plan_query(&q).unwrap_err();
+        let err = pq(&q).unwrap_err();
         assert!(
             err.0.contains("FROM-subquery must select whole objects"),
             "got: {}",
@@ -1805,7 +1812,7 @@ mod tests {
     #[test]
     fn from_subquery_star_projection_accepted() {
         let q = parse("SELECT * FROM (SELECT * FROM java.lang.String s) x").unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = pq(&q).unwrap();
         assert!(
             plan.from_subplan.is_some(),
             "FROM-subquery must plan an inner subplan"
@@ -1816,7 +1823,7 @@ mod tests {
     #[test]
     fn from_subquery_objectid_projection_accepted() {
         let q = parse("SELECT * FROM (SELECT @objectId FROM java.lang.String s) x").unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = pq(&q).unwrap();
         assert!(plan.from_subplan.is_some());
     }
 
@@ -1829,7 +1836,7 @@ mod tests {
              (SELECT @objectId FROM java.lang.Integer i)",
         )
         .unwrap();
-        let err = plan_query(&q).unwrap_err();
+        let err = pq(&q).unwrap_err();
         assert!(
             err.0
                 .contains("IN-subquery must select a single address-valued column"),
@@ -1845,7 +1852,7 @@ mod tests {
              (SELECT @objectAddress FROM java.lang.Integer i)",
         )
         .unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = pq(&q).unwrap();
         assert_eq!(
             plan.in_subplans.len(),
             1,
@@ -1857,7 +1864,7 @@ mod tests {
 
     #[test]
     fn plain_query_has_no_subplans() {
-        let plan = plan_query(&parse("SELECT @objectId FROM C").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT @objectId FROM C").unwrap()).unwrap();
         assert!(plan.from_subplan.is_none());
         assert!(plan.in_subplans.is_empty());
     }
@@ -1870,7 +1877,7 @@ mod tests {
              @objectAddress IN (SELECT @objectAddress FROM B b)",
         )
         .unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = pq(&q).unwrap();
         assert_eq!(plan.in_subplans.len(), 2);
     }
 
@@ -1881,7 +1888,7 @@ mod tests {
     #[test]
     fn explain_shows_scan_limit_after_optimize() {
         let q = parse("SELECT @objectId FROM java.lang.String LIMIT 5").unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = pq(&q).unwrap();
         let plan = crate::query::optimize::optimize(plan, &q, &Default::default());
         let out = plan.explain();
         assert!(
@@ -1894,7 +1901,7 @@ mod tests {
     #[test]
     fn stage_list_reports_scan_limit() {
         let q = parse("SELECT @objectId FROM java.lang.String LIMIT 5").unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = pq(&q).unwrap();
         let plan = crate::query::optimize::optimize(plan, &q, &Default::default());
         let list = plan.stage_list();
         assert!(
@@ -1909,7 +1916,7 @@ mod tests {
     #[test]
     fn stage_list_raw_has_no_scan_limit() {
         let q = parse("SELECT @objectId FROM java.lang.String LIMIT 5").unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = pq(&q).unwrap();
         let list = plan.stage_list();
         assert!(
             list.iter().any(|s| s == "limit=5"),
@@ -1928,7 +1935,7 @@ mod tests {
     #[test]
     fn tostring_select_sets_string_values_need_and_p2_finalize() {
         let plan =
-            plan_query(&parse("SELECT toString(s) FROM java.lang.String s").unwrap()).unwrap();
+            pq(&parse("SELECT toString(s) FROM java.lang.String s").unwrap()).unwrap();
         assert!(
             plan.needs.string_values,
             "toString SELECT must arm string_values need"
@@ -1949,7 +1956,7 @@ mod tests {
 
     #[test]
     fn tostring_where_sets_string_values_need() {
-        let plan = plan_query(
+        let plan = pq(
             &parse(r#"SELECT @objectId FROM java.lang.String s WHERE toString(s) LIKE "java\..*""#)
                 .unwrap(),
         )
@@ -1964,7 +1971,7 @@ mod tests {
     #[test]
     fn tostring_on_non_string_from_is_plan_error() {
         let err =
-            plan_query(&parse("SELECT toString(s) FROM java.lang.Object s").unwrap()).unwrap_err();
+            pq(&parse("SELECT toString(s) FROM java.lang.Object s").unwrap()).unwrap_err();
         assert!(
             err.0.contains("java.lang.String") || err.0.contains("toString"),
             "error must name java.lang.String or toString, got: {}",
@@ -1981,7 +1988,7 @@ mod tests {
     fn tostring_on_string_class_alternate_forms_accepted() {
         // The dotted class name must be accepted at plan time.
         assert!(
-            plan_query(&parse("SELECT toString(s) FROM java.lang.String s").unwrap()).is_ok(),
+            pq(&parse("SELECT toString(s) FROM java.lang.String s").unwrap()).is_ok(),
             "dotted class name must succeed"
         );
     }
@@ -1990,7 +1997,7 @@ mod tests {
     fn tostring_non_string_from_error_names_fix() {
         // The error message must include the correct-usage hint.
         let err =
-            plan_query(&parse("SELECT toString(s) FROM java.util.HashMap s").unwrap()).unwrap_err();
+            pq(&parse("SELECT toString(s) FROM java.util.HashMap s").unwrap()).unwrap_err();
         assert!(
             err.0.contains("java.lang.String"),
             "error must include the correct class name, got: {}",
@@ -2008,7 +2015,7 @@ mod tests {
     /// A pure COUNT(*) histogram query must NOT set `string_values`.
     #[test]
     fn no_tostring_count_star_gating_false() {
-        let plan = plan_query(&parse("SELECT COUNT(*) FROM java.lang.String").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT COUNT(*) FROM java.lang.String").unwrap()).unwrap();
         assert!(
             !plan.needs.string_values,
             "COUNT(*) must not arm string_values, got: {:?}",
@@ -2020,7 +2027,7 @@ mod tests {
     #[test]
     fn no_tostring_used_heap_size_where_gating_false() {
         let plan =
-            plan_query(&parse("SELECT * FROM java.lang.String s WHERE @usedHeapSize > 0").unwrap())
+            pq(&parse("SELECT * FROM java.lang.String s WHERE @usedHeapSize > 0").unwrap())
                 .unwrap();
         assert!(
             !plan.needs.string_values,
@@ -2032,7 +2039,7 @@ mod tests {
     /// A plain scalar-field SELECT on a non-String class must NOT set `string_values`.
     #[test]
     fn no_tostring_scalar_select_gating_false() {
-        let plan = plan_query(&parse("SELECT count FROM java.util.HashMap").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT count FROM java.util.HashMap").unwrap()).unwrap();
         assert!(
             !plan.needs.string_values,
             "field SELECT on non-String class must not arm string_values, got: {:?}",
@@ -2046,7 +2053,7 @@ mod tests {
     #[test]
     fn tostring_select_sets_string_values_true_and_p2() {
         let plan =
-            plan_query(&parse("SELECT toString(s) FROM java.lang.String s").unwrap()).unwrap();
+            pq(&parse("SELECT toString(s) FROM java.lang.String s").unwrap()).unwrap();
         assert!(
             plan.needs.string_values,
             "toString SELECT must arm string_values, got: {:?}",
@@ -2071,7 +2078,7 @@ mod tests {
     /// `needs.string_values == true` and finalize at P2.
     #[test]
     fn tostring_where_like_sets_string_values_true_and_p2() {
-        let plan = plan_query(
+        let plan = pq(
             &parse(r#"SELECT @objectId FROM java.lang.String s WHERE toString(s) LIKE "java\..*""#)
                 .unwrap(),
         )
@@ -2093,17 +2100,31 @@ mod tests {
     // path(a, b) planning tests
     // ============================================================
 
-    /// Pin: DEFAULT_PATH_DEPTH_CAP must be 20 (matches CLI default depth).
+    /// Pin: DEFAULT_PATH_DEPTH_CAP must be 5 (the canonical CLI default depth).
     #[test]
-    fn default_path_depth_cap_constant_is_20() {
-        assert_eq!(crate::query::DEFAULT_PATH_DEPTH_CAP, 20);
+    fn default_path_depth_cap_constant_is_5() {
+        assert_eq!(crate::query::DEFAULT_PATH_DEPTH_CAP, 5);
     }
 
-    /// A lone `SELECT path(a, b)` plans to a BoundedPath late op at P2.
+    /// Depth flag threads through: planning with depth=7 must produce
+    /// `BoundedPath { depth_cap: 7 }`, NOT the default 5.
+    #[test]
+    fn plan_path_depth_param_overrides_default() {
+        let q = parse("SELECT path(a, b) FROM java.lang.Thread a").unwrap();
+        let plan = plan_query(&q, 7).unwrap();
+        assert_eq!(
+            plan.late_ops,
+            vec![StageOp::BoundedPath { depth_cap: 7 }],
+            "plan with depth=7 must carry depth_cap=7, not the default"
+        );
+    }
+
+    /// A lone `SELECT path(a, b)` with the canonical default depth plans to a
+    /// BoundedPath late op at P2 with depth_cap == DEFAULT_PATH_DEPTH_CAP.
     #[test]
     fn plan_path_lone_emits_bounded_path_op() {
         let plan =
-            plan_query(&parse("SELECT path(a, b) FROM java.lang.Thread a").unwrap()).unwrap();
+            pq(&parse("SELECT path(a, b) FROM java.lang.Thread a").unwrap()).unwrap();
         assert_eq!(
             plan.late_ops,
             vec![StageOp::BoundedPath {
@@ -2127,7 +2148,7 @@ mod tests {
     /// actionable error mentioning "only select item".
     #[test]
     fn plan_path_mixed_select_rejected_actionably() {
-        let err = plan_query(
+        let err = pq(
             &parse("SELECT path(a,b), @usedHeapSize FROM java.lang.Thread a").unwrap(),
         )
         .unwrap_err();
@@ -2142,7 +2163,7 @@ mod tests {
     #[test]
     fn plan_path_as_aggregate_arg_rejected() {
         let err =
-            plan_query(&parse("SELECT COUNT(path(a, b)) FROM java.lang.Thread a").unwrap())
+            pq(&parse("SELECT COUNT(path(a, b)) FROM java.lang.Thread a").unwrap())
                 .unwrap_err();
         assert!(
             err.0.contains("aggregate"),
@@ -2155,7 +2176,7 @@ mod tests {
     /// BoundedPath op (memory invariant: no spurious forward-edge retention).
     #[test]
     fn no_path_query_stays_p1_no_bounded_path_op() {
-        let plan = plan_query(&parse("SELECT COUNT(*) FROM java.lang.String").unwrap()).unwrap();
+        let plan = pq(&parse("SELECT COUNT(*) FROM java.lang.String").unwrap()).unwrap();
         assert_eq!(plan.finalize_at, Phase::P1);
         assert!(
             !plan.late_ops.iter().any(|op| matches!(op, StageOp::BoundedPath { .. })),
@@ -2163,3 +2184,4 @@ mod tests {
         );
     }
 }
+

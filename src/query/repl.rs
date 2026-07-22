@@ -236,7 +236,9 @@ fn harvest_class_names(path: &str) -> Vec<String> {
 /// The interactive OQL REPL: reedline read-line with history + Tab-completion.
 /// `!`-prefixed lines are meta-commands; everything else is run against the dump
 /// at `path`. Exits on Ctrl-D/Ctrl-C.
-pub fn run_repl(path: &str) -> io::Result<()> {
+/// `path_depth` is the BFS depth limit for `path(a, b)` queries, sourced from
+/// `--query-path-depth` (default: `DEFAULT_PATH_DEPTH_CAP`).
+pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
     // Harvest class names once for FROM/INSTANCEOF completion. This pass1 is
     // cheap (no heap-object scan) and independent of the per-query pass1+pass2.
     // On I/O failure, warn and proceed with an empty list rather than crashing.
@@ -256,11 +258,11 @@ pub fn run_repl(path: &str) -> io::Result<()> {
                     continue;
                 }
                 if let Some(cmd) = t.strip_prefix('!') {
-                    if handle_meta(cmd, &mut stdout)? {
+                    if handle_meta(cmd, path_depth, &mut stdout)? {
                         break;
                     }
                 } else {
-                    match run_one(path, t) {
+                    match run_one(path, t, path_depth) {
                         Ok(res) => print_result(&res, &mut stdout)?,
                         Err(e) => writeln!(stdout, "error: {e}")?,
                     }
@@ -279,7 +281,7 @@ pub fn run_repl(path: &str) -> io::Result<()> {
 
 /// Handle a meta-command (the text after the leading `!`). Returns `Ok(true)`
 /// when the command asks the REPL to quit.
-fn handle_meta(cmd: &str, out: &mut impl Write) -> io::Result<bool> {
+fn handle_meta(cmd: &str, path_depth: usize, out: &mut impl Write) -> io::Result<bool> {
     let (verb, rest) = match cmd.split_once(char::is_whitespace) {
         Some((v, r)) => (v, r.trim()),
         None => (cmd, ""),
@@ -306,7 +308,7 @@ fn handle_meta(cmd: &str, out: &mut impl Write) -> io::Result<bool> {
                 (false, rest)
             };
             match crate::query::parse::parse_or_report(query_text) {
-                Ok(q) => match crate::query::plan::plan_query(&q) {
+                Ok(q) => match crate::query::plan::plan_query(&q, path_depth) {
                     Ok(plan) => {
                         let plan = if raw {
                             plan
@@ -332,14 +334,14 @@ fn handle_meta(cmd: &str, out: &mut impl Write) -> io::Result<bool> {
 /// Parse, plan, and execute a single OQL line against the dump at `path`,
 /// returning the (single) query result. Parse/plan failures are surfaced as
 /// `io::Error` so the caller prints `error: <msg>` and stays alive.
-fn run_one(path: &str, text: &str) -> io::Result<QueryResult> {
+fn run_one(path: &str, text: &str, path_depth: usize) -> io::Result<QueryResult> {
     let q = crate::query::parse::parse_or_report(text).map_err(|report| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("parse error: {report}"),
         )
     })?;
-    let plan = crate::query::plan::plan_query(&q)
+    let plan = crate::query::plan::plan_query(&q, path_depth)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("plan error: {}", e.0)))?;
     let plan =
         crate::query::optimize::optimize(plan, &q, &crate::query::optimize::SchemaStats::default());
@@ -400,7 +402,7 @@ mod tests {
 
     fn meta_out(cmd: &str) -> (bool, String) {
         let mut buf = Vec::new();
-        let quit = handle_meta(cmd, &mut buf).unwrap();
+        let quit = handle_meta(cmd, crate::query::DEFAULT_PATH_DEPTH_CAP, &mut buf).unwrap();
         (quit, String::from_utf8(buf).unwrap())
     }
 

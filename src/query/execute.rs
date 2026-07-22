@@ -955,7 +955,7 @@ mod tests {
             },
         );
         let q = crate::query::parse::parse("SELECT @retainedHeapSize FROM C").unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         assert_eq!(plan.finalize_at, Phase::P3);
         let mut carry = crate::query::carry::Carry::index_only(100);
         carry.push_index(42);
@@ -971,7 +971,7 @@ mod tests {
         // A cross-phase query: carry mode collects matched dense indices instead
         // of building rows. `finish` is not used; `take_carry` extracts them.
         let q = parse("SELECT @objectId, @retainedHeapSize FROM com.acme.Foo").unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         assert!(plan.finalize_at == crate::query::plan::Phase::P3);
         let sc = schema(&[(10, "com.acme.Foo"), (20, "com.acme.Bar")]);
         let carry = crate::query::carry::Carry::index_only(100);
@@ -990,7 +990,7 @@ mod tests {
         // (retained size is unknown). Carry mode must NOT drop rows on it — all
         // class matches are carried; stage_runner applies the retained filter.
         let q = parse("SELECT @objectId FROM com.acme.Foo WHERE @retainedHeapSize > 1000").unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = schema(&[(10, "com.acme.Foo")]);
         let carry = crate::query::carry::Carry::index_only(100);
         let mut ex = SingleScanExecutor::new_carry(&q, &plan, &sc, carry);
@@ -1010,7 +1010,7 @@ mod tests {
         // mode must carry every match regardless of the query's LIMIT.
         let q = parse("SELECT @objectId FROM com.acme.Foo ORDER BY @retainedHeapSize DESC LIMIT 1")
             .unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = schema(&[(10, "com.acme.Foo")]);
         let carry = crate::query::carry::Carry::index_only(100);
         let mut ex = SingleScanExecutor::new_carry(&q, &plan, &sc, carry);
@@ -1031,7 +1031,7 @@ mod tests {
         // scan; only retained terms are deferred. Here the class filter alone
         // decides membership (no field blob), so a Bar instance is excluded.
         let q = parse("SELECT @objectId FROM com.acme.Foo WHERE @retainedHeapSize > 0").unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = schema(&[(10, "com.acme.Foo"), (20, "com.acme.Bar")]);
         let carry = crate::query::carry::Carry::index_only(100);
         let mut ex = SingleScanExecutor::new_carry(&q, &plan, &sc, carry);
@@ -1044,7 +1044,7 @@ mod tests {
     #[test]
     fn matches_exact_class_and_projects_object_id() {
         let q = parse("SELECT @objectId FROM com.acme.Foo").unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = schema(&[(10, "com.acme.Foo"), (20, "com.acme.Bar")]);
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
         ex.visit_instance(3, 10, &[]);
@@ -1057,7 +1057,7 @@ mod tests {
     #[test]
     fn respects_limit() {
         let q = parse("SELECT @objectId FROM com.acme.Foo LIMIT 1").unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = schema(&[(10, "com.acme.Foo")]);
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
         ex.visit_instance(3, 10, &[]);
@@ -1282,7 +1282,7 @@ mod tests {
     #[test]
     fn projects_star_as_objref() {
         let q = parse("SELECT * FROM com.acme.Foo").unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = schema(&[(10, "com.acme.Foo")]);
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
         ex.visit_instance(7, 10, &[]);
@@ -1300,7 +1300,7 @@ mod tests {
     #[test]
     fn no_match_yields_empty_untruncated() {
         let q = parse("SELECT @objectId FROM com.acme.Missing").unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = schema(&[(10, "com.acme.Foo"), (20, "com.acme.Bar")]);
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
         ex.visit_instance(3, 10, &[]);
@@ -1313,7 +1313,7 @@ mod tests {
     #[test]
     fn glob_from_matches_multiple_classes() {
         let q = parse("SELECT @objectId FROM com.acme.*").unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = schema(&[
             (10, "com.acme.Foo"),
             (20, "com.acme.Bar"),
@@ -1334,7 +1334,7 @@ mod tests {
     fn unknown_class_id_never_matches() {
         // A class_id absent from the resolver must not match any FROM.
         let q = parse("SELECT @objectId FROM com.acme.Foo").unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = schema(&[(10, "com.acme.Foo")]);
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
         ex.visit_instance(3, 999, &[]);
@@ -1386,7 +1386,7 @@ mod tests {
     #[test]
     fn where_filters_on_scalar_field() {
         let q = crate::query::parse::parse("SELECT @objectId FROM C WHERE count > 5").unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = FieldSchema::count_only();
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
         ex.visit_instance(1, 10, &[0, 0, 0, 3]); // count=3 fails >5
@@ -1403,7 +1403,7 @@ mod tests {
         // which is out of scope for this task. WHERE position parses `count`
         // fine (see where_filters_on_scalar_field).
         let q = crate::query::parse::parse("SELECT n FROM C").unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = FieldSchema::with_fields(&[("n", 0, crate::types::HprofType::Int)]);
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
         ex.visit_instance(1, 10, &[0, 0, 0, 7]);
@@ -1436,7 +1436,7 @@ mod tests {
 
     fn decode(field: &str, off: u32, ty: crate::types::HprofType, blob: &[u8]) -> QueryValue {
         let q = crate::query::parse::parse(&format!("SELECT {field} FROM C")).unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = FieldSchema::with_fields(&[(field, off, ty)]);
         let ex = SingleScanExecutor::new(&q, &plan, &sc);
         ex.decode_field(10, field, blob)
@@ -1556,7 +1556,7 @@ mod tests {
     fn decode_unknown_field_is_null() {
         // Resolver has no mapping for "missing" -> Null.
         let q = crate::query::parse::parse("SELECT missing FROM C").unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = FieldSchema::count_only();
         let ex = SingleScanExecutor::new(&q, &plan, &sc);
         assert_eq!(
@@ -1847,7 +1847,7 @@ mod tests {
         let q =
             crate::query::parse::parse("SELECT @objectId FROM C WHERE count > 5 AND count < 100")
                 .unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = FieldSchema::count_only();
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
         ex.visit_instance(1, 10, &[0, 0, 0, 3]); // 3: fails >5
@@ -1863,7 +1863,7 @@ mod tests {
         let q =
             crate::query::parse::parse("SELECT @objectId FROM C WHERE count < 5 OR count > 100")
                 .unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = FieldSchema::count_only();
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
         ex.visit_instance(1, 10, &[0, 0, 0, 3]); // <5: passes
@@ -1878,7 +1878,7 @@ mod tests {
     #[test]
     fn where_not_negates() {
         let q = crate::query::parse::parse("SELECT @objectId FROM C WHERE NOT count = 7").unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = FieldSchema::count_only();
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
         ex.visit_instance(1, 10, &[0, 0, 0, 7]); // ==7: excluded
@@ -1891,7 +1891,7 @@ mod tests {
     #[test]
     fn where_instanceof_matches_by_class_name() {
         let q = crate::query::parse::parse("SELECT @objectId FROM C WHERE x INSTANCEOF C").unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = FieldSchema::count_only();
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
         ex.visit_instance(1, 10, &[0, 0, 0, 1]); // class 10 == "C" -> matches
@@ -1903,7 +1903,7 @@ mod tests {
     #[test]
     fn where_instanceof_excludes_other_class() {
         let q = crate::query::parse::parse("SELECT @objectId FROM C WHERE x INSTANCEOF D").unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = FieldSchema::count_only();
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
         ex.visit_instance(1, 10, &[0, 0, 0, 1]); // class "C" is not "D"
@@ -1915,7 +1915,7 @@ mod tests {
     fn where_unknown_field_excludes_for_eq() {
         // Resolver has no "missing" -> decode Null; Null = 1 is a mismatch -> excluded.
         let q = crate::query::parse::parse("SELECT @objectId FROM C WHERE missing = 1").unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = FieldSchema::count_only();
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
         ex.visit_instance(1, 10, &[0, 0, 0, 1]);
@@ -1930,7 +1930,7 @@ mod tests {
         // `FROM C c` binds alias `c`; `SELECT c.n` must resolve field `n`.
         let q = crate::query::parse::parse("SELECT c.n FROM C c").unwrap();
         assert_eq!(q.alias.as_deref(), Some("c"), "parser must bind alias `c`");
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = FieldSchema::with_fields(&[("n", 0, crate::types::HprofType::Int)]);
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
         ex.visit_instance(1, 10, &[0, 0, 0, 7]);
@@ -1943,7 +1943,7 @@ mod tests {
         // `WHERE c.count > 5` must strip the `c.` prefix and resolve `count`.
         let q = crate::query::parse::parse("SELECT @objectId FROM C c WHERE c.count > 5").unwrap();
         assert_eq!(q.alias.as_deref(), Some("c"));
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = FieldSchema::count_only();
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
         ex.visit_instance(1, 10, &[0, 0, 0, 3]); // count=3 fails >5
@@ -1957,7 +1957,7 @@ mod tests {
     fn strip_alias_only_strips_matching_prefix() {
         // Directly exercise strip_alias: matching prefix stripped, others intact.
         let q = crate::query::parse::parse("SELECT n FROM C c").unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = FieldSchema::count_only();
         let ex = SingleScanExecutor::new(&q, &plan, &sc);
         assert_eq!(ex.strip_alias("c.count"), "count");
@@ -1974,7 +1974,7 @@ mod tests {
         // No alias bound: field names pass through untouched.
         let q = crate::query::parse::parse("SELECT n FROM C").unwrap();
         assert!(q.alias.is_none());
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = FieldSchema::count_only();
         let ex = SingleScanExecutor::new(&q, &plan, &sc);
         assert_eq!(ex.strip_alias("c.count"), "c.count");
@@ -1987,7 +1987,7 @@ mod tests {
         // `FROM char[]` matches the array class NAME passed to visit_array; the
         // `@length` column must project the element count as an Int.
         let q = crate::query::parse::parse("SELECT @length FROM char[]").unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = FieldSchema::count_only();
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
         ex.visit_array(1, "char[]", 42);
@@ -2004,7 +2004,7 @@ mod tests {
     fn array_length_filters_in_where() {
         // WHERE over @length filters array rows just like scalar fields.
         let q = crate::query::parse::parse("SELECT @length FROM char[] WHERE @length > 8").unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = FieldSchema::count_only();
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
         ex.visit_array(1, "char[]", 4); // fails >8
@@ -2018,7 +2018,7 @@ mod tests {
     fn array_respects_limit() {
         // The LIMIT cap applies to array rows and sets truncated.
         let q = crate::query::parse::parse("SELECT @length FROM char[] LIMIT 2").unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = FieldSchema::count_only();
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
         ex.visit_array(1, "char[]", 1);
@@ -2033,7 +2033,7 @@ mod tests {
     fn array_field_projection_is_null() {
         // A bare field has no meaning on an array element; project Null.
         let q = crate::query::parse::parse("SELECT n FROM char[]").unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = FieldSchema::with_fields(&[("n", 0, crate::types::HprofType::Int)]);
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
         ex.visit_array(1, "char[]", 5);
@@ -2067,7 +2067,7 @@ mod tests {
              (SELECT @objectAddress FROM D)",
         )
         .unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         assert_eq!(plan.in_subplans.len(), 1);
         let sc = AddrResolver {
             names: std::iter::once((10u64, "C".to_string())).collect(),
@@ -2101,7 +2101,7 @@ mod tests {
              (SELECT @objectAddress FROM D)",
         )
         .unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = AddrResolver {
             names: std::iter::once((10u64, "C".to_string())).collect(),
             addrs: std::iter::once((1usize, 0x200u64)).collect(),
@@ -2127,7 +2127,7 @@ mod tests {
         // executor considers every object (identity is later semi-joined). Here,
         // both class 10 and 20 objects are emitted (no WHERE, no injection).
         let q = crate::query::parse::parse("SELECT @objectId FROM (SELECT * FROM C c) x").unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         assert!(plan.from_subplan.is_some());
         let sc = schema(&[(10, "C"), (20, "D")]);
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
@@ -2150,7 +2150,7 @@ mod tests {
             "SELECT @objectId AS myid FROM com.acme.Foo",
         )
         .unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = schema(&[(10, "com.acme.Foo")]);
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
         ex.visit_instance(5, 10, &[]);
@@ -2166,7 +2166,7 @@ mod tests {
     fn no_alias_preserves_derived_column_name() {
         let q =
             crate::query::parse::parse("SELECT @usedHeapSize FROM com.acme.Foo").unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = schema(&[(10, "com.acme.Foo")]);
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
         ex.visit_instance(5, 10, &[]);
@@ -2180,7 +2180,7 @@ mod tests {
             "SELECT @objectId AS id, @usedHeapSize AS bytes FROM com.acme.Foo",
         )
         .unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = schema(&[(10, "com.acme.Foo")]);
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
         ex.visit_instance(5, 10, &[]);
@@ -2196,7 +2196,7 @@ mod tests {
             r#"SELECT @usedHeapSize AS "size" FROM com.acme.Foo"#,
         )
         .unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = schema(&[(10, "com.acme.Foo")]);
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
         ex.visit_instance(5, 10, &[]);
@@ -2210,7 +2210,7 @@ mod tests {
             "SELECT COUNT(*) AS n FROM com.acme.Foo",
         )
         .unwrap();
-        let plan = plan_query(&q).unwrap();
+        let plan = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let sc = schema(&[(10, "com.acme.Foo")]);
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
         ex.visit_instance(5, 10, &[]);

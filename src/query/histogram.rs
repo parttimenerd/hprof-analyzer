@@ -110,7 +110,7 @@ mod tests {
     #[test]
     fn count_star_of_one_class() {
         let q = crate::query::parse::parse("SELECT COUNT(*) FROM java.lang.String").unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let cs = summaries();
         let res = run_histogram(&q, &plan, &cs);
         assert_eq!(res.rows[0][0], QueryValue::Int(100));
@@ -120,7 +120,7 @@ mod tests {
     fn sum_shallow_of_one_class() {
         let q =
             crate::query::parse::parse("SELECT SUM(@usedHeapSize) FROM java.lang.String").unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let cs = summaries();
         let res = run_histogram(&q, &plan, &cs);
         assert_eq!(res.rows[0][0], QueryValue::Int(2400));
@@ -129,7 +129,7 @@ mod tests {
     #[test]
     fn glob_matches_multiple_classes() {
         let q = crate::query::parse::parse("SELECT COUNT(*) FROM java.util.*").unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let cs = summaries();
         let res = run_histogram(&q, &plan, &cs);
         assert_eq!(res.rows[0][0], QueryValue::Int(10));
@@ -142,7 +142,7 @@ mod tests {
     fn regex_from_matches_multiple_java_classes() {
         // Both summary classes are under java.*, so a `java\..*` regex counts both.
         let q = crate::query::parse::parse(r#"SELECT COUNT(*) FROM "java\..*""#).unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let res = run_histogram(&q, &plan, &summaries());
         assert_eq!(res.rows[0][0], QueryValue::Int(110));
     }
@@ -150,7 +150,7 @@ mod tests {
     #[test]
     fn regex_from_trailing_string_matches_one_class() {
         let q = crate::query::parse::parse(r#"SELECT COUNT(*) FROM ".*String""#).unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let res = run_histogram(&q, &plan, &summaries());
         assert_eq!(res.rows[0][0], QueryValue::Int(100));
     }
@@ -158,7 +158,7 @@ mod tests {
     #[test]
     fn regex_from_matches_nothing_is_zero() {
         let q = crate::query::parse::parse(r#"SELECT COUNT(*) FROM "no\.such\..*""#).unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let res = run_histogram(&q, &plan, &summaries());
         assert_eq!(res.rows[0][0], QueryValue::Int(0));
     }
@@ -169,7 +169,7 @@ mod tests {
     fn avg_shallow_is_histogram_only_and_correct() {
         let q =
             crate::query::parse::parse("SELECT AVG(@usedHeapSize) FROM java.lang.String").unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         assert_eq!(
             plan.kind,
             crate::query::plan::StageKind::HistogramOnly,
@@ -187,7 +187,7 @@ mod tests {
     fn avg_no_match_is_null() {
         let q = crate::query::parse::parse("SELECT AVG(@usedHeapSize) FROM com.nonexistent.Class")
             .unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let cs = summaries();
         let res = run_histogram(&q, &plan, &cs);
         assert_eq!(res.row_count, 1);
@@ -198,7 +198,7 @@ mod tests {
     #[test]
     fn count_no_match_is_zero() {
         let q = crate::query::parse::parse("SELECT COUNT(*) FROM com.nonexistent.Class").unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let cs = summaries();
         let res = run_histogram(&q, &plan, &cs);
         assert_eq!(res.row_count, 1);
@@ -210,7 +210,7 @@ mod tests {
     fn sum_no_match_is_zero() {
         let q = crate::query::parse::parse("SELECT SUM(@usedHeapSize) FROM com.nonexistent.Class")
             .unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let cs = summaries();
         let res = run_histogram(&q, &plan, &cs);
         assert_eq!(res.row_count, 1);
@@ -224,7 +224,7 @@ mod tests {
         let q =
             crate::query::parse::parse("SELECT COUNT(*), SUM(@usedHeapSize) FROM java.lang.String")
                 .unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let cs = summaries();
         let res = run_histogram(&q, &plan, &cs);
         assert_eq!(res.rows[0].len(), 2, "must have two columns");
@@ -239,7 +239,7 @@ mod tests {
     fn glob_java_star_sums_both_classes() {
         let q =
             crate::query::parse::parse("SELECT COUNT(*), SUM(@usedHeapSize) FROM java.*").unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let cs = summaries();
         let res = run_histogram(&q, &plan, &cs);
         assert_eq!(res.rows[0][0], QueryValue::Int(110), "COUNT(*)");
@@ -307,14 +307,14 @@ mod tests {
     fn result_always_has_exactly_one_row() {
         // Match case
         let q = crate::query::parse::parse("SELECT COUNT(*) FROM java.lang.String").unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let res = run_histogram(&q, &plan, &summaries());
         assert_eq!(res.row_count, 1);
         assert_eq!(res.rows.len(), 1);
 
         // No-match case
         let q2 = crate::query::parse::parse("SELECT COUNT(*) FROM no.such.Class").unwrap();
-        let plan2 = crate::query::plan::plan_query(&q2).unwrap();
+        let plan2 = crate::query::plan::plan_query(&q2, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let res2 = run_histogram(&q2, &plan2, &summaries());
         assert_eq!(res2.row_count, 1);
         assert_eq!(res2.rows.len(), 1);
@@ -325,7 +325,7 @@ mod tests {
     #[test]
     fn count_star_alias_wins_in_column_header() {
         let q = crate::query::parse::parse("SELECT COUNT(*) AS n FROM java.lang.String").unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         assert_eq!(
             plan.kind,
             crate::query::plan::StageKind::HistogramOnly,
@@ -348,7 +348,7 @@ mod tests {
     #[test]
     fn count_star_of_prim_array_matches_pretty_name() {
         let q = crate::query::parse::parse("SELECT COUNT(*) FROM char[]").unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let cs = vec![ClassSummary {
             name: "char[]",
             count: 225,
@@ -380,7 +380,7 @@ mod tests {
         );
         // Sanity: a whole summary keyed by the raw name yields COUNT 0.
         let q = crate::query::parse::parse("SELECT COUNT(*) FROM char[]").unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let raw = vec![ClassSummary {
             name: "[C",
             count: 225,
@@ -398,7 +398,7 @@ mod tests {
     #[test]
     fn result_metadata_defaults() {
         let q = crate::query::parse::parse("SELECT COUNT(*) FROM java.lang.String").unwrap();
-        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         let res = run_histogram(&q, &plan, &summaries());
         assert!(res.name.is_empty(), "name must be empty");
         assert!(res.oql.is_empty(), "oql must be empty");
