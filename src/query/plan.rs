@@ -252,6 +252,30 @@ fn item_is_aggregate(it: &SelectItem) -> bool {
     matches!(it, SelectItem::Aggregate { .. })
 }
 
+/// Visit every `Attr` leaf in an `Expr` tree (in-order), calling `f` on each.
+fn expr_for_each_attr(e: &Expr, f: &mut impl FnMut(&Attr)) {
+    match e {
+        Expr::Attr(a) => f(a),
+        Expr::Lit(_) => {}
+        Expr::Binary { lhs, rhs, .. } => {
+            expr_for_each_attr(lhs, f);
+            expr_for_each_attr(rhs, f);
+        }
+        Expr::Unary { arg, .. } => expr_for_each_attr(arg, f),
+    }
+}
+
+/// Return true iff any `Attr` leaf in the `Expr` tree satisfies `pred`.
+fn expr_any_attr(e: &Expr, pred: impl Fn(&Attr) -> bool) -> bool {
+    let mut found = false;
+    expr_for_each_attr(e, &mut |a| {
+        if pred(a) {
+            found = true;
+        }
+    });
+    found
+}
+
 fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
     // Subqueries (FROM (...) and WHERE ... IN (...)) must be non-correlated:
     // the inner query may not reference an alias bound by the outer query.
@@ -314,7 +338,7 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             SelectItem::ToString(_) => {
                 needs.string_values = true;
             }
-            SelectItem::Expr(_) => unreachable!("Expr select item reached before arithmetic wiring"),
+            SelectItem::Expr(e) => expr_for_each_attr(e, &mut |a| note_attr_need_attr(a, &mut needs)),
         }
     }
 
@@ -642,6 +666,7 @@ fn select_uses_retained(it: &SelectItem) -> bool {
     match it {
         SelectItem::Attr(Attr::RetainedHeapSize) => true,
         SelectItem::Aggregate { arg, .. } => select_uses_retained(arg),
+        SelectItem::Expr(e) => expr_any_attr(e, |a| matches!(a, Attr::RetainedHeapSize)),
         _ => false,
     }
 }
@@ -654,10 +679,10 @@ pub(crate) fn pred_uses_retained(p: &Predicate) -> bool {
             pred_uses_retained(a) || pred_uses_retained(b)
         }
         Predicate::Not(a) => pred_uses_retained(a),
-        Predicate::Compare {
-            lhs: Expr::Attr(Attr::RetainedHeapSize),
-            ..
-        } => true,
+        Predicate::Compare { lhs, rhs, .. } => {
+            expr_any_attr(lhs, |a| matches!(a, Attr::RetainedHeapSize))
+                || expr_any_attr(rhs, |a| matches!(a, Attr::RetainedHeapSize))
+        }
         _ => false,
     }
 }
@@ -668,6 +693,15 @@ fn select_refpath_hops(it: &SelectItem) -> usize {
     match it {
         SelectItem::Attr(Attr::RefPath { hops, .. }) => hops.len(),
         SelectItem::Aggregate { arg, .. } => select_refpath_hops(arg),
+        SelectItem::Expr(e) => {
+            let mut max = 0;
+            expr_for_each_attr(e, &mut |a| {
+                if let Attr::RefPath { hops, .. } = a {
+                    max = max.max(hops.len());
+                }
+            });
+            max
+        }
         _ => 0,
     }
 }
@@ -681,10 +715,20 @@ fn pred_refpath_hops(p: &Predicate) -> usize {
             pred_refpath_hops(a).max(pred_refpath_hops(b))
         }
         Predicate::Not(a) => pred_refpath_hops(a),
-        Predicate::Compare {
-            lhs: Expr::Attr(Attr::RefPath { hops, .. }),
-            ..
-        } => hops.len(),
+        Predicate::Compare { lhs, rhs, .. } => {
+            let mut max = 0;
+            expr_for_each_attr(lhs, &mut |a| {
+                if let Attr::RefPath { hops, .. } = a {
+                    max = max.max(hops.len());
+                }
+            });
+            expr_for_each_attr(rhs, &mut |a| {
+                if let Attr::RefPath { hops, .. } = a {
+                    max = max.max(hops.len());
+                }
+            });
+            max
+        }
         _ => 0,
     }
 }
@@ -763,6 +807,11 @@ fn collect_select_fields(item: &SelectItem, out: &mut Vec<String>) {
     match item {
         SelectItem::Attr(Attr::Field(name)) => out.push(name.clone()),
         SelectItem::Aggregate { arg, .. } => collect_select_fields(arg, out),
+        SelectItem::Expr(e) => expr_for_each_attr(e, &mut |a| {
+            if let Attr::Field(name) = a {
+                out.push(name.clone());
+            }
+        }),
         _ => {}
     }
 }
@@ -774,10 +823,18 @@ fn collect_pred_fields(pred: &Predicate, out: &mut Vec<String>) {
             collect_pred_fields(b, out);
         }
         Predicate::Not(a) => collect_pred_fields(a, out),
-        Predicate::Compare {
-            lhs: Expr::Attr(Attr::Field(name)),
-            ..
-        } => out.push(name.clone()),
+        Predicate::Compare { lhs, rhs, .. } => {
+            expr_for_each_attr(lhs, &mut |a| {
+                if let Attr::Field(name) = a {
+                    out.push(name.clone());
+                }
+            });
+            expr_for_each_attr(rhs, &mut |a| {
+                if let Attr::Field(name) = a {
+                    out.push(name.clone());
+                }
+            });
+        }
         _ => {}
     }
 }
@@ -819,7 +876,11 @@ fn referenced_alias_heads(q: &Query) -> std::collections::HashSet<String> {
             SelectItem::Path { .. } => {}
             // toString(s) has no external alias head to detect correlation.
             SelectItem::ToString(_) => {}
-            SelectItem::Expr(_) => unreachable!("Expr select item reached before arithmetic wiring"),
+            SelectItem::Expr(e) => expr_for_each_attr(e, &mut |a| {
+                if let Some(h) = attr_alias_head(a) {
+                    heads.insert(h.to_string());
+                }
+            }),
         }
     }
     if let Some(pred) = &q.where_ {
@@ -838,12 +899,17 @@ fn collect_pred_alias_heads(pred: &Predicate, heads: &mut std::collections::Hash
             collect_pred_alias_heads(b, heads);
         }
         Predicate::Not(a) => collect_pred_alias_heads(a, heads),
-        Predicate::Compare { lhs, .. } => {
-            if let Some(a) = lhs.as_attr() {
+        Predicate::Compare { lhs, rhs, .. } => {
+            expr_for_each_attr(lhs, &mut |a| {
                 if let Some(h) = attr_alias_head(a) {
                     heads.insert(h.to_string());
                 }
-            }
+            });
+            expr_for_each_attr(rhs, &mut |a| {
+                if let Some(h) = attr_alias_head(a) {
+                    heads.insert(h.to_string());
+                }
+            });
         }
         // A nested IN-subquery is checked on its own via reject_if_correlated;
         // its inner heads are relative to the inner query, not this one.
@@ -904,7 +970,10 @@ fn note_attr_need(item: &SelectItem, needs: &mut QueryNeeds) -> Result<(), Query
         SelectItem::ToString(_) => Err(QueryError(
             "toString(s) may not be used as an aggregate argument".into(),
         )),
-        SelectItem::Expr(_) => unreachable!("Expr select item reached before arithmetic wiring"),
+        SelectItem::Expr(e) => {
+            expr_for_each_attr(e, &mut |a| note_attr_need_attr(a, needs));
+            Ok(())
+        }
     }
 }
 
@@ -940,19 +1009,29 @@ fn collect_pred_needs(pred: &Predicate, needs: &mut QueryNeeds) -> Result<(), Qu
         Predicate::Compare { lhs, rhs, .. } => {
             let lhs_attr = lhs.as_attr();
             let rhs_val = rhs.as_lit();
-            match lhs_attr {
-                Some(Attr::Field(_)) => {
-                    if matches!(rhs_val, Some(Value::Str(_))) {
-                        needs.instance_string = true;
-                    } else {
-                        needs.instance_scalar = true;
+            // Folded plain-compare fast path (unchanged behavior): lhs is a single attr.
+            if let Some(a) = lhs_attr {
+                match a {
+                    Attr::Field(_) => {
+                        if matches!(rhs_val, Some(Value::Str(_))) {
+                            needs.instance_string = true;
+                        } else {
+                            needs.instance_scalar = true;
+                        }
                     }
+                    Attr::DisplayName => needs.instance_string = true,
+                    Attr::ClassOf => needs.runtime_type = true,
+                    // toString(s) in WHERE arms the string-values side table.
+                    Attr::ToString(_) => needs.string_values = true,
+                    _ => {}
                 }
-                Some(Attr::DisplayName) => needs.instance_string = true,
-                Some(Attr::ClassOf) => needs.runtime_type = true,
-                // toString(s) in WHERE arms the string-values side table.
-                Some(Attr::ToString(_)) => needs.string_values = true,
-                _ => {}
+            } else {
+                // Arithmetic lhs: note every attr leaf's need (numeric context).
+                expr_for_each_attr(lhs, &mut |a| note_attr_need_attr(a, needs));
+            }
+            // The rhs may also carry attrs (arithmetic on the right). Note their needs.
+            if rhs_val.is_none() {
+                expr_for_each_attr(rhs, &mut |a| note_attr_need_attr(a, needs));
             }
             Ok(())
         }
@@ -978,13 +1057,20 @@ fn pred_cost(pred: &Predicate) -> PredCost {
         Predicate::InSubquery { .. } => PredCost::Str,
         Predicate::Not(a) => pred_cost(a),
         Predicate::And(a, b) | Predicate::Or(a, b) => pred_cost(a).max_cost(pred_cost(b)),
-        Predicate::Compare { lhs, rhs, .. } => match lhs.as_attr() {
-            Some(Attr::Field(_)) if matches!(rhs.as_lit(), Some(Value::Str(_))) => PredCost::Str,
-            Some(Attr::DisplayName) => PredCost::Str,
-            Some(Attr::ClassOf) => PredCost::Type,
-            Some(Attr::RefPath { .. }) => PredCost::Ref,
-            _ => PredCost::Scalar,
-        },
+        Predicate::Compare { lhs, rhs, .. } => {
+            if expr_any_attr(lhs, |a| matches!(a, Attr::RefPath { .. }))
+                || expr_any_attr(rhs, |a| matches!(a, Attr::RefPath { .. }))
+            {
+                PredCost::Ref
+            } else {
+                match lhs.as_attr() {
+                    Some(Attr::Field(_)) if matches!(rhs.as_lit(), Some(Value::Str(_))) => PredCost::Str,
+                    Some(Attr::DisplayName) => PredCost::Str,
+                    Some(Attr::ClassOf) => PredCost::Type,
+                    _ => PredCost::Scalar,
+                }
+            }
+        }
     }
 }
 
@@ -2187,6 +2273,246 @@ mod tests {
             !plan.late_ops.iter().any(|op| matches!(op, StageOp::BoundedPath { .. })),
             "non-path query must not emit BoundedPath op"
         );
+    }
+
+    // ============================================================
+    // Arithmetic expression planning (Task 5: see-through Expr leaves)
+    // ============================================================
+
+    /// `expr_for_each_attr` visits all attr leaves of a Binary tree.
+    #[test]
+    fn expr_for_each_attr_visits_all_leaves() {
+        use crate::query::ast::{ArithOp, Value};
+        // Build: @retainedHeapSize * (@usedHeapSize + 2)
+        let e = Expr::Binary {
+            op: ArithOp::Mul,
+            lhs: Box::new(Expr::Attr(Attr::RetainedHeapSize)),
+            rhs: Box::new(Expr::Binary {
+                op: ArithOp::Add,
+                lhs: Box::new(Expr::Attr(Attr::UsedHeapSize)),
+                rhs: Box::new(Expr::Lit(Value::Int(2))),
+            }),
+        };
+        let mut visited = Vec::new();
+        expr_for_each_attr(&e, &mut |a| visited.push(a.clone()));
+        assert_eq!(visited.len(), 2, "must visit exactly the 2 attr leaves");
+        assert!(visited.contains(&Attr::RetainedHeapSize));
+        assert!(visited.contains(&Attr::UsedHeapSize));
+    }
+
+    /// `expr_any_attr` finds RetainedHeapSize two levels deep inside a tree.
+    #[test]
+    fn expr_any_attr_finds_retained_two_levels_deep() {
+        use crate::query::ast::{ArithOp, UnaryOp, Value};
+        // Build: -((@retainedHeapSize + 1) * 2)
+        let e = Expr::Unary {
+            op: UnaryOp::Neg,
+            arg: Box::new(Expr::Binary {
+                op: ArithOp::Mul,
+                lhs: Box::new(Expr::Binary {
+                    op: ArithOp::Add,
+                    lhs: Box::new(Expr::Attr(Attr::RetainedHeapSize)),
+                    rhs: Box::new(Expr::Lit(Value::Int(1))),
+                }),
+                rhs: Box::new(Expr::Lit(Value::Int(2))),
+            }),
+        };
+        assert!(
+            expr_any_attr(&e, |a| matches!(a, Attr::RetainedHeapSize)),
+            "expr_any_attr must find RetainedHeapSize buried two levels deep"
+        );
+        assert!(
+            !expr_any_attr(&e, |a| matches!(a, Attr::UsedHeapSize)),
+            "expr_any_attr must return false when attr is absent"
+        );
+    }
+
+    /// `SELECT @retainedHeapSize * 2 FROM C` must arm the retained need and finalize at P3.
+    #[test]
+    fn arithmetic_select_retained_arms_p3() {
+        let plan = pq(&parse("SELECT @retainedHeapSize * 2 FROM C").unwrap()).unwrap();
+        assert!(
+            plan.needs.retained,
+            "SELECT @retainedHeapSize * 2 must arm the retained need"
+        );
+        assert_eq!(
+            plan.finalize_at,
+            Phase::P3,
+            "SELECT @retainedHeapSize * 2 must finalize at P3"
+        );
+        assert_eq!(
+            plan.late_ops,
+            vec![StageOp::JoinRetained],
+            "SELECT @retainedHeapSize * 2 must emit JoinRetained late op"
+        );
+    }
+
+    /// `WHERE @retainedHeapSize * 2 > 100` must arm the retained need and finalize at P3.
+    #[test]
+    fn arithmetic_where_retained_arms_p3() {
+        let plan =
+            pq(&parse("SELECT @objectId FROM C WHERE @retainedHeapSize * 2 > 100").unwrap())
+                .unwrap();
+        assert!(
+            plan.needs.retained,
+            "WHERE @retainedHeapSize * 2 > 100 must arm the retained need"
+        );
+        assert_eq!(plan.finalize_at, Phase::P3);
+    }
+
+    /// `pred_uses_retained` must return true when @retainedHeapSize is inside arithmetic.
+    #[test]
+    fn pred_uses_retained_arithmetic_lhs() {
+        let q = parse("SELECT @objectId FROM C WHERE @retainedHeapSize * 2 > 100").unwrap();
+        let pred = q.where_.as_ref().unwrap();
+        assert!(
+            pred_uses_retained(pred),
+            "pred_uses_retained must fire for @retainedHeapSize inside arithmetic"
+        );
+    }
+
+    /// `SELECT @usedHeapSize * 2 FROM C` must NOT arm retained (non-retained arithmetic).
+    #[test]
+    fn arithmetic_select_non_retained_stays_p1() {
+        let plan = pq(&parse("SELECT @usedHeapSize * 2 FROM C").unwrap()).unwrap();
+        assert!(
+            !plan.needs.retained,
+            "SELECT @usedHeapSize * 2 must NOT arm the retained need"
+        );
+        assert_eq!(
+            plan.finalize_at,
+            Phase::P1,
+            "SELECT @usedHeapSize * 2 must stay at P1"
+        );
+        assert!(
+            plan.late_ops.is_empty(),
+            "SELECT @usedHeapSize * 2 must have no late ops"
+        );
+    }
+
+    /// A `WHERE` arithmetic compare with a `Field` leaf must arm `instance_scalar`.
+    #[test]
+    fn arithmetic_where_field_arms_instance_scalar() {
+        let plan =
+            pq(&parse("SELECT @objectId FROM C WHERE count * 2 > 100").unwrap()).unwrap();
+        assert!(
+            plan.needs.instance_scalar,
+            "WHERE count * 2 > 100 must arm instance_scalar"
+        );
+        assert!(
+            !plan.needs.instance_string,
+            "WHERE count * 2 > 100 must NOT arm instance_string"
+        );
+    }
+
+    /// `collect_select_fields` must collect field names from an Expr item.
+    #[test]
+    fn collect_select_fields_descends_into_expr() {
+        use crate::query::ast::{ArithOp, Value};
+        // Manually build: SelectItem::Expr(count * 2)
+        let item = SelectItem::Expr(Box::new(Expr::Binary {
+            op: ArithOp::Mul,
+            lhs: Box::new(Expr::Attr(Attr::Field("count".to_string()))),
+            rhs: Box::new(Expr::Lit(Value::Int(2))),
+        }));
+        let mut out = Vec::new();
+        collect_select_fields(&item, &mut out);
+        assert_eq!(out, vec!["count"], "collect_select_fields must descend into Expr and collect 'count'");
+    }
+
+    /// Field validation must reject an unknown field inside arithmetic in SELECT.
+    #[test]
+    fn validate_rejects_unknown_field_inside_arithmetic_select() {
+        let schema = FakeSchema {
+            class: "java.lang.String",
+            fields: vec!["count", "hash"],
+        };
+        // `badfield * 2` – badfield is not in the schema.
+        let q = parse("SELECT badfield * 2 FROM java.lang.String").unwrap();
+        let err = validate_fields(&q, &schema).unwrap_err();
+        assert!(err.0.contains("unknown field"), "got: {}", err.0);
+        assert!(err.0.contains("badfield"), "got: {}", err.0);
+    }
+
+    /// A RefPath buried in a WHERE-arithmetic compare must yield `PredCost::Ref`.
+    #[test]
+    fn pred_cost_ref_path_in_arithmetic_is_ref_cost() {
+        // Build: WHERE x.parent.id * 2 > 0 — the RefPath should force Ref cost.
+        // We test pred_cost directly since it's in the same module.
+        use crate::query::ast::{ArithOp, Value};
+        let pred = Predicate::Compare {
+            lhs: Expr::Binary {
+                op: ArithOp::Mul,
+                lhs: Box::new(Expr::Attr(Attr::RefPath {
+                    hops: vec!["parent".to_string()],
+                    tail: Box::new(Attr::Field("id".to_string())),
+                    role: crate::query::ast::RefRole::ProjectionOnly,
+                })),
+                rhs: Box::new(Expr::Lit(Value::Int(2))),
+            },
+            op: crate::query::ast::CompareOp::Gt,
+            rhs: Expr::Lit(Value::Int(0)),
+        };
+        assert_eq!(
+            pred_cost(&pred),
+            PredCost::Ref,
+            "a RefPath buried inside arithmetic must yield Ref cost"
+        );
+    }
+
+    /// A RefPath arithmetic expr in SELECT must arm refwalk and P2 finalize.
+    #[test]
+    fn arithmetic_select_refpath_arms_refwalk_p2() {
+        // `x.parent.id * 2` — a 1-hop RefPath inside arithmetic in SELECT
+        let plan =
+            pq(&parse("SELECT x.parent.id * 2 FROM Node x").unwrap()).unwrap();
+        assert!(
+            plan.needs.ref_walk,
+            "arithmetic SELECT with RefPath must arm ref_walk"
+        );
+        assert_eq!(
+            plan.finalize_at,
+            Phase::P2,
+            "arithmetic SELECT with RefPath must finalize at P2"
+        );
+    }
+
+    /// aggregate-over-expression: `SUM(@usedHeapSize * 2)` must plan without error.
+    #[test]
+    fn aggregate_over_expression_plans_ok() {
+        let plan = pq(&parse("SELECT SUM(@usedHeapSize * 2) FROM C").unwrap());
+        assert!(
+            plan.is_ok(),
+            "SUM(@usedHeapSize * 2) must plan successfully, got: {:?}",
+            plan.unwrap_err()
+        );
+        // `@usedHeapSize` doesn't arm instance_scalar (it's not a user field);
+        // what matters is that the plan succeeds (no unreachable! panic).
+    }
+
+    /// aggregate-over-expression with a Field leaf arms instance_scalar.
+    #[test]
+    fn aggregate_over_expression_with_field_arms_scalar() {
+        let plan = pq(&parse("SELECT SUM(count * 2) FROM C").unwrap()).unwrap();
+        assert!(
+            plan.needs.instance_scalar,
+            "SUM(count * 2) must arm instance_scalar (count is a Field)"
+        );
+    }
+
+    /// Non-arithmetic queries (folded to plain Attr/Lit) plan byte-identically to before.
+    #[test]
+    fn non_arithmetic_query_plans_identically() {
+        // These are the original folded-leaf cases; they must be unchanged.
+        let p1 = pq(&parse("SELECT @retainedHeapSize FROM C").unwrap()).unwrap();
+        assert!(p1.needs.retained && p1.finalize_at == Phase::P3);
+
+        let p2 = pq(&parse("SELECT @objectId FROM C WHERE count > 3").unwrap()).unwrap();
+        assert!(p2.needs.instance_scalar && p2.finalize_at == Phase::P1 && !p2.needs.retained);
+
+        let p3 = pq(&parse("SELECT @objectId FROM C WHERE @retainedHeapSize > 1024").unwrap())
+            .unwrap();
+        assert!(p3.needs.retained && p3.finalize_at == Phase::P3);
     }
 }
 
