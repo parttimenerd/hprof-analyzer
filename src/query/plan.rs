@@ -348,10 +348,25 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
         flatten_and(pred.clone(), &mut where_terms);
     }
 
+    // True when any aggregate arg is a compound SelectItem::Expr — i.e. the arg
+    // is not a bare @attr or COUNT(*) and cannot be answered from class-summary
+    // scalars. A bare @usedHeapSize arg folds to SelectItem::Attr (not Expr), so
+    // this flag is false for the plain-aggregate histogram fast paths.
+    let agg_over_expr = q.select.iter().any(|item| {
+        matches!(
+            item,
+            SelectItem::Aggregate {
+                arg,
+                ..
+            } if matches!(arg.as_ref(), SelectItem::Expr(_))
+        )
+    });
+
     let kind = if is_aggregate
         && !needs.instance_scalar
         && !needs.instance_string
         && where_terms.is_empty()
+        && !agg_over_expr
     {
         needs.histogram = true;
         StageKind::HistogramOnly

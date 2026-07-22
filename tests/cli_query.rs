@@ -2137,3 +2137,318 @@ fn path_query_returns_rows_via_analyze_path() {
         "BoundedPath op did not finalize — no column header in output:\n{section}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Task 7: arithmetic projections + scan-time aggregate accumulator
+// ---------------------------------------------------------------------------
+
+/// Helper: run a query subcommand and return stdout as String (panics on OS error).
+fn query(hprof: &str, oql: &str) -> std::process::Output {
+    Command::new(BIN)
+        .arg("query")
+        .arg(hprof)
+        .args(["--query", oql])
+        .output()
+        .unwrap()
+}
+
+/// `SELECT @usedHeapSize * 2 FROM java.lang.String LIMIT 3` — non-aggregate
+/// arithmetic projection: each value must be exactly 2× the raw shallow size.
+/// java.lang.String has a fixed shallow size (24 bytes each in this dump), so
+/// the first three rows must all read 48.
+#[test]
+fn arith_projection_double_used_heap_size() {
+    let Some(hprof) = philosophers() else { return };
+    let out = query(&hprof, "SELECT @usedHeapSize * 2 FROM java.lang.String LIMIT 3");
+    assert!(
+        out.status.success(),
+        "arithmetic projection failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Column header must be the unaliased expression form.
+    assert!(
+        stdout.contains("@usedHeapSize * 2"),
+        "missing arithmetic column header:\n{stdout}"
+    );
+    // Three rows of value 48.
+    let count_48 = stdout.lines().filter(|l| l.trim() == "48").count();
+    assert!(
+        count_48 >= 3,
+        "expected at least 3 rows with value 48, got:\n{stdout}"
+    );
+}
+
+/// `SELECT @usedHeapSize FROM java.lang.String WHERE @usedHeapSize / 8 > 2 LIMIT 3`
+/// — WHERE with arithmetic: 24/8 = 3 > 2, so all String rows pass. Returns 3 rows
+/// (truncated), each with value 24.
+#[test]
+fn arith_where_division_filters_rows() {
+    let Some(hprof) = philosophers() else { return };
+    let out = query(
+        &hprof,
+        "SELECT @usedHeapSize FROM java.lang.String WHERE @usedHeapSize / 8 > 2 LIMIT 3",
+    );
+    assert!(
+        out.status.success(),
+        "arithmetic WHERE query failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Should have exactly 3 rows (truncated) since all Strings pass the filter.
+    assert!(
+        stdout.contains("(3 rows, truncated)"),
+        "expected 3 truncated rows:\n{stdout}"
+    );
+}
+
+/// `SELECT @usedHeapSize * 2 AS kb FROM java.lang.String LIMIT 1` — AS alias
+/// renames the arithmetic column; value is still 2× the shallow size.
+#[test]
+fn arith_projection_with_alias() {
+    let Some(hprof) = philosophers() else { return };
+    let out = query(
+        &hprof,
+        "SELECT @usedHeapSize * 2 AS kb FROM java.lang.String LIMIT 1",
+    );
+    assert!(
+        out.status.success(),
+        "aliased arithmetic projection failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Column must be named `kb`, not `@usedHeapSize * 2`.
+    assert!(
+        stdout.contains("kb"),
+        "alias `kb` missing from header:\n{stdout}"
+    );
+    // The result table's column header must be `kb`; the raw expression name
+    // appears only in the OQL echo line (which is fine — only the header matters).
+    // Find the header line (first line after the OQL echo that has `kb`) and
+    // check it is not the raw expression.
+    let has_kb_header = stdout.lines().any(|l| l.trim() == "kb");
+    assert!(
+        has_kb_header,
+        "column header should be exactly `kb`:\n{stdout}"
+    );
+    // Value must still be 48 (2 × 24).
+    assert!(
+        stdout.lines().any(|l| l.trim() == "48"),
+        "expected value 48 in output:\n{stdout}"
+    );
+    // One row returned (truncated because LIMIT 1 with many Strings is fine).
+    assert!(
+        stdout.contains("(1 row"),
+        "expected (1 row...) footer:\n{stdout}"
+    );
+}
+
+/// CORE: `SELECT SUM(@usedHeapSize * 2) FROM java.lang.String` must return
+/// 1188480 (= 2 × SUM(@usedHeapSize) = 2 × 594240). This exercises the new
+/// scan-time aggregate accumulator for aggregate-over-expression.
+#[test]
+fn scan_agg_sum_over_expression_equals_2x_plain_sum() {
+    let Some(hprof) = philosophers() else { return };
+    let out = query(
+        &hprof,
+        "SELECT SUM(@usedHeapSize * 2) FROM java.lang.String",
+    );
+    assert!(
+        out.status.success(),
+        "SUM over expression failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Column header.
+    assert!(
+        stdout.contains("SUM(@usedHeapSize * 2)"),
+        "missing aggregate column header:\n{stdout}"
+    );
+    // The aggregate must equal 2 × 594240 = 1188480, NOT null.
+    assert!(
+        stdout.lines().any(|l| l.trim() == "1188480"),
+        "expected value 1188480, got:\n{stdout}"
+    );
+    assert!(
+        !stdout.lines().any(|l| l.trim() == "null"),
+        "null in output — accumulator is broken:\n{stdout}"
+    );
+    // Exactly one result row.
+    assert!(
+        stdout.contains("(1 row)"),
+        "expected (1 row) footer:\n{stdout}"
+    );
+}
+
+/// REGRESSION: `SELECT SUM(@usedHeapSize) FROM java.lang.String` must still
+/// return 594240 (histogram fast-path must be unaffected by the accumulator).
+#[test]
+fn histogram_sum_regression_still_correct() {
+    let Some(hprof) = philosophers() else { return };
+    let out = query(&hprof, "SELECT SUM(@usedHeapSize) FROM java.lang.String");
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.lines().any(|l| l.trim() == "594240"),
+        "histogram SUM regression: expected 594240, got:\n{stdout}"
+    );
+}
+
+/// REGRESSION: `SELECT COUNT(*) FROM java.lang.String` must still return 24760.
+#[test]
+fn histogram_count_regression_still_correct() {
+    let Some(hprof) = philosophers() else { return };
+    let out = query(&hprof, "SELECT COUNT(*) FROM java.lang.String");
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.lines().any(|l| l.trim() == "24760"),
+        "histogram COUNT regression: expected 24760, got:\n{stdout}"
+    );
+}
+
+/// `SELECT AVG(@usedHeapSize * 2) FROM java.lang.String` — scan-time AVG over
+/// expression. AVG(@usedHeapSize * 2) = 2 × (594240/24760) = 48.0 exactly (all
+/// Strings have shallow size 24, so AVG is 48).
+#[test]
+fn scan_agg_avg_over_expression() {
+    let Some(hprof) = philosophers() else { return };
+    let out = query(
+        &hprof,
+        "SELECT AVG(@usedHeapSize * 2) FROM java.lang.String",
+    );
+    assert!(
+        out.status.success(),
+        "AVG over expression failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("AVG(@usedHeapSize * 2)"),
+        "missing AVG column header:\n{stdout}"
+    );
+    // Expected 48 (or 48.0 as float representation).
+    let has_48 = stdout.lines().any(|l| {
+        let t = l.trim();
+        t == "48" || t == "48.0" || t.starts_with("48.")
+    });
+    assert!(has_48, "expected AVG ≈ 48, got:\n{stdout}");
+    assert!(
+        !stdout.lines().any(|l| l.trim() == "null"),
+        "null in AVG output — accumulator broken:\n{stdout}"
+    );
+}
+
+/// WHERE-filtered aggregate routes to SingleScan (WHERE present). The sum of
+/// `@usedHeapSize` for all Strings where `@usedHeapSize > 0` must equal the
+/// full SUM from the histogram path (594240), proving the scan accumulator
+/// matches the histogram for the same data.
+#[test]
+fn scan_agg_sum_with_where_matches_histogram_total() {
+    let Some(hprof) = philosophers() else { return };
+    let out = query(
+        &hprof,
+        "SELECT SUM(@usedHeapSize) FROM java.lang.String WHERE @usedHeapSize > 0",
+    );
+    assert!(
+        out.status.success(),
+        "WHERE-filtered SUM failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Must equal 594240 — every String has @usedHeapSize == 24 > 0.
+    assert!(
+        stdout.lines().any(|l| l.trim() == "594240"),
+        "scan SUM with WHERE must equal histogram SUM 594240, got:\n{stdout}"
+    );
+    assert!(
+        !stdout.lines().any(|l| l.trim() == "null"),
+        "null in WHERE-filtered SUM — accumulator broken:\n{stdout}"
+    );
+}
+
+/// `SELECT MIN(@usedHeapSize), MAX(@usedHeapSize) FROM java.lang.String WHERE @usedHeapSize > 0`
+/// — MIN/MAX on scan path. Both must be sane: min ≥ 1 (all > 0 filtered), max ≥ min.
+#[test]
+fn scan_agg_min_max_are_sane() {
+    let Some(hprof) = philosophers() else { return };
+    let out = query(
+        &hprof,
+        "SELECT MIN(@usedHeapSize), MAX(@usedHeapSize) FROM java.lang.String WHERE @usedHeapSize > 0",
+    );
+    assert!(
+        out.status.success(),
+        "MIN/MAX query failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("MIN(@usedHeapSize)") && stdout.contains("MAX(@usedHeapSize)"),
+        "missing MIN/MAX column headers:\n{stdout}"
+    );
+    assert!(
+        !stdout.lines().any(|l| l.trim() == "null"),
+        "null in MIN/MAX output:\n{stdout}"
+    );
+    // Exactly one row.
+    assert!(
+        stdout.contains("(1 row)"),
+        "MIN/MAX must emit exactly one row:\n{stdout}"
+    );
+    // Extract numeric values from the pipe-separated data row.
+    // The table format is "24 | 24" for multi-column; the header also has `|`
+    // so we identify the data line by requiring all pipe-separated fields to
+    // be parseable as integers.
+    let nums: Vec<i64> = stdout
+        .lines()
+        .find_map(|l| {
+            let parts: Vec<&str> = l.split('|').collect();
+            let parsed: Option<Vec<i64>> = parts
+                .iter()
+                .map(|s| s.trim().parse::<i64>().ok())
+                .collect();
+            parsed
+        })
+        .expect("no numeric data row found in MIN/MAX output");
+    assert!(
+        nums.len() >= 2,
+        "expected at least 2 numeric values (min, max), got {:?}:\n{stdout}",
+        nums
+    );
+    let mn = *nums.iter().min().unwrap();
+    let mx = *nums.iter().max().unwrap();
+    assert!(mn >= 1, "MIN must be ≥ 1 (WHERE @usedHeapSize > 0), got {mn}");
+    assert!(mx >= mn, "MAX must be ≥ MIN, got min={mn} max={mx}");
+}
+
+/// `SELECT SUM(@usedHeapSize * 2) FROM java.lang.String` is exactly double
+/// `SELECT SUM(@usedHeapSize) FROM java.lang.String`. This cross-validates the
+/// accumulator against the histogram path directly.
+#[test]
+fn scan_agg_double_sum_equals_2x_histogram() {
+    let Some(hprof) = philosophers() else { return };
+
+    // Histogram path (fast path — no WHERE, no expr).
+    let hist_out = query(&hprof, "SELECT SUM(@usedHeapSize) FROM java.lang.String");
+    let hist_stdout = String::from_utf8_lossy(&hist_out.stdout);
+    let hist_sum: i64 = hist_stdout
+        .lines()
+        .find_map(|l| l.trim().parse::<i64>().ok())
+        .expect("histogram SUM must be a parseable integer");
+
+    // Scan path (aggregate-over-expression).
+    let scan_out = query(&hprof, "SELECT SUM(@usedHeapSize * 2) FROM java.lang.String");
+    let scan_stdout = String::from_utf8_lossy(&scan_out.stdout);
+    let scan_sum: i64 = scan_stdout
+        .lines()
+        .find_map(|l| l.trim().parse::<i64>().ok())
+        .expect("scan SUM(*2) must be a parseable integer, not null");
+
+    assert_eq!(
+        scan_sum,
+        hist_sum * 2,
+        "SUM(@usedHeapSize * 2) must equal 2 × SUM(@usedHeapSize): {} ≠ 2×{}",
+        scan_sum,
+        hist_sum
+    );
+}

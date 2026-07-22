@@ -3,7 +3,7 @@
 //! HistogramExecutor answers aggregate-only queries from per-class stats.
 
 use crate::query::ObjectVisitor;
-use crate::query::ast::{ArithOp, Attr, CompareOp, Expr, Query, SelectItem, UnaryOp, Value};
+use crate::query::ast::{AggFunc, ArithOp, Attr, CompareOp, Expr, Query, SelectItem, UnaryOp, Value};
 use crate::query::carry::Carry;
 use crate::query::model::{QueryColumn, QueryResult, QueryValue};
 use crate::query::plan::QueryPlan;
@@ -138,6 +138,188 @@ pub struct SingleScanExecutor<'a, R: ClassResolver> {
     /// contract as `from_regex`: the scan touches millions of objects but each
     /// LIKE pattern is compiled exactly once. Empty when the query has no LIKE.
     like_regexes: std::collections::HashMap<String, regex::Regex>,
+    /// Per-SELECT-item aggregate accumulators. `Some` iff the query has at least
+    /// one `SelectItem::Aggregate` and this executor is not in carry mode. The
+    /// Vec is parallel to `query.select`: non-aggregate items get a placeholder.
+    /// Accumulation happens per matched object in `visit_instance`/`visit_array`;
+    /// `finish` finalizes each accumulator into the single result row.
+    agg_acc: Option<Vec<AggAcc>>,
+}
+
+/// Per-select-item running state for a scan-time aggregate accumulator.
+/// One entry per position in `query.select`; non-aggregate positions use
+/// `AggAcc::None` as a no-op placeholder.
+enum AggAcc {
+    /// Placeholder for a non-aggregate SELECT item (Attr / Expr / Star / etc.).
+    None,
+    /// COUNT(*): every matched object increments the counter.
+    CountStar { n: i64 },
+    /// COUNT(expr): every matched object increments iff the per-object value
+    /// is not Null. (MAT semantics: COUNT(expr) counts non-null values.)
+    CountExpr { n: i64 },
+    /// SUM: running total. Starts as Int(0); if any per-object value is Float
+    /// the whole running total is promoted to f64. Non-numeric/Null values are
+    /// skipped (MAT semantics: SUM ignores nulls).
+    Sum { total: QueryValue, any_value: bool },
+    /// AVG: tracks running sum and count of non-null numeric values; finalized
+    /// as Float(sum/count). Zero numeric values → Null (matches histogram path).
+    Avg { sum: f64, count: i64 },
+    /// MIN: running minimum over numeric values; Null until first non-Null value.
+    Min { best: Option<QueryValue> },
+    /// MAX: running maximum over numeric values; Null until first non-Null value.
+    Max { best: Option<QueryValue> },
+}
+
+/// Build the initial `AggAcc` for one SELECT item. Non-aggregate items get
+/// `AggAcc::None`; aggregate items get their zero state.
+fn init_agg_acc(item: &SelectItem) -> AggAcc {
+    match item {
+        SelectItem::Aggregate { func, arg } => match func {
+            AggFunc::Count => {
+                if matches!(arg.as_ref(), SelectItem::Star) {
+                    AggAcc::CountStar { n: 0 }
+                } else {
+                    AggAcc::CountExpr { n: 0 }
+                }
+            }
+            AggFunc::Sum => AggAcc::Sum {
+                total: QueryValue::Int(0),
+                any_value: false,
+            },
+            AggFunc::Avg => AggAcc::Avg { sum: 0.0, count: 0 },
+            AggFunc::Min => AggAcc::Min { best: None },
+            AggFunc::Max => AggAcc::Max { best: None },
+        },
+        _ => AggAcc::None,
+    }
+}
+
+/// Fold one per-object `value` into the accumulator `acc` for the corresponding
+/// SELECT item. Called once per matched object.
+fn fold_agg_acc(acc: &mut AggAcc, value: QueryValue) {
+    match acc {
+        AggAcc::None => {}
+        AggAcc::CountStar { n } => *n += 1,
+        AggAcc::CountExpr { n } => {
+            // COUNT(expr): count non-null values only (MAT semantics).
+            if !matches!(value, QueryValue::Null) {
+                *n += 1;
+            }
+        }
+        AggAcc::Sum { total, any_value } => {
+            // SUM ignores Null and non-numeric values (MAT semantics).
+            match &value {
+                QueryValue::Int(v) => {
+                    *any_value = true;
+                    *total = match total {
+                        QueryValue::Int(t) => QueryValue::Int(t.wrapping_add(*v)),
+                        QueryValue::Float(t) => QueryValue::Float(*t + *v as f64),
+                        _ => QueryValue::Int(*v),
+                    };
+                }
+                QueryValue::Float(v) => {
+                    *any_value = true;
+                    // Float operand: promote the running total to f64.
+                    *total = match total {
+                        QueryValue::Int(t) => QueryValue::Float(*t as f64 + v),
+                        QueryValue::Float(t) => QueryValue::Float(*t + v),
+                        _ => QueryValue::Float(*v),
+                    };
+                }
+                _ => {}
+            }
+        }
+        AggAcc::Avg { sum, count } => {
+            // AVG: accumulate numeric values; ignore Null and non-numeric.
+            match value {
+                QueryValue::Int(v) => {
+                    *sum += v as f64;
+                    *count += 1;
+                }
+                QueryValue::Float(v) => {
+                    *sum += v;
+                    *count += 1;
+                }
+                _ => {}
+            }
+        }
+        AggAcc::Min { best } => {
+            // MIN: track the smallest numeric value; skip Null/non-numeric.
+            let candidate = match &value {
+                QueryValue::Int(_) | QueryValue::Float(_) => Some(value),
+                _ => None,
+            };
+            if let Some(c) = candidate {
+                *best = match best.take() {
+                    None => Some(c),
+                    Some(prev) => {
+                        // Use numeric compare: smaller wins.
+                        let prev_lt = match (&prev, &c) {
+                            (QueryValue::Int(a), QueryValue::Int(b)) => *a <= *b,
+                            (QueryValue::Int(a), QueryValue::Float(b)) => (*a as f64) <= *b,
+                            (QueryValue::Float(a), QueryValue::Int(b)) => *a <= (*b as f64),
+                            (QueryValue::Float(a), QueryValue::Float(b)) => *a <= *b,
+                            _ => true,
+                        };
+                        Some(if prev_lt { prev } else { c })
+                    }
+                };
+            }
+        }
+        AggAcc::Max { best } => {
+            // MAX: track the largest numeric value; skip Null/non-numeric.
+            let candidate = match &value {
+                QueryValue::Int(_) | QueryValue::Float(_) => Some(value),
+                _ => None,
+            };
+            if let Some(c) = candidate {
+                *best = match best.take() {
+                    None => Some(c),
+                    Some(prev) => {
+                        // Use numeric compare: larger wins.
+                        let prev_gt = match (&prev, &c) {
+                            (QueryValue::Int(a), QueryValue::Int(b)) => *a >= *b,
+                            (QueryValue::Int(a), QueryValue::Float(b)) => (*a as f64) >= *b,
+                            (QueryValue::Float(a), QueryValue::Int(b)) => *a >= (*b as f64),
+                            (QueryValue::Float(a), QueryValue::Float(b)) => *a >= *b,
+                            _ => true,
+                        };
+                        Some(if prev_gt { prev } else { c })
+                    }
+                };
+            }
+        }
+    }
+}
+
+/// Finalize an `AggAcc` into its result `QueryValue`.
+fn finalize_agg_acc(acc: AggAcc) -> QueryValue {
+    match acc {
+        AggAcc::None => QueryValue::Null,
+        AggAcc::CountStar { n } => QueryValue::Int(n),
+        AggAcc::CountExpr { n } => QueryValue::Int(n),
+        AggAcc::Sum { total, any_value } => {
+            if any_value {
+                total
+            } else {
+                // SUM of zero numeric values: MAT returns 0 for SUM when the
+                // class exists but all values are Null; however for an empty
+                // result set (no matched objects) Int(0) is the best sentinel.
+                // We return Int(0) to match the histogram path's behavior.
+                QueryValue::Int(0)
+            }
+        }
+        AggAcc::Avg { sum, count } => {
+            if count > 0 {
+                QueryValue::Float(sum / count as f64)
+            } else {
+                // AVG with no numeric values → Null (matches histogram path).
+                QueryValue::Null
+            }
+        }
+        AggAcc::Min { best } => best.unwrap_or(QueryValue::Null),
+        AggAcc::Max { best } => best.unwrap_or(QueryValue::Null),
+    }
 }
 
 /// A resolved `IN (<subquery>)` membership set injected before the outer scan.
@@ -173,6 +355,17 @@ fn compile_like_for_query(query: &Query) -> std::collections::HashMap<String, re
 
 impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     pub fn new(query: &'a Query, plan: &'a QueryPlan, resolver: &'a R) -> Self {
+        // Build per-item accumulators when the query is an aggregate scan. A
+        // query is aggregate-scan when it contains any Aggregate item AND is NOT
+        // a carry (carry mode is for cross-phase retained queries, never
+        // aggregates). The histogram path routes aggregate-only queries that need
+        // no per-object data (see plan.rs); anything routed to SingleScan with an
+        // aggregate gets its own accumulator here.
+        let agg_acc = if query.select.iter().any(|it| matches!(it, SelectItem::Aggregate { .. })) {
+            Some(query.select.iter().map(init_agg_acc).collect())
+        } else {
+            None
+        };
         Self {
             query,
             plan,
@@ -184,6 +377,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             in_sets: Vec::new(),
             from_regex: compile_from_query(query),
             like_regexes: compile_like_for_query(query),
+            agg_acc,
         }
     }
 
@@ -202,6 +396,9 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             in_sets: Vec::new(),
             from_regex: compile_from_query(query),
             like_regexes: compile_like_for_query(query),
+            // Carry mode is always for cross-phase retained queries, never for
+            // aggregates; no accumulator needed.
+            agg_acc: None,
         }
     }
 
@@ -624,15 +821,79 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
 
     pub fn finish(self, name: &str) -> QueryResult {
         let columns = query_columns(self.query);
-        QueryResult {
-            name: name.to_string(),
-            oql: String::new(),
-            columns,
-            row_count: self.rows.len() as u64,
-            rows: self.rows,
-            truncated: self.truncated,
-            error: None,
-            note: None,
+        if let Some(accs) = self.agg_acc {
+            // Aggregate mode: finalize each accumulator and emit exactly one row.
+            // LIMIT on an aggregate produces at most one output row; if
+            // `limit == Some(0)` the caller wants zero rows (degenerate but valid).
+            if self.plan.limit == Some(0) {
+                return QueryResult {
+                    name: name.to_string(),
+                    oql: String::new(),
+                    columns,
+                    row_count: 0,
+                    rows: vec![],
+                    truncated: false,
+                    error: None,
+                    note: None,
+                };
+            }
+            let row: Vec<QueryValue> = accs.into_iter().map(finalize_agg_acc).collect();
+            QueryResult {
+                name: name.to_string(),
+                oql: String::new(),
+                columns,
+                row_count: 1,
+                rows: vec![row],
+                truncated: self.truncated,
+                error: None,
+                note: None,
+            }
+        } else {
+            QueryResult {
+                name: name.to_string(),
+                oql: String::new(),
+                columns,
+                row_count: self.rows.len() as u64,
+                rows: self.rows,
+                truncated: self.truncated,
+                error: None,
+                note: None,
+            }
+        }
+    }
+
+    /// Evaluate one aggregate SELECT item's argument to a per-object `QueryValue`.
+    /// Used by the accumulator in `visit_instance`/`visit_array`. `Star` returns
+    /// a sentinel `Int(1)` (only COUNT(*) uses Star, and it does not call this at
+    /// all — see the fold loop below; this branch is unreachable in practice but
+    /// safe). `Attr` delegates to `project_attr`; `Expr` to `eval_expr`.
+    fn eval_agg_arg_instance(
+        &self,
+        arg: &SelectItem,
+        src_idx: usize,
+        class_id: u64,
+        blob: &[u8],
+    ) -> QueryValue {
+        match arg {
+            SelectItem::Star => QueryValue::Int(1), // CountStar handles this without calling here
+            SelectItem::Attr(a) => self.project_attr(a, src_idx, class_id, blob),
+            SelectItem::Expr(e) => self.eval_expr(e, src_idx, class_id, blob),
+            _ => QueryValue::Null,
+        }
+    }
+
+    fn eval_agg_arg_array(
+        &self,
+        arg: &SelectItem,
+        src_idx: usize,
+        class_name: &str,
+        length: u32,
+    ) -> QueryValue {
+        match arg {
+            SelectItem::Star => QueryValue::Int(1),
+            SelectItem::Attr(a) => self.project_array_attr(a, src_idx, class_name, length),
+            SelectItem::Expr(e) => self.eval_expr_array(e, src_idx, class_name, length),
+            _ => QueryValue::Null,
         }
     }
 }
@@ -649,6 +910,32 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
             // Carry mode: no LIMIT here (retained ORDER BY + LIMIT run late);
             // the carry's own cap bounds memory and sets its truncated flag.
             carry.push_index(src_idx as u32);
+            return;
+        }
+        // Aggregate mode: fold this object into the accumulators. LIMIT is not
+        // applied per-object — the aggregate produces exactly one output row.
+        // (If limit==0 that is handled in finish().)
+        if self.agg_acc.is_some() {
+            self.matched += 1;
+            // Evaluate each arg value outside the mutable borrow of agg_acc to
+            // satisfy the borrow checker. Collect into a temporary Vec first.
+            let n = self.query.select.len();
+            let mut values = Vec::with_capacity(n);
+            for item in self.query.select.iter() {
+                let v = match item {
+                    SelectItem::Aggregate { arg, .. } => {
+                        self.eval_agg_arg_instance(arg, src_idx, class_id, blob)
+                    }
+                    _ => QueryValue::Null,
+                };
+                values.push(v);
+            }
+            let accs = self.agg_acc.as_mut().unwrap();
+            for (i, acc) in accs.iter_mut().enumerate() {
+                if !matches!(acc, AggAcc::None) {
+                    fold_agg_acc(acc, values[i].clone());
+                }
+            }
             return;
         }
         if let Some(limit) = self.plan.limit {
@@ -678,6 +965,28 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
         }
         if let Some(carry) = &mut self.carry {
             carry.push_index(src_idx as u32);
+            return;
+        }
+        // Aggregate mode: fold this array object into the accumulators.
+        if self.agg_acc.is_some() {
+            self.matched += 1;
+            let n = self.query.select.len();
+            let mut values = Vec::with_capacity(n);
+            for item in self.query.select.iter() {
+                let v = match item {
+                    SelectItem::Aggregate { arg, .. } => {
+                        self.eval_agg_arg_array(arg, src_idx, class_name, length)
+                    }
+                    _ => QueryValue::Null,
+                };
+                values.push(v);
+            }
+            let accs = self.agg_acc.as_mut().unwrap();
+            for (i, acc) in accs.iter_mut().enumerate() {
+                if !matches!(acc, AggAcc::None) {
+                    fold_agg_acc(acc, values[i].clone());
+                }
+            }
             return;
         }
         if let Some(limit) = self.plan.limit {
@@ -2407,5 +2716,246 @@ mod tests {
         assert_eq!(cols.len(), 2);
         assert_eq!(cols[0].name, "myid");
         assert_eq!(cols[1].name, "*");
+    }
+
+    // ============================================================
+    // Task 7: scan-time aggregate accumulator unit tests
+    // ============================================================
+
+    /// Resolver that supplies a fixed shallow size per dense index.
+    struct ShallowSchema {
+        name: &'static str,
+        class_id: u64,
+        /// Map from dense index → shallow size (bytes).
+        sizes: std::collections::HashMap<usize, u32>,
+    }
+    impl ShallowSchema {
+        fn new(name: &'static str, sizes: &[(usize, u32)]) -> Self {
+            ShallowSchema {
+                name,
+                class_id: 10,
+                sizes: sizes.iter().copied().collect(),
+            }
+        }
+    }
+    impl ClassResolver for ShallowSchema {
+        fn class_name(&self, class_id: u64) -> Option<&str> {
+            if class_id == self.class_id {
+                Some(self.name)
+            } else {
+                None
+            }
+        }
+        fn shallow_of(&self, src_idx: usize) -> Option<u32> {
+            self.sizes.get(&src_idx).copied()
+        }
+    }
+
+    /// `SELECT COUNT(*) FROM C` via SingleScan accumulator (no WHERE → but we
+    /// also test with WHERE = absent so this routes to HistogramOnly; add a WHERE
+    /// to force SingleScan path). Use `WHERE @usedHeapSize > 0` to route to scan.
+    #[test]
+    fn scan_acc_count_star_with_where() {
+        let q = crate::query::parse::parse(
+            "SELECT COUNT(*) FROM C WHERE @usedHeapSize > 0",
+        )
+        .unwrap();
+        let plan = pq(&q);
+        let sc = ShallowSchema::new("C", &[(1, 24), (2, 24), (3, 24)]);
+        let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
+        ex.visit_instance(1, 10, &[]);
+        ex.visit_instance(2, 10, &[]);
+        ex.visit_instance(3, 10, &[]);
+        let res = ex.finish("q1");
+        assert_eq!(res.row_count, 1, "aggregate emits exactly 1 row");
+        assert_eq!(res.rows[0][0], QueryValue::Int(3), "COUNT(*) = 3");
+    }
+
+    /// `SELECT SUM(@usedHeapSize * 2) FROM C WHERE @usedHeapSize > 0` —
+    /// aggregate-over-expression routes to SingleScan; SUM must be 2 × sum-of-sizes.
+    #[test]
+    fn scan_acc_sum_over_expression() {
+        // sizes: 10, 20, 30 → SUM(@usedHeapSize * 2) = (10+20+30)*2 = 120
+        let q = crate::query::parse::parse(
+            "SELECT SUM(@usedHeapSize * 2) FROM C WHERE @usedHeapSize > 0",
+        )
+        .unwrap();
+        let plan = pq(&q);
+        let sc = ShallowSchema::new("C", &[(1, 10), (2, 20), (3, 30)]);
+        let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
+        ex.visit_instance(1, 10, &[]);
+        ex.visit_instance(2, 10, &[]);
+        ex.visit_instance(3, 10, &[]);
+        let res = ex.finish("q1");
+        assert_eq!(res.row_count, 1);
+        assert_eq!(res.rows[0][0], QueryValue::Int(120), "SUM(@usedHeapSize * 2) = 120");
+    }
+
+    /// SUM ignores Null per-object values (object with unknown shallow size).
+    #[test]
+    fn scan_acc_sum_ignores_null_values() {
+        // idx 2 has no shallow size → ShallowSchema returns None → project_attr returns Null
+        // Null * 2 = Null; SUM should skip it.
+        let q = crate::query::parse::parse(
+            "SELECT SUM(@usedHeapSize * 2) FROM C WHERE @usedHeapSize > 0 OR @usedHeapSize = 0",
+        )
+        .unwrap();
+        // Force scan by having a WHERE clause; idx 2 missing from sizes map → shallow_of = None
+        let q2 = crate::query::parse::parse(
+            "SELECT SUM(@usedHeapSize) FROM C WHERE @objectId >= 0",
+        )
+        .unwrap();
+        let plan = pq(&q2);
+        let sc = ShallowSchema::new("C", &[(1, 100), (3, 50)]); // idx 2 missing
+        let mut ex = SingleScanExecutor::new(&q2, &plan, &sc);
+        ex.visit_instance(1, 10, &[]);
+        ex.visit_instance(2, 10, &[]); // shallow_of(2) = None → Null → skipped
+        ex.visit_instance(3, 10, &[]);
+        let res = ex.finish("q1");
+        assert_eq!(res.row_count, 1);
+        // SUM of 100 + (Null skipped) + 50 = 150
+        assert_eq!(res.rows[0][0], QueryValue::Int(150), "SUM skips Null");
+    }
+
+    /// AVG = sum / count, returned as Float.
+    #[test]
+    fn scan_acc_avg_is_float() {
+        // sizes 10, 20, 30 → avg = 20.0
+        let q = crate::query::parse::parse(
+            "SELECT AVG(@usedHeapSize) FROM C WHERE @usedHeapSize > 0",
+        )
+        .unwrap();
+        let plan = pq(&q);
+        let sc = ShallowSchema::new("C", &[(1, 10), (2, 20), (3, 30)]);
+        let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
+        ex.visit_instance(1, 10, &[]);
+        ex.visit_instance(2, 10, &[]);
+        ex.visit_instance(3, 10, &[]);
+        let res = ex.finish("q1");
+        assert_eq!(res.row_count, 1);
+        assert_eq!(res.rows[0][0], QueryValue::Float(20.0), "AVG = 20.0");
+    }
+
+    /// AVG of zero numeric values → Null (matches histogram behavior).
+    #[test]
+    fn scan_acc_avg_of_empty_is_null() {
+        // No objects match (class 99 unknown) → count 0 → AVG = Null.
+        let q = crate::query::parse::parse(
+            "SELECT AVG(@usedHeapSize) FROM Missing WHERE @usedHeapSize > 0",
+        )
+        .unwrap();
+        let plan = pq(&q);
+        let sc = ShallowSchema::new("C", &[(1, 10)]);
+        let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
+        ex.visit_instance(1, 10, &[]); // class 10 = "C", not "Missing"
+        let res = ex.finish("q1");
+        assert_eq!(res.row_count, 1, "aggregate always emits 1 row even with 0 matches");
+        assert_eq!(res.rows[0][0], QueryValue::Null, "AVG with no values → Null");
+    }
+
+    /// MIN and MAX return correct bounds.
+    #[test]
+    fn scan_acc_min_max_correct() {
+        let q = crate::query::parse::parse(
+            "SELECT MIN(@usedHeapSize), MAX(@usedHeapSize) FROM C WHERE @usedHeapSize > 0",
+        )
+        .unwrap();
+        let plan = pq(&q);
+        let sc = ShallowSchema::new("C", &[(1, 8), (2, 32), (3, 16)]);
+        let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
+        ex.visit_instance(1, 10, &[]);
+        ex.visit_instance(2, 10, &[]);
+        ex.visit_instance(3, 10, &[]);
+        let res = ex.finish("q1");
+        assert_eq!(res.row_count, 1);
+        assert_eq!(res.rows[0][0], QueryValue::Int(8), "MIN = 8");
+        assert_eq!(res.rows[0][1], QueryValue::Int(32), "MAX = 32");
+    }
+
+    /// MIN/MAX with zero matched objects → Null.
+    #[test]
+    fn scan_acc_min_max_of_empty_is_null() {
+        let q = crate::query::parse::parse(
+            "SELECT MIN(@usedHeapSize), MAX(@usedHeapSize) FROM Missing WHERE @usedHeapSize > 0",
+        )
+        .unwrap();
+        let plan = pq(&q);
+        let sc = ShallowSchema::new("C", &[(1, 8)]);
+        let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
+        ex.visit_instance(1, 10, &[]); // class 10 = "C", not "Missing"
+        let res = ex.finish("q1");
+        assert_eq!(res.row_count, 1);
+        assert_eq!(res.rows[0][0], QueryValue::Null, "MIN with no values → Null");
+        assert_eq!(res.rows[0][1], QueryValue::Null, "MAX with no values → Null");
+    }
+
+    /// SUM promotes to Float when any per-object value is Float.
+    #[test]
+    fn scan_acc_sum_promotes_to_float_when_float_present() {
+        // Use @usedHeapSize / 2.0 to introduce a float (Int / Float = Float).
+        let q = crate::query::parse::parse(
+            "SELECT SUM(@usedHeapSize / 2.0) FROM C WHERE @usedHeapSize > 0",
+        )
+        .unwrap();
+        let plan = pq(&q);
+        // sizes: 10, 20 → each / 2.0 = 5.0, 10.0 → SUM = 15.0
+        let sc = ShallowSchema::new("C", &[(1, 10), (2, 20)]);
+        let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
+        ex.visit_instance(1, 10, &[]);
+        ex.visit_instance(2, 10, &[]);
+        let res = ex.finish("q1");
+        assert_eq!(res.row_count, 1);
+        match &res.rows[0][0] {
+            QueryValue::Float(f) => assert!(
+                (f - 15.0).abs() < 1e-9,
+                "SUM of floats must be 15.0, got {f}"
+            ),
+            other => panic!("expected Float(15.0), got {other:?}"),
+        }
+    }
+
+    /// COUNT(expr) counts objects where the expr evaluates to non-Null.
+    /// An object with no shallow size gives Null for @usedHeapSize; COUNT skips it.
+    #[test]
+    fn scan_acc_count_expr_skips_null() {
+        let q = crate::query::parse::parse(
+            "SELECT COUNT(@usedHeapSize) FROM C WHERE @objectId >= 0",
+        )
+        .unwrap();
+        let plan = pq(&q);
+        // idx 2 missing → shallow_of returns None → Null → not counted
+        let sc = ShallowSchema::new("C", &[(1, 24), (3, 24)]);
+        let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
+        ex.visit_instance(1, 10, &[]);
+        ex.visit_instance(2, 10, &[]); // Null → skipped for COUNT(expr)
+        ex.visit_instance(3, 10, &[]);
+        let res = ex.finish("q1");
+        assert_eq!(res.row_count, 1);
+        assert_eq!(
+            res.rows[0][0],
+            QueryValue::Int(2),
+            "COUNT(expr) must skip Null values, expected 2"
+        );
+    }
+
+    /// Non-aggregate scan must be completely unaffected — no accumulator interference.
+    #[test]
+    fn scan_no_aggregate_is_unaffected_by_accumulator() {
+        let q = crate::query::parse::parse(
+            "SELECT @usedHeapSize FROM C WHERE @usedHeapSize > 0",
+        )
+        .unwrap();
+        let plan = pq(&q);
+        let sc = ShallowSchema::new("C", &[(1, 10), (2, 20), (3, 30)]);
+        let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
+        ex.visit_instance(1, 10, &[]);
+        ex.visit_instance(2, 10, &[]);
+        ex.visit_instance(3, 10, &[]);
+        let res = ex.finish("q1");
+        // Must produce 3 individual rows, NOT one aggregate row.
+        assert_eq!(res.row_count, 3, "non-aggregate must produce per-object rows");
+        assert_eq!(res.rows[0][0], QueryValue::Int(10));
+        assert_eq!(res.rows[1][0], QueryValue::Int(20));
+        assert_eq!(res.rows[2][0], QueryValue::Int(30));
     }
 }
