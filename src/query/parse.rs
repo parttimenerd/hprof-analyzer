@@ -386,11 +386,21 @@ where
     // Top level: a base query, then a flat `UNION`-separated tail folded into the
     // head's `union_branches`. Tail branches keep empty `union_branches` (the
     // list is flat, left-associative concatenation with UNION ALL semantics).
+    //
+    // A UNION branch may be bare (`UNION SELECT ...`) or parenthesized
+    // (`UNION (SELECT ...)`, MAT's canonical form). Parens around a branch are
+    // cosmetic; unwrap to the same `Query`. The `(` here sits at the top-level
+    // UNION-branch position (before any SELECT), so it is unambiguous with the
+    // FROM-subquery paren, which only follows `SELECT ... FROM`.
+    let paren_branch = just(Token::LParen)
+        .ignore_then(base_query.clone())
+        .then_ignore(just(Token::RParen));
+    let union_branch = paren_branch.or(base_query.clone());
     base_query
         .clone()
         .then(
             ident_ci("UNION")
-                .ignore_then(base_query)
+                .ignore_then(union_branch)
                 .repeated()
                 .collect::<Vec<_>>(),
         )
@@ -1231,6 +1241,81 @@ mod tests {
     #[test]
     fn no_union_leaves_branches_empty() {
         assert!(parse("SELECT * FROM C").unwrap().union_branches.is_empty());
+    }
+
+    // ---------- parenthesized UNION branches (MAT canonical form) ----------
+
+    #[test]
+    fn union_parenthesized_branch_parses() {
+        let q = parse("SELECT * FROM java.lang.String UNION (SELECT * FROM java.lang.Integer)")
+            .unwrap();
+        assert_eq!(q.union_branches.len(), 1);
+        let branch = &q.union_branches[0];
+        assert_eq!(branch.from.class_name(), "java.lang.Integer");
+        assert_eq!(branch.select, vec![SelectItem::Star]);
+        assert!(
+            branch.union_branches.is_empty(),
+            "branches must be flat, not nested"
+        );
+    }
+
+    #[test]
+    fn union_parenthesized_branch_equals_bare_branch() {
+        // A parenthesized branch unwraps to the SAME branch AST as the bare form.
+        let bare =
+            parse("SELECT * FROM java.lang.String UNION SELECT * FROM java.lang.Integer").unwrap();
+        let paren = parse("SELECT * FROM java.lang.String UNION (SELECT * FROM java.lang.Integer)")
+            .unwrap();
+        assert_eq!(bare.union_branches, paren.union_branches);
+    }
+
+    #[test]
+    fn union_bare_branch_still_parses() {
+        // Regression: the bare (unparenthesized) branch form still works.
+        let q = parse("SELECT * FROM A UNION SELECT * FROM B").unwrap();
+        assert_eq!(q.union_branches.len(), 1);
+        assert_eq!(q.union_branches[0].from.class_name(), "B");
+    }
+
+    #[test]
+    fn union_multiple_parenthesized_branches() {
+        let q = parse("SELECT * FROM A UNION (SELECT * FROM B) UNION (SELECT * FROM C)").unwrap();
+        assert_eq!(q.union_branches.len(), 2);
+        assert_eq!(q.union_branches[0].from.class_name(), "B");
+        assert_eq!(q.union_branches[1].from.class_name(), "C");
+        assert!(q.union_branches.iter().all(|b| b.union_branches.is_empty()));
+    }
+
+    #[test]
+    fn union_mixed_bare_and_parenthesized_branches() {
+        let q = parse("SELECT * FROM A UNION (SELECT * FROM B) UNION SELECT * FROM C").unwrap();
+        assert_eq!(q.union_branches.len(), 2);
+        assert_eq!(q.union_branches[0].from.class_name(), "B");
+        assert_eq!(q.union_branches[1].from.class_name(), "C");
+    }
+
+    #[test]
+    fn union_parenthesized_branch_with_where_and_limit() {
+        // The full base_query grammar is available inside the branch parens.
+        let q =
+            parse("SELECT * FROM A UNION (SELECT * FROM B b WHERE b.hash > 0 LIMIT 5)").unwrap();
+        assert_eq!(q.union_branches.len(), 1);
+        let branch = &q.union_branches[0];
+        assert_eq!(branch.from.class_name(), "B");
+        assert!(branch.where_.is_some(), "branch WHERE must be populated");
+        assert_eq!(branch.limit, Some(5), "branch LIMIT must be populated");
+    }
+
+    #[test]
+    fn union_unterminated_parenthesized_branch_errors() {
+        // Missing `)` after a parenthesized branch is an actionable parse error.
+        let err = parse("SELECT * FROM A UNION (SELECT * FROM B")
+            .unwrap_err()
+            .0;
+        assert!(
+            !err.is_empty(),
+            "expected non-empty error for unterminated UNION branch"
+        );
     }
 
     #[test]

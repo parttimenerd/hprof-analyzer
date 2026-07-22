@@ -38,13 +38,17 @@ fn query_subcommand_count_prints_table() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("COUNT(*)"), "missing COUNT header:\n{stdout}");
+    assert!(
+        stdout.contains("COUNT(*)"),
+        "missing COUNT header:\n{stdout}"
+    );
     // A row count line like "(1 row)" is always emitted for a successful query.
-    assert!(stdout.contains("1 row"), "missing row-count line:\n{stdout}");
+    assert!(
+        stdout.contains("1 row"),
+        "missing row-count line:\n{stdout}"
+    );
     // The COUNT cell must be a non-negative integer on its own line.
-    let has_count = stdout
-        .lines()
-        .any(|l| l.trim().parse::<u64>().is_ok());
+    let has_count = stdout.lines().any(|l| l.trim().parse::<u64>().is_ok());
     assert!(has_count, "no integer count row found:\n{stdout}");
     // An unnamed query is printed under a default `== q1 ==` label header.
     assert!(
@@ -61,7 +65,10 @@ fn query_subcommand_alias_qualified_at_attr_parses() {
     let out = Command::new(BIN)
         .arg("query")
         .arg(&hprof)
-        .args(["--query", "SELECT s.@objectId FROM java.lang.String s LIMIT 3"])
+        .args([
+            "--query",
+            "SELECT s.@objectId FROM java.lang.String s LIMIT 3",
+        ])
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -72,6 +79,32 @@ fn query_subcommand_alias_qualified_at_attr_parses() {
     assert!(
         out.status.success(),
         "alias-qualified @attr query failed: {stderr}"
+    );
+}
+
+/// Parenthesized UNION branch (MAT canonical form `... UNION (SELECT ...)`)
+/// reaches execution: the query runs without an `OQL parse error` and exits
+/// successfully.
+#[test]
+fn query_subcommand_parenthesized_union_branch_parses() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
+            "SELECT * FROM java.lang.String UNION (SELECT * FROM java.lang.Object)",
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("OQL parse error"),
+        "parenthesized UNION branch should not be a parse error:\n{stderr}"
+    );
+    assert!(
+        out.status.success(),
+        "parenthesized UNION branch query failed: {stderr}"
     );
 }
 
@@ -189,10 +222,8 @@ fn query_subcommand_edge_query_reports_edge_specific_error() {
 #[test]
 fn query_subcommand_query_file_skips_comments_and_blanks() {
     let Some(hprof) = philosophers() else { return };
-    let path = std::env::temp_dir().join(format!(
-        "hprof_cli_query_file_{}.oql",
-        std::process::id()
-    ));
+    let path =
+        std::env::temp_dir().join(format!("hprof_cli_query_file_{}.oql", std::process::id()));
     std::fs::write(
         &path,
         "# leading comment\n\n  # indented comment\nSELECT COUNT(*) FROM java.lang.String\n\n",
@@ -211,7 +242,10 @@ fn query_subcommand_query_file_skips_comments_and_blanks() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("COUNT(*)"), "missing COUNT header:\n{stdout}");
+    assert!(
+        stdout.contains("COUNT(*)"),
+        "missing COUNT header:\n{stdout}"
+    );
     // Exactly one query ran: exactly one result block, marked by its "== qN =="
     // header. The comment/blank lines were skipped rather than run as queries.
     assert_eq!(
@@ -629,9 +663,7 @@ fn query_subcommand_address_and_heap_size_are_non_null() {
     // At least one data row must have two integer cells joined by " | ".
     let has_int_row = stdout.lines().any(|l| {
         let cells: Vec<&str> = l.split(" | ").map(str::trim).collect();
-        cells.len() == 2
-            && cells[0].parse::<u64>().is_ok()
-            && cells[1].parse::<u64>().is_ok()
+        cells.len() == 2 && cells[0].parse::<u64>().is_ok() && cells[1].parse::<u64>().is_ok()
     });
     assert!(
         has_int_row,
@@ -658,7 +690,10 @@ fn query_subcommand_array_length_is_non_null() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("@length"), "missing @length header:\n{stdout}");
+    assert!(
+        stdout.contains("@length"),
+        "missing @length header:\n{stdout}"
+    );
     assert!(
         !stdout.contains("error:"),
         "array @length query reported an error:\n{stdout}"
@@ -1009,7 +1044,10 @@ fn retained_query_in_query_only_path_errors_actionably() {
     let out = Command::new(BIN)
         .arg("query")
         .arg(&hprof)
-        .args(["--query", "SELECT @objectId, @retainedHeapSize FROM java.lang.String"])
+        .args([
+            "--query",
+            "SELECT @objectId, @retainedHeapSize FROM java.lang.String",
+        ])
         .output()
         .unwrap();
     assert!(
@@ -1078,13 +1116,7 @@ fn refwalk_primitive_tail_returns_real_values_via_analyze_path() {
     let has_int_cell = section.lines().any(|l| {
         let t = l.trim();
         // Single-column md rows look like `| -904151846 |`.
-        t.starts_with('|')
-            && t.ends_with('|')
-            && t
-                .trim_matches('|')
-                .trim()
-                .parse::<i64>()
-                .is_ok()
+        t.starts_with('|') && t.ends_with('|') && t.trim_matches('|').trim().parse::<i64>().is_ok()
     });
     assert!(
         has_int_cell,
