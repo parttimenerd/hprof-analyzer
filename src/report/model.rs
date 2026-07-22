@@ -1287,11 +1287,17 @@ pub struct TriageSignal {
     /// Link text for `anchor`, e.g. `"Leak Indicators"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub anchor_label: Option<String>,
+    /// Reclaimable/attributable bytes this signal quantifies, when the rule has a
+    /// concrete figure (e.g. wasted collection bytes, duplicate-String waste). Used
+    /// to rank problem signals by impact; `None` for orientation signals and rules
+    /// without a byte figure. Not rendered — ordering only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
 }
 
 /// Schema version for the machine-readable JSON output. Bump on any
 /// breaking change to the `Report` shape; the JSON always carries this.
-pub const SCHEMA_VERSION: u32 = 7;
+pub const SCHEMA_VERSION: u32 = 8;
 
 /// One allocation site: a distinct HPROF stack-trace serial, its resolved frame
 /// lines, and the aggregate footprint of the objects allocated there.

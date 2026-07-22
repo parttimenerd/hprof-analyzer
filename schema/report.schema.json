@@ -3319,6 +3319,15 @@
             "null"
           ]
         },
+        "bytes": {
+          "description": "Reclaimable/attributable bytes this signal quantifies, when the rule has a\nconcrete figure (e.g. wasted collection bytes, duplicate-String waste). Used\nto rank problem signals by impact; `None` for orientation signals and rules\nwithout a byte figure. Not rendered — ordering only.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
         "detail": {
           "description": "One-sentence explanation; may contain backtick code spans.",
           "type": "string"

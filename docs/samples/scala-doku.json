@@ -1,6 +1,6 @@
 {
-  "schema_version": 7,
-  "generated": "2026-07-22T22:50:59.879644000Z",
+  "schema_version": 8,
+  "generated": "2026-07-22T23:11:28.153714000Z",
   "overview": {
     "source_name": "dump_2_scala-doku.hprof",
     "file_path": "tests/fixtures/dump_2_scala-doku.hprof",
@@ -234876,6 +234876,15 @@
       "anchor_label": "Top Consumers"
     },
     {
+      "id": "off-heap",
+      "severity": "warning",
+      "title": "Off-heap (DirectByteBuffer)",
+      "detail": "134.3 MB of native memory is held by live DirectByteBuffers — not counted in heap size but can dominate RSS.",
+      "anchor": "leak-indicators",
+      "anchor_label": "Leak Indicators",
+      "bytes": 140862014
+    },
+    {
       "id": "classloader-leak",
       "severity": "warning",
       "title": "Classloader leak",
@@ -234890,14 +234899,6 @@
       "detail": "thread `main` retains 22.9 MB (76.7% of heap) and pins 124 thread-local roots — a live thread is holding memory alive.",
       "anchor": "threads",
       "anchor_label": "Threads"
-    },
-    {
-      "id": "off-heap",
-      "severity": "warning",
-      "title": "Off-heap (DirectByteBuffer)",
-      "detail": "134.3 MB of native memory is held by live DirectByteBuffers — not counted in heap size but can dominate RSS.",
-      "anchor": "leak-indicators",
-      "anchor_label": "Leak Indicators"
     },
     {
       "id": "sparse-object-arrays",

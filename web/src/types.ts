@@ -669,6 +669,9 @@ export interface TriageSignal {
   detail: string;
   anchor?: string | null;
   anchor_label?: string | null;
+  // Reclaimable/attributable bytes used to rank problem signals (§26.2). Present
+  // only on quantified problem rules; not rendered — ordering happens in Rust.
+  bytes?: number | null;
 }
 
 export interface Report {

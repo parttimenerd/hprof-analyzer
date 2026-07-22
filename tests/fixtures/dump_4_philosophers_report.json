@@ -1,6 +1,6 @@
 {
-  "schema_version": 7,
-  "generated": "2026-07-22T22:35:48.488559000Z",
+  "schema_version": 8,
+  "generated": "2026-07-22T23:03:38.174254000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
     "file_path": "tests/fixtures/dump_4_philosophers.hprof",
@@ -91142,20 +91142,21 @@
       "anchor_label": "Top Consumers"
     },
     {
+      "id": "off-heap",
+      "severity": "warning",
+      "title": "Off-heap (DirectByteBuffer)",
+      "detail": "134.3 MB of native memory is held by live DirectByteBuffers — not counted in heap size but can dominate RSS.",
+      "anchor": "leak-indicators",
+      "anchor_label": "Leak Indicators",
+      "bytes": 140862014
+    },
+    {
       "id": "classloader-leak",
       "severity": "warning",
       "title": "Classloader leak",
       "detail": "`scala.collection.mutable.ArrayBuffer` is loaded by 2 class loaders (126.9 KB retained) — classic reload leak.",
       "anchor": "duplicate-classes",
       "anchor_label": "Duplicate Classes"
-    },
-    {
-      "id": "off-heap",
-      "severity": "warning",
-      "title": "Off-heap (DirectByteBuffer)",
-      "detail": "134.3 MB of native memory is held by live DirectByteBuffers — not counted in heap size but can dominate RSS.",
-      "anchor": "leak-indicators",
-      "anchor_label": "Leak Indicators"
     },
     {
       "id": "fixed-per-object-overhead",

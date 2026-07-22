@@ -181,9 +181,59 @@ fn rules() -> Vec<Box<dyn Rule>> {
 }
 
 /// Evaluate every rule once, in registry order, collecting the ones that fire.
+///
+/// The first signals are *orientation* signals (headline retainer, concentration,
+/// GC-root shape, …) that always fire and describe the heap; they keep registry
+/// order so the "at a glance" lead-in reads coherently. The remaining *problem*
+/// signals — the conditional rules — are then re-ordered by their attributable
+/// `bytes` (largest first, §26.2) so the most impactful reclaim opportunity leads.
+/// Problem signals without a byte figure keep their relative registry order and
+/// sort after the quantified ones. Finally, if nothing worse than Info fired, an
+/// explicit all-clear line is appended (§31.5) so triage is never empty.
 pub fn evaluate_triage(r: &Report) -> Vec<TriageSignal> {
-    rules().iter().filter_map(|rule| rule.eval(r)).collect()
+    let mut fired: Vec<TriageSignal> = rules().iter().filter_map(|rule| rule.eval(r)).collect();
+
+    // Split the always-fire orientation prefix from the conditional problem tail.
+    // ORIENTATION_RULES rules are the first entries in `rules()` and always fire,
+    // so the prefix length equals the count of leading orientation-id signals.
+    let orientation_len = fired
+        .iter()
+        .take_while(|s| ORIENTATION_IDS.contains(&s.id.as_str()))
+        .count();
+    let tail = &mut fired[orientation_len..];
+    // Stable sort: quantified signals by bytes desc; unquantified keep registry
+    // order and follow (bytes None sorts as 0 → naturally last).
+    tail.sort_by_key(|s| std::cmp::Reverse(s.bytes.unwrap_or(0)));
+
+    if !fired
+        .iter()
+        .any(|s| matches!(s.severity, TriageSeverity::Warning | TriageSeverity::Critical))
+    {
+        fired.push(signal(
+            "all-clear",
+            TriageSeverity::Info,
+            "No significant memory issues detected",
+            "No leak-severity retainers, collection waste, or GC pressure crossed the \
+             triage thresholds. The lines above orient you to where the heap lives; \
+             none indicate a problem to fix."
+                .to_string(),
+            None,
+        ));
+    }
+
+    fired
 }
+
+/// Ids of the always-fire orientation signals that lead the triage list. Kept in
+/// registry order (see `rules()`); the conditional problem signals that follow are
+/// re-ranked by attributable bytes.
+const ORIENTATION_IDS: &[&str] = &[
+    "headline-retainer",
+    "concentration",
+    "gc-root-type",
+    "shape",
+    "one-leak-or-many",
+];
 
 /// Percentage of total reachable shallow heap. Basis matches the report tables
 /// ([`HEAP_BASIS_LABEL`]); clamps to 100% so no printed share exceeds the basis.
@@ -213,7 +263,15 @@ fn signal(
         detail,
         anchor,
         anchor_label,
+        bytes: None,
     }
+}
+
+/// Attach an attributable-byte figure to a signal for impact ranking (§26.2).
+/// Chainable on the [`signal`] builder; leaves orientation signals untouched.
+fn with_bytes(mut s: TriageSignal, bytes: u64) -> TriageSignal {
+    s.bytes = Some(bytes);
+    s
 }
 
 // ── Rules (ported from the former render_md.rs hand-written logic) ─────────────
@@ -568,15 +626,18 @@ impl Rule for OffHeap {
         if cap < DBB_FLOOR_BYTES {
             return None;
         }
-        Some(signal(
-            "off-heap",
-            TriageSeverity::Warning,
-            "Off-heap (DirectByteBuffer)",
-            format!(
-                "{} of native memory is held by live DirectByteBuffers — not counted in heap size but can dominate RSS.",
-                format_bytes(cap),
+        Some(with_bytes(
+            signal(
+                "off-heap",
+                TriageSeverity::Warning,
+                "Off-heap (DirectByteBuffer)",
+                format!(
+                    "{} of native memory is held by live DirectByteBuffers — not counted in heap size but can dominate RSS.",
+                    format_bytes(cap),
+                ),
+                Some(SectionId::LeakIndicators),
             ),
-            Some(SectionId::LeakIndicators),
+            cap,
         ))
     }
 }
@@ -602,18 +663,21 @@ impl Rule for GcWaste {
                 )
             })
             .unwrap_or_default();
-        Some(signal(
-            "gc-waste",
-            TriageSeverity::Warning,
-            "GC waste",
-            format!(
-                "{:.1}% of the heap is unreachable garbage ({} shallow, {} retained){}.",
-                pct,
-                format_bytes(o.unreachable_shallow),
-                format_bytes(o.unreachable_retained),
-                cluster,
+        Some(with_bytes(
+            signal(
+                "gc-waste",
+                TriageSeverity::Warning,
+                "GC waste",
+                format!(
+                    "{:.1}% of the heap is unreachable garbage ({} shallow, {} retained){}.",
+                    pct,
+                    format_bytes(o.unreachable_shallow),
+                    format_bytes(o.unreachable_retained),
+                    cluster,
+                ),
+                Some(SectionId::UnreachableObjects),
             ),
-            Some(SectionId::UnreachableObjects),
+            o.unreachable_shallow,
         ))
     }
 }
@@ -637,16 +701,19 @@ impl Rule for OverCapacityCollections {
         if wasted as f64 / total as f64 * 100.0 < OVERCAP_WASTE_PCT {
             return None;
         }
-        Some(signal(
-            "over-capacity-collections",
-            TriageSeverity::Info,
-            "Over-capacity collections",
-            format!(
-                "{} wasted by under-filled collections (<=50% full across {} tracked) — oversized backing arrays.",
-                format_bytes(wasted),
-                fmt_count(cfr.tracked),
+        Some(with_bytes(
+            signal(
+                "over-capacity-collections",
+                TriageSeverity::Info,
+                "Over-capacity collections",
+                format!(
+                    "{} wasted by under-filled collections (<=50% full across {} tracked) — oversized backing arrays.",
+                    format_bytes(wasted),
+                    fmt_count(cfr.tracked),
+                ),
+                Some(SectionId::Collections),
             ),
-            Some(SectionId::Collections),
+            wasted,
         ))
     }
 }
@@ -665,17 +732,20 @@ impl Rule for ConstantValueArrays {
             return None;
         }
         let big = cpa.rows.iter().max_by_key(|row| row.shallow)?;
-        Some(signal(
-            "constant-value-arrays",
-            TriageSeverity::Info,
-            "Constant-value arrays",
-            format!(
-                "{} in single-value primitive arrays; biggest group `{}` × {} instances — likely zero-filled/uninitialized waste.",
-                format_bytes(sum),
-                big.array_class,
-                fmt_count(big.objects),
+        Some(with_bytes(
+            signal(
+                "constant-value-arrays",
+                TriageSeverity::Info,
+                "Constant-value arrays",
+                format!(
+                    "{} in single-value primitive arrays; biggest group `{}` × {} instances — likely zero-filled/uninitialized waste.",
+                    format_bytes(sum),
+                    big.array_class,
+                    fmt_count(big.objects),
+                ),
+                Some(SectionId::Collections),
             ),
-            Some(SectionId::Collections),
+            sum,
         ))
     }
 }
@@ -703,18 +773,21 @@ impl Rule for ObjectSwarm {
         if pct_of(row.shallow, total) < SWARM_PCT {
             return None;
         }
-        Some(signal(
-            "object-swarm",
-            TriageSeverity::Warning,
-            "Object swarm",
-            format!(
-                "{} live `{}` instances ({} shallow, {:.1}% of heap) — typically an unbounded queue, list, or log accumulation.",
-                fmt_count(row.instances),
-                row.pretty_class,
-                format_bytes(row.shallow),
-                pct_of(row.shallow, total),
+        Some(with_bytes(
+            signal(
+                "object-swarm",
+                TriageSeverity::Warning,
+                "Object swarm",
+                format!(
+                    "{} live `{}` instances ({} shallow, {:.1}% of heap) — typically an unbounded queue, list, or log accumulation.",
+                    fmt_count(row.instances),
+                    row.pretty_class,
+                    format_bytes(row.shallow),
+                    pct_of(row.shallow, total),
+                ),
+                Some(SectionId::SystemOverview),
             ),
-            Some(SectionId::SystemOverview),
+            row.shallow,
         ))
     }
 }
@@ -752,17 +825,20 @@ impl Rule for BoxedPrimitiveBloat {
         if instances < BOXED_FLOOR_INSTANCES && pct_of(shallow, total) < BOXED_PCT {
             return None;
         }
-        Some(signal(
-            "boxed-primitive-bloat",
-            TriageSeverity::Info,
-            "Boxed-primitive bloat",
-            format!(
-                "{} boxed-primitive objects ({} shallow, led by `{}`) — consider primitive-specialized collections (e.g. Eclipse Collections, Koloboke).",
-                fmt_count(instances),
-                format_bytes(shallow),
-                worst_class,
+        Some(with_bytes(
+            signal(
+                "boxed-primitive-bloat",
+                TriageSeverity::Info,
+                "Boxed-primitive bloat",
+                format!(
+                    "{} boxed-primitive objects ({} shallow, led by `{}`) — consider primitive-specialized collections (e.g. Eclipse Collections, Koloboke).",
+                    fmt_count(instances),
+                    format_bytes(shallow),
+                    worst_class,
+                ),
+                Some(SectionId::BoxedNumbers),
             ),
-            Some(SectionId::BoxedNumbers),
+            shallow,
         ))
     }
 }
@@ -835,18 +911,21 @@ impl Rule for DuplicateStrings {
         let example = top
             .map(|t| format!("; `\"{}\"` repeated {}×", t.text, fmt_count(t.count),))
             .unwrap_or_default();
-        Some(signal(
-            "duplicate-strings",
-            TriageSeverity::Info,
-            "Duplicate strings",
-            format!(
-                "~{} wasted by {} duplicated String values ({} total instances){}.",
-                format_bytes(ds.approx_wasted_bytes),
-                fmt_count(ds.duplicated_values),
-                fmt_count(ds.total_string_instances),
-                example,
+        Some(with_bytes(
+            signal(
+                "duplicate-strings",
+                TriageSeverity::Info,
+                "Duplicate strings",
+                format!(
+                    "~{} wasted by {} duplicated String values ({} total instances){}.",
+                    format_bytes(ds.approx_wasted_bytes),
+                    fmt_count(ds.duplicated_values),
+                    fmt_count(ds.total_string_instances),
+                    example,
+                ),
+                Some(SectionId::DuplicateStrings),
             ),
-            Some(SectionId::DuplicateStrings),
+            ds.approx_wasted_bytes,
         ))
     }
 }
@@ -867,16 +946,19 @@ impl Rule for CharArraySlack {
         {
             return None;
         }
-        Some(signal(
-            "char-array-slack",
-            TriageSeverity::Info,
-            "Char-array slack",
-            format!(
-                "~{} slack in {} over-allocated char[]/byte[] String backing arrays — possible `substring`/`StringBuilder` waste.",
-                format_bytes(caw.total_wasted_bytes),
-                fmt_count(caw.wasteful_arrays),
+        Some(with_bytes(
+            signal(
+                "char-array-slack",
+                TriageSeverity::Info,
+                "Char-array slack",
+                format!(
+                    "~{} slack in {} over-allocated char[]/byte[] String backing arrays — possible `substring`/`StringBuilder` waste.",
+                    format_bytes(caw.total_wasted_bytes),
+                    fmt_count(caw.wasteful_arrays),
+                ),
+                Some(SectionId::DuplicateStrings),
             ),
-            Some(SectionId::DuplicateStrings),
+            caw.total_wasted_bytes,
         ))
     }
 }
@@ -1351,19 +1433,22 @@ impl Rule for BigDropConcentration {
         if pct < BIG_DROP_PCT {
             return None;
         }
-        Some(signal(
-            "big-drop-concentration",
-            TriageSeverity::Critical,
-            "Dominator-tree big drop",
-            format!(
-                "`{}` is the single largest memory bucket: {:.1}% ({}) of the heap \
-                 drops here in the dominator tree — almost all its retained memory \
-                 is not shared with any other top-level subtree.",
-                row.display_class,
-                pct,
-                format_bytes(row.drop_bytes),
+        Some(with_bytes(
+            signal(
+                "big-drop-concentration",
+                TriageSeverity::Critical,
+                "Dominator-tree big drop",
+                format!(
+                    "`{}` is the single largest memory bucket: {:.1}% ({}) of the heap \
+                     drops here in the dominator tree — almost all its retained memory \
+                     is not shared with any other top-level subtree.",
+                    row.display_class,
+                    pct,
+                    format_bytes(row.drop_bytes),
+                ),
+                Some(SectionId::DominatorAnalysis),
             ),
-            Some(SectionId::DominatorAnalysis),
+            row.drop_bytes,
         ))
     }
 }
@@ -1500,20 +1585,23 @@ impl Rule for OversizedPrimArray {
             Some(o) => format!(" held by `{o}`"),
             None => String::new(),
         };
-        Some(signal(
-            "oversized-prim-array",
-            TriageSeverity::Warning,
-            "Oversized primitive array",
-            format!(
-                "A single `{}` ({} elements, {}){} accounts for {:.1}% of the heap — \
-                 consider chunking, memory-mapping, or off-heap storage.",
-                row.array_class,
-                fmt_count(row.length),
-                format_bytes(row.shallow),
-                owner_clause,
-                pct,
+        Some(with_bytes(
+            signal(
+                "oversized-prim-array",
+                TriageSeverity::Warning,
+                "Oversized primitive array",
+                format!(
+                    "A single `{}` ({} elements, {}){} accounts for {:.1}% of the heap — \
+                     consider chunking, memory-mapping, or off-heap storage.",
+                    row.array_class,
+                    fmt_count(row.length),
+                    format_bytes(row.shallow),
+                    owner_clause,
+                    pct,
+                ),
+                Some(SectionId::ArraysBySize),
             ),
-            Some(SectionId::ArraysBySize),
+            row.shallow,
         ))
     }
 }
@@ -1534,18 +1622,21 @@ impl Rule for DuplicatePrimArrays {
         if wasted < DUP_PRIM_ARRAYS_FLOOR_BYTES && pct_of(wasted, total) < DUP_PRIM_ARRAYS_PCT {
             return None;
         }
-        Some(signal(
-            "dup-prim-arrays",
-            TriageSeverity::Warning,
-            "Duplicate primitive arrays",
-            format!(
-                "{} ({:.1}% of heap) wasted by content-identical primitive arrays — \
-                 multiple copies of the same byte[]/int[]/etc. payload could be \
-                 deduplicated or replaced with a shared constant.",
-                format_bytes(wasted),
-                pct_of(wasted, total),
+        Some(with_bytes(
+            signal(
+                "dup-prim-arrays",
+                TriageSeverity::Warning,
+                "Duplicate primitive arrays",
+                format!(
+                    "{} ({:.1}% of heap) wasted by content-identical primitive arrays — \
+                     multiple copies of the same byte[]/int[]/etc. payload could be \
+                     deduplicated or replaced with a shared constant.",
+                    format_bytes(wasted),
+                    pct_of(wasted, total),
+                ),
+                Some(SectionId::DuplicateStrings),
             ),
-            Some(SectionId::DuplicateStrings),
+            wasted,
         ))
     }
 }

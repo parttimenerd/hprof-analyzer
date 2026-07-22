@@ -1,6 +1,6 @@
 {
-  "schema_version": 7,
-  "generated": "2026-07-22T22:51:04.847586000Z",
+  "schema_version": 8,
+  "generated": "2026-07-22T23:11:33.122351000Z",
   "overview": {
     "source_name": "dump_2_scala-doku.hprof",
     "file_path": "tests/fixtures/dump_2_scala-doku.hprof",
@@ -232302,7 +232302,7 @@
         "shallow": 32,
         "retained": 2622376,
         "pct_bp": 839,
-        "owner": "java.lang.invoke.DirectMethodHandle$Special#caller"
+        "owner": "java.lang.invoke.MemberName#clazz"
       },
       {
         "obj_index_1based": 48876,
@@ -232358,7 +232358,7 @@
         "shallow": 88,
         "retained": 114336,
         "pct_bp": 37,
-        "owner": "java.lang.Thread#contextClassLoader"
+        "owner": "java.security.ProtectionDomain#classloader"
       },
       {
         "obj_index_1based": 878469,
@@ -232382,7 +232382,7 @@
         "shallow": 88,
         "retained": 74152,
         "pct_bp": 24,
-        "owner": "java.lang.Module#loader"
+        "owner": "java.security.ProtectionDomain#classloader"
       },
       {
         "obj_index_1based": 883950,
@@ -232430,7 +232430,7 @@
         "shallow": 104,
         "retained": 54968,
         "pct_bp": 18,
-        "owner": "java.security.Provider$Service#provider"
+        "owner": "java.security.MessageDigest$Delegate$CloneableDelegate#provider"
       },
       {
         "obj_index_1based": 814657,
@@ -237621,6 +237621,15 @@
       "anchor_label": "Top Consumers"
     },
     {
+      "id": "off-heap",
+      "severity": "warning",
+      "title": "Off-heap (DirectByteBuffer)",
+      "detail": "134.3 MB of native memory is held by live DirectByteBuffers — not counted in heap size but can dominate RSS.",
+      "anchor": "leak-indicators",
+      "anchor_label": "Leak Indicators",
+      "bytes": 140862014
+    },
+    {
       "id": "classloader-leak",
       "severity": "warning",
       "title": "Classloader leak",
@@ -237635,14 +237644,6 @@
       "detail": "thread `main` retains 22.9 MB (76.7% of heap) and pins 124 thread-local roots — a live thread is holding memory alive.",
       "anchor": "threads",
       "anchor_label": "Threads"
-    },
-    {
-      "id": "off-heap",
-      "severity": "warning",
-      "title": "Off-heap (DirectByteBuffer)",
-      "detail": "134.3 MB of native memory is held by live DirectByteBuffers — not counted in heap size but can dominate RSS.",
-      "anchor": "leak-indicators",
-      "anchor_label": "Leak Indicators"
     },
     {
       "id": "sparse-object-arrays",
