@@ -8,8 +8,17 @@
 //! A malformed directive never hard-fails: its line is still removed (so the OQL
 //! parses) and a warning is returned that the intake site turns into a result
 //! `note`, falling back to a plain table.
+//!
+//! The directive body (`<kind> [key=value]...`) is lexed by a small logos lexer
+//! ([`VizToken`]) and parsed by a chumsky grammar ([`viz_parser`]), mirroring the
+//! OQL parser's own logos+chumsky pipeline; semantic checks (known kind/keys,
+//! positive cap) run on the parsed pairs so the warnings stay actionable.
 
 use serde::{Deserialize, Serialize};
+
+use chumsky::input::{Stream, ValueInput};
+use chumsky::prelude::*;
+use logos::Logos;
 
 use crate::query::model::{QueryColumn, QueryValue};
 
@@ -82,28 +91,109 @@ pub fn split_directive(text: &str) -> (String, Option<VizSpec>, Option<String>) 
         .join("\n");
 
     let directive = text.lines().nth(dir_idx).unwrap().trim_start();
-    // Strip the leading `--` then the `@viz` keyword.
+    // Strip the leading `--` then the `@viz` keyword, leaving the directive body
+    // (`<kind> [key=value]...`) for the logos+chumsky directive parser.
     let after_dashes = directive.strip_prefix("--").unwrap().trim_start();
-    let args = after_dashes
+    let body = after_dashes
         .split_whitespace()
-        .skip(1) // skip "@viz"
-        .collect::<Vec<_>>();
+        .next()
+        .map(|kw| after_dashes[kw.len()..].trim_start())
+        .unwrap_or("");
 
-    match parse_directive_args(&args) {
+    match parse_directive_body(body) {
         Ok(spec) => (cleaned, Some(spec), None),
         Err(reason) => (cleaned, None, Some(reason)),
     }
 }
 
-/// Parse the whitespace-split tokens after `@viz` into a [`VizSpec`].
-/// `<kind> [label=<col>] [value=<col>] [cap=<n>]`.
-fn parse_directive_args(args: &[&str]) -> Result<VizSpec, String> {
-    let Some(kind_tok) = args.first() else {
+/// Tokens of the `@viz` directive body, lexed by logos.
+///   - `=` separates a key from its value
+///   - `@name` captures a column name with its leading `@` stripped
+///   - a bare integer is the `cap` value
+///   - any other word (kind name, arg key, unquoted column name) is an `Ident`
+#[derive(Logos, Debug, Clone, PartialEq)]
+#[logos(skip r"[ \t\r\n]+")]
+enum VizToken {
+    #[token("=")]
+    Eq,
+    // `@column` — capture the name after '@' (dots/`$` allowed for field paths).
+    #[regex(r"@[A-Za-z_][A-Za-z0-9_.$]*", |lex| lex.slice()[1..].to_string())]
+    At(String),
+    // A bare integer (the `cap` value).
+    #[regex(r"[0-9]+", |lex| lex.slice().parse::<i64>().ok())]
+    Int(i64),
+    // kind name / arg key / unquoted column name.
+    #[regex(r"[A-Za-z_][A-Za-z0-9_.$]*", |lex| lex.slice().to_string())]
+    Ident(String),
+}
+
+/// One parsed `key=value` argument of the directive. The value keeps its typed
+/// form so `cap` can validate as a positive integer and column keys can accept
+/// either a bare or `@`-prefixed name.
+#[derive(Debug, Clone, PartialEq)]
+enum VizArgVal {
+    Word(String),
+    Number(i64),
+}
+
+/// chumsky grammar over [`VizToken`]: `<kind:Ident> (key:Ident '=' value)*`.
+/// Returns `(kind_word, args)`; semantic validation (known kind, known keys,
+/// positive cap) happens in [`parse_directive_body`] so error messages stay
+/// identical to the previous hand-rolled parser.
+fn viz_parser<'a, I>() -> impl Parser<'a, I, (String, Vec<(String, VizArgVal)>), extra::Err<Rich<'a, VizToken>>>
+where
+    I: ValueInput<'a, Token = VizToken, Span = SimpleSpan>,
+{
+    let word = select! { VizToken::Ident(s) => s };
+    let value = select! {
+        VizToken::Ident(s) => VizArgVal::Word(s),
+        VizToken::At(s) => VizArgVal::Word(s),
+        VizToken::Int(n) => VizArgVal::Number(n),
+    };
+    let arg = word
+        .then_ignore(just(VizToken::Eq))
+        .then(value)
+        .map(|(k, v)| (k, v));
+    let kind = word;
+    kind.then(arg.repeated().collect::<Vec<_>>())
+        .then_ignore(end())
+}
+
+/// Parse the directive body (`<kind> [key=value]...`) with logos + chumsky.
+/// A malformed body yields the same actionable messages the callers assert on.
+fn parse_directive_body(body: &str) -> Result<VizSpec, String> {
+    if body.trim().is_empty() {
         return Err("ignored @viz directive: missing chart kind (expected one of \
                     table, histogram, piechart, treemap)"
             .to_string());
-    };
-    let kind = match kind_tok.to_ascii_lowercase().as_str() {
+    }
+
+    // Lex. An unrecognized byte (e.g. `label=re;d`) is a malformed directive.
+    let mut toks: Vec<(VizToken, SimpleSpan)> = Vec::new();
+    let mut lex = VizToken::lexer(body);
+    while let Some(res) = lex.next() {
+        let span = lex.span();
+        match res {
+            Ok(t) => toks.push((t, (span.start..span.end).into())),
+            Err(()) => {
+                return Err(format!(
+                    "ignored @viz directive: unexpected character(s) at offset {} ({:?})",
+                    span.start,
+                    &body[span.clone()]
+                ));
+            }
+        }
+    }
+
+    let eoi: SimpleSpan = (body.len()..body.len()).into();
+    let stream = Stream::from_iter(toks).map(eoi, |(t, s)| (t, s));
+    let (kind_word, args) = viz_parser().parse(stream).into_result().map_err(|_errs| {
+        // A structural error (e.g. `foo` with no `=`, or a stray token) means the
+        // args were not well-formed `key=value` pairs.
+        "ignored @viz argument: expected key=value (label=, value=, or cap=)".to_string()
+    })?;
+
+    let kind = match kind_word.to_ascii_lowercase().as_str() {
         "table" => VizKind::Table,
         "histogram" => VizKind::Histogram,
         "piechart" => VizKind::Piechart,
@@ -120,22 +210,14 @@ fn parse_directive_args(args: &[&str]) -> Result<VizSpec, String> {
     let mut value_col = None;
     let mut cap = None;
 
-    for tok in &args[1..] {
-        let Some((key, val)) = tok.split_once('=') else {
-            return Err(format!(
-                "ignored @viz argument `{tok}`: expected key=value \
-                 (label=, value=, or cap=)"
-            ));
-        };
+    for (key, val) in args {
         match key.to_ascii_lowercase().as_str() {
-            "label" => label_col = Some(strip_at(val)),
-            "value" => value_col = Some(strip_at(val)),
-            "cap" => match val.parse::<usize>() {
-                Ok(n) if n > 0 => cap = Some(n),
+            "label" => label_col = Some(arg_word(&key, val)?),
+            "value" => value_col = Some(arg_word(&key, val)?),
+            "cap" => match val {
+                VizArgVal::Number(n) if n > 0 => cap = Some(n as usize),
                 _ => {
-                    return Err(format!(
-                        "ignored @viz cap `{val}`: cap must be a positive integer"
-                    ));
+                    return Err("ignored @viz cap: cap must be a positive integer".to_string());
                 }
             },
             other => {
@@ -155,10 +237,15 @@ fn parse_directive_args(args: &[&str]) -> Result<VizSpec, String> {
     })
 }
 
-/// Tolerate a leading `@` in a column-name arg so `value=@retainedHeapSize`
-/// resolves the same as `value=retainedHeapSize`.
-fn strip_at(s: &str) -> String {
-    s.strip_prefix('@').unwrap_or(s).to_string()
+/// A `label=`/`value=` argument must be a word (bare or `@`-prefixed), not a
+/// bare number. The `@` was already stripped by the lexer.
+fn arg_word(key: &str, val: VizArgVal) -> Result<String, String> {
+    match val {
+        VizArgVal::Word(s) => Ok(s),
+        VizArgVal::Number(n) => Err(format!(
+            "ignored @viz `{key}={n}`: expected a column name, not a number"
+        )),
+    }
 }
 
 /// Map a [`VizSpec`] to `(label_idx, value_idx)` against the result columns/rows.
@@ -365,6 +452,93 @@ mod tests {
         let (_, spec, warn) = split_directive("-- @viz histogram foo\nSELECT * FROM C");
         assert!(spec.is_none());
         assert!(warn.unwrap().contains("key=value"));
+    }
+
+    // ---------- logos+chumsky directive parser (exceeding the minimal list) ----------
+
+    #[test]
+    fn extra_whitespace_between_args_is_tolerated() {
+        let (_, spec, warn) =
+            split_directive("-- @viz   histogram    label=c    value=n\nSELECT * FROM C");
+        assert!(warn.is_none(), "warn: {warn:?}");
+        let spec = spec.unwrap();
+        assert_eq!(spec.label_col.as_deref(), Some("c"));
+        assert_eq!(spec.value_col.as_deref(), Some("n"));
+    }
+
+    #[test]
+    fn args_in_any_order() {
+        let (_, spec, _) =
+            split_directive("-- @viz piechart cap=5 value=n label=c\nSELECT * FROM C");
+        let spec = spec.unwrap();
+        assert_eq!(spec.cap, Some(5));
+        assert_eq!(spec.label_col.as_deref(), Some("c"));
+        assert_eq!(spec.value_col.as_deref(), Some("n"));
+    }
+
+    #[test]
+    fn dotted_column_name_in_value_arg() {
+        // A field-path column name (e.g. an alias-qualified attribute) is a single
+        // lexer Ident, dots and all.
+        let (_, spec, warn) =
+            split_directive("-- @viz histogram value=obj.size\nSELECT * FROM C");
+        assert!(warn.is_none(), "warn: {warn:?}");
+        assert_eq!(spec.unwrap().value_col.as_deref(), Some("obj.size"));
+    }
+
+    #[test]
+    fn cap_with_column_syntax_is_rejected() {
+        // `cap=@foo` — cap must be a number, not a column name.
+        let (_, spec, warn) = split_directive("-- @viz piechart cap=@foo\nSELECT * FROM C");
+        assert!(spec.is_none());
+        assert!(warn.unwrap().contains("cap"));
+    }
+
+    #[test]
+    fn label_with_number_value_is_rejected() {
+        // `label=42` is nonsensical: a label column can't be a bare integer.
+        let (_, spec, warn) = split_directive("-- @viz histogram label=42\nSELECT * FROM C");
+        assert!(spec.is_none());
+        let w = warn.unwrap();
+        assert!(w.contains("column name") || w.contains("label"), "got: {w}");
+    }
+
+    #[test]
+    fn bad_byte_in_directive_is_malformed_not_panic() {
+        // A stray unlexable byte in the body is a malformed directive, not a crash.
+        let (oql, spec, warn) = split_directive("-- @viz histogram label=a;b\nSELECT * FROM C");
+        assert_eq!(oql.trim(), "SELECT * FROM C", "directive line still removed");
+        assert!(spec.is_none());
+        assert!(warn.is_some());
+    }
+
+    #[test]
+    fn stray_equals_only_is_malformed() {
+        let (_, spec, warn) = split_directive("-- @viz histogram =x\nSELECT * FROM C");
+        assert!(spec.is_none());
+        assert!(warn.is_some());
+    }
+
+    #[test]
+    fn kind_only_no_args_is_well_formed() {
+        let (_, spec, warn) = split_directive("-- @viz treemap\nSELECT * FROM C");
+        assert!(warn.is_none());
+        let spec = spec.unwrap();
+        assert_eq!(spec.kind, VizKind::Treemap);
+        assert_eq!(spec.label_col, None);
+        assert_eq!(spec.value_col, None);
+        assert_eq!(spec.cap, None);
+    }
+
+    #[test]
+    fn arg_key_is_case_insensitive() {
+        let (_, spec, warn) =
+            split_directive("-- @viz histogram LABEL=c VALUE=n CAP=3\nSELECT * FROM C");
+        assert!(warn.is_none(), "warn: {warn:?}");
+        let spec = spec.unwrap();
+        assert_eq!(spec.label_col.as_deref(), Some("c"));
+        assert_eq!(spec.value_col.as_deref(), Some("n"));
+        assert_eq!(spec.cap, Some(3));
     }
 
     #[test]
