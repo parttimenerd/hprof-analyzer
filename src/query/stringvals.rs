@@ -83,3 +83,116 @@ impl StringCapture {
         Ok(out)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ============================================================
+    // StringCapture cap / truncation tests (mirrors RefWalkEdges
+    // cap-test style in refwalk.rs): verify the 500,000 cap and
+    // the `truncated` flag behave exactly as documented.
+    // ============================================================
+
+    /// Below-cap: inserting fewer entries than the cap leaves all
+    /// entries in the map and `truncated` stays false.
+    #[test]
+    fn string_capture_below_cap_no_truncation() {
+        let cap = 10;
+        let mut sc = StringCapture::new(cap);
+        for i in 0..cap {
+            sc.insert(i as u32, i as u64 * 2, 0);
+        }
+        assert_eq!(sc.len(), cap, "all {cap} entries must be retained");
+        assert!(!sc.truncated, "truncated must be false below cap");
+    }
+
+    /// Exactly at cap: inserting exactly `cap` entries fills the map
+    /// without setting `truncated`.
+    #[test]
+    fn string_capture_at_cap_not_truncated() {
+        let cap = 5;
+        let mut sc = StringCapture::new(cap);
+        for i in 0..cap {
+            sc.insert(i as u32, i as u64, 1);
+        }
+        assert_eq!(sc.len(), cap);
+        assert!(
+            !sc.truncated,
+            "truncated must not be true when exactly at cap"
+        );
+    }
+
+    /// Past cap: once the cap is exceeded the `truncated` flag becomes
+    /// true and the map does NOT grow beyond the cap.
+    #[test]
+    fn string_capture_past_cap_truncated_and_size_bounded() {
+        let cap = 8;
+        let mut sc = StringCapture::new(cap);
+        // Insert cap+1 entries (one beyond the limit).
+        for i in 0..=(cap as u32) {
+            sc.insert(i, i as u64, 0);
+        }
+        assert!(
+            sc.truncated,
+            "truncated must be true after inserting past the cap"
+        );
+        assert_eq!(
+            sc.len(),
+            cap,
+            "map must not grow beyond cap; got {}",
+            sc.len()
+        );
+    }
+
+    /// Inserting many entries (well past the cap) still caps the map
+    /// at exactly `cap` and keeps `truncated == true`.
+    #[test]
+    fn string_capture_many_past_cap_stays_bounded() {
+        let cap = 4;
+        let mut sc = StringCapture::new(cap);
+        for i in 0..(cap * 3) {
+            sc.insert(i as u32, i as u64, 0);
+        }
+        assert!(sc.truncated, "truncated after many insertions");
+        assert!(
+            sc.len() <= cap,
+            "len {} must not exceed cap {}",
+            sc.len(),
+            cap
+        );
+    }
+
+    /// Updating an existing key (same dense_idx) does NOT count toward
+    /// the cap check (the cap counts DISTINCT entries, not writes).
+    #[test]
+    fn string_capture_update_existing_key_does_not_count_twice() {
+        let cap = 3;
+        let mut sc = StringCapture::new(cap);
+        sc.insert(0, 100, 0);
+        sc.insert(1, 200, 0);
+        // Overwrite key 0 — this should NOT trigger truncation.
+        sc.insert(0, 999, 1);
+        assert!(
+            !sc.truncated,
+            "overwriting an existing key must not trigger truncation"
+        );
+        assert_eq!(sc.len(), 2, "still only 2 distinct keys");
+    }
+
+    /// Empty capture: `is_empty()` returns true and `truncated` is false.
+    #[test]
+    fn string_capture_empty_state() {
+        let sc = StringCapture::new(STRING_VALUES_CAP);
+        assert!(sc.is_empty());
+        assert!(!sc.truncated);
+        assert_eq!(sc.len(), 0);
+    }
+
+    /// The production cap constant `STRING_VALUES_CAP` is 500,000.
+    /// Pin this value so a refactor cannot silently shrink or grow it.
+    #[test]
+    fn string_values_cap_constant_is_500k() {
+        assert_eq!(STRING_VALUES_CAP, 500_000);
+    }
+}

@@ -1943,4 +1943,95 @@ mod tests {
             err.0
         );
     }
+
+    // ============================================================
+    // No-toString gating: string_values flag must NOT be set for
+    // non-toString queries (negative control) and MUST be set for
+    // toString queries (positive control). Pins the query-gating
+    // invariant so non-toString runs never arm the decode path.
+    // ============================================================
+
+    /// A pure COUNT(*) histogram query must NOT set `string_values`.
+    #[test]
+    fn no_tostring_count_star_gating_false() {
+        let plan = plan_query(&parse("SELECT COUNT(*) FROM java.lang.String").unwrap()).unwrap();
+        assert!(
+            !plan.needs.string_values,
+            "COUNT(*) must not arm string_values, got: {:?}",
+            plan.needs
+        );
+    }
+
+    /// A WHERE-only query on @usedHeapSize must NOT set `string_values`.
+    #[test]
+    fn no_tostring_used_heap_size_where_gating_false() {
+        let plan =
+            plan_query(&parse("SELECT * FROM java.lang.String s WHERE @usedHeapSize > 0").unwrap())
+                .unwrap();
+        assert!(
+            !plan.needs.string_values,
+            "WHERE @usedHeapSize query must not arm string_values, got: {:?}",
+            plan.needs
+        );
+    }
+
+    /// A plain scalar-field SELECT on a non-String class must NOT set `string_values`.
+    #[test]
+    fn no_tostring_scalar_select_gating_false() {
+        let plan = plan_query(&parse("SELECT count FROM java.util.HashMap").unwrap()).unwrap();
+        assert!(
+            !plan.needs.string_values,
+            "field SELECT on non-String class must not arm string_values, got: {:?}",
+            plan.needs
+        );
+    }
+
+    /// Positive control: `SELECT toString(s) FROM java.lang.String s` must set
+    /// `needs.string_values == true` and finalize at P2 (the string-values decode
+    /// window), and emit a `ResolveStringValues` late op.
+    #[test]
+    fn tostring_select_sets_string_values_true_and_p2() {
+        let plan =
+            plan_query(&parse("SELECT toString(s) FROM java.lang.String s").unwrap()).unwrap();
+        assert!(
+            plan.needs.string_values,
+            "toString SELECT must arm string_values, got: {:?}",
+            plan.needs
+        );
+        assert_eq!(
+            plan.finalize_at,
+            Phase::P2,
+            "toString SELECT must finalize at P2, got: {:?}",
+            plan.finalize_at
+        );
+        assert!(
+            plan.late_ops
+                .iter()
+                .any(|op| matches!(op, StageOp::ResolveStringValues)),
+            "toString SELECT must emit a ResolveStringValues late op, got: {:?}",
+            plan.late_ops
+        );
+    }
+
+    /// Positive control: `WHERE toString(s) LIKE "..."` must also set
+    /// `needs.string_values == true` and finalize at P2.
+    #[test]
+    fn tostring_where_like_sets_string_values_true_and_p2() {
+        let plan = plan_query(
+            &parse(r#"SELECT @objectId FROM java.lang.String s WHERE toString(s) LIKE "java\..*""#)
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            plan.needs.string_values,
+            "toString WHERE must arm string_values, got: {:?}",
+            plan.needs
+        );
+        assert_eq!(
+            plan.finalize_at,
+            Phase::P2,
+            "toString WHERE must finalize at P2, got: {:?}",
+            plan.finalize_at
+        );
+    }
 }

@@ -1554,10 +1554,7 @@ fn tostring_non_string_from_is_plan_error() {
     let out = Command::new(BIN)
         .arg("query")
         .arg(&hprof)
-        .args([
-            "--query",
-            "SELECT toString(s) FROM java.lang.Object s",
-        ])
+        .args(["--query", "SELECT toString(s) FROM java.lang.Object s"])
         .output()
         .unwrap();
     let combined = format!(
@@ -1674,5 +1671,54 @@ fn tostring_works_via_full_analyze_path() {
     assert!(
         section.contains("toString"),
         "toString column header missing in analyze output section:\n{section}"
+    );
+}
+
+/// `toString(s)` over a BROAD quoted-regex FROM (e.g. `"java\.lang\..*"`) that
+/// matches BOTH String and non-String classes is REJECTED at plan time with an
+/// actionable `QueryError`. The planner enforces that `toString(s)` is only
+/// valid for an EXACT `java.lang.String` FROM (not a regex/glob), because the
+/// decode path is only armed for the known String instance layout. This test pins
+/// the documented behavior: broad-FROM toString → plan-time error, NOT a silent
+/// runtime Null.
+///
+/// BEHAVIOR NOTE: the plan checks `class_name == "java.lang.String"` (and a few
+/// alternative spellings). A quoted-regex pattern like `"java\.lang\..*"` has
+/// `class_name = "java\.lang\..*"` which does NOT equal `"java.lang.String"`, so
+/// the planner always rejects it. If the planner is later extended to allow
+/// broad-FROM toString with Null for non-String instances, this test MUST be
+/// updated to reflect the new documented behavior.
+#[test]
+fn tostring_broad_regex_from_is_plan_error() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
+            r#"SELECT toString(s) FROM "java\.lang\..*" s LIMIT 5"#,
+        ])
+        .output()
+        .unwrap();
+    // Must fail (plan error), not silently succeed.
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !out.status.success() || combined.to_lowercase().contains("error"),
+        "toString over broad regex FROM must be a plan error, not silent success;\
+         got:\n{combined}"
+    );
+    // The actionable error must name the issue.
+    assert!(
+        combined.contains("java.lang.String") || combined.contains("toString"),
+        "plan error must mention java.lang.String or toString; got:\n{combined}"
+    );
+    // The error must suggest the correct form.
+    assert!(
+        combined.contains("java.lang.String"),
+        "actionable error must name the correct FROM class; got:\n{combined}"
     );
 }

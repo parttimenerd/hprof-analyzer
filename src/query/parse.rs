@@ -2214,4 +2214,87 @@ mod tests {
             self
         }
     }
+
+    // ============================================================
+    // toString(s) parser AST tests (MAT gap #3)
+    // ============================================================
+
+    /// `SELECT toString(s) FROM java.lang.String s` must parse so the single
+    /// SELECT item is exactly `SelectItem::ToString("s")`.
+    #[test]
+    fn parse_tostring_select_item() {
+        let q = parse("SELECT toString(s) FROM java.lang.String s").unwrap();
+        assert_eq!(q.select.len(), 1);
+        match &q.select[0] {
+            SelectItem::ToString(alias) => assert_eq!(alias, "s"),
+            other => panic!("expected SelectItem::ToString(\"s\"), got {other:?}"),
+        }
+        assert_eq!(q.alias.as_deref(), Some("s"));
+    }
+
+    /// `SELECT * FROM java.lang.String s WHERE toString(s) LIKE "java.*"` must
+    /// parse so the WHERE predicate is exactly `Compare { lhs: Attr::ToString("s"),
+    /// op: CompareOp::Like, rhs: Value::Str("java.*") }`.
+    #[test]
+    fn parse_tostring_in_where_like() {
+        let q =
+            parse(r#"SELECT * FROM java.lang.String s WHERE toString(s) LIKE "java.*""#).unwrap();
+        match q.where_.as_ref().unwrap() {
+            Predicate::Compare { lhs, op, rhs } => {
+                assert_eq!(
+                    *lhs,
+                    Attr::ToString("s".into()),
+                    "WHERE LHS must be Attr::ToString(\"s\")"
+                );
+                assert_eq!(*op, CompareOp::Like, "operator must be Like");
+                assert_eq!(
+                    *rhs,
+                    Value::Str("java.*".into()),
+                    "RHS must be Str(\"java.*\")"
+                );
+            }
+            other => panic!("expected Compare predicate, got {other:?}"),
+        }
+    }
+
+    /// Pin the behavior of bare `toString` (without parens/arg) in a SELECT.
+    /// The parser treats `toString` NOT followed by `(` as a plain field name
+    /// `Attr::Field("toString")`, since the `dom_fn` combinator is contextual:
+    /// it only fires when the identifier is immediately followed by `(`.
+    #[test]
+    fn parse_bare_tostring_without_parens_is_field_not_function() {
+        let q = parse("SELECT toString FROM java.lang.String").unwrap();
+        assert_eq!(q.select.len(), 1);
+        match &q.select[0] {
+            SelectItem::Attr(Attr::Field(name)) => assert_eq!(name, "toString"),
+            other => panic!(
+                "bare `toString` without parens must be Attr::Field(\"toString\"), got {other:?}"
+            ),
+        }
+    }
+
+    /// `toString()` — parens but NO alias argument — must be a parse error with
+    /// an actionable message naming the function and the required argument form.
+    #[test]
+    fn parse_tostring_requires_alias_arg() {
+        let err = parse("SELECT toString() FROM java.lang.String s").unwrap_err();
+        assert!(
+            err.to_string().contains("toString(x) requires"),
+            "expected actionable error, got: {err}"
+        );
+    }
+
+    /// `toString` is case-insensitive: `TOSTRING(s)` and `ToString(s)` both
+    /// parse identically to `toString(s)`.
+    #[test]
+    fn parse_tostring_case_insensitive() {
+        for variant in &["TOSTRING(s)", "ToString(s)", "tostring(s)"] {
+            let src = format!("SELECT {variant} FROM java.lang.String s");
+            let q = parse(&src).unwrap_or_else(|e| panic!("parse failed for {src:?}: {e}"));
+            match &q.select[0] {
+                SelectItem::ToString(alias) => assert_eq!(alias, "s", "for {variant}"),
+                other => panic!("expected ToString for {variant}, got {other:?}"),
+            }
+        }
+    }
 }
