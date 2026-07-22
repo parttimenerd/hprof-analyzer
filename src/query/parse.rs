@@ -24,6 +24,8 @@ use crate::query::ast::{
 ///   - `@attr` stores the name without the leading `@`
 ///   - strings are double-quoted, stored without quotes
 ///   - a bare `*` (not part of an ident) is `Star`
+///   - arithmetic operators `+`, `-`, `/`, `*` are dedicated tokens; unary
+///     minus is handled at the grammar level (no leading `-` in number literals)
 ///
 /// Derives `Debug, Clone, PartialEq` — chumsky and the tests rely on them.
 #[derive(Logos, Debug, Clone, PartialEq)]
@@ -49,6 +51,12 @@ pub enum Token {
     Gt,
     #[token("*")]
     Star,
+    #[token("+")]
+    Plus,
+    #[token("-")]
+    Minus,
+    #[token("/")]
+    Divide,
 
     // @attribute — capture the name after '@' (must be non-empty).
     #[regex(r"@[A-Za-z_][A-Za-z0-9_.$]*", |lex| lex.slice()[1..].to_string())]
@@ -58,10 +66,11 @@ pub enum Token {
     #[regex(r#""[^"]*""#, |lex| { let s = lex.slice(); s[1..s.len()-1].to_string() })]
     Str(String),
 
-    // float before int so "1.5" isn't split; optional leading '-'.
-    #[regex(r"-?[0-9]+\.[0-9]*", |lex| lex.slice().parse::<f64>().ok())]
+    // float before int so "1.5" isn't split. No leading '-': unary minus is a
+    // grammar-level operator (Token::Minus), so `1-2` lexes as 1, Minus, 2.
+    #[regex(r"[0-9]+\.[0-9]*", |lex| lex.slice().parse::<f64>().ok())]
     Float(f64),
-    #[regex(r"-?[0-9]+", |lex| lex.slice().parse::<i64>().ok())]
+    #[regex(r"[0-9]+", |lex| lex.slice().parse::<i64>().ok())]
     Int(i64),
 
     // identifier / keyword / dotted class or field name, optional embedded '*'
@@ -913,10 +922,10 @@ mod tests {
             ),
             // 4: parens + comma
             ("( , )", vec![Token::LParen, Token::Comma, Token::RParen]),
-            // 5: negative float
-            ("-3.5", vec![Token::Float(-3.5)]),
-            // 6: negative int
-            ("-42", vec![Token::Int(-42)]),
+            // 5: negative float lexes as Minus + Float (unary minus is grammar-level)
+            ("-3.5", vec![Token::Minus, Token::Float(3.5)]),
+            // 6: negative int lexes as Minus + Int (unary minus is grammar-level)
+            ("-42", vec![Token::Minus, Token::Int(42)]),
             // 7: float before int (no split of 1.5)
             ("1.5", vec![Token::Float(1.5)]),
             // 8: trailing-dot float (regex allows empty fraction)
@@ -952,6 +961,43 @@ mod tests {
         for (src, expected) in cases {
             assert_eq!(toks(src), expected, "token stream mismatch for {src:?}");
         }
+    }
+
+    // ============================================================
+    // Group 1b — arithmetic operator lexing
+    // ============================================================
+
+    #[test]
+    fn lexes_arithmetic_operators() {
+        let toks: Vec<Token> = crate::query::parse::tokenize_spanned("@a + 2 - 3 * 4 / 5")
+            .unwrap()
+            .into_iter()
+            .map(|(t, _)| t)
+            .collect();
+        assert_eq!(
+            toks,
+            vec![
+                Token::At("a".into()),
+                Token::Plus,
+                Token::Int(2),
+                Token::Minus,
+                Token::Int(3),
+                Token::Star,
+                Token::Int(4),
+                Token::Divide,
+                Token::Int(5),
+            ]
+        );
+    }
+
+    #[test]
+    fn minus_before_number_is_operator_not_negative_literal() {
+        let toks: Vec<Token> = crate::query::parse::tokenize_spanned("1-2")
+            .unwrap()
+            .into_iter()
+            .map(|(t, _)| t)
+            .collect();
+        assert_eq!(toks, vec![Token::Int(1), Token::Minus, Token::Int(2)]);
     }
 
     // ============================================================
