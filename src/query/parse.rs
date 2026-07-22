@@ -93,7 +93,9 @@ pub fn tokenize_spanned(src: &str) -> Result<Vec<(Token, SimpleSpan)>, String> {
     Ok(out)
 }
 
-fn ident_ci<'a, I>(kw: &'static str) -> impl Parser<'a, I, String, extra::Err<Rich<'a, Token>>> + Clone
+fn ident_ci<'a, I>(
+    kw: &'static str,
+) -> impl Parser<'a, I, String, extra::Err<Rich<'a, Token>>> + Clone
 where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
 {
@@ -111,7 +113,9 @@ where
 /// identifier. A missing/malformed argument (e.g. `dominators()`) produces the
 /// actionable `"<name>(x) requires a single alias argument, e.g. <name>(s)"`
 /// error the callers assert on.
-fn dom_fn<'a, I>(name: &'static str) -> impl Parser<'a, I, String, extra::Err<Rich<'a, Token>>> + Clone
+fn dom_fn<'a, I>(
+    name: &'static str,
+) -> impl Parser<'a, I, String, extra::Err<Rich<'a, Token>>> + Clone
 where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
 {
@@ -157,20 +161,23 @@ where
             "inbounds" => Attr::Inbounds,
             "outbounds" => Attr::Outbounds,
             other => {
-                emitter.emit(Rich::custom(e.span(), format!("unknown @attribute: @{other}")));
+                emitter.emit(Rich::custom(
+                    e.span(),
+                    format!("unknown @attribute: @{other}"),
+                ));
                 Attr::ObjectId
             }
         });
     let attr = at_attr
         .or(ident_ci("classof")
-        .ignore_then(just(Token::LParen))
-        .ignore_then(any_ident())
-        .then_ignore(just(Token::RParen))
-        .map(|_| Attr::ClassOf))
-    .or(dom_fn("dominators").map(Attr::Dominators))
-    .or(dom_fn("dominatorof").map(Attr::DominatorOf))
-    .or(any_ident().map(Attr::Field))
-    .labelled("attribute");
+            .ignore_then(just(Token::LParen))
+            .ignore_then(any_ident())
+            .then_ignore(just(Token::RParen))
+            .map(|_| Attr::ClassOf))
+        .or(dom_fn("dominators").map(Attr::Dominators))
+        .or(dom_fn("dominatorof").map(Attr::DominatorOf))
+        .or(any_ident().map(Attr::Field))
+        .labelled("attribute");
 
     // select item: AGG(item) | path(a, b) | * | attr
     let select_item = recursive(|item| {
@@ -180,7 +187,10 @@ where
         .then_ignore(just(Token::LParen))
         .then(item.clone())
         .then_ignore(just(Token::RParen))
-        .map(|(func, arg): (AggFunc, SelectItem)| SelectItem::Aggregate { func, arg: Box::new(arg) });
+        .map(|(func, arg): (AggFunc, SelectItem)| SelectItem::Aggregate {
+            func,
+            arg: Box::new(arg),
+        });
 
         // `path(a, b)`. Contextual: only a path function when `path` is immediately
         // followed by `(`; otherwise `path` falls through to the bare-field attr arm.
@@ -205,7 +215,9 @@ where
 
         // `path_item` before the bare-attr fallback so `path(` is consumed as Path
         // rather than swallowed as a field named `path`.
-        agg.or(path_item).or(star).or(attr.clone().map(SelectItem::Attr))
+        agg.or(path_item)
+            .or(star)
+            .or(attr.clone().map(SelectItem::Attr))
     });
 
     let select_list = select_item
@@ -264,7 +276,10 @@ where
             .map(|i| i.is_some())
             .then(any_ident())
             .map(|(instanceof, class_name)| {
-                FromSource::Class(ClassSpec { instanceof, class_name })
+                FromSource::Class(ClassSpec {
+                    instanceof,
+                    class_name,
+                })
             });
         let from_source = from_subquery.or(from_class);
 
@@ -304,14 +319,15 @@ where
                     .map(|p| Predicate::Not(Box::new(p)))
                     .or(primary)
             });
-            let and = not.clone().foldl(
-                ident_ci("AND").ignore_then(not).repeated(),
-                |l, r| Predicate::And(Box::new(l), Box::new(r)),
-            );
-            and.clone().foldl(
-                ident_ci("OR").ignore_then(and).repeated(),
-                |l, r| Predicate::Or(Box::new(l), Box::new(r)),
-            )
+            let and = not
+                .clone()
+                .foldl(ident_ci("AND").ignore_then(not).repeated(), |l, r| {
+                    Predicate::And(Box::new(l), Box::new(r))
+                });
+            and.clone()
+                .foldl(ident_ci("OR").ignore_then(and).repeated(), |l, r| {
+                    Predicate::Or(Box::new(l), Box::new(r))
+                })
         });
 
         ident_ci("SELECT")
@@ -338,11 +354,16 @@ where
             )
             .then(
                 ident_ci("LIMIT")
-                    .ignore_then(select! { Token::Int(n) if n >= 0 => n as u64 }.labelled("LIMIT count"))
+                    .ignore_then(
+                        select! { Token::Int(n) if n >= 0 => n as u64 }.labelled("LIMIT count"),
+                    )
                     .or_not(),
             )
             .map(
-                |(((((((distinct, select), retained_set), from), alias), where_), order_by), limit)| {
+                |(
+                    ((((((distinct, select), retained_set), from), alias), where_), order_by),
+                    limit,
+                )| {
                     let mut q = Query {
                         distinct,
                         select,
@@ -471,7 +492,18 @@ pub const KEYWORDS: &[&str] = &["SELECT", "DISTINCT", "FROM", "classof"];
 
 /// Words reserved in predicate/clause position (`is_reserved`'s source set).
 pub const RESERVED: &[&str] = &[
-    "WHERE", "LIMIT", "UNION", "AND", "OR", "NOT", "INSTANCEOF", "IN", "ORDER", "BY", "ASC", "DESC",
+    "WHERE",
+    "LIMIT",
+    "UNION",
+    "AND",
+    "OR",
+    "NOT",
+    "INSTANCEOF",
+    "IN",
+    "ORDER",
+    "BY",
+    "ASC",
+    "DESC",
 ];
 
 /// Aggregate function names (`agg_func`'s source set), upper-cased.
@@ -627,7 +659,6 @@ pub fn parse_or_report(src: &str) -> Result<Query, String> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -674,7 +705,10 @@ mod tests {
             distinct,
             select,
             retained_set: false,
-            from: FromSource::Class(ClassSpec { instanceof, class_name: class_name.into() }),
+            from: FromSource::Class(ClassSpec {
+                instanceof,
+                class_name: class_name.into(),
+            }),
             alias: alias.map(|s| s.into()),
             where_,
             order_by: None,
@@ -689,7 +723,10 @@ mod tests {
         SelectItem::Attr(a)
     }
     fn agg(func: AggFunc, arg: SelectItem) -> SelectItem {
-        SelectItem::Aggregate { func, arg: Box::new(arg) }
+        SelectItem::Aggregate {
+            func,
+            arg: Box::new(arg),
+        }
     }
 
     // ============================================================
@@ -703,7 +740,13 @@ mod tests {
             // 1: keywords + star + dotted ident + alias
             (
                 "SELECT * FROM java.lang.String s",
-                vec![id("SELECT"), Token::Star, id("FROM"), id("java.lang.String"), id("s")],
+                vec![
+                    id("SELECT"),
+                    Token::Star,
+                    id("FROM"),
+                    id("java.lang.String"),
+                    id("s"),
+                ],
             ),
             // 2: @attr, comparison, int, AND, ident, eq, string
             (
@@ -722,7 +765,14 @@ mod tests {
             // 3: all comparison operators
             (
                 "= != < <= > >=",
-                vec![Token::Eq, Token::Ne, Token::Lt, Token::Le, Token::Gt, Token::Ge],
+                vec![
+                    Token::Eq,
+                    Token::Ne,
+                    Token::Lt,
+                    Token::Le,
+                    Token::Gt,
+                    Token::Ge,
+                ],
             ),
             // 4: parens + comma
             ("( , )", vec![Token::LParen, Token::Comma, Token::RParen]),
@@ -751,7 +801,10 @@ mod tests {
             // 16: bare star vs glob-ident disambiguation
             ("* x*", vec![Token::Star, id("x*")]),
             // 17: whitespace (tabs/newlines) skipped
-            ("SELECT\t*\nFROM\rC", vec![id("SELECT"), Token::Star, id("FROM"), id("C")]),
+            (
+                "SELECT\t*\nFROM\rC",
+                vec![id("SELECT"), Token::Star, id("FROM"), id("C")],
+            ),
             // 18: primitive array class name (trailing '[]')
             ("char[]", vec![id("char[]")]),
             // 19: object array class name (dotted + trailing '[]')
@@ -775,15 +828,34 @@ mod tests {
             // 1: bare star + alias
             (
                 "SELECT * FROM java.lang.String s",
-                q(false, star(), false, "java.lang.String", Some("s"), None, None),
+                q(
+                    false,
+                    star(),
+                    false,
+                    "java.lang.String",
+                    Some("s"),
+                    None,
+                    None,
+                ),
             ),
             // 2: star, no alias
-            ("SELECT * FROM C", q(false, star(), false, "C", None, None, None)),
+            (
+                "SELECT * FROM C",
+                q(false, star(), false, "C", None, None, None),
+            ),
             // 3: DISTINCT
             (
                 "SELECT DISTINCT name FROM C",
-                q(false, vec![attr_sel(field("name"))], false, "C", None, None, None)
-                    .tap_distinct(),
+                q(
+                    false,
+                    vec![attr_sel(field("name"))],
+                    false,
+                    "C",
+                    None,
+                    None,
+                    None,
+                )
+                .tap_distinct(),
             ),
             // 4: INSTANCEOF in FROM
             (
@@ -839,12 +911,28 @@ mod tests {
             // 9: classof(alias)
             (
                 "SELECT classof(s) FROM java.lang.String s",
-                q(false, vec![attr_sel(Attr::ClassOf)], false, "java.lang.String", Some("s"), None, None),
+                q(
+                    false,
+                    vec![attr_sel(Attr::ClassOf)],
+                    false,
+                    "java.lang.String",
+                    Some("s"),
+                    None,
+                    None,
+                ),
             ),
             // 10: COUNT(*)
             (
                 "SELECT COUNT(*) FROM C",
-                q(false, vec![agg(AggFunc::Count, SelectItem::Star)], false, "C", None, None, None),
+                q(
+                    false,
+                    vec![agg(AggFunc::Count, SelectItem::Star)],
+                    false,
+                    "C",
+                    None,
+                    None,
+                    None,
+                ),
             ),
             // 11: SUM(@usedHeapSize)
             (
@@ -879,22 +967,54 @@ mod tests {
             // 13: simple WHERE compare int
             (
                 "SELECT * FROM C WHERE hash > 0",
-                q(false, star(), false, "C", None, Some(cmp(field("hash"), CompareOp::Gt, Value::Int(0))), None),
+                q(
+                    false,
+                    star(),
+                    false,
+                    "C",
+                    None,
+                    Some(cmp(field("hash"), CompareOp::Gt, Value::Int(0))),
+                    None,
+                ),
             ),
             // 14: WHERE compare string
             (
                 "SELECT * FROM C WHERE name = \"main\"",
-                q(false, star(), false, "C", None, Some(cmp(field("name"), CompareOp::Eq, Value::Str("main".into()))), None),
+                q(
+                    false,
+                    star(),
+                    false,
+                    "C",
+                    None,
+                    Some(cmp(field("name"), CompareOp::Eq, Value::Str("main".into()))),
+                    None,
+                ),
             ),
             // 15: WHERE compare float
             (
                 "SELECT * FROM C WHERE ratio <= 1.5",
-                q(false, star(), false, "C", None, Some(cmp(field("ratio"), CompareOp::Le, Value::Float(1.5))), None),
+                q(
+                    false,
+                    star(),
+                    false,
+                    "C",
+                    None,
+                    Some(cmp(field("ratio"), CompareOp::Le, Value::Float(1.5))),
+                    None,
+                ),
             ),
             // 16: WHERE bool true
             (
                 "SELECT * FROM C WHERE flag = true",
-                q(false, star(), false, "C", None, Some(cmp(field("flag"), CompareOp::Eq, Value::Bool(true))), None),
+                q(
+                    false,
+                    star(),
+                    false,
+                    "C",
+                    None,
+                    Some(cmp(field("flag"), CompareOp::Eq, Value::Bool(true))),
+                    None,
+                ),
             ),
             // 17: WHERE bool false + null (case-insensitive keywords)
             (
@@ -996,12 +1116,28 @@ mod tests {
             // 23: negative int literal in WHERE
             (
                 "SELECT * FROM C WHERE delta = -7",
-                q(false, star(), false, "C", None, Some(cmp(field("delta"), CompareOp::Eq, Value::Int(-7))), None),
+                q(
+                    false,
+                    star(),
+                    false,
+                    "C",
+                    None,
+                    Some(cmp(field("delta"), CompareOp::Eq, Value::Int(-7))),
+                    None,
+                ),
             ),
             // 24: nested aggregate arg (AGG over attr)
             (
                 "SELECT COUNT(name) FROM C",
-                q(false, vec![agg(AggFunc::Count, attr_sel(field("name")))], false, "C", None, None, None),
+                q(
+                    false,
+                    vec![agg(AggFunc::Count, attr_sel(field("name")))],
+                    false,
+                    "C",
+                    None,
+                    None,
+                    None,
+                ),
             ),
         ];
         for (src, expected) in cases {
@@ -1019,21 +1155,21 @@ mod tests {
     fn error_cases() {
         // Each entry: (src, substring the message must contain)
         let cases: Vec<(&str, &str)> = vec![
-            ("", "unexpected"),                                   // 1 empty
-            ("SELECT", "unexpected"),                             // 2 select only
-            ("SELECT *", "unexpected"),                           // 3 missing FROM
-            ("SELECT * FROM", "unexpected"),                      // 4 FROM no class
-            ("SELECT * FROM C bogus extra", "unexpected"),        // 5 trailing garbage
-            ("SELECT @bogus FROM C", "bogus"),                   // 6 unknown builtin attr
-            ("SELECT * FROM C WHERE hash >", "unexpected"),       // 7 dangling operator
-            ("SELECT * FROM C WHERE hash", "unexpected"),         // 8 missing operator+rhs
-            ("SELECT * FROM C LIMIT abc", "unexpected"),          // 9 non-int limit
-            ("SELECT * FROM C LIMIT -1", "unexpected"),           // 10 negative limit rejected
-            ("SELECT COUNT * FROM C", "unexpected"),              // 11 agg missing paren
-            ("SELECT * FROM C WHERE (a = 1", "unexpected"),       // 12 unbalanced paren
-            ("SELECT , FROM C", "unexpected"),                    // 13 empty select item
-            ("SELECT * FROM C WHERE a = ", "unexpected"),         // 14 missing rhs value
-            ("SELECT * FROM C WHERE a == 1", "unexpected"),       // 15 bad operator ==
+            ("", "unexpected"),                             // 1 empty
+            ("SELECT", "unexpected"),                       // 2 select only
+            ("SELECT *", "unexpected"),                     // 3 missing FROM
+            ("SELECT * FROM", "unexpected"),                // 4 FROM no class
+            ("SELECT * FROM C bogus extra", "unexpected"),  // 5 trailing garbage
+            ("SELECT @bogus FROM C", "bogus"),              // 6 unknown builtin attr
+            ("SELECT * FROM C WHERE hash >", "unexpected"), // 7 dangling operator
+            ("SELECT * FROM C WHERE hash", "unexpected"),   // 8 missing operator+rhs
+            ("SELECT * FROM C LIMIT abc", "unexpected"),    // 9 non-int limit
+            ("SELECT * FROM C LIMIT -1", "unexpected"),     // 10 negative limit rejected
+            ("SELECT COUNT * FROM C", "unexpected"),        // 11 agg missing paren
+            ("SELECT * FROM C WHERE (a = 1", "unexpected"), // 12 unbalanced paren
+            ("SELECT , FROM C", "unexpected"),              // 13 empty select item
+            ("SELECT * FROM C WHERE a = ", "unexpected"),   // 14 missing rhs value
+            ("SELECT * FROM C WHERE a == 1", "unexpected"), // 15 bad operator ==
         ];
         for (src, needle) in cases {
             let err = parse(src)
@@ -1041,7 +1177,10 @@ mod tests {
                 .unwrap_or_else(|| panic!("expected parse error for {src:?}"))
                 .0;
             assert!(!err.is_empty(), "empty error for {src:?}");
-            assert!(!err.contains('\n'), "expected single-line error for {src:?}, got: {err}");
+            assert!(
+                !err.contains('\n'),
+                "expected single-line error for {src:?}, got: {err}"
+            );
             assert!(
                 err.contains(needle),
                 "error for {src:?} should contain {needle:?}, got: {err}"
@@ -1072,10 +1211,14 @@ mod tests {
 
     #[test]
     fn union_two_branches_parses() {
-        let q = parse("SELECT * FROM java.lang.String UNION SELECT * FROM java.lang.Integer").unwrap();
+        let q =
+            parse("SELECT * FROM java.lang.String UNION SELECT * FROM java.lang.Integer").unwrap();
         assert_eq!(q.union_branches.len(), 1);
         assert_eq!(q.union_branches[0].from.class_name(), "java.lang.Integer");
-        assert!(q.union_branches[0].union_branches.is_empty(), "branches must be flat, not nested");
+        assert!(
+            q.union_branches[0].union_branches.is_empty(),
+            "branches must be flat, not nested"
+        );
     }
     #[test]
     fn union_three_branches_flat() {
@@ -1115,7 +1258,10 @@ mod tests {
     #[test]
     fn from_instanceof_class_sets_flag() {
         let q = parse("SELECT * FROM INSTANCEOF java.util.List").unwrap();
-        assert!(q.from.instanceof(), "INSTANCEOF flag must survive migration");
+        assert!(
+            q.from.instanceof(),
+            "INSTANCEOF flag must survive migration"
+        );
         assert_eq!(q.from.class_name(), "java.util.List");
     }
 
@@ -1158,7 +1304,10 @@ mod tests {
     fn refpath_in_where_parses() {
         let q = parse("SELECT * FROM Node x WHERE x.parent.id = 7").unwrap();
         match q.where_.as_ref().unwrap() {
-            Predicate::Compare { lhs: Attr::RefPath { hops, tail, .. }, .. } => {
+            Predicate::Compare {
+                lhs: Attr::RefPath { hops, tail, .. },
+                ..
+            } => {
                 assert_eq!(hops, &vec!["parent".to_string()]);
                 assert!(matches!(**tail, Attr::Field(ref f) if f == "id"));
             }
@@ -1173,8 +1322,14 @@ mod tests {
         let err = parse("SELECT * FROM (SELECT * FROM A UNION SELECT * FROM B) x")
             .unwrap_err()
             .to_string();
-        assert!(err.contains("unexpected"), "expected a located parse error, got: {err}");
-        assert!(err.contains(':'), "error should carry a line:col location, got: {err}");
+        assert!(
+            err.contains("unexpected"),
+            "expected a located parse error, got: {err}"
+        );
+        assert!(
+            err.contains(':'),
+            "error should carry a line:col location, got: {err}"
+        );
     }
 
     #[test]
@@ -1229,8 +1384,14 @@ mod tests {
         )
         .unwrap_err()
         .to_string();
-        assert!(err.contains("unexpected"), "expected a located parse error, got: {err}");
-        assert!(err.contains(':'), "error should carry a line:col location, got: {err}");
+        assert!(
+            err.contains("unexpected"),
+            "expected a located parse error, got: {err}"
+        );
+        assert!(
+            err.contains(':'),
+            "error should carry a line:col location, got: {err}"
+        );
     }
 
     #[test]
@@ -1253,12 +1414,18 @@ mod tests {
     #[test]
     fn parse_dominators_requires_arg() {
         let err = parse("SELECT dominators() FROM java.lang.String s").unwrap_err();
-        assert!(err.to_string().contains("dominators(x) requires"), "unexpected error: {err}");
+        assert!(
+            err.to_string().contains("dominators(x) requires"),
+            "unexpected error: {err}"
+        );
     }
     #[test]
     fn parse_dominatorof_requires_arg() {
         let err = parse("SELECT dominatorof() FROM java.lang.String s").unwrap_err();
-        assert!(err.to_string().contains("dominatorof(x) requires"), "unexpected error: {err}");
+        assert!(
+            err.to_string().contains("dominatorof(x) requires"),
+            "unexpected error: {err}"
+        );
     }
     #[test]
     fn dominators_in_select_list_with_other_items() {
@@ -1271,7 +1438,10 @@ mod tests {
     fn dominatorof_report_error_names_function() {
         // The caret-rendered report also carries the actionable custom message.
         let rep = parse_or_report("SELECT dominatorof() FROM C").unwrap_err();
-        assert!(rep.contains("dominatorof(x) requires"), "report missing message: {rep}");
+        assert!(
+            rep.contains("dominatorof(x) requires"),
+            "report missing message: {rep}"
+        );
     }
 
     // ---------- @inbounds / @outbounds + path(a, b) ----------
@@ -1382,12 +1552,21 @@ mod tests {
         // `path(s)` — a single operand — must be a parse error, not silently accepted.
         let err = parse("SELECT path(s) FROM C s").unwrap_err().0;
         assert!(!err.is_empty(), "expected non-empty error for path(s)");
-        assert!(!err.contains('\n'), "expected single-line error, got: {err}");
+        assert!(
+            !err.contains('\n'),
+            "expected single-line error, got: {err}"
+        );
     }
     #[test]
     fn inbounds_outbounds_in_attributes_const() {
-        assert!(ATTRIBUTES.contains(&"@inbounds"), "ATTRIBUTES must include @inbounds");
-        assert!(ATTRIBUTES.contains(&"@outbounds"), "ATTRIBUTES must include @outbounds");
+        assert!(
+            ATTRIBUTES.contains(&"@inbounds"),
+            "ATTRIBUTES must include @inbounds"
+        );
+        assert!(
+            ATTRIBUTES.contains(&"@outbounds"),
+            "ATTRIBUTES must include @outbounds"
+        );
     }
 
     #[test]
@@ -1398,12 +1577,19 @@ mod tests {
     }
     #[test]
     fn parse_no_retained_set_default_false() {
-        assert!(!parse("SELECT s FROM java.lang.String s").unwrap().retained_set);
+        assert!(
+            !parse("SELECT s FROM java.lang.String s")
+                .unwrap()
+                .retained_set
+        );
     }
     #[test]
     fn parse_as_retained_missing_set() {
         let err = parse("SELECT s AS RETAINED FROM java.lang.String s").unwrap_err();
-        assert!(err.to_string().contains("expected SET after 'AS RETAINED'"), "unexpected: {err}");
+        assert!(
+            err.to_string().contains("expected SET after 'AS RETAINED'"),
+            "unexpected: {err}"
+        );
     }
     #[test]
     fn parse_as_retained_set_with_where_and_limit() {
@@ -1418,7 +1604,11 @@ mod tests {
     }
     #[test]
     fn parse_as_retained_case_insensitive() {
-        assert!(parse("SELECT s as retained set FROM C s").unwrap().retained_set);
+        assert!(
+            parse("SELECT s as retained set FROM C s")
+                .unwrap()
+                .retained_set
+        );
     }
 
     #[test]
@@ -1481,7 +1671,10 @@ mod tests {
     #[test]
     fn report_contains_caret_marker() {
         let rep = parse_or_report("SELCT * FROM C").unwrap_err();
-        assert!(rep.contains("query:1:"), "expected caret location, got:\n{rep}");
+        assert!(
+            rep.contains("query:1:"),
+            "expected caret location, got:\n{rep}"
+        );
     }
 
     #[test]
@@ -1502,7 +1695,10 @@ mod tests {
     #[test]
     fn agg_funcs_const_matches_parser() {
         for &f in AGG_FUNCS {
-            assert!(agg_func(f).is_some(), "agg_func rejects declared AGG_FUNC {f:?}");
+            assert!(
+                agg_func(f).is_some(),
+                "agg_func rejects declared AGG_FUNC {f:?}"
+            );
             // ...and the query actually parses as an aggregate.
             assert!(
                 parse(&format!("SELECT {f}(*) FROM C")).is_ok(),
@@ -1514,7 +1710,10 @@ mod tests {
     #[test]
     fn reserved_const_matches_parser() {
         for &r in RESERVED {
-            assert!(is_reserved(r), "is_reserved rejects declared RESERVED {r:?}");
+            assert!(
+                is_reserved(r),
+                "is_reserved rejects declared RESERVED {r:?}"
+            );
         }
     }
 
@@ -1546,6 +1745,14 @@ mod tests {
     #[test]
     fn parse_prefixed_at_attr_single_select() {
         let q = parse("SELECT s.@objectId FROM java.lang.String s").expect("should parse");
+        assert_eq!(q.select, vec![attr_sel(Attr::ObjectId)]);
+    }
+
+    #[test]
+    fn parse_multi_dot_prefixed_at_attr_drops_whole_prefix() {
+        // `a.b.@objectId` lexes as `Ident("a.b.")` + `At`; the entire prefix is
+        // dropped (it denotes the FROM object, unvalidated at parse time).
+        let q = parse("SELECT a.b.@objectId FROM java.lang.Object a").expect("should parse");
         assert_eq!(q.select, vec![attr_sel(Attr::ObjectId)]);
     }
 
@@ -1593,7 +1800,8 @@ mod tests {
 
     #[test]
     fn parse_prefixed_at_attr_in_where() {
-        let q = parse("SELECT * FROM java.lang.String s WHERE s.@objectId = 0").expect("should parse");
+        let q =
+            parse("SELECT * FROM java.lang.String s WHERE s.@objectId = 0").expect("should parse");
         assert_eq!(
             q.where_,
             Some(cmp(Attr::ObjectId, CompareOp::Eq, Value::Int(0)))
