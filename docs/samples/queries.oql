@@ -1,0 +1,31 @@
+# Example OQL query set for hprof-analyzer.
+#
+# Run against a dump with:
+#   hprof-analyzer query <dump>.hprof --query-file docs/samples/queries.oql
+#
+# Or fold the results into a report:
+#   hprof-analyzer <dump>.hprof report.html --query-file docs/samples/queries.oql
+#
+# Rules: one query per line; blank lines and `#` comments are skipped.
+# A `-- @viz` line attaches to the query on the FOLLOWING line.
+
+# How many strings are on the heap?
+SELECT COUNT(*) FROM java.lang.String
+
+# All objects, class and subclasses (INSTANCEOF).
+SELECT COUNT(*) FROM INSTANCEOF java.lang.Object
+
+# Distinct thread display names.
+SELECT DISTINCT @displayName FROM java.lang.Thread
+
+# 95th-percentile shallow size of strings.
+SELECT PERCENTILE(@usedHeapSize, 95) AS p95_bytes FROM java.lang.String
+
+# Threads by shallow size, drawn as a histogram in the report (top 15).
+-- @viz histogram label=@displayName value=@usedHeapSize cap=15
+SELECT @displayName, @usedHeapSize FROM java.lang.Thread ORDER BY @usedHeapSize DESC
+
+# Requires the FULL report path (retained sizes): run without the `query`
+# subcommand, e.g. `hprof-analyzer dump.hprof out.html --query-file ...`.
+-- @viz piechart label=@displayName value=@retainedHeapSize cap=10
+SELECT @displayName, @retainedHeapSize FROM java.lang.Thread ORDER BY @retainedHeapSize DESC
