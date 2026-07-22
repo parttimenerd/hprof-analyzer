@@ -472,7 +472,7 @@ pub(crate) fn resume_with_string_values(
 
     let id_map = stage_runner::IdMap::new(&[]);
     let sv_ref: &std::collections::HashMap<u32, String> = if string_values.is_empty() {
-        &*EMPTY_STRING_VALUES
+        &EMPTY_STRING_VALUES
     } else {
         &string_values
     };
@@ -487,12 +487,13 @@ pub(crate) fn resume_with_string_values(
         fwd_tgt: &[],
         fwd_field: &[],
         field_names: &[],
-        refwalk_tails: &*EMPTY_REFWALK_TAILS,
+        refwalk_tails: &EMPTY_REFWALK_TAILS,
         refwalk_truncated: false,
         in_off: &[],
         in_tgt: &[],
         retained_edges: None,
         string_values: sv_ref,
+        string_values_truncated: false,
     };
 
     // Split pending entries: toString-only (all ops are ResolveStringValues) vs others.
@@ -568,7 +569,7 @@ pub fn run_single_dump(
         // Fast path: no subqueries — one scan, no injection.
         let p1 = crate::pass1::Pass1::run(path)?;
         let mut empty = std::collections::HashMap::new();
-        let (.., state, _refwalk_csr, string_values) = crate::pass2::Pass2::build(
+        let (.., state, _refwalk_csr, string_values, _sv_trunc) = crate::pass2::Pass2::build(
             path,
             p1,
             crate::cvec::Codec::Zstd3,
@@ -587,7 +588,7 @@ pub fn run_single_dump(
         .collect();
     let p1_inner = crate::pass1::Pass1::run(path)?;
     let mut empty = std::collections::HashMap::new();
-    let (.., inner_state, _inner_refwalk_csr, _inner_sv) = crate::pass2::Pass2::build(
+    let (.., inner_state, _inner_refwalk_csr, _inner_sv, _inner_sv_trunc) = crate::pass2::Pass2::build(
         path,
         p1_inner,
         crate::cvec::Codec::Zstd3,
@@ -632,7 +633,7 @@ pub fn run_single_dump(
 
     // ── Outer pass: scan again with IN sets injected ─────────────────────────
     let p1_outer = crate::pass1::Pass1::run(path)?;
-    let (.., outer_state, _outer_refwalk_csr, outer_sv) = crate::pass2::Pass2::build(
+    let (.., outer_state, _outer_refwalk_csr, outer_sv, _outer_sv_trunc) = crate::pass2::Pass2::build(
         path,
         p1_outer,
         crate::cvec::Codec::Zstd3,

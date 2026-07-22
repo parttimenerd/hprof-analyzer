@@ -73,6 +73,10 @@ impl Pass2 {
         // Decoded toString(s) values: dense_idx → String.
         // Empty when no toString(s) query ran.
         std::collections::HashMap<u32, String>,
+        // True when the string-capture table overflowed its cap during the scan;
+        // toString(s) results may be partial. Separate from the map so callers can
+        // surface `QueryResult.truncated` even when the map is non-empty.
+        bool,
     )> {
         let n = p1.id_map.len();
         let id_size = p1.id_size;
@@ -514,6 +518,9 @@ impl Pass2 {
         // Decode the query-gated toString(s) capture into dense_idx → String.
         // One `scan_prim_arrays` pass over the dump, then dropped. Empty (no I/O)
         // when no toString(s) query ran — non-toString runs are byte/RSS-identical.
+        // Capture the truncated flag BEFORE taking the capture state (take replaces
+        // the capture with an empty one; reading after would always yield false).
+        let string_values_truncated = scan_driver.string_capture_truncated();
         let string_values: std::collections::HashMap<u32, String> =
             if let Some(capture) = scan_driver.take_string_capture() {
                 capture.decode_all(path, id_size)?
@@ -1107,6 +1114,7 @@ impl Pass2 {
             query_state,
             refwalk_csr,
             string_values,
+            string_values_truncated,
         ))
     }
 
@@ -1745,7 +1753,7 @@ mod tests {
             return;
         }
         let p1 = Pass1::run(DUMP).unwrap();
-        let (g, inbound, _sc, _ci, _as, _q, _rw, _sv) = Pass2::build(
+        let (g, inbound, _sc, _ci, _as, _q, _rw, _sv, _sv_trunc) = Pass2::build(
             DUMP,
             p1,
             crate::cvec::Codec::None,
@@ -1785,7 +1793,7 @@ mod tests {
             return;
         }
         let p1 = Pass1::run(DUMP).unwrap();
-        let (g, _inbound, _sc, _ci, _as, _q, _rw, _sv) = Pass2::build(
+        let (g, _inbound, _sc, _ci, _as, _q, _rw, _sv, _sv_trunc) = Pass2::build(
             DUMP,
             p1,
             crate::cvec::Codec::None,

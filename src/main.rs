@@ -948,7 +948,7 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
             ));
         }
         let mut no_in_sets = std::collections::HashMap::new();
-        let (.., query_state, _refwalk_csr, string_values) =
+        let (.., query_state, _refwalk_csr, string_values, _sv_trunc) =
             pass2::Pass2::build(input, p1, cvec::Codec::Zstd3, &opts, &flat, &mut no_in_sets)?;
 
         // Query-only path: retained sizes/dominators are not computed, so cross-phase
@@ -1085,6 +1085,7 @@ fn run(
         query_state,
         refwalk_csr,
         string_values,
+        string_values_truncated,
     ) = pass2::Pass2::build(input, p1, compress, &opts, &flat_queries, &mut no_in_sets)?;
     log(
         verbose,
@@ -1408,7 +1409,7 @@ fn run(
     // Built only when a toString(s) query ran; empty otherwise — non-toString
     // runs keep the shared EMPTY_STRING_VALUES borrow, byte/RSS-identical.
     let sv_ref: &std::collections::HashMap<u32, String> = if string_values.is_empty() {
-        &*query::stage_runner::EMPTY_STRING_VALUES
+        &query::stage_runner::EMPTY_STRING_VALUES
     } else {
         &string_values
     };
@@ -1432,6 +1433,7 @@ fn run(
             in_tgt,
             retained_edges: retained_edges.as_ref(),
             string_values: sv_ref,
+            string_values_truncated,
         },
     );
     let mut query_results = query::run::collapse_union_results(flat_results, &union_groups);

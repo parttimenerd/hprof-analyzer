@@ -77,6 +77,11 @@ pub struct LateCtx<'a> {
     /// so the per-field CSR is incomplete and RefPath results may be partial.
     /// OR'd into each RefPath result's `truncated` flag.
     pub refwalk_truncated: bool,
+    /// True when the toString(s) string-capture table overflowed its cap during
+    /// the scan, meaning some String instances were not captured and toString(s)
+    /// results may be partial. OR'd into each `ResolveStringValues` result's
+    /// `truncated` flag.
+    pub string_values_truncated: bool,
     /// Inbound-reference CSR offsets (len n+1): node i's referrers are
     /// `in_tgt[in_off[i]..in_off[i+1]]`. Empty when `@inbounds` is not armed.
     pub in_off: &'a [u32],
@@ -538,37 +543,16 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
 /// toString(s) columns filled in. Non-toString SELECT columns (like `*`,
 /// `@objectId`, etc.) are projected as far as possible from the dense index.
 fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
-    // Compile LIKE regexes once for the query (same pattern as refpath_rows).
-    let mut like_regexes: std::collections::HashMap<String, regex::Regex> = Default::default();
-    if let Some(pred) = &q.where_ {
-        // Collect all toString(s) LIKE patterns.
-        fn collect_like(p: &Predicate, out: &mut std::collections::HashMap<String, regex::Regex>) {
-            match p {
-                Predicate::And(a, b) | Predicate::Or(a, b) => {
-                    collect_like(a, out);
-                    collect_like(b, out);
-                }
-                Predicate::Not(a) => collect_like(a, out),
-                Predicate::Compare {
-                    lhs: Attr::ToString(_),
-                    op: CompareOp::Like | CompareOp::NotLike,
-                    rhs: Value::Str(pat),
-                } => {
-                    out.entry(pat.clone()).or_insert_with(|| {
-                        regex::Regex::new(pat)
-                            .unwrap_or_else(|_| regex::Regex::new("(?!x)x").unwrap())
-                    });
-                }
-                _ => {}
-            }
-        }
-        collect_like(pred, &mut like_regexes);
-    }
+    // Compile LIKE regexes once for the query — reuse the shared helper so that
+    // patterns are anchored `^(?:...)$` and validated at plan time. On a bad
+    // pattern (cannot happen for a planned query), the empty map causes LIKE to
+    // never match, which is the correct "no compiled regex → no match" semantics.
+    let like_regexes = crate::query::execute::compile_like_regexes(q).unwrap_or_default();
 
     let seeds: Vec<u32> = entry.carry.indices();
 
     // Apply toString(s) WHERE predicates.
-    let kept: Vec<u32> = if q.where_.as_ref().is_some_and(has_toString_pred) {
+    let kept: Vec<u32> = if q.where_.as_ref().is_some_and(has_to_string_pred) {
         seeds
             .iter()
             .copied()
@@ -596,7 +580,7 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
         })
         .collect();
 
-    let mut truncated = entry.carry.truncated();
+    let mut truncated = entry.carry.truncated() || ctx.string_values_truncated;
     let mut out_rows = out_rows;
     if let Some(limit) = q.limit {
         if out_rows.len() as u64 > limit {
@@ -618,10 +602,10 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
 }
 
 /// True if the predicate tree contains any `Attr::ToString` comparison.
-fn has_toString_pred(p: &Predicate) -> bool {
+fn has_to_string_pred(p: &Predicate) -> bool {
     match p {
-        Predicate::And(a, b) | Predicate::Or(a, b) => has_toString_pred(a) || has_toString_pred(b),
-        Predicate::Not(a) => has_toString_pred(a),
+        Predicate::And(a, b) | Predicate::Or(a, b) => has_to_string_pred(a) || has_to_string_pred(b),
+        Predicate::Not(a) => has_to_string_pred(a),
         Predicate::Compare {
             lhs: Attr::ToString(_),
             ..
@@ -1014,6 +998,7 @@ mod tests {
             in_tgt: &[],
             retained_edges: None,
             string_values: &EMPTY_STRING_VALUES,
+            string_values_truncated: false,
         }
     }
 
@@ -1226,6 +1211,7 @@ mod dom_ctx_tests {
             in_tgt: &[],
             retained_edges: None,
             string_values: &EMPTY_STRING_VALUES,
+            string_values_truncated: false,
         };
         assert_eq!(ctx.dc_off.len(), 5);
         assert_eq!(ctx.id_map.to_addr(0), id_map.to_addr(0));
@@ -1261,6 +1247,7 @@ mod dom_run_tests {
             in_tgt: &[],
             retained_edges: None,
             string_values: &EMPTY_STRING_VALUES,
+            string_values_truncated: false,
         };
         assert_eq!(
             run_dominator_children(&[0u32], usize::MAX, &ctx),
@@ -1293,6 +1280,7 @@ mod dom_run_tests {
             in_tgt: &[],
             retained_edges: None,
             string_values: &EMPTY_STRING_VALUES,
+            string_values_truncated: false,
         };
         assert_eq!(run_dominator_children(&[0u32], 1, &ctx).len(), 1);
     }
@@ -1317,6 +1305,7 @@ mod dom_run_tests {
             in_tgt: &[],
             retained_edges: None,
             string_values: &EMPTY_STRING_VALUES,
+            string_values_truncated: false,
         };
         // idom = [MAX,0,0,1]: node 3's idom is 1, node 1's idom is 0, root 0 yields nothing.
         assert_eq!(run_dominator_of(&[3u32], &ctx), vec![1u32]);
@@ -1344,6 +1333,7 @@ mod dom_run_tests {
             in_tgt: &[],
             retained_edges: None,
             string_values: &EMPTY_STRING_VALUES,
+            string_values_truncated: false,
         };
         let (mut set, truncated) = run_retained_set(&[0u32], usize::MAX, &ctx);
         set.sort_unstable();
@@ -1371,6 +1361,7 @@ mod dom_run_tests {
             in_tgt: &[],
             retained_edges: None,
             string_values: &EMPTY_STRING_VALUES,
+            string_values_truncated: false,
         };
         let (set, truncated) = run_retained_set(&[0u32], 2, &ctx);
         assert_eq!(set.len(), 2);
@@ -1397,6 +1388,7 @@ mod dom_run_tests {
             in_tgt: &[],
             retained_edges: None,
             string_values: &EMPTY_STRING_VALUES,
+            string_values_truncated: false,
         };
         let (mut set, _t) = run_retained_set(&[1u32, 0u32], usize::MAX, &ctx);
         set.sort_unstable();
@@ -1424,6 +1416,7 @@ mod dom_run_tests {
             in_tgt: &[],
             retained_edges: None,
             string_values: &EMPTY_STRING_VALUES,
+            string_values_truncated: false,
         };
         let q = crate::query::parse::parse("SELECT dominators(s) FROM C s").unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
@@ -1460,6 +1453,7 @@ mod dom_run_tests {
             in_tgt: &[],
             retained_edges: None,
             string_values: &EMPTY_STRING_VALUES,
+            string_values_truncated: false,
         };
         let q = crate::query::parse::parse("SELECT dominatorof(s) FROM C s").unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
@@ -1493,6 +1487,7 @@ mod dom_run_tests {
             in_tgt: &[],
             retained_edges: None,
             string_values: &EMPTY_STRING_VALUES,
+            string_values_truncated: false,
         };
         let q = crate::query::parse::parse("SELECT s AS RETAINED SET FROM C s").unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
@@ -1536,6 +1531,7 @@ mod refwalk_tests {
             in_tgt: &[],
             retained_edges: None,
             string_values: &EMPTY_STRING_VALUES,
+            string_values_truncated: false,
         }
     }
 
@@ -1568,6 +1564,7 @@ mod refwalk_tests {
             in_tgt: &[],
             retained_edges: None,
             string_values: &EMPTY_STRING_VALUES,
+            string_values_truncated: false,
         }
     }
 
@@ -1894,6 +1891,7 @@ mod edge_tests {
             in_tgt,
             retained_edges,
             string_values: &EMPTY_STRING_VALUES,
+            string_values_truncated: false,
         }
     }
 
@@ -2141,6 +2139,7 @@ mod tostring_tests {
             in_tgt: &[],
             retained_edges: None,
             string_values: sv,
+            string_values_truncated: false,
         }
     }
 
@@ -2279,5 +2278,45 @@ mod tostring_tests {
         assert!(r.error.is_none());
         assert_eq!(r.row_count, 3, "LIMIT 3 must cap at 3 rows");
         assert!(r.truncated, "exceeding LIMIT must mark truncated");
+    }
+
+    #[test]
+    fn string_values_capture_truncated_sets_result_truncated() {
+        // When the string-capture table overflowed during the scan,
+        // ctx.string_values_truncated is true. The result must surface this
+        // as QueryResult.truncated even when LIMIT is not hit, so the caller
+        // knows the results are partial.
+        let mut sv = std::collections::HashMap::new();
+        sv.insert(0u32, "hello".to_string());
+        // Build ctx with string_values_truncated = true to simulate cap overflow.
+        let ctx = LateCtx {
+            retained: &[],
+            idom: &[],
+            dc_off: &[],
+            dc_tgt: &[],
+            shallow: &[],
+            id_map: &EMPTY_ID_MAP,
+            fwd_off: &[],
+            fwd_tgt: &[],
+            fwd_field: &[],
+            field_names: &[],
+            refwalk_tails: &EMPTY_REFWALK_TAILS,
+            refwalk_truncated: false,
+            in_off: &[],
+            in_tgt: &[],
+            retained_edges: None,
+            string_values: &sv,
+            string_values_truncated: true,
+        };
+
+        let (st, q) = string_state("SELECT toString(s) FROM java.lang.String s", &[0]);
+        let out = resume(st, &[q.clone(), q], &ctx);
+        let r = &out[0];
+        assert!(r.error.is_none());
+        assert_eq!(r.row_count, 1, "one seed still produces one row");
+        assert!(
+            r.truncated,
+            "cap-overflow during scan must set QueryResult.truncated"
+        );
     }
 }
