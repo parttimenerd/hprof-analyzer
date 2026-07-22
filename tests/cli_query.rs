@@ -1811,3 +1811,142 @@ fn from_objects_case_insensitive_end_to_end() {
         );
     }
 }
+
+// ====================================================================
+// AS <name> column alias — integration tests
+// ====================================================================
+
+/// Helper: run a query and return stdout, or panic on non-zero exit.
+fn query_stdout(hprof: &str, oql: &str) -> String {
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(hprof)
+        .args(["--query", oql])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "query failed for {oql:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// 7. Alias on a plain attribute: the result's first column NAME is the alias.
+#[test]
+fn alias_bytes_column_name_in_output() {
+    let Some(hprof) = philosophers() else { return };
+    let stdout = query_stdout(
+        &hprof,
+        "SELECT @usedHeapSize AS bytes FROM java.lang.String LIMIT 1",
+    );
+    assert!(
+        stdout.contains("bytes"),
+        "expected column header 'bytes' in output:\n{stdout}"
+    );
+    // The header line must be exactly "bytes", not "@usedHeapSize".
+    // (The OQL text itself may still mention @usedHeapSize, so we check that
+    //  no line consists solely of the derived name.)
+    assert!(
+        !stdout.lines().any(|l| l.trim() == "@usedHeapSize"),
+        "a line must not consist solely of derived name @usedHeapSize:\n{stdout}"
+    );
+}
+
+/// 8. Alias on aggregate: column name is the alias.
+#[test]
+fn alias_aggregate_column_name_in_output() {
+    let Some(hprof) = philosophers() else { return };
+    let stdout = query_stdout(
+        &hprof,
+        "SELECT COUNT(*) AS n FROM java.lang.String",
+    );
+    assert!(
+        stdout.contains("n"),
+        "expected column header 'n' in output:\n{stdout}"
+    );
+}
+
+/// 9. No alias → derived column name is unchanged.
+#[test]
+fn no_alias_derived_column_name_preserved() {
+    let Some(hprof) = philosophers() else { return };
+    let stdout = query_stdout(
+        &hprof,
+        "SELECT COUNT(*) FROM java.lang.String",
+    );
+    assert!(
+        stdout.contains("COUNT(*)"),
+        "derived name COUNT(*) must appear when no alias is set:\n{stdout}"
+    );
+}
+
+/// Alias on multiple columns — both headers appear in output.
+#[test]
+fn multiple_aliases_both_appear_in_output() {
+    let Some(hprof) = philosophers() else { return };
+    let stdout = query_stdout(
+        &hprof,
+        "SELECT @objectId AS id, @usedHeapSize AS bytes FROM java.lang.String LIMIT 1",
+    );
+    assert!(
+        stdout.contains("id"),
+        "expected column header 'id' in output:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("bytes"),
+        "expected column header 'bytes' in output:\n{stdout}"
+    );
+}
+
+/// UNION: head-branch alias wins; tail-branch without alias uses derived name.
+#[test]
+fn alias_union_head_branch_wins() {
+    let Some(hprof) = philosophers() else { return };
+    let stdout = query_stdout(
+        &hprof,
+        "SELECT @objectId AS id FROM java.lang.String LIMIT 1 \
+         UNION SELECT @objectId FROM java.lang.Object LIMIT 1",
+    );
+    // Head branch alias wins for the unified output column header.
+    assert!(
+        stdout.contains("id"),
+        "expected alias 'id' (head-branch wins) in output:\n{stdout}"
+    );
+}
+
+/// Quoted alias name round-trips through to output.
+#[test]
+fn alias_quoted_name_appears_in_output() {
+    let Some(hprof) = philosophers() else { return };
+    let stdout = query_stdout(
+        &hprof,
+        r#"SELECT @usedHeapSize AS "heap_size" FROM java.lang.String LIMIT 1"#,
+    );
+    assert!(
+        stdout.contains("heap_size"),
+        "expected quoted alias 'heap_size' in output:\n{stdout}"
+    );
+}
+
+/// REGRESSION: AS RETAINED SET must not produce a column named RETAINED.
+#[test]
+fn as_retained_set_does_not_produce_retained_column() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query", "SELECT s AS RETAINED SET FROM java.lang.String s LIMIT 1"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("OQL parse error"),
+        "AS RETAINED SET must not cause a parse error:\n{stderr}"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.contains("| RETAINED |") && !stdout.starts_with("RETAINED"),
+        "output must not have a column named RETAINED:\n{stdout}"
+    );
+}

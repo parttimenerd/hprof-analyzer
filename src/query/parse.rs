@@ -181,6 +181,9 @@ where
         .labelled("attribute");
 
     // select item: AGG(item) | path(a, b) | toString(s) | * | attr
+    // Each item may be followed by an optional `AS <name>` alias.
+    // Guard: `AS RETAINED` is NOT consumed here — it belongs to the retained_set
+    // modifier parsed at the SELECT level.
     let select_item = recursive(|item| {
         let agg = select! {
             Token::Ident(s) if agg_func(&s).is_some() => agg_func(&s).unwrap(),
@@ -188,9 +191,14 @@ where
         .then_ignore(just(Token::LParen))
         .then(item.clone())
         .then_ignore(just(Token::RParen))
-        .map(|(func, arg): (AggFunc, SelectItem)| SelectItem::Aggregate {
-            func,
-            arg: Box::new(arg),
+        .map(|(func, (arg, _alias)): (AggFunc, (SelectItem, Option<String>))| {
+            (
+                SelectItem::Aggregate {
+                    func,
+                    arg: Box::new(arg),
+                },
+                None::<String>,
+            )
         });
 
         // `path(a, b)`. Contextual: only a path function when `path` is immediately
@@ -210,28 +218,46 @@ where
             .then_ignore(just(Token::Comma))
             .then(path_operand)
             .then_ignore(just(Token::RParen))
-            .map(|(from, to)| SelectItem::Path { from, to });
+            .map(|(from, to)| (SelectItem::Path { from, to }, None::<String>));
 
-        let star = just(Token::Star).map(|_| SelectItem::Star);
+        let star = just(Token::Star).map(|_| (SelectItem::Star, None::<String>));
 
         // `toString(s)` as a SELECT item: `toString(alias)` → `SelectItem::ToString(alias)`.
         // Placed before the bare-attr fallback so `toString(` is consumed as ToString
         // rather than as a field named `toString`. The `dom_fn` helper enforces the
         // single-arg requirement with an actionable error.
-        let tostring_item = dom_fn("toString").map(SelectItem::ToString);
+        let tostring_item =
+            dom_fn("toString").map(|a| (SelectItem::ToString(a), None::<String>));
 
         // `path_item` before the bare-attr fallback so `path(` is consumed as Path
         // rather than swallowed as a field named `path`.
-        agg.or(path_item)
+        let base_item = agg
+            .or(path_item)
             .or(tostring_item)
             .or(star)
-            .or(attr.clone().map(SelectItem::Attr))
+            .or(attr.clone().map(|a| (SelectItem::Attr(a), None::<String>)));
+
+        // Optional `AS <alias>` suffix on any select item.
+        // Safe-guard: do NOT match `AS RETAINED` (that belongs to the retained_set
+        // modifier at the SELECT level). Use `.and_is(ident_ci("RETAINED").not())`
+        // on the token immediately following `AS`.
+        let alias_name = ident_ci("AS").ignore_then(
+            select! { Token::Str(s) => s }
+                .or(any_ident().and_is(ident_ci("RETAINED").not())),
+        );
+
+        base_item.then(alias_name.or_not()).map(|((item, _), alias)| (item, alias))
     });
 
+    // Collect aliased items, then unzip into parallel vecs.
     let select_list = select_item
         .separated_by(just(Token::Comma))
         .at_least(1)
-        .collect::<Vec<_>>();
+        .collect::<Vec<_>>()
+        .map(|pairs: Vec<(SelectItem, Option<String>)>| {
+            let (items, aliases): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
+            (items, aliases)
+        });
 
     // value literal
     let value = select! {
@@ -395,12 +421,13 @@ where
             )
             .map(
                 |(
-                    ((((((distinct, select), retained_set), from), alias), where_), order_by),
+                    ((((((distinct, (select, select_aliases)), retained_set), from), alias), where_), order_by),
                     limit,
                 )| {
                     let mut q = Query {
                         distinct,
                         select,
+                        select_aliases,
                         retained_set,
                         from,
                         alias,
@@ -790,9 +817,11 @@ mod tests {
         where_: Option<Predicate>,
         limit: Option<u64>,
     ) -> Query {
+        let n = select.len();
         Query {
             distinct,
             select,
+            select_aliases: vec![None; n],
             retained_set: false,
             from: FromSource::Class(ClassSpec {
                 instanceof,
@@ -2473,5 +2502,157 @@ mod tests {
             with_objects.from, without.from,
             "FROM OBJECTS glob must produce identical FROM as FROM glob"
         );
+    }
+
+    // ============================================================
+    // Group N — AS <name> column alias tests
+    // ============================================================
+
+    /// 1. Bare-ident alias on a dotted-attr select item.
+    #[test]
+    fn alias_bare_ident_on_attr() {
+        let q = parse("SELECT s.@objectId AS foo FROM java.lang.String s").unwrap();
+        assert_eq!(q.select_aliases.len(), 1);
+        assert_eq!(q.select_aliases[0].as_deref(), Some("foo"));
+        assert_eq!(q.select, vec![SelectItem::Attr(Attr::ObjectId)]);
+    }
+
+    /// 2. Quoted alias name.
+    #[test]
+    fn alias_quoted_string() {
+        let q = parse(r#"SELECT @usedHeapSize AS "size" FROM java.lang.String"#).unwrap();
+        assert_eq!(q.select_aliases[0].as_deref(), Some("size"));
+        assert_eq!(q.select, vec![SelectItem::Attr(Attr::UsedHeapSize)]);
+    }
+
+    /// 3. REGRESSION: `SELECT s AS RETAINED SET FROM ...` must NOT treat
+    ///    RETAINED as an alias — retained_set must be true and select == [s].
+    #[test]
+    fn alias_as_retained_set_regression() {
+        let q = parse("SELECT s AS RETAINED SET FROM java.lang.String s").unwrap();
+        assert!(
+            q.retained_set,
+            "retained_set must be true when AS RETAINED SET is used"
+        );
+        assert_eq!(
+            q.select,
+            vec![SelectItem::Attr(Attr::Field("s".into()))],
+            "select must be [s], not an aliased item named RETAINED"
+        );
+        assert_eq!(
+            q.select_aliases[0], None,
+            "item must carry no alias (RETAINED was not consumed as alias name)"
+        );
+    }
+
+    /// 3b. Case-insensitive RETAINED guard: lower-case `as retained set` also
+    ///     must not be treated as an alias.
+    #[test]
+    fn alias_as_retained_set_case_insensitive_regression() {
+        let q = parse("SELECT s as retained set FROM java.lang.String s").unwrap();
+        assert!(q.retained_set);
+        assert_eq!(q.select_aliases[0], None);
+    }
+
+    /// 4. Alias on aggregate.
+    #[test]
+    fn alias_on_aggregate() {
+        let q = parse("SELECT COUNT(*) AS n FROM java.lang.String").unwrap();
+        assert_eq!(q.select_aliases[0].as_deref(), Some("n"));
+        assert!(
+            matches!(&q.select[0], SelectItem::Aggregate { func: AggFunc::Count, .. }),
+            "select must be COUNT(*)"
+        );
+    }
+
+    /// 5. No alias → select_aliases entry is None; derived name unchanged.
+    #[test]
+    fn no_alias_means_none() {
+        let q = parse("SELECT @objectId FROM java.lang.String").unwrap();
+        assert_eq!(q.select_aliases.len(), 1);
+        assert_eq!(q.select_aliases[0], None);
+    }
+
+    /// 6. Cross-phase attr (@retainedHeapSize) can still be aliased.
+    #[test]
+    fn alias_on_retained_heap_size() {
+        let q = parse("SELECT @retainedHeapSize AS r FROM java.lang.String").unwrap();
+        assert_eq!(q.select_aliases[0].as_deref(), Some("r"));
+        assert_eq!(q.select, vec![SelectItem::Attr(Attr::RetainedHeapSize)]);
+    }
+
+    /// Multiple aliased columns in one SELECT.
+    #[test]
+    fn multiple_aliased_columns() {
+        let q =
+            parse("SELECT @objectId AS id, @usedHeapSize AS bytes FROM java.lang.String").unwrap();
+        assert_eq!(q.select_aliases.len(), 2);
+        assert_eq!(q.select_aliases[0].as_deref(), Some("id"));
+        assert_eq!(q.select_aliases[1].as_deref(), Some("bytes"));
+    }
+
+    /// Mixed: first column has alias, second does not.
+    #[test]
+    fn mixed_aliased_and_plain_columns() {
+        let q = parse("SELECT @objectId AS id, @usedHeapSize FROM java.lang.String").unwrap();
+        assert_eq!(q.select_aliases[0].as_deref(), Some("id"));
+        assert_eq!(q.select_aliases[1], None);
+    }
+
+    /// Alias combined with ORDER BY.
+    #[test]
+    fn alias_combined_with_order_by() {
+        let q =
+            parse("SELECT @usedHeapSize AS bytes FROM java.lang.String ORDER BY @usedHeapSize DESC")
+                .unwrap();
+        assert_eq!(q.select_aliases[0].as_deref(), Some("bytes"));
+        assert!(q.order_by.is_some());
+    }
+
+    /// Alias after a `path(a,b)` item.
+    #[test]
+    fn alias_on_path_item() {
+        let q = parse(
+            "SELECT path(s, java.lang.Object) AS p FROM java.lang.String s",
+        )
+        .unwrap();
+        assert_eq!(q.select_aliases[0].as_deref(), Some("p"));
+        assert!(matches!(&q.select[0], SelectItem::Path { .. }));
+    }
+
+    /// AS with a quoted name that looks like a reserved word.
+    #[test]
+    fn alias_quoted_reserved_word_name() {
+        let q = parse(r#"SELECT * AS "FROM" FROM java.lang.String"#).unwrap();
+        assert_eq!(q.select_aliases[0].as_deref(), Some("FROM"));
+    }
+
+    /// UNION: alias on head branch is present; tail branch alias is independent.
+    #[test]
+    fn alias_union_head_branch_preserved() {
+        let q =
+            parse("SELECT @objectId AS id FROM java.lang.String UNION SELECT @objectId FROM java.lang.Object")
+                .unwrap();
+        assert_eq!(q.select_aliases[0].as_deref(), Some("id"));
+        // tail branch has no alias
+        assert_eq!(q.union_branches[0].select_aliases[0], None);
+    }
+
+    /// select_aliases vec is always the same length as select vec.
+    #[test]
+    fn select_aliases_length_matches_select() {
+        let queries = [
+            "SELECT * FROM C",
+            "SELECT @objectId, @usedHeapSize FROM C",
+            "SELECT COUNT(*) AS n, SUM(@usedHeapSize) AS total FROM C",
+        ];
+        for oql in &queries {
+            let q = parse(oql).unwrap();
+            assert_eq!(
+                q.select.len(),
+                q.select_aliases.len(),
+                "select_aliases length mismatch for: {oql}"
+            );
+        }
     }
 }

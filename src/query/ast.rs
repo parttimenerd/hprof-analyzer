@@ -7,6 +7,10 @@
 pub struct Query {
     pub distinct: bool,
     pub select: Vec<SelectItem>,
+    /// Per-column alias names from `<expr> AS <name>` clauses, parallel to
+    /// `select` (same length). `None` at index i means no alias for that item;
+    /// `Some(s)` overrides the derived column name in the output header.
+    pub select_aliases: Vec<Option<String>>,
     /// `SELECT ... AS RETAINED SET`: expand each result into its full
     /// dominator-retained object set. `false` for a plain projection.
     pub retained_set: bool,

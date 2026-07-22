@@ -2,11 +2,11 @@
 //! ObjectVisitor and accumulates bounded rows during the pass2 2a scan.
 //! HistogramExecutor answers aggregate-only queries from per-class stats.
 
+use crate::query::ObjectVisitor;
 use crate::query::ast::{Attr, CompareOp, Query, SelectItem, Value};
 use crate::query::carry::Carry;
 use crate::query::model::{QueryColumn, QueryResult, QueryValue};
 use crate::query::plan::QueryPlan;
-use crate::query::ObjectVisitor;
 
 /// A cross-phase query whose Phase-1 matches were carried; finalized after
 /// retained sizes exist. `slot` is the query's index in the caller's list so
@@ -582,14 +582,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     }
 
     pub fn finish(self, name: &str) -> QueryResult {
-        let columns = self
-            .query
-            .select
-            .iter()
-            .map(|it| QueryColumn {
-                name: column_name(it),
-            })
-            .collect();
+        let columns = query_columns(self.query);
         QueryResult {
             name: name.to_string(),
             oql: String::new(),
@@ -879,6 +872,24 @@ pub fn column_name(it: &SelectItem) -> String {
         ),
         SelectItem::ToString(a) => format!("toString({a})"),
     }
+}
+
+/// Build output columns for a query, applying per-item AS aliases where present.
+pub fn query_columns(q: &crate::query::ast::Query) -> Vec<crate::query::model::QueryColumn> {
+    q.select
+        .iter()
+        .zip(
+            q.select_aliases
+                .iter()
+                .map(Option::as_deref)
+                .chain(std::iter::repeat(None)),
+        )
+        .map(|(it, alias)| crate::query::model::QueryColumn {
+            name: alias
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| column_name(it)),
+        })
+        .collect()
 }
 
 fn path_operand_name(p: &crate::query::ast::PathOperand) -> String {
@@ -2126,5 +2137,110 @@ mod tests {
             res.row_count, 2,
             "FROM-subquery outer matches all objects pre-semijoin"
         );
+    }
+
+    // ============================================================
+    // Column alias (AS <name>) tests in execute
+    // ============================================================
+
+    #[test]
+    fn alias_overrides_column_name_in_finish() {
+        let q = crate::query::parse::parse(
+            "SELECT @objectId AS myid FROM com.acme.Foo",
+        )
+        .unwrap();
+        let plan = plan_query(&q).unwrap();
+        let sc = schema(&[(10, "com.acme.Foo")]);
+        let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
+        ex.visit_instance(5, 10, &[]);
+        let res = ex.finish("q1");
+        assert_eq!(res.columns.len(), 1);
+        assert_eq!(
+            res.columns[0].name, "myid",
+            "alias must override derived @objectId name"
+        );
+    }
+
+    #[test]
+    fn no_alias_preserves_derived_column_name() {
+        let q =
+            crate::query::parse::parse("SELECT @usedHeapSize FROM com.acme.Foo").unwrap();
+        let plan = plan_query(&q).unwrap();
+        let sc = schema(&[(10, "com.acme.Foo")]);
+        let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
+        ex.visit_instance(5, 10, &[]);
+        let res = ex.finish("q1");
+        assert_eq!(res.columns[0].name, "@usedHeapSize");
+    }
+
+    #[test]
+    fn multiple_aliases_applied_per_column() {
+        let q = crate::query::parse::parse(
+            "SELECT @objectId AS id, @usedHeapSize AS bytes FROM com.acme.Foo",
+        )
+        .unwrap();
+        let plan = plan_query(&q).unwrap();
+        let sc = schema(&[(10, "com.acme.Foo")]);
+        let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
+        ex.visit_instance(5, 10, &[]);
+        let res = ex.finish("q1");
+        assert_eq!(res.columns.len(), 2);
+        assert_eq!(res.columns[0].name, "id");
+        assert_eq!(res.columns[1].name, "bytes");
+    }
+
+    #[test]
+    fn quoted_alias_applied_to_column() {
+        let q = crate::query::parse::parse(
+            r#"SELECT @usedHeapSize AS "size" FROM com.acme.Foo"#,
+        )
+        .unwrap();
+        let plan = plan_query(&q).unwrap();
+        let sc = schema(&[(10, "com.acme.Foo")]);
+        let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
+        ex.visit_instance(5, 10, &[]);
+        let res = ex.finish("q1");
+        assert_eq!(res.columns[0].name, "size");
+    }
+
+    #[test]
+    fn count_aggregate_alias() {
+        let q = crate::query::parse::parse(
+            "SELECT COUNT(*) AS n FROM com.acme.Foo",
+        )
+        .unwrap();
+        let plan = plan_query(&q).unwrap();
+        let sc = schema(&[(10, "com.acme.Foo")]);
+        let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
+        ex.visit_instance(5, 10, &[]);
+        let res = ex.finish("q1");
+        assert_eq!(res.columns[0].name, "n");
+    }
+
+    #[test]
+    fn query_columns_helper_respects_aliases() {
+        use crate::query::ast::{Attr, Query, SelectItem};
+        use crate::query::ast::{ClassSpec, FromSource};
+        let q = Query {
+            distinct: false,
+            select: vec![SelectItem::Attr(Attr::ObjectId), SelectItem::Star],
+            select_aliases: vec![Some("myid".to_string()), None],
+            retained_set: false,
+            from: FromSource::Class(ClassSpec {
+                instanceof: false,
+                class_name: "C".into(),
+                is_regex: false,
+            }),
+            alias: None,
+            where_: None,
+            order_by: None,
+            limit: None,
+            union_branches: Vec::new(),
+            union_limit: None,
+        };
+        let cols = query_columns(&q);
+        assert_eq!(cols.len(), 2);
+        assert_eq!(cols[0].name, "myid");
+        assert_eq!(cols[1].name, "*");
     }
 }

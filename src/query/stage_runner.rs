@@ -2,12 +2,12 @@
 //! QueryExecState after dominators + retained sizes exist, applies each plan's
 //! late_ops, and reassembles all results in original query order.
 
+use crate::query::PATH_FRONTIER_CAP;
 use crate::query::ast::{Attr, CompareOp, Predicate, Query, SelectItem, SortDir, Value};
 use crate::query::execute::{CrossPhaseEntry, QueryExecState};
 use crate::query::model::{QueryColumn, QueryResult, QueryValue};
 use crate::query::plan::StageOp;
 use crate::query::runflags::EdgeDir;
-use crate::query::PATH_FRONTIER_CAP;
 
 /// A shared empty tail-scalar table, used as the default `refwalk_tails` borrow
 /// when no RefWalk query ran (the common case). `LazyLock` derefs to a `'static`
@@ -392,7 +392,7 @@ fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
                     truncated: false,
                     error: Some(format!("stage op {other:?} not supported in this phase")),
                     note: None,
-                }
+                };
             }
         }
     }
@@ -417,9 +417,15 @@ fn dominator_rows(
         }
     }
     let col = q
-        .select
+        .select_aliases
         .first()
-        .map(crate::query::execute::column_name)
+        .and_then(|o| o.as_deref())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            q.select
+                .first()
+                .map(crate::query::execute::column_name)
+        })
         .unwrap_or_else(|| "*".to_string());
     let rows: Vec<Vec<QueryValue>> = indices
         .iter()
@@ -483,14 +489,7 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
         seeds.clone()
     };
 
-    let columns: Vec<QueryColumn> = q
-        .select
-        .iter()
-        .map(|it| QueryColumn {
-            name: crate::query::execute::column_name(it),
-        })
-        .collect();
-
+    let columns: Vec<QueryColumn> = crate::query::execute::query_columns(q);
     let mut rows: Vec<Vec<QueryValue>> = Vec::new();
     for &s in &kept {
         let row: Vec<QueryValue> = q
@@ -562,13 +561,7 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
         seeds
     };
 
-    let columns: Vec<QueryColumn> = q
-        .select
-        .iter()
-        .map(|it| QueryColumn {
-            name: crate::query::execute::column_name(it),
-        })
-        .collect();
+    let columns: Vec<QueryColumn> = crate::query::execute::query_columns(q);
 
     let out_rows: Vec<Vec<QueryValue>> = kept
         .iter()
@@ -604,7 +597,9 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
 /// True if the predicate tree contains any `Attr::ToString` comparison.
 fn has_to_string_pred(p: &Predicate) -> bool {
     match p {
-        Predicate::And(a, b) | Predicate::Or(a, b) => has_to_string_pred(a) || has_to_string_pred(b),
+        Predicate::And(a, b) | Predicate::Or(a, b) => {
+            has_to_string_pred(a) || has_to_string_pred(b)
+        }
         Predicate::Not(a) => has_to_string_pred(a),
         Predicate::Compare {
             lhs: Attr::ToString(_),
@@ -823,13 +818,7 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
             truncated = true;
         }
     }
-    let columns: Vec<QueryColumn> = q
-        .select
-        .iter()
-        .map(|it| QueryColumn {
-            name: crate::query::execute::column_name(it),
-        })
-        .collect();
+    let columns: Vec<QueryColumn> = crate::query::execute::query_columns(q);
     let out_rows: Vec<Vec<QueryValue>> = rows
         .iter()
         .map(|(idx, ret)| project_late_row(q, *idx, *ret))
