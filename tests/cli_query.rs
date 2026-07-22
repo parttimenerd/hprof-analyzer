@@ -2165,6 +2165,118 @@ fn from_objects_instanceof_is_accepted_end_to_end() {
     );
 }
 
+/// INSTANCEOF SUBCLASS RESOLUTION (found by the MAT differential oracle):
+/// `FROM INSTANCEOF C` must match C AND every subclass (Java `instanceof`
+/// semantics), not just the exact class. The philosophers fixture contains 128
+/// `…PhilosopherThread` instances (a `java.lang.Thread` subclass) plus 29 direct
+/// Threads, so `INSTANCEOF java.lang.Thread` must return strictly MORE rows than
+/// exact `FROM java.lang.Thread`. Before the fix both returned 29 (exact only).
+#[test]
+fn from_instanceof_includes_subclasses() {
+    let Some(hprof) = philosophers() else { return };
+    let exact = query_count_value(&hprof, "SELECT COUNT(*) FROM java.lang.Thread")
+        .expect("exact FROM Thread count must succeed");
+    let subclasses = query_count_value(&hprof, "SELECT COUNT(*) FROM INSTANCEOF java.lang.Thread")
+        .expect("INSTANCEOF Thread count must succeed");
+    assert!(exact > 0, "fixture must have some Threads; got {exact}");
+    assert!(
+        subclasses > exact,
+        "INSTANCEOF java.lang.Thread ({subclasses}) must include subclasses and \
+         therefore exceed exact FROM java.lang.Thread ({exact}); equal counts mean \
+         the hierarchy walk regressed to exact-only matching"
+    );
+}
+
+/// Exact `FROM C` must NOT pull in subclasses — the complement of the test above.
+/// The subclass `…PhilosopherThread` is present in the fixture; querying it by
+/// its exact name returns those instances, and they must NOT appear in an exact
+/// `FROM java.lang.Thread` (only the direct-Thread count).
+#[test]
+fn exact_from_excludes_subclasses() {
+    let Some(hprof) = philosophers() else { return };
+    let subclass_exact = query_count_value(
+        &hprof,
+        r#"SELECT COUNT(*) FROM "org\.renaissance\.scala\.stm\..*PhilosopherThread""#,
+    )
+    .expect("exact subclass count must succeed");
+    let thread_exact = query_count_value(&hprof, "SELECT COUNT(*) FROM java.lang.Thread")
+        .expect("exact Thread count must succeed");
+    assert!(
+        subclass_exact > 0,
+        "fixture must contain PhilosopherThread instances; got {subclass_exact}"
+    );
+    // If exact FROM erroneously matched subclasses, the direct-Thread count would
+    // be inflated to include the 128 PhilosopherThreads. It must stay small.
+    assert!(
+        thread_exact < subclass_exact,
+        "exact FROM java.lang.Thread ({thread_exact}) must exclude the \
+         {subclass_exact} PhilosopherThread subclass instances"
+    );
+}
+
+/// HISTOGRAM-vs-SCAN parity for INSTANCEOF: `COUNT(*) FROM INSTANCEOF C` (which is
+/// now forced onto the SingleScan path, since a class-summary histogram cannot
+/// resolve subclasses) must equal the row count of `SELECT * FROM INSTANCEOF C`.
+/// This pins the planner's `!q.from.instanceof()` histogram guard.
+#[test]
+fn instanceof_count_matches_projection_row_count() {
+    let Some(hprof) = philosophers() else { return };
+    let count = query_count_value(&hprof, "SELECT COUNT(*) FROM INSTANCEOF java.lang.Thread")
+        .expect("INSTANCEOF COUNT must succeed");
+    let rows = query_row_count(&hprof, "SELECT @objectAddress FROM INSTANCEOF java.lang.Thread")
+        .expect("INSTANCEOF projection must succeed");
+    assert_eq!(
+        count, rows,
+        "COUNT(*) INSTANCEOF Thread ({count}) must equal the projection row count \
+         ({rows}); a mismatch means the histogram fast path counted a different \
+         (exact-only) universe than the scan"
+    );
+}
+
+/// `FROM INSTANCEOF java.lang.Object` matches (nearly) every reachable object —
+/// its COUNT must equal the full object universe (the row count of the same
+/// projection), and must dwarf any single concrete class. This is the broadest
+/// hierarchy walk: every class chains up to Object.
+#[test]
+fn instanceof_object_spans_full_universe() {
+    let Some(hprof) = philosophers() else { return };
+    let count = query_count_value(&hprof, "SELECT COUNT(*) FROM INSTANCEOF java.lang.Object")
+        .expect("INSTANCEOF Object COUNT must succeed");
+    let rows = query_row_count(&hprof, "SELECT * FROM INSTANCEOF java.lang.Object")
+        .expect("INSTANCEOF Object projection must succeed");
+    let threads = query_count_value(&hprof, "SELECT COUNT(*) FROM INSTANCEOF java.lang.Thread")
+        .expect("INSTANCEOF Thread COUNT must succeed");
+    assert_eq!(
+        count, rows,
+        "COUNT(*) INSTANCEOF Object ({count}) must equal its projection row count ({rows})"
+    );
+    assert!(
+        count > threads,
+        "INSTANCEOF Object ({count}) must span far more than INSTANCEOF Thread ({threads})"
+    );
+}
+
+/// `WHERE x INSTANCEOF C` must also walk the hierarchy. Scanning the whole
+/// object universe (`FROM INSTANCEOF Object`) and filtering `WHERE o INSTANCEOF
+/// Thread` must return the SAME set as `FROM INSTANCEOF Thread` directly.
+#[test]
+fn where_instanceof_walks_hierarchy() {
+    let Some(hprof) = philosophers() else { return };
+    let via_where = query_row_count(
+        &hprof,
+        "SELECT @objectAddress FROM INSTANCEOF java.lang.Object o WHERE o INSTANCEOF java.lang.Thread",
+    )
+    .expect("WHERE INSTANCEOF query must succeed");
+    let via_from = query_row_count(&hprof, "SELECT @objectAddress FROM INSTANCEOF java.lang.Thread")
+        .expect("FROM INSTANCEOF Thread must succeed");
+    assert!(via_from > 0, "fixture must have Thread-subtype objects; got {via_from}");
+    assert_eq!(
+        via_where, via_from,
+        "WHERE o INSTANCEOF Thread ({via_where}) must match FROM INSTANCEOF Thread \
+         ({via_from}) — the WHERE predicate must walk the superclass chain too"
+    );
+}
+
 /// `FROM OBJECTS` is case-insensitive end-to-end.
 #[test]
 fn from_objects_case_insensitive_end_to_end() {

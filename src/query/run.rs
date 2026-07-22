@@ -80,6 +80,32 @@ impl<'a> ClassResolver for LiveResolver<'a> {
         self.names.get(&class_id).map(String::as_str)
     }
 
+    /// `FROM INSTANCEOF C` / `WHERE x INSTANCEOF C`: match the object's class AND
+    /// every superclass. Walk the `super_id` chain from `class_id` (mirroring
+    /// `owner_of`), testing each class's dot-form name against `spec`. Returns
+    /// true on the first match; false once the chain terminates (`super_id == 0`)
+    /// or a link is missing. `spec.instanceof` is ignored here — this method is
+    /// only reached WHEN instanceof is requested, and it always walks the chain.
+    fn is_instance_of(
+        &self,
+        class_id: u64,
+        spec: &crate::query::ast::ClassSpec,
+        from_regex: Option<&regex::Regex>,
+    ) -> bool {
+        let mut cur = class_id;
+        loop {
+            if let Some(name) = self.names.get(&cur) {
+                if crate::query::execute::class_name_matches_spec(name, spec, from_regex) {
+                    return true;
+                }
+            }
+            match self.class_map.get(&cur) {
+                Some(ci) if ci.super_id != 0 => cur = ci.super_id,
+                _ => return false,
+            }
+        }
+    }
+
     fn field(&self, class_id: u64, name: &str) -> Option<(u32, HprofType)> {
         let key = (class_id, name.to_string());
         if let Some(cached) = self.field_cache.borrow().get(&key) {

@@ -377,11 +377,16 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
         )
     });
 
+    // `FROM INSTANCEOF C` must NOT use the histogram fast path: a `ClassSummary`
+    // carries only a class name (no super-chain), so the histogram cannot resolve
+    // subclasses and would count only the exact class. Route instanceof aggregates
+    // to SingleScan, where `class_matches` walks the hierarchy via `is_instance_of`.
     let kind = if is_aggregate
         && !needs.instance_scalar
         && !needs.instance_string
         && where_terms.is_empty()
         && !agg_over_expr
+        && !q.from.instanceof()
         && q.select.iter().all(agg_histogram_answerable)
     {
         needs.histogram = true;
@@ -2815,6 +2820,23 @@ mod tests {
             plan.kind,
             StageKind::SingleScan,
             "MIN+SUM mix must route to SingleScan (MIN is not histogram-answerable)"
+        );
+    }
+
+    /// INSTANCEOF SUBCLASS FIX: `COUNT(*) FROM INSTANCEOF C` must NOT use the
+    /// histogram fast path. A `ClassSummary` has no super-chain, so the histogram
+    /// would count only the exact class. Forcing SingleScan lets `class_matches`
+    /// walk the hierarchy via `is_instance_of`. The exact-class COUNT still uses
+    /// the histogram (guarded by `count_star_stays_histogram_only`).
+    #[test]
+    fn count_instanceof_routes_single_scan() {
+        let plan =
+            pq(&parse("SELECT COUNT(*) FROM INSTANCEOF java.lang.Thread").unwrap()).unwrap();
+        assert_eq!(
+            plan.kind,
+            StageKind::SingleScan,
+            "COUNT(*) FROM INSTANCEOF must route to SingleScan so subclasses are \
+             resolved via the superclass walk, not the class-summary histogram"
         );
     }
 }

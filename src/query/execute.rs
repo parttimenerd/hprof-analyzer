@@ -70,6 +70,25 @@ impl QueryExecState {
 /// unit-tested against a fake and run against the real pass2 schema in prod.
 pub trait ClassResolver {
     fn class_name(&self, class_id: u64) -> Option<&str>;
+    /// True if the object's class (`class_id`) IS the target class named by
+    /// `spec` OR a subclass of it — i.e. Java `instanceof` semantics for
+    /// `FROM INSTANCEOF C` / `WHERE x INSTANCEOF C`. The default implementation
+    /// only matches the exact class (no hierarchy), which is correct for test
+    /// resolvers with no super-chain; `LiveResolver` overrides it to walk the
+    /// superclass chain via `ClassInfo::super_id`. `spec` carries the class name
+    /// (and, for a quoted-regex FROM, the compiled regex) so exact/glob/regex
+    /// matching stays consistent with `class_matches`.
+    fn is_instance_of(
+        &self,
+        class_id: u64,
+        spec: &crate::query::ast::ClassSpec,
+        from_regex: Option<&regex::Regex>,
+    ) -> bool {
+        match self.class_name(class_id) {
+            Some(name) => class_name_matches_spec(name, spec, from_regex),
+            None => false,
+        }
+    }
     fn field(&self, _class_id: u64, _name: &str) -> Option<(u32, crate::types::HprofType)> {
         None
     }
@@ -505,6 +524,14 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             // No class spec means a subquery source, handled above.
             return true;
         };
+        if spec.instanceof {
+            // `FROM INSTANCEOF C` matches C and every subclass. Walk the
+            // superclass chain (LiveResolver override); test resolvers with no
+            // hierarchy fall back to exact match.
+            return self
+                .resolver
+                .is_instance_of(class_id, spec, self.from_regex.as_ref());
+        }
         match self.resolver.class_name(class_id) {
             None => false,
             Some(name) => class_name_matches_spec(name, spec, self.from_regex.as_ref()),
@@ -773,11 +800,18 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                     || self.eval_pred(b, src_idx, class_id, blob)
             }
             P::Not(a) => !self.eval_pred(a, src_idx, class_id, blob),
-            P::InstanceOf(cname) => self
-                .resolver
-                .class_name(class_id)
-                .map(|n| class_name_matches(n, cname))
-                .unwrap_or(false),
+            P::InstanceOf(cname) => {
+                // `WHERE x INSTANCEOF C` follows Java semantics: match C and any
+                // subclass. Reuse the resolver's hierarchy walk (LiveResolver
+                // override) via a synthetic exact-match spec; test resolvers with
+                // no super-chain degrade to exact match.
+                let spec = crate::query::ast::ClassSpec {
+                    instanceof: true,
+                    class_name: cname.clone(),
+                    is_regex: false,
+                };
+                self.resolver.is_instance_of(class_id, &spec, None)
+            }
             P::InSubquery { lhs, .. } => self.eval_in_subquery(lhs, src_idx),
             P::Compare { lhs, op, rhs } => {
                 // Pass the real `src_idx` so object-identity LHS attrs
