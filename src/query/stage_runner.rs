@@ -969,6 +969,10 @@ mod tests {
     use crate::query::execute::QueryExecState;
     use crate::query::model::{QueryResult, QueryValue};
 
+
+    fn pq(q: &crate::query::ast::Query) -> crate::query::plan::QueryPlan {
+        crate::query::plan::plan_query(q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap()
+    }
     fn ctx(retained: &[u64]) -> LateCtx<'_> {
         // Dominator/shallow/id_map fields are unread by the retained-join tests;
         // populate with empty slices and an identity IdMap.
@@ -1005,7 +1009,7 @@ mod tests {
             "SELECT @objectId, @retainedHeapSize FROM C ORDER BY @retainedHeapSize DESC",
         )
         .unwrap();
-        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        let plan = pq(&q);
         let mut carry = crate::query::carry::Carry::index_only(100);
         carry.push_index(42);
         carry.push_index(7);
@@ -1030,7 +1034,7 @@ mod tests {
     fn join_retained_filters_where_and_limit() {
         let q = crate::query::parse::parse(
             "SELECT @objectId FROM C WHERE @retainedHeapSize > 1500 ORDER BY @retainedHeapSize DESC LIMIT 1").unwrap();
-        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        let plan = pq(&q);
         let mut carry = crate::query::carry::Carry::index_only(100);
         for i in [1u32, 2, 3] {
             carry.push_index(i);
@@ -1054,7 +1058,7 @@ mod tests {
     #[test]
     fn finished_and_pending_reassemble_in_slot_order() {
         let q = crate::query::parse::parse("SELECT @retainedHeapSize FROM C").unwrap();
-        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        let plan = pq(&q);
         let mut carry = crate::query::carry::Carry::index_only(100);
         carry.push_index(5);
         let mut st = QueryExecState::new();
@@ -1089,7 +1093,7 @@ mod tests {
     fn no_where_passes_all() {
         // No WHERE, no ORDER BY, no LIMIT: every carried index is projected.
         let q = crate::query::parse::parse("SELECT @objectId, @retainedHeapSize FROM C").unwrap();
-        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        let plan = pq(&q);
         let mut carry = crate::query::carry::Carry::index_only(100);
         for i in [3u32, 8, 1] {
             carry.push_index(i);
@@ -1122,7 +1126,7 @@ mod tests {
         // threshold, preserving push order.
         let q = crate::query::parse::parse("SELECT @objectId FROM C WHERE @retainedHeapSize > 100")
             .unwrap();
-        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        let plan = pq(&q);
         let mut carry = crate::query::carry::Carry::index_only(100);
         for i in [1u32, 2, 3, 4] {
             carry.push_index(i);
@@ -1151,7 +1155,7 @@ mod tests {
     #[test]
     fn empty_carry_yields_empty_result() {
         let q = crate::query::parse::parse("SELECT @objectId, @retainedHeapSize FROM C").unwrap();
-        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        let plan = pq(&q);
         let carry = crate::query::carry::Carry::index_only(100);
         let mut st = QueryExecState::new();
         st.push_cross_phase(0, "q_empty".to_string(), plan, carry);
@@ -1216,6 +1220,11 @@ mod dom_run_tests {
     fn ctx_parts() -> (Vec<u32>, Vec<u32>, Vec<u32>, Vec<u64>, Vec<u32>) {
         super::dom_ctx_tests::tiny_ctx_parts()
     }
+
+    fn pq(q: &crate::query::ast::Query) -> crate::query::plan::QueryPlan {
+        crate::query::plan::plan_query(q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap()
+    }
+
 
     #[test]
     fn dominator_children_emits_direct_children() {
@@ -1410,7 +1419,7 @@ mod dom_run_tests {
             string_values_truncated: false,
         };
         let q = crate::query::parse::parse("SELECT dominators(s) FROM C s").unwrap();
-        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        let plan = pq(&q);
         let mut carry = crate::query::carry::Carry::index_only(100);
         carry.push_index(0);
         let mut st = QueryExecState::new();
@@ -1447,7 +1456,7 @@ mod dom_run_tests {
             string_values_truncated: false,
         };
         let q = crate::query::parse::parse("SELECT dominatorof(s) FROM C s").unwrap();
-        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        let plan = pq(&q);
         let mut carry = crate::query::carry::Carry::index_only(100);
         carry.push_index(3);
         let mut st = QueryExecState::new();
@@ -1481,7 +1490,7 @@ mod dom_run_tests {
             string_values_truncated: false,
         };
         let q = crate::query::parse::parse("SELECT s AS RETAINED SET FROM C s").unwrap();
-        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        let plan = pq(&q);
         let mut carry = crate::query::carry::Carry::index_only(100);
         carry.push_index(0);
         let mut st = QueryExecState::new();
@@ -1650,11 +1659,15 @@ mod refwalk_tests {
 
     use crate::query::execute::QueryExecState;
 
+    fn pq(q: &crate::query::ast::Query) -> crate::query::plan::QueryPlan {
+        crate::query::plan::plan_query(q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap()
+    }
+
     /// Build a QueryExecState with one carried seed frontier for `oql`, seeded
     /// with the given dense indices.
     fn refwalk_state(oql: &str, seeds: &[u32]) -> (QueryExecState, crate::query::ast::Query) {
         let q = crate::query::parse::parse(oql).unwrap();
-        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        let plan = pq(&q);
         assert!(plan.needs.ref_walk, "query must arm ref_walk: {oql}");
         let mut carry = crate::query::carry::Carry::index_only(1000);
         for &s in seeds {
@@ -2134,11 +2147,15 @@ mod tostring_tests {
         }
     }
 
+    fn pq(q: &crate::query::ast::Query) -> crate::query::plan::QueryPlan {
+        crate::query::plan::plan_query(q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap()
+    }
+
     /// Helper: build a QueryExecState with one `ResolveStringValues` pending entry
     /// carrying the given dense indices.
     fn string_state(oql: &str, seeds: &[u32]) -> (QueryExecState, crate::query::ast::Query) {
         let q = crate::query::parse::parse(oql).unwrap();
-        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        let plan = pq(&q);
         assert!(
             plan.needs.string_values,
             "query must arm string_values for this test: {oql}"

@@ -47,11 +47,7 @@ pub const SUBQUERY_SET_CAP: usize = 5_000_000;
 /// forward subgraph for `path(a, b)`. Caps memory of the path-walk frontier.
 pub const PATH_FRONTIER_CAP: usize = 100_000;
 
-/// Default maximum BFS depth for a `path(a, b)` bounded forward walk. Bounds the
-/// reachable subgraph so a deep object graph can't produce an unbounded result.
-/// This is the single canonical default: the CLI `--query-path-depth` flag defaults
-/// to this value, and internal callers (tests, REPL `!plan`) pass it explicitly.
-/// Override per-run with `--query-path-depth N`.
+/// Default BFS depth cap for `path(a, b)` walks. Bounds memory; override with `--query-path-depth`.
 pub const DEFAULT_PATH_DEPTH_CAP: usize = 5;
 
 /// Per-object callback invoked once per INSTANCE_DUMP during the pass2 2a scan,

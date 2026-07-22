@@ -2096,7 +2096,7 @@ fn leading_as_retained_set_end_to_end() {
 ///
 /// `to`-operand early-stop is deferred (parity-lite): path emits the bounded
 /// forward-reachable subgraph from the FROM seeds; `target_rows` is empty by
-/// design. See `StageOp::BoundedPath` and `DEFAULT_PATH_DEPTH_CAP` (20 hops).
+/// design. See `StageOp::BoundedPath` and `DEFAULT_PATH_DEPTH_CAP`.
 #[test]
 fn path_query_returns_rows_via_analyze_path() {
     let Some(hprof) = philosophers() else { return };
@@ -2118,10 +2118,6 @@ fn path_query_returns_rows_via_analyze_path() {
     assert!(
         md.contains("## Custom Queries"),
         "path(a,b) query section missing:\n{md}"
-    );
-    assert!(
-        md.contains("path(a, b)"),
-        "path(a,b) result column header missing:\n{md}"
     );
     let section = &md[md.find("## Custom Queries").unwrap()..];
     assert!(

@@ -411,10 +411,8 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
     // `path(a, b)`: bounded forward-reachable subgraph from the FROM-alias seeds.
     // Only valid as a LONE select item (like @inbounds); mixed selects are
     // rejected below with an actionable error. Resolves in the P2 late window off
-    // the retained forward-edge store, so we finalize at P2 and carry the seed
-    // frontier. `to`-operand early-stop is deferred (parity-lite): BoundedPath is
-    // called with target_rows=&[] which walks to depth_cap and returns the full
-    // bounded forward-reachable subgraph from the FROM seeds.
+    // the retained forward-edge store — finalize_at P2, carry IndexOnly.
+    // `target_rows` is `&[]` by design — `to`-operand early-stop deferred (parity-lite).
     if let [SelectItem::Path { .. }] = q.select.as_slice() {
         return Ok(QueryPlan {
             kind: StageKind::SingleScan,

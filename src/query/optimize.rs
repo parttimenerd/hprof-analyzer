@@ -209,6 +209,10 @@ mod tests {
 
     // ---------- helpers ----------
 
+    fn pq(q: &crate::query::ast::Query) -> QueryPlan {
+        plan_query(q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap()
+    }
+
     /// Build a minimal Conjunct with a scalar integer-compare predicate (cost = `cost`).
     /// The field name is embedded in the predicate so two conjuncts at the same cost
     /// but different field names can be told apart.
@@ -232,7 +236,7 @@ mod tests {
     fn reorder_sorts_cheap_first() {
         // Build a plan whose where_terms are deliberately in worst-first order.
         let mut plan =
-            plan_query(&parse("SELECT @objectId FROM java.lang.String").unwrap(), crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+            pq(&parse("SELECT @objectId FROM java.lang.String").unwrap());
         plan.where_terms = vec![
             scalar_conjunct("d", PredCost::Ref),
             scalar_conjunct("c", PredCost::Str),
@@ -271,7 +275,7 @@ mod tests {
     #[test]
     fn reorder_is_stable_within_cost_class() {
         let mut plan =
-            plan_query(&parse("SELECT @objectId FROM java.lang.String").unwrap(), crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+            pq(&parse("SELECT @objectId FROM java.lang.String").unwrap());
         plan.where_terms = vec![
             scalar_conjunct("first", PredCost::Scalar),
             scalar_conjunct("second", PredCost::Scalar),
@@ -311,7 +315,7 @@ mod tests {
     #[test]
     fn reorder_is_idempotent() {
         let mut plan =
-            plan_query(&parse("SELECT @objectId FROM java.lang.String").unwrap(), crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+            pq(&parse("SELECT @objectId FROM java.lang.String").unwrap());
         plan.where_terms = vec![
             scalar_conjunct("d", PredCost::Ref),
             scalar_conjunct("c", PredCost::Str),
@@ -335,7 +339,7 @@ mod tests {
     /// must leave it empty and not panic.
     #[test]
     fn reorder_empty_where_is_noop() {
-        let mut plan = plan_query(&parse("SELECT * FROM java.lang.String").unwrap(), crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        let mut plan = pq(&parse("SELECT * FROM java.lang.String").unwrap());
         assert!(
             plan.where_terms.is_empty(),
             "precondition: no WHERE → empty where_terms"
@@ -391,7 +395,7 @@ mod tests {
     #[test]
     fn limit_pushed_to_scan_when_safe() {
         let mut plan =
-            plan_query(&parse("SELECT @objectId FROM java.lang.String LIMIT 10").unwrap(), crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+            pq(&parse("SELECT @objectId FROM java.lang.String LIMIT 10").unwrap());
         pushdown_limit(&mut plan);
         assert_eq!(
             plan.scan_limit,
@@ -404,12 +408,8 @@ mod tests {
     /// order_sensitive. Either condition alone blocks pushdown; this tests both.
     #[test]
     fn limit_not_pushed_with_order_by() {
-        let mut plan = plan_query(
-            &parse("SELECT @objectId FROM java.lang.String ORDER BY @retainedHeapSize LIMIT 10")
-                .unwrap(),
-            crate::query::DEFAULT_PATH_DEPTH_CAP,
-        )
-        .unwrap();
+        let mut plan = pq(&parse("SELECT @objectId FROM java.lang.String ORDER BY @retainedHeapSize LIMIT 10")
+                .unwrap());
         pushdown_limit(&mut plan);
         assert_eq!(
             plan.scan_limit, None,
@@ -423,12 +423,8 @@ mod tests {
     /// isolation (no late_ops are present).
     #[test]
     fn limit_not_pushed_with_scalar_order_by() {
-        let mut plan = plan_query(
-            &parse("SELECT @objectId FROM java.lang.String ORDER BY @usedHeapSize LIMIT 10")
-                .unwrap(),
-            crate::query::DEFAULT_PATH_DEPTH_CAP,
-        )
-        .unwrap();
+        let mut plan = pq(&parse("SELECT @objectId FROM java.lang.String ORDER BY @usedHeapSize LIMIT 10")
+                .unwrap());
         // Verify precondition: no late ops (so order_sensitive is the ONLY blocker).
         assert!(
             plan.late_ops.is_empty(),
@@ -450,7 +446,7 @@ mod tests {
     #[test]
     fn no_limit_means_no_scan_limit() {
         let mut plan =
-            plan_query(&parse("SELECT @objectId FROM java.lang.String").unwrap(), crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+            pq(&parse("SELECT @objectId FROM java.lang.String").unwrap());
         pushdown_limit(&mut plan);
         assert_eq!(
             plan.scan_limit, None,
@@ -467,8 +463,7 @@ mod tests {
         // @retainedHeapSize in SELECT → JoinRetained late op; no ORDER BY so
         // order_sensitive is false; LIMIT 5 is present. The late op blocks pushdown.
         let mut plan =
-            plan_query(&parse("SELECT @retainedHeapSize FROM java.lang.String LIMIT 5").unwrap(), crate::query::DEFAULT_PATH_DEPTH_CAP)
-                .unwrap();
+            pq(&parse("SELECT @retainedHeapSize FROM java.lang.String LIMIT 5").unwrap());
         // Verify precondition: late ops non-empty and order_sensitive false.
         assert!(
             !plan.late_ops.is_empty(),
@@ -491,7 +486,7 @@ mod tests {
     #[test]
     fn pushdown_is_idempotent() {
         let mut plan =
-            plan_query(&parse("SELECT @objectId FROM java.lang.String LIMIT 10").unwrap(), crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+            pq(&parse("SELECT @objectId FROM java.lang.String LIMIT 10").unwrap());
         pushdown_limit(&mut plan);
         assert_eq!(plan.scan_limit, Some(10), "first call must set scan_limit");
         pushdown_limit(&mut plan);
@@ -510,7 +505,7 @@ mod tests {
     #[test]
     fn projection_only_refpath_deferred() {
         let query = parse("SELECT x.parent.name FROM Node x").unwrap();
-        let mut plan = plan_query(&query, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        let mut plan = pq(&query);
         defer_projections(&mut plan, &query);
         assert!(
             !plan.deferred_projections.is_empty(),
@@ -528,7 +523,7 @@ mod tests {
     #[test]
     fn retained_projection_deferred() {
         let query = parse("SELECT @retainedHeapSize FROM java.lang.String").unwrap();
-        let mut plan = plan_query(&query, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        let mut plan = pq(&query);
         defer_projections(&mut plan, &query);
         assert!(
             !plan.deferred_projections.is_empty(),
@@ -543,7 +538,7 @@ mod tests {
     #[test]
     fn plain_scalar_projection_not_deferred() {
         let query = parse("SELECT @objectId FROM java.lang.String").unwrap();
-        let mut plan = plan_query(&query, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        let mut plan = pq(&query);
         defer_projections(&mut plan, &query);
         assert!(
             plan.deferred_projections.is_empty(),
@@ -558,7 +553,7 @@ mod tests {
     #[test]
     fn defer_is_idempotent() {
         let query = parse("SELECT @retainedHeapSize FROM java.lang.String").unwrap();
-        let mut plan = plan_query(&query, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        let mut plan = pq(&query);
         defer_projections(&mut plan, &query);
         let first = plan.deferred_projections.clone();
         defer_projections(&mut plan, &query);
@@ -577,7 +572,7 @@ mod tests {
     fn dead_retained_need_eliminated() {
         // Build a plan that has no late ops, then manually arm needs.retained.
         let mut plan =
-            plan_query(&parse("SELECT @usedHeapSize FROM java.lang.String").unwrap(), crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+            pq(&parse("SELECT @usedHeapSize FROM java.lang.String").unwrap());
         // Ensure no late ops (precondition).
         plan.late_ops.clear();
         plan.needs.retained = true; // stale: no referent late op
@@ -593,7 +588,7 @@ mod tests {
     #[test]
     fn live_retained_need_preserved() {
         let mut plan =
-            plan_query(&parse("SELECT @retainedHeapSize FROM java.lang.String").unwrap(), crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+            pq(&parse("SELECT @retainedHeapSize FROM java.lang.String").unwrap());
         // Confirm precondition: the planner armed JoinRetained and needs.retained.
         assert!(
             plan.late_ops
@@ -621,15 +616,11 @@ mod tests {
     fn eliminate_does_not_touch_scan_needs() {
         // @displayName = "foo" → instance_string; count > 1 → instance_scalar;
         // s INSTANCEOF java.lang.Object → runtime_type.
-        let mut plan = plan_query(
-            &parse(
-                "SELECT * FROM C s WHERE @displayName = \"foo\" \
-                 AND count > 1 AND s INSTANCEOF java.lang.Object",
-            )
-            .unwrap(),
-            crate::query::DEFAULT_PATH_DEPTH_CAP,
+        let mut plan = pq(&parse(
+            "SELECT * FROM C s WHERE @displayName = \"foo\" \
+             AND count > 1 AND s INSTANCEOF java.lang.Object",
         )
-        .unwrap();
+        .unwrap());
         // Confirm preconditions.
         assert!(plan.needs.instance_string, "precondition: instance_string");
         assert!(plan.needs.instance_scalar, "precondition: instance_scalar");
@@ -657,7 +648,7 @@ mod tests {
     #[test]
     fn eliminate_is_idempotent() {
         let mut plan =
-            plan_query(&parse("SELECT @retainedHeapSize FROM java.lang.String").unwrap(), crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+            pq(&parse("SELECT @retainedHeapSize FROM java.lang.String").unwrap());
         eliminate_dead_needs(&mut plan);
         let needs_after_first = plan.needs.clone();
         eliminate_dead_needs(&mut plan);
@@ -675,7 +666,7 @@ mod tests {
     fn optimize_is_idempotent_and_composes() {
         let src = "SELECT @objectId FROM java.lang.String LIMIT 3";
         let q = parse(src).unwrap();
-        let plan = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        let plan = pq(&q);
         let once = optimize(plan.clone(), &q, &SchemaStats::default());
         let twice = optimize(once.clone(), &q, &SchemaStats::default());
         assert_eq!(once, twice, "optimize must be idempotent");
@@ -688,7 +679,7 @@ mod tests {
         // Build a plan from a LIMIT query, then manually inject worst-first predicates.
         let src = "SELECT @objectId FROM java.lang.String LIMIT 5";
         let q = parse(src).unwrap();
-        let mut plan = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        let mut plan = pq(&q);
         // Inject Ref > Str > Scalar > Type (worst-first) to verify reorder.
         plan.where_terms = vec![
             scalar_conjunct("d", PredCost::Ref),
@@ -723,7 +714,7 @@ mod tests {
         let src =
             "SELECT @objectId FROM java.lang.String UNION SELECT @objectId FROM java.lang.Object";
         let q = parse(src).unwrap();
-        let plan = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        let plan = pq(&q);
         assert_eq!(
             plan.union_branches.len(),
             1,
@@ -787,7 +778,7 @@ mod tests {
     #[test]
     fn order_by_selectivity_is_noop() {
         let q = parse("SELECT @objectId FROM java.lang.String").unwrap();
-        let mut plan = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        let mut plan = pq(&q);
         let snapshot = plan.clone();
         order_by_selectivity(&mut plan, &SchemaStats::default());
         assert_eq!(
@@ -801,7 +792,7 @@ mod tests {
     fn optimize_empty_where_and_no_limit() {
         let src = "SELECT @objectId FROM java.lang.String";
         let q = parse(src).unwrap();
-        let plan = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        let plan = pq(&q);
         let once = optimize(plan.clone(), &q, &SchemaStats::default());
         assert!(
             once.where_terms.is_empty(),
@@ -825,7 +816,7 @@ mod tests {
     #[test]
     fn narrow_carry_indexonly_is_noop() {
         let mut plan =
-            plan_query(&parse("SELECT @objectId FROM java.lang.String").unwrap(), crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+            pq(&parse("SELECT @objectId FROM java.lang.String").unwrap());
         assert!(
             matches!(plan.carry, CarryLayout::IndexOnly),
             "precondition: default carry is IndexOnly"
@@ -842,7 +833,7 @@ mod tests {
     #[test]
     fn narrow_carry_empty_scalars_downgrades() {
         let mut plan =
-            plan_query(&parse("SELECT @objectId FROM java.lang.String").unwrap(), crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+            pq(&parse("SELECT @objectId FROM java.lang.String").unwrap());
         plan.carry = CarryLayout::IndexPlusScalars { widths: vec![] };
         narrow_carry(&mut plan);
         assert!(

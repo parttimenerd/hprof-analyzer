@@ -866,8 +866,6 @@ fn collect_query_texts(opts: &AnalyzeOptions) -> io::Result<Vec<String>> {
 
 /// Parse and plan each OQL text, failing fast with an actionable message that
 /// names the offending query text and includes the parser/planner detail.
-/// `depth_cap` is threaded into the planner so `path(a, b)` BFS depth honours
-/// the `--query-path-depth` CLI flag.
 fn parse_plan_queries(
     query_texts: &[String],
     depth_cap: usize,
