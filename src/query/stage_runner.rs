@@ -380,6 +380,12 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
     // A predicate-critical RefPath in WHERE filters seeds before projection.
     let where_refpath = q.where_.as_ref().and_then(find_pred_refpath);
 
+    // Compile LIKE/NOT LIKE regexes for this query's WHERE predicates. They were
+    // already validated at plan time, so compilation here is infallible for
+    // well-formed queries; errors fall back to an empty map (LIKE never matches).
+    // This is called once per query entry (not per row), so it does not hot-path.
+    let like_regexes = crate::query::execute::compile_like_regexes(q).unwrap_or_default();
+
     let seeds: Vec<u32> = entry.carry.indices();
     let mut note: Option<String> = None;
 
@@ -397,7 +403,7 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
                 let val = resolved
                     .first()
                     .and_then(|&d| project_tail(tail, d, ctx, &mut note));
-                eval_refpath_pred(pred, val.as_ref())
+                eval_refpath_pred(pred, val.as_ref(), &like_regexes)
             })
             .collect()
     } else {
@@ -498,13 +504,21 @@ fn find_pred_refpath(p: &Predicate) -> Option<Attr> {
 /// Evaluate only the RefPath comparison term(s) of a predicate against the
 /// resolved tail value. Non-RefPath terms pass (they were applied in Phase 1).
 /// A `None` resolved value fails any comparison (dead end / uncaptured tail).
-fn eval_refpath_pred(p: &Predicate, val: Option<&QueryValue>) -> bool {
+fn eval_refpath_pred(
+    p: &Predicate,
+    val: Option<&QueryValue>,
+    like_regexes: &std::collections::HashMap<String, regex::Regex>,
+) -> bool {
     match p {
-        Predicate::And(a, b) => eval_refpath_pred(a, val) && eval_refpath_pred(b, val),
-        Predicate::Or(a, b) => eval_refpath_pred(a, val) || eval_refpath_pred(b, val),
-        Predicate::Not(a) => !eval_refpath_pred(a, val),
+        Predicate::And(a, b) => {
+            eval_refpath_pred(a, val, like_regexes) && eval_refpath_pred(b, val, like_regexes)
+        }
+        Predicate::Or(a, b) => {
+            eval_refpath_pred(a, val, like_regexes) || eval_refpath_pred(b, val, like_regexes)
+        }
+        Predicate::Not(a) => !eval_refpath_pred(a, val, like_regexes),
         Predicate::Compare { lhs: Attr::RefPath { .. }, op, rhs } => match val {
-            Some(v) => cmp_query_value(v, *op, rhs),
+            Some(v) => cmp_query_value(v, *op, rhs, like_regexes),
             None => false,
         },
         _ => true,
@@ -512,7 +526,14 @@ fn eval_refpath_pred(p: &Predicate, val: Option<&QueryValue>) -> bool {
 }
 
 /// Compare a resolved tail `QueryValue` against a literal RHS per the operator.
-fn cmp_query_value(v: &QueryValue, op: CompareOp, rhs: &Value) -> bool {
+/// `like_regexes` backs LIKE/NOT LIKE for string tails — looked up by pattern
+/// string, never compiled per row.
+fn cmp_query_value(
+    v: &QueryValue,
+    op: CompareOp,
+    rhs: &Value,
+    like_regexes: &std::collections::HashMap<String, regex::Regex>,
+) -> bool {
     match (v, rhs) {
         (QueryValue::Int(l), Value::Int(r)) => cmp_i64(*l, op, *r),
         (QueryValue::Int(l), Value::Float(r)) => cmp_f64(*l as f64, op, *r),
@@ -521,6 +542,8 @@ fn cmp_query_value(v: &QueryValue, op: CompareOp, rhs: &Value) -> bool {
         (QueryValue::Str(l), Value::Str(r)) => match op {
             CompareOp::Eq => l == r,
             CompareOp::Ne => l != r,
+            CompareOp::Like => like_regexes.get(r.as_str()).is_some_and(|re| re.is_match(l)),
+            CompareOp::NotLike => like_regexes.get(r.as_str()).is_none_or(|re| !re.is_match(l)),
             _ => false,
         },
         (QueryValue::Bool(l), Value::Bool(r)) => match op {
@@ -528,8 +551,9 @@ fn cmp_query_value(v: &QueryValue, op: CompareOp, rhs: &Value) -> bool {
             CompareOp::Ne => l != r,
             _ => false,
         },
-        // Type mismatch: only Ne is (trivially) true.
-        _ => matches!(op, CompareOp::Ne),
+        // Type mismatch: only Ne is (trivially) true. Non-string LHS with LIKE
+        // never matches; NOT LIKE on non-string is trivially true.
+        _ => matches!(op, CompareOp::Ne | CompareOp::NotLike),
     }
 }
 fn cmp_i64(l: i64, op: CompareOp, r: i64) -> bool {
@@ -1230,6 +1254,65 @@ mod refwalk_tests {
             Some(QueryValue::Int(3))
         );
         assert!(note.is_none(), "identity tail needs no note");
+    }
+
+    // --- LIKE / NOT LIKE on RefPath string tail ---
+
+    #[test]
+    fn refwalk_like_on_string_tail_matches_correctly() {
+        // SELECT x.parent.name FROM C x WHERE x.parent.name LIKE "foo.*"
+        // seed 0 --parent--> 3 (name "foobar", matches); seed 1 --parent--> 4
+        // (name "bar", doesn't match). Only seed 0's row survives the filter.
+        let names = vec!["parent".to_string()];
+        let id_map = IdMap::identity(5);
+        let mut tails = std::collections::HashMap::new();
+        tails.insert(3u32, QueryValue::Str("foobar".to_string()));
+        tails.insert(4u32, QueryValue::Str("bar".to_string()));
+        let ctx = fwd_ctx_tails(
+            &[0, 1, 2, 2, 2, 2],
+            &[3, 4],
+            &[0, 0],
+            &names,
+            &id_map,
+            &tails,
+        );
+        let (st, q) = refwalk_state(
+            "SELECT x.parent.name FROM C x WHERE x.parent.name LIKE \"foo.*\"",
+            &[0, 1],
+        );
+        let out = resume(st, &[q.clone(), q], &ctx);
+        let r = &out[0];
+        assert!(r.error.is_none(), "unexpected error: {:?}", r.error);
+        assert_eq!(r.row_count, 1, "only seed 0 (name 'foobar') matches LIKE 'foo.*'");
+        assert_eq!(r.rows[0][0], QueryValue::Str("foobar".to_string()));
+    }
+
+    #[test]
+    fn refwalk_not_like_on_string_tail_negates_correctly() {
+        // SELECT x.parent.name FROM C x WHERE x.parent.name NOT LIKE "foo.*"
+        // seed 0 -> name "foobar" (filtered out); seed 1 -> name "bar" (survives).
+        let names = vec!["parent".to_string()];
+        let id_map = IdMap::identity(5);
+        let mut tails = std::collections::HashMap::new();
+        tails.insert(3u32, QueryValue::Str("foobar".to_string()));
+        tails.insert(4u32, QueryValue::Str("bar".to_string()));
+        let ctx = fwd_ctx_tails(
+            &[0, 1, 2, 2, 2, 2],
+            &[3, 4],
+            &[0, 0],
+            &names,
+            &id_map,
+            &tails,
+        );
+        let (st, q) = refwalk_state(
+            "SELECT x.parent.name FROM C x WHERE x.parent.name NOT LIKE \"foo.*\"",
+            &[0, 1],
+        );
+        let out = resume(st, &[q.clone(), q], &ctx);
+        let r = &out[0];
+        assert!(r.error.is_none(), "unexpected error: {:?}", r.error);
+        assert_eq!(r.row_count, 1, "only seed 1 (name 'bar') passes NOT LIKE 'foo.*'");
+        assert_eq!(r.rows[0][0], QueryValue::Str("bar".to_string()));
     }
 }
 

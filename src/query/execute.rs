@@ -824,7 +824,7 @@ fn collect_like_regexes(
             collect_like_regexes(b, out)?;
         }
         P::Not(a) => collect_like_regexes(a, out)?,
-        P::Compare { op, rhs, .. } if matches!(op, CompareOp::Like | CompareOp::NotLike) => {
+        P::Compare { op: CompareOp::Like | CompareOp::NotLike, rhs, .. } => {
             if let Value::Str(pat) = rhs {
                 if !out.contains_key(pat) {
                     let anchored = format!("^(?:{pat})$");
