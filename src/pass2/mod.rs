@@ -347,6 +347,16 @@ impl Pass2 {
             let mut counts = vec![0u64; cap];
             let mut shallow_totals = vec![0u64; cap];
             for i in 0..n {
+                // Skip class objects (kind 3): the OQL SingleScan path only
+                // delivers instances/arrays to the visitor (CLASS_DUMP records
+                // are never sent to `visit_instance`/`visit_array`), so counting
+                // them here would make `SELECT COUNT(*)` over-report relative to
+                // `SELECT *` for any pattern matching `java.lang.Class`. Excluding
+                // them keeps the histogram (aggregate) path consistent with the
+                // scan (projection) path over the same object universe.
+                if p1.kind[i] == 3 {
+                    continue;
+                }
                 let ci = class_idx[i] as usize;
                 counts[ci] += 1;
                 shallow_totals[ci] += shallow[i] as u64;

@@ -57,6 +57,86 @@ fn query_subcommand_count_prints_table() {
     );
 }
 
+/// Run a query and return its trimmed stdout.
+fn run_query_stdout(hprof: &str, oql: &str) -> String {
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(hprof)
+        .args(["--query", oql])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "query failed ({oql}): {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// Extract the single integer cell from a `SELECT COUNT(*)`-style result.
+fn parse_single_count(stdout: &str) -> u64 {
+    stdout
+        .lines()
+        .find_map(|l| l.trim().parse::<u64>().ok())
+        .unwrap_or_else(|| panic!("no integer count row in:\n{stdout}"))
+}
+
+/// Extract the `(N rows)` / `(1 row)` count from a projection result footer.
+fn parse_row_count(stdout: &str) -> u64 {
+    for l in stdout.lines() {
+        let t = l.trim();
+        if let Some(rest) = t.strip_prefix('(') {
+            // Handles "(N rows)", "(1 row)", "(N rows, truncated)".
+            if let Some(num) = rest.split_whitespace().next() {
+                if let Ok(n) = num.parse::<u64>() {
+                    return n;
+                }
+            }
+        }
+    }
+    panic!("no `(N rows)` footer in:\n{stdout}");
+}
+
+/// SW-5 regression: the histogram (aggregate) `COUNT(*)` path must count the
+/// SAME object universe as the SingleScan (projection) `SELECT *` path. Class
+/// objects (HPROF `CLASS_DUMP` records, kind 3) are never delivered to the OQL
+/// visitor, so they must also be excluded from the histogram tally — otherwise
+/// `COUNT(*)` over-reports for any pattern matching `java.lang.Class`.
+#[test]
+fn query_count_matches_select_star_for_class_objects() {
+    let Some(hprof) = philosophers() else { return };
+    // java.lang.Class: the class-object case that exposed the over-count.
+    let count = parse_single_count(&run_query_stdout(
+        &hprof,
+        "SELECT COUNT(*) FROM java.lang.Class",
+    ));
+    let rows = parse_row_count(&run_query_stdout(&hprof, "SELECT * FROM java.lang.Class"));
+    assert_eq!(
+        count, rows,
+        "COUNT(*) ({count}) must equal SELECT * row count ({rows}) for java.lang.Class"
+    );
+
+    // A wide regex spanning many classes including java.lang.Class.
+    let count_re = parse_single_count(&run_query_stdout(
+        &hprof,
+        "SELECT COUNT(*) FROM \"java.lang.*\"",
+    ));
+    let rows_re = parse_row_count(&run_query_stdout(&hprof, "SELECT * FROM \"java.lang.*\""));
+    assert_eq!(
+        count_re, rows_re,
+        "COUNT(*) ({count_re}) must equal SELECT * row count ({rows_re}) for java.lang.*"
+    );
+
+    // Sanity: an exact leaf class with no class-object rows is unaffected.
+    let s_count = parse_single_count(&run_query_stdout(
+        &hprof,
+        "SELECT COUNT(*) FROM java.lang.String",
+    ));
+    let s_rows = parse_row_count(&run_query_stdout(&hprof, "SELECT * FROM java.lang.String"));
+    assert_eq!(s_count, s_rows, "java.lang.String count must match rows");
+    assert!(s_count > 0, "String count must be positive");
+}
+
 /// Alias-qualified `@attr` (MAT syntax `s.@objectId`) reaches execution: the
 /// query runs without an `OQL parse error` and exits successfully.
 #[test]
