@@ -7,8 +7,8 @@ use std::io;
 use crate::{pass1::Pass1, types::HprofType};
 
 use super::{
-    ThreadProps, ThreadStack, decode_java_string, field_offset, read_ref, scan_class_dumps,
-    scan_instance_blobs, scan_obj_arrays, scan_prim_arrays,
+    decode_java_string, field_offset, read_ref, scan_class_dumps, scan_instance_blobs,
+    scan_obj_arrays, scan_prim_arrays, ThreadProps, ThreadStack,
 };
 
 /// Cached byte offsets of the `(daemon, priority, threadStatus)` fields within a

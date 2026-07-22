@@ -50,7 +50,7 @@ pub(crate) fn render_duplicate_strings(
     d: &Option<crate::pass2::DupStrings>,
     graphs: bool,
 ) {
-    use crate::md::{Align, Table, bar, sparkline};
+    use crate::md::{bar, sparkline, Align, Table};
     out.push_str("### Duplicate Strings (approximate)\n\n");
     let d = match d {
         None => {
@@ -281,7 +281,10 @@ pub fn render_markdown(r: &Report) -> String {
 /// and either an error line or a result table with a row-count footer. Emits
 /// nothing when there are no queries so the document structure is unchanged for
 /// the common (no `--query`) case.
-pub(crate) fn render_custom_queries(queries: &[crate::query::model::QueryResult], out: &mut String) {
+pub(crate) fn render_custom_queries(
+    queries: &[crate::query::model::QueryResult],
+    out: &mut String,
+) {
     use std::fmt::Write;
     if queries.is_empty() {
         return;
@@ -1430,7 +1433,7 @@ pub(crate) fn render_top_components(tc: &TopComponents, graphs: bool, out: &mut 
 /// Emits the heading + a fallback italic line even when empty so the document
 /// structure stays stable.
 pub(crate) fn render_arrays_by_size(a: &ArraysBySize, graphs: bool, out: &mut String) {
-    use crate::md::{Align, Table, bar};
+    use crate::md::{bar, Align, Table};
     out.push_str("## Arrays by Size\n\n");
     if a.obj_array_buckets.is_empty() && a.prim_array_buckets.is_empty() && a.zero_length_count == 0
     {
@@ -1520,7 +1523,7 @@ fn render_fill_ratio_table(
     graphs: bool,
     out: &mut String,
 ) {
-    use crate::md::{Align, Table, bar};
+    use crate::md::{bar, Align, Table};
     if buckets.is_empty() {
         out.push_str("_None._\n\n");
         return;
@@ -1571,7 +1574,7 @@ fn render_fill_ratio_table(
 }
 
 pub(crate) fn render_collections(c: &CollectionsAnalysis, graphs: bool, out: &mut String) {
-    use crate::md::{Align, Table, bar};
+    use crate::md::{bar, Align, Table};
     out.push_str("## Collections\n\n");
     out.push_str(
         "_Collection and array occupancy: how full collections are, how big they get, \
@@ -1822,7 +1825,7 @@ pub(crate) fn render_collections(c: &CollectionsAnalysis, graphs: bool, out: &mu
 /// md-graphs; when `graphs` is set an extra proportional bar column is appended
 /// on Shallow.
 fn render_top_arrays(t: &TopArrays, kind: &str, graphs: bool, out: &mut String) {
-    use crate::md::{Align, Table, bar};
+    use crate::md::{bar, Align, Table};
 
     out.push_str(&format!("### Top Arrays ({kind})\n\n"));
     out.push_str(&format!(
@@ -1938,7 +1941,7 @@ pub(crate) fn render_collection_attribution(
     graphs: bool,
     out: &mut String,
 ) {
-    use crate::md::{Align, Table, bar};
+    use crate::md::{bar, Align, Table};
     let Some(a) = a else {
         return;
     };
@@ -2064,7 +2067,7 @@ pub(crate) fn render_collection_attribution(
 /// and md-graphs; when `graphs` is set a proportional bar is appended on the
 /// Retained column.
 pub(crate) fn render_fields_by_size(f: &Option<FieldsBySize>, graphs: bool, out: &mut String) {
-    use crate::md::{Align, Table, bar};
+    use crate::md::{bar, Align, Table};
     let Some(f) = f else {
         return;
     };
@@ -2191,7 +2194,7 @@ fn render_biggest_collection_table(
     graphs: bool,
     out: &mut String,
 ) {
-    use crate::md::{Align, Table, bar};
+    use crate::md::{bar, Align, Table};
     out.push_str(&format!("### {title}\n\n"));
     if rows.is_empty() {
         out.push_str("_None._\n\n");
@@ -2362,7 +2365,7 @@ pub(crate) fn render_collection_contents(
 /// fallback line even when no references are present so the structure stays
 /// stable.
 pub(crate) fn render_references(rf: &ReferencesAnalysis, graphs: bool, out: &mut String) {
-    use crate::md::{Align, Table, bar};
+    use crate::md::{bar, Align, Table};
     out.push_str("## References\n\n");
     out.push_str("_Soft/weak/phantom reference referents (what they point at)._\n\n");
 
@@ -2415,7 +2418,7 @@ pub(crate) fn render_references(rf: &ReferencesAnalysis, graphs: bool, out: &mut
 /// Shared by plain md and md-graphs; when `graphs` is set, proportional bar
 /// columns are appended. Emits the heading + a fallback italic line when empty.
 pub(crate) fn render_unreachable_histogram(o: &SystemOverview, graphs: bool, out: &mut String) {
-    use crate::md::{Align, Table, bar};
+    use crate::md::{bar, Align, Table};
     out.push_str("## Unreachable Objects\n\n");
     if o.unreachable_histogram.is_empty() {
         out.push_str("*No unreachable objects.*\n\n");
@@ -2573,7 +2576,7 @@ fn render_garbage_root_node(
 /// on Drop (big drops) and on Dominated Shallow (immediate dominators). Emits the
 /// headings + fallback italic lines even when empty so the structure stays stable.
 pub(crate) fn render_dominator_analysis(d: &DominatorAnalysis, graphs: bool, out: &mut String) {
-    use crate::md::{Align, Table, bar};
+    use crate::md::{bar, Align, Table};
     out.push_str("## Dominator Analysis\n\n");
 
     // ---- Big Drops ----
@@ -2837,7 +2840,7 @@ pub(crate) fn render_alloc_sites(a: &AllocSites, graphs: bool, out: &mut String)
         );
         return;
     }
-    use crate::md::{Align, Table, bar};
+    use crate::md::{bar, Align, Table};
     let max = a.sites.iter().map(|s| s.object_count).max().unwrap_or(0);
     let mut t = if graphs {
         Table::new(
@@ -3088,19 +3091,34 @@ mod tests {
         };
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
-        assert!(out.contains("## Custom Queries"), "section heading missing: {out}");
+        assert!(
+            out.contains("## Custom Queries"),
+            "section heading missing: {out}"
+        );
         assert!(out.contains("### q1"), "query name heading missing: {out}");
         // Fenced OQL block.
-        assert!(out.contains("```\nSELECT a, b FROM C\n```"), "fenced OQL block missing: {out}");
+        assert!(
+            out.contains("```\nSELECT a, b FROM C\n```"),
+            "fenced OQL block missing: {out}"
+        );
         // Header row + separator.
         assert!(out.contains("| a | b |"), "header row missing: {out}");
-        assert!(out.contains("| --- | --- |"), "separator row missing: {out}");
+        assert!(
+            out.contains("| --- | --- |"),
+            "separator row missing: {out}"
+        );
         // Both data rows.
         assert!(out.contains("| 1 | x |"), "first data row missing: {out}");
         assert!(out.contains("| 2 | y |"), "second data row missing: {out}");
         // Footer.
-        assert!(out.contains("_2 row(s)_"), "row-count footer missing: {out}");
-        assert!(!out.contains("truncated"), "non-truncated result must not say truncated: {out}");
+        assert!(
+            out.contains("_2 row(s)_"),
+            "row-count footer missing: {out}"
+        );
+        assert!(
+            !out.contains("truncated"),
+            "non-truncated result must not say truncated: {out}"
+        );
     }
 
     #[test]
@@ -3117,10 +3135,19 @@ mod tests {
         };
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
-        assert!(out.contains("**Error:** parse failed near 'bogus'"), "error line missing: {out}");
+        assert!(
+            out.contains("**Error:** parse failed near 'bogus'"),
+            "error line missing: {out}"
+        );
         // No table header/separator emitted for the errored query.
-        assert!(!out.contains("| x |"), "errored query must not emit a header row: {out}");
-        assert!(!out.contains("| --- |"), "errored query must not emit a separator row: {out}");
+        assert!(
+            !out.contains("| x |"),
+            "errored query must not emit a header row: {out}"
+        );
+        assert!(
+            !out.contains("| --- |"),
+            "errored query must not emit a separator row: {out}"
+        );
     }
 
     #[test]
@@ -3137,7 +3164,10 @@ mod tests {
         };
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
-        assert!(out.contains("_5000 row(s), truncated_"), "truncated footer missing: {out}");
+        assert!(
+            out.contains("_5000 row(s), truncated_"),
+            "truncated footer missing: {out}"
+        );
     }
 
     #[test]
@@ -3174,7 +3204,10 @@ mod tests {
         };
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
-        assert!(!out.contains("Note:"), "absent note must not emit a Note: line: {out}");
+        assert!(
+            !out.contains("Note:"),
+            "absent note must not emit a Note: line: {out}"
+        );
     }
 
     #[test]
@@ -3191,7 +3224,10 @@ mod tests {
         };
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
-        assert!(out.contains("| a\\|b |"), "pipe in Str cell must be escaped as \\|: {out}");
+        assert!(
+            out.contains("| a\\|b |"),
+            "pipe in Str cell must be escaped as \\|: {out}"
+        );
     }
 
     #[test]
@@ -3220,10 +3256,20 @@ mod tests {
         ];
         let mut out = String::new();
         render_custom_queries(&queries, &mut out);
-        assert!(out.contains("### first"), "first query heading missing: {out}");
-        assert!(out.contains("### second"), "second query heading missing: {out}");
+        assert!(
+            out.contains("### first"),
+            "first query heading missing: {out}"
+        );
+        assert!(
+            out.contains("### second"),
+            "second query heading missing: {out}"
+        );
         // Only one top-level section heading regardless of query count.
-        assert_eq!(out.matches("## Custom Queries").count(), 1, "exactly one section heading: {out}");
+        assert_eq!(
+            out.matches("## Custom Queries").count(),
+            1,
+            "exactly one section heading: {out}"
+        );
     }
 
     #[test]
@@ -3242,7 +3288,10 @@ mod tests {
         };
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
-        assert!(out.contains("| --- |"), "empty-column result must still emit a valid separator: {out}");
+        assert!(
+            out.contains("| --- |"),
+            "empty-column result must still emit a valid separator: {out}"
+        );
     }
 
     #[test]
@@ -3281,7 +3330,10 @@ mod tests {
         assert!(out.contains("| --- |"), "separator row missing: {out}");
         assert!(out.contains("_0 row(s)_"), "zero-row footer missing: {out}");
         // No stray body row between the separator and the footer.
-        assert!(!out.contains("| null |"), "must not emit a body row for a rowless result: {out}");
+        assert!(
+            !out.contains("| null |"),
+            "must not emit a body row for a rowless result: {out}"
+        );
     }
 
     #[test]
@@ -3294,7 +3346,10 @@ mod tests {
             columns: vec![col("size"), col("obj")],
             rows: vec![vec![
                 QueryValue::Float(2.5),
-                QueryValue::ObjRef { index: 12, class: "java.lang.String".into() },
+                QueryValue::ObjRef {
+                    index: 12,
+                    class: "java.lang.String".into(),
+                },
             ]],
             row_count: 1,
             truncated: false,

@@ -17,7 +17,7 @@ use crate::{
     id_map::IdMap,
     pass2::sub_remaining,
     reader::HprofReader,
-    types::{HprofType, heap, tags},
+    types::{heap, tags, HprofType},
 };
 
 /// A thread-local GC-root edge: `(threadSerial, frameNumber, localAddr)`.

@@ -1,6 +1,6 @@
 // src/collection_config.rs
 
-use crate::pass2::{CollDesc, CollKind, builtin_coll_descs};
+use crate::pass2::{builtin_coll_descs, CollDesc, CollKind};
 use std::path::{Path, PathBuf};
 
 /// Parse a `Class#field` string into `(field_name, declaring_class)`.

@@ -17,7 +17,10 @@ pub enum QueryValue {
     Float(f64),
     Str(String),
     /// A reference to a heap object: dense index + its class name for display.
-    ObjRef { index: u64, class: String },
+    ObjRef {
+        index: u64,
+        class: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -49,7 +52,9 @@ mod tests {
         let r = QueryResult {
             name: "q1".into(),
             oql: "SELECT COUNT(*) FROM C".into(),
-            columns: vec![QueryColumn { name: "COUNT(*)".into() }],
+            columns: vec![QueryColumn {
+                name: "COUNT(*)".into(),
+            }],
             rows: vec![vec![QueryValue::Int(42)]],
             row_count: 1,
             truncated: false,
@@ -59,7 +64,10 @@ mod tests {
         let j = serde_json::to_string(&r).unwrap();
         assert!(j.contains("\"row_count\":1"));
         assert!(j.contains("\"truncated\":false"));
-        assert!(!j.contains("\"error\""), "error key should be omitted when None: {j}");
+        assert!(
+            !j.contains("\"error\""),
+            "error key should be omitted when None: {j}"
+        );
         let back: QueryResult = serde_json::from_str(&j).unwrap();
         assert_eq!(back, r);
     }
@@ -76,7 +84,10 @@ mod tests {
                 QueryValue::Int(-5),
                 QueryValue::Float(1.5),
                 QueryValue::Str("hi".into()),
-                QueryValue::ObjRef { index: 7, class: "java.lang.String".into() },
+                QueryValue::ObjRef {
+                    index: 7,
+                    class: "java.lang.String".into(),
+                },
             ]],
             row_count: 6,
             truncated: false,
@@ -88,13 +99,25 @@ mod tests {
         assert_eq!(back, r);
 
         // Verify the tagged enum representation for ObjRef (snake_case -> "obj_ref")
-        assert!(j.contains("\"kind\":\"obj_ref\""), "ObjRef must serialize as kind=obj_ref, got: {j}");
+        assert!(
+            j.contains("\"kind\":\"obj_ref\""),
+            "ObjRef must serialize as kind=obj_ref, got: {j}"
+        );
         // Verify Int serializes as "kind":"int"
-        assert!(j.contains("\"kind\":\"int\""), "Int must serialize as kind=int, got: {j}");
+        assert!(
+            j.contains("\"kind\":\"int\""),
+            "Int must serialize as kind=int, got: {j}"
+        );
         // Verify Bool serializes as "kind":"bool"
-        assert!(j.contains("\"kind\":\"bool\""), "Bool must serialize as kind=bool, got: {j}");
+        assert!(
+            j.contains("\"kind\":\"bool\""),
+            "Bool must serialize as kind=bool, got: {j}"
+        );
         // ObjRef content should have the "v" key with index and class
-        assert!(j.contains("\"java.lang.String\""), "ObjRef class must appear in JSON");
+        assert!(
+            j.contains("\"java.lang.String\""),
+            "ObjRef class must appear in JSON"
+        );
     }
 
     #[test]
@@ -110,7 +133,10 @@ mod tests {
             note: None,
         };
         let j = serde_json::to_string(&r).unwrap();
-        assert!(j.contains("\"error\":\"boom\""), "error field must appear in JSON, got: {j}");
+        assert!(
+            j.contains("\"error\":\"boom\""),
+            "error field must appear in JSON, got: {j}"
+        );
         let back: QueryResult = serde_json::from_str(&j).unwrap();
         assert_eq!(back, r);
     }

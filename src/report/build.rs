@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::pass2::Graph;
-use crate::pass2::{ATTRIBUTION_TOP_N, AttributionRaw};
+use crate::pass2::{AttributionRaw, ATTRIBUTION_TOP_N};
 
 const THRESHOLD_PCT: f64 = 10.0;
 /// Default per-suspect cap on the "accumulated objects" lists (immediately
@@ -2996,7 +2996,7 @@ mod leak_indicator_tests {
         assert!(is_anonymous_class("com/example/Foo$$Lambda$42/0x1234")); // lambda
         assert!(is_anonymous_class("com/example/Foo$Proxy1")); // proxy
         assert!(is_anonymous_class("com/example/$$Anon")); // anon
-        // These should NOT match:
+                                                           // These should NOT match:
         assert!(!is_anonymous_class("com/example/Foo$Bar")); // named inner
         assert!(!is_anonymous_class("java/lang/String")); // plain class
     }

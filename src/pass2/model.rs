@@ -531,9 +531,9 @@ impl InboundBuilder {
         let n_nodes = fwd_offsets.len().saturating_sub(1);
         let mut buf: Vec<u32> = Vec::with_capacity(4096);
         let mut next_fwd_free: usize = 1 << 26; // first chunk boundary = 64 M u32 = 256 MB
-        // MADV_DONTNEED fwd_offsets pages as src advances past page boundaries.
-        // fwd_offsets[0..src] is dead after processing src; freeing pages
-        // immediately counteracts the inb_flat page faults during the transpose.
+                                                // MADV_DONTNEED fwd_offsets pages as src advances past page boundaries.
+                                                // fwd_offsets[0..src] is dead after processing src; freeing pages
+                                                // immediately counteracts the inb_flat page faults during the transpose.
         #[cfg(target_os = "linux")]
         let fwd_off_ptr = fwd_offsets.as_ptr();
         #[cfg(target_os = "linux")]

@@ -14,7 +14,7 @@ use std::io::{self, ErrorKind};
 
 use crate::{
     reader::HprofReader,
-    types::{HprofType, heap, tags},
+    types::{heap, tags, HprofType},
 };
 
 use super::scan::{skip_class_dump, sub_remaining};

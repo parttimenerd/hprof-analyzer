@@ -13,9 +13,9 @@
 use std::collections::BTreeMap;
 use std::io::{self, Read};
 
-use crate::OutputFormat;
 use crate::md::{Align, Table};
 use crate::report::{self, Report};
+use crate::OutputFormat;
 
 /// Cap on the number of rows shown in the growth-leaders and new-classes
 /// lists. Suspects are uncapped (there are only ever a handful).
@@ -557,7 +557,7 @@ pub fn run(paths: &[String], format: OutputFormat) -> io::Result<String> {
 mod tests {
     use super::*;
     use crate::report::{
-        HistRow, LeakSuspects, PackageNode, SCHEMA_VERSION, Suspect, SystemOverview, TopConsumers,
+        HistRow, LeakSuspects, PackageNode, Suspect, SystemOverview, TopConsumers, SCHEMA_VERSION,
     };
 
     fn hist(name: &str, inst: u64, sh: u64, ret: u64) -> HistRow {
@@ -829,11 +829,10 @@ mod tests {
         assert_eq!(s.growth_leaders[1].delta_retained, 200);
         assert_eq!(s.growth_leaders[1].delta_instances, 2);
         assert_eq!(s.growth_leaders[1].retained, vec![100, 300]);
-        assert!(
-            !s.growth_leaders
-                .iter()
-                .any(|c| c.pretty_class == "Shrank" || c.pretty_class == "Removed")
-        );
+        assert!(!s
+            .growth_leaders
+            .iter()
+            .any(|c| c.pretty_class == "Shrank" || c.pretty_class == "Removed"));
 
         // New class: NewClass, retained [0, 400].
         assert_eq!(s.new_classes.len(), 1);

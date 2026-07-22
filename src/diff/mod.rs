@@ -35,7 +35,7 @@ mod tests {
     #![allow(clippy::field_reassign_with_default)]
     use super::*;
     use crate::report::{
-        self, HistRow, LeakSuspects, Report, SCHEMA_VERSION, Suspect, SystemOverview, TopConsumers,
+        self, HistRow, LeakSuspects, Report, Suspect, SystemOverview, TopConsumers, SCHEMA_VERSION,
     };
 
     fn hist(name: &str, inst: u64, sh: u64, ret: u64) -> HistRow {
@@ -919,11 +919,10 @@ mod tests {
         compare_packages(&mat, &ours, &mut r);
         assert_eq!(r.n_fail(), 0);
         // scala -> MATCH
-        assert!(
-            r.fields
-                .iter()
-                .any(|f| f.field.contains("[scala]") && f.tier == Tier::Match)
-        );
+        assert!(r
+            .fields
+            .iter()
+            .any(|f| f.field.contains("[scala]") && f.tier == Tier::Match));
         // root/java/lang -> EXPLAINABLE(MatClassObjectRootingGap)
         let gap = r
             .fields
@@ -937,11 +936,10 @@ mod tests {
             .count();
         assert_eq!(gap, 3);
         // class-leaf -> SKIP (NoCounterpart)
-        assert!(
-            r.skipped
-                .iter()
-                .any(|f| f.field.contains("java.lang.Object"))
-        );
+        assert!(r
+            .skipped
+            .iter()
+            .any(|f| f.field.contains("java.lang.Object")));
     }
 
     // ── Leak-suspect thread-variant parse ──

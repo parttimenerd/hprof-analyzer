@@ -36,18 +36,35 @@ pub struct Carry {
 
 impl Carry {
     pub fn index_only(cap: usize) -> Self {
-        Self { layout: CarryLayout::IndexOnly, cap, truncated: false,
-               idx: Vec::new(), cols: Vec::new(), addrs: std::collections::BTreeSet::new() }
+        Self {
+            layout: CarryLayout::IndexOnly,
+            cap,
+            truncated: false,
+            idx: Vec::new(),
+            cols: Vec::new(),
+            addrs: std::collections::BTreeSet::new(),
+        }
     }
-    pub fn layout(&self) -> &CarryLayout { &self.layout }
-    pub fn truncated(&self) -> bool { self.truncated }
-    pub fn len(&self) -> usize { self.idx.len() }
-    pub fn is_empty(&self) -> bool { self.idx.is_empty() }
+    pub fn layout(&self) -> &CarryLayout {
+        &self.layout
+    }
+    pub fn truncated(&self) -> bool {
+        self.truncated
+    }
+    pub fn len(&self) -> usize {
+        self.idx.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.idx.is_empty()
+    }
 
     /// Record a matched dense index. Silently drops (and sets `truncated`) once
     /// the cap is reached so a runaway match set can't exhaust memory.
     pub fn push_index(&mut self, dense_idx: u32) {
-        if self.idx.len() >= self.cap { self.truncated = true; return; }
+        if self.idx.len() >= self.cap {
+            self.truncated = true;
+            return;
+        }
         self.idx.push(dense_idx);
     }
 
@@ -65,7 +82,9 @@ impl Carry {
         let n = widths.len();
         Self {
             layout: CarryLayout::IndexPlusScalars { widths },
-            cap, truncated: false, idx: Vec::new(),
+            cap,
+            truncated: false,
+            idx: Vec::new(),
             cols: vec![Vec::new(); n],
             addrs: std::collections::BTreeSet::new(),
         }
@@ -76,15 +95,32 @@ impl Carry {
     /// (both are planner/executor invariants, not user input).
     pub fn push_row(&mut self, dense_idx: u32, vals: &[u64]) {
         let CarryLayout::IndexPlusScalars { widths } = &self.layout else {
-            panic!("push_row is only valid for IndexPlusScalars, got {:?}", self.layout);
+            panic!(
+                "push_row is only valid for IndexPlusScalars, got {:?}",
+                self.layout
+            );
         };
-        assert_eq!(vals.len(), widths.len(),
-            "push_row expected {} scalar column(s) but got {}", widths.len(), vals.len());
-        if self.idx.len() >= self.cap { self.truncated = true; return; }
+        assert_eq!(
+            vals.len(),
+            widths.len(),
+            "push_row expected {} scalar column(s) but got {}",
+            widths.len(),
+            vals.len()
+        );
+        if self.idx.len() >= self.cap {
+            self.truncated = true;
+            return;
+        }
         for (k, (&v, &w)) in vals.iter().zip(widths.iter()).enumerate() {
-            let max = if w >= 8 { u64::MAX } else { (1u64 << (w as u32 * 8)) - 1 };
-            assert!(v <= max,
-                "scalar column {k}: value {v} does not fit declared width {w} byte(s) (max {max})");
+            let max = if w >= 8 {
+                u64::MAX
+            } else {
+                (1u64 << (w as u32 * 8)) - 1
+            };
+            assert!(
+                v <= max,
+                "scalar column {k}: value {v} does not fit declared width {w} byte(s) (max {max})"
+            );
             self.cols[k].push(v);
         }
         self.idx.push(dense_idx);
@@ -97,11 +133,15 @@ impl Carry {
         };
         let w = widths[k] as usize;
         let mut buf = Vec::with_capacity(self.cols[k].len() * w);
-        for &v in &self.cols[k] { buf.extend_from_slice(&v.to_be_bytes()[8 - w..]); }
+        for &v in &self.cols[k] {
+            buf.extend_from_slice(&v.to_be_bytes()[8 - w..]);
+        }
         let mut out = Vec::with_capacity(self.cols[k].len());
         for chunk in buf.chunks_exact(w) {
             let mut acc = 0u64;
-            for &b in chunk { acc = (acc << 8) | b as u64; }
+            for &b in chunk {
+                acc = (acc << 8) | b as u64;
+            }
             out.push(acc);
         }
         out
@@ -111,8 +151,11 @@ impl Carry {
     /// bounds the number of DISTINCT addresses.
     pub fn addr_frontier(cap: usize) -> Self {
         Self {
-            layout: CarryLayout::AddrFrontier, cap, truncated: false,
-            idx: Vec::new(), cols: Vec::new(),
+            layout: CarryLayout::AddrFrontier,
+            cap,
+            truncated: false,
+            idx: Vec::new(),
+            cols: Vec::new(),
             addrs: std::collections::BTreeSet::new(),
         }
     }
@@ -120,8 +163,13 @@ impl Carry {
     /// Add an address. Duplicates are ignored (never count against the cap); a new
     /// distinct address past the cap sets `truncated`.
     pub fn push_addr(&mut self, addr: u64) {
-        if self.addrs.contains(&addr) { return; }
-        if self.addrs.len() >= self.cap { self.truncated = true; return; }
+        if self.addrs.contains(&addr) {
+            return;
+        }
+        if self.addrs.len() >= self.cap {
+            self.truncated = true;
+            return;
+        }
         self.addrs.insert(addr);
     }
 
@@ -195,7 +243,9 @@ mod tests {
     #[test]
     fn descending_pushes_still_roundtrip_exactly() {
         let mut c = Carry::index_only(100);
-        for &i in &[100u32, 5, 5, 42, 0] { c.push_index(i); }
+        for &i in &[100u32, 5, 5, 42, 0] {
+            c.push_index(i);
+        }
         assert_eq!(c.indices(), vec![100, 5, 5, 42, 0]);
     }
 
@@ -222,7 +272,9 @@ mod tests {
     #[test]
     fn addr_frontier_dedups_and_sorts() {
         let mut c = Carry::addr_frontier(100);
-        for &a in &[0x5000u64, 0x1000, 0x5000, 0x1000, 0x9abc] { c.push_addr(a); }
+        for &a in &[0x5000u64, 0x1000, 0x5000, 0x1000, 0x9abc] {
+            c.push_addr(a);
+        }
         assert_eq!(c.addresses(), vec![0x1000, 0x5000, 0x9abc]);
         assert!(!c.truncated());
     }

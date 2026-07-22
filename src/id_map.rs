@@ -127,7 +127,7 @@ fn search_offsets(slice: &[u32], d: u32) -> Option<usize> {
         let ptr = sub.as_ptr();
         #[cfg(target_arch = "x86_64")]
         unsafe {
-            use core::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
+            use core::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
             _mm_prefetch(ptr.add(base + q) as *const i8, _MM_HINT_T0);
             _mm_prefetch(ptr.add(mid + q) as *const i8, _MM_HINT_T0);
         }

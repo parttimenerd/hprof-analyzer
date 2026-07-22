@@ -23,8 +23,8 @@ use crate::{
 };
 
 use super::{
-    AttributionRaw, CollValuesRaw, FieldSizeRaw, Record, field_offset, prim_array_class_name,
-    read_ref, scan_all_records,
+    field_offset, prim_array_class_name, read_ref, scan_all_records, AttributionRaw, CollValuesRaw,
+    FieldSizeRaw, Record,
 };
 
 // ── Caps (bound every aggregate) ─────────────────────────────────────────────
@@ -907,9 +907,9 @@ pub(crate) fn build_field_decode_views(
     let mut map_collision = FillAcc::default();
     let mut coll_total: u64 = 0; // every collection with a size read
     let mut map_total: u64 = 0; // every map collection seen
-    // Per-kind collection summary (always-on): indexed by CollKind discriminant
-    // 0=List..5=Tree. Each entry = (count, total_elements, total_shallow,
-    // max_elements). Folded only when a size was read (mirrors coll_total).
+                                // Per-kind collection summary (always-on): indexed by CollKind discriminant
+                                // 0=List..5=Tree. Each entry = (count, total_elements, total_shallow,
+                                // max_elements). Folded only when a size was read (mirrors coll_total).
     let mut kind_stats: [(u64, u64, u64, u64); 6] = [(0, 0, 0, 0); 6];
     // Wanted backing arrays (array addr → its collection's size/is_map).
     let mut wanted_arrays: HashMap<u64, ArrayWant> = HashMap::new();
@@ -2041,7 +2041,7 @@ mod tests {
         assert_eq!(decode_prim_value(char_code, &[0xFF, 0xFF]), 65535);
         assert_eq!(decode_prim_value(char_code, &[0x80, 0x00]), 32768);
         assert_eq!(decode_prim_value(char_code, &[0x00, 0x41]), 65); // 'A'
-        // Short with the same high-bit bytes is negative.
+                                                                     // Short with the same high-bit bytes is negative.
         assert_eq!(decode_prim_value(short_code, &[0xFF, 0xFF]), -1);
     }
 }

@@ -6,15 +6,15 @@ use std::collections::HashMap;
 use crate::{
     pass1::Pass1,
     reader::HprofReader,
-    types::{HprofType, heap, tags},
+    types::{heap, tags, HprofType},
 };
 
 use std::io::{self, ErrorKind};
 
 use super::{
+    build_field_plans, field_offset, read_ref, scan_prim_arrays, skip_class_dump, sub_remaining,
     CharArrayWaste, CharArrayWasteRow, DupStringSample, DupStrings, StrLenBucket, StrLenStats,
-    StringHolder, build_field_plans, field_offset, read_ref, scan_prim_arrays, skip_class_dump,
-    sub_remaining,
+    StringHolder,
 };
 
 /// Max retained sample text length (bytes) for a most-duplicated String — bounds
@@ -155,8 +155,8 @@ pub(crate) fn scan_all_instances<F: FnMut(u64, u64, &[u8])>(
 ///   Pass D (`compute_string_holders`, `scan_all_instances`): credit each
 ///     owning class for every object-field reference to a String instance.
 pub(crate) fn resolve_duplicate_strings(path: &str, p1: &Pass1) -> io::Result<DupStrings> {
-    use std::collections::HashSet;
     use std::collections::hash_map::DefaultHasher;
+    use std::collections::HashSet;
     use std::hash::{Hash, Hasher};
 
     let id_size = p1.id_size;

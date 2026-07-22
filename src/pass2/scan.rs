@@ -4,7 +4,7 @@ use std::io::{self, ErrorKind};
 
 use crate::{
     reader::HprofReader,
-    types::{HprofType, heap, tags},
+    types::{heap, tags, HprofType},
 };
 
 /// Subtract a consumed sub-record byte count from a heap-segment's `remaining`

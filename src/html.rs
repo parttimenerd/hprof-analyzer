@@ -20,7 +20,7 @@ use std::io::Write;
 use std::sync::OnceLock;
 
 use base64::Engine as _;
-use flate2::{Compression, write::DeflateEncoder};
+use flate2::{write::DeflateEncoder, Compression};
 
 use crate::diff_reports::SeriesDiffResult;
 use crate::report::Report;

@@ -9,9 +9,9 @@
 use std::io::{self, Write};
 
 use reedline::{
-    ColumnarMenu, Completer, DefaultPrompt, Emacs, FileBackedHistory, KeyCode, KeyModifiers,
-    MenuBuilder, Reedline, ReedlineEvent, ReedlineMenu, Signal, Span, Suggestion,
-    default_emacs_keybindings,
+    default_emacs_keybindings, ColumnarMenu, Completer, DefaultPrompt, Emacs, FileBackedHistory,
+    KeyCode, KeyModifiers, MenuBuilder, Reedline, ReedlineEvent, ReedlineMenu, Signal, Span,
+    Suggestion,
 };
 
 use crate::query::model::{QueryResult, QueryValue};
