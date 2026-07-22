@@ -605,8 +605,8 @@ where
 }
 
 /// Clause/grammar keywords that open or structure a query but are not reserved
-/// words in predicate position. `classof` is the pseudo-function attribute form.
-pub const KEYWORDS: &[&str] = &["SELECT", "DISTINCT", "FROM", "classof"];
+/// words in predicate position. `classof` lives in [`FUNCS`] (projection form).
+pub const KEYWORDS: &[&str] = &["SELECT", "DISTINCT", "FROM"];
 
 /// Words reserved in predicate/clause position (`is_reserved`'s source set).
 pub const RESERVED: &[&str] = &[
@@ -2084,11 +2084,13 @@ mod tests {
     #[test]
     fn completion_words_covers_all_sources() {
         let words = completion_words();
-        for set in [KEYWORDS, RESERVED, AGG_FUNCS, ATTRIBUTES] {
+        for set in [KEYWORDS, RESERVED, AGG_FUNCS, ATTRIBUTES, FUNCS] {
             for &w in set {
                 assert!(words.contains(&w), "completion_words missing {w:?}");
             }
         }
+        let unique: std::collections::HashSet<_> = words.iter().collect();
+        assert_eq!(words.len(), unique.len(), "completion_words has duplicates");
     }
 
     // ============================================================

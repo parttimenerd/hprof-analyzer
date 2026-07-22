@@ -1,8 +1,9 @@
 //! The interactive OQL REPL: a reedline line editor providing persistent
 //! history, line editing, and Tab-completion of OQL keywords, plus the
-//! query-execution / meta-command / formatting helpers it drives. Keyword
-//! completions are sourced from [`crate::query::parse::completion_words`] so
-//! they can never drift from the grammar. Each query triggers a fresh
+//! query-execution / meta-command / formatting helpers it drives. Completion
+//! candidates are sourced from the parser's canonical const slices (`KEYWORDS`,
+//! `RESERVED`, `AGG_FUNCS`, `ATTRIBUTES`, `FUNCS`) so they can never drift from
+//! the grammar. Each query triggers a fresh
 //! pass1+pass2 (keeping tables resident across queries is out of scope for the
 //! foundation slice).
 
