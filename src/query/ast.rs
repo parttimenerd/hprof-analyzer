@@ -56,6 +56,9 @@ pub enum SelectItem {
     /// Only valid when the FROM class is `java.lang.String`. The `String` carries
     /// the FROM alias identifier (e.g. `s` in `toString(s)`).
     ToString(String),
+    /// An arithmetic expression column, e.g. `@usedHeapSize * 2`. Only emitted
+    /// when the item actually contains an operator; a bare attr stays `Attr`.
+    Expr(Box<Expr>),
 }
 
 /// One operand of a `path(a, b)` select item: a bound alias or a class name.
@@ -113,6 +116,36 @@ pub enum Attr {
         tail: Box<Attr>,
         role: RefRole,
     },
+}
+
+/// An arithmetic expression over attribute/field/literal operands. Leaves are
+/// the existing `Attr` and `Value` nodes; `Binary`/`Unary` compose them. Used in
+/// SELECT columns and WHERE comparison operands. A single-leaf expression is
+/// folded back to `SelectItem::Attr` / a plain compare by the parser, so
+/// no-arithmetic queries never carry an `Expr`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Expr {
+    Attr(Attr),
+    Lit(Value),
+    Binary { op: ArithOp, lhs: Box<Expr>, rhs: Box<Expr> },
+    Unary { op: UnaryOp, arg: Box<Expr> },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArithOp { Add, Sub, Mul, Div }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnaryOp { Neg, Pos }
+
+impl Expr {
+    /// The single `Attr` leaf, if this expression is exactly `Expr::Attr`.
+    pub fn as_attr(&self) -> Option<&Attr> {
+        match self { Expr::Attr(a) => Some(a), _ => None }
+    }
+    /// The single `Value` leaf, if this expression is exactly `Expr::Lit`.
+    pub fn as_lit(&self) -> Option<&Value> {
+        match self { Expr::Lit(v) => Some(v), _ => None }
+    }
 }
 
 /// When a `RefPath` must be resolved. Predicate-critical paths (used in WHERE)
@@ -185,9 +218,9 @@ pub enum Predicate {
     Or(Box<Predicate>, Box<Predicate>),
     Not(Box<Predicate>),
     Compare {
-        lhs: Attr,
+        lhs: Expr,
         op: CompareOp,
-        rhs: Value,
+        rhs: Expr,
     },
     /// `x INSTANCEOF C`
     InstanceOf(String),

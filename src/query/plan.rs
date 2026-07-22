@@ -3,7 +3,7 @@
 //! rejected here (not in the parser) with a message naming the construct.
 
 use crate::query::QueryError;
-use crate::query::ast::{Attr, Predicate, Query, RefRole, SelectItem, Value};
+use crate::query::ast::{Attr, Expr, Predicate, Query, RefRole, SelectItem, Value};
 use crate::query::carry::CarryLayout;
 use crate::query::runflags::EdgeDir;
 
@@ -314,6 +314,7 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             SelectItem::ToString(_) => {
                 needs.string_values = true;
             }
+            SelectItem::Expr(_) => unreachable!("Expr select item reached before arithmetic wiring"),
         }
     }
 
@@ -654,7 +655,7 @@ pub(crate) fn pred_uses_retained(p: &Predicate) -> bool {
         }
         Predicate::Not(a) => pred_uses_retained(a),
         Predicate::Compare {
-            lhs: Attr::RetainedHeapSize,
+            lhs: Expr::Attr(Attr::RetainedHeapSize),
             ..
         } => true,
         _ => false,
@@ -681,7 +682,7 @@ fn pred_refpath_hops(p: &Predicate) -> usize {
         }
         Predicate::Not(a) => pred_refpath_hops(a),
         Predicate::Compare {
-            lhs: Attr::RefPath { hops, .. },
+            lhs: Expr::Attr(Attr::RefPath { hops, .. }),
             ..
         } => hops.len(),
         _ => 0,
@@ -774,7 +775,7 @@ fn collect_pred_fields(pred: &Predicate, out: &mut Vec<String>) {
         }
         Predicate::Not(a) => collect_pred_fields(a, out),
         Predicate::Compare {
-            lhs: Attr::Field(name),
+            lhs: Expr::Attr(Attr::Field(name)),
             ..
         } => out.push(name.clone()),
         _ => {}
@@ -818,6 +819,7 @@ fn referenced_alias_heads(q: &Query) -> std::collections::HashSet<String> {
             SelectItem::Path { .. } => {}
             // toString(s) has no external alias head to detect correlation.
             SelectItem::ToString(_) => {}
+            SelectItem::Expr(_) => unreachable!("Expr select item reached before arithmetic wiring"),
         }
     }
     if let Some(pred) = &q.where_ {
@@ -837,8 +839,10 @@ fn collect_pred_alias_heads(pred: &Predicate, heads: &mut std::collections::Hash
         }
         Predicate::Not(a) => collect_pred_alias_heads(a, heads),
         Predicate::Compare { lhs, .. } => {
-            if let Some(h) = attr_alias_head(lhs) {
-                heads.insert(h.to_string());
+            if let Some(a) = lhs.as_attr() {
+                if let Some(h) = attr_alias_head(a) {
+                    heads.insert(h.to_string());
+                }
             }
         }
         // A nested IN-subquery is checked on its own via reject_if_correlated;
@@ -900,6 +904,7 @@ fn note_attr_need(item: &SelectItem, needs: &mut QueryNeeds) -> Result<(), Query
         SelectItem::ToString(_) => Err(QueryError(
             "toString(s) may not be used as an aggregate argument".into(),
         )),
+        SelectItem::Expr(_) => unreachable!("Expr select item reached before arithmetic wiring"),
     }
 }
 
@@ -933,18 +938,20 @@ fn collect_pred_needs(pred: &Predicate, needs: &mut QueryNeeds) -> Result<(), Qu
             Ok(())
         }
         Predicate::Compare { lhs, rhs, .. } => {
-            match lhs {
-                Attr::Field(_) => {
-                    if matches!(rhs, Value::Str(_)) {
+            let lhs_attr = lhs.as_attr();
+            let rhs_val = rhs.as_lit();
+            match lhs_attr {
+                Some(Attr::Field(_)) => {
+                    if matches!(rhs_val, Some(Value::Str(_))) {
                         needs.instance_string = true;
                     } else {
                         needs.instance_scalar = true;
                     }
                 }
-                Attr::DisplayName => needs.instance_string = true,
-                Attr::ClassOf => needs.runtime_type = true,
+                Some(Attr::DisplayName) => needs.instance_string = true,
+                Some(Attr::ClassOf) => needs.runtime_type = true,
                 // toString(s) in WHERE arms the string-values side table.
-                Attr::ToString(_) => needs.string_values = true,
+                Some(Attr::ToString(_)) => needs.string_values = true,
                 _ => {}
             }
             Ok(())
@@ -971,11 +978,11 @@ fn pred_cost(pred: &Predicate) -> PredCost {
         Predicate::InSubquery { .. } => PredCost::Str,
         Predicate::Not(a) => pred_cost(a),
         Predicate::And(a, b) | Predicate::Or(a, b) => pred_cost(a).max_cost(pred_cost(b)),
-        Predicate::Compare { lhs, rhs, .. } => match lhs {
-            Attr::Field(_) if matches!(rhs, Value::Str(_)) => PredCost::Str,
-            Attr::DisplayName => PredCost::Str,
-            Attr::ClassOf => PredCost::Type,
-            Attr::RefPath { .. } => PredCost::Ref,
+        Predicate::Compare { lhs, rhs, .. } => match lhs.as_attr() {
+            Some(Attr::Field(_)) if matches!(rhs.as_lit(), Some(Value::Str(_))) => PredCost::Str,
+            Some(Attr::DisplayName) => PredCost::Str,
+            Some(Attr::ClassOf) => PredCost::Type,
+            Some(Attr::RefPath { .. }) => PredCost::Ref,
             _ => PredCost::Scalar,
         },
     }

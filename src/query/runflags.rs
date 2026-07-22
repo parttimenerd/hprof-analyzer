@@ -13,7 +13,7 @@
 #![allow(dead_code)]
 
 use crate::query::QueryError;
-use crate::query::ast::{Attr, Predicate, Query, SelectItem};
+use crate::query::ast::{Attr, Expr, Predicate, Query, SelectItem};
 
 /// Direction of an edge feature. Kept as a small typed enum so callers that
 /// walk edges do not thread bare bools around.
@@ -178,6 +178,7 @@ fn scan_select_item(item: &SelectItem, used: &mut BranchUse) {
         SelectItem::Star => {}
         // toString(s) uses the string-values side table, not edge CSRs.
         SelectItem::ToString(_) => {}
+        SelectItem::Expr(_) => unreachable!("Expr select item reached before arithmetic wiring"),
     }
 }
 
@@ -189,7 +190,11 @@ fn scan_predicate(pred: &Predicate, used: &mut BranchUse) {
             scan_predicate(b, used);
         }
         Predicate::Not(a) => scan_predicate(a, used),
-        Predicate::Compare { lhs, .. } => scan_attr(lhs, used),
+        Predicate::Compare { lhs, .. } => {
+            if let Expr::Attr(a) = lhs {
+                scan_attr(a, used);
+            }
+        }
         // Edge usage inside an IN-subquery's inner query targets a *different*
         // FROM class; scoping that correctly is out of scope for this task, so
         // we only inspect the outer `lhs` here.

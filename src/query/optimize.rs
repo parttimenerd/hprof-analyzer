@@ -200,7 +200,7 @@ pub fn optimize(mut plan: QueryPlan, query: &Query, stats: &SchemaStats) -> Quer
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::query::ast::{Attr, CompareOp, Predicate, Value};
+    use crate::query::ast::{Attr, CompareOp, Expr, Predicate, Value};
     use crate::query::carry::CarryLayout;
     use crate::query::parse::parse;
     use crate::query::plan::StageOp;
@@ -219,9 +219,9 @@ mod tests {
     fn scalar_conjunct(field: &str, cost: PredCost) -> Conjunct {
         Conjunct {
             pred: Predicate::Compare {
-                lhs: Attr::Field(field.to_string()),
+                lhs: Expr::Attr(Attr::Field(field.to_string())),
                 op: CompareOp::Gt,
-                rhs: Value::Int(0),
+                rhs: Expr::Lit(Value::Int(0)),
             },
             cost,
         }
@@ -286,7 +286,7 @@ mod tests {
         assert_eq!(plan.where_terms.len(), 2);
         match &plan.where_terms[0].pred {
             Predicate::Compare {
-                lhs: Attr::Field(name),
+                lhs: Expr::Attr(Attr::Field(name)),
                 ..
             } => {
                 assert_eq!(
@@ -298,7 +298,7 @@ mod tests {
         }
         match &plan.where_terms[1].pred {
             Predicate::Compare {
-                lhs: Attr::Field(name),
+                lhs: Expr::Attr(Attr::Field(name)),
                 ..
             } => {
                 assert_eq!(

@@ -3,7 +3,7 @@
 //! late_ops, and reassembles all results in original query order.
 
 use crate::query::PATH_FRONTIER_CAP;
-use crate::query::ast::{Attr, CompareOp, Predicate, Query, SelectItem, SortDir, Value};
+use crate::query::ast::{Attr, CompareOp, Expr, Predicate, Query, SelectItem, SortDir, Value};
 use crate::query::execute::{CrossPhaseEntry, QueryExecState};
 use crate::query::model::{QueryColumn, QueryResult, QueryValue};
 use crate::query::plan::StageOp;
@@ -604,7 +604,7 @@ fn has_to_string_pred(p: &Predicate) -> bool {
         }
         Predicate::Not(a) => has_to_string_pred(a),
         Predicate::Compare {
-            lhs: Attr::ToString(_),
+            lhs: Expr::Attr(Attr::ToString(_)),
             ..
         } => true,
         _ => false,
@@ -630,12 +630,13 @@ fn eval_tostring_pred(
         }
         Predicate::Not(a) => !eval_tostring_pred(a, dense, ctx, like_regexes),
         Predicate::Compare {
-            lhs: Attr::ToString(_),
+            lhs: Expr::Attr(Attr::ToString(_)),
             op,
             rhs,
         } => {
+            let rhs_val = rhs.as_lit().expect("Compare rhs is a single literal before arithmetic wiring");
             match ctx.string_value(dense) {
-                Some(s) => cmp_query_value(&QueryValue::Str(s.to_string()), *op, rhs, like_regexes),
+                Some(s) => cmp_query_value(&QueryValue::Str(s.to_string()), *op, rhs_val, like_regexes),
                 None => false, // String instance not in capture (cap overflow) → no match
             }
         }
@@ -700,7 +701,7 @@ fn find_pred_refpath(p: &Predicate) -> Option<Attr> {
         }
         Predicate::Not(a) => find_pred_refpath(a),
         Predicate::Compare {
-            lhs: a @ Attr::RefPath { .. },
+            lhs: Expr::Attr(a @ Attr::RefPath { .. }),
             ..
         } => Some(a.clone()),
         _ => None,
@@ -724,11 +725,14 @@ fn eval_refpath_pred(
         }
         Predicate::Not(a) => !eval_refpath_pred(a, val, like_regexes),
         Predicate::Compare {
-            lhs: Attr::RefPath { .. },
+            lhs: Expr::Attr(Attr::RefPath { .. }),
             op,
             rhs,
         } => match val {
-            Some(v) => cmp_query_value(v, *op, rhs, like_regexes),
+            Some(v) => {
+                let rhs_val = rhs.as_lit().expect("Compare rhs is a single literal before arithmetic wiring");
+                cmp_query_value(v, *op, rhs_val, like_regexes)
+            }
             None => false,
         },
         _ => true,
@@ -851,10 +855,13 @@ fn eval_retained_pred(p: &Predicate, ret: u64) -> bool {
         Predicate::Or(a, b) => eval_retained_pred(a, ret) || eval_retained_pred(b, ret),
         Predicate::Not(a) => !eval_retained_pred(a, ret),
         Predicate::Compare {
-            lhs: Attr::RetainedHeapSize,
+            lhs: Expr::Attr(Attr::RetainedHeapSize),
             op,
             rhs,
-        } => cmp_u64(ret, *op, rhs),
+        } => {
+            let rhs_val = rhs.as_lit().expect("Compare rhs is a single literal before arithmetic wiring");
+            cmp_u64(ret, *op, rhs_val)
+        }
         _ => true,
     }
 }

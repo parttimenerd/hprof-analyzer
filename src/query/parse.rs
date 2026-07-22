@@ -15,7 +15,7 @@ use logos::Logos;
 
 use crate::query::QueryError;
 use crate::query::ast::{
-    AggFunc, Attr, ClassSpec, CompareOp, FromSource, OrderBy, PathOperand, Predicate, Query,
+    AggFunc, Attr, ClassSpec, CompareOp, Expr, FromSource, OrderBy, PathOperand, Predicate, Query,
     RefRole, SelectItem, SortDir, Value,
 };
 
@@ -377,7 +377,7 @@ where
                 .clone()
                 .then(op)
                 .then(value)
-                .map(|((lhs, op), rhs)| Predicate::Compare { lhs, op, rhs });
+                .map(|((lhs, op), rhs)| Predicate::Compare { lhs: Expr::Attr(lhs), op, rhs: Expr::Lit(rhs) });
             // `in_subquery` before `compare` so `IN` isn't consumed as a bare field.
             let primary = paren.or(instanceof).or(in_subquery).or(compare);
             let not = recursive(|not| {
@@ -558,6 +558,7 @@ fn normalize_select_item(item: &mut SelectItem, alias: Option<&str>) {
         SelectItem::Path { .. } => {}
         // `toString(s)` carries a single alias token; no dotted path to normalize.
         SelectItem::ToString(_) => {}
+        SelectItem::Expr(_) => unreachable!("Expr select item reached before arithmetic wiring"),
     }
 }
 
@@ -568,7 +569,11 @@ fn normalize_predicate(pred: &mut Predicate, alias: Option<&str>) {
             normalize_predicate(b, alias);
         }
         Predicate::Not(a) => normalize_predicate(a, alias),
-        Predicate::Compare { lhs, .. } => normalize_attr(lhs, alias),
+        Predicate::Compare { lhs, .. } => {
+            if let Expr::Attr(a) = lhs {
+                normalize_attr(a, alias);
+            }
+        }
         // The inner query of an IN-subquery is normalized against its own alias
         // when it is parsed; the outer LHS attr is normalized here.
         Predicate::InSubquery { lhs, .. } => normalize_attr(lhs, alias),
@@ -823,7 +828,7 @@ mod tests {
         Attr::Field(s.into())
     }
     fn cmp(lhs: Attr, op: CompareOp, rhs: Value) -> Predicate {
-        Predicate::Compare { lhs, op, rhs }
+        Predicate::Compare { lhs: Expr::Attr(lhs), op, rhs: Expr::Lit(rhs) }
     }
     fn and(a: Predicate, b: Predicate) -> Predicate {
         Predicate::And(Box::new(a), Box::new(b))
@@ -1706,7 +1711,7 @@ mod tests {
         let q = parse("SELECT * FROM Node x WHERE x.parent.id = 7").unwrap();
         match q.where_.as_ref().unwrap() {
             Predicate::Compare {
-                lhs: Attr::RefPath { hops, tail, .. },
+                lhs: Expr::Attr(Attr::RefPath { hops, tail, .. }),
                 ..
             } => {
                 assert_eq!(hops, &vec!["parent".to_string()]);
@@ -1862,7 +1867,7 @@ mod tests {
         // Goes through the same `attr` parser, so it is a valid compare LHS.
         let q = parse("SELECT @objectId FROM C WHERE @inbounds > 0").unwrap();
         match q.where_.as_ref().unwrap() {
-            Predicate::Compare { lhs, .. } => assert_eq!(*lhs, Attr::Inbounds),
+            Predicate::Compare { lhs, .. } => assert_eq!(lhs.as_attr().expect("Expr::Attr"), &Attr::Inbounds),
             other => panic!("expected compare on @inbounds, got {other:?}"),
         }
     }
@@ -1870,7 +1875,7 @@ mod tests {
     fn outbounds_usable_in_where() {
         let q = parse("SELECT @objectId FROM C WHERE @outbounds != 0").unwrap();
         match q.where_.as_ref().unwrap() {
-            Predicate::Compare { lhs, .. } => assert_eq!(*lhs, Attr::Outbounds),
+            Predicate::Compare { lhs, .. } => assert_eq!(lhs.as_attr().expect("Expr::Attr"), &Attr::Outbounds),
             other => panic!("expected compare on @outbounds, got {other:?}"),
         }
     }
@@ -2340,14 +2345,14 @@ mod tests {
         match q.where_.as_ref().unwrap() {
             Predicate::Compare { lhs, op, rhs } => {
                 assert_eq!(
-                    *lhs,
-                    Attr::ToString("s".into()),
+                    lhs.as_attr().expect("Compare lhs is Expr::Attr"),
+                    &Attr::ToString("s".into()),
                     "WHERE LHS must be Attr::ToString(\"s\")"
                 );
                 assert_eq!(*op, CompareOp::Like, "operator must be Like");
                 assert_eq!(
-                    *rhs,
-                    Value::Str("java.*".into()),
+                    rhs.as_lit().expect("Compare rhs is Expr::Lit"),
+                    &Value::Str("java.*".into()),
                     "RHS must be Str(\"java.*\")"
                 );
             }
@@ -2531,8 +2536,8 @@ mod tests {
         match q.where_.as_ref().unwrap() {
             Predicate::Compare { lhs, .. } => {
                 assert_eq!(
-                    *lhs,
-                    Attr::Field("objects".into()),
+                    lhs.as_attr().expect("Compare lhs is Expr::Attr"),
+                    &Attr::Field("objects".into()),
                     "objects as a WHERE field must parse as Attr::Field(\"objects\")"
                 );
             }

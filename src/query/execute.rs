@@ -324,6 +324,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             SelectItem::Path { .. } => QueryValue::Null,
             // toString(s) is cross-phase: resolved post-scan by the stage runner.
             SelectItem::ToString(_) => QueryValue::Null,
+            SelectItem::Expr(_) => unreachable!("Expr select item reached before arithmetic wiring"),
         }
     }
     fn project_attr(&self, a: &Attr, src_idx: usize, class_id: u64, blob: &[u8]) -> QueryValue {
@@ -389,6 +390,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             SelectItem::Path { .. } => QueryValue::Null,
             // toString(s) is cross-phase: resolved post-scan by the stage runner.
             SelectItem::ToString(_) => QueryValue::Null,
+            SelectItem::Expr(_) => unreachable!("Expr select item reached before arithmetic wiring"),
         }
     }
     fn project_array_attr(
@@ -518,8 +520,10 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 // (@objectAddress/@objectId) compare against the actual object,
                 // not a placeholder. Blob-scalar and class/type LHS attrs ignore
                 // the index, so this is a no-op for them.
-                let lv = self.project_attr(lhs, src_idx, class_id, blob);
-                compare_values(&lv, *op, rhs, self.like_re_for(rhs))
+                let lhs_attr = lhs.as_attr().expect("Compare lhs is a single attr before arithmetic wiring");
+                let rhs_val = rhs.as_lit().expect("Compare rhs is a single literal before arithmetic wiring");
+                let lv = self.project_attr(lhs_attr, src_idx, class_id, blob);
+                compare_values(&lv, *op, rhs_val, self.like_re_for(rhs_val))
             }
         }
     }
@@ -575,8 +579,10 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             P::InstanceOf(cname) => class_name_matches(class_name, cname),
             P::InSubquery { lhs, .. } => self.eval_in_subquery(lhs, src_idx),
             P::Compare { lhs, op, rhs } => {
-                let lv = self.project_array_attr(lhs, src_idx, class_name, length);
-                compare_values(&lv, *op, rhs, self.like_re_for(rhs))
+                let lhs_attr = lhs.as_attr().expect("Compare lhs is a single attr before arithmetic wiring");
+                let rhs_val = rhs.as_lit().expect("Compare rhs is a single literal before arithmetic wiring");
+                let lv = self.project_array_attr(lhs_attr, src_idx, class_name, length);
+                compare_values(&lv, *op, rhs_val, self.like_re_for(rhs_val))
             }
         }
     }
@@ -837,7 +843,7 @@ fn collect_like_regexes(
             rhs,
             ..
         } => {
-            if let Value::Str(pat) = rhs {
+            if let Some(Value::Str(pat)) = rhs.as_lit() {
                 if !out.contains_key(pat) {
                     let anchored = format!("^(?:{pat})$");
                     let re = regex::Regex::new(&anchored).map_err(|e| {
@@ -871,6 +877,7 @@ pub fn column_name(it: &SelectItem) -> String {
             path_operand_name(to)
         ),
         SelectItem::ToString(a) => format!("toString({a})"),
+        SelectItem::Expr(_) => unreachable!("Expr select item reached before arithmetic wiring"),
     }
 }
 

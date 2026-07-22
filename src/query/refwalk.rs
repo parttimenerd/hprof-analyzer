@@ -195,7 +195,7 @@ pub fn decode_primitive_tail(
 /// queries. The `tail` of a RefPath is a projection, not a hop, so it is not
 /// included (unless it is itself a nested RefPath, which the recursion covers).
 pub fn refwalk_field_names(q: &crate::query::ast::Query) -> Vec<String> {
-    use crate::query::ast::{Attr, Predicate, SelectItem};
+    use crate::query::ast::{Attr, Expr, Predicate, SelectItem};
 
     fn collect_attr(a: &Attr, out: &mut Vec<String>) {
         if let Attr::RefPath { hops, tail, .. } = a {
@@ -214,7 +214,11 @@ pub fn refwalk_field_names(q: &crate::query::ast::Query) -> Vec<String> {
                 collect_pred(b, out);
             }
             Predicate::Not(a) => collect_pred(a, out),
-            Predicate::Compare { lhs, .. } => collect_attr(lhs, out),
+            Predicate::Compare { lhs, .. } => {
+                if let Expr::Attr(a) = lhs {
+                    collect_attr(a, out);
+                }
+            }
             Predicate::InSubquery { .. } | Predicate::InstanceOf(_) => {}
         }
     }
@@ -233,6 +237,7 @@ pub fn refwalk_field_names(q: &crate::query::ast::Query) -> Vec<String> {
             SelectItem::Path { .. } => {}
             // toString(s) carries no RefPath hops; string values are a separate side table.
             SelectItem::ToString(_) => {}
+            SelectItem::Expr(_) => unreachable!("Expr select item reached before arithmetic wiring"),
         }
     }
     if let Some(pred) = &q.where_ {
@@ -247,7 +252,7 @@ pub fn refwalk_field_names(q: &crate::query::ast::Query) -> Vec<String> {
 /// `RefWalkTails` during the scan. Non-field tails (identity attrs) yield
 /// nothing here; they are answered directly in the late window.
 pub fn refwalk_tail_field_names(q: &crate::query::ast::Query) -> Vec<String> {
-    use crate::query::ast::{Attr, Predicate, SelectItem};
+    use crate::query::ast::{Attr, Expr, Predicate, SelectItem};
 
     fn collect_attr(a: &Attr, out: &mut Vec<String>) {
         if let Attr::RefPath { tail, .. } = a {
@@ -268,7 +273,11 @@ pub fn refwalk_tail_field_names(q: &crate::query::ast::Query) -> Vec<String> {
                 collect_pred(b, out);
             }
             Predicate::Not(a) => collect_pred(a, out),
-            Predicate::Compare { lhs, .. } => collect_attr(lhs, out),
+            Predicate::Compare { lhs, .. } => {
+                if let Expr::Attr(a) = lhs {
+                    collect_attr(a, out);
+                }
+            }
             Predicate::InSubquery { .. } | Predicate::InstanceOf(_) => {}
         }
     }
@@ -287,6 +296,7 @@ pub fn refwalk_tail_field_names(q: &crate::query::ast::Query) -> Vec<String> {
             SelectItem::Path { .. } => {}
             // toString(s) carries no RefPath tail fields.
             SelectItem::ToString(_) => {}
+            SelectItem::Expr(_) => unreachable!("Expr select item reached before arithmetic wiring"),
         }
     }
     if let Some(pred) = &q.where_ {
