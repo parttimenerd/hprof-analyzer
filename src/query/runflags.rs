@@ -12,8 +12,8 @@
 // (Task 40); until those land, the items are dead from the binary's view.
 #![allow(dead_code)]
 
-use crate::query::ast::{Attr, Predicate, Query, SelectItem};
 use crate::query::QueryError;
+use crate::query::ast::{Attr, Predicate, Query, SelectItem};
 
 /// Direction of an edge feature. Kept as a small typed enum so callers that
 /// walk edges do not thread bare bools around.
@@ -172,6 +172,8 @@ fn scan_select_item(item: &SelectItem, used: &mut BranchUse) {
         SelectItem::Attr(a) => scan_attr(a, used),
         SelectItem::Aggregate { arg, .. } => scan_select_item(arg, used),
         // A bounded forward subgraph walk needs the forward-reference CSR.
+        // FROM-seed rows suffice; no `to`-class retention is needed because
+        // `to`-operand early-stop is not armed (parity-lite).
         SelectItem::Path { .. } => used.forward = true,
         SelectItem::Star => {}
         // toString(s) uses the string-values side table, not edge CSRs.

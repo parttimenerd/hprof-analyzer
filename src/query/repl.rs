@@ -446,8 +446,10 @@ mod tests {
 
     #[test]
     fn plan_rejected_reports_plan_error() {
-        // path(a, b) parses fine but the planner rejects it.
-        let (_, out) = meta_out("plan SELECT path(x, y) FROM C x");
+        // A mixed path(a,b) select (path plus another item) is rejected by the
+        // planner. This verifies the repl surfaces "plan error:" for plan-time
+        // rejections (path(x,y) alone now plans OK; the mixed form is still an error).
+        let (_, out) = meta_out("plan SELECT path(x, y), @usedHeapSize FROM C x");
         assert!(out.contains("plan error:"), "got: {out}");
     }
 

@@ -6,6 +6,7 @@ use crate::query::QueryError;
 use crate::query::ast::{Attr, Predicate, Query, RefRole, SelectItem, Value};
 use crate::query::carry::CarryLayout;
 use crate::query::runflags::EdgeDir;
+use crate::query::{DEFAULT_PATH_DEPTH_CAP};
 
 /// Default cap on late-phase emitted rows (dominator children) and retained-set
 /// closures, mirroring the scan-time `DEFAULT_CARRY_CAP`. Bounds late output so
@@ -299,10 +300,12 @@ fn plan_single(q: &Query) -> Result<QueryPlan, QueryError> {
             }
             SelectItem::Star => {}
             SelectItem::Attr(a) => note_attr_need_attr(a, &mut needs),
-            // path(a, b) planning/execution lands in a later task.
-            SelectItem::Path { .. } => {
-                return Err(QueryError("path(a, b) is not yet supported".into()));
-            }
+            // path(a, b): handled below as a lone-select special-case (mirroring
+            // @inbounds/@outbounds). A lone path select returns early; a mixed
+            // select is rejected with an actionable error after the scan loop.
+            // We do NOT note any scalar needs here — path emits object-ref rows
+            // from the forward-reference graph, not instance fields.
+            SelectItem::Path { .. } => {}
             // toString(s) needs the string-values side table (built post-scan).
             SelectItem::ToString(_) => {
                 needs.string_values = true;
@@ -399,6 +402,45 @@ fn plan_single(q: &Query) -> Result<QueryPlan, QueryError> {
             in_subplans: Vec::new(),
             deferred_projections: Vec::new(),
         });
+    }
+
+    // `path(a, b)`: bounded forward-reachable subgraph from the FROM-alias seeds.
+    // Only valid as a LONE select item (like @inbounds); mixed selects are
+    // rejected below with an actionable error. Resolves in the P2 late window off
+    // the retained forward-edge store, so we finalize at P2 and carry the seed
+    // frontier. `to`-operand early-stop is deferred (parity-lite): BoundedPath is
+    // called with target_rows=&[] which walks to depth_cap and returns the full
+    // bounded forward-reachable subgraph from the FROM seeds.
+    if let [SelectItem::Path { .. }] = q.select.as_slice() {
+        return Ok(QueryPlan {
+            kind: StageKind::SingleScan,
+            needs,
+            where_terms,
+            finalize_at: Phase::P2,
+            carry: CarryLayout::IndexOnly,
+            late_ops: vec![StageOp::BoundedPath {
+                depth_cap: DEFAULT_PATH_DEPTH_CAP,
+            }],
+            limit: q.limit,
+            scan_limit: None,
+            order_sensitive: q.order_by.is_some(),
+            select_arity,
+            union_branches: Vec::new(),
+            union_limit: None,
+            from_subplan: None,
+            in_subplans: Vec::new(),
+            deferred_projections: Vec::new(),
+        });
+    }
+    // A mixed select containing path(a, b) alongside other items is not supported:
+    // path emits a one-column object-ref subgraph, so combining it with other
+    // projections is meaningless. Reject with an actionable error.
+    if q.select.iter().any(|it| matches!(it, SelectItem::Path { .. })) {
+        return Err(QueryError(
+            "path(a, b) must be the only select item \
+             (e.g. SELECT path(a, b) FROM java.lang.Thread a)"
+                .into(),
+        ));
     }
 
     // `@inbounds` / `@outbounds`: the referrers / forward-targets of each matched
@@ -2044,6 +2086,80 @@ mod tests {
             Phase::P2,
             "toString WHERE must finalize at P2, got: {:?}",
             plan.finalize_at
+        );
+    }
+
+    // ============================================================
+    // path(a, b) planning tests
+    // ============================================================
+
+    /// Pin: DEFAULT_PATH_DEPTH_CAP must be 20 (matches CLI default depth).
+    #[test]
+    fn default_path_depth_cap_constant_is_20() {
+        assert_eq!(crate::query::DEFAULT_PATH_DEPTH_CAP, 20);
+    }
+
+    /// A lone `SELECT path(a, b)` plans to a BoundedPath late op at P2.
+    #[test]
+    fn plan_path_lone_emits_bounded_path_op() {
+        let plan =
+            plan_query(&parse("SELECT path(a, b) FROM java.lang.Thread a").unwrap()).unwrap();
+        assert_eq!(
+            plan.late_ops,
+            vec![StageOp::BoundedPath {
+                depth_cap: crate::query::DEFAULT_PATH_DEPTH_CAP
+            }],
+            "lone path(a,b) must emit exactly one BoundedPath op"
+        );
+        assert_eq!(
+            plan.finalize_at,
+            Phase::P2,
+            "path(a,b) must finalize at P2"
+        );
+        assert!(
+            matches!(plan.carry, CarryLayout::IndexOnly),
+            "path(a,b) carry must be IndexOnly"
+        );
+        assert_eq!(plan.kind, StageKind::SingleScan);
+    }
+
+    /// A mixed select with path(a, b) plus another item must be rejected with an
+    /// actionable error mentioning "only select item".
+    #[test]
+    fn plan_path_mixed_select_rejected_actionably() {
+        let err = plan_query(
+            &parse("SELECT path(a,b), @usedHeapSize FROM java.lang.Thread a").unwrap(),
+        )
+        .unwrap_err();
+        assert!(
+            err.0.contains("only select item"),
+            "mixed path select must mention 'only select item'; got: {}",
+            err.0
+        );
+    }
+
+    /// path(a, b) as an aggregate argument must be rejected with an actionable error.
+    #[test]
+    fn plan_path_as_aggregate_arg_rejected() {
+        let err =
+            plan_query(&parse("SELECT COUNT(path(a, b)) FROM java.lang.Thread a").unwrap())
+                .unwrap_err();
+        assert!(
+            err.0.contains("aggregate"),
+            "path-as-aggregate-arg must mention 'aggregate'; got: {}",
+            err.0
+        );
+    }
+
+    /// A plain non-path query must still plan with finalize_at == P1 and no
+    /// BoundedPath op (memory invariant: no spurious forward-edge retention).
+    #[test]
+    fn no_path_query_stays_p1_no_bounded_path_op() {
+        let plan = plan_query(&parse("SELECT COUNT(*) FROM java.lang.String").unwrap()).unwrap();
+        assert_eq!(plan.finalize_at, Phase::P1);
+        assert!(
+            !plan.late_ops.iter().any(|op| matches!(op, StageOp::BoundedPath { .. })),
+            "non-path query must not emit BoundedPath op"
         );
     }
 }

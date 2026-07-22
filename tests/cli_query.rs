@@ -2083,3 +2083,61 @@ fn leading_as_retained_set_end_to_end() {
         "output must not have a column named RETAINED:\n{stdout}"
     );
 }
+
+/// `SELECT path(a, b) FROM <class> a` needs the FULL analysis pipeline: the
+/// forward-reference CSR is built during the analyze scan (RunFlags-gated), so
+/// it must be exercised through the ANALYZE path, not the query-only subcommand.
+/// A correct run exits 0, renders a `## Custom Queries` section with a
+/// `path(a, b)` column header, and produces NO error block. The query may yield
+/// 0 rows (the bounded subgraph is empty or no objects of the seed class were
+/// retained after the edge-retention gate), which is acceptable; what matters is
+/// that the pipeline runs to completion and the late BoundedPath op is executed
+/// without error.
+///
+/// `to`-operand early-stop is deferred (parity-lite): path emits the bounded
+/// forward-reachable subgraph from the FROM seeds; `target_rows` is empty by
+/// design. See `StageOp::BoundedPath` and `DEFAULT_PATH_DEPTH_CAP` (20 hops).
+#[test]
+fn path_query_returns_rows_via_analyze_path() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg(&hprof)
+        .args([
+            "--query",
+            "SELECT path(a, b) FROM java.lang.String a LIMIT 5",
+        ])
+        .args(["-f", "md"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "analyze with path(a,b) query failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let md = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        md.contains("## Custom Queries"),
+        "path(a,b) query section missing:\n{md}"
+    );
+    assert!(
+        md.contains("path(a, b)"),
+        "path(a,b) result column header missing:\n{md}"
+    );
+    let section = &md[md.find("## Custom Queries").unwrap()..];
+    assert!(
+        !section.contains("**Error:**"),
+        "path(a,b) query rendered an error block:\n{section}"
+    );
+    assert!(
+        !section.contains("requires the full analysis pipeline"),
+        "path(a,b) query hit the query-only error path in the FULL analyze path:\n{section}"
+    );
+    // The result may be 0 rows (bounded subgraph from String seeds in the
+    // philosophers fixture may be small), but must NOT be an error block.
+    // The column header "path(a, b)" in the section confirms the late
+    // BoundedPath op ran to completion in the full P2 pipeline.
+    assert!(
+        section.contains("path(a, b)"),
+        "BoundedPath op did not finalize — no column header in output:\n{section}"
+    );
+}

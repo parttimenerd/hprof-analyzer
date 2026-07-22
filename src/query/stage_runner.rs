@@ -363,9 +363,11 @@ fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
                 return dominator_rows(entry, q, &neighbours, entry.carry.truncated(), ctx);
             }
             StageOp::BoundedPath { depth_cap } => {
-                // Bounded walk from each carried seed; concatenate reached nodes.
-                // `target_rows` is empty here (no early target stop): carry-level
-                // target-class resolution lands in a later task (41/42).
+                // Bounded forward walk from each carried seed; concatenate reached
+                // nodes. `target_rows` is empty by design (parity-lite): path(a, b)
+                // emits the bounded forward-reachable subgraph from the FROM seeds.
+                // `to`-operand early-stop needs a per-index class map we intentionally
+                // don't keep (MEMORY-CRITICAL: no flat per-object Vec<u32>).
                 let seeds: Vec<u32> = entry.carry.indices();
                 let mut reached = Vec::new();
                 let mut capped = false;
