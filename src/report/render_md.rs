@@ -501,22 +501,31 @@ pub(crate) fn render_retention_concentration(o: &SystemOverview, out: &mut Strin
          **Top 10** / **Top 100**, the leak is spread across many peers (e.g. a big cache \
          or collection of similar objects) and no single free helps much._\n\n",
     );
-    let mut t = Table::new(&["Scope", "Retained Share"], &[Align::Left, Align::Right]);
+    let total = o.total_shallow;
+    let bp_to_bytes = |bp: u32| -> u64 { (bp as u64 * total) / 10_000 };
+    let mut t = Table::new(
+        &["Scope", "Retained Share", "Retained"],
+        &[Align::Left, Align::Right, Align::Right],
+    );
     t.row([
         "Top 1 object".into(),
         format!("{:.1}%", rc.top1_bp as f64 / 100.0),
+        format_bytes(bp_to_bytes(rc.top1_bp)),
     ]);
     t.row([
         "Top 10 objects".into(),
         format!("{:.1}%", rc.top10_bp as f64 / 100.0),
+        format_bytes(bp_to_bytes(rc.top10_bp)),
     ]);
     t.row([
         "Top 100 objects".into(),
         format!("{:.1}%", rc.top100_bp as f64 / 100.0),
+        format_bytes(bp_to_bytes(rc.top100_bp)),
     ]);
     t.row([
         "Objects each >=1%".into(),
         fmt_count(rc.num_objects_ge_1pct),
+        String::new(),
     ]);
     t.render(out);
     out.push('\n');
@@ -525,33 +534,61 @@ pub(crate) fn render_retention_concentration(o: &SystemOverview, out: &mut Strin
 /// Dominator-Depth Distribution (B2): objects per idom-hop below a GC root.
 /// Rendered as a standalone section near the end of the report.
 pub(crate) fn render_dominator_depth(o: &SystemOverview, out: &mut String) {
-    use crate::md::{Align, Table};
+    render_dominator_depth_inner(o, false, out);
+}
+
+pub(crate) fn render_dominator_depth_graphs(o: &SystemOverview, out: &mut String) {
+    render_dominator_depth_inner(o, true, out);
+}
+
+fn render_dominator_depth_inner(o: &SystemOverview, graphs: bool, out: &mut String) {
+    use crate::md::{Align, Table, bar};
     let Some(stats) = depth_stats(&o.dominator_depth_histogram) else {
         return;
     };
+    // Show up to 50 rows but stop at the last row with >= 0.1% of objects.
     const DEPTH_CAP: usize = 50;
+    let meaningful_end = stats
+        .rows
+        .iter()
+        .rposition(|&(_, _, pct, _)| pct >= 0.001)
+        .map(|i| i + 1)
+        .unwrap_or(stats.rows.len());
+    let shown = meaningful_end.min(DEPTH_CAP);
+    let hidden = stats.rows.len() - shown;
     out.push_str("## Dominator-Depth Distribution\n\n");
     out.push_str(DEPTH_DIST_CAPTION);
     out.push_str(&depth_summary_line(&stats));
-    let total = stats.rows.len();
-    let shown = total.min(DEPTH_CAP);
-    let mut t = Table::new(
-        &["Depth", "Objects", "% Objects", "Cumulative %"],
-        &[Align::Right, Align::Right, Align::Right, Align::Right],
-    );
+    let obj_max = stats.rows.iter().map(|&(_, o, _, _)| o).max().unwrap_or(0);
+    let mut headers: Vec<&str> = vec!["Depth", "Objects", "% Objects", "Cumulative %"];
+    let mut aligns = vec![Align::Right, Align::Right, Align::Right, Align::Right];
+    if graphs {
+        headers.push("");
+        aligns.push(Align::Left);
+    }
+    let mut t = Table::new(&headers, &aligns);
     for &(depth, objects, pct, cum) in stats.rows.iter().take(shown) {
-        t.row([
+        let mut row = vec![
             depth.to_string(),
             fmt_count(objects),
             fmt_pct(pct),
             fmt_pct(cum),
-        ]);
+        ];
+        if graphs {
+            row.push(bar(objects, obj_max, render_graphs::GRAPH_BAR_WIDTH));
+        }
+        t.row(row);
     }
     t.render(out);
-    if total > shown {
+    if hidden > 0 {
+        // Count objects and compute cumulative % for the hidden tail
+        let hidden_objects: u64 = stats.rows[shown..].iter().map(|&(_, o, _, _)| o).sum();
+        let last_cum = stats.rows.last().map(|&(_, _, _, c)| c).unwrap_or(0.0);
         out.push_str(&format!(
-            "\n_… (+{} deeper buckets in JSON)_\n",
-            total - shown
+            "\n_… (+{} deeper buckets, {} objects, {:.1}% cumulative — full data in JSON)_\n",
+            hidden,
+            fmt_count(hidden_objects),
+            last_cum * 100.0,
         ));
     }
     out.push('\n');
@@ -612,6 +649,25 @@ _Definitions for the terms used above._
 - **Instance vs. class**: an *instance* is one object; a *class* row aggregates
   every instance of that type. \"Largest\" in the histogram is the shallow size of
   the single biggest instance of a class.
+- **Collection fill ratio**: the fraction of a collection's backing-array capacity
+  that is actually occupied by elements — `elements / capacity`. A fill ratio near
+  0 means the backing array is mostly empty (wasted memory). A ratio near 1 means
+  the collection is full.
+- **Map collision ratio** (load factor): for hash maps, the fraction of backing-array
+  slots occupied — `occupied_slots / total_slots`. A low load factor means many
+  empty buckets (wasted memory); a very high load factor increases hash collision
+  probability and lookup cost.
+- **Only-weakly retained**: an object that has no incoming strong reference — it is
+  reachable only through one or more `WeakReference` or `SoftReference` chains.
+  Under GC pressure these objects are candidates for collection.
+- **Compressed OOPs** (Compressed Ordinary Object Pointers): a JVM optimisation
+  where object references are stored as 32-bit integers instead of 64-bit pointers,
+  halving reference-field overhead on heaps <= ~32 GB. Visible in the Heap Summary
+  as `Compressed OOPs: yes`.
+- **Class#field**: the notation used throughout this report to identify a specific
+  field — `HolderClass#fieldName`. For example `java.util.HashMap#table` names the
+  `table` field of `HashMap`. This is the dominant incoming reference path for an
+  object, not a guaranteed allocation site — it is a hint, not a precise origin.
 ";
 
 /// Render the "System Overview" section (plain Markdown): scalars, GC-roots and
@@ -730,10 +786,19 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
 
     // (a single-type breakdown restates the "GC roots" scalar above).
     if o.gc_roots_by_type.len() > 1 {
+        use crate::md::bar;
         out.push_str("### GC Roots by Type\n\n");
-        let mut t = Table::new(&["Root Type", "Count"], &[Align::Left, Align::Right]);
+        let max_count = o.gc_roots_by_type.iter().map(|r| r.count).max().unwrap_or(0);
+        let mut t = Table::new(
+            &["Root Type", "Count", ""],
+            &[Align::Left, Align::Right, Align::Left],
+        );
         for row in &o.gc_roots_by_type {
-            t.row([row.root_type.clone(), fmt_count(row.count)]);
+            t.row([
+                row.root_type.clone(),
+                fmt_count(row.count),
+                bar(row.count, max_count, 16),
+            ]);
         }
         t.render(out);
         out.push('\n');
@@ -742,16 +807,25 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
     // Heap composition by kind: worth a table only when >1 kind present
     // (a single-kind heap just restates "Total objects").
     if o.heap_composition.by_kind.len() > 1 {
+        use crate::md::bar;
         out.push_str("### Heap Composition\n\n");
+        let max_shallow = o
+            .heap_composition
+            .by_kind
+            .iter()
+            .map(|k| k.shallow_heap)
+            .max()
+            .unwrap_or(0);
         let mut t = Table::new(
-            &["Kind", "Objects", "Shallow Heap"],
-            &[Align::Left, Align::Right, Align::Right],
+            &["Kind", "Objects", "Shallow Heap", ""],
+            &[Align::Left, Align::Right, Align::Right, Align::Left],
         );
         for k in &o.heap_composition.by_kind {
             t.row([
                 k.kind.clone(),
                 fmt_count(k.objects),
                 format_bytes(k.shallow_heap),
+                bar(k.shallow_heap, max_shallow, 16),
             ]);
         }
         t.render(out);
@@ -1851,29 +1925,38 @@ pub(crate) fn render_collections(
 
     // ── Constant Primitive Arrays ────────────────────────────────────────────
     out.push_str("### Constant Primitive Arrays\n\n");
-    let mut note = String::from("_Primitive arrays whose every element is identical._");
+    // Filter noise: skip groups that are trivially short (length <= 4) and have
+    // few instances — these are almost always single-char String backing arrays
+    // (e.g. byte[1] value=49) with no actionable information.
+    const MIN_LENGTH: u64 = 8;
+    const MIN_INSTANCES: u64 = 5;
+    let interesting_rows: Vec<_> = c
+        .constant_primitive_arrays
+        .rows
+        .iter()
+        .filter(|r| r.length >= MIN_LENGTH || r.objects >= MIN_INSTANCES)
+        .collect();
+    let mut note = String::from(
+        "_Primitive arrays whose every element is identical — possible candidates for \
+deduplication or replacement with a shared constant. Short arrays (length < 8 with \
+few instances) are hidden as noise._",
+    );
     if c.constant_primitive_arrays.truncated {
         note.push_str(" _(list truncated; remaining groups folded into one row)._");
     }
     out.push_str(&note);
     out.push_str("\n\n");
-    if c.constant_primitive_arrays.rows.is_empty() {
+    let skipped = c.constant_primitive_arrays.rows.len() - interesting_rows.len();
+    if skipped > 0 {
+        out.push_str(&format!("_({skipped} trivial groups hidden.)_\n\n"));
+    }
+    if interesting_rows.is_empty() {
         out.push_str("_None._\n\n");
     } else {
-        let obj_max = c
-            .constant_primitive_arrays
-            .rows
-            .iter()
-            .map(|r| r.objects)
-            .max()
-            .unwrap_or(0);
+        let obj_max = interesting_rows.iter().map(|r| r.objects).max().unwrap_or(0);
         // The Owner column (dominant `Class#field` referrer) is present only when
         // attribution data exists (i.e. `--collections` was passed).
-        let has_owner = c
-            .constant_primitive_arrays
-            .rows
-            .iter()
-            .any(|r| r.owner.is_some());
+        let has_owner = interesting_rows.iter().any(|r| r.owner.is_some());
         let mut headers: Vec<&str> = vec!["Array class", "Length", "Value", "Objects", "Shallow"];
         let mut aligns = vec![
             Align::Left,
@@ -1891,7 +1974,7 @@ pub(crate) fn render_collections(
             aligns.push(Align::Left);
         }
         let mut t = Table::new(&headers, &aligns);
-        for r in &c.constant_primitive_arrays.rows {
+        for r in &interesting_rows {
             let mut row = vec![
                 format!("`{}`", r.array_class),
                 fmt_count(r.length),
@@ -2275,10 +2358,32 @@ pub(crate) fn render_biggest_collections(
          dominates). Owner/retained/value columns require `--collections`._\n\n",
     );
 
-    render_biggest_collection_table(&b.combined, "Combined", graphs, out);
-    for k in &b.by_kind {
-        let title = format!("By Kind — {}", k.kind);
-        render_biggest_collection_table(&k.rows, &title, graphs, out);
+    // When per-kind breakdown is available show it directly (avoids listing every
+    // row twice — once in Combined and again in By Kind). Fall back to Combined
+    // only when there are no by-kind tables.
+    if b.by_kind.is_empty() {
+        render_biggest_collection_table(&b.combined, "Combined", graphs, out);
+    } else {
+        // Emit a compact combined summary (total elements + retained) without
+        // repeating every row, then show the full per-kind breakdown.
+        if !b.combined.is_empty() {
+            let total_elements: u64 = b.combined.iter().map(|r| r.elements).sum();
+            let total_retained: u64 = b.combined.iter().filter_map(|r| r.retained).sum();
+            let n_kinds = b.by_kind.len();
+            out.push_str(&format!(
+                "_Total: {} elements across {} collection kind(s)",
+                fmt_count(total_elements),
+                n_kinds,
+            ));
+            if total_retained > 0 {
+                out.push_str(&format!(", {} retained", format_bytes(total_retained)));
+            }
+            out.push_str(". See per-kind breakdown below._\n\n");
+        }
+        for k in &b.by_kind {
+            let title = format!("By Kind — {}", k.kind);
+            render_biggest_collection_table(&k.rows, &title, graphs, out);
+        }
     }
     if b.truncated {
         out.push_str("_Collection value tally was truncated; ranking is a bounded sample._\n\n");
@@ -2984,12 +3089,15 @@ pub(crate) fn render_alloc_sites(a: &AllocSites, graphs: bool, out: &mut String)
     out.push_str("## Allocation Sites\n\n");
     if !a.traces_present {
         out.push_str(
-            "_Allocation tracking was off in this dump (`stack_trace_serial = 0`); no allocation sites available._\n\n",
+            "_No per-frame allocation data is available in this dump (`stack_trace_serial = 0`). \
+To capture allocation stacks, restart the JVM with JFR (`-XX:StartFlightRecording`) \
+or take the heap dump while a profiler is attached. Without allocation stacks only \
+the aggregate totals below are available._\n\n",
         );
         return;
     }
-    use crate::md::{Align, Table, bar};
     let max = a.sites.iter().map(|s| s.object_count).max().unwrap_or(0);
+    use crate::md::{Align, Table, bar};
     let mut t = if graphs {
         Table::new(
             &["Stack", "Objects", "Shallow", "Retained", ""],

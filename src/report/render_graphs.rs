@@ -430,28 +430,34 @@ fn render_retention_concentration_graphs(o: &SystemOverview, out: &mut String) {
          **Top 10** / **Top 100**, the leak is spread across many peers (e.g. a big cache \
          or collection of similar objects) and no single free helps much._\n\n",
     );
+    let total = o.total_shallow;
+    let bp_to_bytes = |bp: u32| -> u64 { (bp as u64 * total) / 10_000 };
     let mut t = Table::new(
-        &["Scope", "Retained Share", ""],
-        &[Align::Left, Align::Right, Align::Left],
+        &["Scope", "Retained Share", "Retained", ""],
+        &[Align::Left, Align::Right, Align::Right, Align::Left],
     );
     t.row([
         "Top 1 object".into(),
         format!("{:.1}%", rc.top1_bp as f64 / 100.0),
+        format_bytes(bp_to_bytes(rc.top1_bp)),
         bar(rc.top1_bp as u64, 10_000, GRAPH_BAR_WIDTH),
     ]);
     t.row([
         "Top 10 objects".into(),
         format!("{:.1}%", rc.top10_bp as f64 / 100.0),
+        format_bytes(bp_to_bytes(rc.top10_bp)),
         bar(rc.top10_bp as u64, 10_000, GRAPH_BAR_WIDTH),
     ]);
     t.row([
         "Top 100 objects".into(),
         format!("{:.1}%", rc.top100_bp as f64 / 100.0),
+        format_bytes(bp_to_bytes(rc.top100_bp)),
         bar(rc.top100_bp as u64, 10_000, GRAPH_BAR_WIDTH),
     ]);
     t.row([
         "Objects each >=1%".into(),
         fmt_count(rc.num_objects_ge_1pct),
+        String::new(),
         String::new(),
     ]);
     t.render(out);
@@ -459,47 +465,9 @@ fn render_retention_concentration_graphs(o: &SystemOverview, out: &mut String) {
 }
 
 /// Dominator-Depth Distribution (md-graphs): the full per-depth table with a
-/// proportional bar column. Standalone section near the end of the report.
+/// proportional bar column. Delegates to the shared render_md implementation.
 fn render_dominator_depth_graphs(o: &SystemOverview, out: &mut String) {
-    use crate::md::{Align, Table, bar};
-    let Some(stats) = depth_stats(&o.dominator_depth_histogram) else {
-        return;
-    };
-    out.push_str("## Dominator-Depth Distribution\n\n");
-    out.push_str(DEPTH_DIST_CAPTION);
-    out.push_str(&depth_summary_line(&stats));
-    let counts: Vec<u64> = stats.rows.iter().map(|&(_, o, _, _)| o).collect();
-    const DEPTH_CAP: usize = 50;
-    let dmax = counts.iter().copied().max().unwrap_or(0);
-    let total = stats.rows.len();
-    let shown = total.min(DEPTH_CAP);
-    let mut t = Table::new(
-        &["Depth", "Objects", "% Objects", "Cumulative %", ""],
-        &[
-            Align::Right,
-            Align::Right,
-            Align::Right,
-            Align::Right,
-            Align::Left,
-        ],
-    );
-    for &(depth, objects, pct, cum) in stats.rows.iter().take(shown) {
-        t.row([
-            depth.to_string(),
-            fmt_count(objects),
-            fmt_pct(pct),
-            fmt_pct(cum),
-            bar(objects, dmax, GRAPH_BAR_WIDTH),
-        ]);
-    }
-    t.render(out);
-    if total > shown {
-        out.push_str(&format!(
-            "\n_… (+{} deeper buckets in JSON)_\n",
-            total - shown
-        ));
-    }
-    out.push('\n');
+    render_md::render_dominator_depth_graphs(o, out);
 }
 
 /// Leak Suspects with a leading share-bar table across all suspects, then the
