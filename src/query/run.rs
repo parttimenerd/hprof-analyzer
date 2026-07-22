@@ -5,13 +5,13 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use crate::pass1::ClassInfo;
 use crate::id_map::IdMap;
+use crate::pass1::ClassInfo;
+use crate::query::ObjectVisitor;
 use crate::query::ast::Query;
 use crate::query::execute::{ClassResolver, SingleScanExecutor};
 use crate::query::model::{QueryResult, QueryValue};
 use crate::query::plan::QueryPlan;
-use crate::query::ObjectVisitor;
 use crate::types::HprofType;
 
 /// Resolves a class-object address (`class_id`) to its dotted class name and,
@@ -87,7 +87,12 @@ impl<'a> ClassResolver for LiveResolver<'a> {
         }
         let resolved = self.owner_of(class_id, name).and_then(|owner_slash| {
             crate::pass2::sizing::field_offset(
-                class_id, name, &owner_slash, self.class_map, self.strings, self.id_size,
+                class_id,
+                name,
+                &owner_slash,
+                self.class_map,
+                self.strings,
+                self.id_size,
             )
         });
         self.field_cache.borrow_mut().insert(key, resolved);
@@ -175,7 +180,11 @@ impl<'q, R: ClassResolver> ScanDriver<'q, R> {
             execs.push(ex);
         }
         let refwalk = Self::arm_refwalk(&execs);
-        Self { execs, slots, refwalk }
+        Self {
+            execs,
+            slots,
+            refwalk,
+        }
     }
 
     /// Build the RefWalk sidecar if any exec needs it: intern the union of hop
@@ -287,10 +296,14 @@ impl<'q, R: ClassResolver> ScanDriver<'q, R> {
     /// Decode the needed reference fields from one instance blob and record their
     /// edges; also capture any tail field this object owns. No-op when unarmed.
     fn capture_refwalk(&mut self, src_idx: usize, class_id: u64, blob: &[u8]) {
-        let Some(state) = self.refwalk.as_mut() else { return };
+        let Some(state) = self.refwalk.as_mut() else {
+            return;
+        };
         let width = state.resolver.ref_width();
         for (field_id, name) in state.field_names.iter().enumerate() {
-            let Some((off, ty)) = state.resolver.field(class_id, name) else { continue };
+            let Some((off, ty)) = state.resolver.field(class_id, name) else {
+                continue;
+            };
             if ty != HprofType::Object {
                 continue;
             }
@@ -307,13 +320,17 @@ impl<'q, R: ClassResolver> ScanDriver<'q, R> {
                 continue; // null reference → no edge
             }
             if let Some(dst) = state.resolver.index_of_addr(addr) {
-                state.edges.push(src_idx as u32, field_id as u32, dst as u32);
+                state
+                    .edges
+                    .push(src_idx as u32, field_id as u32, dst as u32);
             }
         }
         // Capture tail field values owned by THIS object (keyed by its own dense
         // index — the walk resolves to it, then the late window looks it up).
         for name in &state.tail_names {
-            let Some((off, ty)) = state.resolver.field(class_id, name) else { continue };
+            let Some((off, ty)) = state.resolver.field(class_id, name) else {
+                continue;
+            };
             if let Some(v) = crate::query::refwalk::decode_primitive_tail(off, ty, blob) {
                 state.tails.insert(src_idx as u32, v);
             }
@@ -364,19 +381,31 @@ pub fn run_single_dump(
         let p1 = crate::pass1::Pass1::run(path)?;
         let mut empty = std::collections::HashMap::new();
         let (.., state, _refwalk_csr) = crate::pass2::Pass2::build(
-            path, p1, crate::cvec::Codec::Zstd3, &opts, &flat, &mut empty,
+            path,
+            p1,
+            crate::cvec::Codec::Zstd3,
+            &opts,
+            &flat,
+            &mut empty,
         )?;
         let flat_results = crate::query::stage_runner::resume_without_late_ctx(state);
         return Ok(collapse_union_results(flat_results, &groups));
     }
 
     // ── Inner pass: scan the dump once for all inner subqueries ──────────────
-    let inner_queries: Vec<(Query, QueryPlan)> =
-        inners.iter().map(|i| (i.inner.clone(), i.plan.clone())).collect();
+    let inner_queries: Vec<(Query, QueryPlan)> = inners
+        .iter()
+        .map(|i| (i.inner.clone(), i.plan.clone()))
+        .collect();
     let p1_inner = crate::pass1::Pass1::run(path)?;
     let mut empty = std::collections::HashMap::new();
     let (.., inner_state, _inner_refwalk_csr) = crate::pass2::Pass2::build(
-        path, p1_inner, crate::cvec::Codec::Zstd3, &opts, &inner_queries, &mut empty,
+        path,
+        p1_inner,
+        crate::cvec::Codec::Zstd3,
+        &opts,
+        &inner_queries,
+        &mut empty,
     )?;
     let inner_results = crate::query::stage_runner::resume_without_late_ctx(inner_state);
 
@@ -384,10 +413,8 @@ pub fn run_single_dump(
     // IN-subqueries → per-outer-slot address membership sets (injected into the
     // outer executors). FROM-subqueries → per-outer-slot sorted dense-index
     // sets (applied as a post-scan semi-join).
-    let mut in_sets_by_slot: std::collections::HashMap<
-        usize,
-        Vec<crate::query::execute::InSet>,
-    > = std::collections::HashMap::new();
+    let mut in_sets_by_slot: std::collections::HashMap<usize, Vec<crate::query::execute::InSet>> =
+        std::collections::HashMap::new();
     // outer_slot → (sorted inner dense indices, inner truncated)
     let mut from_index_by_slot: std::collections::HashMap<usize, (Vec<u32>, bool)> =
         std::collections::HashMap::new();
@@ -407,7 +434,8 @@ pub fn run_single_dump(
                 );
             }
             SubqueryRole::From => {
-                let mut idx: Vec<u32> = res.rows.iter().filter_map(|r| row_dense_index(r)).collect();
+                let mut idx: Vec<u32> =
+                    res.rows.iter().filter_map(|r| row_dense_index(r)).collect();
                 idx.sort_unstable();
                 from_index_by_slot.insert(meta.outer_slot, (idx, res.truncated));
             }
@@ -417,7 +445,12 @@ pub fn run_single_dump(
     // ── Outer pass: scan again with IN sets injected ─────────────────────────
     let p1_outer = crate::pass1::Pass1::run(path)?;
     let (.., outer_state, _outer_refwalk_csr) = crate::pass2::Pass2::build(
-        path, p1_outer, crate::cvec::Codec::Zstd3, &opts, &flat, &mut in_sets_by_slot,
+        path,
+        p1_outer,
+        crate::cvec::Codec::Zstd3,
+        &opts,
+        &flat,
+        &mut in_sets_by_slot,
     )?;
     let mut flat_results = crate::query::stage_runner::resume_without_late_ctx(outer_state);
 
@@ -429,12 +462,17 @@ pub fn run_single_dump(
         // intersect. `intersect_from_subquery` returns the kept indices; we use
         // membership to filter the rows in place (preserving row order/shape).
         let keep: std::collections::HashSet<u32> = {
-            let mut outer_idx: Vec<u32> = r.rows.iter().filter_map(|r| row_dense_index(r)).collect();
+            let mut outer_idx: Vec<u32> =
+                r.rows.iter().filter_map(|r| row_dense_index(r)).collect();
             outer_idx.sort_unstable();
             let (kept, _t) = intersect_from_subquery(inner_idx_sorted, *inner_trunc, &outer_idx);
             kept.into_iter().collect()
         };
-        r.rows.retain(|row| row_dense_index(row).map(|i| keep.contains(&i)).unwrap_or(false));
+        r.rows.retain(|row| {
+            row_dense_index(row)
+                .map(|i| keep.contains(&i))
+                .unwrap_or(false)
+        });
         r.row_count = r.rows.len() as u64;
         if *inner_trunc {
             r.truncated = true;
@@ -481,7 +519,9 @@ fn collect_subquery_inners(flat: &[(Query, QueryPlan)]) -> Vec<SubqueryInner> {
         for isp in &plan.in_subplans {
             out.push(SubqueryInner {
                 outer_slot: slot,
-                role: SubqueryRole::In { lhs: isp.lhs.clone() },
+                role: SubqueryRole::In {
+                    lhs: isp.lhs.clone(),
+                },
                 inner: isp.inner.clone(),
                 plan: isp.plan.clone(),
             });
@@ -514,8 +554,18 @@ fn row_address(row: &[QueryValue]) -> Option<u64> {
 /// dedup). The first result supplies the column headers; every branch's rows
 /// are appended in branch order up to `overall_cap`, past which `truncated` is
 /// set. `truncated` also propagates if any individual branch was truncated.
+///
+/// The cap bounds the TOTAL row count, including the head branch's own rows —
+/// so a small `overall_cap` (e.g. a union-wide `LIMIT 0`) truncates the head as
+/// well, not just the appended branches.
 pub fn concat_union(mut branches: Vec<QueryResult>, overall_cap: usize) -> QueryResult {
     let mut out = branches.remove(0);
+    // Cap the head's own rows first: the total union result may not exceed
+    // `overall_cap`, and the head alone can already meet or exceed it.
+    if out.rows.len() > overall_cap {
+        out.rows.truncate(overall_cap);
+        out.truncated = true;
+    }
     for b in branches {
         out.truncated |= b.truncated;
         for row in b.rows {
@@ -584,11 +634,14 @@ pub fn in_subquery_contains(set: &std::collections::HashSet<u64>, lhs_addr: u64)
 /// One original query's footprint in the flattened scan list: `count`
 /// consecutive slots starting at `head`. `count == 1` for a plain query;
 /// `1 + N` when the query has N `UNION` branches (head slot followed by one
-/// slot per branch, in branch order).
+/// slot per branch, in branch order). `union_limit` is the union-wide trailing
+/// LIMIT (MAT gap #6), applied to the concatenated result at collapse time;
+/// `None` when there is no trailing union LIMIT.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UnionGroup {
     pub head: usize,
     pub count: usize,
+    pub union_limit: Option<u64>,
 }
 
 /// Flatten a caller's query list so every `UNION` branch becomes its own scan
@@ -617,7 +670,13 @@ pub fn expand_union_queries(
             bq.union_branches.clear();
             flat.push((bq, bplan));
         }
-        groups.push(UnionGroup { head, count: 1 + q.union_branches.len() });
+        groups.push(UnionGroup {
+            head,
+            count: 1 + q.union_branches.len(),
+            // Union-wide trailing LIMIT (MAT gap #6). Sourced from the plan so it
+            // is applied when the branch slots are re-collapsed.
+            union_limit: plan.union_limit,
+        });
     }
     (flat, groups)
 }
@@ -635,12 +694,23 @@ pub fn collapse_union_results(
     let mut out: Vec<QueryResult> = Vec::with_capacity(groups.len());
     for g in groups {
         let branch_results: Vec<QueryResult> = (0..g.count)
-            .map(|_| it.next().expect("flat results shorter than groups describe"))
+            .map(|_| {
+                it.next()
+                    .expect("flat results shorter than groups describe")
+            })
             .collect();
         if g.count == 1 {
             out.push(branch_results.into_iter().next().unwrap());
         } else {
-            out.push(concat_union(branch_results, crate::query::OVERALL_UNION_CAP));
+            // Apply the union-wide trailing LIMIT (MAT gap #6) as the row cap, but
+            // never above OVERALL_UNION_CAP so the memory safety bound still holds:
+            // cap = min(union_limit, OVERALL_UNION_CAP) when a union LIMIT is set,
+            // else just OVERALL_UNION_CAP (old behavior).
+            let cap = match g.union_limit {
+                Some(n) => (n as usize).min(crate::query::OVERALL_UNION_CAP),
+                None => crate::query::OVERALL_UNION_CAP,
+            };
+            out.push(concat_union(branch_results, cap));
         }
     }
     out
@@ -867,7 +937,8 @@ mod tests {
     }
 
     #[test]
-    fn concat_union_propagates_branch_truncation() {        use crate::query::model::{QueryColumn, QueryValue};
+    fn concat_union_propagates_branch_truncation() {
+        use crate::query::model::{QueryColumn, QueryValue};
         let col = || vec![QueryColumn { name: "c".into() }];
         let a = QueryResult {
             name: "q".into(),
@@ -892,7 +963,10 @@ mod tests {
         };
         let out = concat_union(vec![a, b], 100);
         assert_eq!(out.rows.len(), 2);
-        assert!(out.truncated, "a truncated branch taints the union even under cap");
+        assert!(
+            out.truncated,
+            "a truncated branch taints the union even under cap"
+        );
     }
 
     fn one_col_result(vals: &[i64]) -> QueryResult {
@@ -925,13 +999,22 @@ mod tests {
         assert_eq!(flat.len(), 4, "1 plain + 3 union slots");
         // Every flat entry must carry no residual branch tail.
         for (q, p) in &flat {
-            assert!(q.union_branches.is_empty(), "flattened AST keeps no branch tail");
-            assert!(p.union_branches.is_empty(), "flattened plan keeps no branch tail");
+            assert!(
+                q.union_branches.is_empty(),
+                "flattened AST keeps no branch tail"
+            );
+            assert!(
+                p.union_branches.is_empty(),
+                "flattened plan keeps no branch tail"
+            );
         }
-        assert_eq!(groups, vec![
-            UnionGroup { head: 0, count: 1 },
-            UnionGroup { head: 1, count: 3 },
-        ]);
+        assert_eq!(
+            groups,
+            vec![
+                UnionGroup { head: 0, count: 1, union_limit: None },
+                UnionGroup { head: 1, count: 3, union_limit: None },
+            ]
+        );
     }
 
     #[test]
@@ -946,8 +1029,8 @@ mod tests {
             one_col_result(&[4, 5, 6]),
         ];
         let groups = vec![
-            UnionGroup { head: 0, count: 1 },
-            UnionGroup { head: 1, count: 3 },
+            UnionGroup { head: 0, count: 1, union_limit: None },
+            UnionGroup { head: 1, count: 3, union_limit: None },
         ];
         let out = collapse_union_results(flat, &groups);
         assert_eq!(out.len(), 2, "one result per original query");
@@ -956,14 +1039,122 @@ mod tests {
         assert!(!out[1].truncated);
     }
 
+    // ---------- union-wide LIMIT (MAT gap #6) ----------
+
+    #[test]
+    fn collapse_applies_union_wide_limit_truncating() {
+        // Two branches of 2 rows each = 4 total; union_limit 3 caps to 3 rows and
+        // marks the result truncated (rows were dropped).
+        let flat = vec![one_col_result(&[1, 2]), one_col_result(&[3, 4])];
+        let groups = vec![UnionGroup {
+            head: 0,
+            count: 2,
+            union_limit: Some(3),
+        }];
+        let out = collapse_union_results(flat, &groups);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].rows.len(), 3, "capped to union_limit");
+        assert_eq!(out[0].row_count, 3);
+        assert!(out[0].truncated, "dropping rows for the union LIMIT truncates");
+    }
+
+    #[test]
+    fn collapse_union_limit_larger_than_total_returns_all() {
+        // union_limit 99 exceeds the 3 total rows → all rows, not truncated.
+        let flat = vec![one_col_result(&[1, 2]), one_col_result(&[3])];
+        let groups = vec![UnionGroup {
+            head: 0,
+            count: 2,
+            union_limit: Some(99),
+        }];
+        let out = collapse_union_results(flat, &groups);
+        assert_eq!(out[0].rows.len(), 3, "all rows returned");
+        assert!(!out[0].truncated, "no rows dropped → not truncated");
+    }
+
+    #[test]
+    fn collapse_union_limit_zero_returns_no_rows() {
+        // union_limit 0 → zero rows even though branches have rows; truncated.
+        let flat = vec![one_col_result(&[1, 2]), one_col_result(&[3, 4])];
+        let groups = vec![UnionGroup {
+            head: 0,
+            count: 2,
+            union_limit: Some(0),
+        }];
+        let out = collapse_union_results(flat, &groups);
+        assert!(out[0].rows.is_empty(), "LIMIT 0 → no rows");
+        assert_eq!(out[0].row_count, 0);
+        assert!(out[0].truncated);
+    }
+
+    #[test]
+    fn collapse_union_limit_none_uses_overall_cap_only() {
+        // No union_limit → old behavior: all rows kept (well under OVERALL cap).
+        let flat = vec![one_col_result(&[1, 2]), one_col_result(&[3, 4, 5])];
+        let groups = vec![UnionGroup {
+            head: 0,
+            count: 2,
+            union_limit: None,
+        }];
+        let out = collapse_union_results(flat, &groups);
+        assert_eq!(out[0].rows.len(), 5);
+        assert!(!out[0].truncated);
+    }
+
+    #[test]
+    fn collapse_union_limit_equal_to_total_not_truncated() {
+        // union_limit exactly equal to the total row count returns all rows and
+        // must NOT be marked truncated (nothing was dropped).
+        let flat = vec![one_col_result(&[1, 2]), one_col_result(&[3])];
+        let groups = vec![UnionGroup {
+            head: 0,
+            count: 2,
+            union_limit: Some(3),
+        }];
+        let out = collapse_union_results(flat, &groups);
+        assert_eq!(out[0].rows.len(), 3);
+        assert!(!out[0].truncated, "exact fit is not a truncation");
+    }
+
+    #[test]
+    fn concat_union_caps_head_rows_too() {
+        // A cap smaller than the head branch's own row count must truncate the
+        // head, not just the appended branches.
+        let out = concat_union(vec![one_col_result(&[1, 2, 3, 4]), one_col_result(&[5])], 2);
+        assert_eq!(out.rows.len(), 2, "head alone exceeds the cap → truncated");
+        assert!(out.truncated);
+    }
+
+    #[test]
+    fn expand_union_queries_propagates_union_limit_to_group() {
+        // A parsed+planned union with a trailing LIMIT must carry that union_limit
+        // onto its UnionGroup so collapse can apply it.
+        use crate::query::plan::plan_query;
+        let q = parse(
+            "SELECT @objectId FROM java.lang.String \
+             UNION (SELECT @objectId FROM java.lang.Object) LIMIT 7",
+        )
+        .unwrap();
+        assert_eq!(q.union_limit, Some(7), "parser sets union_limit");
+        let p = plan_query(&q).unwrap();
+        assert_eq!(p.union_limit, Some(7), "planner propagates union_limit");
+        let (_flat, groups) = expand_union_queries(&[(q, p)]);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(
+            groups[0].union_limit,
+            Some(7),
+            "UnionGroup carries the union-wide LIMIT"
+        );
+    }
+
     #[test]
     fn expand_collapse_roundtrip_preserves_plain_query_order() {
         // Two plain queries: flatten is a no-op grouping and collapse returns
         // them in the same order with contents intact.
         let flat = vec![one_col_result(&[1]), one_col_result(&[2, 3])];
         let groups = vec![
-            UnionGroup { head: 0, count: 1 },
-            UnionGroup { head: 1, count: 1 },
+            UnionGroup { head: 0, count: 1, union_limit: None },
+            UnionGroup { head: 1, count: 1, union_limit: None },
         ];
         let out = collapse_union_results(flat, &groups);
         assert_eq!(out.len(), 2);
@@ -984,7 +1175,10 @@ mod tests {
     #[test]
     fn intersect_from_subquery_propagates_truncation() {
         let (_k, trunc) = intersect_from_subquery(&[2, 3], true, &[2, 3]);
-        assert!(trunc, "inner truncation must propagate — result is incomplete");
+        assert!(
+            trunc,
+            "inner truncation must propagate — result is incomplete"
+        );
     }
 
     #[test]
@@ -1012,4 +1206,3 @@ mod tests {
         assert!(in_subquery_contains(&set, 5));
     }
 }
-

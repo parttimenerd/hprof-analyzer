@@ -374,6 +374,7 @@ where
                         order_by,
                         limit,
                         union_branches: Vec::new(),
+                        union_limit: None,
                     };
                     // Now the alias is known, rewrite dotted `Field`s into N-hop
                     // `RefPath`s (a single segment after alias-strip stays a Field).
@@ -394,8 +395,18 @@ where
     // FROM-subquery paren, which only follows `SELECT ... FROM`.
     let paren_branch = just(Token::LParen)
         .ignore_then(base_query.clone())
-        .then_ignore(just(Token::RParen));
-    let union_branch = paren_branch.or(base_query.clone());
+        .then_ignore(just(Token::RParen))
+        .map(|q| (q, true)); // (branch, parenthesized?)
+    let union_branch = paren_branch.or(base_query.clone().map(|q| (q, false)));
+    // Optional trailing top-level LIMIT combinator, reused from the single-query
+    // path (same `LIMIT <non-negative int>` shape). This only becomes reachable
+    // AFTER a parenthesized last branch — a bare last branch's own `base_query`
+    // greedily swallows any trailing LIMIT into that branch's `limit`, so the
+    // top-level LIMIT here never fires for the bare form. We recover the bare-
+    // form union-wide binding below by lifting the last branch's swallowed LIMIT.
+    let trailing_limit = ident_ci("LIMIT")
+        .ignore_then(select! { Token::Int(n) if n >= 0 => n as u64 }.labelled("LIMIT count"))
+        .or_not();
     base_query
         .clone()
         .then(
@@ -404,11 +415,40 @@ where
                 .repeated()
                 .collect::<Vec<_>>(),
         )
+        .then(trailing_limit)
         .then_ignore(end())
-        .map(|(mut head, tail): (Query, Vec<Query>)| {
-            head.union_branches = tail;
-            head
-        })
+        .map(
+            |((mut head, tail), trailing): ((Query, Vec<(Query, bool)>), Option<u64>)| {
+                // DECISION (MAT gap #6): a trailing `LIMIT n` after a UNION binds
+                // UNION-WIDE (applied to the whole concatenated result), matching
+                // Eclipse MAT — NOT to a single branch. Two forms reach here:
+                //   • parenthesized last branch `... UNION (SELECT ...) LIMIT n`:
+                //     the `LIMIT n` sits at the top level and is captured in
+                //     `trailing` directly.
+                //   • bare last branch `... UNION SELECT ... LIMIT n`: the last
+                //     branch's own `base_query` greedily absorbed the `LIMIT n`
+                //     into the last branch's `limit`, so `trailing` is None. We
+                //     LIFT that swallowed LIMIT up to the union level so the bare
+                //     form matches MAT too. A LIMIT written INSIDE a branch's own
+                //     parens is a genuine per-branch limit and is left untouched
+                //     (we only lift when the last branch was NOT parenthesized).
+                let last_was_paren = tail.last().map(|(_, p)| *p).unwrap_or(false);
+                head.union_branches = tail.into_iter().map(|(q, _)| q).collect();
+                if !head.union_branches.is_empty() {
+                    if let Some(n) = trailing {
+                        head.union_limit = Some(n);
+                    } else if !last_was_paren {
+                        // Bare-form: lift the last branch's swallowed LIMIT.
+                        if let Some(last) = head.union_branches.last_mut() {
+                            if let Some(n) = last.limit.take() {
+                                head.union_limit = Some(n);
+                            }
+                        }
+                    }
+                }
+                head
+            },
+        )
 }
 
 /// Rewrite dotted `Attr::Field` values in a query into N-hop `Attr::RefPath`s,
@@ -724,6 +764,7 @@ mod tests {
             order_by: None,
             limit,
             union_branches: Vec::new(),
+            union_limit: None,
         }
     }
     fn star() -> Vec<SelectItem> {
@@ -1241,6 +1282,81 @@ mod tests {
     #[test]
     fn no_union_leaves_branches_empty() {
         assert!(parse("SELECT * FROM C").unwrap().union_branches.is_empty());
+    }
+
+    // ---------- top-level union-wide LIMIT (MAT gap #6) ----------
+
+    #[test]
+    fn union_wide_limit_parenthesized_form() {
+        // MAT applies a trailing LIMIT to the WHOLE union. With a parenthesized
+        // last branch, the trailing `LIMIT 5` sits at the top level and must land
+        // in `union_limit`, NOT on any branch.
+        let q =
+            parse("SELECT * FROM java.lang.String UNION (SELECT * FROM java.lang.Object) LIMIT 5")
+                .unwrap();
+        assert_eq!(q.union_branches.len(), 1, "head + 1 branch");
+        assert_eq!(
+            q.union_limit,
+            Some(5),
+            "trailing LIMIT after `)` must be union-wide"
+        );
+        // The per-branch limit must be untouched (the LIMIT is not inside the parens).
+        assert_eq!(q.limit, None, "head branch keeps no per-branch LIMIT");
+        assert_eq!(q.union_branches[0].limit, None, "branch keeps no LIMIT");
+    }
+
+    #[test]
+    fn union_wide_limit_bare_form_binds_union_wide() {
+        // DECISION (pinned): the bare form `... UNION SELECT ... LIMIT 5` binds the
+        // trailing LIMIT UNION-WIDE (to match Eclipse MAT), NOT to the last branch.
+        // A bare branch has no closing token, so the LIMIT is parsed at the top
+        // level after the branch tail and stored in `union_limit`.
+        let q = parse("SELECT * FROM A UNION SELECT * FROM B LIMIT 5").unwrap();
+        assert_eq!(q.union_branches.len(), 1);
+        assert_eq!(q.union_limit, Some(5), "bare-form trailing LIMIT is union-wide");
+        assert_eq!(q.limit, None, "head keeps no per-branch LIMIT");
+        assert_eq!(
+            q.union_branches[0].limit, None,
+            "last branch must NOT absorb the union-wide LIMIT"
+        );
+    }
+
+    #[test]
+    fn union_wide_limit_absent_is_none() {
+        // No trailing LIMIT → union_limit stays None (old behavior, OVERALL cap only).
+        let q = parse("SELECT * FROM A UNION SELECT * FROM B").unwrap();
+        assert_eq!(q.union_limit, None);
+    }
+
+    #[test]
+    fn single_query_union_limit_is_none() {
+        // A non-union query never sets union_limit, even with a per-branch LIMIT.
+        let q = parse("SELECT * FROM C LIMIT 5").unwrap();
+        assert_eq!(q.union_limit, None, "single query has no union_limit");
+        assert_eq!(q.limit, Some(5), "single-query LIMIT stays per-query");
+    }
+
+    #[test]
+    fn union_wide_limit_zero_parses() {
+        let q = parse("SELECT * FROM A UNION SELECT * FROM B LIMIT 0").unwrap();
+        assert_eq!(q.union_limit, Some(0));
+    }
+
+    #[test]
+    fn union_branch_inner_limit_preserved_with_union_wide_limit() {
+        // A parenthesized branch may carry its OWN LIMIT (inside the parens) AND
+        // the whole union may carry a trailing union-wide LIMIT after the `)`.
+        let q = parse(
+            "SELECT * FROM A UNION (SELECT * FROM B LIMIT 3) LIMIT 5",
+        )
+        .unwrap();
+        assert_eq!(q.union_branches.len(), 1);
+        assert_eq!(
+            q.union_branches[0].limit,
+            Some(3),
+            "the branch's own LIMIT (inside parens) is preserved"
+        );
+        assert_eq!(q.union_limit, Some(5), "trailing LIMIT is union-wide");
     }
 
     // ---------- parenthesized UNION branches (MAT canonical form) ----------

@@ -962,6 +962,46 @@ fn union_row_count_is_at_least_each_branch() {
     );
 }
 
+/// A union-wide trailing `LIMIT n` (MAT gap #6) caps the WHOLE concatenated
+/// UNION result at exactly `n` rows when the branches together exceed it. The
+/// bare form binds the trailing LIMIT union-wide (matching Eclipse MAT), not to
+/// the last branch. Exercised through the `query` subcommand's `(N rows)` footer.
+#[test]
+fn union_wide_limit_caps_total_rows_bare_form() {
+    let Some(hprof) = philosophers() else { return };
+    // Sanity: the plain union (no LIMIT) has more than 3 rows in this fixture, so
+    // a LIMIT 3 is a real cap and not vacuously satisfied.
+    let full = query_row_count(
+        &hprof,
+        "SELECT @objectId FROM java.lang.String \
+         UNION SELECT @objectId FROM java.lang.Object",
+    )
+    .expect("plain UNION query failed or had no row count");
+    assert!(full > 3, "fixture UNION must exceed the LIMIT (got {full})");
+    let limited = query_row_count(
+        &hprof,
+        "SELECT @objectId FROM java.lang.String \
+         UNION SELECT @objectId FROM java.lang.Object LIMIT 3",
+    )
+    .expect("union-wide LIMIT query failed or had no row count");
+    assert_eq!(limited, 3, "union-wide LIMIT 3 must return EXACTLY 3 rows");
+}
+
+/// The parenthesized union form `... UNION (SELECT ...) LIMIT n` also caps the
+/// whole result union-wide (the LIMIT sits after the closing paren, at the top
+/// level). Same expectation as the bare form.
+#[test]
+fn union_wide_limit_caps_total_rows_parenthesized_form() {
+    let Some(hprof) = philosophers() else { return };
+    let limited = query_row_count(
+        &hprof,
+        "SELECT @objectId FROM java.lang.String \
+         UNION (SELECT @objectId FROM java.lang.Object) LIMIT 2",
+    )
+    .expect("parenthesized union-wide LIMIT query failed or had no row count");
+    assert_eq!(limited, 2, "union-wide LIMIT 2 must return EXACTLY 2 rows");
+}
+
 /// A `FROM (<inner>)` semi-join restricts the outer scan to objects that appear
 /// in the inner result. Semi-joining a class against ITSELF must return no more
 /// rows than the outer-alone scan (and, for an identical inner, exactly the same

@@ -18,10 +18,18 @@ pub struct Query {
     /// `UNION`-separated tail branches, concatenated (UNION ALL semantics).
     /// Each branch is itself a `Query` with an empty `union_branches`.
     pub union_branches: Vec<Query>,
+    /// Union-wide trailing `LIMIT n` applied to the WHOLE `UNION` result (after
+    /// branch concatenation), matching Eclipse MAT. `None` for single queries and
+    /// when no trailing union LIMIT is present. Distinct from `limit`, which is
+    /// the per-branch/per-query LIMIT.
+    pub union_limit: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SortDir { Asc, Desc }
+pub enum SortDir {
+    Asc,
+    Desc,
+}
 
 /// Our extension over MAT OQL: `ORDER BY <attr> [ASC|DESC]`.
 #[derive(Debug, Clone, PartialEq)]
@@ -54,7 +62,13 @@ pub enum PathOperand {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AggFunc { Count, Sum, Min, Max, Avg }
+pub enum AggFunc {
+    Count,
+    Sum,
+    Min,
+    Max,
+    Avg,
+}
 
 /// An attribute reference. `@`-prefixed built-ins plus bare named fields.
 #[derive(Debug, Clone, PartialEq)]
@@ -84,14 +98,21 @@ pub enum Attr {
     /// reference field to follow in the forward-reference graph; the tail is the
     /// scalar/attr projected on the resolved object. Requires ≥ 1 hop (a single
     /// segment after alias-strip stays a plain `Field`).
-    RefPath { hops: Vec<String>, tail: Box<Attr>, role: RefRole },
+    RefPath {
+        hops: Vec<String>,
+        tail: Box<Attr>,
+        role: RefRole,
+    },
 }
 
 /// When a `RefPath` must be resolved. Predicate-critical paths (used in WHERE)
 /// resolve before row filtering; projection-only paths (used only in SELECT)
 /// resolve after filtering (cheaper — fewer rows). Assigned during planning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RefRole { PredicateCritical, ProjectionOnly }
+pub enum RefRole {
+    PredicateCritical,
+    ProjectionOnly,
+}
 
 /// The FROM clause target.
 #[derive(Debug, Clone, PartialEq)]
@@ -147,17 +168,31 @@ pub enum Predicate {
     And(Box<Predicate>, Box<Predicate>),
     Or(Box<Predicate>, Box<Predicate>),
     Not(Box<Predicate>),
-    Compare { lhs: Attr, op: CompareOp, rhs: Value },
+    Compare {
+        lhs: Attr,
+        op: CompareOp,
+        rhs: Value,
+    },
     /// `x INSTANCEOF C`
     InstanceOf(String),
     /// `<lhs> IN ( <inner> )` — keep rows whose `lhs` attribute is a member of
     /// the (non-correlated) inner query's result set. `inner` has an empty
     /// `union_branches` (UNION is not allowed inside a subquery).
-    InSubquery { lhs: Attr, inner: Box<Query> },
+    InSubquery {
+        lhs: Attr,
+        inner: Box<Query>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CompareOp { Eq, Ne, Lt, Le, Gt, Ge }
+pub enum CompareOp {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
