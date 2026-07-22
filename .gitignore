@@ -24,6 +24,18 @@ tests/fixtures/dump_0_fj-kmeans.hprof
 tests/fixtures/dump_6_dec-tree.hprof
 tests/fixtures/dump_8_log-regression.hprof
 
+# MAT (Eclipse Memory Analyzer) index artifacts generated next to a parsed dump
+# by ParseHeapDump.sh — used only by the local mat-oracle differential harness.
+tests/fixtures/*.index
+tests/fixtures/*.threads
+tests/fixtures/*.hprof.log
+# MAT headless report result zips (`<dump>_<SectionName>.zip`) written next to
+# the dump by scripts/mat-oracle.sh. The committed `dump_1_mnemonics.hprof.zip`
+# fixture is NOT caught (it ends in `.hprof.zip`, not `_<Section>.zip`).
+tests/fixtures/*_OQLOracle.zip
+tests/fixtures/*_OQLIOCLS.zip
+tests/fixtures/*_Query.zip
+
 # macOS metadata files.
 .DS_Store
 
