@@ -9,35 +9,88 @@
 use std::io::{self, Write};
 
 use reedline::{
-    default_emacs_keybindings, ColumnarMenu, Completer, DefaultPrompt, Emacs, FileBackedHistory,
-    KeyCode, KeyModifiers, MenuBuilder, Reedline, ReedlineEvent, ReedlineMenu, Signal, Span,
-    Suggestion,
+    ColumnarMenu, Completer, DefaultPrompt, Emacs, FileBackedHistory, KeyCode, KeyModifiers,
+    MenuBuilder, Reedline, ReedlineEvent, ReedlineMenu, Signal, Span, Suggestion,
+    default_emacs_keybindings,
 };
 
 use crate::query::model::{QueryResult, QueryValue};
+use crate::query::parse::{AGG_FUNCS, ATTRIBUTES, KEYWORDS, RESERVED};
 
-/// A trivial prefix completer over the parser's canonical keyword/attribute set
-/// ([`crate::query::parse::completion_words`]), case-insensitive, completing the
-/// final whitespace- or `(`-delimited word at the cursor.
-struct KeywordCompleter;
+/// Grammatical context of the cursor, driving which candidate set the completer
+/// offers. Determined by a lightweight word-scan (not the full parser) so that
+/// partial/incomplete input still completes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ctx {
+    /// Typing a class operand (after `FROM`/`INSTANCEOF`): offer class names.
+    ClassName,
+    /// SELECT list or predicate/order operand: offer attributes/agg-funcs/classof.
+    Attr,
+    /// Clause position (line start, after a complete class, after `)`): keywords.
+    Keyword,
+}
 
-impl Completer for KeywordCompleter {
-    fn complete(&mut self, line: &str, pos: usize) -> Vec<Suggestion> {
-        let upto = &line[..pos];
-        let start = upto
-            .rfind(|c: char| c.is_whitespace() || c == '(')
-            .map(|i| i + 1)
-            .unwrap_or(0);
-        let frag = &upto[start..];
-        if frag.is_empty() {
-            return Vec::new();
+/// Classify the cursor position from the text before the fragment (`before`) and
+/// the fragment being typed (`frag`). Case-insensitive word comparison; a simple
+/// scan is deliberate — it is robust for partial input and unit-testable.
+fn classify(before: &str, frag: &str) -> Ctx {
+    let mut words: Vec<&str> = before.split_whitespace().collect();
+    // The fragment may be included in `before` (callers pass either `line[..start]`
+    // or the whole line); drop a trailing word equal to it so it isn't mistaken
+    // for the previous significant word.
+    if !frag.is_empty() && words.last().is_some_and(|w| *w == frag) {
+        words.pop();
+    }
+    let last = words.last().copied();
+    let eq = |w: &str, kw: &str| w.eq_ignore_ascii_case(kw);
+
+    // The class operand directly follows FROM or INSTANCEOF.
+    if let Some(w) = last {
+        if eq(w, "FROM") || eq(w, "INSTANCEOF") {
+            return Ctx::ClassName;
         }
-        let lower = frag.to_ascii_lowercase();
-        crate::query::parse::completion_words()
+    }
+    // Once `@` is typed we are always naming an attribute.
+    if frag.starts_with('@') {
+        return Ctx::Attr;
+    }
+    let seen = |kw: &str| words.iter().any(|w| eq(w, kw));
+    // SELECT list: SELECT seen but FROM not yet reached.
+    if seen("SELECT") && !seen("FROM") {
+        return Ctx::Attr;
+    }
+    // Predicate / order operand follows these connective words.
+    if let Some(w) = last {
+        if ["WHERE", "AND", "OR", "NOT", "BY"]
+            .iter()
+            .any(|kw| eq(w, kw))
+        {
+            return Ctx::Attr;
+        }
+    }
+    Ctx::Keyword
+}
+
+/// A context-aware prefix completer. Holds the dump's class names (harvested once
+/// at REPL startup) and offers, per cursor context, class names / attributes /
+/// keywords sourced from the parser's canonical const slices so completions can
+/// never drift from the grammar.
+struct OqlCompleter {
+    class_names: Vec<String>,
+}
+
+impl OqlCompleter {
+    /// Prefix-filter `cands` (case-insensitive) and wrap each in a `Suggestion`
+    /// replacing the fragment span `[start, pos)`.
+    fn suggestions<'a, I>(cands: I, lower: &str, start: usize, pos: usize) -> Vec<Suggestion>
+    where
+        I: IntoIterator<Item = &'a str>,
+    {
+        cands
             .into_iter()
-            .filter(|kw| kw.to_ascii_lowercase().starts_with(&lower))
-            .map(|kw| Suggestion {
-                value: kw.to_string(),
+            .filter(|c| c.to_ascii_lowercase().starts_with(lower))
+            .map(|c| Suggestion {
+                value: c.to_string(),
                 description: None,
                 style: None,
                 extra: None,
@@ -48,12 +101,64 @@ impl Completer for KeywordCompleter {
     }
 }
 
-/// Build a `Reedline` editor wired with the keyword completer, a Tab-driven
-/// completion menu, and persistent history at `~/.hprof_oql_history` (falling
-/// back to in-memory history if the file cannot be opened). Returned rather than
-/// run so a smoke test can construct it without needing a live TTY.
-pub fn build_editor() -> Reedline {
-    let completer = Box::new(KeywordCompleter);
+impl Completer for OqlCompleter {
+    fn complete(&mut self, line: &str, pos: usize) -> Vec<Suggestion> {
+        let upto = &line[..pos];
+        // Delimit the fragment on whitespace, '(' and ',' so `SELECT a,b` and
+        // `COUNT(x` complete their trailing word.
+        let start = upto
+            .rfind(|c: char| c.is_whitespace() || c == '(' || c == ',')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let frag = &upto[start..];
+        let before = &upto[..start];
+        let ctx = classify(before, frag);
+        let lower = frag.to_ascii_lowercase();
+
+        match ctx {
+            Ctx::ClassName => {
+                // Guard: require at least one char before offering class names,
+                // otherwise an empty fragment would dump the entire class list.
+                if frag.is_empty() {
+                    return Vec::new();
+                }
+                Self::suggestions(
+                    self.class_names.iter().map(String::as_str),
+                    &lower,
+                    start,
+                    pos,
+                )
+            }
+            Ctx::Attr => {
+                // The `@`-fragment sub-case: offer only attributes (the fragment
+                // is non-empty by construction once `@` is typed, so allow it).
+                if frag.starts_with('@') {
+                    return Self::suggestions(ATTRIBUTES.iter().copied(), &lower, start, pos);
+                }
+                // Empty fragment here is an intentional improvement over the old
+                // silent behavior: offer the full attr/func set as a menu.
+                let cands = ATTRIBUTES
+                    .iter()
+                    .copied()
+                    .chain(AGG_FUNCS.iter().copied())
+                    .chain(std::iter::once("classof"));
+                Self::suggestions(cands, &lower, start, pos)
+            }
+            Ctx::Keyword => {
+                let cands = KEYWORDS.iter().copied().chain(RESERVED.iter().copied());
+                Self::suggestions(cands, &lower, start, pos)
+            }
+        }
+    }
+}
+
+/// Build a `Reedline` editor wired with the context-aware completer (seeded with
+/// the dump's `class_names`), a Tab-driven completion menu, and persistent
+/// history at `~/.hprof_oql_history` (falling back to in-memory history if the
+/// file cannot be opened). Returned rather than run so a smoke test can construct
+/// it without needing a live TTY.
+pub fn build_editor(class_names: Vec<String>) -> Reedline {
+    let completer = Box::new(OqlCompleter { class_names });
     let completion_menu = Box::new(ColumnarMenu::default().with_name("completion_menu"));
 
     let mut keybindings = default_emacs_keybindings();
@@ -85,11 +190,37 @@ fn history_path() -> Option<std::path::PathBuf> {
     std::env::var_os("HOME").map(|home| std::path::Path::new(&home).join(".hprof_oql_history"))
 }
 
+/// Run pass1 over the dump to collect a sorted, deduped list of dotted class
+/// names for FROM/INSTANCEOF completion. On failure, warn once to stderr and
+/// return an empty list so the REPL still completes keywords/attributes.
+fn harvest_class_names(path: &str) -> Vec<String> {
+    match crate::pass1::Pass1::run(path) {
+        Ok(p) => {
+            let mut names: Vec<String> = p
+                .class_map
+                .values()
+                .filter_map(|ci| p.strings.get(&ci.name_id).map(|s| s.replace('/', ".")))
+                .collect();
+            names.sort_unstable();
+            names.dedup();
+            names
+        }
+        Err(e) => {
+            eprintln!("warning: could not harvest class names for completion: {e}");
+            Vec::new()
+        }
+    }
+}
+
 /// The interactive OQL REPL: reedline read-line with history + Tab-completion.
 /// `!`-prefixed lines are meta-commands; everything else is run against the dump
 /// at `path`. Exits on Ctrl-D/Ctrl-C.
 pub fn run_repl(path: &str) -> io::Result<()> {
-    let mut line_editor = build_editor();
+    // Harvest class names once for FROM/INSTANCEOF completion. This pass1 is
+    // cheap (no heap-object scan) and independent of the per-query pass1+pass2.
+    // On I/O failure, warn and proceed with an empty list rather than crashing.
+    let class_names = harvest_class_names(path);
+    let mut line_editor = build_editor(class_names);
     let prompt = DefaultPrompt::default();
     let mut stdout = io::stdout();
     writeln!(
@@ -137,7 +268,10 @@ fn handle_meta(cmd: &str, out: &mut impl Write) -> io::Result<bool> {
         "help" | "h" => {
             writeln!(out, "commands:")?;
             writeln!(out, "  !help                 show this help")?;
-            writeln!(out, "  !plan [--raw] <oql>   show the query plan (no scan); --raw shows unoptimized plan")?;
+            writeln!(
+                out,
+                "  !plan [--raw] <oql>   show the query plan (no scan); --raw shows unoptimized plan"
+            )?;
             writeln!(out, "  !explain [--raw] <oql> alias for !plan")?;
             writeln!(out, "  !quit                 exit")?;
             writeln!(out, "  <oql>                 run a query and print results")?;
@@ -178,11 +312,16 @@ fn handle_meta(cmd: &str, out: &mut impl Write) -> io::Result<bool> {
 /// returning the (single) query result. Parse/plan failures are surfaced as
 /// `io::Error` so the caller prints `error: <msg>` and stays alive.
 fn run_one(path: &str, text: &str) -> io::Result<QueryResult> {
-    let q = crate::query::parse::parse_or_report(text)
-        .map_err(|report| io::Error::new(io::ErrorKind::InvalidInput, format!("parse error: {report}")))?;
+    let q = crate::query::parse::parse_or_report(text).map_err(|report| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("parse error: {report}"),
+        )
+    })?;
     let plan = crate::query::plan::plan_query(&q)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("plan error: {}", e.0)))?;
-    let plan = crate::query::optimize::optimize(plan, &q, &crate::query::optimize::SchemaStats::default());
+    let plan =
+        crate::query::optimize::optimize(plan, &q, &crate::query::optimize::SchemaStats::default());
     let mut results = crate::query::run::run_single_dump(path, &[(q, plan)])?;
     Ok(results.pop().unwrap_or_else(|| QueryResult {
         name: "q1".into(),
@@ -334,7 +473,9 @@ mod tests {
         let res = QueryResult {
             name: "q1".into(),
             oql: "SELECT COUNT(*) FROM C".into(),
-            columns: vec![QueryColumn { name: "COUNT(*)".into() }],
+            columns: vec![QueryColumn {
+                name: "COUNT(*)".into(),
+            }],
             rows: vec![vec![QueryValue::Int(42)]],
             row_count: 1,
             truncated: false,
@@ -400,45 +541,151 @@ mod tests {
 
     // --- reedline completer + editor construction ---
 
-    /// The keyword completer offers case-insensitive prefix matches, spanning
-    /// the current word so the menu replaces it in place.
-    #[test]
-    fn completer_offers_prefix_matches() {
-        let mut c = KeywordCompleter;
-        // "SEL" → SELECT
-        let s = c.complete("SEL", 3);
-        assert!(
-            s.iter().any(|x| x.value == "SELECT"),
-            "expected SELECT, got {:?}",
-            s.iter().map(|x| &x.value).collect::<Vec<_>>()
-        );
-        // case-insensitive: "co" → COUNT
-        let s = c.complete("SELECT co", 9);
-        assert!(s.iter().any(|x| x.value == "COUNT"), "expected COUNT");
-        // "@u" → @usedHeapSize
-        let s = c.complete("WHERE @u", 8);
-        assert!(
-            s.iter().any(|x| x.value == "@usedHeapSize"),
-            "expected @usedHeapSize"
-        );
-        // span replaces just the final fragment
-        let s = c.complete("SELECT co", 9);
-        assert_eq!(s[0].span, Span { start: 7, end: 9 });
+    /// Build a completer over a small fixed class list for tests.
+    fn completer(classes: &[&str]) -> OqlCompleter {
+        OqlCompleter {
+            class_names: classes.iter().map(|s| s.to_string()).collect(),
+        }
     }
 
-    /// Empty fragment (cursor after whitespace) yields no suggestions rather
-    /// than dumping the whole keyword list.
+    fn values(sugg: &[Suggestion]) -> Vec<String> {
+        sugg.iter().map(|s| s.value.clone()).collect()
+    }
+
+    // ---------- classify() ----------
+
     #[test]
-    fn completer_empty_fragment_is_silent() {
-        let mut c = KeywordCompleter;
-        assert!(c.complete("SELECT ", 7).is_empty());
-        assert!(c.complete("", 0).is_empty());
+    fn classify_after_from_is_class_name() {
+        assert_eq!(classify("SELECT * FROM ", ""), Ctx::ClassName);
+    }
+
+    #[test]
+    fn classify_partial_class_after_from() {
+        assert_eq!(classify("SELECT * FROM java.", "java."), Ctx::ClassName);
+        let mut c = completer(&["java.lang.String", "java.util.HashMap"]);
+        let s = c.complete("SELECT * FROM java.", 19);
+        let v = values(&s);
+        assert!(v.contains(&"java.lang.String".to_string()), "got {v:?}");
+        assert!(v.contains(&"java.util.HashMap".to_string()), "got {v:?}");
+    }
+
+    #[test]
+    fn classify_select_list_is_attr() {
+        assert_eq!(classify("SELECT ", ""), Ctx::Attr);
+        assert_eq!(classify("SELECT c", "c"), Ctx::Attr);
+        let mut c = completer(&[]);
+        // "c" and "CO" both prefix COUNT (case-insensitive).
+        assert!(values(&c.complete("SELECT c", 8)).contains(&"COUNT".to_string()));
+        assert!(values(&c.complete("SELECT CO", 9)).contains(&"COUNT".to_string()));
+        // classof is offered in attr position.
+        assert!(values(&c.complete("SELECT cl", 9)).contains(&"classof".to_string()));
+    }
+
+    #[test]
+    fn classify_at_fragment_is_attr() {
+        assert_eq!(classify("SELECT ", "@u"), Ctx::Attr);
+        let mut c = completer(&[]);
+        let s = c.complete("SELECT @u", 9);
+        assert_eq!(values(&s), vec!["@usedHeapSize".to_string()]);
+    }
+
+    #[test]
+    fn classify_where_operand_is_attr() {
+        assert_eq!(classify("SELECT * FROM X WHERE ", ""), Ctx::Attr);
+        assert_eq!(classify("SELECT * FROM X WHERE f", "f"), Ctx::Attr);
+    }
+
+    #[test]
+    fn classify_order_by_operand_is_attr() {
+        assert_eq!(classify("SELECT * FROM X ORDER BY ", ""), Ctx::Attr);
+    }
+
+    #[test]
+    fn classify_line_start_and_partial_keyword() {
+        assert_eq!(classify("", ""), Ctx::Keyword);
+        assert_eq!(classify("SEL", "SEL"), Ctx::Keyword);
+        let mut c = completer(&[]);
+        assert!(values(&c.complete("SEL", 3)).contains(&"SELECT".to_string()));
+    }
+
+    #[test]
+    fn classify_after_complete_from_class_is_keyword() {
+        // After a complete FROM class name, we expect clause keywords next.
+        assert_eq!(classify("SELECT * FROM X ", ""), Ctx::Keyword);
+        let mut c = completer(&["X"]);
+        let v = values(&c.complete("SELECT * FROM X ", 16));
+        for kw in ["WHERE", "UNION", "ORDER", "LIMIT"] {
+            assert!(v.contains(&kw.to_string()), "expected {kw} in {v:?}");
+        }
+    }
+
+    #[test]
+    fn classify_after_instanceof_is_class_name() {
+        assert_eq!(
+            classify("SELECT * FROM X WHERE @objectId INSTANCEOF ", ""),
+            Ctx::ClassName
+        );
+    }
+
+    // ---------- OqlCompleter::complete() ----------
+
+    #[test]
+    fn class_position_offers_only_class_names() {
+        let mut c = completer(&["com.acme.Foo", "com.acme.Bar"]);
+        let v = values(&c.complete("SELECT * FROM com.", 18));
+        assert!(v.iter().all(|x| x.starts_with("com.acme.")), "got {v:?}");
+        assert!(!v.contains(&"SELECT".to_string()));
+        assert!(!v.contains(&"WHERE".to_string()));
+    }
+
+    #[test]
+    fn attr_position_does_not_offer_class_names() {
+        let mut c = completer(&["com.acme.Foo"]);
+        let v = values(&c.complete("SELECT co", 9));
+        assert!(!v.contains(&"com.acme.Foo".to_string()), "got {v:?}");
+        assert!(v.contains(&"COUNT".to_string()), "got {v:?}");
+    }
+
+    #[test]
+    fn at_fragment_offers_only_attributes() {
+        let mut c = completer(&[]);
+        let v = values(&c.complete("SELECT @", 8));
+        assert!(!v.is_empty());
+        assert!(v.iter().all(|x| x.starts_with('@')), "got {v:?}");
+        assert!(v.contains(&"@objectId".to_string()));
+    }
+
+    #[test]
+    fn empty_fragment_attr_position_offers_full_set() {
+        // Intentional improvement: empty fragment in attr position lists the menu.
+        let mut c = completer(&[]);
+        let v = values(&c.complete("SELECT ", 7));
+        assert!(!v.is_empty(), "attr menu should be non-empty");
+        assert!(v.contains(&"COUNT".to_string()));
+        assert!(v.contains(&"@objectId".to_string()));
+        assert!(v.contains(&"classof".to_string()));
+    }
+
+    #[test]
+    fn empty_fragment_class_position_is_silent() {
+        // Guard: never dump the whole class list on an empty fragment.
+        let mut c = completer(&["a.B", "c.D"]);
+        assert!(c.complete("SELECT * FROM ", 14).is_empty());
+    }
+
+    #[test]
+    fn comma_delimits_select_list_fragment() {
+        // `SELECT a,b` should complete `b`, not `a,b`.
+        let mut c = completer(&[]);
+        let s = c.complete("SELECT @objectId,@u", 19);
+        assert_eq!(values(&s), vec!["@usedHeapSize".to_string()]);
+        assert_eq!(s[0].span, Span { start: 17, end: 19 });
     }
 
     /// The editor builds without a live TTY (construction smoke test).
     #[test]
     fn editor_builds() {
-        let _ = build_editor();
+        let _ = build_editor(vec!["java.lang.String".to_string()]);
     }
 
     // ---------- Task 34: !plan --raw and optimizer wiring tests ----------
