@@ -9,9 +9,9 @@
 use std::io::{self, Write};
 
 use reedline::{
-    default_emacs_keybindings, ColumnarMenu, Completer, DefaultPrompt, Emacs, FileBackedHistory,
-    KeyCode, KeyModifiers, MenuBuilder, Reedline, ReedlineEvent, ReedlineMenu, Signal, Span,
-    Suggestion,
+    ColumnarMenu, Completer, DefaultPrompt, Emacs, FileBackedHistory, KeyCode, KeyModifiers,
+    MenuBuilder, Reedline, ReedlineEvent, ReedlineMenu, Signal, Span, Suggestion,
+    default_emacs_keybindings,
 };
 
 use crate::query::model::{QueryResult, QueryValue};
@@ -446,8 +446,8 @@ mod tests {
 
     #[test]
     fn plan_rejected_reports_plan_error() {
-        // DISTINCT parses fine but the planner rejects it.
-        let (_, out) = meta_out("plan SELECT DISTINCT * FROM C");
+        // path(a, b) parses fine but the planner rejects it.
+        let (_, out) = meta_out("plan SELECT path(x, y) FROM C x");
         assert!(out.contains("plan error:"), "got: {out}");
     }
 

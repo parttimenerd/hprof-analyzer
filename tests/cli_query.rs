@@ -159,27 +159,89 @@ fn query_subcommand_malformed_errors_with_text() {
     );
 }
 
-/// A planner rejection (DISTINCT is deferred) exits non-zero and produces a
-/// `OQL plan error` naming the query, distinct from the parser's error prefix.
+/// DISTINCT query: returns success, and SELECT DISTINCT from a class where all
+/// rows have the same value returns a single row (dedup is working).
 #[test]
-fn query_subcommand_plan_error_when_rejected() {
+fn query_subcommand_distinct_deduplicates_rows() {
+    let Some(hprof) = philosophers() else { return };
+    // java.lang.Thread: all 29 instances have @displayName = "java.lang.Thread".
+    // Non-distinct returns 29 rows; distinct must return exactly 1.
+    let non_distinct = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query", "SELECT @displayName FROM java.lang.Thread"])
+        .output()
+        .unwrap();
+    assert!(non_distinct.status.success());
+    let nd_out = String::from_utf8_lossy(&non_distinct.stdout);
+    let nd_rows: Vec<&str> = nd_out
+        .lines()
+        .filter(|l| l.trim() == "java.lang.Thread")
+        .collect();
+    assert!(
+        nd_rows.len() > 1,
+        "non-distinct Thread query must yield multiple rows:\n{nd_out}"
+    );
+
+    let distinct = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query", "SELECT DISTINCT @displayName FROM java.lang.Thread"])
+        .output()
+        .unwrap();
+    assert!(
+        distinct.status.success(),
+        "DISTINCT query must succeed: {}",
+        String::from_utf8_lossy(&distinct.stderr)
+    );
+    let d_out = String::from_utf8_lossy(&distinct.stdout);
+    assert!(
+        d_out.contains("(1 row)"),
+        "DISTINCT over identical values must yield 1 row:\n{d_out}"
+    );
+}
+
+/// DISTINCT + LIMIT n returns exactly n rows when ≥ n distinct values exist,
+/// proving dedup runs before the LIMIT cap.
+#[test]
+fn query_subcommand_distinct_limit_returns_exactly_n_distinct() {
+    let Some(hprof) = philosophers() else { return };
+    // java.lang.String exists in large numbers in any heap dump.
+    // DISTINCT @objectId is unique per instance so any LIMIT 5 returns 5 rows.
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query", "SELECT DISTINCT @objectId FROM java.lang.String LIMIT 5"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "DISTINCT LIMIT query failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // "(5 rows)" or "(5 rows, truncated)" — the important thing is exactly 5 rows.
+    assert!(
+        stdout.contains("(5 rows"),
+        "DISTINCT LIMIT 5 must return exactly 5 rows:\n{stdout}"
+    );
+}
+
+/// Non-DISTINCT query is byte-identical to pre-DISTINCT behavior (regression guard).
+#[test]
+fn query_subcommand_non_distinct_unchanged() {
     let Some(hprof) = philosophers() else { return };
     let out = Command::new(BIN)
         .arg("query")
         .arg(&hprof)
-        .args(["--query", "SELECT DISTINCT * FROM java.lang.String"])
+        .args(["--query", "SELECT COUNT(*) FROM java.lang.String"])
         .output()
         .unwrap();
-    assert!(!out.status.success(), "DISTINCT query should be rejected");
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("OQL plan error"),
-        "missing plan-error indication:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("SELECT DISTINCT * FROM java.lang.String"),
-        "plan error did not echo the offending query text:\n{stderr}"
-    );
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Must still print COUNT(*) header and a (1 row) footer.
+    assert!(stdout.contains("COUNT(*)"), "header present:\n{stdout}");
+    assert!(stdout.contains("(1 row)"), "row count present:\n{stdout}");
 }
 
 /// An edge query (`@inbounds`) on the query-only `query` subcommand cannot be

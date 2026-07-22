@@ -2,10 +2,10 @@
 //! each flag arms exactly one piece of machinery. Deferred constructs are
 //! rejected here (not in the parser) with a message naming the construct.
 
+use crate::query::QueryError;
 use crate::query::ast::{Attr, Predicate, Query, RefRole, SelectItem, Value};
 use crate::query::carry::CarryLayout;
 use crate::query::runflags::EdgeDir;
-use crate::query::QueryError;
 
 /// Default cap on late-phase emitted rows (dominator children) and retained-set
 /// closures, mirroring the scan-time `DEFAULT_CARRY_CAP`. Bounds late output so
@@ -248,14 +248,6 @@ fn item_is_aggregate(it: &SelectItem) -> bool {
 }
 
 fn plan_single(q: &Query) -> Result<QueryPlan, QueryError> {
-    if q.distinct {
-        return Err(QueryError(
-            "DISTINCT is deferred and not supported in this version; \
-             remove DISTINCT and run the query without it"
-                .into(),
-        ));
-    }
-
     // Subqueries (FROM (...) and WHERE ... IN (...)) must be non-correlated:
     // the inner query may not reference an alias bound by the outer query.
     if let Some(inner) = q.from.as_subquery() {
@@ -492,8 +484,8 @@ fn plan_single(q: &Query) -> Result<QueryPlan, QueryError> {
         let is_string_from = class_name == "java.lang.String"
             || class_name == "java/lang/String"
             || class_name.ends_with(".String"); // allow simple short form
-                                                // Subquery FROM is also rejected: toString(s) over a non-direct-String
-                                                // subquery source is unsupported in this version.
+        // Subquery FROM is also rejected: toString(s) over a non-direct-String
+        // subquery source is unsupported in this version.
         let is_subquery = q.from.as_subquery().is_some();
         if is_subquery || !is_string_from {
             let source_desc = if is_subquery {
@@ -520,7 +512,9 @@ fn plan_single(q: &Query) -> Result<QueryPlan, QueryError> {
         finalize_at,
         carry: CarryLayout::IndexOnly,
         late_ops,
-        limit: q.limit,
+        // For DISTINCT queries, defer the LIMIT to the dedup choke point so all
+        // matching rows flow through for dedup before the cap is applied.
+        limit: if q.distinct { None } else { q.limit },
         scan_limit: None,
         order_sensitive: q.order_by.is_some(),
         select_arity,
@@ -1145,10 +1139,30 @@ mod tests {
     }
 
     #[test]
-    fn rejects_distinct_for_now() {
-        let err = plan_query(&parse("SELECT DISTINCT * FROM C").unwrap()).unwrap_err();
-        assert!(err.0.to_lowercase().contains("distinct"), "got: {}", err.0);
+    fn distinct_now_plans() {
+        // DISTINCT is no longer rejected at plan time; the plan must succeed.
+        let plan = plan_query(&parse("SELECT DISTINCT * FROM C").unwrap());
+        assert!(plan.is_ok(), "DISTINCT should plan successfully, got: {:?}", plan.unwrap_err());
     }
+
+    #[test]
+    fn distinct_with_limit_plans_ok() {
+        let plan = plan_query(&parse("SELECT DISTINCT @objectId FROM C LIMIT 5").unwrap());
+        assert!(plan.is_ok(), "DISTINCT LIMIT should plan, got: {:?}", plan.unwrap_err());
+        // For a DISTINCT query, scan-time limit is cleared so all rows flow through
+        // for dedup; the limit is applied post-dedup at the choke point.
+        let plan = plan.unwrap();
+        assert_eq!(plan.limit, None, "scan-time limit must be cleared for DISTINCT");
+    }
+
+    #[test]
+    fn non_distinct_limit_unchanged() {
+        // Non-DISTINCT queries must keep their scan-time limit (invariant guard).
+        let plan = plan_query(&parse("SELECT @objectId FROM C LIMIT 7").unwrap()).unwrap();
+        assert_eq!(plan.limit, Some(7), "non-distinct limit must pass through unchanged");
+    }
+
+
 
     #[test]
     fn predicates_ordered_cheapest_first() {

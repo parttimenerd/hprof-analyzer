@@ -7,11 +7,11 @@ use std::collections::HashMap;
 
 use crate::id_map::IdMap;
 use crate::pass1::ClassInfo;
+use crate::query::ObjectVisitor;
 use crate::query::ast::Query;
 use crate::query::execute::{ClassResolver, SingleScanExecutor};
 use crate::query::model::{QueryResult, QueryValue};
 use crate::query::plan::QueryPlan;
-use crate::query::ObjectVisitor;
 use crate::types::HprofType;
 
 /// Resolves a class-object address (`class_id`) to its dotted class name and,
@@ -434,7 +434,7 @@ impl<'q, R: ClassResolver> ScanDriver<'q, R> {
         if arr_addr == 0 {
             return;
         } // null backing array — skip
-          // Read coder byte (0=LATIN1, 1=UTF16). Default to 1 (JDK8 char[]).
+        // Read coder byte (0=LATIN1, 1=UTF16). Default to 1 (JDK8 char[]).
         let coder = match coder_off {
             Some(co) if co < blob.len() => blob[co],
             _ => 1,
@@ -588,14 +588,15 @@ pub fn run_single_dump(
         .collect();
     let p1_inner = crate::pass1::Pass1::run(path)?;
     let mut empty = std::collections::HashMap::new();
-    let (.., inner_state, _inner_refwalk_csr, _inner_sv, _inner_sv_trunc) = crate::pass2::Pass2::build(
-        path,
-        p1_inner,
-        crate::cvec::Codec::Zstd3,
-        &opts,
-        &inner_queries,
-        &mut empty,
-    )?;
+    let (.., inner_state, _inner_refwalk_csr, _inner_sv, _inner_sv_trunc) =
+        crate::pass2::Pass2::build(
+            path,
+            p1_inner,
+            crate::cvec::Codec::Zstd3,
+            &opts,
+            &inner_queries,
+            &mut empty,
+        )?;
     let inner_results = crate::query::stage_runner::resume_without_late_ctx(inner_state);
 
     // ── Materialize inner results into injectable sets ───────────────────────
@@ -633,14 +634,15 @@ pub fn run_single_dump(
 
     // ── Outer pass: scan again with IN sets injected ─────────────────────────
     let p1_outer = crate::pass1::Pass1::run(path)?;
-    let (.., outer_state, _outer_refwalk_csr, outer_sv, _outer_sv_trunc) = crate::pass2::Pass2::build(
-        path,
-        p1_outer,
-        crate::cvec::Codec::Zstd3,
-        &opts,
-        &flat,
-        &mut in_sets_by_slot,
-    )?;
+    let (.., outer_state, _outer_refwalk_csr, outer_sv, _outer_sv_trunc) =
+        crate::pass2::Pass2::build(
+            path,
+            p1_outer,
+            crate::cvec::Codec::Zstd3,
+            &opts,
+            &flat,
+            &mut in_sets_by_slot,
+        )?;
     let mut flat_results = resume_with_string_values(outer_state, &flat, outer_sv);
 
     // ── FROM-subquery semi-join: keep only outer rows whose dense index is in
@@ -826,11 +828,17 @@ pub fn in_subquery_contains(set: &std::collections::HashSet<u64>, lhs_addr: u64)
 /// slot per branch, in branch order). `union_limit` is the union-wide trailing
 /// LIMIT (MAT gap #6), applied to the concatenated result at collapse time;
 /// `None` when there is no trailing union LIMIT.
+/// `distinct` mirrors the original query's `SELECT DISTINCT` flag; when true,
+/// `collapse_union_results` will stable-dedup the result rows before capping.
+/// `limit` is the per-query LIMIT to apply AFTER dedup (only meaningful when
+/// `distinct` is true; for non-distinct queries the scan already caps rows).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UnionGroup {
     pub head: usize,
     pub count: usize,
     pub union_limit: Option<u64>,
+    pub distinct: bool,
+    pub limit: Option<u64>,
 }
 
 /// Flatten a caller's query list so every `UNION` branch becomes its own scan
@@ -865,6 +873,10 @@ pub fn expand_union_queries(
             // Union-wide trailing LIMIT (MAT gap #6). Sourced from the plan so it
             // is applied when the branch slots are re-collapsed.
             union_limit: plan.union_limit,
+            distinct: q.distinct,
+            // The per-query LIMIT was cleared from the scan plan for DISTINCT queries;
+            // capture it here from the AST so collapse can apply it post-dedup.
+            limit: q.limit,
         });
     }
     (flat, groups)
@@ -888,8 +900,8 @@ pub fn collapse_union_results(
                     .expect("flat results shorter than groups describe")
             })
             .collect();
-        if g.count == 1 {
-            out.push(branch_results.into_iter().next().unwrap());
+        let mut result = if g.count == 1 {
+            branch_results.into_iter().next().unwrap()
         } else {
             // Apply the union-wide trailing LIMIT (MAT gap #6) as the row cap, but
             // never above OVERALL_UNION_CAP so the memory safety bound still holds:
@@ -899,10 +911,37 @@ pub fn collapse_union_results(
                 Some(n) => (n as usize).min(crate::query::OVERALL_UNION_CAP),
                 None => crate::query::OVERALL_UNION_CAP,
             };
-            out.push(concat_union(branch_results, cap));
+            concat_union(branch_results, cap)
+        };
+        // DISTINCT: stable first-occurrence dedup on the full row tuple, then
+        // apply the deferred per-query LIMIT. This path is only entered when
+        // the query carried SELECT DISTINCT; non-distinct queries are untouched.
+        if g.distinct {
+            result = stable_dedup(result);
+            if let Some(n) = g.limit {
+                let n = n as usize;
+                if result.rows.len() > n {
+                    result.rows.truncate(n);
+                    result.truncated = true;
+                }
+                result.row_count = result.rows.len() as u64;
+            }
         }
+        out.push(result);
     }
     out
+}
+
+/// Stable first-occurrence row dedup: keep the first row for each unique key,
+/// preserving original order. Uses `Debug` formatting as a total canonical key
+/// (handles `Float(NaN)` without panic; allocation is acceptable since dedup is
+/// query-result post-processing, not per-object hot path).
+fn stable_dedup(mut r: QueryResult) -> QueryResult {
+    use std::collections::HashSet;
+    let mut seen: HashSet<String> = HashSet::with_capacity(r.rows.len());
+    r.rows.retain(|row| seen.insert(format!("{row:?}")));
+    r.row_count = r.rows.len() as u64;
+    r
 }
 
 #[cfg(test)]
@@ -1203,12 +1242,16 @@ mod tests {
                 UnionGroup {
                     head: 0,
                     count: 1,
-                    union_limit: None
+                    union_limit: None,
+                    distinct: false,
+                    limit: None,
                 },
                 UnionGroup {
                     head: 1,
                     count: 3,
-                    union_limit: None
+                    union_limit: None,
+                    distinct: false,
+                    limit: None,
                 },
             ]
         );
@@ -1230,11 +1273,15 @@ mod tests {
                 head: 0,
                 count: 1,
                 union_limit: None,
+                distinct: false,
+                limit: None,
             },
             UnionGroup {
                 head: 1,
                 count: 3,
                 union_limit: None,
+                distinct: false,
+                limit: None,
             },
         ];
         let out = collapse_union_results(flat, &groups);
@@ -1255,6 +1302,8 @@ mod tests {
             head: 0,
             count: 2,
             union_limit: Some(3),
+            distinct: false,
+            limit: None,
         }];
         let out = collapse_union_results(flat, &groups);
         assert_eq!(out.len(), 1);
@@ -1274,6 +1323,8 @@ mod tests {
             head: 0,
             count: 2,
             union_limit: Some(99),
+            distinct: false,
+            limit: None,
         }];
         let out = collapse_union_results(flat, &groups);
         assert_eq!(out[0].rows.len(), 3, "all rows returned");
@@ -1288,6 +1339,8 @@ mod tests {
             head: 0,
             count: 2,
             union_limit: Some(0),
+            distinct: false,
+            limit: None,
         }];
         let out = collapse_union_results(flat, &groups);
         assert!(out[0].rows.is_empty(), "LIMIT 0 → no rows");
@@ -1303,6 +1356,8 @@ mod tests {
             head: 0,
             count: 2,
             union_limit: None,
+            distinct: false,
+            limit: None,
         }];
         let out = collapse_union_results(flat, &groups);
         assert_eq!(out[0].rows.len(), 5);
@@ -1318,6 +1373,8 @@ mod tests {
             head: 0,
             count: 2,
             union_limit: Some(3),
+            distinct: false,
+            limit: None,
         }];
         let out = collapse_union_results(flat, &groups);
         assert_eq!(out[0].rows.len(), 3);
@@ -1365,17 +1422,191 @@ mod tests {
                 head: 0,
                 count: 1,
                 union_limit: None,
+                distinct: false,
+                limit: None,
             },
             UnionGroup {
                 head: 1,
                 count: 1,
                 union_limit: None,
+                distinct: false,
+                limit: None,
             },
         ];
         let out = collapse_union_results(flat, &groups);
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].row_count, 1);
         assert_eq!(out[1].row_count, 2);
+    }
+
+    // ---------- SELECT DISTINCT dedup (Task 4) ----------
+
+    fn distinct_group(rows: &[i64]) -> (Vec<QueryResult>, Vec<UnionGroup>) {
+        (
+            vec![one_col_result(rows)],
+            vec![UnionGroup {
+                head: 0,
+                count: 1,
+                union_limit: None,
+                distinct: true,
+                limit: None,
+            }],
+        )
+    }
+
+    #[test]
+    fn distinct_single_group_deduplicates_rows() {
+        // Rows [1,2,1,3,2] → deduped to [1,2,3] (stable first-occurrence order).
+        let (flat, groups) = distinct_group(&[1, 2, 1, 3, 2]);
+        let out = collapse_union_results(flat, &groups);
+        assert_eq!(out.len(), 1);
+        let r = &out[0];
+        use crate::query::model::QueryValue;
+        let vals: Vec<i64> = r.rows.iter().map(|row| {
+            match row[0] { QueryValue::Int(v) => v, _ => panic!("unexpected") }
+        }).collect();
+        assert_eq!(vals, vec![1, 2, 3], "first-occurrence stable dedup");
+        assert_eq!(r.row_count, 3);
+    }
+
+    #[test]
+    fn distinct_single_group_all_unique_unchanged() {
+        // All unique: dedup is a no-op.
+        let (flat, groups) = distinct_group(&[5, 3, 1]);
+        let out = collapse_union_results(flat, &groups);
+        assert_eq!(out[0].row_count, 3);
+    }
+
+    #[test]
+    fn distinct_single_group_all_same_returns_one() {
+        let (flat, groups) = distinct_group(&[7, 7, 7, 7]);
+        let out = collapse_union_results(flat, &groups);
+        assert_eq!(out[0].row_count, 1);
+    }
+
+    #[test]
+    fn distinct_union_group_removes_cross_branch_dupes() {
+        // Two branches both producing [1,2,3]: DISTINCT must yield [1,2,3], not [1,2,3,1,2,3].
+        use crate::query::model::{QueryColumn, QueryValue};
+        let col = || vec![QueryColumn { name: "v".into() }];
+        let branch = |vals: &[i64]| QueryResult {
+            name: String::new(),
+            oql: String::new(),
+            columns: col(),
+            rows: vals.iter().map(|&v| vec![QueryValue::Int(v)]).collect(),
+            row_count: vals.len() as u64,
+            truncated: false,
+            error: None,
+            note: None,
+        };
+        let flat = vec![branch(&[1, 2, 3]), branch(&[2, 3, 4])];
+        let groups = vec![UnionGroup {
+            head: 0,
+            count: 2,
+            union_limit: None,
+            distinct: true,
+            limit: None,
+        }];
+        let out = collapse_union_results(flat, &groups);
+        assert_eq!(out[0].row_count, 4, "cross-branch dupes removed: 1,2,3,4");
+        let vals: Vec<i64> = out[0].rows.iter().map(|row| {
+            match row[0] { QueryValue::Int(v) => v, _ => panic!() }
+        }).collect();
+        assert_eq!(vals, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn distinct_float_column_deduplicates_without_panic() {
+        // Float rows with equal values are deduped; NaN must not panic.
+        use crate::query::model::{QueryColumn, QueryValue};
+        let col = || vec![QueryColumn { name: "f".into() }];
+        let flat = vec![QueryResult {
+            name: String::new(),
+            oql: String::new(),
+            columns: col(),
+            rows: vec![
+                vec![QueryValue::Float(1.5)],
+                vec![QueryValue::Float(1.5)],
+                vec![QueryValue::Float(f64::NAN)],
+                vec![QueryValue::Float(f64::NAN)],
+                vec![QueryValue::Float(2.0)],
+            ],
+            row_count: 5,
+            truncated: false,
+            error: None,
+            note: None,
+        }];
+        let groups = vec![UnionGroup {
+            head: 0,
+            count: 1,
+            union_limit: None,
+            distinct: true,
+            limit: None,
+        }];
+        let out = collapse_union_results(flat, &groups);
+        // Two NaN rows should also dedup (Debug format is total: "Float(NaN)" == "Float(NaN)").
+        assert_eq!(out[0].row_count, 3, "1.5, NaN, 2.0 remain after dedup");
+    }
+
+    #[test]
+    fn non_distinct_group_with_dupes_is_not_deduped() {
+        // Non-DISTINCT invariant: duplicate rows must pass through unchanged.
+        let (flat, mut groups) = distinct_group(&[1, 1, 2]);
+        groups[0].distinct = false;
+        let out = collapse_union_results(flat, &groups);
+        assert_eq!(out[0].row_count, 3, "non-distinct must preserve duplicates");
+    }
+
+    #[test]
+    fn distinct_with_limit_applies_limit_after_dedup() {
+        // 5 rows where [1,2,1,3,2,4,5] → distinct [1,2,3,4,5], then LIMIT 3 → [1,2,3].
+        let (flat, mut groups) = distinct_group(&[1, 2, 1, 3, 2, 4, 5]);
+        groups[0].limit = Some(3);
+        let out = collapse_union_results(flat, &groups);
+        use crate::query::model::QueryValue;
+        let vals: Vec<i64> = out[0].rows.iter().map(|row| {
+            match row[0] { QueryValue::Int(v) => v, _ => panic!() }
+        }).collect();
+        assert_eq!(vals, vec![1, 2, 3], "LIMIT applied after dedup");
+        assert_eq!(out[0].row_count, 3);
+        assert!(out[0].truncated, "truncated because limit dropped rows");
+    }
+
+    #[test]
+    fn distinct_with_limit_ge_distinct_count_returns_all() {
+        // LIMIT 10 on 3 distinct rows → all 3, not truncated.
+        let (flat, mut groups) = distinct_group(&[1, 2, 1, 3]);
+        groups[0].limit = Some(10);
+        let out = collapse_union_results(flat, &groups);
+        assert_eq!(out[0].row_count, 3);
+        assert!(!out[0].truncated, "limit not reached → not truncated");
+    }
+
+    #[test]
+    fn expand_union_propagates_distinct_and_limit_to_group() {
+        // A DISTINCT query with LIMIT must set both fields on its UnionGroup.
+        let q = parse("SELECT DISTINCT @objectId FROM java.lang.String LIMIT 5").unwrap();
+        assert!(q.distinct, "parser must set distinct");
+        assert_eq!(q.limit, Some(5));
+        let p = plan_query(&q).unwrap();
+        // Scan-time limit is cleared for DISTINCT (deferred to collapse).
+        assert_eq!(p.limit, None, "scan-time limit cleared for DISTINCT");
+        let (_flat, groups) = expand_union_queries(&[(q, p)]);
+        assert_eq!(groups.len(), 1);
+        assert!(groups[0].distinct, "UnionGroup.distinct must be true");
+        assert_eq!(groups[0].limit, Some(5), "UnionGroup.limit carries the deferred limit");
+    }
+
+    #[test]
+    fn expand_union_non_distinct_limit_not_deferred() {
+        // A non-DISTINCT query with LIMIT must NOT set the distinct flag.
+        let q = parse("SELECT @objectId FROM java.lang.String LIMIT 5").unwrap();
+        assert!(!q.distinct);
+        let p = plan_query(&q).unwrap();
+        assert_eq!(p.limit, Some(5), "non-distinct keeps scan-time limit");
+        let (_flat, groups) = expand_union_queries(&[(q, p)]);
+        assert!(!groups[0].distinct);
+        assert_eq!(groups[0].limit, Some(5));
     }
 
     // ---------- subquery helpers (Task 23) ----------
