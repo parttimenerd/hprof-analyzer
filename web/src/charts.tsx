@@ -7,8 +7,12 @@ import type {
   KindStat,
   LoaderRollup,
   PackageNode,
+  QueryColumn,
+  QueryResult,
+  QueryValue,
   RetentionSummary,
   Suspect,
+  VizSpec,
 } from "./types";
 import { fmtCount, formatBytes, shortLoader } from "./format";
 import { Pie as ChartPie, Bar as ChartBar } from "react-chartjs-2";
@@ -559,4 +563,175 @@ export function RetainedTreemap({ root }: { root: PackageNode }) {
       )}
     </div>
   );
+}
+
+// ── Custom-query visualization (OQL `-- @viz` directive) ─────────────────────
+// Renders a QueryResult's chart per its resolved VizSpec, reusing Pie/HBar and a
+// flat d3 treemap. Mirrors the column resolution in src/query/viz.rs; the Rust
+// side only attaches `viz` when resolution already succeeded, but we resolve
+// defensively and fall back to `null` (the paired table stays visible in App).
+
+function qvNum(v: QueryValue | undefined): number | null {
+  if (!v) return null;
+  return v.kind === "int" || v.kind === "float" ? v.v : null;
+}
+
+function qvLabel(v: QueryValue | undefined): string {
+  if (!v) return "(null)";
+  switch (v.kind) {
+    case "null":
+      return "(null)";
+    case "bool":
+    case "int":
+    case "float":
+      return String(v.v);
+    case "str":
+      return v.v;
+    case "obj_ref":
+      return `${v.v.class}@${v.v.index}`;
+  }
+}
+
+function qvColMatch(colName: string, want: string): boolean {
+  const strip = (s: string) => (s.startsWith("@") ? s.slice(1) : s);
+  return strip(colName).toLowerCase() === strip(want).toLowerCase();
+}
+
+function qvColumnIsNumeric(idx: number, rows: QueryValue[][]): boolean {
+  let sawNumber = false;
+  for (const row of rows) {
+    const cell = row[idx];
+    if (!cell || cell.kind === "null") continue;
+    if (cell.kind === "int" || cell.kind === "float") sawNumber = true;
+    else return false;
+  }
+  return sawNumber;
+}
+
+// Returns [labelIdx, valueIdx] or null when the query cannot be charted.
+function qvResolveColumns(spec: VizSpec, columns: QueryColumn[], rows: QueryValue[][]): [number, number] | null {
+  if (columns.length === 0) return null;
+  let valueIdx: number;
+  if (spec.value_col) {
+    const i = columns.findIndex((c) => qvColMatch(c.name, spec.value_col!));
+    if (i < 0) return null;
+    valueIdx = i;
+  } else {
+    const i = columns.findIndex((_, ci) => qvColumnIsNumeric(ci, rows));
+    if (i < 0) return null;
+    valueIdx = i;
+  }
+  if (!qvColumnIsNumeric(valueIdx, rows)) return null;
+
+  let labelIdx: number;
+  if (spec.label_col) {
+    const i = columns.findIndex((c) => qvColMatch(c.name, spec.label_col!));
+    if (i < 0) return null;
+    labelIdx = i;
+  } else {
+    const i = columns.findIndex((_, ci) => ci !== valueIdx);
+    if (i < 0) return null;
+    labelIdx = i;
+  }
+  return [labelIdx, valueIdx];
+}
+
+// Flat (single-level) treemap for arbitrary label/value slices.
+function QueryTreemap({ data }: { data: Slice[] }) {
+  const positive = data.filter((d) => d.value > 0);
+  const nodes = React.useMemo(() => {
+    if (positive.length === 0) return [];
+    const root = hierarchy<{ name: string; value: number; children?: unknown[] }>(
+      { name: "", value: 0, children: positive },
+      (d) => d.children as { name: string; value: number }[] | undefined,
+    )
+      .sum((d) => (d.children ? 0 : d.value))
+      .sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
+    treemap<{ name: string; value: number }>()
+      .tile(treemapSquarify)
+      .size([TREEMAP_W, TREEMAP_H])
+      .paddingOuter(2)
+      .paddingInner(1)(root as never);
+    return root.leaves();
+  }, [positive]);
+
+  if (nodes.length === 0) return null;
+  const total = positive.reduce((s, d) => s + d.value, 0) || 1;
+  return (
+    <div style={{ position: "relative", width: TREEMAP_W, height: TREEMAP_H, overflow: "hidden" }}>
+      {nodes.map((leaf, i) => {
+        const x0 = (leaf as any).x0 as number;
+        const y0 = (leaf as any).y0 as number;
+        const x1 = (leaf as any).x1 as number;
+        const y1 = (leaf as any).y1 as number;
+        const w = x1 - x0;
+        const h = y1 - y0;
+        if (w < 1 || h < 1) return null;
+        const label = (leaf.data as { name: string }).name;
+        const value = leaf.value ?? 0;
+        return (
+          <div
+            key={i}
+            title={`${label}: ${value} (${((value / total) * 100).toFixed(1)}%)`}
+            style={{
+              position: "absolute",
+              left: x0,
+              top: y0,
+              width: w,
+              height: h,
+              background: PALETTE[i % PALETTE.length],
+              opacity: 0.82,
+              boxSizing: "border-box",
+              overflow: "hidden",
+              cursor: "default",
+            }}
+          >
+            {w > 40 && h > 20 && (
+              <span
+                style={{
+                  display: "block",
+                  padding: "2px 3px",
+                  fontSize: Math.min(11, w / 8),
+                  color: "#fff",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                {label}
+              </span>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+export function QueryViz({ query }: { query: QueryResult }) {
+  const spec = query.viz;
+  if (!spec || spec.kind === "table") return null;
+  const resolved = qvResolveColumns(spec, query.columns, query.rows);
+  if (!resolved) return null;
+  const [labelIdx, valueIdx] = resolved;
+
+  let slices: Slice[] = [];
+  for (const row of query.rows) {
+    const value = qvNum(row[valueIdx]);
+    if (value == null) continue;
+    slices.push({ name: qvLabel(row[labelIdx]), value });
+  }
+  if (spec.cap != null) slices = slices.slice(0, spec.cap);
+  if (slices.length === 0) return null;
+
+  const fmt = (n: number) => String(n);
+  switch (spec.kind) {
+    case "piechart":
+      return <Pie data={slices} fmt={fmt} />;
+    case "treemap":
+      return <QueryTreemap data={slices} />;
+    case "histogram":
+    default:
+      return <HBar data={slices} fmt={fmt} />;
+  }
 }

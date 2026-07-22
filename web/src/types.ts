@@ -684,6 +684,15 @@ export type QueryValue =
   | { kind: "str"; v: string }
   | { kind: "obj_ref"; v: { index: number; class: string } };
 
+export type VizKind = "table" | "histogram" | "piechart" | "treemap";
+
+export interface VizSpec {
+  kind: VizKind;
+  label_col?: string;
+  value_col?: string;
+  cap?: number;
+}
+
 export interface QueryResult {
   name: string;
   oql: string;
@@ -693,6 +702,7 @@ export interface QueryResult {
   truncated: boolean;
   error?: string;
   note?: string;
+  viz?: VizSpec;
 }
 
 export interface Report {

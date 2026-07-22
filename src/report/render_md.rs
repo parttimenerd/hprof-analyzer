@@ -313,7 +313,84 @@ pub(crate) fn render_custom_queries(
         if let Some(note) = &q.note {
             let _ = writeln!(out, "_Note: {note}_\n");
         }
+        render_query_chart(q, out);
     }
+}
+
+/// Render an ASCII bar chart beneath the table when the query declared a
+/// chartable `-- @viz` directive. `histogram`/`piechart` draw horizontal bars
+/// (piecharts also show each slice's share of the total); `treemap` has no
+/// ASCII analogue, so a note explains it renders in the HTML report only.
+/// `table` and a missing spec draw nothing (the table above suffices). The
+/// spec's `cap` limits the number of charted rows (the table always shows all).
+fn render_query_chart(q: &crate::query::model::QueryResult, out: &mut String) {
+    use crate::query::viz::{cell_as_f64, cell_as_label, resolve_columns, VizKind};
+    use std::fmt::Write;
+
+    let Some(spec) = &q.viz else { return };
+    if spec.kind == VizKind::Table {
+        return;
+    }
+    if spec.kind == VizKind::Treemap {
+        let _ = writeln!(
+            out,
+            "_Treemap chart is available in the HTML report; showing the table above._\n"
+        );
+        return;
+    }
+    // resolve_columns already validated at intake time, but re-resolve so the
+    // renderer is self-contained (and degrades to nothing if columns changed).
+    let Ok((label_idx, value_idx)) = resolve_columns(spec, &q.columns, &q.rows) else {
+        return;
+    };
+
+    // Collect (label, value) pairs, skipping rows whose value cell is non-numeric.
+    let mut pairs: Vec<(String, f64)> = Vec::new();
+    for row in &q.rows {
+        if let (Some(lbl), Some(val)) = (
+            row.get(label_idx).map(cell_as_label),
+            row.get(value_idx).and_then(cell_as_f64),
+        ) {
+            pairs.push((lbl, val));
+        }
+    }
+    if pairs.is_empty() {
+        return;
+    }
+    if let Some(cap) = spec.cap {
+        pairs.truncate(cap);
+    }
+
+    let total: f64 = pairs.iter().map(|(_, v)| *v).sum();
+    let max = pairs.iter().map(|(_, v)| *v).fold(0.0_f64, f64::max);
+    let label_w = pairs.iter().map(|(l, _)| l.len()).max().unwrap_or(0).min(40);
+
+    let _ = writeln!(out, "```");
+    for (label, value) in &pairs {
+        let bar = ascii_bar(*value, max, 40);
+        let lbl = if label.len() > label_w {
+            format!("{}…", &label[..label_w.saturating_sub(1)])
+        } else {
+            format!("{label:label_w$}")
+        };
+        if spec.kind == VizKind::Piechart && total > 0.0 {
+            let pct = value / total * 100.0;
+            let _ = writeln!(out, "{lbl} | {bar} {value:.0} ({pct:.1}%)");
+        } else {
+            let _ = writeln!(out, "{lbl} | {bar} {value:.0}");
+        }
+    }
+    let _ = writeln!(out, "```\n");
+}
+
+/// A proportional ASCII bar of `#` characters: `width` columns at `value/max`.
+/// A zero or negative `max` yields an empty bar (avoids div-by-zero / NaN).
+fn ascii_bar(value: f64, max: f64, width: usize) -> String {
+    if max <= 0.0 || value <= 0.0 {
+        return String::new();
+    }
+    let filled = ((value / max) * width as f64).round() as usize;
+    "#".repeat(filled.min(width))
 }
 
 /// Format a single `QueryValue` cell for a Markdown table. Pipes inside string
@@ -3088,6 +3165,7 @@ mod tests {
             truncated: false,
             error: None,
             note: None,
+            viz: None,
         };
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
@@ -3132,6 +3210,7 @@ mod tests {
             truncated: false,
             error: Some("parse failed near 'bogus'".into()),
             note: None,
+            viz: None,
         };
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
@@ -3161,6 +3240,7 @@ mod tests {
             truncated: true,
             error: None,
             note: None,
+            viz: None,
         };
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
@@ -3181,6 +3261,7 @@ mod tests {
             truncated: false,
             error: None,
             note: Some("edge retention capped at depth 5".into()),
+            viz: None,
         };
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
@@ -3201,6 +3282,7 @@ mod tests {
             truncated: false,
             error: None,
             note: None,
+            viz: None,
         };
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
@@ -3221,6 +3303,7 @@ mod tests {
             truncated: false,
             error: None,
             note: None,
+            viz: None,
         };
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
@@ -3242,6 +3325,7 @@ mod tests {
                 truncated: false,
                 error: None,
                 note: None,
+                viz: None,
             },
             QueryResult {
                 name: "second".into(),
@@ -3252,6 +3336,7 @@ mod tests {
                 truncated: false,
                 error: None,
                 note: None,
+                viz: None,
             },
         ];
         let mut out = String::new();
@@ -3285,6 +3370,7 @@ mod tests {
             truncated: false,
             error: None,
             note: None,
+            viz: None,
         };
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
@@ -3323,6 +3409,7 @@ mod tests {
             truncated: false,
             error: None,
             note: None,
+            viz: None,
         };
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
@@ -3355,12 +3442,134 @@ mod tests {
             truncated: false,
             error: None,
             note: None,
+            viz: None,
         };
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
         assert!(
             out.contains("| 2.5 | java.lang.String@12 |"),
             "Float and ObjRef cells must render in the data row: {out}"
+        );
+    }
+
+    fn viz(kind: crate::query::viz::VizKind) -> crate::query::viz::VizSpec {
+        crate::query::viz::VizSpec {
+            kind,
+            label_col: Some("name".into()),
+            value_col: Some("bytes".into()),
+            cap: None,
+        }
+    }
+
+    fn charted_result(kind: crate::query::viz::VizKind) -> QueryResult {
+        QueryResult {
+            name: "chart".into(),
+            oql: "SELECT @displayName AS name, @usedHeapSize AS bytes FROM C".into(),
+            columns: vec![col("name"), col("bytes")],
+            rows: vec![
+                vec![QueryValue::Str("alpha".into()), QueryValue::Int(10)],
+                vec![QueryValue::Str("beta".into()), QueryValue::Int(30)],
+            ],
+            row_count: 2,
+            truncated: false,
+            error: None,
+            note: None,
+            viz: Some(viz(kind)),
+        }
+    }
+
+    #[test]
+    fn histogram_viz_renders_ascii_bars() {
+        let q = charted_result(crate::query::viz::VizKind::Histogram);
+        let mut out = String::new();
+        render_custom_queries(std::slice::from_ref(&q), &mut out);
+        // The table still shows all rows.
+        assert!(out.contains("| name | bytes |"), "table header missing: {out}");
+        // A fenced ASCII bar block follows, with labels and `#` bars.
+        assert!(out.contains("alpha"), "bar label alpha missing: {out}");
+        assert!(out.contains("beta"), "bar label beta missing: {out}");
+        assert!(out.contains('#'), "ascii bar chars missing: {out}");
+        // The larger value (30) yields more `#` than the smaller (10). Scan only
+        // the bar lines (those containing `#`), not the plain markdown table rows.
+        let alpha_hashes = out
+            .lines()
+            .find(|l| l.contains("alpha") && l.contains('#'))
+            .map(|l| l.matches('#').count())
+            .unwrap_or(0);
+        let beta_hashes = out
+            .lines()
+            .find(|l| l.contains("beta") && l.contains('#'))
+            .map(|l| l.matches('#').count())
+            .unwrap_or(0);
+        assert!(
+            beta_hashes > alpha_hashes,
+            "larger value must draw a longer bar: alpha={alpha_hashes} beta={beta_hashes}\n{out}"
+        );
+    }
+
+    #[test]
+    fn piechart_viz_shows_percent_share() {
+        let q = charted_result(crate::query::viz::VizKind::Piechart);
+        let mut out = String::new();
+        render_custom_queries(std::slice::from_ref(&q), &mut out);
+        // 10 and 30 of a 40 total -> 25.0% and 75.0%.
+        assert!(out.contains("25.0%"), "alpha share missing: {out}");
+        assert!(out.contains("75.0%"), "beta share missing: {out}");
+    }
+
+    #[test]
+    fn treemap_viz_notes_html_only() {
+        let q = charted_result(crate::query::viz::VizKind::Treemap);
+        let mut out = String::new();
+        render_custom_queries(std::slice::from_ref(&q), &mut out);
+        assert!(
+            out.contains("Treemap chart is available in the HTML report"),
+            "treemap must explain HTML-only rendering: {out}"
+        );
+        // No ascii bar block for a treemap: no bar line (label + `| #…`) exists.
+        // (Markdown headers like `## Custom Queries` also contain `#`, so match
+        // the bar shape specifically rather than a bare `#`.)
+        assert!(
+            !out.lines().any(|l| l.contains("| #")),
+            "treemap must not draw ascii bars: {out}"
+        );
+    }
+
+    #[test]
+    fn table_viz_and_no_viz_draw_no_chart() {
+        for spec in [Some(viz(crate::query::viz::VizKind::Table)), None] {
+            let mut q = charted_result(crate::query::viz::VizKind::Histogram);
+            q.viz = spec;
+            let mut out = String::new();
+            render_custom_queries(std::slice::from_ref(&q), &mut out);
+            // The table renders, but no fenced bar block beyond the OQL block.
+            // (histogram would add a second ``` block; table/None must not.)
+            let fences = out.matches("```").count();
+            assert_eq!(
+                fences, 2,
+                "only the OQL fence should appear (2 backtick markers), got {fences}:\n{out}"
+            );
+        }
+    }
+
+    #[test]
+    fn viz_cap_limits_charted_rows_not_table() {
+        let mut q = charted_result(crate::query::viz::VizKind::Histogram);
+        // Add a third row and cap the chart at 2.
+        q.rows.push(vec![QueryValue::Str("gamma".into()), QueryValue::Int(5)]);
+        q.row_count = 3;
+        if let Some(v) = q.viz.as_mut() {
+            v.cap = Some(2);
+        }
+        let mut out = String::new();
+        render_custom_queries(std::slice::from_ref(&q), &mut out);
+        // The table shows all three rows.
+        assert!(out.contains("gamma"), "table must show all rows incl gamma: {out}");
+        // The chart block (after the OQL fence) charts only the first two.
+        let chart_block = out.rsplit("```").nth(1).unwrap_or("");
+        assert!(
+            !chart_block.contains("gamma"),
+            "capped chart must omit gamma: {chart_block}"
         );
     }
 }

@@ -10,6 +10,7 @@ import {
   HeapCompositionChart,
   LeakShareChart,
   LoaderRollupChart,
+  QueryViz,
   TopClassesChart,
   TreemapBar,
   RetainedTreemap,
@@ -3364,6 +3365,7 @@ function CustomQueriesSection({ report }: { report: Report }) {
                 {q.row_count} row(s){q.truncated ? ", truncated" : ""}
               </p>
               {q.note && <p className="subtitle">Note: {q.note}</p>}
+              <QueryViz query={q} />
             </>
           )}
         </div>
