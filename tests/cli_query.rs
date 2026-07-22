@@ -1204,6 +1204,83 @@ fn refwalk_query_in_query_only_path_errors_actionably() {
     );
 }
 
+/// Extract the integer value of a single-cell COUNT(*) result from the `query`
+/// subcommand stdout. The subcommand prints the `COUNT(*)` header on one line and
+/// the numeric cell on its own line; we take the first line that parses as u64.
+/// Returns `None` if the query exited non-zero or no numeric cell was found.
+fn query_count_value(hprof: &str, oql: &str) -> Option<u64> {
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(hprof)
+        .args(["--query", oql])
+        .output()
+        .unwrap();
+    if !out.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    stdout.lines().find_map(|l| l.trim().parse::<u64>().ok())
+}
+
+/// NORMALIZATION / MAT-parity guard: `COUNT(*) FROM char[]` must return a POSITIVE
+/// integer. The bug this pins: the histogram/aggregate path matched the class name
+/// via the RAW JVM descriptor (`[C`) while the FROM pattern is the pretty form
+/// (`char[]`), so `class_name_matches("[C","char[]")` was false and COUNT was
+/// silently 0 — even though `SELECT *`/`@length` (scan path, pretty name) returned
+/// rows. The philosophers fixture is known to contain char arrays.
+#[test]
+fn query_count_star_char_array_is_positive() {
+    let Some(hprof) = philosophers() else { return };
+    let n = query_count_value(&hprof, "SELECT COUNT(*) FROM char[]")
+        .expect("COUNT(*) FROM char[] query failed or printed no numeric cell");
+    assert!(
+        n > 0,
+        "COUNT(*) FROM char[] must be > 0 (fixture has char arrays); got {n} — \
+         raw-vs-pretty class-name asymmetry between scan and histogram paths"
+    );
+}
+
+/// SCAN-vs-HISTOGRAM PARITY guard (the core of the fix): the aggregate COUNT(*)
+/// over `char[]` must EQUAL the number of object rows the scan path returns for
+/// the same class. Before the fix these two paths disagreed (histogram=0,
+/// scan>0) because they normalized the class name differently. Both are driven
+/// through the CLI and compared directly.
+#[test]
+fn query_count_star_char_array_equals_scan_row_count() {
+    let Some(hprof) = philosophers() else { return };
+    let count = query_count_value(&hprof, "SELECT COUNT(*) FROM char[]")
+        .expect("COUNT(*) FROM char[] failed or printed no numeric cell");
+    let rows = query_row_count(&hprof, "SELECT * FROM char[]")
+        .expect("SELECT * FROM char[] failed or had no row-count footer");
+    assert!(count > 0, "COUNT(*) FROM char[] must be > 0; got {count}");
+    assert!(rows > 0, "SELECT * FROM char[] must return rows; got {rows}");
+    assert_eq!(
+        count, rows,
+        "histogram COUNT(*) ({count}) must equal scan row count ({rows}) for char[] \
+         — scan/histogram class-name normalization must agree"
+    );
+}
+
+/// NORMALIZATION guard for another primitive-array class: `COUNT(*) FROM int[]`
+/// must succeed and report a positive integer. The philosophers fixture is known
+/// to contain int arrays (SELECT * FROM int[] returns rows), so the same
+/// raw-vs-pretty asymmetry that zeroed char[] would zero int[] too. This equally
+/// pins the scan/histogram parity: the aggregate count must match the scan rows.
+#[test]
+fn query_count_star_int_array_matches_scan() {
+    let Some(hprof) = philosophers() else { return };
+    let count = query_count_value(&hprof, "SELECT COUNT(*) FROM int[]")
+        .expect("COUNT(*) FROM int[] failed or printed no numeric cell");
+    let rows = query_row_count(&hprof, "SELECT * FROM int[]")
+        .expect("SELECT * FROM int[] failed or had no row-count footer");
+    // int[] is present in this fixture; assert positivity and exact parity.
+    assert!(count > 0, "COUNT(*) FROM int[] must be > 0; got {count}");
+    assert_eq!(
+        count, rows,
+        "histogram COUNT(*) ({count}) must equal scan row count ({rows}) for int[]"
+    );
+}
+
 /// MEMORY-CRITICAL guard: an analyze run with NO OQL query must be byte-for-byte
 /// identical to the committed golden JSON report — the edge-retention hooks
 /// (Task 41) are gated behind `RunFlags`, so a no-edge run must not introduce a

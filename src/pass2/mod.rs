@@ -331,7 +331,12 @@ impl Pass2 {
         // cannot read class_names.len() here because the `get_or_insert_class`
         // closure still holds a mutable borrow of `class_names`.
         let hist_tally: Option<(Vec<u64>, Vec<u64>)> = if has_histogram {
-            let cap = class_idx.iter().copied().max().map(|m| m as usize + 1).unwrap_or(0);
+            let cap = class_idx
+                .iter()
+                .copied()
+                .max()
+                .map(|m| m as usize + 1)
+                .unwrap_or(0);
             let mut counts = vec![0u64; cap];
             let mut shallow_totals = vec![0u64; cap];
             for i in 0..n {
@@ -365,8 +370,7 @@ impl Pass2 {
             }
             match crate::query::plan::validate_fields(q, &query_resolver) {
                 Ok(()) => {
-                    let cross_phase =
-                        plan.finalize_at != crate::query::plan::Phase::P1;
+                    let cross_phase = plan.finalize_at != crate::query::plan::Phase::P1;
                     let mut exec = if cross_phase {
                         crate::query::execute::SingleScanExecutor::new_carry(
                             q,
@@ -546,9 +550,21 @@ impl Pass2 {
             let n_classes = class_names.len();
             counts.resize(n_classes, 0);
             shallow_totals.resize(n_classes, 0);
+            // Normalize each class name to the pretty/dotted display form the OQL
+            // FROM patterns use (`[C` -> `char[]`, `java/lang/String` ->
+            // `java.lang.String`). class_names holds RAW JVM descriptors for
+            // primitive/object arrays, so matching those directly against a
+            // `FROM char[]` pattern would fail (raw-vs-pretty asymmetry) and
+            // silently return COUNT 0. The scan path already projects the pretty
+            // name via visit_array, so this makes the histogram/aggregate path
+            // agree with it. `pretty_names` outlives `summaries` and the
+            // `run_histogram` loop below (all in this block).
+            let pretty_names: Vec<String> = (0..n_classes)
+                .map(|ci| crate::report::pretty_class_name(&class_names[ci]))
+                .collect();
             let summaries: Vec<crate::query::histogram::ClassSummary> = (0..n_classes)
                 .map(|ci| crate::query::histogram::ClassSummary {
-                    name: class_names[ci].as_str(),
+                    name: pretty_names[ci].as_str(),
                     count: counts[ci],
                     shallow_total: shallow_totals[ci],
                 })
@@ -1069,7 +1085,15 @@ impl Pass2 {
         // Query results are tagged by slot inside `query_state`; the caller
         // reassembles them in input order after the late (retained) stage runs,
         // so no positional reorder happens here.
-        Ok((graph, inbound, shallow_c, class_idx_c, alloc_serial_c, query_state, refwalk_csr))
+        Ok((
+            graph,
+            inbound,
+            shallow_c,
+            class_idx_c,
+            alloc_serial_c,
+            query_state,
+            refwalk_csr,
+        ))
     }
 
     /// First-scan heap walker that COUNTS out/in degrees per node and finalizes
@@ -1223,7 +1247,10 @@ impl Pass2 {
                     // object-array classes as `[L…;` descriptors).
                     if visit_arrays {
                         if let Some(v) = visitor.as_deref_mut() {
-                            if let Some(raw) = class_map.get(&elem_class_id).and_then(|ci| strings.get(&ci.name_id)) {
+                            if let Some(raw) = class_map
+                                .get(&elem_class_id)
+                                .and_then(|ci| strings.get(&ci.name_id))
+                            {
                                 let name = crate::report::pretty_class_name(raw);
                                 v.visit_array(src_idx, &name, count as u32);
                             }

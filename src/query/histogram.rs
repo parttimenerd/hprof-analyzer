@@ -78,8 +78,16 @@ mod tests {
 
     fn summaries() -> Vec<ClassSummary<'static>> {
         vec![
-            ClassSummary { name: "java.lang.String", count: 100, shallow_total: 2400 },
-            ClassSummary { name: "java.util.HashMap", count: 10, shallow_total: 480 },
+            ClassSummary {
+                name: "java.lang.String",
+                count: 100,
+                shallow_total: 2400,
+            },
+            ClassSummary {
+                name: "java.util.HashMap",
+                count: 10,
+                shallow_total: 480,
+            },
         ]
     }
 
@@ -96,7 +104,8 @@ mod tests {
 
     #[test]
     fn sum_shallow_of_one_class() {
-        let q = crate::query::parse::parse("SELECT SUM(@usedHeapSize) FROM java.lang.String").unwrap();
+        let q =
+            crate::query::parse::parse("SELECT SUM(@usedHeapSize) FROM java.lang.String").unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
         let cs = summaries();
         let res = run_histogram(&q, &plan, &cs);
@@ -136,10 +145,8 @@ mod tests {
     /// and falls to `_ => Null`.
     #[test]
     fn avg_no_match_is_null() {
-        let q = crate::query::parse::parse(
-            "SELECT AVG(@usedHeapSize) FROM com.nonexistent.Class",
-        )
-        .unwrap();
+        let q = crate::query::parse::parse("SELECT AVG(@usedHeapSize) FROM com.nonexistent.Class")
+            .unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
         let cs = summaries();
         let res = run_histogram(&q, &plan, &cs);
@@ -150,8 +157,7 @@ mod tests {
     /// COUNT(*) on a class that matches nothing → Int(0).
     #[test]
     fn count_no_match_is_zero() {
-        let q =
-            crate::query::parse::parse("SELECT COUNT(*) FROM com.nonexistent.Class").unwrap();
+        let q = crate::query::parse::parse("SELECT COUNT(*) FROM com.nonexistent.Class").unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
         let cs = summaries();
         let res = run_histogram(&q, &plan, &cs);
@@ -162,10 +168,8 @@ mod tests {
     /// SUM on a class that matches nothing → Int(0).
     #[test]
     fn sum_no_match_is_zero() {
-        let q = crate::query::parse::parse(
-            "SELECT SUM(@usedHeapSize) FROM com.nonexistent.Class",
-        )
-        .unwrap();
+        let q = crate::query::parse::parse("SELECT SUM(@usedHeapSize) FROM com.nonexistent.Class")
+            .unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
         let cs = summaries();
         let res = run_histogram(&q, &plan, &cs);
@@ -177,10 +181,9 @@ mod tests {
     /// column labels emitted by column_name.
     #[test]
     fn multiple_aggregates_in_one_select() {
-        let q = crate::query::parse::parse(
-            "SELECT COUNT(*), SUM(@usedHeapSize) FROM java.lang.String",
-        )
-        .unwrap();
+        let q =
+            crate::query::parse::parse("SELECT COUNT(*), SUM(@usedHeapSize) FROM java.lang.String")
+                .unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
         let cs = summaries();
         let res = run_histogram(&q, &plan, &cs);
@@ -194,8 +197,8 @@ mod tests {
     /// Glob spanning both classes: COUNT(*) = 110, SUM = 2880.
     #[test]
     fn glob_java_star_sums_both_classes() {
-        let q = crate::query::parse::parse("SELECT COUNT(*), SUM(@usedHeapSize) FROM java.*")
-            .unwrap();
+        let q =
+            crate::query::parse::parse("SELECT COUNT(*), SUM(@usedHeapSize) FROM java.*").unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
         let cs = summaries();
         let res = run_histogram(&q, &plan, &cs);
@@ -270,12 +273,65 @@ mod tests {
         assert_eq!(res.rows.len(), 1);
 
         // No-match case
-        let q2 =
-            crate::query::parse::parse("SELECT COUNT(*) FROM no.such.Class").unwrap();
+        let q2 = crate::query::parse::parse("SELECT COUNT(*) FROM no.such.Class").unwrap();
         let plan2 = crate::query::plan::plan_query(&q2).unwrap();
         let res2 = run_histogram(&q2, &plan2, &summaries());
         assert_eq!(res2.row_count, 1);
         assert_eq!(res2.rows.len(), 1);
+    }
+
+    /// MAT-parity / normalization invariant: aggregate COUNT(*) over a primitive
+    /// array class matches ONLY when the class summary carries the pretty/dotted
+    /// name (`char[]`) that queries use — the same normalized form the scan path
+    /// projects. A summary built with the pretty name matches and returns its
+    /// count. This pins the pass2 contract: build summaries from pretty names.
+    #[test]
+    fn count_star_of_prim_array_matches_pretty_name() {
+        let q = crate::query::parse::parse("SELECT COUNT(*) FROM char[]").unwrap();
+        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let cs = vec![ClassSummary {
+            name: "char[]",
+            count: 225,
+            shallow_total: 9000,
+        }];
+        let res = run_histogram(&q, &plan, &cs);
+        assert_eq!(res.rows[0][0], QueryValue::Int(225));
+    }
+
+    /// Regression pin for the root cause: a summary keyed by the RAW JVM
+    /// descriptor `[C` (what pass2 held before the fix) does NOT match a
+    /// `FROM char[]` pattern (2 vs 6 bytes), so COUNT would be 0. This is exactly
+    /// why the histogram path silently returned 0 while the scan path (which sees
+    /// the pretty name) returned rows. `class_name_matches` is the shared matcher;
+    /// asserting it directly documents that pass2 MUST normalize before building
+    /// summaries — the raw descriptor can never match the query pattern.
+    #[test]
+    fn raw_descriptor_does_not_match_pretty_pattern() {
+        // The raw-vs-pretty asymmetry that caused COUNT(*) FROM char[] == 0.
+        assert!(
+            !class_name_matches("[C", "char[]"),
+            "raw descriptor `[C` must NOT match `char[]` — this is the bug: pass2 \
+             fed summaries the raw name, so the histogram path never matched"
+        );
+        // And the fix's normalized form DOES match.
+        assert!(
+            class_name_matches("char[]", "char[]"),
+            "pretty name `char[]` must match `char[]`"
+        );
+        // Sanity: a whole summary keyed by the raw name yields COUNT 0.
+        let q = crate::query::parse::parse("SELECT COUNT(*) FROM char[]").unwrap();
+        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let raw = vec![ClassSummary {
+            name: "[C",
+            count: 225,
+            shallow_total: 9000,
+        }];
+        let res = run_histogram(&q, &plan, &raw);
+        assert_eq!(
+            res.rows[0][0],
+            QueryValue::Int(0),
+            "raw-named summary must (wrongly) count 0 — the exact bug"
+        );
     }
 
     /// Verify result metadata: name, oql, truncated, error are defaults.
