@@ -220,9 +220,9 @@ fn query_subcommand_distinct_limit_returns_exactly_n_distinct() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    // "(5 rows)" or "(5 rows, truncated)" — the important thing is exactly 5 rows.
+    // CLI prints "(5 rows, truncated)" when LIMIT clips results.
     assert!(
-        stdout.contains("(5 rows"),
+        stdout.contains("(5 rows, truncated)"),
         "DISTINCT LIMIT 5 must return exactly 5 rows:\n{stdout}"
     );
 }

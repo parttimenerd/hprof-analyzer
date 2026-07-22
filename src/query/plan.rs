@@ -1162,8 +1162,6 @@ mod tests {
         assert_eq!(plan.limit, Some(7), "non-distinct limit must pass through unchanged");
     }
 
-
-
     #[test]
     fn predicates_ordered_cheapest_first() {
         let q = parse("SELECT * FROM C WHERE name = \"x\" AND count > 1").unwrap();

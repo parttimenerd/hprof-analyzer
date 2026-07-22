@@ -923,8 +923,8 @@ pub fn collapse_union_results(
                 if result.rows.len() > n {
                     result.rows.truncate(n);
                     result.truncated = true;
+                    result.row_count = result.rows.len() as u64;
                 }
-                result.row_count = result.rows.len() as u64;
             }
         }
         out.push(result);
@@ -1607,6 +1607,7 @@ mod tests {
         let (_flat, groups) = expand_union_queries(&[(q, p)]);
         assert!(!groups[0].distinct);
         assert_eq!(groups[0].limit, Some(5));
+        // limit is populated from q.limit but only READ for distinct groups; this asserts population, not use.
     }
 
     // ---------- subquery helpers (Task 23) ----------
