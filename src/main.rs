@@ -78,9 +78,13 @@ impl query::runflags::ClassIndexResolver for NoClassIndex {
 /// True if this query (or any UNION branch) uses an edge feature
 /// (`@inbounds` / `@outbounds` / `path()`).
 fn query_uses_edges(q: &query::ast::Query) -> bool {
-    query::runflags::plan_run(std::slice::from_ref(q), &NoClassIndex, DEFAULT_QUERY_PATH_DEPTH)
-        .map(|f| f.retain_inbound || f.retain_forward || f.outbounds_by_rescan)
-        .unwrap_or(false)
+    query::runflags::plan_run(
+        std::slice::from_ref(q),
+        &NoClassIndex,
+        DEFAULT_QUERY_PATH_DEPTH,
+    )
+    .map(|f| f.retain_inbound || f.retain_forward || f.outbounds_by_rescan)
+    .unwrap_or(false)
 }
 
 /// Output format for the analysis report.
@@ -845,8 +849,9 @@ fn render_report(path: &str, format: OutputFormat) -> io::Result<String> {
 fn collect_query_texts(opts: &AnalyzeOptions) -> io::Result<Vec<String>> {
     let mut query_texts: Vec<String> = opts.queries.clone();
     if let Some(ref qf) = opts.query_file {
-        let body = std::fs::read_to_string(qf)
-            .map_err(|e| io::Error::new(e.kind(), format!("cannot read --query-file '{qf}': {e}")))?;
+        let body = std::fs::read_to_string(qf).map_err(|e| {
+            io::Error::new(e.kind(), format!("cannot read --query-file '{qf}': {e}"))
+        })?;
         for line in body.lines() {
             let t = line.trim();
             if t.is_empty() || t.starts_with('#') {
@@ -943,12 +948,13 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
             ));
         }
         let mut no_in_sets = std::collections::HashMap::new();
-        let (.., query_state, _refwalk_csr) =
+        let (.., query_state, _refwalk_csr, string_values) =
             pass2::Pass2::build(input, p1, cvec::Codec::Zstd3, &opts, &flat, &mut no_in_sets)?;
 
         // Query-only path: retained sizes/dominators are not computed, so cross-phase
         // (@retainedHeapSize) queries resolve to actionable errors here.
-        let flat_results = query::stage_runner::resume_without_late_ctx(query_state);
+        // toString(s) queries (finalize_at=P2) use the decoded string_values map.
+        let flat_results = query::run::resume_with_string_values(query_state, &flat, string_values);
         query::run::collapse_union_results(flat_results, &union_groups)
     };
 
@@ -1070,8 +1076,16 @@ fn run(
     let t = Instant::now();
     progress::phase("building object graph (pass 2)");
     let mut no_in_sets = std::collections::HashMap::new();
-    let (mut g, mut inbound, shallow_c, class_idx_c, alloc_serial_c, query_state, refwalk_csr) =
-        pass2::Pass2::build(input, p1, compress, &opts, &flat_queries, &mut no_in_sets)?;
+    let (
+        mut g,
+        mut inbound,
+        shallow_c,
+        class_idx_c,
+        alloc_serial_c,
+        query_state,
+        refwalk_csr,
+        string_values,
+    ) = pass2::Pass2::build(input, p1, compress, &opts, &flat_queries, &mut no_in_sets)?;
     log(
         verbose,
         &format!("pass2 n={}", g.n),
@@ -1367,8 +1381,7 @@ fn run(
     // Finalize cross-phase (@retainedHeapSize) queries now that retained sizes
     // exist. Phase-1 results pass through; carried indices are joined against
     // g.retained, then all results reassemble in original query order.
-    let query_asts: Vec<query::ast::Query> =
-        flat_queries.iter().map(|(q, _)| q.clone()).collect();
+    let query_asts: Vec<query::ast::Query> = flat_queries.iter().map(|(q, _)| q.clone()).collect();
     // Dominator stages read idom + the dominator-children CSR (dc_off/dc_tgt),
     // both live in this window. The IdMap is built empty: the dense address
     // table was compressed away at ~L973 (its 4.1GB dense form must not rejoin
@@ -1391,6 +1404,14 @@ fn run(
     // borrowed slices stay empty and behavior is identical to today.
     let in_off: &[u32] = retained_inbound.as_ref().map_or(&[], |(o, _)| o);
     let in_tgt: &[u32] = retained_inbound.as_ref().map_or(&[], |(_, t)| t);
+    // Thread the query-gated toString(s) string values into the resume window.
+    // Built only when a toString(s) query ran; empty otherwise — non-toString
+    // runs keep the shared EMPTY_STRING_VALUES borrow, byte/RSS-identical.
+    let sv_ref: &std::collections::HashMap<u32, String> = if string_values.is_empty() {
+        &*query::stage_runner::EMPTY_STRING_VALUES
+    } else {
+        &string_values
+    };
     let flat_results = query::stage_runner::resume(
         query_state,
         &query_asts,
@@ -1410,6 +1431,7 @@ fn run(
             in_off,
             in_tgt,
             retained_edges: retained_edges.as_ref(),
+            string_values: sv_ref,
         },
     );
     let mut query_results = query::run::collapse_union_results(flat_results, &union_groups);
@@ -1591,8 +1613,8 @@ mod cli_tests {
 
     #[test]
     fn query_path_depth_custom() {
-        let cli =
-            Cli::try_parse_from(["hprof-analyzer", "heap.hprof", "--query-path-depth", "3"]).unwrap();
+        let cli = Cli::try_parse_from(["hprof-analyzer", "heap.hprof", "--query-path-depth", "3"])
+            .unwrap();
         assert_eq!(cli.query_path_depth, 3);
     }
 
@@ -1610,9 +1632,10 @@ mod cli_tests {
 
     #[test]
     fn query_path_depth_non_numeric_errors() {
-        let err = Cli::try_parse_from(["hprof-analyzer", "heap.hprof", "--query-path-depth", "abc"])
-            .err()
-            .expect("non-numeric depth must be rejected");
+        let err =
+            Cli::try_parse_from(["hprof-analyzer", "heap.hprof", "--query-path-depth", "abc"])
+                .err()
+                .expect("non-numeric depth must be rejected");
         // clap rejects the non-numeric value at parse time.
         assert!(!err.to_string().is_empty());
     }
@@ -1639,6 +1662,9 @@ mod cli_tests {
         assert_eq!(parse_query_path_depth("5").unwrap(), 5);
         let zero = parse_query_path_depth("0").unwrap_err();
         assert!(zero.contains("must be > 0"), "0 message: {zero}");
-        assert!(parse_query_path_depth("abc").is_err(), "non-numeric must error");
+        assert!(
+            parse_query_path_depth("abc").is_err(),
+            "non-numeric must error"
+        );
     }
 }

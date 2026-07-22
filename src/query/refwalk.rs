@@ -34,7 +34,11 @@ pub struct RefWalkEdges {
 
 impl RefWalkEdges {
     pub fn new(cap: usize) -> Self {
-        Self { edges: Vec::new(), cap, truncated: false }
+        Self {
+            edges: Vec::new(),
+            cap,
+            truncated: false,
+        }
     }
 
     pub fn truncated(&self) -> bool {
@@ -103,7 +107,11 @@ pub struct RefWalkTails {
 
 impl RefWalkTails {
     pub fn new(cap: usize) -> Self {
-        Self { values: std::collections::HashMap::new(), cap, truncated: false }
+        Self {
+            values: std::collections::HashMap::new(),
+            cap,
+            truncated: false,
+        }
     }
 
     pub fn truncated(&self) -> bool {
@@ -172,7 +180,9 @@ pub fn decode_primitive_tail(
         HprofType::Char => read_be(o, 2).map(|v| QueryValue::Int(v as i64)),
         HprofType::Int => read_be(o, 4).map(|v| QueryValue::Int(v as i32 as i64)),
         HprofType::Long => read_be(o, 8).map(|v| QueryValue::Int(v as i64)),
-        HprofType::Float => read_be(o, 4).map(|v| QueryValue::Float(f32::from_bits(v as u32) as f64)),
+        HprofType::Float => {
+            read_be(o, 4).map(|v| QueryValue::Float(f32::from_bits(v as u32) as f64))
+        }
         HprofType::Double => read_be(o, 8).map(|v| QueryValue::Float(f64::from_bits(v))),
         HprofType::Object => None,
     }
@@ -221,6 +231,8 @@ pub fn refwalk_field_names(q: &crate::query::ast::Query) -> Vec<String> {
             SelectItem::Star => {}
             // path(a, b) carries no RefPath hops to collect.
             SelectItem::Path { .. } => {}
+            // toString(s) carries no RefPath hops; string values are a separate side table.
+            SelectItem::ToString(_) => {}
         }
     }
     if let Some(pred) = &q.where_ {
@@ -273,6 +285,8 @@ pub fn refwalk_tail_field_names(q: &crate::query::ast::Query) -> Vec<String> {
             SelectItem::Star => {}
             // path(a, b) carries no RefPath hops to collect.
             SelectItem::Path { .. } => {}
+            // toString(s) carries no RefPath tail fields.
+            SelectItem::ToString(_) => {}
         }
     }
     if let Some(pred) = &q.where_ {
@@ -302,10 +316,8 @@ mod tests {
 
     #[test]
     fn intern_dedups_hop_fields_across_queries() {
-        let names = intern_hop_fields(&[
-            vec!["parent".into()],
-            vec!["parent".into(), "next".into()],
-        ]);
+        let names =
+            intern_hop_fields(&[vec!["parent".into()], vec!["parent".into(), "next".into()]]);
         assert_eq!(names, vec!["parent".to_string(), "next".to_string()]);
     }
 
@@ -315,7 +327,10 @@ mod tests {
             vec!["b".into(), "a".into()],
             vec!["a".into(), "c".into(), "b".into()],
         ]);
-        assert_eq!(names, vec!["b".to_string(), "a".to_string(), "c".to_string()]);
+        assert_eq!(
+            names,
+            vec!["b".to_string(), "a".to_string(), "c".to_string()]
+        );
     }
 
     #[test]
@@ -377,10 +392,8 @@ mod tests {
 
     #[test]
     fn refwalk_field_names_gathers_select_and_where_hops() {
-        let q = crate::query::parse::parse(
-            "SELECT x.parent.name FROM C x WHERE x.next.hash > 0",
-        )
-        .unwrap();
+        let q = crate::query::parse::parse("SELECT x.parent.name FROM C x WHERE x.next.hash > 0")
+            .unwrap();
         let names = refwalk_field_names(&q);
         // hop fields only (parent, next); tails name/hash are projections, not hops.
         assert!(names.contains(&"parent".to_string()));
@@ -397,10 +410,8 @@ mod tests {
 
     #[test]
     fn refwalk_tail_field_names_gathers_field_tails() {
-        let q = crate::query::parse::parse(
-            "SELECT x.parent.name FROM C x WHERE x.next.hash > 0",
-        )
-        .unwrap();
+        let q = crate::query::parse::parse("SELECT x.parent.name FROM C x WHERE x.next.hash > 0")
+            .unwrap();
         let tails = refwalk_tail_field_names(&q);
         assert!(tails.contains(&"name".to_string()));
         assert!(tails.contains(&"hash".to_string()));

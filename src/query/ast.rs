@@ -50,6 +50,10 @@ pub enum SelectItem {
     /// `path(a, b)` — a shortest reference path between two operands. Each operand
     /// is either a bound alias (the FROM object) or a class name.
     Path { from: PathOperand, to: PathOperand },
+    /// `toString(alias)` — decode a `java.lang.String` instance to its text value.
+    /// Only valid when the FROM class is `java.lang.String`. The `String` carries
+    /// the FROM alias identifier (e.g. `s` in `toString(s)`).
+    ToString(String),
 }
 
 /// One operand of a `path(a, b)` select item: a bound alias or a class name.
@@ -91,6 +95,10 @@ pub enum Attr {
     Dominators(String),
     /// `dominatorof(alias)` — immediate dominator (idom) of each matched object.
     DominatorOf(String),
+    /// `toString(alias)` — decode a `java.lang.String` instance to its text.
+    /// Usable as a WHERE predicate LHS (`WHERE toString(s) LIKE "java.*"`).
+    /// Only valid for `java.lang.String` FROM; non-String targets are an error.
+    ToString(String),
     /// A bare instance field name, e.g. `count`, `value`.
     Field(String),
     /// An N-hop reference path: `x.parent.name` (after alias-strip) becomes

@@ -16,6 +16,11 @@ pub(crate) static EMPTY_REFWALK_TAILS: std::sync::LazyLock<
     std::collections::HashMap<u32, QueryValue>,
 > = std::sync::LazyLock::new(std::collections::HashMap::new);
 
+/// A shared empty string-values table, used as the default `string_values` borrow
+/// when no toString(s) query ran (the common case). Zero-cost for non-toString runs.
+pub(crate) static EMPTY_STRING_VALUES: std::sync::LazyLock<std::collections::HashMap<u32, String>> =
+    std::sync::LazyLock::new(std::collections::HashMap::new);
+
 /// Maps a dense object index to its object address (and back, if needed) for
 /// building result rows in the late phase.
 pub struct IdMap<'a> {
@@ -23,10 +28,16 @@ pub struct IdMap<'a> {
     addr_of: &'a [u64],
 }
 impl<'a> IdMap<'a> {
-    pub fn new(addr_of: &'a [u64]) -> Self { Self { addr_of } }
-    pub fn to_addr(&self, dense: u32) -> u64 { self.addr_of.get(dense as usize).copied().unwrap_or(0) }
+    pub fn new(addr_of: &'a [u64]) -> Self {
+        Self { addr_of }
+    }
+    pub fn to_addr(&self, dense: u32) -> u64 {
+        self.addr_of.get(dense as usize).copied().unwrap_or(0)
+    }
     #[cfg(test)]
-    pub fn identity(_n: usize) -> Self { Self { addr_of: &[] } }
+    pub fn identity(_n: usize) -> Self {
+        Self { addr_of: &[] }
+    }
 }
 
 /// Borrowed late-phase context. Lives only inside the `dc_*`/retained window in
@@ -74,13 +85,20 @@ pub struct LateCtx<'a> {
     /// Retained forward-edge store for `@outbounds`/`path` (L1+L2 compressed),
     /// or `None` when no forward-edge feature is armed.
     pub retained_edges: Option<&'a crate::query::retained_edges::RetainedEdges>,
+    /// Decoded `toString(s)` values: `dense_idx → String`. Populated (query-gated)
+    /// only when a toString(s) query ran; empty otherwise (non-toString runs keep
+    /// the shared `EMPTY_STRING_VALUES` borrow, byte/RSS-identical to before).
+    pub string_values: &'a std::collections::HashMap<u32, String>,
 }
 
 impl LateCtx<'_> {
     /// The interned id of a field name, or `None` if the name is unknown. Linear
     /// scan over the (small) interning table; RefWalk resolves one id per hop.
     pub fn field_id(&self, name: &str) -> Option<u32> {
-        self.field_names.iter().position(|f| f == name).map(|p| p as u32)
+        self.field_names
+            .iter()
+            .position(|f| f == name)
+            .map(|p| p as u32)
     }
 
     /// The scan-captured tail scalar for a resolved-target dense index, if one
@@ -88,20 +106,32 @@ impl LateCtx<'_> {
     pub fn refwalk_tail(&self, dense: u32) -> Option<&QueryValue> {
         self.refwalk_tails.get(&dense)
     }
+
+    /// The decoded toString(s) text for a String instance at `dense`. `None`
+    /// when no toString query ran or the instance was not captured (cap overflow).
+    pub fn string_value(&self, dense: u32) -> Option<&str> {
+        self.string_values.get(&dense).map(String::as_str)
+    }
 }
 
 /// Resolve one reference hop: for each source dense index, emit the target dense
 /// indices reachable via a forward-ref edge whose field name matches `field`.
 /// An unknown field name (or an empty forward CSR) yields no targets.
 pub fn resolve_hop(sources: &[u32], field: &str, ctx: &LateCtx) -> Vec<u32> {
-    let Some(fid) = ctx.field_id(field) else { return Vec::new(); };
+    let Some(fid) = ctx.field_id(field) else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
     for &s in sources {
         let si = s as usize;
-        if si + 1 >= ctx.fwd_off.len() { continue; }
+        if si + 1 >= ctx.fwd_off.len() {
+            continue;
+        }
         let (start, end) = (ctx.fwd_off[si] as usize, ctx.fwd_off[si + 1] as usize);
         for k in start..end {
-            if ctx.fwd_field[k] == fid { out.push(ctx.fwd_tgt[k]); }
+            if ctx.fwd_field[k] == fid {
+                out.push(ctx.fwd_tgt[k]);
+            }
         }
     }
     out
@@ -156,7 +186,10 @@ pub fn edge_lookup(rows: &[u32], dir: EdgeDir, ctx: &LateCtx) -> Vec<u32> {
 /// is the set of dense indices visited (BFS order, deduped). Never materializes
 /// the whole graph — walks only the retained subgraph via `retained_edges`.
 pub fn bounded_path(
-    from: u32, target_rows: &[u32], depth_cap: usize, ctx: &LateCtx,
+    from: u32,
+    target_rows: &[u32],
+    depth_cap: usize,
+    ctx: &LateCtx,
 ) -> (Vec<u32>, bool) {
     // No forward edge store armed: only the seed is "reached".
     let Some(re) = ctx.retained_edges else {
@@ -284,6 +317,12 @@ pub fn resume_without_late_ctx(state: QueryExecState) -> Vec<QueryResult> {
     slotted.into_iter().map(|(_, r)| r).collect()
 }
 
+/// Run a single cross-phase entry against the given late context.
+/// Exposed `pub(crate)` for the query-only hybrid resume path.
+pub(crate) fn run_entry_pub(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
+    run_entry(entry, q, ctx)
+}
+
 fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
     // Dominator/retained-set ops each produce a one-column ObjRef result and
     // fully own row building; they never fall through to join_retained.
@@ -332,15 +371,24 @@ fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
                 }
                 return dominator_rows(entry, q, &reached, entry.carry.truncated() || capped, ctx);
             }
+            StageOp::ResolveStringValues => {
+                return string_values_rows(entry, q, ctx);
+            }
             // Later phases add more StageOp variants; an unhandled op must fail
             // loudly rather than silently dropping the query's late work.
             #[allow(unreachable_patterns)]
-            other => return QueryResult {
-                name: entry.name.clone(), oql: String::new(), columns: Vec::new(),
-                rows: Vec::new(), row_count: 0, truncated: false,
-                error: Some(format!("stage op {other:?} not supported in this phase")),
-                note: None,
-            },
+            other => {
+                return QueryResult {
+                    name: entry.name.clone(),
+                    oql: String::new(),
+                    columns: Vec::new(),
+                    rows: Vec::new(),
+                    row_count: 0,
+                    truncated: false,
+                    error: Some(format!("stage op {other:?} not supported in this phase")),
+                    note: None,
+                }
+            }
         }
     }
     join_retained(entry, q, ctx)
@@ -350,21 +398,41 @@ fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
 /// indices (dominator children / idoms / retained closure). LIMIT is applied
 /// here since these ops don't route through join_retained.
 fn dominator_rows(
-    entry: &CrossPhaseEntry, q: &Query, indices: &[u32], mut truncated: bool, ctx: &LateCtx,
+    entry: &CrossPhaseEntry,
+    q: &Query,
+    indices: &[u32],
+    mut truncated: bool,
+    ctx: &LateCtx,
 ) -> QueryResult {
     let mut indices = indices.to_vec();
     if let Some(limit) = q.limit {
-        if indices.len() as u64 > limit { indices.truncate(limit as usize); truncated = true; }
+        if indices.len() as u64 > limit {
+            indices.truncate(limit as usize);
+            truncated = true;
+        }
     }
-    let col = q.select.first().map(crate::query::execute::column_name)
+    let col = q
+        .select
+        .first()
+        .map(crate::query::execute::column_name)
         .unwrap_or_else(|| "*".to_string());
-    let rows: Vec<Vec<QueryValue>> = indices.iter().map(|&i| {
-        vec![QueryValue::ObjRef { index: ctx.id_map.to_addr(i), class: "?".to_string() }]
-    }).collect();
+    let rows: Vec<Vec<QueryValue>> = indices
+        .iter()
+        .map(|&i| {
+            vec![QueryValue::ObjRef {
+                index: ctx.id_map.to_addr(i),
+                class: "?".to_string(),
+            }]
+        })
+        .collect();
     QueryResult {
-        name: entry.name.clone(), oql: String::new(),
+        name: entry.name.clone(),
+        oql: String::new(),
         columns: vec![QueryColumn { name: col }],
-        row_count: rows.len() as u64, rows, truncated, error: None,
+        row_count: rows.len() as u64,
+        rows,
+        truncated,
+        error: None,
         note: None,
     }
 }
@@ -413,7 +481,9 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
     let columns: Vec<QueryColumn> = q
         .select
         .iter()
-        .map(|it| QueryColumn { name: crate::query::execute::column_name(it) })
+        .map(|it| QueryColumn {
+            name: crate::query::execute::column_name(it),
+        })
         .collect();
 
     let mut rows: Vec<Vec<QueryValue>> = Vec::new();
@@ -432,9 +502,10 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
                     }
                 }
                 SelectItem::Attr(Attr::ObjectId) => QueryValue::Int(s as i64),
-                SelectItem::Star => {
-                    QueryValue::ObjRef { index: ctx.id_map.to_addr(s), class: "?".to_string() }
-                }
+                SelectItem::Star => QueryValue::ObjRef {
+                    index: ctx.id_map.to_addr(s),
+                    class: "?".to_string(),
+                },
                 _ => QueryValue::Null,
             })
             .collect();
@@ -461,12 +532,163 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
     }
 }
 
+/// Resolve toString(s) values for each carried dense index. For every String
+/// instance carried from the scan, look up its decoded text in `ctx.string_values`,
+/// apply any WHERE `toString(s)` predicates, and project result rows with all
+/// toString(s) columns filled in. Non-toString SELECT columns (like `*`,
+/// `@objectId`, etc.) are projected as far as possible from the dense index.
+fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
+    // Compile LIKE regexes once for the query (same pattern as refpath_rows).
+    let mut like_regexes: std::collections::HashMap<String, regex::Regex> = Default::default();
+    if let Some(pred) = &q.where_ {
+        // Collect all toString(s) LIKE patterns.
+        fn collect_like(p: &Predicate, out: &mut std::collections::HashMap<String, regex::Regex>) {
+            match p {
+                Predicate::And(a, b) | Predicate::Or(a, b) => {
+                    collect_like(a, out);
+                    collect_like(b, out);
+                }
+                Predicate::Not(a) => collect_like(a, out),
+                Predicate::Compare {
+                    lhs: Attr::ToString(_),
+                    op: CompareOp::Like | CompareOp::NotLike,
+                    rhs: Value::Str(pat),
+                } => {
+                    out.entry(pat.clone()).or_insert_with(|| {
+                        regex::Regex::new(pat)
+                            .unwrap_or_else(|_| regex::Regex::new("(?!x)x").unwrap())
+                    });
+                }
+                _ => {}
+            }
+        }
+        collect_like(pred, &mut like_regexes);
+    }
+
+    let seeds: Vec<u32> = entry.carry.indices();
+
+    // Apply toString(s) WHERE predicates.
+    let kept: Vec<u32> = if q.where_.as_ref().is_some_and(has_toString_pred) {
+        seeds
+            .iter()
+            .copied()
+            .filter(|&s| eval_tostring_pred(q.where_.as_ref().unwrap(), s, ctx, &like_regexes))
+            .collect()
+    } else {
+        seeds
+    };
+
+    let columns: Vec<QueryColumn> = q
+        .select
+        .iter()
+        .map(|it| QueryColumn {
+            name: crate::query::execute::column_name(it),
+        })
+        .collect();
+
+    let out_rows: Vec<Vec<QueryValue>> = kept
+        .iter()
+        .map(|&idx| {
+            q.select
+                .iter()
+                .map(|it| project_string_row_item(it, idx, ctx))
+                .collect()
+        })
+        .collect();
+
+    let mut truncated = entry.carry.truncated();
+    let mut out_rows = out_rows;
+    if let Some(limit) = q.limit {
+        if out_rows.len() as u64 > limit {
+            out_rows.truncate(limit as usize);
+            truncated = true;
+        }
+    }
+
+    QueryResult {
+        name: entry.name.clone(),
+        oql: String::new(),
+        columns,
+        row_count: out_rows.len() as u64,
+        rows: out_rows,
+        truncated,
+        error: None,
+        note: None,
+    }
+}
+
+/// True if the predicate tree contains any `Attr::ToString` comparison.
+fn has_toString_pred(p: &Predicate) -> bool {
+    match p {
+        Predicate::And(a, b) | Predicate::Or(a, b) => has_toString_pred(a) || has_toString_pred(b),
+        Predicate::Not(a) => has_toString_pred(a),
+        Predicate::Compare {
+            lhs: Attr::ToString(_),
+            ..
+        } => true,
+        _ => false,
+    }
+}
+
+/// Evaluate a predicate tree for a String instance at `dense`, resolving
+/// `toString(s)` comparisons against `ctx.string_values`.
+fn eval_tostring_pred(
+    p: &Predicate,
+    dense: u32,
+    ctx: &LateCtx,
+    like_regexes: &std::collections::HashMap<String, regex::Regex>,
+) -> bool {
+    match p {
+        Predicate::And(a, b) => {
+            eval_tostring_pred(a, dense, ctx, like_regexes)
+                && eval_tostring_pred(b, dense, ctx, like_regexes)
+        }
+        Predicate::Or(a, b) => {
+            eval_tostring_pred(a, dense, ctx, like_regexes)
+                || eval_tostring_pred(b, dense, ctx, like_regexes)
+        }
+        Predicate::Not(a) => !eval_tostring_pred(a, dense, ctx, like_regexes),
+        Predicate::Compare {
+            lhs: Attr::ToString(_),
+            op,
+            rhs,
+        } => {
+            match ctx.string_value(dense) {
+                Some(s) => cmp_query_value(&QueryValue::Str(s.to_string()), *op, rhs, like_regexes),
+                None => false, // String instance not in capture (cap overflow) → no match
+            }
+        }
+        // Non-toString predicates were already applied at scan time (Phase 1).
+        _ => true,
+    }
+}
+
+/// Project a single SELECT item for a toString(s) result row.
+fn project_string_row_item(it: &SelectItem, dense: u32, ctx: &LateCtx) -> QueryValue {
+    match it {
+        SelectItem::ToString(_) | SelectItem::Attr(Attr::ToString(_)) => ctx
+            .string_value(dense)
+            .map(|s| QueryValue::Str(s.to_string()))
+            .unwrap_or(QueryValue::Null),
+        SelectItem::Attr(Attr::ObjectId) => QueryValue::Int(dense as i64),
+        SelectItem::Attr(Attr::ObjectAddress) => QueryValue::Int(ctx.id_map.to_addr(dense) as i64),
+        SelectItem::Star => QueryValue::ObjRef {
+            index: ctx.id_map.to_addr(dense),
+            class: "java.lang.String".to_string(),
+        },
+        _ => QueryValue::Null,
+    }
+}
+
 /// Project a RefPath tail on a resolved-target dense index. Identity attrs answer
 /// directly from the dense index; a scalar field tail is looked up in the
 /// scan-captured tail table. Returns `None` (→ caller projects `Null` + note)
 /// when a field tail has no captured value (object-ref tail or not decoded).
 fn project_tail(
-    tail: &Attr, dense: u32, ctx: &LateCtx, note: &mut Option<String>,
+    tail: &Attr,
+    dense: u32,
+    ctx: &LateCtx,
+    note: &mut Option<String>,
 ) -> Option<QueryValue> {
     match tail {
         Attr::ObjectId => Some(QueryValue::Int(dense as i64)),
@@ -496,7 +718,10 @@ fn find_pred_refpath(p: &Predicate) -> Option<Attr> {
             find_pred_refpath(a).or_else(|| find_pred_refpath(b))
         }
         Predicate::Not(a) => find_pred_refpath(a),
-        Predicate::Compare { lhs: a @ Attr::RefPath { .. }, .. } => Some(a.clone()),
+        Predicate::Compare {
+            lhs: a @ Attr::RefPath { .. },
+            ..
+        } => Some(a.clone()),
         _ => None,
     }
 }
@@ -517,7 +742,11 @@ fn eval_refpath_pred(
             eval_refpath_pred(a, val, like_regexes) || eval_refpath_pred(b, val, like_regexes)
         }
         Predicate::Not(a) => !eval_refpath_pred(a, val, like_regexes),
-        Predicate::Compare { lhs: Attr::RefPath { .. }, op, rhs } => match val {
+        Predicate::Compare {
+            lhs: Attr::RefPath { .. },
+            op,
+            rhs,
+        } => match val {
             Some(v) => cmp_query_value(v, *op, rhs, like_regexes),
             None => false,
         },
@@ -542,8 +771,12 @@ fn cmp_query_value(
         (QueryValue::Str(l), Value::Str(r)) => match op {
             CompareOp::Eq => l == r,
             CompareOp::Ne => l != r,
-            CompareOp::Like => like_regexes.get(r.as_str()).is_some_and(|re| re.is_match(l)),
-            CompareOp::NotLike => like_regexes.get(r.as_str()).is_none_or(|re| !re.is_match(l)),
+            CompareOp::Like => like_regexes
+                .get(r.as_str())
+                .is_some_and(|re| re.is_match(l)),
+            CompareOp::NotLike => like_regexes
+                .get(r.as_str())
+                .is_none_or(|re| !re.is_match(l)),
             _ => false,
         },
         (QueryValue::Bool(l), Value::Bool(r)) => match op {
@@ -558,20 +791,28 @@ fn cmp_query_value(
 }
 fn cmp_i64(l: i64, op: CompareOp, r: i64) -> bool {
     match op {
-        CompareOp::Eq => l == r, CompareOp::Ne => l != r,
-        CompareOp::Lt => l < r, CompareOp::Le => l <= r,
-        CompareOp::Gt => l > r, CompareOp::Ge => l >= r,
+        CompareOp::Eq => l == r,
+        CompareOp::Ne => l != r,
+        CompareOp::Lt => l < r,
+        CompareOp::Le => l <= r,
+        CompareOp::Gt => l > r,
+        CompareOp::Ge => l >= r,
         // LIKE/NOT LIKE are string-only; a numeric LHS never matches a regex.
-        CompareOp::Like => false, CompareOp::NotLike => true,
+        CompareOp::Like => false,
+        CompareOp::NotLike => true,
     }
 }
 fn cmp_f64(l: f64, op: CompareOp, r: f64) -> bool {
     match op {
-        CompareOp::Eq => l == r, CompareOp::Ne => l != r,
-        CompareOp::Lt => l < r, CompareOp::Le => l <= r,
-        CompareOp::Gt => l > r, CompareOp::Ge => l >= r,
+        CompareOp::Eq => l == r,
+        CompareOp::Ne => l != r,
+        CompareOp::Lt => l < r,
+        CompareOp::Le => l <= r,
+        CompareOp::Gt => l > r,
+        CompareOp::Ge => l >= r,
         // LIKE/NOT LIKE are string-only; a numeric LHS never matches a regex.
-        CompareOp::Like => false, CompareOp::NotLike => true,
+        CompareOp::Like => false,
+        CompareOp::NotLike => true,
     }
 }
 
@@ -579,27 +820,44 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
     let mut rows: Vec<(u32, u64)> = Vec::new();
     for idx in entry.carry.indices() {
         let ret = *ctx.retained.get(idx as usize).unwrap_or(&0);
-        if retained_where_passes(q, ret) { rows.push((idx, ret)); }
+        if retained_where_passes(q, ret) {
+            rows.push((idx, ret));
+        }
     }
     if let Some(ob) = &q.order_by {
         if ob.key == Attr::RetainedHeapSize {
             rows.sort_by_key(|(_, r)| *r);
-            if ob.dir == SortDir::Desc { rows.reverse(); }
+            if ob.dir == SortDir::Desc {
+                rows.reverse();
+            }
         }
     }
     let mut truncated = entry.carry.truncated();
     if let Some(limit) = q.limit {
-        if rows.len() as u64 > limit { rows.truncate(limit as usize); truncated = true; }
+        if rows.len() as u64 > limit {
+            rows.truncate(limit as usize);
+            truncated = true;
+        }
     }
-    let columns: Vec<QueryColumn> = q.select.iter()
-        .map(|it| QueryColumn { name: crate::query::execute::column_name(it) })
+    let columns: Vec<QueryColumn> = q
+        .select
+        .iter()
+        .map(|it| QueryColumn {
+            name: crate::query::execute::column_name(it),
+        })
         .collect();
-    let out_rows: Vec<Vec<QueryValue>> = rows.iter()
+    let out_rows: Vec<Vec<QueryValue>> = rows
+        .iter()
         .map(|(idx, ret)| project_late_row(q, *idx, *ret))
         .collect();
     QueryResult {
-        name: entry.name.clone(), oql: String::new(), columns,
-        row_count: out_rows.len() as u64, rows: out_rows, truncated, error: None,
+        name: entry.name.clone(),
+        oql: String::new(),
+        columns,
+        row_count: out_rows.len() as u64,
+        rows: out_rows,
+        truncated,
+        error: None,
         note: None,
     }
 }
@@ -607,39 +865,60 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
 /// Evaluate only the retained-size WHERE terms; non-retained terms were already
 /// applied in Phase 1, so they pass here.
 fn retained_where_passes(q: &Query, ret: u64) -> bool {
-    match &q.where_ { None => true, Some(p) => eval_retained_pred(p, ret) }
+    match &q.where_ {
+        None => true,
+        Some(p) => eval_retained_pred(p, ret),
+    }
 }
 fn eval_retained_pred(p: &Predicate, ret: u64) -> bool {
     match p {
         Predicate::And(a, b) => eval_retained_pred(a, ret) && eval_retained_pred(b, ret),
         Predicate::Or(a, b) => eval_retained_pred(a, ret) || eval_retained_pred(b, ret),
         Predicate::Not(a) => !eval_retained_pred(a, ret),
-        Predicate::Compare { lhs: Attr::RetainedHeapSize, op, rhs } => cmp_u64(ret, *op, rhs),
+        Predicate::Compare {
+            lhs: Attr::RetainedHeapSize,
+            op,
+            rhs,
+        } => cmp_u64(ret, *op, rhs),
         _ => true,
     }
 }
 fn cmp_u64(lv: u64, op: CompareOp, rhs: &Value) -> bool {
-    let rv = match rhs { Value::Int(i) => *i as f64, Value::Float(f) => *f, _ => return matches!(op, CompareOp::Ne) };
+    let rv = match rhs {
+        Value::Int(i) => *i as f64,
+        Value::Float(f) => *f,
+        _ => return matches!(op, CompareOp::Ne),
+    };
     let l = lv as f64;
     match op {
-        CompareOp::Eq => l == rv, CompareOp::Ne => l != rv,
-        CompareOp::Lt => l < rv, CompareOp::Le => l <= rv,
-        CompareOp::Gt => l > rv, CompareOp::Ge => l >= rv,
+        CompareOp::Eq => l == rv,
+        CompareOp::Ne => l != rv,
+        CompareOp::Lt => l < rv,
+        CompareOp::Le => l <= rv,
+        CompareOp::Gt => l > rv,
+        CompareOp::Ge => l >= rv,
         // LIKE/NOT LIKE are string-only; a numeric retained-size LHS never
         // matches a regex, so LIKE is false and NOT LIKE is true.
-        CompareOp::Like => false, CompareOp::NotLike => true,
+        CompareOp::Like => false,
+        CompareOp::NotLike => true,
     }
 }
 
 /// Project a late row. IndexOnly carries answer only @objectId / @retainedHeapSize;
 /// blob-dependent attrs need an IndexPlusScalars carry (later step) and are Null.
 fn project_late_row(q: &Query, idx: u32, ret: u64) -> Vec<QueryValue> {
-    q.select.iter().map(|it| match it {
-        SelectItem::Attr(Attr::ObjectId) => QueryValue::Int(idx as i64),
-        SelectItem::Attr(Attr::RetainedHeapSize) => QueryValue::Int(ret as i64),
-        SelectItem::Star => QueryValue::ObjRef { index: idx as u64, class: "?".to_string() },
-        _ => QueryValue::Null,
-    }).collect()
+    q.select
+        .iter()
+        .map(|it| match it {
+            SelectItem::Attr(Attr::ObjectId) => QueryValue::Int(idx as i64),
+            SelectItem::Attr(Attr::RetainedHeapSize) => QueryValue::Int(ret as i64),
+            SelectItem::Star => QueryValue::ObjRef {
+                index: idx as u64,
+                class: "?".to_string(),
+            },
+            _ => QueryValue::Null,
+        })
+        .collect()
 }
 
 /// Dominator-tree children of each matched dense index, in match order, bounded
@@ -649,10 +928,14 @@ pub(crate) fn run_dominator_children(matches: &[u32], cap: usize, ctx: &LateCtx)
     let mut out = Vec::new();
     for &i in matches {
         let i = i as usize;
-        if i + 1 >= ctx.dc_off.len() { continue; }
+        if i + 1 >= ctx.dc_off.len() {
+            continue;
+        }
         let (start, end) = (ctx.dc_off[i] as usize, ctx.dc_off[i + 1] as usize);
         for &child in &ctx.dc_tgt[start..end] {
-            if out.len() >= cap { return out; }
+            if out.len() >= cap {
+                return out;
+            }
             out.push(child);
         }
     }
@@ -665,7 +948,9 @@ pub(crate) fn run_dominator_of(matches: &[u32], ctx: &LateCtx) -> Vec<u32> {
     let mut out = Vec::new();
     for &i in matches {
         if let Some(&d) = ctx.idom.get(i as usize) {
-            if d != u32::MAX { out.push(d); }
+            if d != u32::MAX {
+                out.push(d);
+            }
         }
     }
     out
@@ -683,13 +968,19 @@ pub(crate) fn run_retained_set(seeds: &[u32], cap: usize, ctx: &LateCtx) -> (Vec
             stack.push(s);
             while let Some(node) = stack.pop() {
                 let ni = node as usize;
-                if visited[ni] { continue; }
-                if out.len() >= cap { return (out, true); }
+                if visited[ni] {
+                    continue;
+                }
+                if out.len() >= cap {
+                    return (out, true);
+                }
                 visited[ni] = true;
                 out.push(node);
                 let (start, end) = (ctx.dc_off[ni] as usize, ctx.dc_off[ni + 1] as usize);
                 for &child in &ctx.dc_tgt[start..end] {
-                    if !visited[child as usize] { stack.push(child); }
+                    if !visited[child as usize] {
+                        stack.push(child);
+                    }
                 }
             }
         }
@@ -722,6 +1013,7 @@ mod tests {
             in_off: &[],
             in_tgt: &[],
             retained_edges: None,
+            string_values: &EMPTY_STRING_VALUES,
         }
     }
 
@@ -734,14 +1026,21 @@ mod tests {
     #[test]
     fn join_retained_projects_and_orders_desc() {
         let q = crate::query::parse::parse(
-            "SELECT @objectId, @retainedHeapSize FROM C ORDER BY @retainedHeapSize DESC").unwrap();
+            "SELECT @objectId, @retainedHeapSize FROM C ORDER BY @retainedHeapSize DESC",
+        )
+        .unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
         let mut carry = crate::query::carry::Carry::index_only(100);
         carry.push_index(42);
         carry.push_index(7);
         let mut st = QueryExecState::new();
         st.push_cross_phase(0, "q1".to_string(), plan, carry);
-        let retained = { let mut v = vec![0u64; 100]; v[42] = 1000; v[7] = 5000; v };
+        let retained = {
+            let mut v = vec![0u64; 100];
+            v[42] = 1000;
+            v[7] = 5000;
+            v
+        };
         let out = resume(st, &q_slice(&q), &ctx(&retained));
         assert_eq!(out.len(), 1);
         let r = &out[0];
@@ -757,10 +1056,18 @@ mod tests {
             "SELECT @objectId FROM C WHERE @retainedHeapSize > 1500 ORDER BY @retainedHeapSize DESC LIMIT 1").unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
         let mut carry = crate::query::carry::Carry::index_only(100);
-        for i in [1u32, 2, 3] { carry.push_index(i); }
+        for i in [1u32, 2, 3] {
+            carry.push_index(i);
+        }
         let mut st = QueryExecState::new();
         st.push_cross_phase(0, "q1".to_string(), plan, carry);
-        let retained = { let mut v = vec![0u64; 10]; v[1]=1000; v[2]=2000; v[3]=3000; v };
+        let retained = {
+            let mut v = vec![0u64; 10];
+            v[1] = 1000;
+            v[2] = 2000;
+            v[3] = 3000;
+            v
+        };
         let out = resume(st, &q_slice(&q), &ctx(&retained));
         let r = &out[0];
         assert_eq!(r.row_count, 1);
@@ -775,13 +1082,25 @@ mod tests {
         let mut carry = crate::query::carry::Carry::index_only(100);
         carry.push_index(5);
         let mut st = QueryExecState::new();
-        st.push_finished(1, QueryResult {
-            name: "q_hist".into(), oql: String::new(), columns: vec![],
-            rows: vec![vec![QueryValue::Int(99)]], row_count: 1, truncated: false, error: None,
-            note: None,
-        });
+        st.push_finished(
+            1,
+            QueryResult {
+                name: "q_hist".into(),
+                oql: String::new(),
+                columns: vec![],
+                rows: vec![vec![QueryValue::Int(99)]],
+                row_count: 1,
+                truncated: false,
+                error: None,
+                note: None,
+            },
+        );
         st.push_cross_phase(0, "q_ret".to_string(), plan, carry);
-        let retained = { let mut v = vec![0u64; 10]; v[5]=777; v };
+        let retained = {
+            let mut v = vec![0u64; 10];
+            v[5] = 777;
+            v
+        };
         let out = resume(st, &q_slice(&q), &ctx(&retained));
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].name, "q_ret");
@@ -793,14 +1112,21 @@ mod tests {
     #[test]
     fn no_where_passes_all() {
         // No WHERE, no ORDER BY, no LIMIT: every carried index is projected.
-        let q = crate::query::parse::parse(
-            "SELECT @objectId, @retainedHeapSize FROM C").unwrap();
+        let q = crate::query::parse::parse("SELECT @objectId, @retainedHeapSize FROM C").unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
         let mut carry = crate::query::carry::Carry::index_only(100);
-        for i in [3u32, 8, 1] { carry.push_index(i); }
+        for i in [3u32, 8, 1] {
+            carry.push_index(i);
+        }
         let mut st = QueryExecState::new();
         st.push_cross_phase(0, "q1".to_string(), plan, carry);
-        let retained = { let mut v = vec![0u64; 10]; v[3]=30; v[8]=80; v[1]=10; v };
+        let retained = {
+            let mut v = vec![0u64; 10];
+            v[3] = 30;
+            v[8] = 80;
+            v[1] = 10;
+            v
+        };
         let out = resume(st, &q_slice(&q), &ctx(&retained));
         let r = &out[0];
         assert_eq!(r.row_count, 3);
@@ -818,17 +1144,29 @@ mod tests {
     fn where_only_filters_on_retained() {
         // WHERE @retainedHeapSize > 100, no ORDER BY: keep only indices above the
         // threshold, preserving push order.
-        let q = crate::query::parse::parse(
-            "SELECT @objectId FROM C WHERE @retainedHeapSize > 100").unwrap();
+        let q = crate::query::parse::parse("SELECT @objectId FROM C WHERE @retainedHeapSize > 100")
+            .unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
         let mut carry = crate::query::carry::Carry::index_only(100);
-        for i in [1u32, 2, 3, 4] { carry.push_index(i); }
+        for i in [1u32, 2, 3, 4] {
+            carry.push_index(i);
+        }
         let mut st = QueryExecState::new();
         st.push_cross_phase(0, "q1".to_string(), plan, carry);
-        let retained = { let mut v = vec![0u64; 10]; v[1]=50; v[2]=150; v[3]=100; v[4]=200; v };
+        let retained = {
+            let mut v = vec![0u64; 10];
+            v[1] = 50;
+            v[2] = 150;
+            v[3] = 100;
+            v[4] = 200;
+            v
+        };
         let out = resume(st, &q_slice(&q), &ctx(&retained));
         let r = &out[0];
-        assert_eq!(r.row_count, 2, "only idx 2 (150) and idx 4 (200) exceed 100");
+        assert_eq!(
+            r.row_count, 2,
+            "only idx 2 (150) and idx 4 (200) exceed 100"
+        );
         assert_eq!(r.rows[0][0], QueryValue::Int(2));
         assert_eq!(r.rows[1][0], QueryValue::Int(4));
         assert!(!r.truncated);
@@ -836,8 +1174,7 @@ mod tests {
 
     #[test]
     fn empty_carry_yields_empty_result() {
-        let q = crate::query::parse::parse(
-            "SELECT @objectId, @retainedHeapSize FROM C").unwrap();
+        let q = crate::query::parse::parse("SELECT @objectId, @retainedHeapSize FROM C").unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
         let carry = crate::query::carry::Carry::index_only(100);
         let mut st = QueryExecState::new();
@@ -860,16 +1197,36 @@ mod dom_ctx_tests {
     use super::*;
     /// Dominator tree: 0->{1,2}, 1->{3}. CSR dc_off=[0,2,3,3,3], dc_tgt=[1,2,3].
     pub(super) fn tiny_ctx_parts() -> (Vec<u32>, Vec<u32>, Vec<u32>, Vec<u64>, Vec<u32>) {
-        (vec![u32::MAX,0,0,1], vec![0u32,2,3,3,3], vec![1u32,2,3],
-         vec![100u64,40,10,20], vec![10u32,10,10,20])
+        (
+            vec![u32::MAX, 0, 0, 1],
+            vec![0u32, 2, 3, 3, 3],
+            vec![1u32, 2, 3],
+            vec![100u64, 40, 10, 20],
+            vec![10u32, 10, 10, 20],
+        )
     }
     #[test]
     fn late_ctx_exposes_dominator_fields() {
         let (idom, dc_off, dc_tgt, retained, shallow) = tiny_ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained: &retained, idom: &idom, dc_off: &dc_off,
-                            dc_tgt: &dc_tgt, shallow: &shallow, id_map: &id_map,
-                            fwd_off: &[], fwd_tgt: &[], fwd_field: &[], field_names: &[], refwalk_tails: &EMPTY_REFWALK_TAILS, refwalk_truncated: false, in_off: &[], in_tgt: &[], retained_edges: None };
+        let ctx = LateCtx {
+            retained: &retained,
+            idom: &idom,
+            dc_off: &dc_off,
+            dc_tgt: &dc_tgt,
+            shallow: &shallow,
+            id_map: &id_map,
+            fwd_off: &[],
+            fwd_tgt: &[],
+            fwd_field: &[],
+            field_names: &[],
+            refwalk_tails: &EMPTY_REFWALK_TAILS,
+            refwalk_truncated: false,
+            in_off: &[],
+            in_tgt: &[],
+            retained_edges: None,
+            string_values: &EMPTY_STRING_VALUES,
+        };
         assert_eq!(ctx.dc_off.len(), 5);
         assert_eq!(ctx.id_map.to_addr(0), id_map.to_addr(0));
     }
@@ -887,23 +1244,80 @@ mod dom_run_tests {
     fn dominator_children_emits_direct_children() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false, in_off:&[], in_tgt:&[], retained_edges:None };
-        assert_eq!(run_dominator_children(&[0u32], usize::MAX, &ctx), vec![1u32, 2]);
-        assert_eq!(run_dominator_children(&[1u32], usize::MAX, &ctx), vec![3u32]);
+        let ctx = LateCtx {
+            retained: &retained,
+            idom: &idom,
+            dc_off: &dc_off,
+            dc_tgt: &dc_tgt,
+            shallow: &shallow,
+            id_map: &id_map,
+            fwd_off: &[],
+            fwd_tgt: &[],
+            fwd_field: &[],
+            field_names: &[],
+            refwalk_tails: &EMPTY_REFWALK_TAILS,
+            refwalk_truncated: false,
+            in_off: &[],
+            in_tgt: &[],
+            retained_edges: None,
+            string_values: &EMPTY_STRING_VALUES,
+        };
+        assert_eq!(
+            run_dominator_children(&[0u32], usize::MAX, &ctx),
+            vec![1u32, 2]
+        );
+        assert_eq!(
+            run_dominator_children(&[1u32], usize::MAX, &ctx),
+            vec![3u32]
+        );
         assert!(run_dominator_children(&[2u32], usize::MAX, &ctx).is_empty());
     }
     #[test]
     fn dominator_children_respects_cap() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false, in_off:&[], in_tgt:&[], retained_edges:None };
+        let ctx = LateCtx {
+            retained: &retained,
+            idom: &idom,
+            dc_off: &dc_off,
+            dc_tgt: &dc_tgt,
+            shallow: &shallow,
+            id_map: &id_map,
+            fwd_off: &[],
+            fwd_tgt: &[],
+            fwd_field: &[],
+            field_names: &[],
+            refwalk_tails: &EMPTY_REFWALK_TAILS,
+            refwalk_truncated: false,
+            in_off: &[],
+            in_tgt: &[],
+            retained_edges: None,
+            string_values: &EMPTY_STRING_VALUES,
+        };
         assert_eq!(run_dominator_children(&[0u32], 1, &ctx).len(), 1);
     }
     #[test]
     fn dominator_of_emits_idom() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false, in_off:&[], in_tgt:&[], retained_edges:None };
+        let ctx = LateCtx {
+            retained: &retained,
+            idom: &idom,
+            dc_off: &dc_off,
+            dc_tgt: &dc_tgt,
+            shallow: &shallow,
+            id_map: &id_map,
+            fwd_off: &[],
+            fwd_tgt: &[],
+            fwd_field: &[],
+            field_names: &[],
+            refwalk_tails: &EMPTY_REFWALK_TAILS,
+            refwalk_truncated: false,
+            in_off: &[],
+            in_tgt: &[],
+            retained_edges: None,
+            string_values: &EMPTY_STRING_VALUES,
+        };
         // idom = [MAX,0,0,1]: node 3's idom is 1, node 1's idom is 0, root 0 yields nothing.
         assert_eq!(run_dominator_of(&[3u32], &ctx), vec![1u32]);
         assert_eq!(run_dominator_of(&[1u32, 2u32], &ctx), vec![0u32, 0u32]);
@@ -913,7 +1327,24 @@ mod dom_run_tests {
     fn retained_set_emits_bounded_closure() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false, in_off:&[], in_tgt:&[], retained_edges:None };
+        let ctx = LateCtx {
+            retained: &retained,
+            idom: &idom,
+            dc_off: &dc_off,
+            dc_tgt: &dc_tgt,
+            shallow: &shallow,
+            id_map: &id_map,
+            fwd_off: &[],
+            fwd_tgt: &[],
+            fwd_field: &[],
+            field_names: &[],
+            refwalk_tails: &EMPTY_REFWALK_TAILS,
+            refwalk_truncated: false,
+            in_off: &[],
+            in_tgt: &[],
+            retained_edges: None,
+            string_values: &EMPTY_STRING_VALUES,
+        };
         let (mut set, truncated) = run_retained_set(&[0u32], usize::MAX, &ctx);
         set.sort_unstable();
         assert_eq!(set, vec![0u32, 1, 2, 3]);
@@ -923,7 +1354,24 @@ mod dom_run_tests {
     fn retained_set_overflow_marks_truncated() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false, in_off:&[], in_tgt:&[], retained_edges:None };
+        let ctx = LateCtx {
+            retained: &retained,
+            idom: &idom,
+            dc_off: &dc_off,
+            dc_tgt: &dc_tgt,
+            shallow: &shallow,
+            id_map: &id_map,
+            fwd_off: &[],
+            fwd_tgt: &[],
+            fwd_field: &[],
+            field_names: &[],
+            refwalk_tails: &EMPTY_REFWALK_TAILS,
+            refwalk_truncated: false,
+            in_off: &[],
+            in_tgt: &[],
+            retained_edges: None,
+            string_values: &EMPTY_STRING_VALUES,
+        };
         let (set, truncated) = run_retained_set(&[0u32], 2, &ctx);
         assert_eq!(set.len(), 2);
         assert!(truncated);
@@ -932,7 +1380,24 @@ mod dom_run_tests {
     fn retained_set_dedups_shared_roots() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false, in_off:&[], in_tgt:&[], retained_edges:None };
+        let ctx = LateCtx {
+            retained: &retained,
+            idom: &idom,
+            dc_off: &dc_off,
+            dc_tgt: &dc_tgt,
+            shallow: &shallow,
+            id_map: &id_map,
+            fwd_off: &[],
+            fwd_tgt: &[],
+            fwd_field: &[],
+            field_names: &[],
+            refwalk_tails: &EMPTY_REFWALK_TAILS,
+            refwalk_truncated: false,
+            in_off: &[],
+            in_tgt: &[],
+            retained_edges: None,
+            string_values: &EMPTY_STRING_VALUES,
+        };
         let (mut set, _t) = run_retained_set(&[1u32, 0u32], usize::MAX, &ctx);
         set.sort_unstable();
         assert_eq!(set, vec![0u32, 1, 2, 3]);
@@ -942,7 +1407,24 @@ mod dom_run_tests {
     fn resume_dominator_children_builds_rows() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false, in_off:&[], in_tgt:&[], retained_edges:None };
+        let ctx = LateCtx {
+            retained: &retained,
+            idom: &idom,
+            dc_off: &dc_off,
+            dc_tgt: &dc_tgt,
+            shallow: &shallow,
+            id_map: &id_map,
+            fwd_off: &[],
+            fwd_tgt: &[],
+            fwd_field: &[],
+            field_names: &[],
+            refwalk_tails: &EMPTY_REFWALK_TAILS,
+            refwalk_truncated: false,
+            in_off: &[],
+            in_tgt: &[],
+            retained_edges: None,
+            string_values: &EMPTY_STRING_VALUES,
+        };
         let q = crate::query::parse::parse("SELECT dominators(s) FROM C s").unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
         let mut carry = crate::query::carry::Carry::index_only(100);
@@ -961,7 +1443,24 @@ mod dom_run_tests {
     fn resume_dominator_of_builds_single_row() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false, in_off:&[], in_tgt:&[], retained_edges:None };
+        let ctx = LateCtx {
+            retained: &retained,
+            idom: &idom,
+            dc_off: &dc_off,
+            dc_tgt: &dc_tgt,
+            shallow: &shallow,
+            id_map: &id_map,
+            fwd_off: &[],
+            fwd_tgt: &[],
+            fwd_field: &[],
+            field_names: &[],
+            refwalk_tails: &EMPTY_REFWALK_TAILS,
+            refwalk_truncated: false,
+            in_off: &[],
+            in_tgt: &[],
+            retained_edges: None,
+            string_values: &EMPTY_STRING_VALUES,
+        };
         let q = crate::query::parse::parse("SELECT dominatorof(s) FROM C s").unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
         let mut carry = crate::query::carry::Carry::index_only(100);
@@ -977,7 +1476,24 @@ mod dom_run_tests {
     fn resume_retained_set_builds_closure_rows() {
         let (idom, dc_off, dc_tgt, retained, shallow) = ctx_parts();
         let id_map = IdMap::identity(4);
-        let ctx = LateCtx { retained:&retained, idom:&idom, dc_off:&dc_off, dc_tgt:&dc_tgt, shallow:&shallow, id_map:&id_map, fwd_off:&[], fwd_tgt:&[], fwd_field:&[], field_names:&[], refwalk_tails:&EMPTY_REFWALK_TAILS, refwalk_truncated:false, in_off:&[], in_tgt:&[], retained_edges:None };
+        let ctx = LateCtx {
+            retained: &retained,
+            idom: &idom,
+            dc_off: &dc_off,
+            dc_tgt: &dc_tgt,
+            shallow: &shallow,
+            id_map: &id_map,
+            fwd_off: &[],
+            fwd_tgt: &[],
+            fwd_field: &[],
+            field_names: &[],
+            refwalk_tails: &EMPTY_REFWALK_TAILS,
+            refwalk_truncated: false,
+            in_off: &[],
+            in_tgt: &[],
+            retained_edges: None,
+            string_values: &EMPTY_STRING_VALUES,
+        };
         let q = crate::query::parse::parse("SELECT s AS RETAINED SET FROM C s").unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
         let mut carry = crate::query::carry::Carry::index_only(100);
@@ -1004,12 +1520,22 @@ mod refwalk_tests {
         id_map: &'a IdMap<'a>,
     ) -> LateCtx<'a> {
         LateCtx {
-            retained: &[], idom: &[], dc_off: &[], dc_tgt: &[], shallow: &[],
+            retained: &[],
+            idom: &[],
+            dc_off: &[],
+            dc_tgt: &[],
+            shallow: &[],
             id_map,
-            fwd_off, fwd_tgt, fwd_field, field_names,
+            fwd_off,
+            fwd_tgt,
+            fwd_field,
+            field_names,
             refwalk_tails: &EMPTY_REFWALK_TAILS,
             refwalk_truncated: false,
-            in_off: &[], in_tgt: &[], retained_edges: None,
+            in_off: &[],
+            in_tgt: &[],
+            retained_edges: None,
+            string_values: &EMPTY_STRING_VALUES,
         }
     }
 
@@ -1026,12 +1552,22 @@ mod refwalk_tests {
         tails: &'a std::collections::HashMap<u32, QueryValue>,
     ) -> LateCtx<'a> {
         LateCtx {
-            retained: &[], idom: &[], dc_off: &[], dc_tgt: &[], shallow: &[],
+            retained: &[],
+            idom: &[],
+            dc_off: &[],
+            dc_tgt: &[],
+            shallow: &[],
             id_map,
-            fwd_off, fwd_tgt, fwd_field, field_names,
+            fwd_off,
+            fwd_tgt,
+            fwd_field,
+            field_names,
             refwalk_tails: tails,
             refwalk_truncated: false,
-            in_off: &[], in_tgt: &[], retained_edges: None,
+            in_off: &[],
+            in_tgt: &[],
+            retained_edges: None,
+            string_values: &EMPTY_STRING_VALUES,
         }
     }
 
@@ -1207,7 +1743,10 @@ mod refwalk_tests {
         let r = &out[0];
         assert!(r.error.is_none());
         assert_eq!(r.rows[0][0], QueryValue::Null);
-        assert!(r.note.is_some(), "object-ref/absent tail should attach a note");
+        assert!(
+            r.note.is_some(),
+            "object-ref/absent tail should attach a note"
+        );
     }
 
     #[test]
@@ -1229,8 +1768,10 @@ mod refwalk_tests {
             &id_map,
             &tails,
         );
-        let (st, q) =
-            refwalk_state("SELECT x.parent.hash FROM C x WHERE x.parent.hash > 100", &[0, 1]);
+        let (st, q) = refwalk_state(
+            "SELECT x.parent.hash FROM C x WHERE x.parent.hash > 100",
+            &[0, 1],
+        );
         let out = resume(st, &[q.clone(), q], &ctx);
         let r = &out[0];
         assert!(r.error.is_none(), "unexpected error: {:?}", r.error);
@@ -1283,7 +1824,10 @@ mod refwalk_tests {
         let out = resume(st, &[q.clone(), q], &ctx);
         let r = &out[0];
         assert!(r.error.is_none(), "unexpected error: {:?}", r.error);
-        assert_eq!(r.row_count, 1, "only seed 0 (name 'foobar') matches LIKE 'foo.*'");
+        assert_eq!(
+            r.row_count, 1,
+            "only seed 0 (name 'foobar') matches LIKE 'foo.*'"
+        );
         assert_eq!(r.rows[0][0], QueryValue::Str("foobar".to_string()));
     }
 
@@ -1311,7 +1855,10 @@ mod refwalk_tests {
         let out = resume(st, &[q.clone(), q], &ctx);
         let r = &out[0];
         assert!(r.error.is_none(), "unexpected error: {:?}", r.error);
-        assert_eq!(r.row_count, 1, "only seed 1 (name 'bar') passes NOT LIKE 'foo.*'");
+        assert_eq!(
+            r.row_count, 1,
+            "only seed 1 (name 'bar') passes NOT LIKE 'foo.*'"
+        );
         assert_eq!(r.rows[0][0], QueryValue::Str("bar".to_string()));
     }
 }
@@ -1331,14 +1878,22 @@ mod edge_tests {
         retained_edges: Option<&'a RetainedEdges>,
     ) -> LateCtx<'a> {
         LateCtx {
-            retained: &[], idom: &[], dc_off: &[], dc_tgt: &[], shallow: &[],
+            retained: &[],
+            idom: &[],
+            dc_off: &[],
+            dc_tgt: &[],
+            shallow: &[],
             id_map: &EMPTY_ID_MAP,
-            fwd_off: &[], fwd_tgt: &[], fwd_field: &[], field_names: &[],
+            fwd_off: &[],
+            fwd_tgt: &[],
+            fwd_field: &[],
+            field_names: &[],
             refwalk_tails: &EMPTY_REFWALK_TAILS,
             refwalk_truncated: false,
             in_off,
             in_tgt,
             retained_edges,
+            string_values: &EMPTY_STRING_VALUES,
         }
     }
 
@@ -1433,7 +1988,10 @@ mod edge_tests {
         let mut sorted = reached.clone();
         sorted.sort_unstable();
         assert_eq!(sorted, vec![0, 1, 2, 3]);
-        assert!(!reached.contains(&50), "must not reach a far node at depth 3");
+        assert!(
+            !reached.contains(&50),
+            "must not reach a far node at depth 3"
+        );
     }
 
     #[test]
@@ -1464,7 +2022,10 @@ mod edge_tests {
         assert!(!capped);
         assert!(reached.contains(&2), "must reach the target node 2");
         // Early exit: expansion stops once 2 is reached, so 3 is not visited.
-        assert!(!reached.contains(&3), "must not expand past the target: {reached:?}");
+        assert!(
+            !reached.contains(&3),
+            "must not expand past the target: {reached:?}"
+        );
     }
 
     #[test]
@@ -1535,7 +2096,9 @@ mod edge_tests {
         let in_tgt = [2u32, 3];
         let ctx = edge_ctx(&in_off, &in_tgt, None);
         let plan = crate::query::plan::QueryPlan {
-            late_ops: vec![StageOp::EdgeLookup { dir: EdgeDir::Inbound }],
+            late_ops: vec![StageOp::EdgeLookup {
+                dir: EdgeDir::Inbound,
+            }],
             ..Default::default()
         };
         let q = crate::query::parse::parse("SELECT * FROM C s").unwrap();
@@ -1549,5 +2112,172 @@ mod edge_tests {
         let r = &out[0];
         assert!(r.error.is_none(), "unexpected error: {:?}", r.error);
         assert_eq!(r.row_count, 2, "node 5's referrers are {{2,3}}");
+    }
+}
+
+#[cfg(test)]
+mod tostring_tests {
+    use super::*;
+    use crate::query::execute::QueryExecState;
+
+    static EMPTY_ID_MAP: IdMap<'static> = IdMap { addr_of: &[] };
+
+    /// Build a LateCtx with a caller-supplied string-values map.
+    fn string_ctx<'a>(sv: &'a std::collections::HashMap<u32, String>) -> LateCtx<'a> {
+        LateCtx {
+            retained: &[],
+            idom: &[],
+            dc_off: &[],
+            dc_tgt: &[],
+            shallow: &[],
+            id_map: &EMPTY_ID_MAP,
+            fwd_off: &[],
+            fwd_tgt: &[],
+            fwd_field: &[],
+            field_names: &[],
+            refwalk_tails: &EMPTY_REFWALK_TAILS,
+            refwalk_truncated: false,
+            in_off: &[],
+            in_tgt: &[],
+            retained_edges: None,
+            string_values: sv,
+        }
+    }
+
+    /// Helper: build a QueryExecState with one `ResolveStringValues` pending entry
+    /// carrying the given dense indices.
+    fn string_state(oql: &str, seeds: &[u32]) -> (QueryExecState, crate::query::ast::Query) {
+        let q = crate::query::parse::parse(oql).unwrap();
+        let plan = crate::query::plan::plan_query(&q).unwrap();
+        assert!(
+            plan.needs.string_values,
+            "query must arm string_values for this test: {oql}"
+        );
+        let mut carry = crate::query::carry::Carry::index_only(1000);
+        for &s in seeds {
+            carry.push_index(s);
+        }
+        let mut st = QueryExecState::new();
+        st.push_cross_phase(0, "q_sv".to_string(), plan, carry);
+        (st, q)
+    }
+
+    #[test]
+    fn string_values_rows_projects_decoded_text() {
+        // dense 0 → "hello", dense 1 → "world". SELECT toString(s).
+        let mut sv = std::collections::HashMap::new();
+        sv.insert(0u32, "hello".to_string());
+        sv.insert(1u32, "world".to_string());
+        let ctx = string_ctx(&sv);
+
+        let (st, q) = string_state("SELECT toString(s) FROM java.lang.String s", &[0, 1]);
+        let out = resume(st, &[q.clone(), q], &ctx);
+        assert_eq!(out.len(), 1);
+        let r = &out[0];
+        assert!(r.error.is_none(), "unexpected error: {:?}", r.error);
+        assert_eq!(r.row_count, 2);
+        assert_eq!(
+            r.rows[0][0],
+            crate::query::model::QueryValue::Str("hello".to_string())
+        );
+        assert_eq!(
+            r.rows[1][0],
+            crate::query::model::QueryValue::Str("world".to_string())
+        );
+    }
+
+    #[test]
+    fn string_values_rows_uncaptured_is_null() {
+        // dense 0 is NOT in the string-values map (cap overflow or absent).
+        let sv: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
+        let ctx = string_ctx(&sv);
+
+        let (st, q) = string_state("SELECT toString(s) FROM java.lang.String s", &[0]);
+        let out = resume(st, &[q.clone(), q], &ctx);
+        let r = &out[0];
+        assert!(r.error.is_none());
+        // An uncaptured String still produces a row with a Null cell (not an error).
+        assert_eq!(r.row_count, 1, "uncaptured String must still produce a row");
+        assert_eq!(r.rows[0][0], crate::query::model::QueryValue::Null);
+    }
+
+    #[test]
+    fn string_values_rows_empty_carry_is_empty() {
+        let sv: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
+        let ctx = string_ctx(&sv);
+
+        let (st, q) = string_state("SELECT toString(s) FROM java.lang.String s", &[]);
+        let out = resume(st, &[q.clone(), q], &ctx);
+        let r = &out[0];
+        assert!(r.error.is_none());
+        assert_eq!(r.row_count, 0);
+    }
+
+    #[test]
+    fn string_values_where_like_filters() {
+        // dense 0 → "java.lang.String", dense 1 → "hello". Filter: LIKE "java\..*".
+        // Only dense 0 should survive.
+        let mut sv = std::collections::HashMap::new();
+        sv.insert(0u32, "java.lang.String".to_string());
+        sv.insert(1u32, "hello".to_string());
+        let ctx = string_ctx(&sv);
+
+        let (st, q) = string_state(
+            r#"SELECT toString(s) FROM java.lang.String s WHERE toString(s) LIKE "java\..*""#,
+            &[0, 1],
+        );
+        let out = resume(st, &[q.clone(), q], &ctx);
+        let r = &out[0];
+        assert!(r.error.is_none(), "unexpected error: {:?}", r.error);
+        assert_eq!(
+            r.row_count, 1,
+            "only the java.lang.String value should pass"
+        );
+        assert_eq!(
+            r.rows[0][0],
+            crate::query::model::QueryValue::Str("java.lang.String".to_string())
+        );
+    }
+
+    #[test]
+    fn string_values_where_not_like_inverts() {
+        // dense 0 → "java.lang.Object", dense 1 → "hello".
+        // NOT LIKE "java\..*" passes only "hello".
+        let mut sv = std::collections::HashMap::new();
+        sv.insert(0u32, "java.lang.Object".to_string());
+        sv.insert(1u32, "hello".to_string());
+        let ctx = string_ctx(&sv);
+
+        let (st, q) = string_state(
+            r#"SELECT toString(s) FROM java.lang.String s WHERE toString(s) NOT LIKE "java\..*""#,
+            &[0, 1],
+        );
+        let out = resume(st, &[q.clone(), q], &ctx);
+        let r = &out[0];
+        assert!(r.error.is_none(), "unexpected error: {:?}", r.error);
+        assert_eq!(r.row_count, 1, "only 'hello' passes NOT LIKE 'java\\..*'");
+        assert_eq!(
+            r.rows[0][0],
+            crate::query::model::QueryValue::Str("hello".to_string())
+        );
+    }
+
+    #[test]
+    fn string_values_limit_is_applied() {
+        let mut sv = std::collections::HashMap::new();
+        for i in 0u32..10 {
+            sv.insert(i, format!("s{i}"));
+        }
+        let ctx = string_ctx(&sv);
+
+        let (st, q) = string_state(
+            "SELECT toString(s) FROM java.lang.String s LIMIT 3",
+            &(0u32..10).collect::<Vec<_>>(),
+        );
+        let out = resume(st, &[q.clone(), q], &ctx);
+        let r = &out[0];
+        assert!(r.error.is_none());
+        assert_eq!(r.row_count, 3, "LIMIT 3 must cap at 3 rows");
+        assert!(r.truncated, "exceeding LIMIT must mark truncated");
     }
 }

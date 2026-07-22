@@ -29,6 +29,9 @@ pub struct QueryNeeds {
     /// Arms the forward-reference graph (fwd CSR + per-edge field ids) in the
     /// P2 late window, for N-hop `RefPath` resolution.
     pub ref_walk: bool,
+    /// Arms the string-values side table in the P2 late window, for
+    /// `toString(s)` SELECT and WHERE on `java.lang.String` FROM queries.
+    pub string_values: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +87,10 @@ pub enum StageOp {
     /// Bounded forward BFS from each carried index toward a target class, at most
     /// `depth_cap` levels, frontier-capped at `PATH_FRONTIER_CAP`. Backs `path(a,b)`.
     BoundedPath { depth_cap: usize },
+    /// Resolve `toString(s)` for each carried dense index by looking up the
+    /// pre-built string-values map (dense_idx → String). Applied in the P2 window
+    /// after the backing-array decode pass.
+    ResolveStringValues,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -304,6 +311,10 @@ fn plan_single(q: &Query) -> Result<QueryPlan, QueryError> {
             SelectItem::Path { .. } => {
                 return Err(QueryError("path(a, b) is not yet supported".into()));
             }
+            // toString(s) needs the string-values side table (built post-scan).
+            SelectItem::ToString(_) => {
+                needs.string_values = true;
+            }
         }
     }
 
@@ -467,6 +478,36 @@ fn plan_single(q: &Query) -> Result<QueryPlan, QueryError> {
             push_hops(select_hops, RefRole::ProjectionOnly);
         }
         // RefWalk finalizes at P2; a later phase (P3 retained/dominators) wins.
+        if finalize_at == Phase::P1 {
+            finalize_at = Phase::P2;
+        }
+    }
+
+    // `toString(s)`: decode each java.lang.String instance to its text value.
+    // Only valid when the FROM class is java.lang.String (exact or INSTANCEOF).
+    // Emits one ResolveStringValues op that runs at P2 after the backing-array
+    // decode pass. Non-String targets get an ACTIONABLE error at plan time.
+    if needs.string_values {
+        let class_name = q.from.class_name();
+        let is_string_from = class_name == "java.lang.String"
+            || class_name == "java/lang/String"
+            || class_name.ends_with(".String"); // allow simple short form
+                                                // Subquery FROM is also rejected: toString(s) over a non-direct-String
+                                                // subquery source is unsupported in this version.
+        let is_subquery = q.from.as_subquery().is_some();
+        if is_subquery || !is_string_from {
+            let source_desc = if is_subquery {
+                "a subquery result".to_string()
+            } else {
+                format!("'{class_name}'")
+            };
+            return Err(QueryError(format!(
+                "toString(s) is only valid for FROM java.lang.String; \
+                 the FROM class is {source_desc}. \
+                 Use: SELECT toString(s) FROM java.lang.String s"
+            )));
+        }
+        late_ops.push(StageOp::ResolveStringValues);
         if finalize_at == Phase::P1 {
             finalize_at = Phase::P2;
         }
@@ -739,6 +780,8 @@ fn referenced_alias_heads(q: &Query) -> std::collections::HashSet<String> {
             SelectItem::Star => {}
             // Correlation detection over path(a, b) operands lands in a later task.
             SelectItem::Path { .. } => {}
+            // toString(s) has no external alias head to detect correlation.
+            SelectItem::ToString(_) => {}
         }
     }
     if let Some(pred) = &q.where_ {
@@ -817,6 +860,10 @@ fn note_attr_need(item: &SelectItem, needs: &mut QueryNeeds) -> Result<(), Query
         SelectItem::Path { .. } => Err(QueryError(
             "path(a, b) may not be used as an aggregate argument".into(),
         )),
+        // toString(s) cannot be an aggregate argument.
+        SelectItem::ToString(_) => Err(QueryError(
+            "toString(s) may not be used as an aggregate argument".into(),
+        )),
     }
 }
 
@@ -827,6 +874,8 @@ fn note_attr_need_attr(a: &Attr, needs: &mut QueryNeeds) {
         Attr::Field(_) => {
             needs.instance_scalar = true;
         }
+        // toString(s) arms the string-values side table, built post-scan.
+        Attr::ToString(_) => needs.string_values = true,
         _ => {}
     }
 }
@@ -858,6 +907,8 @@ fn collect_pred_needs(pred: &Predicate, needs: &mut QueryNeeds) -> Result<(), Qu
                 }
                 Attr::DisplayName => needs.instance_string = true,
                 Attr::ClassOf => needs.runtime_type = true,
+                // toString(s) in WHERE arms the string-values side table.
+                Attr::ToString(_) => needs.string_values = true,
                 _ => {}
             }
             Ok(())
@@ -1815,6 +1866,81 @@ mod tests {
             !list.iter().any(|s| s.starts_with("scan_limit=")),
             "unoptimized plan must NOT contain 'scan_limit=', got: {:?}",
             list
+        );
+    }
+
+    // --- toString(s) planning (MAT gap #3) ---
+
+    #[test]
+    fn tostring_select_sets_string_values_need_and_p2_finalize() {
+        let plan =
+            plan_query(&parse("SELECT toString(s) FROM java.lang.String s").unwrap()).unwrap();
+        assert!(
+            plan.needs.string_values,
+            "toString SELECT must arm string_values need"
+        );
+        assert_eq!(
+            plan.finalize_at,
+            Phase::P2,
+            "toString SELECT must finalize at P2"
+        );
+        assert!(
+            plan.late_ops
+                .iter()
+                .any(|op| matches!(op, StageOp::ResolveStringValues)),
+            "toString SELECT must emit a ResolveStringValues op, got {:?}",
+            plan.late_ops
+        );
+    }
+
+    #[test]
+    fn tostring_where_sets_string_values_need() {
+        let plan = plan_query(
+            &parse(r#"SELECT @objectId FROM java.lang.String s WHERE toString(s) LIKE "java\..*""#)
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            plan.needs.string_values,
+            "toString WHERE must arm string_values need"
+        );
+        assert_eq!(plan.finalize_at, Phase::P2);
+    }
+
+    #[test]
+    fn tostring_on_non_string_from_is_plan_error() {
+        let err =
+            plan_query(&parse("SELECT toString(s) FROM java.lang.Object s").unwrap()).unwrap_err();
+        assert!(
+            err.0.contains("java.lang.String") || err.0.contains("toString"),
+            "error must name java.lang.String or toString, got: {}",
+            err.0
+        );
+        assert!(
+            err.0.contains("java.lang.Object") || err.0.contains("FROM"),
+            "error must name the offending FROM class, got: {}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn tostring_on_string_class_alternate_forms_accepted() {
+        // The dotted class name must be accepted at plan time.
+        assert!(
+            plan_query(&parse("SELECT toString(s) FROM java.lang.String s").unwrap()).is_ok(),
+            "dotted class name must succeed"
+        );
+    }
+
+    #[test]
+    fn tostring_non_string_from_error_names_fix() {
+        // The error message must include the correct-usage hint.
+        let err =
+            plan_query(&parse("SELECT toString(s) FROM java.util.HashMap s").unwrap()).unwrap_err();
+        assert!(
+            err.0.contains("java.lang.String"),
+            "error must include the correct class name, got: {}",
+            err.0
         );
     }
 }

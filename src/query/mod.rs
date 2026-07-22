@@ -4,19 +4,20 @@
 //! rejected by the planner with a clear message (see the design spec).
 
 pub mod ast;
-pub mod parse;
-pub mod plan;
-pub mod model;
+pub mod carry;
 pub mod execute;
 pub mod histogram;
-pub mod run;
-pub mod repl;
-pub mod carry;
+pub mod model;
+pub mod optimize;
+pub mod parse;
+pub mod plan;
 pub mod refwalk;
+pub mod repl;
+pub mod retained_edges;
+pub mod run;
 pub mod runflags;
 pub mod stage_runner;
-pub mod optimize;
-pub mod retained_edges;
+pub mod stringvals;
 
 use std::fmt;
 

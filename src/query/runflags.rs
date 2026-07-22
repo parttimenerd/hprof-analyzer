@@ -174,6 +174,8 @@ fn scan_select_item(item: &SelectItem, used: &mut BranchUse) {
         // A bounded forward subgraph walk needs the forward-reference CSR.
         SelectItem::Path { .. } => used.forward = true,
         SelectItem::Star => {}
+        // toString(s) uses the string-values side table, not edge CSRs.
+        SelectItem::ToString(_) => {}
     }
 }
 
@@ -303,10 +305,12 @@ mod tests {
 
     #[test]
     fn union_branch_edge_usage_counts() {
-        let f = plan(
-            "SELECT * FROM java.lang.String UNION SELECT @inbounds FROM java.lang.Integer",
+        let f =
+            plan("SELECT * FROM java.lang.String UNION SELECT @inbounds FROM java.lang.Integer");
+        assert!(
+            f.retain_inbound,
+            "UNION branch traversal must detect @inbounds"
         );
-        assert!(f.retain_inbound, "UNION branch traversal must detect @inbounds");
         let rows = f.retain_rows.expect("edge branch must retain rows");
         // The non-edge lead branch (String, bit 0) must NOT be retained.
         assert!(!rows.get(0), "non-edge lead branch must not retain rows");
@@ -347,7 +351,10 @@ mod tests {
     fn retention_note_describes_what_is_kept() {
         let f = plan("SELECT @inbounds FROM java.lang.String");
         let note = f.retention_note().expect("edge query discloses retention");
-        assert!(note.contains("inbound"), "note should mention inbound: {note}");
+        assert!(
+            note.contains("inbound"),
+            "note should mention inbound: {note}"
+        );
 
         let none = plan("SELECT * FROM java.lang.String");
         assert!(
@@ -366,14 +373,22 @@ mod tests {
     fn retention_note_mentions_forward_for_path() {
         let f = plan("SELECT path(s, java.lang.Integer) FROM java.lang.String s");
         let note = f.retention_note().expect("path query discloses retention");
-        assert!(note.contains("forward"), "note should mention forward: {note}");
+        assert!(
+            note.contains("forward"),
+            "note should mention forward: {note}"
+        );
     }
 
     #[test]
     fn retention_note_mentions_outbound() {
         let f = plan("SELECT @outbounds FROM java.lang.String");
-        let note = f.retention_note().expect("outbound query discloses retention");
-        assert!(note.contains("outbound"), "note should mention outbound: {note}");
+        let note = f
+            .retention_note()
+            .expect("outbound query discloses retention");
+        assert!(
+            note.contains("outbound"),
+            "note should mention outbound: {note}"
+        );
     }
 
     #[test]
@@ -390,8 +405,14 @@ mod tests {
         let q2 = parse("SELECT @outbounds FROM java.lang.Integer").unwrap();
         let f = plan_run(&[q1, q2], &fake_class_index(), 8).unwrap();
         let note = f.retention_note().expect("edge queries disclose retention");
-        assert!(note.contains("inbound"), "note should mention inbound: {note}");
-        assert!(note.contains("outbound"), "note should mention outbound: {note}");
+        assert!(
+            note.contains("inbound"),
+            "note should mention inbound: {note}"
+        );
+        assert!(
+            note.contains("outbound"),
+            "note should mention outbound: {note}"
+        );
     }
 
     #[test]

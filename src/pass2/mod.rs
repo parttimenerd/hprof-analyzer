@@ -18,7 +18,7 @@ use std::{
 use crate::{
     pass1::Pass1,
     reader::HprofReader,
-    types::{HprofType, heap, tags},
+    types::{heap, tags, HprofType},
 };
 
 mod boxed;
@@ -32,10 +32,10 @@ mod strings;
 
 pub(crate) use boxed::compute_boxed_holders;
 pub(crate) use dup_prim_arrays::{
-    DupPrimArrays, compute_dup_array_holders, compute_dup_prim_arrays,
+    compute_dup_array_holders, compute_dup_prim_arrays, DupPrimArrays,
 };
 pub(crate) use fielddecode::ATTRIBUTION_TOP_N;
-pub(crate) use fielddecode::{CollDesc, CollKind, builtin_coll_descs};
+pub(crate) use fielddecode::{builtin_coll_descs, CollDesc, CollKind};
 pub(crate) use meta::*;
 pub use model::*;
 pub(crate) use scan::*;
@@ -70,6 +70,9 @@ impl Pass2 {
         Option<crate::cvec::CompressedU32>,
         crate::query::execute::QueryExecState,
         Option<crate::query::refwalk::RefWalkCsr>,
+        // Decoded toString(s) values: dense_idx → String.
+        // Empty when no toString(s) query ran.
+        std::collections::HashMap<u32, String>,
     )> {
         let n = p1.id_map.len();
         let id_size = p1.id_size;
@@ -507,6 +510,16 @@ impl Pass2 {
                 truncated,
             }
         });
+
+        // Decode the query-gated toString(s) capture into dense_idx → String.
+        // One `scan_prim_arrays` pass over the dump, then dropped. Empty (no I/O)
+        // when no toString(s) query ran — non-toString runs are byte/RSS-identical.
+        let string_values: std::collections::HashMap<u32, String> =
+            if let Some(capture) = scan_driver.take_string_capture() {
+                capture.decode_all(path, id_size)?
+            } else {
+                std::collections::HashMap::new()
+            };
 
         let mut query_state = scan_driver.finish_state();
         for outcome in scan_outcomes {
@@ -1093,6 +1106,7 @@ impl Pass2 {
             alloc_serial_c,
             query_state,
             refwalk_csr,
+            string_values,
         ))
     }
 
@@ -1731,7 +1745,7 @@ mod tests {
             return;
         }
         let p1 = Pass1::run(DUMP).unwrap();
-        let (g, inbound, _sc, _ci, _as, _q, _rw) = Pass2::build(
+        let (g, inbound, _sc, _ci, _as, _q, _rw, _sv) = Pass2::build(
             DUMP,
             p1,
             crate::cvec::Codec::None,
@@ -1771,7 +1785,7 @@ mod tests {
             return;
         }
         let p1 = Pass1::run(DUMP).unwrap();
-        let (g, _inbound, _sc, _ci, _as, _q, _rw) = Pass2::build(
+        let (g, _inbound, _sc, _ci, _as, _q, _rw, _sv) = Pass2::build(
             DUMP,
             p1,
             crate::cvec::Codec::None,

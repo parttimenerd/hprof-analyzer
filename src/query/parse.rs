@@ -176,10 +176,11 @@ where
             .map(|_| Attr::ClassOf))
         .or(dom_fn("dominators").map(Attr::Dominators))
         .or(dom_fn("dominatorof").map(Attr::DominatorOf))
+        .or(dom_fn("toString").map(Attr::ToString))
         .or(any_ident().map(Attr::Field))
         .labelled("attribute");
 
-    // select item: AGG(item) | path(a, b) | * | attr
+    // select item: AGG(item) | path(a, b) | toString(s) | * | attr
     let select_item = recursive(|item| {
         let agg = select! {
             Token::Ident(s) if agg_func(&s).is_some() => agg_func(&s).unwrap(),
@@ -213,9 +214,16 @@ where
 
         let star = just(Token::Star).map(|_| SelectItem::Star);
 
+        // `toString(s)` as a SELECT item: `toString(alias)` → `SelectItem::ToString(alias)`.
+        // Placed before the bare-attr fallback so `toString(` is consumed as ToString
+        // rather than as a field named `toString`. The `dom_fn` helper enforces the
+        // single-arg requirement with an actionable error.
+        let tostring_item = dom_fn("toString").map(SelectItem::ToString);
+
         // `path_item` before the bare-attr fallback so `path(` is consumed as Path
         // rather than swallowed as a field named `path`.
         agg.or(path_item)
+            .or(tostring_item)
             .or(star)
             .or(attr.clone().map(SelectItem::Attr))
     });
@@ -505,6 +513,8 @@ fn normalize_select_item(item: &mut SelectItem, alias: Option<&str>) {
         // `path(a, b)` operands are already resolved to Alias/Class at parse time;
         // they carry no dotted RefPath to normalize.
         SelectItem::Path { .. } => {}
+        // `toString(s)` carries a single alias token; no dotted path to normalize.
+        SelectItem::ToString(_) => {}
     }
 }
 

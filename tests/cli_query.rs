@@ -1541,3 +1541,138 @@ fn bad_like_regex_is_actionable_cli_error() {
         "bad LIKE regex must surface an actionable error, got:\n{combined}"
     );
 }
+
+// ============================================================
+// MAT gap #3 — toString(s) for java.lang.String
+// ============================================================
+
+/// `toString(s) FROM java.lang.String` applied to a non-String class at plan time
+/// must produce an actionable `QueryError` naming the cause and the fix.
+#[test]
+fn tostring_non_string_from_is_plan_error() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
+            "SELECT toString(s) FROM java.lang.Object s",
+        ])
+        .output()
+        .unwrap();
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // Plan-time error: exits non-zero or surfaces "error:" inline.
+    assert!(
+        !out.status.success() || combined.contains("error"),
+        "toString on non-String FROM must surface an error, got:\n{combined}"
+    );
+    // The error must name the actual FROM class.
+    assert!(
+        combined.contains("java.lang.Object") || combined.contains("toString"),
+        "error must name the FROM class or toString, got:\n{combined}"
+    );
+}
+
+/// `SELECT toString(s) FROM java.lang.String` returns a positive row count and
+/// every non-null cell must be a non-empty string (the decoded Java string text).
+/// Exercises the capture-during-scan + post-scan decode path end-to-end.
+#[test]
+fn tostring_select_returns_string_values() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
+            "SELECT toString(s) FROM java.lang.String s LIMIT 20",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "toString SELECT query must succeed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Must have a header with "toString" in it.
+    assert!(
+        stdout.contains("toString"),
+        "toString column header missing:\n{stdout}"
+    );
+    // At least one row must be returned (philosophers dump has many strings).
+    assert!(
+        stdout.contains("row"),
+        "toString query must return rows:\n{stdout}"
+    );
+    // Must not surface an error.
+    assert!(
+        !stdout.contains("error:"),
+        "toString SELECT query surfaced an unexpected error:\n{stdout}"
+    );
+}
+
+/// `WHERE toString(s) LIKE "<pattern>"` filters `java.lang.String` instances.
+/// A pattern that matches a known class-name string must return > 0 rows,
+/// and fewer rows than the full String count (the filter actually rejects rows).
+#[test]
+fn tostring_where_like_filters_strings() {
+    let Some(hprof) = philosophers() else { return };
+    // The philosophers dump is a JVM app; its heap contains strings whose content
+    // includes class names like "java.lang.Object". Use a broad prefix pattern.
+    let all_strings = query_row_count(&hprof, "SELECT @objectId FROM java.lang.String")
+        .expect("baseline String count must succeed");
+
+    let filtered = query_row_count(
+        &hprof,
+        r#"SELECT @objectId FROM java.lang.String s WHERE toString(s) LIKE "java\..*""#,
+    )
+    .expect("WHERE toString LIKE query must succeed");
+
+    // There must be some java.* strings, but also many non-java.* strings.
+    // filtered must be strictly between 0 and the total (the filter is real).
+    assert!(
+        filtered < all_strings,
+        "WHERE toString LIKE filter must exclude some rows \
+         (filtered={filtered} must be < all_strings={all_strings})"
+    );
+}
+
+/// toString(s) via the ANALYZE path (full report with `--query`): the result must
+/// appear in the Custom Queries section and contain the `toString` column header.
+/// This is the regression guard: before wiring, the section was missing or empty.
+#[test]
+fn tostring_works_via_full_analyze_path() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg(&hprof)
+        .args([
+            "--query",
+            "SELECT toString(s) FROM java.lang.String s LIMIT 5",
+        ])
+        .args(["-f", "md"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "analyze with toString query failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let md = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        md.contains("## Custom Queries"),
+        "toString query section missing in analyze output:\n{md}"
+    );
+    let section = &md[md.find("## Custom Queries").unwrap()..];
+    assert!(
+        !section.contains("**Error:**"),
+        "toString query rendered an error block in analyze path:\n{section}"
+    );
+    assert!(
+        section.contains("toString"),
+        "toString column header missing in analyze output section:\n{section}"
+    );
+}

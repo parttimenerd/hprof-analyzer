@@ -5,10 +5,10 @@
 
 use std::collections::HashMap;
 
-use crate::query::plan::{PredCost, QueryPlan, StageOp};
-use crate::query::ast::{Query, SelectItem, Attr};
-use crate::query::plan::DeferredProj;
+use crate::query::ast::{Attr, Query, SelectItem};
 use crate::query::carry::CarryLayout;
+use crate::query::plan::DeferredProj;
+use crate::query::plan::{PredCost, QueryPlan, StageOp};
 
 /// Per-class instance counts sampled from the heap, used by the optimizer to
 /// estimate predicate selectivity. Built once and shared read-only across the
@@ -81,7 +81,8 @@ pub fn defer_projections(plan: &mut QueryPlan, query: &Query) {
     plan.deferred_projections.clear();
     for (i, item) in query.select.iter().enumerate() {
         if select_item_is_deferrable(item) {
-            plan.deferred_projections.push(DeferredProj { select_index: i });
+            plan.deferred_projections
+                .push(DeferredProj { select_index: i });
         }
     }
 }
@@ -110,6 +111,9 @@ pub fn eliminate_dead_needs(plan: &mut QueryPlan) {
             // per-run RunFlags, not by a QueryNeeds field, so there is no
             // late-armed need to recompute for them here.
             StageOp::EdgeLookup { .. } | StageOp::BoundedPath { .. } => {}
+            // ResolveStringValues arms `string_values` which is handled separately
+            // (tracked in QueryNeeds but not cleared here; it's already minimal).
+            StageOp::ResolveStringValues => {}
         }
     }
     // Only DOWNGRADE (clear) — never set a need true here (setting is the
@@ -196,12 +200,12 @@ pub fn optimize(mut plan: QueryPlan, query: &Query, stats: &SchemaStats) -> Quer
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::query::plan::{Conjunct, PredCost, Phase, StageKind};
     use crate::query::ast::{Attr, CompareOp, Predicate, Value};
+    use crate::query::carry::CarryLayout;
     use crate::query::parse::parse;
     use crate::query::plan::plan_query;
-    use crate::query::carry::CarryLayout;
     use crate::query::plan::StageOp;
+    use crate::query::plan::{Conjunct, Phase, PredCost, StageKind};
 
     // ---------- helpers ----------
 
@@ -227,7 +231,8 @@ mod tests {
     #[test]
     fn reorder_sorts_cheap_first() {
         // Build a plan whose where_terms are deliberately in worst-first order.
-        let mut plan = plan_query(&parse("SELECT @objectId FROM java.lang.String").unwrap()).unwrap();
+        let mut plan =
+            plan_query(&parse("SELECT @objectId FROM java.lang.String").unwrap()).unwrap();
         plan.where_terms = vec![
             scalar_conjunct("d", PredCost::Ref),
             scalar_conjunct("c", PredCost::Str),
@@ -237,15 +242,27 @@ mod tests {
 
         reorder_predicates(&mut plan);
 
-        let ranks: Vec<u8> = plan.where_terms.iter().map(|c| pred_cost_rank(c.cost)).collect();
+        let ranks: Vec<u8> = plan
+            .where_terms
+            .iter()
+            .map(|c| pred_cost_rank(c.cost))
+            .collect();
         assert!(
             ranks.windows(2).all(|w| w[0] <= w[1]),
             "expected non-decreasing ranks, got: {:?}",
             ranks
         );
         // Cheapest first: rank 0 first, rank 3 last.
-        assert_eq!(ranks.first().copied(), Some(0), "first conjunct must be cheapest");
-        assert_eq!(ranks.last().copied(), Some(3), "last conjunct must be most expensive");
+        assert_eq!(
+            ranks.first().copied(),
+            Some(0),
+            "first conjunct must be cheapest"
+        );
+        assert_eq!(
+            ranks.last().copied(),
+            Some(3),
+            "last conjunct must be most expensive"
+        );
     }
 
     /// Within the same cost class, the relative user-written order must be preserved
@@ -253,7 +270,8 @@ mod tests {
     /// and verify reorder_predicates preserves that order.
     #[test]
     fn reorder_is_stable_within_cost_class() {
-        let mut plan = plan_query(&parse("SELECT @objectId FROM java.lang.String").unwrap()).unwrap();
+        let mut plan =
+            plan_query(&parse("SELECT @objectId FROM java.lang.String").unwrap()).unwrap();
         plan.where_terms = vec![
             scalar_conjunct("first", PredCost::Scalar),
             scalar_conjunct("second", PredCost::Scalar),
@@ -263,14 +281,26 @@ mod tests {
 
         assert_eq!(plan.where_terms.len(), 2);
         match &plan.where_terms[0].pred {
-            Predicate::Compare { lhs: Attr::Field(name), .. } => {
-                assert_eq!(name, "first", "stable sort must preserve first conjunct's position");
+            Predicate::Compare {
+                lhs: Attr::Field(name),
+                ..
+            } => {
+                assert_eq!(
+                    name, "first",
+                    "stable sort must preserve first conjunct's position"
+                );
             }
             other => panic!("unexpected predicate: {:?}", other),
         }
         match &plan.where_terms[1].pred {
-            Predicate::Compare { lhs: Attr::Field(name), .. } => {
-                assert_eq!(name, "second", "stable sort must preserve second conjunct's position");
+            Predicate::Compare {
+                lhs: Attr::Field(name),
+                ..
+            } => {
+                assert_eq!(
+                    name, "second",
+                    "stable sort must preserve second conjunct's position"
+                );
             }
             other => panic!("unexpected predicate: {:?}", other),
         }
@@ -280,7 +310,8 @@ mod tests {
     /// it once (idempotent).
     #[test]
     fn reorder_is_idempotent() {
-        let mut plan = plan_query(&parse("SELECT @objectId FROM java.lang.String").unwrap()).unwrap();
+        let mut plan =
+            plan_query(&parse("SELECT @objectId FROM java.lang.String").unwrap()).unwrap();
         plan.where_terms = vec![
             scalar_conjunct("d", PredCost::Ref),
             scalar_conjunct("c", PredCost::Str),
@@ -294,7 +325,10 @@ mod tests {
         reorder_predicates(&mut plan);
         let after_second: Vec<PredCost> = plan.where_terms.iter().map(|c| c.cost).collect();
 
-        assert_eq!(after_first, after_second, "reorder_predicates must be idempotent");
+        assert_eq!(
+            after_first, after_second,
+            "reorder_predicates must be idempotent"
+        );
     }
 
     /// A plan with no WHERE clause has an empty where_terms; reorder_predicates
@@ -302,11 +336,17 @@ mod tests {
     #[test]
     fn reorder_empty_where_is_noop() {
         let mut plan = plan_query(&parse("SELECT * FROM java.lang.String").unwrap()).unwrap();
-        assert!(plan.where_terms.is_empty(), "precondition: no WHERE → empty where_terms");
+        assert!(
+            plan.where_terms.is_empty(),
+            "precondition: no WHERE → empty where_terms"
+        );
 
         reorder_predicates(&mut plan); // must not panic
 
-        assert!(plan.where_terms.is_empty(), "where_terms must remain empty after reorder");
+        assert!(
+            plan.where_terms.is_empty(),
+            "where_terms must remain empty after reorder"
+        );
     }
 
     #[test]
@@ -332,7 +372,9 @@ mod tests {
     #[test]
     fn schema_stats_count_of_returns_inserted() {
         let mut stats = SchemaStats::default();
-        stats.instance_counts.insert("java.lang.String".to_string(), 42);
+        stats
+            .instance_counts
+            .insert("java.lang.String".to_string(), 42);
         assert_eq!(stats.count_of("java.lang.String"), 42);
         assert_eq!(stats.count_of("java.lang.Object"), 0);
     }
@@ -349,8 +391,7 @@ mod tests {
     #[test]
     fn limit_pushed_to_scan_when_safe() {
         let mut plan =
-            plan_query(&parse("SELECT @objectId FROM java.lang.String LIMIT 10").unwrap())
-                .unwrap();
+            plan_query(&parse("SELECT @objectId FROM java.lang.String LIMIT 10").unwrap()).unwrap();
         pushdown_limit(&mut plan);
         assert_eq!(
             plan.scan_limit,
@@ -364,10 +405,8 @@ mod tests {
     #[test]
     fn limit_not_pushed_with_order_by() {
         let mut plan = plan_query(
-            &parse(
-                "SELECT @objectId FROM java.lang.String ORDER BY @retainedHeapSize LIMIT 10",
-            )
-            .unwrap(),
+            &parse("SELECT @objectId FROM java.lang.String ORDER BY @retainedHeapSize LIMIT 10")
+                .unwrap(),
         )
         .unwrap();
         pushdown_limit(&mut plan);
@@ -384,10 +423,8 @@ mod tests {
     #[test]
     fn limit_not_pushed_with_scalar_order_by() {
         let mut plan = plan_query(
-            &parse(
-                "SELECT @objectId FROM java.lang.String ORDER BY @usedHeapSize LIMIT 10",
-            )
-            .unwrap(),
+            &parse("SELECT @objectId FROM java.lang.String ORDER BY @usedHeapSize LIMIT 10")
+                .unwrap(),
         )
         .unwrap();
         // Verify precondition: no late ops (so order_sensitive is the ONLY blocker).
@@ -413,7 +450,10 @@ mod tests {
         let mut plan =
             plan_query(&parse("SELECT @objectId FROM java.lang.String").unwrap()).unwrap();
         pushdown_limit(&mut plan);
-        assert_eq!(plan.scan_limit, None, "absent LIMIT must leave scan_limit None");
+        assert_eq!(
+            plan.scan_limit, None,
+            "absent LIMIT must leave scan_limit None"
+        );
     }
 
     /// A query with late ops (JoinRetained due to @retainedHeapSize in SELECT)
@@ -424,10 +464,9 @@ mod tests {
     fn limit_not_pushed_with_late_ops() {
         // @retainedHeapSize in SELECT → JoinRetained late op; no ORDER BY so
         // order_sensitive is false; LIMIT 5 is present. The late op blocks pushdown.
-        let mut plan = plan_query(
-            &parse("SELECT @retainedHeapSize FROM java.lang.String LIMIT 5").unwrap(),
-        )
-        .unwrap();
+        let mut plan =
+            plan_query(&parse("SELECT @retainedHeapSize FROM java.lang.String LIMIT 5").unwrap())
+                .unwrap();
         // Verify precondition: late ops non-empty and order_sensitive false.
         assert!(
             !plan.late_ops.is_empty(),
@@ -450,12 +489,15 @@ mod tests {
     #[test]
     fn pushdown_is_idempotent() {
         let mut plan =
-            plan_query(&parse("SELECT @objectId FROM java.lang.String LIMIT 10").unwrap())
-                .unwrap();
+            plan_query(&parse("SELECT @objectId FROM java.lang.String LIMIT 10").unwrap()).unwrap();
         pushdown_limit(&mut plan);
         assert_eq!(plan.scan_limit, Some(10), "first call must set scan_limit");
         pushdown_limit(&mut plan);
-        assert_eq!(plan.scan_limit, Some(10), "second call must not change scan_limit");
+        assert_eq!(
+            plan.scan_limit,
+            Some(10),
+            "second call must not change scan_limit"
+        );
     }
 
     // ---------- defer_projections tests (Task 32) ----------
@@ -519,7 +561,10 @@ mod tests {
         let first = plan.deferred_projections.clone();
         defer_projections(&mut plan, &query);
         let second = plan.deferred_projections.clone();
-        assert_eq!(first, second, "calling defer_projections twice must be idempotent");
+        assert_eq!(
+            first, second,
+            "calling defer_projections twice must be idempotent"
+        );
     }
 
     // ---------- eliminate_dead_needs tests (Task 32) ----------
@@ -549,11 +594,16 @@ mod tests {
             plan_query(&parse("SELECT @retainedHeapSize FROM java.lang.String").unwrap()).unwrap();
         // Confirm precondition: the planner armed JoinRetained and needs.retained.
         assert!(
-            plan.late_ops.iter().any(|op| matches!(op, StageOp::JoinRetained)),
+            plan.late_ops
+                .iter()
+                .any(|op| matches!(op, StageOp::JoinRetained)),
             "precondition: @retainedHeapSize SELECT must produce JoinRetained, got {:?}",
             plan.late_ops
         );
-        assert!(plan.needs.retained, "precondition: needs.retained must be set by planner");
+        assert!(
+            plan.needs.retained,
+            "precondition: needs.retained must be set by planner"
+        );
         eliminate_dead_needs(&mut plan);
         assert!(
             plan.needs.retained,
@@ -585,9 +635,18 @@ mod tests {
         let before_string = plan.needs.instance_string;
         let before_rt = plan.needs.runtime_type;
         eliminate_dead_needs(&mut plan);
-        assert_eq!(plan.needs.instance_scalar, before_scalar, "instance_scalar must not change");
-        assert_eq!(plan.needs.instance_string, before_string, "instance_string must not change");
-        assert_eq!(plan.needs.runtime_type, before_rt, "runtime_type must not change");
+        assert_eq!(
+            plan.needs.instance_scalar, before_scalar,
+            "instance_scalar must not change"
+        );
+        assert_eq!(
+            plan.needs.instance_string, before_string,
+            "instance_string must not change"
+        );
+        assert_eq!(
+            plan.needs.runtime_type, before_rt,
+            "runtime_type must not change"
+        );
     }
 
     /// Calling `eliminate_dead_needs` twice must leave `needs` identical to
@@ -638,42 +697,83 @@ mod tests {
         // late_ops, union_branches, from_subplan and in_subplans are empty for
         // this query, so pushdown is still safe (order_sensitive is false too).
         let optimized = optimize(plan, &q, &SchemaStats::default());
-        let ranks: Vec<u8> = optimized.where_terms.iter().map(|c| pred_cost_rank(c.cost)).collect();
+        let ranks: Vec<u8> = optimized
+            .where_terms
+            .iter()
+            .map(|c| pred_cost_rank(c.cost))
+            .collect();
         assert!(
             ranks.windows(2).all(|w| w[0] <= w[1]),
-            "where_terms must be sorted cheapest-first after optimize, got ranks: {:?}", ranks
+            "where_terms must be sorted cheapest-first after optimize, got ranks: {:?}",
+            ranks
         );
-        assert_eq!(optimized.scan_limit, Some(5), "scan_limit must be pushed down by optimize");
+        assert_eq!(
+            optimized.scan_limit,
+            Some(5),
+            "scan_limit must be pushed down by optimize"
+        );
     }
 
     /// optimize must recurse into union_branches so each branch is also optimized.
     #[test]
     fn optimize_recurses_into_union_branches() {
-        let src = "SELECT @objectId FROM java.lang.String UNION SELECT @objectId FROM java.lang.Object";
+        let src =
+            "SELECT @objectId FROM java.lang.String UNION SELECT @objectId FROM java.lang.Object";
         let q = parse(src).unwrap();
         let plan = plan_query(&q).unwrap();
-        assert_eq!(plan.union_branches.len(), 1, "precondition: one union branch");
+        assert_eq!(
+            plan.union_branches.len(),
+            1,
+            "precondition: one union branch"
+        );
         let once = optimize(plan.clone(), &q, &SchemaStats::default());
         let twice = optimize(once.clone(), &q, &SchemaStats::default());
         // Idempotence holds across the full UNION plan.
         assert_eq!(once, twice, "optimize must be idempotent for UNION queries");
         // Branch count is preserved.
-        assert_eq!(once.union_branches.len(), 1, "union branch must be preserved after optimize");
+        assert_eq!(
+            once.union_branches.len(),
+            1,
+            "union branch must be preserved after optimize"
+        );
     }
 
     /// QueryPlan::default() must compile and produce sensible zero/empty values.
     #[test]
     fn optimize_default_queryplan_constructs() {
         let d = QueryPlan::default();
-        assert_eq!(d.kind, StageKind::SingleScan, "default kind must be SingleScan");
-        assert_eq!(d.carry, CarryLayout::IndexOnly, "default carry must be IndexOnly");
+        assert_eq!(
+            d.kind,
+            StageKind::SingleScan,
+            "default kind must be SingleScan"
+        );
+        assert_eq!(
+            d.carry,
+            CarryLayout::IndexOnly,
+            "default carry must be IndexOnly"
+        );
         assert_eq!(d.finalize_at, Phase::P1, "default finalize_at must be P1");
-        assert!(d.where_terms.is_empty(), "default where_terms must be empty");
+        assert!(
+            d.where_terms.is_empty(),
+            "default where_terms must be empty"
+        );
         assert!(d.late_ops.is_empty(), "default late_ops must be empty");
-        assert!(d.union_branches.is_empty(), "default union_branches must be empty");
-        assert!(d.in_subplans.is_empty(), "default in_subplans must be empty");
-        assert!(d.deferred_projections.is_empty(), "default deferred_projections must be empty");
-        assert!(d.from_subplan.is_none(), "default from_subplan must be None");
+        assert!(
+            d.union_branches.is_empty(),
+            "default union_branches must be empty"
+        );
+        assert!(
+            d.in_subplans.is_empty(),
+            "default in_subplans must be empty"
+        );
+        assert!(
+            d.deferred_projections.is_empty(),
+            "default deferred_projections must be empty"
+        );
+        assert!(
+            d.from_subplan.is_none(),
+            "default from_subplan must be None"
+        );
         assert!(d.limit.is_none(), "default limit must be None");
         assert!(d.scan_limit.is_none(), "default scan_limit must be None");
         assert!(!d.order_sensitive, "default order_sensitive must be false");
@@ -687,7 +787,10 @@ mod tests {
         let mut plan = plan_query(&q).unwrap();
         let snapshot = plan.clone();
         order_by_selectivity(&mut plan, &SchemaStats::default());
-        assert_eq!(plan, snapshot, "order_by_selectivity must not change the plan");
+        assert_eq!(
+            plan, snapshot,
+            "order_by_selectivity must not change the plan"
+        );
     }
 
     /// optimize must leave an empty WHERE and absent LIMIT unchanged.
@@ -697,10 +800,19 @@ mod tests {
         let q = parse(src).unwrap();
         let plan = plan_query(&q).unwrap();
         let once = optimize(plan.clone(), &q, &SchemaStats::default());
-        assert!(once.where_terms.is_empty(), "empty WHERE must remain empty after optimize");
-        assert_eq!(once.scan_limit, None, "absent LIMIT must leave scan_limit None after optimize");
+        assert!(
+            once.where_terms.is_empty(),
+            "empty WHERE must remain empty after optimize"
+        );
+        assert_eq!(
+            once.scan_limit, None,
+            "absent LIMIT must leave scan_limit None after optimize"
+        );
         let twice = optimize(once.clone(), &q, &SchemaStats::default());
-        assert_eq!(once, twice, "optimize must be idempotent on a simple no-WHERE no-LIMIT plan");
+        assert_eq!(
+            once, twice,
+            "optimize must be idempotent on a simple no-WHERE no-LIMIT plan"
+        );
     }
 
     // ---------- narrow_carry tests (Task 32) ----------

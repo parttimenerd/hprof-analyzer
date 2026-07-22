@@ -7,11 +7,11 @@ use std::collections::HashMap;
 
 use crate::id_map::IdMap;
 use crate::pass1::ClassInfo;
-use crate::query::ObjectVisitor;
 use crate::query::ast::Query;
 use crate::query::execute::{ClassResolver, SingleScanExecutor};
 use crate::query::model::{QueryResult, QueryValue};
 use crate::query::plan::QueryPlan;
+use crate::query::ObjectVisitor;
 use crate::types::HprofType;
 
 /// Resolves a class-object address (`class_id`) to its dotted class name and,
@@ -153,6 +153,11 @@ pub struct ScanDriver<'q, R: ClassResolver> {
     /// interned hop-field table + the resolver used to decode ref fields from
     /// each instance blob. `None` on non-RefWalk runs → zero capture cost.
     refwalk: Option<RefWalkState<'q, R>>,
+    /// Armed only when at least one exec's plan has `needs.string_values`.
+    /// Captures `dense_idx → (arr_addr, coder)` during the scan; resolved to
+    /// `String` values post-scan via a single `scan_prim_arrays` pass.
+    /// `None` on non-toString runs → zero capture cost.
+    string_capture: Option<StringCaptureState<'q, R>>,
 }
 
 /// Sidecar edge-capture state for RefWalk queries (see `refwalk.rs`).
@@ -168,10 +173,22 @@ struct RefWalkState<'q, R: ClassResolver> {
     resolver: &'q R,
 }
 
+/// Sidecar capture state for toString(s) queries. Armed only when at least one
+/// query has `needs.string_values`. Captures (dense_idx → (arr_addr, coder))
+/// during the scan so a post-scan array decode pass can resolve the text values.
+struct StringCaptureState<'q, R: ClassResolver> {
+    capture: crate::query::stringvals::StringCapture,
+    /// Memoized per-class String field offsets: class_id → Option<(value_off, coder_off)>.
+    /// `None` means "not a String class or field not found".
+    off_cache: HashMap<u64, Option<(usize, Option<usize>)>>,
+    resolver: &'q R,
+}
+
 impl<'q, R: ClassResolver> ScanDriver<'q, R> {
     /// Construct a driver from `(slot, executor)` pairs. `slot` is the query's
     /// index in the caller's list. Arms RefWalk edge capture iff any executor's
-    /// plan requests it.
+    /// plan requests it. Arms string-values capture iff any executor's plan
+    /// requests toString(s).
     pub fn new(entries: Vec<(usize, SingleScanExecutor<'q, R>)>) -> Self {
         let mut execs = Vec::with_capacity(entries.len());
         let mut slots = Vec::with_capacity(entries.len());
@@ -180,11 +197,32 @@ impl<'q, R: ClassResolver> ScanDriver<'q, R> {
             execs.push(ex);
         }
         let refwalk = Self::arm_refwalk(&execs);
+        let string_capture = Self::arm_string_capture(&execs);
         Self {
             execs,
             slots,
             refwalk,
+            string_capture,
         }
+    }
+
+    /// Build the string-capture sidecar if any exec has `needs.string_values`.
+    /// Returns `None` when no toString(s) query is present.
+    fn arm_string_capture(
+        execs: &[SingleScanExecutor<'q, R>],
+    ) -> Option<StringCaptureState<'q, R>> {
+        let needs_any = execs.iter().any(|e| e.plan().needs.string_values);
+        if !needs_any {
+            return None;
+        }
+        let resolver = execs.first().map(|e| e.resolver())?;
+        Some(StringCaptureState {
+            capture: crate::query::stringvals::StringCapture::new(
+                crate::query::stringvals::STRING_VALUES_CAP,
+            ),
+            off_cache: HashMap::new(),
+            resolver,
+        })
     }
 
     /// Build the RefWalk sidecar if any exec needs it: intern the union of hop
@@ -293,6 +331,25 @@ impl<'q, R: ClassResolver> ScanDriver<'q, R> {
         Some(std::mem::take(&mut self.refwalk.as_mut()?.field_names))
     }
 
+    /// True when the string-values capture overflowed its cap during the scan,
+    /// meaning some String instances were not captured and results may be partial.
+    pub fn string_capture_truncated(&self) -> bool {
+        self.string_capture
+            .as_ref()
+            .map(|s| s.capture.truncated)
+            .unwrap_or(false)
+    }
+
+    /// Take the string-capture side table for post-scan decoding.
+    /// `None` when toString(s) was never armed (non-toString run).
+    pub fn take_string_capture(&mut self) -> Option<crate::query::stringvals::StringCapture> {
+        let state = self.string_capture.as_mut()?;
+        Some(std::mem::replace(
+            &mut state.capture,
+            crate::query::stringvals::StringCapture::new(0),
+        ))
+    }
+
     /// Decode the needed reference fields from one instance blob and record their
     /// edges; also capture any tail field this object owns. No-op when unarmed.
     fn capture_refwalk(&mut self, src_idx: usize, class_id: u64, blob: &[u8]) {
@@ -336,11 +393,60 @@ impl<'q, R: ClassResolver> ScanDriver<'q, R> {
             }
         }
     }
+
+    /// Capture a String instance's backing array address and coder byte for the
+    /// post-scan toString decode pass. No-op when not armed or this class is not
+    /// a java.lang.String class (memoized per class_id for zero amortised cost on
+    /// non-String instances, which are the vast majority in any dump).
+    fn capture_string_values(&mut self, src_idx: usize, class_id: u64, blob: &[u8]) {
+        let Some(state) = self.string_capture.as_mut() else {
+            return;
+        };
+        // Memoize the (value_off, coder_off) for this class_id. `None` means
+        // "not a java.lang.String class" — we skip it cheaply on future visits.
+        let offs = *state.off_cache.entry(class_id).or_insert_with(|| {
+            let value_result = state.resolver.field(class_id, "value");
+            let value_off = match value_result {
+                Some((off, HprofType::Object)) => off as usize,
+                _ => return None,
+            };
+            // `coder` is a byte field (HprofType::Byte). Present in JDK9+; absent
+            // in JDK8 (char[] backing — treat as UTF-16, coder = 1).
+            let coder_off = state
+                .resolver
+                .field(class_id, "coder")
+                .filter(|&(_, ty)| ty == HprofType::Byte)
+                .map(|(off, _)| off as usize);
+            Some((value_off, coder_off))
+        });
+        let Some((value_off, coder_off)) = offs else {
+            return;
+        };
+        let width = state.resolver.ref_width();
+        if value_off + width > blob.len() {
+            return;
+        }
+        // Read the backing array reference.
+        let mut arr_addr: u64 = 0;
+        for &b in &blob[value_off..value_off + width] {
+            arr_addr = (arr_addr << 8) | b as u64;
+        }
+        if arr_addr == 0 {
+            return;
+        } // null backing array — skip
+          // Read coder byte (0=LATIN1, 1=UTF16). Default to 1 (JDK8 char[]).
+        let coder = match coder_off {
+            Some(co) if co < blob.len() => blob[co],
+            _ => 1,
+        };
+        state.capture.insert(src_idx as u32, arr_addr, coder);
+    }
 }
 
 impl<'q, R: ClassResolver> ObjectVisitor for ScanDriver<'q, R> {
     fn visit_instance(&mut self, src_idx: usize, class_id: u64, blob: &[u8]) {
         self.capture_refwalk(src_idx, class_id, blob);
+        self.capture_string_values(src_idx, class_id, blob);
         for ex in &mut self.execs {
             ex.visit_instance(src_idx, class_id, blob);
         }
@@ -350,6 +456,88 @@ impl<'q, R: ClassResolver> ObjectVisitor for ScanDriver<'q, R> {
             ex.visit_array(src_idx, class_name, length);
         }
     }
+}
+
+/// Resume a `QueryExecState` with a minimal late context that provides only the
+/// decoded toString(s) string values. Entries that need retained/dominator/edge/
+/// refwalk data still get actionable errors (same as `resume_without_late_ctx`).
+/// Only entries whose plan exclusively uses `ResolveStringValues` are resolved here.
+pub(crate) fn resume_with_string_values(
+    state: crate::query::execute::QueryExecState,
+    flat: &[(Query, QueryPlan)],
+    string_values: std::collections::HashMap<u32, String>,
+) -> Vec<crate::query::model::QueryResult> {
+    use crate::query::plan::StageOp;
+    use crate::query::stage_runner::{self, EMPTY_REFWALK_TAILS, EMPTY_STRING_VALUES};
+
+    let id_map = stage_runner::IdMap::new(&[]);
+    let sv_ref: &std::collections::HashMap<u32, String> = if string_values.is_empty() {
+        &*EMPTY_STRING_VALUES
+    } else {
+        &string_values
+    };
+    let ctx = stage_runner::LateCtx {
+        retained: &[],
+        idom: &[],
+        dc_off: &[],
+        dc_tgt: &[],
+        shallow: &[],
+        id_map: &id_map,
+        fwd_off: &[],
+        fwd_tgt: &[],
+        fwd_field: &[],
+        field_names: &[],
+        refwalk_tails: &*EMPTY_REFWALK_TAILS,
+        refwalk_truncated: false,
+        in_off: &[],
+        in_tgt: &[],
+        retained_edges: None,
+        string_values: sv_ref,
+    };
+
+    // Split pending entries: toString-only (all ops are ResolveStringValues) vs others.
+    // toString-only entries are resolved with the string-values ctx above; the rest
+    // go through `resume_without_late_ctx` which produces actionable errors for
+    // unsupported late ops (edge queries, refwalk, retained sizes, dominators).
+    let (finished, pending) = state.into_parts();
+    let mut slotted: Vec<(usize, crate::query::model::QueryResult)> = finished;
+    let mut other_state = crate::query::execute::QueryExecState::new();
+    // Track the slots pushed into other_state in insertion order so we can
+    // re-associate them with the sorted output from resume_without_late_ctx.
+    let mut other_slots: Vec<usize> = Vec::new();
+
+    for entry in pending {
+        let is_string_only = !entry.plan.late_ops.is_empty()
+            && entry
+                .plan
+                .late_ops
+                .iter()
+                .all(|op| matches!(op, StageOp::ResolveStringValues));
+        if is_string_only {
+            let q = &flat[entry.slot].0;
+            let r = stage_runner::run_entry_pub(&entry, q, &ctx);
+            slotted.push((entry.slot, r));
+        } else {
+            other_slots.push(entry.slot);
+            other_state.push_cross_phase_entry(entry);
+        }
+    }
+
+    // Delegate non-toString pending entries to the error-producing path.
+    // `resume_without_late_ctx` sorts its output by slot ascending, so sort
+    // `other_slots` to match and zip the two parallel sequences.
+    if other_state.has_pending() {
+        other_slots.sort_unstable();
+        let error_results = crate::query::stage_runner::resume_without_late_ctx(other_state);
+        // error_results and other_slots are now both sorted by slot ascending.
+        debug_assert_eq!(other_slots.len(), error_results.len());
+        for (slot, r) in other_slots.into_iter().zip(error_results) {
+            slotted.push((slot, r));
+        }
+    }
+
+    slotted.sort_by_key(|(slot, _)| *slot);
+    slotted.into_iter().map(|(_, r)| r).collect()
 }
 
 /// Run the full pass1+pass2 pipeline against `path` for the given planned
@@ -380,7 +568,7 @@ pub fn run_single_dump(
         // Fast path: no subqueries — one scan, no injection.
         let p1 = crate::pass1::Pass1::run(path)?;
         let mut empty = std::collections::HashMap::new();
-        let (.., state, _refwalk_csr) = crate::pass2::Pass2::build(
+        let (.., state, _refwalk_csr, string_values) = crate::pass2::Pass2::build(
             path,
             p1,
             crate::cvec::Codec::Zstd3,
@@ -388,7 +576,7 @@ pub fn run_single_dump(
             &flat,
             &mut empty,
         )?;
-        let flat_results = crate::query::stage_runner::resume_without_late_ctx(state);
+        let flat_results = resume_with_string_values(state, &flat, string_values);
         return Ok(collapse_union_results(flat_results, &groups));
     }
 
@@ -399,7 +587,7 @@ pub fn run_single_dump(
         .collect();
     let p1_inner = crate::pass1::Pass1::run(path)?;
     let mut empty = std::collections::HashMap::new();
-    let (.., inner_state, _inner_refwalk_csr) = crate::pass2::Pass2::build(
+    let (.., inner_state, _inner_refwalk_csr, _inner_sv) = crate::pass2::Pass2::build(
         path,
         p1_inner,
         crate::cvec::Codec::Zstd3,
@@ -444,7 +632,7 @@ pub fn run_single_dump(
 
     // ── Outer pass: scan again with IN sets injected ─────────────────────────
     let p1_outer = crate::pass1::Pass1::run(path)?;
-    let (.., outer_state, _outer_refwalk_csr) = crate::pass2::Pass2::build(
+    let (.., outer_state, _outer_refwalk_csr, outer_sv) = crate::pass2::Pass2::build(
         path,
         p1_outer,
         crate::cvec::Codec::Zstd3,
@@ -452,7 +640,7 @@ pub fn run_single_dump(
         &flat,
         &mut in_sets_by_slot,
     )?;
-    let mut flat_results = crate::query::stage_runner::resume_without_late_ctx(outer_state);
+    let mut flat_results = resume_with_string_values(outer_state, &flat, outer_sv);
 
     // ── FROM-subquery semi-join: keep only outer rows whose dense index is in
     //    the inner result set (matched by dense index). ───────────────────────
@@ -1011,8 +1199,16 @@ mod tests {
         assert_eq!(
             groups,
             vec![
-                UnionGroup { head: 0, count: 1, union_limit: None },
-                UnionGroup { head: 1, count: 3, union_limit: None },
+                UnionGroup {
+                    head: 0,
+                    count: 1,
+                    union_limit: None
+                },
+                UnionGroup {
+                    head: 1,
+                    count: 3,
+                    union_limit: None
+                },
             ]
         );
     }
@@ -1029,8 +1225,16 @@ mod tests {
             one_col_result(&[4, 5, 6]),
         ];
         let groups = vec![
-            UnionGroup { head: 0, count: 1, union_limit: None },
-            UnionGroup { head: 1, count: 3, union_limit: None },
+            UnionGroup {
+                head: 0,
+                count: 1,
+                union_limit: None,
+            },
+            UnionGroup {
+                head: 1,
+                count: 3,
+                union_limit: None,
+            },
         ];
         let out = collapse_union_results(flat, &groups);
         assert_eq!(out.len(), 2, "one result per original query");
@@ -1055,7 +1259,10 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].rows.len(), 3, "capped to union_limit");
         assert_eq!(out[0].row_count, 3);
-        assert!(out[0].truncated, "dropping rows for the union LIMIT truncates");
+        assert!(
+            out[0].truncated,
+            "dropping rows for the union LIMIT truncates"
+        );
     }
 
     #[test]
@@ -1153,8 +1360,16 @@ mod tests {
         // them in the same order with contents intact.
         let flat = vec![one_col_result(&[1]), one_col_result(&[2, 3])];
         let groups = vec![
-            UnionGroup { head: 0, count: 1, union_limit: None },
-            UnionGroup { head: 1, count: 1, union_limit: None },
+            UnionGroup {
+                head: 0,
+                count: 1,
+                union_limit: None,
+            },
+            UnionGroup {
+                head: 1,
+                count: 1,
+                union_limit: None,
+            },
         ];
         let out = collapse_union_results(flat, &groups);
         assert_eq!(out.len(), 2);

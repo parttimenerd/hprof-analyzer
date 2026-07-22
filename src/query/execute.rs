@@ -57,6 +57,13 @@ impl QueryExecState {
     pub fn into_parts(self) -> (Vec<(usize, QueryResult)>, Vec<CrossPhaseEntry>) {
         (self.finished, self.pending)
     }
+
+    /// Re-add a `CrossPhaseEntry` (e.g. one taken from `into_parts` that was
+    /// not handled). Used by hybrid resume paths that handle some ops locally
+    /// and delegate the rest to `resume_without_late_ctx`.
+    pub fn push_cross_phase_entry(&mut self, entry: CrossPhaseEntry) {
+        self.pending.push(entry);
+    }
 }
 
 /// Abstracts class-name resolution + field-offset lookup so the executor can be
@@ -315,6 +322,8 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             SelectItem::Attr(a) => self.project_attr(a, src_idx, class_id, blob),
             // path(a, b) is cross-phase (needs the ref graph); filled later, not here.
             SelectItem::Path { .. } => QueryValue::Null,
+            // toString(s) is cross-phase: resolved post-scan by the stage runner.
+            SelectItem::ToString(_) => QueryValue::Null,
         }
     }
     fn project_attr(&self, a: &Attr, src_idx: usize, class_id: u64, blob: &[u8]) -> QueryValue {
@@ -348,6 +357,8 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             // N-hop reference paths resolve against the forward-ref graph, which
             // only exists post-scan (P2). Filled by the stage runner, not here.
             Attr::RefPath { .. } => QueryValue::Null,
+            // toString(s) is cross-phase: resolved post-scan by the stage runner.
+            Attr::ToString(_) => QueryValue::Null,
         }
     }
     /// Project a SELECT row for an array object. Arrays carry no field blob and
@@ -376,6 +387,8 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             SelectItem::Attr(a) => self.project_array_attr(a, src_idx, class_name, length),
             // path(a, b) is cross-phase (needs the ref graph); filled later, not here.
             SelectItem::Path { .. } => QueryValue::Null,
+            // toString(s) is cross-phase: resolved post-scan by the stage runner.
+            SelectItem::ToString(_) => QueryValue::Null,
         }
     }
     fn project_array_attr(
@@ -409,6 +422,8 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             Attr::Field(_) => QueryValue::Null,
             // Arrays have no reference fields to walk; a RefPath is Null.
             Attr::RefPath { .. } => QueryValue::Null,
+            // toString(s) is cross-phase: resolved post-scan by the stage runner.
+            Attr::ToString(_) => QueryValue::Null,
         }
     }
     fn decode_field(&self, class_id: u64, name: &str, blob: &[u8]) -> QueryValue {
@@ -824,7 +839,11 @@ fn collect_like_regexes(
             collect_like_regexes(b, out)?;
         }
         P::Not(a) => collect_like_regexes(a, out)?,
-        P::Compare { op: CompareOp::Like | CompareOp::NotLike, rhs, .. } => {
+        P::Compare {
+            op: CompareOp::Like | CompareOp::NotLike,
+            rhs,
+            ..
+        } => {
             if let Value::Str(pat) = rhs {
                 if !out.contains_key(pat) {
                     let anchored = format!("^(?:{pat})$");
@@ -858,6 +877,7 @@ pub fn column_name(it: &SelectItem) -> String {
             path_operand_name(from),
             path_operand_name(to)
         ),
+        SelectItem::ToString(a) => format!("toString({a})"),
     }
 }
 
@@ -881,6 +901,7 @@ fn attr_name(a: &Attr) -> String {
         Attr::ClassOf => "classof".into(),
         Attr::Dominators(a) => format!("dominators({a})"),
         Attr::DominatorOf(a) => format!("dominatorof({a})"),
+        Attr::ToString(a) => format!("toString({a})"),
         Attr::Field(f) => f.clone(),
         Attr::RefPath { hops, tail, .. } => {
             let mut s = hops.join(".");
