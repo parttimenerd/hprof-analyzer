@@ -740,6 +740,12 @@ export interface SeriesClassRow {
   instances: number[];
   delta_retained: number;
   delta_instances: number;
+  // Peak retained across all reports; peak minus baseline (§37.1); and gross
+  // per-step growth/shrinkage churn (§37.2). See src/diff_reports.rs.
+  peak_retained: number;
+  peak_over_baseline: number;
+  gross_growth: number;
+  gross_shrink: number;
 }
 
 // One joined leak-suspect row across N reports.
@@ -760,7 +766,10 @@ export interface SeriesDiffResult {
   delta_total_objects: number;
   delta_total_shallow: number;
   net_delta_retained: number;
+  gross_growth_retained: number;
+  gross_shrink_retained: number;
   growth_leaders: SeriesClassRow[];
+  spike_leaders: SeriesClassRow[];
   new_classes: SeriesClassRow[];
   removed_classes: SeriesClassRow[];
   grown_suspects: SeriesSuspectRow[];

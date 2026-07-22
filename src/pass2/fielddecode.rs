@@ -783,14 +783,25 @@ fn assemble_field_size_raw(
             set.insert(idx as u32);
         }
     }
-    groups
+    let mut out: Vec<FieldSizeRaw> = groups
         .into_iter()
-        .map(|((hk, fk), set)| FieldSizeRaw {
-            holder_class: holder_class_names[hk as usize].clone(),
-            field: field_names[fk as usize].clone(),
-            pointee_indices: set.into_iter().collect(),
+        .map(|((hk, fk), set)| {
+            let mut pointee_indices: Vec<u32> = set.into_iter().collect();
+            // HashSet iteration order is nondeterministic; sort so the pointee
+            // list (and any first-wins owner join against it) is stable run to run.
+            pointee_indices.sort_unstable();
+            FieldSizeRaw {
+                holder_class: holder_class_names[hk as usize].clone(),
+                field: field_names[fk as usize].clone(),
+                pointee_indices,
+            }
         })
-        .collect()
+        .collect();
+    // HashMap iteration order is nondeterministic; sort the groups by
+    // (holder_class, field) so downstream "first writer wins" owner attribution
+    // (build.rs `biggest_owner`) picks the same label every run.
+    out.sort_by(|a, b| a.holder_class.cmp(&b.holder_class).then(a.field.cmp(&b.field)));
+    out
 }
 
 /// Enumerate every Object-type instance field of `class_id`, returning

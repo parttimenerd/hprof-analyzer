@@ -1,6 +1,6 @@
 {
   "schema_version": 8,
-  "generated": "2026-07-22T23:11:33.122351000Z",
+  "generated": "2026-07-22T23:40:17.722241000Z",
   "overview": {
     "source_name": "dump_2_scala-doku.hprof",
     "file_path": "tests/fixtures/dump_2_scala-doku.hprof",
@@ -232302,7 +232302,7 @@
         "shallow": 32,
         "retained": 2622376,
         "pct_bp": 839,
-        "owner": "java.lang.invoke.MemberName#clazz"
+        "owner": "java.lang.invoke.DirectMethodHandle$Special#caller"
       },
       {
         "obj_index_1based": 48876,
@@ -232358,7 +232358,7 @@
         "shallow": 88,
         "retained": 114336,
         "pct_bp": 37,
-        "owner": "java.security.ProtectionDomain#classloader"
+        "owner": "java.lang.Module#loader"
       },
       {
         "obj_index_1based": 878469,
@@ -232382,7 +232382,7 @@
         "shallow": 88,
         "retained": 74152,
         "pct_bp": 24,
-        "owner": "java.security.ProtectionDomain#classloader"
+        "owner": "java.lang.Module#loader"
       },
       {
         "obj_index_1based": 883950,
@@ -232422,7 +232422,7 @@
         "shallow": 96,
         "retained": 58648,
         "pct_bp": 19,
-        "owner": "java.net.URLClassLoader#parent"
+        "owner": "java.lang.Module#loader"
       },
       {
         "obj_index_1based": 882059,

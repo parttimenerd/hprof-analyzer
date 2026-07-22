@@ -49,4 +49,20 @@ echo "generating full (--find-duplicates --collections) samples…"
 "$bin" "$dump" "${common[@]}" "${full[@]}" --format html       > "$out/scala-doku-full.html"
 "$bin" "$dump" "${common[@]}" "${full[@]}" --format json       > "$out/scala-doku-full.json"
 
-echo "done: 8 files written to $out/"
+# Cross-dump compare sample (§37.4): a two-dump growth series. Uses philosophers
+# as the baseline and scala-doku as the current dump; the compare engine reads
+# the two JSON reports and renders the growth/spike/churn verdict.
+echo "generating compare sample…"
+base_dump="tests/fixtures/dump_4_philosophers.hprof"
+if [[ -f "$base_dump" ]]; then
+  tmp_base="$(mktemp)"
+  tmp_curr="$(mktemp)"
+  trap 'rm -f "$tmp_base" "$tmp_curr"' EXIT
+  "$bin" "$base_dump" "${common[@]}" --format json > "$tmp_base"
+  "$bin" "$dump"      "${common[@]}" --format json > "$tmp_curr"
+  "$bin" compare reports "$tmp_base" "$tmp_curr" --format md   > "$out/compare-philosophers-scala-doku.md"
+  "$bin" compare reports "$tmp_base" "$tmp_curr" --format html > "$out/compare-philosophers-scala-doku.html"
+  echo "done: 10 files written to $out/"
+else
+  echo "note: $base_dump absent; skipped compare sample (8 files written)"
+fi

@@ -3532,24 +3532,75 @@ function DiffSection({
 // The verdict line: mirrors the Markdown verdict (the sole percentage).
 function diffVerdict(diff: SeriesDiffResult): string {
   const firstShallow = diff.total_shallow[0] ?? 0;
-  const pct = firstShallow > 0 ? (diff.delta_total_shallow / firstShallow) * 100 : 0;
   const newSuspects = diff.grown_suspects.filter((s) => s.is_new).length;
   let line: string;
-  if (diff.delta_total_shallow > 0) {
-    const lead = diff.growth_leaders[0];
-    const driver = lead
-      ? `; largest driver ${lead.pretty_class} (${fmtDeltaBytes(lead.delta_retained)} retained)`
-      : "";
-    line = `Heap grew ${pct.toFixed(1)}% (${fmtDeltaBytes(diff.delta_total_shallow)} shallow)${driver}.`;
-  } else if (diff.delta_total_shallow < 0) {
-    line = `Heap shrank ${Math.abs(pct).toFixed(1)}% (${fmtDeltaBytes(diff.delta_total_shallow)} shallow); no net growth.`;
+  if (firstShallow === 0) {
+    // Undefined percentage against an empty baseline (§37.3).
+    if (diff.delta_total_shallow > 0) {
+      const lead = diff.growth_leaders[0];
+      const driver = lead
+        ? `; largest driver ${lead.pretty_class} (${fmtDeltaBytes(lead.delta_retained)} retained)`
+        : "";
+      line = `Heap grew by ${fmtDeltaBytes(diff.delta_total_shallow)} shallow (baseline was empty)${driver}.`;
+    } else {
+      line = "Heap size is unchanged (baseline was empty).";
+    }
   } else {
-    line = "Heap size is unchanged.";
+    const pct = (diff.delta_total_shallow / firstShallow) * 100;
+    if (diff.delta_total_shallow > 0) {
+      const lead = diff.growth_leaders[0];
+      const driver = lead
+        ? `; largest driver ${lead.pretty_class} (${fmtDeltaBytes(lead.delta_retained)} retained)`
+        : "";
+      line = `Heap grew ${pct.toFixed(1)}% (${fmtDeltaBytes(diff.delta_total_shallow)} shallow)${driver}.`;
+    } else if (diff.delta_total_shallow < 0) {
+      line = `Heap shrank ${Math.abs(pct).toFixed(1)}% (${fmtDeltaBytes(diff.delta_total_shallow)} shallow); no net growth.`;
+    } else {
+      line = "Heap size is unchanged.";
+    }
+  }
+  // Gross churn when a net-flat/shrinking series still churned a lot (§37.2).
+  if (
+    diff.gross_growth_retained > 0 &&
+    diff.gross_growth_retained > Math.max(diff.net_delta_retained, 0) * 2
+  ) {
+    line += ` Gross retained churn: +${formatBytes(diff.gross_growth_retained)} grown / ${MINUS}${formatBytes(diff.gross_shrink_retained)} reclaimed across steps.`;
   }
   if (newSuspects > 0) {
     line += ` ${newSuspects} new suspect${newSuspects === 1 ? "" : "s"}.`;
   }
   return line;
+}
+
+// A dedicated table for Transient Spikes (§37.1): name | r1…rN | Peak | Peak−r1.
+function SpikeTable({ labels, rows }: { labels: string[]; rows: SeriesClassRow[] }) {
+  const n = labels.length;
+  return (
+    <table className="data">
+      <thead>
+        <tr>
+          <th>Class</th>
+          {labels.map((lbl, i) => (
+            <th key={i} className="num" title={`${lbl} retained`}>r{i + 1}</th>
+          ))}
+          <th className="num">Peak</th>
+          <th className="num">Peak−r1</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={row.pretty_class}>
+            <td><code>{row.pretty_class}</code></td>
+            {Array.from({ length: n }, (_, i) => (
+              <td key={i} className="num">{formatBytes(row.retained[i] ?? 0)}</td>
+            ))}
+            <td className="num">{formatBytes(row.peak_retained)}</td>
+            <td className="num">{fmtDeltaBytes(row.peak_over_baseline)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
 }
 
 export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
@@ -3582,6 +3633,7 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
           <li><strong>Δ Objects (r1→rN):</strong> {fmtDeltaCount(diff.delta_total_objects)}</li>
           <li><strong>Δ Shallow heap (r1→rN):</strong> {fmtDeltaBytes(diff.delta_total_shallow)}</li>
           <li><strong>Net Δ Retained (all classes, r1→rN):</strong> {fmtDeltaBytes(diff.net_delta_retained)}</li>
+          <li><strong>Gross Retained churn (all classes, per-step):</strong> +{formatBytes(diff.gross_growth_retained)} grown / {MINUS}{formatBytes(diff.gross_shrink_retained)} reclaimed</li>
         </ul>
       </section>
 
@@ -3592,6 +3644,17 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
         rows={diff.growth_leaders}
         emptyNote="No class grew in retained heap."
       />
+      {diff.spike_leaders.length > 0 ? (
+        <section className="diff-section">
+          <h2>Transient Spikes (peak above baseline)</h2>
+          <p>
+            Classes that climbed well above their baseline mid-series then fell back — a
+            first→last Δ alone would miss them. Ranked by peak-over-baseline; the peak may be
+            at any intermediate dump.
+          </p>
+          <SpikeTable labels={labels} rows={diff.spike_leaders} />
+        </section>
+      ) : null}
       <DiffSection
         title="New Classes"
         nameLabel="Class"
@@ -3621,13 +3684,18 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
         rows={diff.shrunk_suspects}
         emptyNote="No leak suspect shrank in the current dump."
       />
-      <DiffSection
-        title="Disappeared Leak Suspects"
-        nameLabel="Suspect"
-        labels={labels}
-        rows={diff.gone_suspects}
-        emptyNote="No leak suspect disappeared in the current dump."
-      />
+      <section className="diff-section">
+        <h2>Disappeared Leak Suspects (resolved)</h2>
+        <p>
+          Informational: these were flagged in an earlier dump but are gone from the current
+          one — a fixed or transient issue, not a current problem. Listed last for that reason.
+        </p>
+        {diff.gone_suspects.length === 0 ? (
+          <p>No leak suspect disappeared in the current dump.</p>
+        ) : (
+          <SeriesTable nameLabel="Suspect" labels={labels} rows={diff.gone_suspects} />
+        )}
+      </section>
       <BackToTop />
     </div>
   );

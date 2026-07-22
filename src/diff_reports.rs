@@ -68,6 +68,19 @@ pub struct SeriesClassRow {
     pub delta_retained: i64,
     /// last − first instances.
     pub delta_instances: i64,
+    /// Peak retained across all reports (the single highest per-report value).
+    /// For N==2 this equals `max(first, last)`; for longer series it catches a
+    /// mid-run spike that endpoints miss (§37.1).
+    pub peak_retained: u64,
+    /// `peak_retained − retained[0]` (baseline). How far above the baseline the
+    /// class ever climbed — ranks transient spikes that a first→last Δ hides.
+    pub peak_over_baseline: i64,
+    /// Sum of the *positive* consecutive-step deltas (gross growth) — churn that a
+    /// net first→last Δ cancels out when the class grows then shrinks (§37.2).
+    pub gross_growth: u64,
+    /// Sum of the magnitudes of the *negative* consecutive-step deltas (gross
+    /// shrinkage).
+    pub gross_shrink: u64,
 }
 
 /// One joined leak-suspect row across N reports.
@@ -101,7 +114,16 @@ pub struct SeriesDiffResult {
     pub delta_total_shallow: i64,
     /// Sum over classes of (last − first) retained.
     pub net_delta_retained: i64,
+    /// Sum over classes of `gross_growth` — total churn that grew, regardless of
+    /// whether it was later reclaimed (§37.2). Always ≥ `net_delta_retained`.
+    pub gross_growth_retained: u64,
+    /// Sum over classes of `gross_shrink` — total churn that was reclaimed.
+    pub gross_shrink_retained: u64,
     pub growth_leaders: Vec<SeriesClassRow>,
+    /// Classes ranked by `peak_over_baseline` desc — the biggest transient spikes
+    /// above baseline, which endpoint-only growth leaders miss (§37.1). Only
+    /// populated for N ≥ 3 (for N == 2 it would duplicate `growth_leaders`).
+    pub spike_leaders: Vec<SeriesClassRow>,
     /// Classes absent in the first report, present in the last.
     pub new_classes: Vec<SeriesClassRow>,
     /// Classes present in the first report, absent in the last.
@@ -165,6 +187,8 @@ pub fn diff_series(reports: &[Report]) -> SeriesDiffResult {
     let mut new_classes: Vec<SeriesClassRow> = Vec::new();
     let mut removed_classes: Vec<SeriesClassRow> = Vec::new();
     let mut net_delta_retained: i64 = 0;
+    let mut gross_growth_retained: u64 = 0;
+    let mut gross_shrink_retained: u64 = 0;
     for (name, cells) in &joined {
         let instances: Vec<u64> = cells.iter().map(|c| c.map_or(0, |(i, _)| i)).collect();
         let retained: Vec<u64> = cells.iter().map(|c| c.map_or(0, |(_, r)| r)).collect();
@@ -180,13 +204,33 @@ pub fn diff_series(reports: &[Report]) -> SeriesDiffResult {
         } else {
             instances[last] as i64 - instances[0] as i64
         };
+        // Peak and gross churn across consecutive steps (§37.1/§37.2). A class that
+        // spikes then falls back has a small first→last Δ but large peak/gross.
+        let peak_retained = retained.iter().copied().max().unwrap_or(0);
+        let peak_over_baseline = peak_retained as i64 - retained.first().copied().unwrap_or(0) as i64;
+        let mut gross_growth: u64 = 0;
+        let mut gross_shrink: u64 = 0;
+        for w in retained.windows(2) {
+            let step = w[1] as i64 - w[0] as i64;
+            if step > 0 {
+                gross_growth += step as u64;
+            } else {
+                gross_shrink += step.unsigned_abs();
+            }
+        }
         net_delta_retained += delta_retained;
+        gross_growth_retained += gross_growth;
+        gross_shrink_retained += gross_shrink;
         let row = SeriesClassRow {
             pretty_class: (*name).to_string(),
             retained,
             instances,
             delta_retained,
             delta_instances,
+            peak_retained,
+            peak_over_baseline,
+            gross_growth,
+            gross_shrink,
         };
         // "new" iff present in last and absent in first; "removed" iff reverse.
         if last_present && !first_present {
@@ -199,8 +243,9 @@ pub fn diff_series(reports: &[Report]) -> SeriesDiffResult {
 
     // Growth leaders: largest POSITIVE first→last Δretained, desc, name tie-break.
     let mut growth_leaders: Vec<SeriesClassRow> = all_rows
-        .into_iter()
+        .iter()
         .filter(|c| c.delta_retained > 0)
+        .cloned()
         .collect();
     growth_leaders.sort_by(|x, y| {
         y.delta_retained
@@ -208,6 +253,29 @@ pub fn diff_series(reports: &[Report]) -> SeriesDiffResult {
             .then_with(|| x.pretty_class.cmp(&y.pretty_class))
     });
     growth_leaders.truncate(TOP_N);
+
+    // Spike leaders (§37.1): largest peak-over-baseline, for N >= 3 only. Surfaces
+    // classes that climbed high mid-run then fell back — a transient the endpoint
+    // Δ hides. Excludes rows whose peak is at the last report (those are already
+    // ordinary growth leaders) so the section adds signal rather than duplicating.
+    let spike_leaders: Vec<SeriesClassRow> = if n >= 3 {
+        let mut spikes: Vec<SeriesClassRow> = all_rows
+            .iter()
+            .filter(|c| {
+                c.peak_over_baseline > 0 && c.peak_retained > c.retained[last]
+            })
+            .cloned()
+            .collect();
+        spikes.sort_by(|x, y| {
+            y.peak_over_baseline
+                .cmp(&x.peak_over_baseline)
+                .then_with(|| x.pretty_class.cmp(&y.pretty_class))
+        });
+        spikes.truncate(TOP_N);
+        spikes
+    } else {
+        Vec::new()
+    };
 
     // New classes: sorted by last retained desc, then name asc.
     new_classes.sort_by(|x, y| {
@@ -295,7 +363,10 @@ pub fn diff_series(reports: &[Report]) -> SeriesDiffResult {
         delta_total_objects,
         delta_total_shallow,
         net_delta_retained,
+        gross_growth_retained,
+        gross_shrink_retained,
         growth_leaders,
+        spike_leaders,
         new_classes,
         removed_classes,
         grown_suspects,
@@ -342,39 +413,72 @@ fn fmt_delta_count(n: i64) -> String {
 /// a single rounded percentage only (the only f64 in the whole renderer).
 fn verdict(d: &SeriesDiffResult) -> String {
     let first_shallow = d.total_shallow.first().copied().unwrap_or(0);
-    let pct = if first_shallow > 0 {
-        d.delta_total_shallow as f64 / first_shallow as f64 * 100.0
-    } else {
-        0.0
-    };
     let new_suspects = d.grown_suspects.iter().filter(|s| s.is_new).count();
-    let mut line = if d.delta_total_shallow > 0 {
-        let driver = d
-            .growth_leaders
-            .first()
-            .map(|c| {
-                format!(
-                    "; largest driver `{}` ({} retained)",
-                    c.pretty_class,
-                    fmt_delta_bytes(c.delta_retained)
-                )
-            })
-            .unwrap_or_default();
-        format!(
-            "Heap grew {:.1}% ({} shallow){}.",
-            pct,
-            fmt_delta_bytes(d.delta_total_shallow),
-            driver,
-        )
-    } else if d.delta_total_shallow < 0 {
-        format!(
-            "Heap shrank {:.1}% ({} shallow); no net growth.",
-            pct.abs(),
-            fmt_delta_bytes(d.delta_total_shallow),
-        )
+    // Guard a zero baseline: a percentage against a 0-byte first dump is undefined,
+    // so fall back to an absolute-only phrasing (§37.3).
+    let mut line = if first_shallow == 0 {
+        if d.delta_total_shallow > 0 {
+            let driver = d
+                .growth_leaders
+                .first()
+                .map(|c| {
+                    format!(
+                        "; largest driver `{}` ({} retained)",
+                        c.pretty_class,
+                        fmt_delta_bytes(c.delta_retained)
+                    )
+                })
+                .unwrap_or_default();
+            format!(
+                "Heap grew by {} shallow (baseline was empty){}.",
+                fmt_delta_bytes(d.delta_total_shallow),
+                driver,
+            )
+        } else {
+            "Heap size is unchanged (baseline was empty).".to_string()
+        }
     } else {
-        "Heap size is unchanged.".to_string()
+        let pct = d.delta_total_shallow as f64 / first_shallow as f64 * 100.0;
+        if d.delta_total_shallow > 0 {
+            let driver = d
+                .growth_leaders
+                .first()
+                .map(|c| {
+                    format!(
+                        "; largest driver `{}` ({} retained)",
+                        c.pretty_class,
+                        fmt_delta_bytes(c.delta_retained)
+                    )
+                })
+                .unwrap_or_default();
+            format!(
+                "Heap grew {:.1}% ({} shallow){}.",
+                pct,
+                fmt_delta_bytes(d.delta_total_shallow),
+                driver,
+            )
+        } else if d.delta_total_shallow < 0 {
+            format!(
+                "Heap shrank {:.1}% ({} shallow); no net growth.",
+                pct.abs(),
+                fmt_delta_bytes(d.delta_total_shallow),
+            )
+        } else {
+            "Heap size is unchanged.".to_string()
+        }
     };
+    // Surface gross churn when a net-flat/shrinking series still churned a lot —
+    // net endpoints alone would hide a grow-then-reclaim cycle (§37.2).
+    if d.gross_growth_retained > 0
+        && d.gross_growth_retained as i64 > d.net_delta_retained.max(0) * 2
+    {
+        line.push_str(&format!(
+            " Gross retained churn: +{} grown / {}{} reclaimed across steps.",
+            report::format_bytes(d.gross_growth_retained),
+            MINUS,
+            report::format_bytes(d.gross_shrink_retained),
+        ));
+    }
     if new_suspects > 0 {
         let plural = if new_suspects == 1 { "" } else { "s" };
         line.push_str(&format!(" {new_suspects} new suspect{plural}."));
@@ -439,8 +543,14 @@ pub fn render_md(d: &SeriesDiffResult) -> String {
         fmt_delta_bytes(d.delta_total_shallow)
     ));
     out.push_str(&format!(
-        "- **Net Δ Retained (all classes, r1→rN):** {}\n\n",
+        "- **Net Δ Retained (all classes, r1→rN):** {}\n",
         fmt_delta_bytes(d.net_delta_retained)
+    ));
+    out.push_str(&format!(
+        "- **Gross Retained churn (all classes, per-step):** +{} grown / {}{} reclaimed\n\n",
+        report::format_bytes(d.gross_growth_retained),
+        MINUS,
+        report::format_bytes(d.gross_shrink_retained),
     ));
 
     out.push_str("### Growth Leaders (by Δ retained)\n\n");
@@ -450,6 +560,36 @@ pub fn render_md(d: &SeriesDiffResult) -> String {
         let mut t = series_table("Class", n);
         for c in &d.growth_leaders {
             t.row(retained_row(&c.pretty_class, &c.retained, c.delta_retained));
+        }
+        t.render(&mut out);
+        out.push('\n');
+    }
+
+    // Spike Leaders (§37.1): only for N >= 3, and only when at least one class
+    // spiked above baseline mid-run without ending as an ordinary growth leader.
+    if !d.spike_leaders.is_empty() {
+        out.push_str("### Transient Spikes (peak above baseline)\n\n");
+        out.push_str(
+            "_Classes that climbed well above their baseline mid-series then fell back — a \
+             first→last Δ alone would miss them. Ranked by peak-over-baseline; the peak may \
+             be at any intermediate dump._\n\n",
+        );
+        let mut headers: Vec<String> = vec!["Class".to_string()];
+        headers.extend(report_col_headers(n));
+        headers.push("Peak".to_string());
+        headers.push("Peak−r1".to_string());
+        let mut aligns: Vec<Align> = vec![Align::Left];
+        aligns.extend(std::iter::repeat_n(Align::Right, n + 2));
+        let header_refs: Vec<&str> = headers.iter().map(String::as_str).collect();
+        let mut t = Table::new(&header_refs, &aligns);
+        for c in &d.spike_leaders {
+            let mut cells: Vec<String> = vec![format!("`{}`", c.pretty_class)];
+            for &r in &c.retained {
+                cells.push(report::format_bytes(r));
+            }
+            cells.push(report::format_bytes(c.peak_retained));
+            cells.push(fmt_delta_bytes(c.peak_over_baseline));
+            t.row(cells);
         }
         t.render(&mut out);
         out.push('\n');
@@ -518,7 +658,11 @@ pub fn render_md(d: &SeriesDiffResult) -> String {
         out.push('\n');
     }
 
-    out.push_str("### Disappeared Leak Suspects\n\n");
+    out.push_str("### Disappeared Leak Suspects (resolved)\n\n");
+    out.push_str(
+        "_Informational: these were flagged in an earlier dump but are gone from the current \
+         one — a fixed or transient issue, not a current problem. Listed last for that reason._\n\n",
+    );
     if d.gone_suspects.is_empty() {
         out.push_str("No leak suspect disappeared in the current dump.\n\n");
     } else {
@@ -948,5 +1092,80 @@ mod tests {
         assert_eq!(s.gone_suspects[0].pretty_class, "EarlyLeak");
         assert!(s.gone_suspects[0].is_gone);
         assert_eq!(s.gone_suspects[0].retained, vec![900, 900, 0]);
+    }
+
+    #[test]
+    fn spike_leaders_rank_mid_run_peak() {
+        // "Spiky" balloons in r2 then falls back below its r2 peak by r3 —
+        // net endpoints hide it, but it is the biggest transient (§37.1).
+        // "Climber" grows monotonically (peak == last, excluded from spikes).
+        let r1 = base_report(0, 0, vec![hist("Spiky", 1, 10, 100), hist("Climber", 1, 10, 100)], vec![]);
+        let r2 = base_report(0, 0, vec![hist("Spiky", 9, 90, 900), hist("Climber", 2, 20, 200)], vec![]);
+        let r3 = base_report(0, 0, vec![hist("Spiky", 3, 30, 300), hist("Climber", 3, 30, 300)], vec![]);
+        let s = diff_series(&[r1, r2, r3]);
+
+        // Spiky: peak 900 in r2, baseline 100 → peak_over_baseline 800, and it
+        // ends (300) below its peak, so it qualifies as a transient spike.
+        let spiky = s
+            .growth_leaders
+            .iter()
+            .chain(s.spike_leaders.iter())
+            .find(|c| c.pretty_class == "Spiky")
+            .expect("Spiky present");
+        assert_eq!(spiky.peak_retained, 900);
+        assert_eq!(spiky.peak_over_baseline, 800);
+
+        // spike_leaders (N>=3) leads with Spiky, and excludes Climber whose peak
+        // is its final value (never fell back).
+        assert!(!s.spike_leaders.is_empty(), "expected a spike leader");
+        assert_eq!(s.spike_leaders[0].pretty_class, "Spiky");
+        assert!(
+            !s.spike_leaders.iter().any(|c| c.pretty_class == "Climber"),
+            "Climber peaks at last value, not a transient spike"
+        );
+    }
+
+    #[test]
+    fn gross_churn_surfaced_when_net_flat() {
+        // Retained goes 100 → 1000 → 100: net-flat endpoints, but 900 grown then
+        // 900 reclaimed. Verdict must surface the gross churn (§37.2).
+        let r1 = base_report(0, 0, vec![hist("Churner", 1, 10, 100)], vec![]);
+        let r2 = base_report(0, 0, vec![hist("Churner", 9, 90, 1_000)], vec![]);
+        let r3 = base_report(0, 0, vec![hist("Churner", 1, 10, 100)], vec![]);
+        let d = diff_series(&[r1, r2, r3]);
+
+        assert_eq!(d.gross_growth_retained, 900);
+        assert_eq!(d.gross_shrink_retained, 900);
+        assert_eq!(d.net_delta_retained, 0);
+
+        let v = verdict(&d);
+        assert!(
+            v.contains("Gross retained churn"),
+            "gross churn should surface when net is flat but churn is high: {v}"
+        );
+        assert!(v.contains("grown"), "got: {v}");
+        assert!(v.contains("reclaimed"), "got: {v}");
+    }
+
+    #[test]
+    fn verdict_zero_baseline_absolute() {
+        // First dump has 0 total shallow: a percentage is undefined, so the
+        // verdict must use absolute phrasing and no "%" (§37.3).
+        let a = base_report(0, 0, vec![hist("Big", 1, 10, 500)], vec![]);
+        let b = base_report(0, 2_000, vec![hist("Big", 5, 50, 2_000)], vec![]);
+        let d = diff_series(&[a, b]);
+        let v = verdict(&d);
+        assert!(
+            v.contains("baseline was empty"),
+            "zero-base verdict should note the empty baseline: {v}"
+        );
+        assert!(!v.contains('%'), "no percentage against a zero baseline: {v}");
+
+        // A zero→zero series reports unchanged, still no percentage.
+        let c = base_report(0, 0, vec![], vec![]);
+        let e = base_report(0, 0, vec![], vec![]);
+        let d2 = diff_series(&[c, e]);
+        let v2 = verdict(&d2);
+        assert!(v2.contains("unchanged (baseline was empty)"), "got: {v2}");
     }
 }

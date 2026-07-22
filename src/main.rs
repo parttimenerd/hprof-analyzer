@@ -219,6 +219,11 @@ enum CompareCmd {
         /// Diff output format (Markdown, JSON, or HTML); defaults to Markdown.
         #[arg(short, long, value_enum)]
         format: Option<FormatArg>,
+        /// Write the diff to this path instead of stdout. A `.gz` suffix
+        /// gzip-compresses the output; the format is inferred from the extension
+        /// when `--format` is omitted.
+        #[arg(short, long, value_hint = ValueHint::FilePath)]
+        output: Option<String>,
     },
 }
 
@@ -385,7 +390,11 @@ fn main() {
                     Err(e) => fail(e),
                 }
             }
-            CompareCmd::Reports { reports, format } => {
+            CompareCmd::Reports {
+                reports,
+                format,
+                output,
+            } => {
                 // Name a missing input up front for a clear error, mirroring the
                 // MAT arm. Skip "-" (stdin) — it has no filesystem path.
                 for p in &reports {
@@ -393,8 +402,13 @@ fn main() {
                         fail(format!("cannot open '{p}': no such file or directory"));
                     }
                 }
-                match diff_reports::run(&reports, resolve_format(format, None)) {
-                    Ok(text) => print!("{text}"),
+                let fmt = resolve_format(format, output.as_deref());
+                match diff_reports::run(&reports, fmt) {
+                    Ok(text) => {
+                        if let Err(e) = write_output(output.as_deref(), &text) {
+                            fail(e);
+                        }
+                    }
                     Err(e) => fail(e),
                 }
             }
