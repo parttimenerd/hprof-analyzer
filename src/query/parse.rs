@@ -13,11 +13,11 @@ use chumsky::input::{Stream, ValueInput};
 use chumsky::prelude::*;
 use logos::Logos;
 
+use crate::query::QueryError;
 use crate::query::ast::{
     AggFunc, Attr, ClassSpec, CompareOp, FromSource, OrderBy, PathOperand, Predicate, Query,
     RefRole, SelectItem, SortDir, Value,
 };
-use crate::query::QueryError;
 
 /// OQL token kinds, lexed directly by logos.
 ///   - identifiers may contain `.`, `$`, and a trailing/embedded `*` glob
@@ -367,6 +367,11 @@ where
             .then(select_list.clone())
             .then(retained_set.clone())
             .then_ignore(ident_ci("FROM"))
+            // MAT allows `FROM OBJECTS <class>` as a no-op synonym for `FROM <class>`.
+            // Consume the optional OBJECTS marker here (before from_source) so it
+            // applies to both the class form and the parenthesized-subquery form.
+            // Style mirrors the INSTANCEOF .or_not() at from_class (line ~294).
+            .then_ignore(ident_ci("OBJECTS").or_not())
             .then(from_source)
             .then(any_ident().and_is(reserved_ident().not()).or_not())
             .then(ident_ci("WHERE").ignore_then(predicate.clone()).or_not())
@@ -589,6 +594,9 @@ pub const RESERVED: &[&str] = &[
     "BY",
     "ASC",
     "DESC",
+    // MAT keyword: `FROM OBJECTS <class>` is a no-op synonym for `FROM <class>`.
+    // Listed here so it is never harvested as a class-name or alias completion.
+    "OBJECTS",
 ];
 
 /// Aggregate function names (`agg_func`'s source set), upper-cased.
@@ -2296,5 +2304,198 @@ mod tests {
                 other => panic!("expected ToString for {variant}, got {other:?}"),
             }
         }
+    }
+
+    // ============================================================
+    // Group — FROM OBJECTS keyword (MAT gap: 266 occurrences in OQLTest.java)
+    // ============================================================
+
+    /// `SELECT * FROM OBJECTS java.lang.String` must parse to the SAME AST as
+    /// `SELECT * FROM java.lang.String` — OBJECTS is a no-op marker.
+    #[test]
+    fn from_objects_bare_class_parses() {
+        let with_objects = parse("SELECT * FROM OBJECTS java.lang.String").unwrap();
+        let without = parse("SELECT * FROM java.lang.String").unwrap();
+        assert_eq!(
+            with_objects.from, without.from,
+            "FROM OBJECTS <class> must produce identical FROM as FROM <class>"
+        );
+    }
+
+    /// The class_name and is_regex fields must be correct after OBJECTS.
+    #[test]
+    fn from_objects_class_name_and_is_regex() {
+        let q = parse("SELECT * FROM OBJECTS java.lang.String").unwrap();
+        let spec = q.from.class_spec().expect("expected class source");
+        assert_eq!(
+            spec.class_name, "java.lang.String",
+            "class_name must be java.lang.String after OBJECTS"
+        );
+        assert!(
+            !spec.is_regex,
+            "bare-ident after OBJECTS must not be is_regex"
+        );
+        assert!(!spec.instanceof, "OBJECTS alone must not set instanceof");
+    }
+
+    /// `SELECT COUNT(*) FROM OBJECTS java.lang.String` — the most common MAT form.
+    #[test]
+    fn from_objects_count_star_parses() {
+        let q = parse("SELECT COUNT(*) FROM OBJECTS java.lang.String").unwrap();
+        assert_eq!(
+            q.from.class_name(),
+            "java.lang.String",
+            "FROM OBJECTS class_name must be java.lang.String"
+        );
+    }
+
+    /// `FROM OBJECTS` is case-insensitive: `from objects` and `FROM OBJECTS` both work.
+    #[test]
+    fn from_objects_case_insensitive() {
+        for variant in &[
+            "SELECT * FROM OBJECTS java.lang.String",
+            "SELECT * FROM objects java.lang.String",
+            "SELECT * FROM Objects java.lang.String",
+        ] {
+            let q = parse(variant).unwrap_or_else(|e| panic!("parse failed for {variant:?}: {e}"));
+            assert_eq!(
+                q.from.class_name(),
+                "java.lang.String",
+                "FROM {variant} must yield class java.lang.String"
+            );
+        }
+    }
+
+    /// `FROM OBJECTS ( <subquery> )` — OBJECTS before a parenthesized subquery.
+    #[test]
+    fn from_objects_subquery_parses() {
+        let q = parse("SELECT * FROM OBJECTS ( SELECT * FROM java.lang.String )").unwrap();
+        match &q.from {
+            FromSource::Subquery(inner) => {
+                assert_eq!(
+                    inner.from.class_name(),
+                    "java.lang.String",
+                    "inner subquery must have class java.lang.String"
+                );
+            }
+            other => panic!("expected FromSource::Subquery after OBJECTS, got {other:?}"),
+        }
+    }
+
+    /// `FROM OBJECTS "java\.lang\..*"` — quoted/regex class after OBJECTS must still
+    /// set is_regex = true.
+    #[test]
+    fn from_objects_quoted_regex_sets_is_regex() {
+        let q = parse(r#"SELECT * FROM OBJECTS "java\.lang\..*""#).unwrap();
+        let spec = q.from.class_spec().expect("expected class source");
+        assert!(
+            spec.is_regex,
+            "quoted class after OBJECTS must set is_regex = true"
+        );
+        assert_eq!(spec.class_name, r"java\.lang\..*");
+    }
+
+    /// `FROM OBJECTS java.lang.String` with an alias — alias is correctly captured.
+    #[test]
+    fn from_objects_with_alias() {
+        let q = parse("SELECT s FROM OBJECTS java.lang.String s").unwrap();
+        assert_eq!(q.from.class_name(), "java.lang.String");
+        assert_eq!(q.alias.as_deref(), Some("s"));
+    }
+
+    /// `FROM OBJECTS INSTANCEOF` is NOT valid in Eclipse MAT (OBJECTS and INSTANCEOF
+    /// are mutually exclusive). DECISION: we ACCEPT it as a harmless no-op (OBJECTS
+    /// is consumed, then INSTANCEOF proceeds normally), because chumsky has no clean
+    /// way to reject a keyword combination in two separate optional combinators
+    /// without backtracking complications. This test PINS that accepted-no-op
+    /// behavior so any future change to reject it will fail loudly and require a
+    /// deliberate decision.
+    ///
+    /// If you wish to reject this form in the future, emit a custom error via
+    /// `.validate` on `from_class` after checking both flags.
+    #[test]
+    fn from_objects_instanceof_is_accepted_as_noop() {
+        // OBJECTS is consumed as the optional marker; INSTANCEOF proceeds normally.
+        let result = parse("SELECT * FROM OBJECTS INSTANCEOF java.lang.String");
+        // Pin current behavior: accepted (OBJECTS no-op, INSTANCEOF sets the flag).
+        match result {
+            Ok(q) => {
+                assert_eq!(
+                    q.from.class_name(),
+                    "java.lang.String",
+                    "FROM OBJECTS INSTANCEOF: class must be java.lang.String"
+                );
+                // INSTANCEOF flag should be set because it was consumed normally.
+                assert!(
+                    q.from.instanceof(),
+                    "FROM OBJECTS INSTANCEOF: instanceof flag must be set"
+                );
+            }
+            Err(e) => {
+                // If a future implementation rejects this form, update the test to
+                // assert the actionable error message instead:
+                //   "FROM OBJECTS INSTANCEOF is not valid; use FROM OBJECTS <class>
+                //    or FROM INSTANCEOF <class>"
+                panic!(
+                    "FROM OBJECTS INSTANCEOF currently accepted as no-op, \
+                     but got parse error: {e}\n\
+                     If you intentionally added rejection, update this test to \
+                     assert the actionable error message."
+                );
+            }
+        }
+    }
+
+    /// A bare `objects` used as a WHERE field must still work — adding OBJECTS to
+    /// RESERVED only blocks it in the alias position (after the class name), not
+    /// inside predicate expressions where `any_ident()` is used.
+    ///
+    /// NOTE: `objects` in a WHERE field position uses `any_ident()` which does NOT
+    /// check `RESERVED`, so this continues to work fine. The RESERVED set only
+    /// affects the alias slot (the `.and_is(reserved_ident().not())` guard at line
+    /// 371 in the SELECT production).
+    #[test]
+    fn objects_as_where_field_still_parses() {
+        // `objects` used as a plain field name in WHERE is not affected by RESERVED.
+        let q = parse("SELECT * FROM C WHERE objects = 1").unwrap();
+        match q.where_.as_ref().unwrap() {
+            Predicate::Compare { lhs, .. } => {
+                assert_eq!(
+                    *lhs,
+                    Attr::Field("objects".into()),
+                    "objects as a WHERE field must parse as Attr::Field(\"objects\")"
+                );
+            }
+            other => panic!("expected Compare predicate, got {other:?}"),
+        }
+    }
+
+    /// OBJECTS must appear in the RESERVED array — it should never be offered as
+    /// a class-name or alias completion.
+    #[test]
+    fn objects_is_in_reserved() {
+        assert!(
+            RESERVED.iter().any(|&r| r.eq_ignore_ascii_case("OBJECTS")),
+            "OBJECTS must be in RESERVED (guards alias-position and completion drift)"
+        );
+        assert!(
+            is_reserved("OBJECTS"),
+            "is_reserved(\"OBJECTS\") must return true"
+        );
+        assert!(
+            is_reserved("objects"),
+            "is_reserved is case-insensitive; must return true for \"objects\""
+        );
+    }
+
+    /// `FROM OBJECTS` with a glob class pattern — should work identically to bare FROM.
+    #[test]
+    fn from_objects_glob_class_parses() {
+        let with_objects = parse("SELECT * FROM OBJECTS java.util.*").unwrap();
+        let without = parse("SELECT * FROM java.util.*").unwrap();
+        assert_eq!(
+            with_objects.from, without.from,
+            "FROM OBJECTS glob must produce identical FROM as FROM glob"
+        );
     }
 }

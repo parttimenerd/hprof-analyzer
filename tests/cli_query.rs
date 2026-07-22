@@ -1722,3 +1722,92 @@ fn tostring_broad_regex_from_is_plan_error() {
         "actionable error must name the correct FROM class; got:\n{combined}"
     );
 }
+
+// ============================================================
+// MAT gap — FROM OBJECTS keyword (the most common MAT construct)
+// ============================================================
+
+/// `SELECT COUNT(*) FROM OBJECTS java.lang.String` must return the SAME count as
+/// `SELECT COUNT(*) FROM java.lang.String`, and both must be > 0.
+/// This is the primary regression guard: before the fix, OBJECTS was silently
+/// parsed as the class name and returned 0 rows.
+#[test]
+fn from_objects_count_equals_plain_from() {
+    let Some(hprof) = philosophers() else { return };
+    let with_objects = query_count_value(&hprof, "SELECT COUNT(*) FROM OBJECTS java.lang.String")
+        .expect("FROM OBJECTS query must succeed and return a numeric cell");
+    let without = query_count_value(&hprof, "SELECT COUNT(*) FROM java.lang.String")
+        .expect("plain FROM query must succeed and return a numeric cell");
+    assert!(
+        with_objects > 0,
+        "FROM OBJECTS java.lang.String must return > 0 rows (not silently 0); got {with_objects}"
+    );
+    assert!(
+        without > 0,
+        "FROM java.lang.String must return > 0 rows; got {without}"
+    );
+    assert_eq!(
+        with_objects, without,
+        "COUNT(*) FROM OBJECTS java.lang.String ({with_objects}) must equal \
+         COUNT(*) FROM java.lang.String ({without}) — OBJECTS is a no-op marker"
+    );
+}
+
+/// `SELECT * FROM OBJECTS java.lang.String` row count must equal the plain form.
+#[test]
+fn from_objects_row_count_equals_plain_from() {
+    let Some(hprof) = philosophers() else { return };
+    let with_objects = query_row_count(&hprof, "SELECT * FROM OBJECTS java.lang.String")
+        .expect("FROM OBJECTS SELECT * must succeed and return a row count");
+    let without = query_row_count(&hprof, "SELECT * FROM java.lang.String")
+        .expect("plain SELECT * FROM must succeed and return a row count");
+    assert!(
+        with_objects > 0,
+        "FROM OBJECTS java.lang.String must return > 0 object rows; got {with_objects}"
+    );
+    assert_eq!(
+        with_objects, without,
+        "SELECT * FROM OBJECTS ({with_objects}) must return the same rows as \
+         SELECT * FROM ({without})"
+    );
+}
+
+/// `FROM OBJECTS` works with `INSTANCEOF` (OBJECTS followed by INSTANCEOF is
+/// accepted as a no-op — OBJECTS is consumed, INSTANCEOF applies normally).
+/// This guards the ACCEPTED-no-op decision pinned in the parser unit test.
+#[test]
+fn from_objects_instanceof_is_accepted_end_to_end() {
+    let Some(hprof) = philosophers() else { return };
+    let with_objects = query_row_count(&hprof, "SELECT * FROM OBJECTS INSTANCEOF java.lang.String")
+        .expect("FROM OBJECTS INSTANCEOF must succeed");
+    let without = query_row_count(&hprof, "SELECT * FROM INSTANCEOF java.lang.String")
+        .expect("FROM INSTANCEOF must succeed");
+    assert!(
+        with_objects > 0,
+        "FROM OBJECTS INSTANCEOF java.lang.String must return > 0 rows; got {with_objects}"
+    );
+    assert_eq!(
+        with_objects, without,
+        "FROM OBJECTS INSTANCEOF ({with_objects}) must equal FROM INSTANCEOF ({without})"
+    );
+}
+
+/// `FROM OBJECTS` is case-insensitive end-to-end.
+#[test]
+fn from_objects_case_insensitive_end_to_end() {
+    let Some(hprof) = philosophers() else { return };
+    let baseline = query_count_value(&hprof, "SELECT COUNT(*) FROM java.lang.String")
+        .expect("baseline query must succeed");
+    for variant in &[
+        "SELECT COUNT(*) FROM OBJECTS java.lang.String",
+        "SELECT COUNT(*) FROM objects java.lang.String",
+        "SELECT COUNT(*) FROM Objects java.lang.String",
+    ] {
+        let n = query_count_value(&hprof, variant)
+            .unwrap_or_else(|| panic!("query failed or printed no count: {variant}"));
+        assert_eq!(
+            n, baseline,
+            "FROM OBJECTS case variant {variant:?} must yield the same count as the baseline {baseline}"
+        );
+    }
+}
