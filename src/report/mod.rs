@@ -11,6 +11,7 @@
 //! byte-exact- and golden-tested, so opt-in fields are `Option<T>` +
 //! `skip_serializing_if` and absent by default to preserve parity.
 
+mod anchors;
 mod build;
 pub(crate) mod format;
 mod model;
@@ -18,6 +19,7 @@ mod render_graphs;
 mod render_md;
 mod triage;
 
+pub use anchors::*;
 pub use build::*;
 pub use format::*;
 pub use model::*;

@@ -878,6 +878,15 @@ Ordered by impact. **Effort** now uses the §22 classes: **H** = render-only (da
 | P3 | Graphs: the standalone sparkline duplicates the labeled bar-column table that always follows it (sample 209 vs 211–227; render_graphs.rs:745 vs 758) — drop it here and relocate sparklines to the `compare` output as a cross-dump trend line, filling §37's missing-visual gap (§44.4) | F |
 | P3 | Triage: compute the reachable-shallow total **once** and have `overview`/`leaks` share it (or `debug_assert_eq!`) — today equality rests on a comment (build.rs:2053) + two summation loops, a latent split-denominator drift (§45.3) | C |
 | P3 | Triage: enforce unit-suffix naming on the ~55 threshold consts + add a provenance comment per const — `OVERCAP_WASTE_PCT` (%) sits beside `OVERCAP_FILL_BP` (bp) in one rule, so a bp/pct transposition fails silently (100× gap); this is the §26.7 provenance ask done once (§45.4) | F |
+| **P1** | **One canonical name for the `total_shallow` scalar** — the same 29.8 MB is labeled "Total heap (reachable)" (render_md.rs:359), "Total shallow heap" (692/graphs 123/App.tsx 1161) and "Total heap" (App.tsx:300 KPI); reuse the `HEAP_BASIS_LABEL` vocabulary so scalar and "% Heap" denominator share one name across all four formats (§48.1) | H |
+| **P2** | **"% of total heap" on the Unreachable row uses a THIRD, unprinted denominator** — `unreachable / (reachable+unreachable)` (render_md.rs:697–699), not the "Total shallow heap 29.8 MB" printed directly above it; both round to 2.2% only because this sample is barely fragmented. Name the base explicitly or switch to the reachable base that matches the adjacent scalar (§48.2) | H |
+| P3 | **Drop the duplicated fragmentation percent** — "; 2.2% of total heap" (render_md.rs:699) and the standalone "Heap fragmentation" row (715) are the *same* `unreachable/(reachable+unreachable)` ratio, printed twice under two labels on adjacent rows; keep the fragmentation row, strip the suffix (§48.3) | H |
+| **P2** | **md/graphs/HTML disagree on the unreachable-block labels** — only plain-md shows the "% of total heap" fragment (699) and the "(unreachable / total)" clarifier (715); graphs (131/139) and HTML (1181/1187) omit both. Apply the chosen §48.2/§48.3 wording identically in all three renderers (§48.4, parity) | F |
+| **P1** | **Significant-frame percentage silently uses a per-thread base** — `` retains 4.6 MB (20.2%) `` (render_md.rs:1361–1366, HTML App.tsx:1931) divides by the *thread's* retained heap (`SignificantLocal.pct`, model.rs:713–714), not the reachable heap every other "%" uses; on tiny threads this prints alarming "47.6%/76.2%" for byte-sized locals (sample 2635/2647). Label the per-thread base once per thread (or add a heap-relative percent) — render-only, both totals already in the model (§49.1) | H |
+| **P2** | **Local-root rows read as accidental duplicates** — identical `(class, shallow, retained)` rows repeat 2–3× (sample thread 1: `Solver` ×2 lines 2518–2519, `HashSet` ×3 2528–2530) because `render_thread_locals` (render_md.rs:1391) drops the distinguishing `obj_index_1based` (model.rs:721); collapse to one row with a `×N` count (mirroring the §28.1 dominator `×N` collapse) or surface the index (§49.2) | H |
+| **P2** | **Local-root table is a bounded, non-summing sample but says neither** — header `_Local roots: 124._` but only 19 rows shown (sample 2512 vs 2517–2537), capped by `--detail`; add a "showing top N of M; sizes overlap and do not sum to the thread total" line (both counts already in the model, model.rs:654/659; reuses the §47.3 overlap caveat) (§49.3) | F |
+| P3 | **"Local roots: N" line is emitted for some threads, omitted for others** — gated on `local_root_count > 0` (render_md.rs:1344), so thread 2 "Reference Handler" (sample 2571) shows no count line and the absence is ambiguous (zero vs omitted); always emit it, printing `0` when empty (§31.4 emptiness principle, per-thread) (§49.4) | F |
+| **P2** | **md shows local roots inline; HTML double-nests them behind a collapsed `<details>`** — `ThreadLocalsTable` (App.tsx:1849–1850) wraps the table in a collapsed disclosure *inside* the already-collapsed per-thread card (App.tsx:1896), so expanding a thread in HTML still hides its locals; md renders them inline unconditionally (render_md.rs:1353). Unify default visibility across formats (§49.5, parity) | F |
 
 *Already satisfied (do not re-do):* structured JSON triage (`Report.triage`, §19.9);
 schema versioning (`schema_version`=6, §19.8) — *present and enforced on read-back (main.rs:709),
@@ -4079,3 +4088,238 @@ Four moves, all reusing captured data:
 The engine already knows the biggest thing on the heap lives in a stack frame. §47 just makes it *say so*, in
 the same `Class#…` vocabulary it already uses for fields.
 
+## 48. "Total heap" Denominator & Label Consistency Audit (pass 29)
+
+This pass is a *cross-section arithmetic* audit, distinct from §27 (which argued the "% Heap" **basis** is a
+category error) and §45 (threshold/percentage-basis discipline). Here the question is narrower and entirely
+verifiable against the committed sample: **does the phrase "total heap" mean the same number everywhere it
+appears, and is the same scalar labeled the same way across the four formats?** It does not, and it is not.
+Every claim below is grounded in `docs/samples/scala-doku-full.md`, its `.graphs.md` sibling, and the render
+sources.
+
+### 48.1 The same 29.8 MB scalar wears four different labels (new P1)
+
+`SystemOverview.total_shallow` (model.rs:319) is a single value — 31,252,288 bytes → "29.8 MB". It is rendered
+under **four distinct labels** across the report surfaces:
+
+| Surface                                   | Label                       | Source                          |
+| ----------------------------------------- | --------------------------- | ------------------------------- |
+| md / graphs **Summary digest**            | `Total heap (reachable)`    | render_md.rs:359                |
+| md **System Overview** detail table       | `Total shallow heap`        | render_md.rs:692                |
+| graphs **System Overview** detail table   | `Total shallow heap`        | render_graphs.rs:123            |
+| HTML **System Overview** `<dl>`           | `Total shallow heap`        | App.tsx:1161                    |
+| HTML **KPI strip**                        | `Total heap`                | App.tsx:300                     |
+
+So a reader who scrolls from the Summary ("Total heap (reachable) 29.8 MB", sample 40) to the System Overview
+("Total shallow heap 29.8 MB", sample 85) sees the *same number* introduced twice under two names, with no
+statement that they are the same quantity. The HTML KPI strip adds a third bare "Total heap". The three names
+—"total heap (reachable)", "total shallow heap", "total heap"— are not obviously synonyms to a non-expert:
+"shallow" vs "reachable" vs bare "heap" each imply a different scope.
+
+**Reason it matters:** the whole document's thesis is *find where the heap comes from*. If the headline size of
+"the heap" is named three ways, a reader cannot be sure the 76.7% share, the 29.8 MB total, and the composition
+rows are all denominated in the same thing. **Availability: Have** — this is a pure label-consolidation. Pick one
+canonical rendering (the §0b `HEAP_BASIS_LABEL` = "reachable heap" work already established the *denominator*
+name; the *scalar* should match it) and use it in all four places: e.g. "Total heap (reachable, shallow) —
+29.8 MB" once, then "reachable heap" everywhere the same number recurs. This dovetails with the existing
+`HEAP_BASIS_LABEL` constant (format.rs) — extend it to the scalar's row label, not just the percentage suffix.
+
+### 48.2 "% of total heap" uses a THIRD denominator — reachable + unreachable (new P2)
+
+The Unreachable row prints "4,266 (673.0 KB; 2.2% of total heap)" (sample 89). The percentage is computed
+(render_md.rs:697–699) as:
+
+```
+let total = o.total_shallow + o.unreachable_shallow;      // reachable + unreachable
+format!(" {:.1}% of total heap", o.unreachable_shallow as f64 / total as f64 * 100.0)
+```
+
+So *this* "total heap" = **reachable + unreachable** (31,252,288 + 673.0 KB ≈ 31.9 MB), a different quantity
+from the "Total shallow heap 29.8 MB" row six lines above it (reachable only). The label "% of total heap"
+therefore refers to a denominator the report never prints as a line item. 673 KB ÷ 29.8 MB would be 2.20%;
+673 KB ÷ (29.8 MB + 673 KB) is 2.15% → both round to "2.2%" in *this* sample, which is precisely why the bug is
+invisible here and will surface on a dump with more garbage. On a heap that is 40% unreachable the two
+denominators diverge by 40% and the "% of total heap" figure will look wrong to anyone who divides by the
+printed 29.8 MB.
+
+**Reason:** a percentage whose denominator is never shown and differs from the adjacent scalar is unverifiable
+and, on fragmented heaps, misleading. **Availability: Have.** Either (a) relabel to "% of all heap (reachable +
+unreachable)" so the base is explicit, or (b) print the reachable-only ratio to match the scalar directly above
+it. Option (a) is preferable because it keeps fragmentation honest; whichever is chosen, the label must name the
+base. This is the §27.5/§45.1 discipline applied to the one denominator those passes did not cover: the
+unreachable base.
+
+### 48.3 "Heap fragmentation (unreachable / total)" restates the exact same ratio under a new name (new P3)
+
+Immediately below the Unreachable row, md prints "Heap fragmentation (unreachable / total) 2.2%" (sample 90),
+from `heap_fragmentation_ratio` (model.rs:365, documented "unreachable shallow / total heap (reachable +
+unreachable)"). That is the **same formula** as the "% of total heap" fragment on the line above
+(render_md.rs:713–716 vs 697–699): both are `unreachable_shallow / (reachable + unreachable)`. The report thus
+prints 2.2% twice, once appended to the Unreachable count and once as its own "Heap fragmentation" row — two
+labels, one number, adjacent rows.
+
+**Reason:** duplication the user explicitly asked to avoid ("without duplication"). **Availability: Have.** Drop
+one of the two. Recommended: keep the standalone "Heap fragmentation" row (its label already parenthesizes the
+formula) and strip the redundant "; 2.2% of total heap" suffix from the Unreachable row, leaving that row to
+report the *count and bytes* only (which is unique information). Net effect: the Unreachable row says *how many
+/ how big*, the fragmentation row says *what fraction* — no overlap.
+
+### 48.4 The md ↔ graphs ↔ HTML label set diverges on this very block (new P2, parity)
+
+The three renderers do not even agree on how much denominator context to show for these identical scalars:
+
+| Row                    | md (render_md.rs)                          | graphs (render_graphs.rs)     | HTML (App.tsx)              |
+| ---------------------- | ------------------------------------------ | ----------------------------- | --------------------------- |
+| Unreachable            | `… (673.0 KB; 2.2% of total heap)` (699)   | `… (673.0 KB)` only (131)     | `… (673.0 KB)` only (1181)  |
+| Heap fragmentation     | `Heap fragmentation (unreachable / total)` (715) | `Heap fragmentation` (139) | `Heap fragmentation` (1187) |
+
+So the plain-md reader is told the fragmentation denominator ("unreachable / total") and given the inline
+percent; the graphs and HTML readers get neither clarifier. This violates the standing comparability rule (the
+same block must present the same data and the same labels in all four formats). It is not a data difference —
+all three have `unreachable_shallow` and `heap_fragmentation_ratio` — it is a *rendering* divergence.
+
+**Reason / fix:** once §48.2 and §48.3 pick the canonical wording, apply it identically in all three renderers
+(and confirm JSON carries the raw `unreachable_shallow` + `heap_fragmentation_ratio` so the value is
+reconstructable — it does, model.rs:344/368). **Availability: Have** (format-plumbing only, no model change, no
+SCHEMA bump). The graphs/HTML rows simply gain the same clarifier text the md row already has.
+
+### 48.5 One thing that IS consistent — note it so §35/§48 don't contradict
+
+To keep this pass reconciled with the §35 consistency table: the Heap Composition rows **do** sum to the
+headline total. 770,497 + 65,061 + 114,257 + 2,851 = **952,666** objects = "Total objects" (sample 84 vs
+107–110), and 19.7 + 5.4 + 4.7 + 0.034 MB ≈ **29.8 MB** = "Total shallow heap" (sample 85). This confirms
+`total_objects`/`total_shallow` are the **reachable** aggregates (composition is documented reachable-only,
+model.rs:325) and that the composition is a faithful partition of them. The defect is purely in the *labels*
+(§48.1) and the *unreachable denominator* (§48.2–48.4), not in the reachable arithmetic. This is worth stating
+explicitly so the fix does not "correct" a total that is already right.
+
+### 48.6 Summary and Priority-Summary deltas
+
+- **§48.1 (P1, Have):** one canonical name for the `total_shallow` scalar across Summary / Overview / KPI in all
+  four formats; reuse the `HEAP_BASIS_LABEL` vocabulary so the scalar and the "% Heap" denominator share a name.
+- **§48.2 (P2, Have):** name the "% of total heap" base (reachable + unreachable) explicitly, or switch it to the
+  reachable-only base that matches the adjacent scalar; today it silently uses a third, unprinted denominator.
+- **§48.3 (P3, Have):** drop the duplicated fragmentation percent — it is printed twice under two labels.
+- **§48.4 (P2, Have, parity):** apply the chosen wording identically in md / graphs / HTML; today only plain-md
+  shows the denominator clarifier and the inline percent.
+- **§48.5:** the reachable composition arithmetic is correct and must be preserved; the fix is label-only.
+
+All five are **Have** (label/format work, no new field, no heap pass, no SCHEMA bump), and none change a
+rendered *number* except §48.2, which only changes it on fragmented heaps where the current figure is already
+wrong. This pass closes the last "what does 'total heap' mean here?" ambiguity that §27/§45 left on the
+unreachable side of the ledger.
+
+## 49. Threads Section: Local-Root & Significant-Frame Rendering Audit (pass 30)
+
+The Threads section (`render_threads`, render_md.rs:1257–1376; shared by md + graphs; HTML `ThreadCard`
+App.tsx:1890–1945) is one of the most information-dense parts of the report — thread 1 "main" in the sample
+spans lines 2508–2567 (≈60 lines for one thread). It has real actionability (it is the only place that ties a
+retained size to a *stack frame*, i.e. to code), but a walkthrough of the sample surfaces five defects: an
+uncomparable-percentage basis, apparent-but-unexplained duplicate rows, a local-root sample that neither sums
+nor says it is a sample, an inconsistently-present "Local roots" count line, and an md/graphs↔HTML parity gap
+on how the whole block is disclosed. None of these are covered by earlier passes (§45/§48 audited *heap*
+percentages and the *total-heap* label; the thread section's percentages use a different, per-thread base that
+no pass has examined).
+
+### 49.1 The significant-frame percentage uses a per-thread base but is printed like every other "% Heap" (new, P1, Have)
+
+Each significant-frame local prints `` `Class` retains <bytes> (<pct>%) `` (render_md.rs:1361–1366; HTML
+App.tsx:1931). The `pct` is documented as "Retained heap as a percentage of the **owning thread's** retained
+heap" (model.rs:713–714), and the sample confirms it: thread 1 line 2557 shows
+`` `cafesat.sat.Solver` retains 4.6 MB (20.2%) `` where 4.6 MB ÷ 22.9 MB (thread retained) = 20.1% — **not** 4.6
+MB ÷ 29.8 MB (heap) = 15.4%. Thread 3 "Finalizer" line 2600 shows `` NativeReferenceQueue retains 40 B
+(19.2%) `` where 40 B ÷ 208 B (thread retained) = 19.2% — a bare "19.2%" that looks alarming until you realise
+the whole thread retains 208 B.
+
+**Reason / fix:** every *other* percent in the report is "% of reachable heap" (now canonically
+`HEAP_BASIS_LABEL`, §45.2/§48.1). This one silently switches base with no label, so a reader cannot compare
+"20.2%" here against "20.2%" anywhere else, and the 47.6%/28.6%/76.2% figures on tiny threads (sample 2635/
+2638/2647) read as major retainers when they are bytes. Fix (label-only, no value change): print the base once
+per thread — e.g. `_Frame percentages are of this thread's 22.9 MB retained heap._` under the Thread heading —
+**or** add a second heap-relative percent so the two bases are both visible and cross-comparable. The thread's
+retained total is already in `ThreadInfo.retained` (model.rs:665) and the heap total is the §48.1 scalar, so
+either fix is **Have** (render-only, no model change). Applies identically to md/graphs (render_md.rs:1362) and
+HTML (App.tsx:1931).
+
+### 49.2 Local-root table rows look like accidental duplicates because instances have no identity (new, P2, Have)
+
+The Local root objects table (render_thread_locals, render_md.rs:1381–1400) lists one row per sampled local
+with only `Object | Shallow | Retained`. In the sample, thread 1 shows `` `cafesat/sat/Solver` | 168 B | 4.6
+MB `` **twice** (lines 2518–2519), `` `scala/runtime/ObjectRef` | 16 B | 962.1 KB `` twice (2522–2523), and
+`` scala/collection/immutable/HashSet | 16 B | 16 B `` **three** times (2528–2530); thread 3 shows three
+identical `NativeReferenceQueue` 40 B rows (2587–2589). These are distinct object *instances* (each has its own
+`obj_index_1based`, model.rs:721), but the table drops that field, so a reader sees what looks like a rendering
+bug — the same row repeated.
+
+**Reason / fix:** either (a) collapse identical (class, shallow, retained) rows into one with a `×N` count
+column — mirroring the `×N` collapse the plan already mandates for the dominator subtree (§28.1/§13.3) — so
+"3× HashSet 16 B" is one honest row; or (b) surface the distinguishing `obj_index_1based` (e.g. `@ #12345`) so
+the rows are visibly different instances. Option (a) is the better default (it shortens a 19-row table to ~12
+and makes the multiplicity a *fact* rather than an eyesore). `obj_index_1based` is already in the model
+(model.rs:721) so both options are **Have** (render-only). Must land in md/graphs (render_md.rs:1391) and HTML
+(`ThreadLocalsTable`, App.tsx:1846–1852) together.
+
+### 49.3 The local-root table is a bounded sample but neither sums nor says so (new, P2, Have)
+
+Thread 1's header says `_Local roots: 124._` (sample 2512) but the table lists only 19 rows (2517–2537) — the
+list is capped by `--detail` (documented model.rs:656–657) yet nothing in the *rendered* output says "showing
+19 of 124" or "sampled". Worse, the 19 retained values do not and cannot sum to the thread's 22.9 MB (they
+overlap — `Solver` 4.6 MB is likely an ancestor of the `$colon$colon` 3.2 MB), but a reader naturally tries to
+add them. There is no total row and no "sample" caveat.
+
+**Reason / fix:** add a truncation line when `local_objects.len() < local_root_count` — `_Showing top 19 of 124
+local roots by retained heap; sizes overlap and do not sum to the thread total._` — reusing the retention-
+overlap caveat the plan wants stated once (§47.3). Both counts are already in the model
+(`local_objects.len()` and `local_root_count`, model.rs:654/659), so this is **Have** (render-only). This is
+distinct from §22 row 6.1 ("cap per-thread local roots at top-10"), which is about *capping*; this is about
+*disclosing* that a cap was applied and that the numbers overlap. md/graphs (render_md.rs:1352) + HTML
+(App.tsx:1920) together.
+
+### 49.4 The "Local roots: N" count line is emitted for some threads but not others (new, P3, Have)
+
+The count line is gated on `local_root_count > 0` (render_md.rs:1344). Thread 2 "Reference Handler" (sample
+2571–2575) has no count line and jumps straight from heading to a bare frame list, while threads 1/3/6 all show
+`_Local roots: N._`. A reader scanning the section cannot tell whether thread 2 has *zero* resolved locals or
+whether the line was simply omitted — the absence is ambiguous.
+
+**Reason / fix:** always emit the line, printing `_Local roots: 0._` (or `_No resolved local roots._`) when the
+count is zero, so the section is structurally uniform per thread and the zero is an explicit statement rather
+than a silent gap. This mirrors the §31.4 "empty-section emptiness-check" principle applied per-thread.
+**Availability: Have** (drop the `> 0` guard, render-only). md/graphs (render_md.rs:1344) + HTML (App.tsx: the
+meta-row already always shows retained, so add an explicit locals count) together.
+
+### 49.5 md/graphs disclose the whole thread inline; HTML hides locals behind a nested `<details>` — a parity gap (new, P2, Have, parity)
+
+In md/graphs the local-root table renders inline and unconditionally (render_md.rs:1353). In HTML the same data
+is wrapped in a collapsed `<details><summary>Local root objects (N)</summary>` (App.tsx:1849–1850), *nested*
+inside the already-collapsed per-thread `<details>` (App.tsx:1896). So a reader who expands thread 1 in the
+HTML report still does not see the local roots — they must find and expand a second disclosure. The three
+formats therefore present the *same data* at *different* default visibility, violating the comparability rule
+(md shows it, HTML hides it two levels deep).
+
+**Reason / fix:** pick one disclosure policy and apply it across formats. Given md shows locals inline, the HTML
+`ThreadLocalsTable` should render the table open-by-default (or inline, no nested `<details>`) once its parent
+thread card is expanded — the nesting is what breaks parity, not the outer per-thread collapse (which md lacks
+but which is a legitimate HTML affordance for hundreds of threads). Alternatively, if collapsing is kept for
+very large local sets, apply the *same* cap-then-collapse threshold in md (§49.3's truncation line). Either way
+the *default-visible content* must match. **Availability: Have** (HTML render change in `ThreadLocalsTable`,
+App.tsx:1849; no model change, no SCHEMA bump).
+
+### 49.6 Summary and Priority-Summary deltas
+
+- **§49.1 (P1, Have):** label the significant-frame percentage's per-thread base (or add a heap-relative
+  percent) — today it silently uses a different denominator than every other "%" in the report.
+- **§49.2 (P2, Have):** collapse identical local-root rows with a `×N` count (or surface `obj_index_1based`) so
+  distinct instances stop reading as duplicate rows.
+- **§49.3 (P2, Have):** disclose that the local-root table is a bounded, non-summing sample ("top N of M;
+  sizes overlap") — both counts are already in the model.
+- **§49.4 (P3, Have):** always emit the "Local roots: N" line (including `0`) so per-thread structure is
+  uniform and an absent line is never ambiguous.
+- **§49.5 (P2, Have, parity):** unify the default visibility of the local-root table across md/graphs (inline)
+  and HTML (currently double-nested `<details>`).
+
+All five are **Have** — render-only, no new model field, no heap pass, no SCHEMA bump — and none change a
+rendered byte value; §49.1 changes only a *label* (or adds a second percent). This pass is the Threads-section
+analogue of the §45/§48 percentage-basis work: it finds the one remaining place a percentage silently switches
+denominator, plus four presentation defects that make an otherwise highly-actionable section (frame → retained
+size → code location) read as buggy or incomplete.

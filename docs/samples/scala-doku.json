@@ -1,6 +1,6 @@
 {
   "schema_version": 6,
-  "generated": "2026-07-22T14:24:54.400459000Z",
+  "generated": "2026-07-22T21:59:35.323347000Z",
   "overview": {
     "source_name": "dump_2_scala-doku.hprof",
     "file_path": "tests/fixtures/dump_2_scala-doku.hprof",
@@ -234841,7 +234841,7 @@
       "severity": "warning",
       "title": "Dominant GC-root type",
       "detail": "76.7% of the heap is held by \"Thread\" roots — retention concentrates at one root class.",
-      "anchor": "overview",
+      "anchor": "system-overview",
       "anchor_label": "System Overview"
     },
     {
@@ -234889,8 +234889,8 @@
       "severity": "warning",
       "title": "Fixed per-object header overhead",
       "detail": "952,666 objects × 12 B header = 10.9 MB (36.6% of heap) is consumed by JVM object headers alone — consider value types, primitive arrays, or fewer wrapper objects.",
-      "anchor": "header-overhead",
-      "anchor_label": "Header Overhead"
+      "anchor": "object-header-overhead",
+      "anchor_label": "Object Header Overhead"
     },
     {
       "id": "empty-collection-cemetery",

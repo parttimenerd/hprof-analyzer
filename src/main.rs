@@ -706,11 +706,16 @@ fn render_report(path: &str, format: OutputFormat) -> io::Result<String> {
             format!("invalid report JSON: {e}"),
         )
     })?;
-    if report.schema_version != report::SCHEMA_VERSION {
+    // Accept any report at or below the version this build understands. Every
+    // field added since v1 is `#[serde(default)]`, so an older/smaller shape
+    // deserializes cleanly (missing fields fall back to their defaults). Only a
+    // strictly-newer schema — which may carry fields this build cannot represent
+    // — is refused.
+    if report.schema_version > report::SCHEMA_VERSION {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
-                "report schema_version {} does not match supported version {}; refusing to render",
+                "report schema_version {} is newer than supported version {}; refusing to render (upgrade hprof-analyzer)",
                 report.schema_version,
                 report::SCHEMA_VERSION
             ),

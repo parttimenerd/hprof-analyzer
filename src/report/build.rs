@@ -103,6 +103,14 @@ pub fn build_model(
     };
     // Evaluate the OOM-triage rule framework once over the finished report.
     report.triage = crate::report::evaluate_triage(&report);
+    // Invariant: the "% Heap" denominator is one number. `leaks.total_shallow`
+    // and `overview.total_shallow` are computed by separate passes but must agree,
+    // or the same figure would slug to different percentages in different sections.
+    debug_assert_eq!(
+        report.leaks.total_shallow, report.overview.total_shallow,
+        "reachable-shallow basis diverged: leaks={} overview={}",
+        report.leaks.total_shallow, report.overview.total_shallow,
+    );
     report
 }
 

@@ -91147,8 +91147,8 @@
       "severity": "warning",
       "title": "Fixed per-object header overhead",
       "detail": "236,457 objects × 12 B header = 2.7 MB (23.3% of heap) is consumed by JVM object headers alone — consider value types, primitive arrays, or fewer wrapper objects.",
-      "anchor": "header-overhead",
-      "anchor_label": "Header Overhead"
+      "anchor": "object-header-overhead",
+      "anchor_label": "Object Header Overhead"
     },
     {
       "id": "empty-collection-cemetery",

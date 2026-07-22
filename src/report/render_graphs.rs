@@ -43,47 +43,43 @@ pub fn render_markdown_graphs(r: &Report) -> String {
 /// `##`/`###` headings emitted by the section renderers.
 fn render_toc_graphs(r: &Report, out: &mut String) {
     out.push_str("## Contents\n\n");
-    out.push_str("- [Summary](#summary)\n");
-    out.push_str("- [Memory Triage](#memory-triage)\n");
-    out.push_str("- [System Overview](#system-overview)\n");
-    out.push_str("- [Leak Suspects](#leak-suspects)\n");
-    out.push_str("- [Top Consumers](#top-consumers)\n");
-    out.push_str("- [Dominator Analysis](#dominator-analysis)\n");
-    out.push_str("- [Threads](#threads)\n");
+    out.push_str(&SectionId::Summary.toc_bullet());
+    out.push_str(&SectionId::MemoryTriage.toc_bullet());
+    out.push_str(&SectionId::SystemOverview.toc_bullet());
+    out.push_str(&SectionId::LeakSuspects.toc_bullet());
+    out.push_str(&SectionId::TopConsumers.toc_bullet());
+    out.push_str(&SectionId::DominatorAnalysis.toc_bullet());
+    out.push_str(&SectionId::Threads.toc_bullet());
     if !r.top_components.components.is_empty() {
-        out.push_str("- [Top Components](#top-components)\n");
+        out.push_str(&SectionId::TopComponents.toc_bullet());
     }
-    out.push_str("- [Arrays by Size](#arrays-by-size)\n");
-    out.push_str("- [Collections](#collections)\n");
+    out.push_str(&SectionId::ArraysBySize.toc_bullet());
+    out.push_str(&SectionId::Collections.toc_bullet());
     if r.collection_attribution.is_some() {
-        out.push_str(
-            "- [Container Attribution (Class#field)](#container-attribution-classfield)\n",
-        );
+        out.push_str(&SectionId::ContainerAttribution.toc_bullet());
     }
     if r.fields_by_size.is_some() {
-        out.push_str(
-            "- [Fields by Retained Size (Class#field)](#fields-by-retained-size-classfield)\n",
-        );
+        out.push_str(&SectionId::FieldsBySize.toc_bullet());
     }
     if r.biggest_collections.is_some() {
-        out.push_str("- [Biggest Collections](#biggest-collections)\n");
+        out.push_str(&SectionId::BiggestCollections.toc_bullet());
     }
     if r.collection_contents.is_some() {
-        out.push_str("- [Collection Contents by Type](#collection-contents-by-type)\n");
+        out.push_str(&SectionId::CollectionContents.toc_bullet());
     }
-    out.push_str("- [References](#references)\n");
-    out.push_str("- [Unreachable Objects](#unreachable-objects)\n");
+    out.push_str(&SectionId::References.toc_bullet());
+    out.push_str(&SectionId::UnreachableObjects.toc_bullet());
     // The ToC bullet appears only when the alloc-sites section is present.
     if r.alloc_sites.is_some() {
-        out.push_str("- [Allocation Sites](#allocation-sites)\n");
+        out.push_str(&SectionId::AllocationSites.toc_bullet());
     }
     if retention_concentration_present(&r.overview) {
-        out.push_str("- [Retention Concentration](#retention-concentration)\n");
+        out.push_str(&SectionId::RetentionConcentration.toc_bullet());
     }
     if depth_stats(&r.overview.dominator_depth_histogram).is_some() {
-        out.push_str("- [Dominator-Depth Distribution](#dominator-depth-distribution)\n");
+        out.push_str(&SectionId::DominatorDepth.toc_bullet());
     }
-    out.push_str("- [Glossary](#glossary)\n");
+    out.push_str(&SectionId::Glossary.toc_bullet());
     out.push('\n');
     out.push_str("----\n\n");
 }
@@ -250,6 +246,14 @@ fn render_system_overview_graphs(o: &SystemOverview, out: &mut String) {
 
     render_record_census(out, &o.record_census);
     render_duplicate_strings(out, &o.duplicate_strings, true);
+    render_duplicate_prim_arrays(out, &o.duplicate_prim_arrays);
+    render_boxed_numbers(
+        out,
+        &o.boxed_numbers,
+        &o.boxed_number_holders,
+        o.total_shallow,
+    );
+    render_header_overhead(out, &o.header_overhead);
 
     out.push_str("### Class Histogram (by Retained Heap)\n\n");
     out.push_str(
@@ -500,11 +504,7 @@ These are the most likely causes of excessive memory usage or OOM errors._\n\n",
         ],
     );
     for (rank, s) in l.suspects.iter().enumerate() {
-        let pct = if l.total_shallow > 0 {
-            s.retained as f64 / l.total_shallow as f64 * 100.0
-        } else {
-            0.0
-        };
+        let pct = pct_of_heap(s.retained, l.total_shallow);
         share.row([
             (rank + 1).to_string(),
             format!("`{}`", s.pretty_class),
@@ -518,14 +518,10 @@ These are the most likely causes of excessive memory usage or OOM errors._\n\n",
 
     // Per-suspect detail: identical to plain Markdown.
     for (rank, s) in l.suspects.iter().enumerate() {
-        let pct = if l.total_shallow > 0 {
-            s.retained as f64 / l.total_shallow as f64 * 100.0
-        } else {
-            0.0
-        };
+        let pct = pct_of_heap(s.retained, l.total_shallow);
 
         out.push_str(&format!(
-            "### {}. `{}` — retains {} ({:.1}% of reachable heap)\n\n",
+            "### {}. `{}` — retains {} ({:.1}% of {HEAP_BASIS_LABEL})\n\n",
             rank + 1,
             s.pretty_class,
             format_bytes(s.retained),
@@ -672,11 +668,7 @@ fn render_top_consumers_graphs(t: &TopConsumers, total_shallow: u64, out: &mut S
         ],
     );
     for (rank, row) in t.biggest_objects.iter().enumerate() {
-        let pct = if total_shallow > 0 {
-            row.retained as f64 / total_shallow as f64 * 100.0
-        } else {
-            0.0
-        };
+        let pct = pct_of_heap(row.retained, total_shallow);
         objs.row([
             (rank + 1).to_string(),
             format!("`{}`", row.display_class),

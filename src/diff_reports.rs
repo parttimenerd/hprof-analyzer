@@ -37,11 +37,13 @@ fn load_report(path: &str) -> io::Result<Report> {
             format!("invalid report JSON ({path}): {e}"),
         )
     })?;
-    if report.schema_version != report::SCHEMA_VERSION {
+    // Accept any report at or below the supported version (older fields default
+    // in); refuse only a strictly-newer schema this build cannot represent.
+    if report.schema_version > report::SCHEMA_VERSION {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
-                "report {} schema_version {} does not match supported version {}; refusing to diff",
+                "report {} schema_version {} is newer than supported version {}; refusing to diff (upgrade hprof-analyzer)",
                 path,
                 report.schema_version,
                 report::SCHEMA_VERSION
@@ -319,21 +321,14 @@ fn fmt_delta_bytes(n: i64) -> String {
 }
 
 /// Format a signed instance-count delta with thousands separators, e.g.
-/// "+1,024" / "\u{2212}17" / "0".
+/// "+1,024" / "\u{2212}17" / "0". Delegates grouping to the shared
+/// `report::format::group_thousands` so counts group identically everywhere.
 fn fmt_delta_count(n: i64) -> String {
     if n == 0 {
         return "0".to_string();
     }
     let sign = if n > 0 { '+' } else { MINUS };
-    let s = n.unsigned_abs().to_string();
-    let mut grouped = String::new();
-    for (i, c) in s.chars().rev().enumerate() {
-        if i > 0 && i % 3 == 0 {
-            grouped.push(',');
-        }
-        grouped.push(c);
-    }
-    let grouped: String = grouped.chars().rev().collect();
+    let grouped = report::group_thousands(&n.unsigned_abs().to_string());
     format!("{sign}{grouped}")
 }
 

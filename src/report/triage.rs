@@ -8,6 +8,7 @@
 //! A rule "declares the data it needs" implicitly by which `Report` fields it
 //! reads in `eval`; each rule's doc-comment states that dependency explicitly.
 
+use crate::report::anchors::SectionId;
 use crate::report::format::{fmt_count, format_bytes};
 use crate::report::model::{Report, TriageSeverity, TriageSignal};
 
@@ -42,7 +43,7 @@ const WEAKREF_FLOOR: u64 = 1000;
 /// Wasted collection backing-array bytes as a share of heap.
 const OVERCAP_WASTE_PCT: f64 = 5.0;
 /// Total shallow bytes in constant-value primitive arrays before the rule.
-const CONSTARR_FLOOR: u64 = 8 * 1024 * 1024;
+const CONSTARR_FLOOR_BYTES: u64 = 8 * 1024 * 1024;
 /// Fill ratio (basis points) below which a collection counts as "under-filled".
 const OVERCAP_FILL_BP: u32 = 5000;
 /// Duplicate-String waste floor (bytes) before the duplicate-strings rule fires.
@@ -105,7 +106,7 @@ const SPARSE_ARRAY_WASTED_PCT: f64 = 5.0;
 /// Big-drop node drop_bytes as share of total shallow heap.
 const BIG_DROP_PCT: f64 = 5.0;
 /// Big-drop absolute floor (bytes).
-const BIG_DROP_FLOOR: u64 = 64 * 1024 * 1024;
+const BIG_DROP_FLOOR_BYTES: u64 = 64 * 1024 * 1024;
 /// Object header overhead share above which the fixed-per-object rule fires.
 const HEADER_OVERHEAD_PCT: f64 = 20.0;
 /// Hash-map collision ratio (load-factor proxy in bp) above which hotspot fires.
@@ -120,11 +121,11 @@ const EMPTY_COLL_FLOOR: u64 = 500_000;
 /// Single primitive array shallow bytes as share of heap.
 const OVERSIZED_PRIM_ARRAY_PCT: f64 = 5.0;
 /// Absolute floor for the oversized-primitive-array rule.
-const OVERSIZED_PRIM_ARRAY_FLOOR: u64 = 64 * 1024 * 1024;
+const OVERSIZED_PRIM_ARRAY_FLOOR_BYTES: u64 = 64 * 1024 * 1024;
 /// Duplicate-primitive-array wasted bytes as share of heap.
 const DUP_PRIM_ARRAYS_PCT: f64 = 5.0;
 /// Duplicate-primitive-array absolute wasted-bytes floor.
-const DUP_PRIM_ARRAYS_FLOOR: u64 = 16 * 1024 * 1024;
+const DUP_PRIM_ARRAYS_FLOOR_BYTES: u64 = 16 * 1024 * 1024;
 
 // ── Framework ─────────────────────────────────────────────────────────────────
 
@@ -184,25 +185,25 @@ pub fn evaluate_triage(r: &Report) -> Vec<TriageSignal> {
     rules().iter().filter_map(|rule| rule.eval(r)).collect()
 }
 
-/// Percentage of total reachable shallow heap. Basis matches the report tables.
+/// Percentage of total reachable shallow heap. Basis matches the report tables
+/// ([`HEAP_BASIS_LABEL`]); clamps to 100% so no printed share exceeds the basis.
 fn pct_of(retained: u64, total: u64) -> f64 {
-    if total > 0 {
-        retained as f64 / total as f64 * 100.0
-    } else {
-        0.0
-    }
+    crate::report::format::pct_of_heap(retained, total)
 }
 
-/// Small `TriageSignal` builder for the common linked case.
+/// Small `TriageSignal` builder for the common linked case. The link target is a
+/// [`SectionId`] so the emitted anchor is the section's canonical slug — the same
+/// string the Markdown heading slugs to and the HTML `id=` uses — guaranteeing a
+/// "See X" link resolves in every format.
 fn signal(
     id: &str,
     severity: TriageSeverity,
     title: &str,
     detail: String,
-    anchor: Option<(&str, &str)>,
+    anchor: Option<SectionId>,
 ) -> TriageSignal {
     let (anchor, anchor_label) = match anchor {
-        Some((a, l)) => (Some(a.to_string()), Some(l.to_string())),
+        Some(s) => (Some(s.slug().to_string()), Some(s.label().to_string())),
         None => (None, None),
     };
     TriageSignal {
@@ -240,7 +241,7 @@ impl Rule for HeadlineRetainer {
                     format_bytes(s.retained),
                     pct_of(s.retained, total),
                 ),
-                Some(("leak-suspects", "Leak Suspects")),
+                Some(SectionId::LeakSuspects),
             ))
         } else if let Some(o) = r.top.biggest_objects.first() {
             Some(signal(
@@ -253,7 +254,7 @@ impl Rule for HeadlineRetainer {
                     format_bytes(o.retained),
                     pct_of(o.retained, total),
                 ),
-                Some(("top-consumers", "Top Consumers")),
+                Some(SectionId::TopConsumers),
             ))
         } else {
             Some(signal(
@@ -306,7 +307,7 @@ impl Rule for Concentration {
                         held_by,
                         pct_of(s.retained, total),
                     ),
-                    Some(("leak-suspects", "Leak Suspects")),
+                    Some(SectionId::LeakSuspects),
                 )
             }
             Some(_) => signal(
@@ -314,7 +315,7 @@ impl Rule for Concentration {
                 TriageSeverity::Info,
                 "Concentration",
                 "diffuse — retention is spread across multiple roots, so there is no single object to free.".to_string(),
-                Some(("leak-suspects", "Leak Suspects")),
+                Some(SectionId::LeakSuspects),
             ),
             None => signal(
                 "concentration",
@@ -346,7 +347,7 @@ impl Rule for DominantGcRootType {
                 "{:.1}% of the heap is held by \"{}\" roots — retention concentrates at one root class.",
                 pct, top.root_type,
             ),
-            Some(("overview", "System Overview")),
+            Some(SectionId::SystemOverview),
         ))
     }
 }
@@ -380,10 +381,7 @@ impl Rule for Shape {
             TriageSeverity::Info,
             "Shape",
             format!("{shape} — 90% of objects within depth {p90}, max depth {max_depth}."),
-            Some((
-                "dominator-depth-distribution",
-                "Dominator-Depth Distribution",
-            )),
+            Some(SectionId::DominatorDepth),
         ))
     }
 }
@@ -421,7 +419,7 @@ impl Rule for OneLeakOrMany {
             TriageSeverity::Info,
             "One leak or many",
             detail,
-            Some(("top-consumers", "Top Consumers")),
+            Some(SectionId::TopConsumers),
         ))
     }
 }
@@ -447,7 +445,7 @@ impl Rule for ClassloaderLeak {
                 dup.loader_count,
                 format_bytes(dup.total_retained),
             ),
-            Some(("duplicate-classes", "Duplicate Classes")),
+            Some(SectionId::DuplicateClasses),
         ))
     }
 }
@@ -468,7 +466,7 @@ impl Rule for ThreadLocalLeak {
                 "{} ThreadLocalMap entries have a cleared key — abandoned thread-local values that will never be reclaimed.",
                 fmt_count(n),
             ),
-            Some(("leak-indicators", "Leak Indicators")),
+            Some(SectionId::LeakIndicators),
         ))
     }
 }
@@ -501,7 +499,7 @@ impl Rule for ThreadPinning {
                 share,
                 fmt_count(t.local_root_count),
             ),
-            Some(("threads", "Threads")),
+            Some(SectionId::Threads),
         ))
     }
 }
@@ -528,7 +526,7 @@ impl Rule for WeakRefEscape {
                 "{} objects are reachable only via soft/weak/phantom references — likely reclaimable under memory pressure.",
                 fmt_count(only_weak),
             ),
-            Some(("references", "References")),
+            Some(SectionId::References),
         ))
     }
 }
@@ -557,7 +555,7 @@ impl Rule for ProxyLambdaBloat {
                 fmt_count(loaded),
                 share,
             ),
-            Some(("leak-indicators", "Leak Indicators")),
+            Some(SectionId::LeakIndicators),
         ))
     }
 }
@@ -578,7 +576,7 @@ impl Rule for OffHeap {
                 "{} of native memory is held by live DirectByteBuffers — not counted in heap size but can dominate RSS.",
                 format_bytes(cap),
             ),
-            Some(("leak-indicators", "Leak Indicators")),
+            Some(SectionId::LeakIndicators),
         ))
     }
 }
@@ -615,7 +613,7 @@ impl Rule for GcWaste {
                 format_bytes(o.unreachable_retained),
                 cluster,
             ),
-            Some(("unreachable-objects", "Unreachable Objects")),
+            Some(SectionId::UnreachableObjects),
         ))
     }
 }
@@ -648,7 +646,7 @@ impl Rule for OverCapacityCollections {
                 format_bytes(wasted),
                 fmt_count(cfr.tracked),
             ),
-            Some(("collections", "Collections")),
+            Some(SectionId::Collections),
         ))
     }
 }
@@ -663,7 +661,7 @@ impl Rule for ConstantValueArrays {
             return None;
         }
         let sum: u64 = cpa.rows.iter().map(|row| row.shallow).sum();
-        if sum < CONSTARR_FLOOR {
+        if sum < CONSTARR_FLOOR_BYTES {
             return None;
         }
         let big = cpa.rows.iter().max_by_key(|row| row.shallow)?;
@@ -677,7 +675,7 @@ impl Rule for ConstantValueArrays {
                 big.array_class,
                 fmt_count(big.objects),
             ),
-            Some(("collections", "Collections")),
+            Some(SectionId::Collections),
         ))
     }
 }
@@ -716,7 +714,7 @@ impl Rule for ObjectSwarm {
                 format_bytes(row.shallow),
                 pct_of(row.shallow, total),
             ),
-            Some(("overview", "System Overview")),
+            Some(SectionId::SystemOverview),
         ))
     }
 }
@@ -764,7 +762,7 @@ impl Rule for BoxedPrimitiveBloat {
                 format_bytes(shallow),
                 worst_class,
             ),
-            Some(("boxed-numbers", "Boxed Numbers")),
+            Some(SectionId::BoxedNumbers),
         ))
     }
 }
@@ -787,7 +785,7 @@ impl Rule for ClassloaderExplosion {
                 "{} live ClassLoader instances — abnormally high; typical apps use tens. Likely a dynamic-class or redeploy leak.",
                 fmt_count(n),
             ),
-            Some(("overview", "System Overview")),
+            Some(SectionId::SystemOverview),
         ))
     }
 }
@@ -815,7 +813,7 @@ impl Rule for ThreadSwarm {
                 fmt_count(count as u64),
                 format_bytes(aggregate_retained),
             ),
-            Some(("threads", "Threads")),
+            Some(SectionId::Threads),
         ))
     }
 }
@@ -848,7 +846,7 @@ impl Rule for DuplicateStrings {
                 fmt_count(ds.total_string_instances),
                 example,
             ),
-            Some(("duplicate-strings", "Duplicate Strings")),
+            Some(SectionId::DuplicateStrings),
         ))
     }
 }
@@ -878,7 +876,7 @@ impl Rule for CharArraySlack {
                 format_bytes(caw.total_wasted_bytes),
                 fmt_count(caw.wasteful_arrays),
             ),
-            Some(("duplicate-strings", "Duplicate Strings")),
+            Some(SectionId::DuplicateStrings),
         ))
     }
 }
@@ -921,7 +919,7 @@ impl Rule for LargeUnboundedCollection {
                 retained_str,
                 owner_str,
             ),
-            Some(("biggest-collections", "Biggest Collections")),
+            Some(SectionId::BiggestCollections),
         ))
     }
 }
@@ -950,7 +948,7 @@ impl Rule for FinalizerQueueBacklog {
                 "{} live `java.lang.ref.Finalizer` instances — the finalizer thread is falling behind; finalizeable objects (e.g. `Deflater`, JDBC connections) accumulate until drained.",
                 fmt_count(row.instances),
             ),
-            Some(("overview", "System Overview")),
+            Some(SectionId::SystemOverview),
         ))
     }
 }
@@ -973,7 +971,7 @@ impl Rule for MetaspacePressure {
                 "{} classes loaded — far above normal; class metadata is likely exhausting Metaspace. Typical cause: CGLIB/Byte Buddy/Groovy proxy generation without caching.",
                 fmt_count(n),
             ),
-            Some(("overview", "System Overview")),
+            Some(SectionId::SystemOverview),
         ))
     }
 }
@@ -1007,7 +1005,7 @@ impl Rule for CachedReflectionMetadata {
                 "{} live `java.lang.reflect.{{Method,Field,Constructor}}` objects — framework reflection caches are unbounded (typically Spring/Hibernate accumulating per scanned class).",
                 fmt_count(total),
             ),
-            Some(("overview", "System Overview")),
+            Some(SectionId::SystemOverview),
         ))
     }
 }
@@ -1049,7 +1047,7 @@ impl Rule for JniGlobalRefLeak {
                 format_bytes(retained),
                 pct_of(retained, total),
             ),
-            Some(("overview", "System Overview")),
+            Some(SectionId::SystemOverview),
         ))
     }
 }
@@ -1082,7 +1080,7 @@ impl Rule for HeapCompositionSkew {
                 "`{}` account for {:.1}% of reachable heap — the heap is bulk-data dominated; most memory is in raw buffers rather than object graphs.",
                 dominant.kind, pct,
             ),
-            Some(("overview", "System Overview")),
+            Some(SectionId::SystemOverview),
         ))
     }
 }
@@ -1112,7 +1110,7 @@ impl Rule for StaticFieldAnchor {
                 format_bytes(s.retained),
                 pct,
             ),
-            Some(("leak-suspects", "Leak Suspects")),
+            Some(SectionId::LeakSuspects),
         ))
     }
 }
@@ -1143,7 +1141,7 @@ impl Rule for SessionScopeLeak {
                 fmt_count(row.instances),
                 row.pretty_class,
             ),
-            Some(("overview", "System Overview")),
+            Some(SectionId::SystemOverview),
         ))
     }
 }
@@ -1177,7 +1175,7 @@ impl Rule for ConnectionLeak {
                 fmt_count(row.instances),
                 row.pretty_class,
             ),
-            Some(("overview", "System Overview")),
+            Some(SectionId::SystemOverview),
         ))
     }
 }
@@ -1210,7 +1208,7 @@ impl Rule for EventListenerAccumulation {
                 fmt_count(row.instances),
                 row.pretty_class,
             ),
-            Some(("overview", "System Overview")),
+            Some(SectionId::SystemOverview),
         ))
     }
 }
@@ -1252,7 +1250,7 @@ impl Rule for ParserOutputAccumulation {
                 fmt_count(row.instances),
                 row.pretty_class,
             ),
-            Some(("overview", "System Overview")),
+            Some(SectionId::SystemOverview),
         ))
     }
 }
@@ -1293,7 +1291,7 @@ impl Rule for InternedStringBloat {
                 fmt_count(string_count),
                 fmt_count(jni_global_count),
             ),
-            Some(("overview", "System Overview")),
+            Some(SectionId::SystemOverview),
         ))
     }
 }
@@ -1330,7 +1328,7 @@ impl Rule for SparseObjectArrays {
                 SPARSE_ARRAY_FILL_BP / 100,
                 format_bytes(wasted),
             ),
-            Some(("collections", "Collections")),
+            Some(SectionId::Collections),
         ))
     }
 }
@@ -1339,14 +1337,14 @@ impl Rule for SparseObjectArrays {
 
 /// Big-drop concentration. Reads `dominator_analysis.big_drops` and
 /// `overview.total_shallow`. Always-on. Fires when the top dominator-tree node
-/// drops at least BIG_DROP_PCT of the heap AND at least BIG_DROP_FLOOR bytes —
+/// drops at least BIG_DROP_PCT of the heap AND at least BIG_DROP_FLOOR_BYTES bytes —
 /// a single object is acting as a giant memory bucket.
 struct BigDropConcentration;
 impl Rule for BigDropConcentration {
     fn eval(&self, r: &Report) -> Option<TriageSignal> {
         let total = r.overview.total_shallow;
         let row = r.dominator_analysis.big_drops.rows.first()?;
-        if row.drop_bytes < BIG_DROP_FLOOR {
+        if row.drop_bytes < BIG_DROP_FLOOR_BYTES {
             return None;
         }
         let pct = pct_of(row.drop_bytes, total);
@@ -1365,7 +1363,7 @@ impl Rule for BigDropConcentration {
                 pct,
                 format_bytes(row.drop_bytes),
             ),
-            Some(("dominator-tree", "Dominator Tree")),
+            Some(SectionId::DominatorAnalysis),
         ))
     }
 }
@@ -1407,7 +1405,7 @@ impl Rule for FixedPerObjectOverhead {
                 format_bytes(overhead),
                 pct,
             ),
-            Some(("header-overhead", "Header Overhead")),
+            Some(SectionId::HeaderOverhead),
         ))
     }
 }
@@ -1446,7 +1444,7 @@ impl Rule for HashCollisionHotspot {
                 pct,
                 COLLISION_HIGH_BP / 100,
             ),
-            Some(("collections", "Collections")),
+            Some(SectionId::Collections),
         ))
     }
 }
@@ -1477,7 +1475,7 @@ impl Rule for EmptyCollectionCemetery {
                 fmt_count(cbs.tracked),
                 share_pct,
             ),
-            Some(("collections", "Collections")),
+            Some(SectionId::Collections),
         ))
     }
 }
@@ -1485,13 +1483,13 @@ impl Rule for EmptyCollectionCemetery {
 /// Oversized primitive array. Reads `collections.top_prim_arrays.top_individual`
 /// and `overview.total_shallow`. Always-on (top_prim_arrays is always computed).
 /// Fires when a single primitive array is individually >= OVERSIZED_PRIM_ARRAY_PCT
-/// of the heap AND >= OVERSIZED_PRIM_ARRAY_FLOOR bytes.
+/// of the heap AND >= OVERSIZED_PRIM_ARRAY_FLOOR_BYTES bytes.
 struct OversizedPrimArray;
 impl Rule for OversizedPrimArray {
     fn eval(&self, r: &Report) -> Option<TriageSignal> {
         let total = r.overview.total_shallow;
         let row = r.collections.top_prim_arrays.top_individual.first()?;
-        if row.shallow < OVERSIZED_PRIM_ARRAY_FLOOR {
+        if row.shallow < OVERSIZED_PRIM_ARRAY_FLOOR_BYTES {
             return None;
         }
         let pct = pct_of(row.shallow, total);
@@ -1515,14 +1513,14 @@ impl Rule for OversizedPrimArray {
                 owner_clause,
                 pct,
             ),
-            Some(("arrays", "Arrays")),
+            Some(SectionId::ArraysBySize),
         ))
     }
 }
 
 /// Duplicate primitive arrays. Reads `overview.duplicate_prim_arrays`
 /// (populated only when `--find-duplicates` is active). Fires when content-identical
-/// prim arrays waste at least DUP_PRIM_ARRAYS_PCT of the heap or DUP_PRIM_ARRAYS_FLOOR
+/// prim arrays waste at least DUP_PRIM_ARRAYS_PCT of the heap or DUP_PRIM_ARRAYS_FLOOR_BYTES
 /// bytes — arrays sharing the same payload could be deduplicated or interned.
 struct DuplicatePrimArrays;
 impl Rule for DuplicatePrimArrays {
@@ -1533,7 +1531,7 @@ impl Rule for DuplicatePrimArrays {
             return None;
         }
         let total = r.overview.total_shallow;
-        if wasted < DUP_PRIM_ARRAYS_FLOOR && pct_of(wasted, total) < DUP_PRIM_ARRAYS_PCT {
+        if wasted < DUP_PRIM_ARRAYS_FLOOR_BYTES && pct_of(wasted, total) < DUP_PRIM_ARRAYS_PCT {
             return None;
         }
         Some(signal(
@@ -1547,7 +1545,7 @@ impl Rule for DuplicatePrimArrays {
                 format_bytes(wasted),
                 pct_of(wasted, total),
             ),
-            Some(("dup-strings", "Duplicate Strings")),
+            Some(SectionId::DuplicateStrings),
         ))
     }
 }

@@ -1,6 +1,6 @@
 import React from "react";
 import type { AllocSites, ArraysBySize, BiggestCollectionRow, BiggestCollections, ClassRow, CollectionAttribution, CollectionContents, CollectionsAnalysis, Component, DominatorAnalysis, DuplicateClass, FieldsBySize, FillRatioBucket, HeapComposition, HistRow, KindStat, LeakIndicators, LoaderRollup, MergedPathNode, ObjRow, PackageNode, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalObj, TopArrays, TopComponents, UnreachableClassRow } from "./types";
-import { fmtCount, fmtExactBytes, formatBytes, formatEpochMs, pctOf, shortLoader } from "./format";
+import { fmtCount, fmtExactBytes, fmtPct, formatBytes, formatEpochMs, pctOf, shortLoader } from "./format";
 import {
   CompositionStackedBar,
   ConcentrationChart,
@@ -100,6 +100,26 @@ function ShowMoreRow({ extra, cols, showAll, setShowAll }: { extra: number; cols
   );
 }
 
+// A capped <tbody> for tables whose <tfoot> totals must reflect the FULL row
+// set. Renders only the first `cap` rows (unless expanded, per-table or via the
+// global expand-all toggle) plus a "Show N more" row, while the caller keeps
+// computing totals over the complete array. `cols` is the column count for the
+// ShowMoreRow's colSpan.
+function CappedTbody<T>({ rows, cols, renderRow, cap = TABLE_CAP }: {
+  rows: T[];
+  cols: number;
+  renderRow: (row: T, i: number) => React.ReactNode;
+  cap?: number;
+}) {
+  const { visible, extra, showAll, setShowAll } = useCapped(rows, cap);
+  return (
+    <tbody>
+      {visible.map(renderRow)}
+      <ShowMoreRow extra={extra} cols={cols} showAll={showAll} setShowAll={setShowAll} />
+    </tbody>
+  );
+}
+
 // ── Navigation ───────────────────────────────────────────────────────────────
 // A sticky in-page table of contents so long reports (hundreds of threads,
 // thousands of histogram rows) stay navigable — MAT's report has an equivalent
@@ -110,14 +130,14 @@ function Nav({ report }: { report: Report }) {
 
   // ── Overview group ──
   items.push(
-    ["triage",        "OOM Triage",          "Overview"],
-    ["overview",      "System Overview"],
-    ["record-census", "HPROF Record Census"],
+    ["memory-triage",  "Memory Triage",      "Overview"],
+    ["system-overview", "System Overview"],
+    ["hprof-record-census", "HPROF Record Census"],
   );
 
   // ── Analysis group ──
-  items.push(["leaks",              "Leak Suspects",    "Analysis"]);
-  items.push(["top",                "Top Consumers"]);
+  items.push(["leak-suspects",       "Leak Suspects",    "Analysis"]);
+  items.push(["top-consumers",       "Top Consumers"]);
   items.push(["dominator-analysis", "Dominator Analysis"]);
   items.push(["threads",            "Threads"]);
   if (report.top.size_distribution.count > 0) items.push(["size-distribution", "Size Distribution"]);
@@ -128,20 +148,20 @@ function Nav({ report }: { report: Report }) {
     if (!dataGroupSet) { items.push([id, label, "Data"]); dataGroupSet = true; }
     else items.push([id, label]);
   };
-  if (report.overview.duplicate_strings) addData("duplicate-strings", "Duplicate Strings");
+  if (report.overview.duplicate_strings) addData("duplicate-strings-approximate", "Duplicate Strings");
   if (report.overview.duplicate_prim_arrays) addData("duplicate-prim-arrays", "Duplicate Prim Arrays");
   if (report.overview.boxed_numbers?.length) addData("boxed-numbers", "Boxed Numbers");
-  if (report.overview.header_overhead?.length) addData("header-overhead", "Header Overhead");
+  if (report.overview.header_overhead?.length) addData("object-header-overhead", "Header Overhead");
   if (report.top_components?.components?.length) addData("top-components", "Top Components");
   addData("arrays-by-size", "Arrays by Size");
   addData("collections", "Collections");
-  if (report.collection_attribution) addData("container-attribution", "Container Attribution");
-  if (report.fields_by_size) addData("fields-by-size", "Fields by Size");
+  if (report.collection_attribution) addData("container-attribution-classfield", "Container Attribution");
+  if (report.fields_by_size) addData("fields-by-retained-size-classfield", "Fields by Size");
   if (report.biggest_collections) addData("biggest-collections", "Biggest Collections");
-  if (report.collection_contents) addData("collection-contents", "Collection Contents");
+  if (report.collection_contents) addData("collection-contents-by-type", "Collection Contents");
   addData("references", "References");
   addData("unreachable-objects", "Unreachable Objects");
-  if (report.alloc_sites) addData("alloc-sites", "Allocation Sites");
+  if (report.alloc_sites) addData("allocation-sites", "Allocation Sites");
 
   // ── Distribution group ──
   let distGroupSet = false;
@@ -238,8 +258,8 @@ function InlineCode({ text }: { text: string }) {
 function OomTriage({ report }: { report: Report }) {
   const signals = report.triage ?? [];
   return (
-    <div className="oom" id="triage" tabIndex={-1}>
-      <h2>OOM Triage</h2>
+    <div className="oom" id="memory-triage" tabIndex={-1}>
+      <h2>Memory Triage</h2>
       <p className="subtitle">Where the reachable heap is concentrated, at a glance.</p>
       <ul>
         {signals.map((s, i) => (
@@ -263,7 +283,7 @@ function KpiStrip({ report }: { report: Report }) {
   const suspects = report.leaks.suspects;
   const top = suspects[0];
   const topShare = top
-    ? pctOf(top.retained, report.leaks.total_shallow).toFixed(1) + "%"
+    ? fmtPct(pctOf(top.retained, report.leaks.total_shallow))
     : "—";
   const dominantClass = top?.pretty_class ?? "—";
 
@@ -609,7 +629,7 @@ function RecordCensusSection({ report }: { report: Report }) {
     ["Class dumps", c.class_dumps],
   ];
   return (
-    <section id="record-census">
+    <section id="hprof-record-census">
       <h2>HPROF Record Census</h2>
       <p className="subtitle">
         Raw HPROF record-type composition of the dump (pass-1 counts); additive, not parity-compared.
@@ -881,7 +901,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
   const d = report.overview.duplicate_strings;
   if (!d) {
     return (
-      <section id="duplicate-strings">
+      <section id="duplicate-strings-approximate">
         <h2>Duplicate Strings (approximate)</h2>
         <p className="subtitle">
           Duplicate-string analysis not run (pass <code>--find-duplicates</code>).
@@ -891,7 +911,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
   }
   const w = d.char_array_waste;
   return (
-    <section id="duplicate-strings">
+    <section id="duplicate-strings-approximate">
       <h2>Duplicate Strings (approximate)</h2>
       <p className="subtitle">
         Opt-in (<code>--find-duplicates</code>): each <code>java.lang.String</code> value hashed to 64 bits; collisions accepted as approximation.
@@ -1070,7 +1090,7 @@ function HeaderOverheadSection({ report }: { report: Report }) {
   if (!rows?.length) return null;
   const { visible, extra, showAll, setShowAll } = useCapped(rows);
   return (
-    <section id="header-overhead">
+    <section id="object-header-overhead">
       <h2>Object Header Overhead</h2>
       <p className="subtitle">
         Classes where object headers consume a large share of shallow heap
@@ -1115,7 +1135,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
   const o = report.overview;
   const threadCount = report.threads?.threads?.length ?? 0;
   return (
-    <section id="overview">
+    <section id="system-overview">
       <h2>System Overview</h2>
       <p className="subtitle">Reachable-heap totals and the largest classes by retained heap.</p>
 
@@ -1208,16 +1228,14 @@ function SystemOverviewSection({ report }: { report: Report }) {
                   <th>Value</th>
                 </tr>
               </thead>
-              <tbody>
-                {o.system_properties.map((p, i) => (
+              <CappedTbody rows={o.system_properties} cols={2} renderRow={(p, i) => (
                   <tr key={i}>
                     <td>
                       <code>{p.key}</code>
                     </td>
                     <td className="sysprop-val">{p.value}</td>
                   </tr>
-                ))}
-              </tbody>
+                )} />
             </table>
           </div>
         </details>
@@ -1641,7 +1659,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
 function LeakSuspectsSection({ report }: { report: Report }) {
   const l = report.leaks;
   return (
-    <section id="leaks">
+    <section id="leak-suspects">
       <h2>Leak Suspects</h2>
       <p className="subtitle">Ranked accumulation points holding the most retained heap.</p>
       {l.suspects.length === 0 ? (
@@ -1721,7 +1739,7 @@ function TopConsumersSection({ report }: { report: Report }) {
   const clsResize = useColumnResize(4);
 
   return (
-    <section id="top">
+    <section id="top-consumers">
       <h2>Top Consumers</h2>
       <p className="subtitle">Biggest individual objects, classes, and packages by retained heap.</p>
 
@@ -1753,7 +1771,7 @@ function TopConsumersSection({ report }: { report: Report }) {
               <td className="num" title={fmtExactBytes(o.retained)}>
                 {formatBytes(o.retained)}
               </td>
-              <td className="num">{pctOf(o.retained, total).toFixed(1)}%</td>
+              <td className="num">{fmtPct(pctOf(o.retained, total))}</td>
             </tr>
           ))}
           <ShowMoreRow extra={objCap.extra} cols={5} showAll={objCap.showAll} setShowAll={objCap.setShowAll} />
@@ -1790,7 +1808,7 @@ function TopConsumersSection({ report }: { report: Report }) {
               <td className="num" title={fmtExactBytes(c.retained)}>
                 {formatBytes(c.retained)}
               </td>
-              <td className="num">{pctOf(c.retained, total).toFixed(1)}%</td>
+              <td className="num">{fmtPct(pctOf(c.retained, total))}</td>
             </tr>
           ))}
           <ShowMoreRow extra={clsCap.extra} cols={4} showAll={clsCap.showAll} setShowAll={clsCap.setShowAll} />
@@ -1856,8 +1874,7 @@ function ThreadLocalsTable({ objs }: { objs: ThreadLocalObj[] }) {
             <th className="num">Retained</th>
           </tr>
         </thead>
-        <tbody>
-          {objs.map((o, i) => (
+        <CappedTbody rows={objs} cols={3} renderRow={(o: ThreadLocalObj, i: number) => (
             <tr key={i}>
               <td>
                 <span className="copy-cell">
@@ -1868,8 +1885,7 @@ function ThreadLocalsTable({ objs }: { objs: ThreadLocalObj[] }) {
               <td className="num">{formatBytes(o.shallow)}</td>
               <td className="num">{formatBytes(o.retained)}</td>
             </tr>
-          ))}
-        </tbody>
+          )} />
       </table>
     </details>
   );
@@ -2227,16 +2243,14 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
                 {hasOwner && <th>Owner (Class#field)</th>}
               </tr>
             </thead>
-            <tbody>
-              {individual.map((r, i) => (
+            <CappedTbody rows={individual} cols={hasOwner ? 4 : 3} renderRow={(r, i) => (
                 <tr key={i}>
                   <td><code>{r.array_class}</code></td>
                   <td className="num">{fmtCount(r.length)}</td>
                   <td className="num">{formatBytes(r.shallow)}</td>
                   {hasOwner && <td>{r.owner ? <code>{r.owner}</code> : "—"}</td>}
                 </tr>
-              ))}
-            </tbody>
+              )} />
             <tfoot>
               <tr>
                 <td className="num"><strong>Total</strong></td>
@@ -2259,15 +2273,13 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
                 <th className="num">Shallow</th>
               </tr>
             </thead>
-            <tbody>
-              {byClass.map((r, i) => (
+            <CappedTbody rows={byClass} cols={3} renderRow={(r, i) => (
                 <tr key={i}>
                   <td><code>{r.array_class}</code></td>
                   <td className="num">{fmtCount(r.objects)}</td>
                   <td className="num">{formatBytes(r.shallow)}</td>
                 </tr>
-              ))}
-            </tbody>
+              )} />
             <tfoot>
               <tr>
                 <td className="num"><strong>Total</strong></td>
@@ -2482,8 +2494,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
               {cpaHasOwner && <th>Owner (Class#field)</th>}
             </tr>
           </thead>
-          <tbody>
-            {cpaRows.map((r, i) => (
+          <CappedTbody rows={cpaRows} cols={cpaHasOwner ? 6 : 5} renderRow={(r, i) => (
               <tr key={i}>
                 <td><code>{r.array_class}</code></td>
                 <td className="num">{fmtCount(r.length)}</td>
@@ -2492,8 +2503,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
                 <td className="num">{formatBytes(r.shallow)}</td>
                 {cpaHasOwner && <td>{r.owner ? <code>{r.owner}</code> : "—"}</td>}
               </tr>
-            ))}
-          </tbody>
+            )} />
         </table>
       )}
 
@@ -2514,7 +2524,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
   const overallCap = useCapped(mostOverall);
   const singleCap = useCapped(biggestSingle);
   return (
-    <section id="container-attribution">
+    <section id="container-attribution-classfield">
       <h2>Container Attribution (Class#field)</h2>
       <p className="subtitle">
         Which holder <code>Class#field</code> points at the most container memory. Two rankings: total across
@@ -2680,7 +2690,7 @@ function CollectionContentsSection({ data }: { data?: CollectionContents }) {
   const rows = data.rows ?? [];
   const { visible, extra, showAll, setShowAll } = useCapped(rows);
   return (
-    <section id="collection-contents">
+    <section id="collection-contents-by-type">
       <h2>Collection Contents by Type</h2>
       <p className="subtitle">
         What runtime element/value types your collections hold, aggregated per collection class.
@@ -2738,7 +2748,7 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
   const totalPointees = rows.reduce((s, r) => s + r.pointees, 0);
   const { visible, extra, showAll, setShowAll } = useCapped(rows);
   return (
-    <section id="fields-by-size">
+    <section id="fields-by-retained-size-classfield">
       <h2>Fields by Retained Size (Class#field)</h2>
       <p className="subtitle">
         Which holder <code>Class#field</code> retains the most memory, summed over every object the
@@ -3089,7 +3099,7 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
 function AllocSitesSection({ data }: { data: AllocSites }) {
   const { visible, extra, showAll, setShowAll } = useCapped(data.sites);
   return (
-    <section id="alloc-sites">
+    <section id="allocation-sites">
       <h2>Allocation Sites</h2>
       <p className="subtitle">Objects grouped by the stack trace that allocated them.</p>
       {!data.traces_present ? (
@@ -3238,16 +3248,14 @@ function DominatorDepthSection({ report }: { report: Report }) {
               <th className="num">Cumulative %</th>
             </tr>
           </thead>
-          <tbody>
-            {rows.map((r, i) => (
+          <CappedTbody rows={rows} cols={4} renderRow={(r, i) => (
               <tr key={i}>
                 <td className="num">{r.depth}</td>
                 <td className="num">{fmtCount(r.objects)}</td>
                 <td className="num">{r.pct.toFixed(2)}%</td>
                 <td className="num">{r.cum.toFixed(2)}%</td>
               </tr>
-            ))}
-          </tbody>
+            )} />
         </table>
       </details>
     </section>
@@ -3578,11 +3586,14 @@ export default function App({ report }: { report: Report }) {
   return (
     <TableExpansionCtx.Provider value={expandAllTables}>
     <div className="app">
-      <a href="#triage" className="skip-link">Skip to content</a>
+      <a href="#memory-triage" className="skip-link">Skip to content</a>
       <h1>
-        Heap Dump Analysis: <code>{report.overview.source_name}</code>
+        Heap Dump Analysis: <code>{report.overview?.source_name ?? "(unknown)"}</code>
       </h1>
       <p className="subtitle">Generated by hprof-analyzer — {report.generated}</p>
+      <p className="subtitle" style={{ marginTop: "-0.5rem" }}>
+        All sizes are binary (1&nbsp;KB = 1024 bytes, 1&nbsp;MB = 1024&nbsp;KB, and so on).
+      </p>
       <div className="theme-toggle-wrap">
         <button className="theme-toggle" onClick={() => setExpandAllTables((v) => !v)}>
           {expandAllTables ? "⊟ Collapse tables" : "⊞ Expand all tables"}
@@ -3625,4 +3636,40 @@ export default function App({ report }: { report: Report }) {
     </div>
     </TableExpansionCtx.Provider>
   );
+}
+
+/// Catches any render-time exception below it and shows a styled panel instead of
+/// a blank page. `boot()` wraps the whole app in this, so a bug in one section
+/// degrades to an error message rather than a white screen with the report data
+/// still embedded but invisible.
+export class ErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { error: Error | null }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    // Surface to the console for anyone with devtools open.
+    console.error("hprof-analyzer report render failed:", error, info);
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="render-error" role="alert">
+          <h1>Report failed to render</h1>
+          <p>
+            The report data loaded, but a rendering error occurred. This is a bug
+            in the viewer — the underlying JSON is intact. Details:
+          </p>
+          <pre>{String(this.state.error?.stack || this.state.error)}</pre>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
