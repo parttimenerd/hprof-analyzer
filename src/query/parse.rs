@@ -15,8 +15,8 @@ use logos::Logos;
 
 use crate::query::QueryError;
 use crate::query::ast::{
-    AggFunc, Attr, ClassSpec, CompareOp, Expr, FromSource, OrderBy, PathOperand, Predicate, Query,
-    RefRole, SelectItem, SortDir, Value,
+    AggFunc, ArithOp, Attr, ClassSpec, CompareOp, Expr, FromSource, OrderBy, PathOperand,
+    Predicate, Query, RefRole, SelectItem, SortDir, UnaryOp, Value,
 };
 
 /// OQL token kinds, lexed directly by logos.
@@ -189,7 +189,63 @@ where
         .or(any_ident().map(Attr::Field))
         .labelled("attribute");
 
-    // select item: AGG(item) | path(a, b) | toString(s) | * | attr
+    // Arithmetic expression combinator: precedence-climbing over attr/literal primaries.
+    // Defined here (after `attr`) so it can be reused in both the SELECT item and the
+    // WHERE compare production. Bool/null ARE included as primaries so that compare
+    // expressions like `flag = true` and `x != null` still parse. A bare single-leaf
+    // expr is folded back to `SelectItem::Attr` by the caller; this combinator always
+    // returns `Expr`.
+    let expr = recursive(|expr| {
+        let lit = select! {
+            Token::Int(n) => Value::Int(n),
+            Token::Float(f) => Value::Float(f),
+            Token::Str(s) => Value::Str(s),
+            Token::Ident(s) if s.eq_ignore_ascii_case("true") => Value::Bool(true),
+            Token::Ident(s) if s.eq_ignore_ascii_case("false") => Value::Bool(false),
+            Token::Ident(s) if s.eq_ignore_ascii_case("null") => Value::Null,
+        }
+        .map(Expr::Lit);
+
+        let primary = lit
+            .or(just(Token::LParen)
+                .ignore_then(expr.clone())
+                .then_ignore(just(Token::RParen)))
+            .or(attr.clone().map(Expr::Attr));
+
+        let unary = just(Token::Minus)
+            .to(UnaryOp::Neg)
+            .or(just(Token::Plus).to(UnaryOp::Pos))
+            .or_not()
+            .then(primary)
+            .map(|(u, p)| match u {
+                None | Some(UnaryOp::Pos) => p,
+                Some(UnaryOp::Neg) => match p {
+                    Expr::Lit(Value::Int(n)) => Expr::Lit(Value::Int(-n)),
+                    Expr::Lit(Value::Float(f)) => Expr::Lit(Value::Float(-f)),
+                    other => Expr::Unary { op: UnaryOp::Neg, arg: Box::new(other) },
+                },
+            });
+
+        let mul = unary.clone().foldl(
+            just(Token::Star)
+                .to(ArithOp::Mul)
+                .or(just(Token::Divide).to(ArithOp::Div))
+                .then(unary)
+                .repeated(),
+            |lhs, (op, rhs)| Expr::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs) },
+        );
+
+        mul.clone().foldl(
+            just(Token::Plus)
+                .to(ArithOp::Add)
+                .or(just(Token::Minus).to(ArithOp::Sub))
+                .then(mul)
+                .repeated(),
+            |lhs, (op, rhs)| Expr::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs) },
+        )
+    });
+
+    // select item: AGG(item) | path(a, b) | toString(s) | * | expr (with single-leaf fold)
     // Each item may be followed by an optional `AS <name>` alias.
     // Guard: `AS RETAINED` is NOT consumed here — it belongs to the retained_set
     // modifier parsed at the SELECT level.
@@ -240,11 +296,21 @@ where
 
         // `path_item` before the bare-attr fallback so `path(` is consumed as Path
         // rather than swallowed as a field named `path`.
+        // `expr_item` covers all arithmetic expressions AND bare attrs (folded back).
+        let expr_item = expr.clone().map(|e| {
+            let item = match e {
+                Expr::Attr(a) => SelectItem::Attr(a),
+                other => SelectItem::Expr(Box::new(other)),
+            };
+            (item, None::<String>)
+        });
+        // IMPORTANT: `star` must come before `expr_item` so a lone `*` stays
+        // `SelectItem::Star` (Star token is also ArithOp::Mul in expr; ordering wins).
         let base_item = agg
             .or(path_item)
             .or(tostring_item)
             .or(star)
-            .or(attr.clone().map(|a| (SelectItem::Attr(a), None::<String>)));
+            .or(expr_item);
 
         // Optional `AS <alias>` suffix on any select item.
         // Safe-guard: do NOT match `AS RETAINED` (that belongs to the retained_set
@@ -267,17 +333,6 @@ where
             let (items, aliases): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
             (items, aliases)
         });
-
-    // value literal
-    let value = select! {
-        Token::Int(n) => Value::Int(n),
-        Token::Float(f) => Value::Float(f),
-        Token::Str(s) => Value::Str(s),
-        Token::Ident(s) if s.eq_ignore_ascii_case("true") => Value::Bool(true),
-        Token::Ident(s) if s.eq_ignore_ascii_case("false") => Value::Bool(false),
-        Token::Ident(s) if s.eq_ignore_ascii_case("null") => Value::Null,
-    }
-    .labelled("literal value");
 
     // Symbolic comparison operators tokenized by logos.
     let sym_op = select! {
@@ -373,11 +428,23 @@ where
                     lhs,
                     inner: Box::new(inner),
                 });
-            let compare = attr
+            let compare = expr
                 .clone()
                 .then(op)
-                .then(value)
-                .map(|((lhs, op), rhs)| Predicate::Compare { lhs: Expr::Attr(lhs), op, rhs: Expr::Lit(rhs) });
+                .then(expr.clone())
+                .validate(|((lhs, op), rhs), e, emitter| {
+                    // LIKE/NOT LIKE RHS must be a string literal (MAT parity).
+                    if matches!(op, CompareOp::Like | CompareOp::NotLike)
+                        && !matches!(&rhs, Expr::Lit(Value::Str(_)))
+                    {
+                        emitter.emit(Rich::custom(
+                            e.span(),
+                            "LIKE right-hand side must be a string literal, \
+                             e.g. LIKE \"java\\\\..*\"",
+                        ));
+                    }
+                    Predicate::Compare { lhs, op, rhs }
+                });
             // `in_subquery` before `compare` so `IN` isn't consumed as a bare field.
             let primary = paren.or(instanceof).or(in_subquery).or(compare);
             let not = recursive(|not| {
@@ -558,7 +625,7 @@ fn normalize_select_item(item: &mut SelectItem, alias: Option<&str>) {
         SelectItem::Path { .. } => {}
         // `toString(s)` carries a single alias token; no dotted path to normalize.
         SelectItem::ToString(_) => {}
-        SelectItem::Expr(_) => unreachable!("Expr select item reached before arithmetic wiring"),
+        SelectItem::Expr(e) => normalize_expr(e, alias),
     }
 }
 
@@ -569,15 +636,27 @@ fn normalize_predicate(pred: &mut Predicate, alias: Option<&str>) {
             normalize_predicate(b, alias);
         }
         Predicate::Not(a) => normalize_predicate(a, alias),
-        Predicate::Compare { lhs, .. } => {
-            if let Expr::Attr(a) = lhs {
-                normalize_attr(a, alias);
-            }
+        Predicate::Compare { lhs, rhs, .. } => {
+            normalize_expr(lhs, alias);
+            normalize_expr(rhs, alias);
         }
         // The inner query of an IN-subquery is normalized against its own alias
         // when it is parsed; the outer LHS attr is normalized here.
         Predicate::InSubquery { lhs, .. } => normalize_attr(lhs, alias),
         Predicate::InstanceOf(_) => {}
+    }
+}
+
+/// Recurse into an `Expr`, normalizing all `Attr` leaves with `normalize_attr`.
+fn normalize_expr(e: &mut Expr, alias: Option<&str>) {
+    match e {
+        Expr::Attr(a) => normalize_attr(a, alias),
+        Expr::Lit(_) => {}
+        Expr::Binary { lhs, rhs, .. } => {
+            normalize_expr(lhs, alias);
+            normalize_expr(rhs, alias);
+        }
+        Expr::Unary { arg, .. } => normalize_expr(arg, alias),
     }
 }
 
@@ -2902,5 +2981,98 @@ mod tests {
             );
         }
         // If it errors, that is also correct behaviour — wrong order is not supported.
+    }
+
+    // ============================================================
+    // Group: arithmetic expression grammar (Task 3)
+    // ============================================================
+
+    fn parse_one(s: &str) -> Query {
+        super::parse(s).unwrap_or_else(|e| panic!("parse failed for {s:?}: {}", e.0))
+    }
+
+    #[test]
+    fn arithmetic_precedence_mul_binds_tighter_than_add() {
+        let q = parse_one("SELECT @usedHeapSize + @length * 2 FROM C");
+        match &q.select[0] {
+            SelectItem::Expr(e) => match e.as_ref() {
+                Expr::Binary { op: ArithOp::Add, lhs, rhs } => {
+                    assert!(matches!(lhs.as_ref(), Expr::Attr(_)));
+                    assert!(matches!(rhs.as_ref(), Expr::Binary { op: ArithOp::Mul, .. }));
+                }
+                other => panic!("expected Add root, got {other:?}"),
+            },
+            other => panic!("expected Expr item, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn arithmetic_parens_override_precedence() {
+        let q = parse_one("SELECT (@usedHeapSize + @length) * 2 FROM C");
+        match &q.select[0] {
+            SelectItem::Expr(e) => assert!(matches!(e.as_ref(), Expr::Binary { op: ArithOp::Mul, .. })),
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unary_minus_on_attr_parses() {
+        let q = parse_one("SELECT -@usedHeapSize FROM C");
+        match &q.select[0] {
+            SelectItem::Expr(e) => assert!(matches!(e.as_ref(), Expr::Unary { op: UnaryOp::Neg, .. })),
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lone_star_stays_select_star_not_multiply() {
+        let q = parse_one("SELECT * FROM C");
+        assert_eq!(q.select, vec![SelectItem::Star]);
+    }
+
+    #[test]
+    fn bare_attr_folds_to_attr_item_not_expr() {
+        let q = parse_one("SELECT @usedHeapSize FROM C");
+        assert_eq!(q.select, vec![SelectItem::Attr(Attr::UsedHeapSize)]);
+    }
+
+    #[test]
+    fn where_arithmetic_both_sides() {
+        let q = parse_one("SELECT * FROM C WHERE @usedHeapSize / 8 > @length + 1");
+        match q.where_.unwrap() {
+            Predicate::Compare { lhs, op: CompareOp::Gt, rhs } => {
+                assert!(matches!(lhs, Expr::Binary { op: ArithOp::Div, .. }));
+                assert!(matches!(rhs, Expr::Binary { op: ArithOp::Add, .. }));
+            }
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn where_plain_compare_folds_to_leaf_exprs() {
+        let q = parse_one("SELECT * FROM C WHERE @usedHeapSize > 100");
+        match q.where_.unwrap() {
+            Predicate::Compare { lhs, op: CompareOp::Gt, rhs } => {
+                assert_eq!(lhs, Expr::Attr(Attr::UsedHeapSize));
+                assert_eq!(rhs, Expr::Lit(Value::Int(100)));
+            }
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn negative_literal_folds_via_unary() {
+        let q = parse_one("SELECT * FROM C WHERE delta = -5");
+        match q.where_.unwrap() {
+            Predicate::Compare { rhs, .. } => assert_eq!(rhs, Expr::Lit(Value::Int(-5))),
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn like_rhs_must_be_string_literal() {
+        let err = super::parse("SELECT * FROM C WHERE name LIKE @a + 1").unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(msg.to_lowercase().contains("like"), "error should mention LIKE: {msg}");
     }
 }
