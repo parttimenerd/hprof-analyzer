@@ -2015,4 +2015,9 @@ fn leading_as_retained_set_end_to_end() {
         !stderr.contains("OQL parse error"),
         "leading AS RETAINED SET must not cause a parse error:\n{stderr}"
     );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.contains("| RETAINED |") && !stdout.starts_with("RETAINED"),
+        "output must not have a column named RETAINED:\n{stdout}"
+    );
 }

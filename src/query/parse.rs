@@ -2779,39 +2779,27 @@ mod tests {
     ///    Both set retained_set=true; combined result is true.
     #[test]
     fn leading_and_trailing_as_retained_set_both_true() {
-        let r = parse("SELECT AS RETAINED SET s AS RETAINED SET FROM java.lang.String s");
-        // This may parse or error depending on grammar. Pin the observed behaviour.
-        match r {
-            Ok(q) => assert!(
-                q.retained_set,
-                "when both leading and trailing present, retained_set must be true"
-            ),
-            Err(e) => {
-                // Acceptable: the grammar does not support double-retained.
-                // As long as the error is not something unexpected.
-                let _ = e;
-            }
-        }
+        let q = parse("SELECT AS RETAINED SET s AS RETAINED SET FROM java.lang.String s")
+            .expect("leading + trailing AS RETAINED SET must parse Ok");
+        assert!(
+            q.retained_set,
+            "when both leading and trailing present, retained_set must be true"
+        );
     }
 
     /// 10. OBJECTS before an aggregate: SELECT OBJECTS COUNT(*) FROM C
     ///     Pin the observed accept/reject behaviour.
     #[test]
     fn select_objects_before_aggregate() {
-        let r = parse("SELECT OBJECTS COUNT(*) FROM java.lang.String");
-        // OBJECTS is a no-op marker before any expression including aggregates.
-        match r {
-            Ok(q) => assert!(
-                matches!(
-                    &q.select[0],
-                    SelectItem::Aggregate { func: AggFunc::Count, .. }
-                ),
-                "COUNT(*) after OBJECTS must still parse as aggregate"
+        let q = parse("SELECT OBJECTS COUNT(*) FROM java.lang.String")
+            .expect("OBJECTS before aggregate must parse Ok");
+        assert!(
+            matches!(
+                &q.select[0],
+                SelectItem::Aggregate { func: AggFunc::Count, .. }
             ),
-            Err(_) => {
-                // Also acceptable if grammar does not support this combination.
-            }
-        }
+            "COUNT(*) after OBJECTS must still parse as aggregate"
+        );
     }
 
     /// 11. SELECT OBJECTS * (star after OBJECTS).
