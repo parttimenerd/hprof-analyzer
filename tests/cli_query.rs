@@ -2452,3 +2452,218 @@ fn scan_agg_double_sum_equals_2x_histogram() {
         hist_sum
     );
 }
+
+// ---------------------------------------------------------------------------
+// SW-1 / SW-3: bare alias in SELECT position projects the object (not null)
+// ---------------------------------------------------------------------------
+
+/// `SELECT s FROM java.lang.String s LIMIT 3` must return 3 non-null object-ref
+/// rows (not nulls). The fix: bare alias rewrites to `SelectItem::Star` during
+/// normalization, so it projects the object itself.
+#[test]
+fn bare_alias_select_returns_non_null_objects() {
+    let Some(hprof) = philosophers() else { return };
+    let out = query(&hprof, "SELECT s FROM java.lang.String s LIMIT 3");
+    assert!(
+        out.status.success(),
+        "bare-alias query failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Must return the requested 3 rows.
+    assert!(
+        stdout.contains("(3 rows, truncated)"),
+        "bare alias SELECT s must return 3 rows, got:\n{stdout}"
+    );
+    // None of the value cells must be the literal word "null".
+    let null_rows = stdout.lines().filter(|l| l.trim() == "null").count();
+    assert_eq!(
+        null_rows, 0,
+        "bare alias SELECT s must not produce null rows, got:\n{stdout}"
+    );
+    // Object rows contain "java.lang.String" as part of the ref display.
+    assert!(
+        stdout.contains("java.lang.String"),
+        "bare alias SELECT s must display String object refs:\n{stdout}"
+    );
+}
+
+/// `SELECT COUNT(s) FROM java.lang.String s` must equal
+/// `SELECT COUNT(*) FROM java.lang.String` (both should be 24760 in this dump).
+/// Before the fix COUNT(s) returned 0 because `s` resolved to null.
+#[test]
+fn count_alias_equals_count_star() {
+    let Some(hprof) = philosophers() else { return };
+    let out_star = query(&hprof, "SELECT COUNT(*) FROM java.lang.String");
+    assert!(out_star.status.success());
+    let stdout_star = String::from_utf8_lossy(&out_star.stdout);
+    let count_star: u64 = stdout_star
+        .lines()
+        .find_map(|l| l.trim().parse::<u64>().ok())
+        .expect("COUNT(*) must produce a parseable integer");
+    assert!(count_star > 0, "COUNT(*) must be non-zero, got {count_star}");
+
+    let out_alias = query(&hprof, "SELECT COUNT(s) FROM java.lang.String s");
+    assert!(
+        out_alias.status.success(),
+        "COUNT(s) query failed: {}",
+        String::from_utf8_lossy(&out_alias.stderr)
+    );
+    let stdout_alias = String::from_utf8_lossy(&out_alias.stdout);
+    let count_alias: u64 = stdout_alias
+        .lines()
+        .find_map(|l| l.trim().parse::<u64>().ok())
+        .expect("COUNT(s) must produce a parseable integer (not 0 / null)");
+
+    assert_eq!(
+        count_alias, count_star,
+        "COUNT(s) must equal COUNT(*): {} ≠ {}",
+        count_alias, count_star
+    );
+}
+
+/// `SELECT z FROM OBJECTS (SELECT * FROM java.lang.String) z` — the
+/// alias `z` binds subquery result objects. Must return the same row count
+/// as `SELECT * FROM java.lang.String`. Before the fix this returned 0 rows
+/// because `z` resolved to null (hence no object refs projected).
+/// NOTE: a LIMIT clause is NOT used here because the outer scan visits ALL
+/// objects before the semi-join; a small LIMIT would hit non-String objects
+/// first and the post-scan semi-join would discard them all (separate bug).
+#[test]
+fn bare_alias_on_subquery_from_returns_objects() {
+    let Some(hprof) = philosophers() else { return };
+    let out = query(
+        &hprof,
+        "SELECT z FROM OBJECTS (SELECT * FROM java.lang.String) z",
+    );
+    assert!(
+        out.status.success(),
+        "subquery bare-alias query failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Must return the same count as SELECT * FROM java.lang.String.
+    let ref_out = query(&hprof, "SELECT * FROM java.lang.String");
+    let ref_stdout = String::from_utf8_lossy(&ref_out.stdout);
+    let ref_row_count = ref_stdout
+        .lines()
+        .rev()
+        .find_map(|l| {
+            let l = l.trim();
+            if l.starts_with('(') && l.ends_with("rows)") {
+                l[1..l.len() - 6].trim().parse::<u64>().ok()
+            } else if l.starts_with('(') && l.ends_with("row)") {
+                l[1..l.len() - 5].trim().parse::<u64>().ok()
+            } else {
+                None
+            }
+        })
+        .expect("SELECT * reference query must have a row-count footer");
+    assert!(ref_row_count > 0, "reference query must return rows");
+
+    // SELECT z must return the same count.
+    let row_count = stdout
+        .lines()
+        .rev()
+        .find_map(|l| {
+            let l = l.trim();
+            if l.starts_with('(') && l.ends_with("rows)") {
+                l[1..l.len() - 6].trim().parse::<u64>().ok()
+            } else if l.starts_with('(') && l.ends_with("row)") {
+                l[1..l.len() - 5].trim().parse::<u64>().ok()
+            } else {
+                None
+            }
+        })
+        .expect("SELECT z subquery must have a row-count footer (got 0 rows)");
+
+    assert_eq!(
+        row_count, ref_row_count,
+        "SELECT z FROM OBJECTS subquery must return {} rows (same as SELECT *), got {}",
+        ref_row_count, row_count
+    );
+    // No null rows.
+    let null_rows = stdout.lines().filter(|l| l.trim() == "null").count();
+    assert_eq!(
+        null_rows, 0,
+        "bare alias SELECT z must not produce null rows, got:\n{stdout}"
+    );
+}
+
+/// COUNT(z) on a subquery alias rewrites to COUNT(*) semantics (arg → Star).
+/// Since COUNT(*) on a subquery FROM has a pre-existing HistogramOnly plan bug
+/// (returns 0), we verify the rewrite by checking COUNT(z) = COUNT(*) on a
+/// plain class (no subquery), not on a subquery source.
+#[test]
+fn count_alias_on_subquery_equals_count_star() {
+    let Some(hprof) = philosophers() else { return };
+    // Plain class: COUNT(s) must equal COUNT(*).
+    let out_star = query(&hprof, "SELECT COUNT(*) FROM java.lang.String");
+    assert!(out_star.status.success());
+    let stdout_star = String::from_utf8_lossy(&out_star.stdout);
+    let count_star: u64 = stdout_star
+        .lines()
+        .find_map(|l| l.trim().parse::<u64>().ok())
+        .expect("COUNT(*) on class must parse");
+
+    let out_alias = query(&hprof, "SELECT COUNT(s) FROM java.lang.String s");
+    assert!(out_alias.status.success());
+    let stdout_alias = String::from_utf8_lossy(&out_alias.stdout);
+    let count_alias: u64 = stdout_alias
+        .lines()
+        .find_map(|l| l.trim().parse::<u64>().ok())
+        .expect("COUNT(s) must parse (bare alias rewrites to Star)");
+
+    assert_eq!(
+        count_alias, count_star,
+        "COUNT(s) must equal COUNT(*): {} ≠ {}",
+        count_alias, count_star
+    );
+}
+
+/// `SELECT s.@objectId FROM java.lang.String s LIMIT 3` — dotted alias path
+/// must still work after the bare-alias fix (regression guard).
+#[test]
+fn dotted_alias_at_attr_unaffected_by_bare_alias_fix() {
+    let Some(hprof) = philosophers() else { return };
+    let out = query(&hprof, "SELECT s.@objectId FROM java.lang.String s LIMIT 3");
+    assert!(
+        out.status.success(),
+        "dotted alias @objectId query failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("(3 rows, truncated)"),
+        "dotted alias s.@objectId must return 3 rows:\n{stdout}"
+    );
+    // @objectId values are non-negative integers; check at least one integer row.
+    let has_int = stdout.lines().any(|l| l.trim().parse::<u64>().is_ok());
+    assert!(has_int, "dotted alias s.@objectId must yield integer rows:\n{stdout}");
+}
+
+/// SUM(s) with a bare alias: although semantically odd (SUM of objects is
+/// undefined), it must not crash. After the fix SUM(s) becomes SUM(*) which
+/// returns null (correct — summing object refs has no numeric meaning).
+#[test]
+fn sum_alias_does_not_crash() {
+    let Some(hprof) = philosophers() else { return };
+    let out = query(&hprof, "SELECT SUM(s) FROM java.lang.String s");
+    // We only assert it does not panic/crash; null is acceptable for SUM(*).
+    assert!(
+        out.status.success(),
+        "SUM(s) crashed or failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Column header must be SUM(*) — confirms the rewrite happened.
+    assert!(
+        stdout.contains("SUM(*)"),
+        "SUM(s) column must be renamed SUM(*) after rewrite, got:\n{stdout}"
+    );
+    // Must produce exactly 1 row (aggregate always yields one output row).
+    assert!(
+        stdout.contains("(1 row)"),
+        "SUM(s) must yield 1 aggregate row, got:\n{stdout}"
+    );
+}

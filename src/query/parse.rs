@@ -616,6 +616,18 @@ fn normalize_query_ref_paths(q: &mut Query) {
 }
 
 fn normalize_select_item(item: &mut SelectItem, alias: Option<&str>) {
+    // If this item is exactly the bare alias name (no dot), rewrite it to Star —
+    // the alias denotes the FROM object itself, just like `*`. This must fire
+    // BEFORE the Attr branch's normalize_attr call so dotted paths (`s.field`)
+    // are handled by normalize_attr while bare `s` becomes Star.
+    if let SelectItem::Attr(Attr::Field(name)) = &*item {
+        if let Some(al) = alias {
+            if name == al && !name.contains('.') {
+                *item = SelectItem::Star;
+                return;
+            }
+        }
+    }
     match item {
         SelectItem::Attr(a) => normalize_attr(a, alias),
         SelectItem::Aggregate { arg, .. } => normalize_select_item(arg, alias),
@@ -2683,10 +2695,11 @@ mod tests {
             q.retained_set,
             "retained_set must be true when AS RETAINED SET is used"
         );
+        // After the bare-alias fix, `s` (the FROM alias) rewrites to Star.
         assert_eq!(
             q.select,
-            vec![SelectItem::Attr(Attr::Field("s".into()))],
-            "select must be [s], not an aliased item named RETAINED"
+            vec![SelectItem::Star],
+            "select must be [Star] — bare alias s rewrites to Star"
         );
         assert_eq!(
             q.select_aliases[0], None,
@@ -2809,14 +2822,15 @@ mod tests {
     // Group: SELECT OBJECTS + leading AS RETAINED SET (Task 3)
     // ============================================================
 
-    /// 1. SELECT OBJECTS <s> is a no-op projection marker: parses, select == [s].
+    /// 1. SELECT OBJECTS <s> is a no-op projection marker: parses, select == [Star]
+    ///    because `s` is the FROM alias and rewrites to Star.
     #[test]
     fn select_objects_is_noop() {
         let q = parse("SELECT OBJECTS s FROM java.lang.String s").unwrap();
         assert_eq!(
             q.select,
-            vec![SelectItem::Attr(Attr::Field("s".into()))],
-            "OBJECTS must be a no-op: select must be [Field(s)]"
+            vec![SelectItem::Star],
+            "OBJECTS must be a no-op: select must be [Star] (bare alias rewrites to Star)"
         );
         assert!(!q.retained_set, "OBJECTS must not set retained_set");
         assert!(!q.distinct, "OBJECTS must not set distinct");
@@ -2830,10 +2844,11 @@ mod tests {
             q.retained_set,
             "leading AS RETAINED SET must set retained_set"
         );
+        // bare alias `s` rewrites to Star after the SW-1 fix
         assert_eq!(
             q.select,
-            vec![SelectItem::Attr(Attr::Field("s".into()))],
-            "select must be [Field(s)] with leading retained"
+            vec![SelectItem::Star],
+            "select must be [Star] with leading retained (bare alias rewrites)"
         );
     }
 
@@ -2864,10 +2879,11 @@ mod tests {
             q.retained_set,
             "trailing AS RETAINED SET must still set retained_set"
         );
+        // bare alias `s` rewrites to Star after the SW-1 fix
         assert_eq!(
             q.select,
-            vec![SelectItem::Attr(Attr::Field("s".into()))],
-            "select must still be [Field(s)] for trailing form"
+            vec![SelectItem::Star],
+            "select must be [Star] for trailing form (bare alias rewrites)"
         );
     }
 
@@ -2886,10 +2902,11 @@ mod tests {
     fn select_distinct_objects() {
         let q = parse("SELECT DISTINCT OBJECTS s FROM java.lang.String s").unwrap();
         assert!(q.distinct, "distinct must be true");
+        // bare alias `s` rewrites to Star after the SW-1 fix
         assert_eq!(
             q.select,
-            vec![SelectItem::Attr(Attr::Field("s".into()))],
-            "select must be [Field(s)] with DISTINCT OBJECTS"
+            vec![SelectItem::Star],
+            "select must be [Star] with DISTINCT OBJECTS (bare alias rewrites)"
         );
         assert!(!q.retained_set);
     }
@@ -2903,9 +2920,10 @@ mod tests {
             q.retained_set,
             "retained_set must be true with leading AS RETAINED SET OBJECTS"
         );
+        // bare alias `s` rewrites to Star after the SW-1 fix
         assert_eq!(
             q.select,
-            vec![SelectItem::Attr(Attr::Field("s".into()))],
+            vec![SelectItem::Star],
         );
     }
 
@@ -2913,9 +2931,10 @@ mod tests {
     #[test]
     fn select_objects_case_insensitive() {
         let q = parse("select objects s from java.lang.String s").unwrap();
+        // bare alias `s` rewrites to Star after the SW-1 fix
         assert_eq!(
             q.select,
-            vec![SelectItem::Attr(Attr::Field("s".into()))],
+            vec![SelectItem::Star],
         );
     }
 
@@ -2959,9 +2978,10 @@ mod tests {
         let q = parse("SELECT DISTINCT AS RETAINED SET s FROM java.lang.String s").unwrap();
         assert!(q.distinct, "distinct must be true");
         assert!(q.retained_set, "retained_set must be true");
+        // bare alias `s` rewrites to Star after the SW-1 fix
         assert_eq!(
             q.select,
-            vec![SelectItem::Attr(Attr::Field("s".into()))],
+            vec![SelectItem::Star],
         );
     }
 
@@ -3074,5 +3094,110 @@ mod tests {
         let err = super::parse("SELECT * FROM C WHERE name LIKE @a + 1").unwrap_err();
         let msg = format!("{err:?}");
         assert!(msg.to_lowercase().contains("like"), "error should mention LIKE: {msg}");
+    }
+
+    // ============================================================
+    // Group: bare-alias rewrite in SELECT (SW-1 / SW-3 fix)
+    // ============================================================
+
+    /// `SELECT s FROM java.lang.String s` — the bare alias `s` must rewrite to
+    /// `SelectItem::Star` (project the object itself), not `Attr::Field("s")`.
+    #[test]
+    fn bare_alias_in_select_rewrites_to_star() {
+        let q = parse_one("SELECT s FROM java.lang.String s");
+        assert_eq!(
+            q.select,
+            vec![SelectItem::Star],
+            "bare alias s must rewrite to Star, got {:?}",
+            q.select
+        );
+    }
+
+    /// `SELECT COUNT(s) FROM java.lang.String s` — the aggregate arg `s` must
+    /// also rewrite to `Star` so COUNT(s) becomes COUNT(*) semantics.
+    #[test]
+    fn bare_alias_in_count_arg_rewrites_to_star() {
+        let q = parse_one("SELECT COUNT(s) FROM java.lang.String s");
+        match &q.select[0] {
+            SelectItem::Aggregate { func: AggFunc::Count, arg } => {
+                assert_eq!(
+                    arg.as_ref(),
+                    &SelectItem::Star,
+                    "COUNT(s) arg must rewrite to Star, got {:?}",
+                    arg
+                );
+            }
+            other => panic!("expected COUNT aggregate, got {other:?}"),
+        }
+    }
+
+    /// REGRESSION: `SELECT s.count FROM java.lang.String s` — dotted path must
+    /// NOT be affected; it should normalize to `Attr::Field("count")`.
+    #[test]
+    fn dotted_alias_field_is_not_rewritten_to_star() {
+        let q = parse_one("SELECT s.count FROM java.lang.String s");
+        assert_eq!(
+            q.select,
+            vec![SelectItem::Attr(Attr::Field("count".into()))],
+            "s.count must normalize to Field(\"count\"), got {:?}",
+            q.select
+        );
+    }
+
+    /// REGRESSION: `SELECT count FROM java.lang.String s` — a bare name that is
+    /// NOT the alias must stay `Attr::Field("count")`.
+    #[test]
+    fn bare_non_alias_field_stays_field() {
+        let q = parse_one("SELECT count FROM java.lang.String s");
+        assert_eq!(
+            q.select,
+            vec![SelectItem::Attr(Attr::Field("count".into()))],
+            "bare non-alias field must stay Field(\"count\"), got {:?}",
+            q.select
+        );
+    }
+
+    /// The alias-qualified `@attr` form (`s.@objectId`) still produces
+    /// `Attr::ObjectId` — not affected by the bare-alias rewrite.
+    #[test]
+    fn alias_qualified_at_attr_still_works() {
+        let q = parse_one("SELECT s.@objectId FROM java.lang.String s");
+        assert_eq!(
+            q.select,
+            vec![SelectItem::Attr(Attr::ObjectId)],
+            "s.@objectId must remain Attr::ObjectId, got {:?}",
+            q.select
+        );
+    }
+
+    /// Multiple columns: bare alias plus a real attr.  Only the alias column
+    /// should become Star; the real attr stays untouched.
+    #[test]
+    fn bare_alias_mixed_columns_only_alias_rewrites() {
+        let q = parse_one("SELECT s, @usedHeapSize FROM java.lang.String s");
+        assert_eq!(q.select.len(), 2, "must have 2 columns");
+        assert_eq!(q.select[0], SelectItem::Star, "first column (alias) must be Star");
+        assert_eq!(
+            q.select[1],
+            SelectItem::Attr(Attr::UsedHeapSize),
+            "second column must be @usedHeapSize"
+        );
+    }
+
+    /// SUM(s) on an object alias is nonsensical but must not crash; arg rewrites to Star.
+    #[test]
+    fn bare_alias_in_sum_arg_rewrites_to_star() {
+        let q = parse_one("SELECT SUM(s) FROM java.lang.String s");
+        match &q.select[0] {
+            SelectItem::Aggregate { func: AggFunc::Sum, arg } => {
+                assert_eq!(
+                    arg.as_ref(),
+                    &SelectItem::Star,
+                    "SUM(s) arg must rewrite to Star, got {:?}",
+                    arg
+                );
+            }
+            other => panic!("expected SUM aggregate, got {other:?}"),
+        }
     }
 }
