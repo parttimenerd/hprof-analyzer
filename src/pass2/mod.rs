@@ -421,6 +421,7 @@ impl Pass2 {
                             truncated: false,
                             error: Some(e.0),
                             note: None,
+                            viz: None,
                         },
                     )));
                 }

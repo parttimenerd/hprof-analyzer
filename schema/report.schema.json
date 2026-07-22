@@ -2157,6 +2157,17 @@
         "truncated": {
           "description": "True if a cap was hit and rows are a bounded sample.",
           "type": "boolean"
+        },
+        "viz": {
+          "description": "Optional visualization directive (`-- @viz ...`) declared with the query.\n`None` renders a plain table (today's behavior). Omitted from JSON when\nabsent so no-viz reports are byte-identical.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VizSpec"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -3593,6 +3604,51 @@
       "required": [
         "type_name",
         "count"
+      ]
+    },
+    "VizKind": {
+      "description": "The declared visualization kind. `Table` is the no-op default.",
+      "type": "string",
+      "enum": [
+        "table",
+        "histogram",
+        "piechart",
+        "treemap"
+      ]
+    },
+    "VizSpec": {
+      "description": "A parsed `-- @viz` directive, attached to a `QueryResult`.",
+      "type": "object",
+      "properties": {
+        "cap": {
+          "description": "Optional top-N cap for the CHART ONLY (table always shows all rows).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "kind": {
+          "$ref": "#/$defs/VizKind"
+        },
+        "label_col": {
+          "description": "Column name (alias or derived) for the label axis; `None` => positional.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value_col": {
+          "description": "Column name for the numeric value axis; `None` => positional.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind"
       ]
     }
   }

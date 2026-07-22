@@ -18,6 +18,7 @@ pub mod run;
 pub mod runflags;
 pub mod stage_runner;
 pub mod stringvals;
+pub mod viz;
 
 use std::fmt;
 

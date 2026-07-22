@@ -449,7 +449,11 @@ fn handle_meta(cmd: &str, path_depth: usize, out: &mut impl Write) -> io::Result
 /// returning the (single) query result. Parse/plan failures are surfaced as
 /// `io::Error` so the caller prints `error: <msg>` and stays alive.
 fn run_one(path: &str, text: &str, path_depth: usize) -> io::Result<QueryResult> {
-    let q = crate::query::parse::parse_or_report(text).map_err(|report| {
+    // Strip any leading `-- @viz` directive before parsing; the OQL lexer has no
+    // comment rule. A malformed directive becomes a result note; a well-formed
+    // one is attached after execution once the columns are known.
+    let (cleaned, viz, warning) = crate::query::viz::split_directive(text);
+    let q = crate::query::parse::parse_or_report(&cleaned).map_err(|report| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("parse error: {report}"),
@@ -460,7 +464,7 @@ fn run_one(path: &str, text: &str, path_depth: usize) -> io::Result<QueryResult>
     let plan =
         crate::query::optimize::optimize(plan, &q, &crate::query::optimize::SchemaStats::default());
     let mut results = crate::query::run::run_single_dump(path, &[(q, plan)])?;
-    Ok(results.pop().unwrap_or_else(|| QueryResult {
+    let mut result = results.pop().unwrap_or_else(|| QueryResult {
         name: "q1".into(),
         oql: text.into(),
         columns: vec![],
@@ -469,7 +473,31 @@ fn run_one(path: &str, text: &str, path_depth: usize) -> io::Result<QueryResult>
         truncated: false,
         error: Some("no result produced".into()),
         note: None,
-    }))
+        viz: None,
+    });
+    // Fold a malformed-directive warning into the note.
+    if let Some(w) = warning {
+        result.note = Some(match result.note.take() {
+            Some(n) => format!("{n}; {w}"),
+            None => w,
+        });
+    }
+    // Attach a well-formed chart spec only if its columns resolve; otherwise
+    // downgrade to a table with an explanatory note (charts never hard-fail).
+    if result.error.is_none() {
+        if let Some(spec) = viz {
+            match crate::query::viz::resolve_columns(&spec, &result.columns, &result.rows) {
+                Ok(_) => result.viz = Some(spec),
+                Err(reason) => {
+                    result.note = Some(match result.note.take() {
+                        Some(n) => format!("{n}; {reason}"),
+                        None => reason,
+                    });
+                }
+            }
+        }
+    }
+    Ok(result)
 }
 
 /// Print a `QueryResult` as a simple pipe-delimited table with a row-count
@@ -599,6 +627,7 @@ mod tests {
             truncated: false,
             error: None,
             note: None,
+            viz: None,
         };
         let out = print_to_string(&res);
         assert!(out.contains("a | b"), "header missing:\n{out}");
@@ -620,6 +649,7 @@ mod tests {
             truncated: false,
             error: None,
             note: None,
+            viz: None,
         };
         let out = print_to_string(&res);
         assert!(out.contains("(1 row)"), "singular footer missing:\n{out}");
@@ -637,6 +667,7 @@ mod tests {
             truncated: false,
             error: Some("boom".into()),
             note: None,
+            viz: None,
         };
         let out = print_to_string(&res);
         assert_eq!(out, "error: boom\n");
@@ -653,6 +684,7 @@ mod tests {
             truncated: true,
             error: None,
             note: None,
+            viz: None,
         };
         let out = print_to_string(&res);
         assert!(

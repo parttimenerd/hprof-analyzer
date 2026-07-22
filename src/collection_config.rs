@@ -47,6 +47,24 @@ fn default_kind() -> String {
 struct ConfigFile {
     #[serde(default)]
     collection: Vec<RawEntry>,
+    #[serde(default)]
+    query: Vec<RawQuery>,
+}
+
+/// A `[[query]]` entry from the config file: an OQL string with an optional
+/// display name. The `oql` may embed a leading `-- @viz` directive line, which
+/// the query intake strips and honors just like a `--query` argument.
+#[derive(serde::Deserialize)]
+struct RawQuery {
+    name: Option<String>,
+    oql: String,
+}
+
+/// A named OQL query loaded from config, ready to hand to the query intake.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ConfigQuery {
+    pub name: Option<String>,
+    pub oql: String,
 }
 
 /// Parse a TOML string into a Vec of user-defined CollDesc entries.
@@ -77,6 +95,47 @@ pub(crate) fn parse_toml_str(src: &str) -> Result<Vec<CollDesc>, String> {
             })
         })
         .collect()
+}
+
+/// Parse the `[[query]]` entries from a TOML config string. Empty when the
+/// file declares none. An entry with a blank `oql` is a hard error naming it.
+pub(crate) fn parse_query_entries(src: &str) -> Result<Vec<ConfigQuery>, String> {
+    let cfg: ConfigFile = toml::from_str(src).map_err(|e| e.to_string())?;
+    cfg.query
+        .into_iter()
+        .map(|q| {
+            if q.oql.trim().is_empty() {
+                return Err(format!(
+                    "config [[query]] entry {:?} has an empty `oql`",
+                    q.name.as_deref().unwrap_or("<unnamed>")
+                ));
+            }
+            Ok(ConfigQuery {
+                name: q.name,
+                oql: q.oql,
+            })
+        })
+        .collect()
+}
+
+/// Load `[[query]]` entries from the config file (same search order as
+/// [`load_collection_descs`]). A parse error is surfaced as a warning and the
+/// entries are dropped, matching the collection-config failure mode.
+pub(crate) fn load_config_queries(explicit_path: Option<&Path>) -> Vec<ConfigQuery> {
+    find_config(explicit_path)
+        .and_then(|p| {
+            std::fs::read_to_string(&p)
+                .map_err(|e| {
+                    eprintln!("warning: could not read query config {}: {e}", p.display())
+                })
+                .ok()
+        })
+        .and_then(|src| {
+            parse_query_entries(&src)
+                .map_err(|e| eprintln!("warning: query config parse error: {e}"))
+                .ok()
+        })
+        .unwrap_or_default()
 }
 
 /// Merge user entries (prepended) with built-in entries.
@@ -194,6 +253,77 @@ class = "com/example/Foo"
 kind = "Bag"
 "#;
         assert!(parse_toml_str(toml).is_err());
+    }
+
+    #[test]
+    fn parse_query_entries_reads_named_and_unnamed() {
+        let toml = r#"
+[[query]]
+name = "threads"
+oql = "SELECT * FROM java.lang.Thread"
+
+[[query]]
+oql = "SELECT COUNT(*) FROM java.lang.String"
+"#;
+        let qs = parse_query_entries(toml).unwrap();
+        assert_eq!(qs.len(), 2);
+        assert_eq!(qs[0].name.as_deref(), Some("threads"));
+        assert_eq!(qs[0].oql, "SELECT * FROM java.lang.Thread");
+        assert_eq!(qs[1].name, None);
+        assert_eq!(qs[1].oql, "SELECT COUNT(*) FROM java.lang.String");
+    }
+
+    #[test]
+    fn parse_query_entries_empty_when_none_declared() {
+        let toml = r#"
+[[collection]]
+class = "java/util/HashMap"
+"#;
+        assert_eq!(parse_query_entries(toml).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn parse_query_entries_blank_oql_is_error() {
+        let toml = r#"
+[[query]]
+name = "bad"
+oql = "   "
+"#;
+        let err = parse_query_entries(toml).unwrap_err();
+        assert!(err.contains("bad"), "error should name the entry: {err}");
+        assert!(err.contains("empty"), "error should mention empty: {err}");
+    }
+
+    #[test]
+    fn parse_query_entries_preserves_viz_directive_in_oql() {
+        // The `-- @viz` directive stays in the oql string; the query intake
+        // strips it later. parse_query_entries must not mangle it.
+        let toml = r#"
+[[query]]
+name = "hist"
+oql = """
+-- @viz histogram label=c value=n
+SELECT @clazz AS c, COUNT(*) AS n FROM java.lang.Object
+"""
+"#;
+        let qs = parse_query_entries(toml).unwrap();
+        assert_eq!(qs.len(), 1);
+        assert!(qs[0].oql.contains("-- @viz histogram"));
+        assert!(qs[0].oql.contains("SELECT @clazz AS c"));
+    }
+
+    #[test]
+    fn collections_and_queries_coexist_in_one_file() {
+        let toml = r#"
+[[collection]]
+class = "com/example/MyList"
+kind = "List"
+
+[[query]]
+oql = "SELECT * FROM C"
+"#;
+        assert_eq!(parse_toml_str(toml).unwrap().len(), 1);
+        assert_eq!(parse_query_entries(toml).unwrap().len(), 1);
     }
 
     #[test]

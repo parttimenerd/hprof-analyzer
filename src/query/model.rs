@@ -3,6 +3,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::query::viz::VizSpec;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct QueryColumn {
     pub name: String,
@@ -41,6 +43,11 @@ pub struct QueryResult {
     /// phases, harmless (`None`) otherwise. Omitted from JSON when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Optional visualization directive (`-- @viz ...`) declared with the query.
+    /// `None` renders a plain table (today's behavior). Omitted from JSON when
+    /// absent so no-viz reports are byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub viz: Option<VizSpec>,
 }
 
 #[cfg(test)]
@@ -60,6 +67,7 @@ mod tests {
             truncated: false,
             error: None,
             note: None,
+            viz: None,
         };
         let j = serde_json::to_string(&r).unwrap();
         assert!(j.contains("\"row_count\":1"));
@@ -93,6 +101,7 @@ mod tests {
             truncated: false,
             error: None,
             note: None,
+            viz: None,
         };
         let j = serde_json::to_string(&r).unwrap();
         let back: QueryResult = serde_json::from_str(&j).unwrap();
@@ -131,6 +140,7 @@ mod tests {
             truncated: false,
             error: Some("boom".into()),
             note: None,
+            viz: None,
         };
         let j = serde_json::to_string(&r).unwrap();
         assert!(

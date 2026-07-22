@@ -1122,6 +1122,7 @@ mod tests {
             truncated: false,
             error: None,
             note: None,
+            viz: None,
         };
         let b = QueryResult {
             name: "q".into(),
@@ -1132,6 +1133,7 @@ mod tests {
             truncated: false,
             error: None,
             note: None,
+            viz: None,
         };
         let out = concat_union(vec![a, b], 10);
         assert_eq!(out.row_count, 3);
@@ -1150,6 +1152,7 @@ mod tests {
                     truncated: false,
                     error: None,
                     note: None,
+                    viz: None,
                 },
                 QueryResult {
                     name: "q".into(),
@@ -1160,6 +1163,7 @@ mod tests {
                     truncated: false,
                     error: None,
                     note: None,
+                    viz: None,
                 },
             ],
             10,
@@ -1181,6 +1185,7 @@ mod tests {
             truncated: false,
             error: None,
             note: None,
+            viz: None,
         };
         // Second branch was itself truncated at scan time; UNION must carry that.
         let b = QueryResult {
@@ -1192,6 +1197,7 @@ mod tests {
             truncated: true,
             error: None,
             note: None,
+            viz: None,
         };
         let out = concat_union(vec![a, b], 100);
         assert_eq!(out.rows.len(), 2);
@@ -1212,6 +1218,7 @@ mod tests {
             truncated: false,
             error: None,
             note: None,
+            viz: None,
         }
     }
 
@@ -1501,6 +1508,7 @@ mod tests {
             truncated: false,
             error: None,
             note: None,
+            viz: None,
         };
         let flat = vec![branch(&[1, 2, 3]), branch(&[2, 3, 4])];
         let groups = vec![UnionGroup {
@@ -1538,6 +1546,7 @@ mod tests {
             truncated: false,
             error: None,
             note: None,
+            viz: None,
         }];
         let groups = vec![UnionGroup {
             head: 0,

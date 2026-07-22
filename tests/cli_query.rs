@@ -3310,3 +3310,171 @@ fn percentile_over_retained_is_cli_error() {
         "error must explain the retained-size restriction, got:\n{stderr}"
     );
 }
+
+/// A well-formed `-- @viz` directive on a `--query` arg rides through to the
+/// JSON report as a `viz` object on the query result. Uses the full analyze
+/// path (`--format json`) since the plain `query` subcommand prints text tables
+/// only; the JSON report is where `viz` is serialized.
+#[test]
+fn viz_directive_serializes_into_report_json() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg(&hprof)
+        .args(["--format", "json"])
+        .args([
+            "--query=-- @viz histogram label=name value=bytes\nSELECT @displayName AS name, @usedHeapSize AS bytes FROM java.lang.Thread LIMIT 5",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "analyze with viz query failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("\"viz\""),
+        "report JSON must carry a viz object:\n{}",
+        &stdout[..stdout.len().min(4000)]
+    );
+    assert!(
+        stdout.contains("\"histogram\""),
+        "viz kind histogram must appear:\n{}",
+        &stdout[..stdout.len().min(4000)]
+    );
+}
+
+/// A malformed `-- @viz` directive never hard-fails the query: the directive
+/// line is stripped, the query runs, and the malformed reason is surfaced as a
+/// `note` in the JSON report (falling back to a plain table).
+#[test]
+fn malformed_viz_directive_falls_back_with_note() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg(&hprof)
+        .args(["--format", "json"])
+        .args([
+            "--query=-- @viz boguskind\nSELECT COUNT(*) FROM java.lang.String",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "malformed viz must not fail the query: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("\"note\""),
+        "malformed directive must produce a note:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("unknown chart kind"),
+        "note must explain the malformed kind:\n{stdout}"
+    );
+    // No viz object should be attached on a malformed directive.
+    assert!(
+        !stdout.contains("\"viz\""),
+        "malformed directive must not attach a viz object:\n{stdout}"
+    );
+}
+
+/// A well-formed directive whose value column is not numeric downgrades to a
+/// table with an explanatory note rather than emitting a broken chart.
+#[test]
+fn viz_unchartable_columns_downgrade_to_table_note() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg(&hprof)
+        .args(["--format", "json"])
+        .args([
+            // @displayName is a string column; asking to chart it as the value
+            // axis is unchartable -> table + note.
+            "--query=-- @viz histogram value=@displayName\nSELECT @displayName FROM java.lang.Thread LIMIT 5",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "unchartable viz must not fail the query: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("\"note\""),
+        "unchartable column must produce a note:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("\"viz\""),
+        "unchartable directive must not attach a viz object:\n{stdout}"
+    );
+}
+
+/// A config-file `[[query]]` entry is discovered and run, and its declared name
+/// labels the result. Writes a `.hprof-analyzer.toml` into a temp CWD and runs
+/// the binary there so auto-discovery picks it up.
+#[test]
+fn config_query_entry_is_run_and_named() {
+    let Some(hprof) = philosophers() else { return };
+    let dir = std::env::temp_dir().join(format!("hprof_cfgq_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let cfg = dir.join(".hprof-analyzer.toml");
+    std::fs::write(
+        &cfg,
+        "[[query]]\nname = \"strcount\"\noql = \"SELECT COUNT(*) FROM java.lang.String\"\n",
+    )
+    .unwrap();
+    let out = Command::new(BIN)
+        .current_dir(&dir)
+        .arg("query")
+        .arg(&hprof)
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&cfg);
+    let _ = std::fs::remove_dir(&dir);
+    assert!(
+        out.status.success(),
+        "config-query run failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("== strcount =="),
+        "config query name must label the result:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("COUNT(*)"),
+        "config query must actually run:\n{stdout}"
+    );
+}
+
+/// A `-- @viz` directive on its own line in a `--query-file` attaches to the
+/// FOLLOWING query line (queries in files are one-per-line).
+#[test]
+fn viz_directive_line_in_query_file_attaches_to_next() {
+    let Some(hprof) = philosophers() else { return };
+    let qf = std::env::temp_dir().join(format!("hprof_vizqf_{}.oql", std::process::id()));
+    std::fs::write(
+        &qf,
+        "-- @viz histogram label=name value=bytes\nSELECT @displayName AS name, @usedHeapSize AS bytes FROM java.lang.Thread LIMIT 5\n",
+    )
+    .unwrap();
+    let out = Command::new(BIN)
+        .arg(&hprof)
+        .args(["--format", "json"])
+        .arg("--query-file")
+        .arg(&qf)
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&qf);
+    assert!(
+        out.status.success(),
+        "query-file with viz directive failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("\"viz\"") && stdout.contains("\"histogram\""),
+        "query-file directive must attach a histogram viz:\n{stdout}"
+    );
+}

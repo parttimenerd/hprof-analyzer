@@ -844,24 +844,92 @@ fn render_report(path: &str, format: OutputFormat) -> io::Result<String> {
     })
 }
 
-/// Collect the OQL query strings for a run: inline `--query` flags first, then
-/// each non-empty, non-comment (`#`) line of `--query-file`. A missing or
-/// unreadable query file is a hard error naming the path.
-fn collect_query_texts(opts: &AnalyzeOptions) -> io::Result<Vec<String>> {
-    let mut query_texts: Vec<String> = opts.queries.clone();
+/// A collected query: its OQL text (with any `-- @viz` directive already
+/// stripped), the parsed [`VizSpec`] if one was declared, an optional warning
+/// when the directive was malformed (surfaced later as a result note), and an
+/// optional display name (config `[[query]]` entries may name themselves).
+struct CollectedQuery {
+    text: String,
+    viz: Option<query::viz::VizSpec>,
+    warning: Option<String>,
+    name: Option<String>,
+}
+
+/// Collect the OQL queries for a run: inline `--query` flags first, then each
+/// non-empty, non-comment (`#`) line of `--query-file`, then any `[[query]]`
+/// entries from the config file. A leading `-- @viz` line in a query file
+/// attaches to the FOLLOWING query line (queries in files are one-per-line, so
+/// the directive is its own physical line). Inline `--query` args and config
+/// `oql` strings may embed the directive on their own `\n`-separated line. The
+/// directive is stripped from the text before parsing; a malformed one is
+/// recorded as a warning and the query still runs as a plain table.
+/// A missing or unreadable query file is a hard error naming the path.
+fn collect_query_texts(opts: &AnalyzeOptions) -> io::Result<Vec<CollectedQuery>> {
+    let mut collected: Vec<CollectedQuery> = opts
+        .queries
+        .iter()
+        .map(|q| {
+            let (text, viz, warning) = query::viz::split_directive(q);
+            CollectedQuery {
+                text,
+                viz,
+                warning,
+                name: None,
+            }
+        })
+        .collect();
     if let Some(ref qf) = opts.query_file {
         let body = std::fs::read_to_string(qf).map_err(|e| {
             io::Error::new(e.kind(), format!("cannot read --query-file '{qf}': {e}"))
         })?;
+        // A pending `-- @viz` directive line waits for the next query line.
+        let mut pending_directive: Option<String> = None;
         for line in body.lines() {
             let t = line.trim();
             if t.is_empty() || t.starts_with('#') {
                 continue;
             }
-            query_texts.push(t.to_string());
+            // A `-- @viz ...` line prefixes the next query; hold it.
+            if is_viz_directive_line(t) {
+                pending_directive = Some(t.to_string());
+                continue;
+            }
+            let full = match pending_directive.take() {
+                Some(dir) => format!("{dir}\n{t}"),
+                None => t.to_string(),
+            };
+            let (text, viz, warning) = query::viz::split_directive(&full);
+            collected.push(CollectedQuery {
+                text,
+                viz,
+                warning,
+                name: None,
+            });
         }
     }
-    Ok(query_texts)
+    // Config `[[query]]` entries run after CLI-supplied queries, keeping their
+    // declared names for display.
+    for cq in crate::collection_config::load_config_queries(opts.collection_config.as_deref()) {
+        let (text, viz, warning) = query::viz::split_directive(&cq.oql);
+        collected.push(CollectedQuery {
+            text,
+            viz,
+            warning,
+            name: cq.name,
+        });
+    }
+    Ok(collected)
+}
+
+/// True if a trimmed line is a `-- @viz ...` directive (case-insensitive on the
+/// `@viz` keyword). Mirrors the recognizer in `query::viz::split_directive` so a
+/// directive on its own query-file line is attached to the following query
+/// rather than being fed to the OQL parser as a stray comment.
+fn is_viz_directive_line(t: &str) -> bool {
+    t.strip_prefix("--")
+        .map(str::trim_start)
+        .and_then(|r| r.split_whitespace().next())
+        .is_some_and(|w| w.eq_ignore_ascii_case("@viz"))
 }
 
 /// Parse and plan each OQL text, failing fast with an actionable message that
@@ -907,6 +975,47 @@ fn finalize_query_labels(results: &mut [query::model::QueryResult], query_texts:
     }
 }
 
+/// Attach each collected query's [`VizSpec`] to its result, and fold any
+/// directive warning into the result `note`. A well-formed directive whose
+/// columns cannot be resolved against the actual result (unknown/non-numeric
+/// column, too few columns) is downgraded to a plain table with an explanatory
+/// note — charts never hard-fail a query. Results and `collected` are in the
+/// same order (executor output is restored to input order before this runs).
+fn attach_viz(results: &mut [query::model::QueryResult], collected: &[CollectedQuery]) {
+    for (r, c) in results.iter_mut().zip(collected.iter()) {
+        // A config-supplied name overrides the positional `q{N}` label.
+        if let Some(name) = &c.name {
+            if !name.is_empty() {
+                r.name = name.clone();
+            }
+        }
+        // A malformed directive recorded at collection time becomes a note.
+        if let Some(w) = &c.warning {
+            append_note(r, w);
+        }
+        // An errored query keeps no chart; the error already explains it.
+        if r.error.is_some() {
+            continue;
+        }
+        let Some(spec) = &c.viz else { continue };
+        match query::viz::resolve_columns(spec, &r.columns, &r.rows) {
+            Ok(_) => r.viz = Some(spec.clone()),
+            Err(reason) => append_note(r, &reason),
+        }
+    }
+}
+
+/// Append `msg` to a result's `note`, preserving any existing note.
+fn append_note(r: &mut query::model::QueryResult, msg: &str) {
+    match &mut r.note {
+        Some(existing) => {
+            existing.push_str("; ");
+            existing.push_str(msg);
+        }
+        None => r.note = Some(msg.to_string()),
+    }
+}
+
 /// Format a single query cell for plain-text table output.
 fn fmt_query_value(v: &query::model::QueryValue) -> String {
     use query::model::QueryValue::*;
@@ -923,7 +1032,8 @@ fn fmt_query_value(v: &query::model::QueryValue) -> String {
 /// The `query` subcommand: run pass1+pass2 with the parsed queries and print
 /// each result as a simple aligned text table to stdout. Never writes a file.
 fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
-    let query_texts = collect_query_texts(&opts)?;
+    let collected = collect_query_texts(&opts)?;
+    let query_texts: Vec<String> = collected.iter().map(|c| c.text.clone()).collect();
     let parsed = parse_plan_queries(&query_texts, opts.query_path_depth)?;
     let (flat, union_groups) = query::run::expand_union_queries(&parsed);
 
@@ -962,6 +1072,7 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
 
     // Fill in blank oql text and default `q{N}` names for the printed tables.
     finalize_query_labels(&mut query_results, &query_texts);
+    attach_viz(&mut query_results, &collected);
 
     let mut out = String::new();
     for r in query_results.iter() {
@@ -1033,7 +1144,8 @@ fn run(
 
     // Collect + parse + plan any OQL queries before pass2, so a bad query fails
     // fast (before the expensive graph build) with a message naming the query.
-    let query_texts = collect_query_texts(&opts)?;
+    let collected = collect_query_texts(&opts)?;
+    let query_texts: Vec<String> = collected.iter().map(|c| c.text.clone()).collect();
     let parsed_queries = parse_plan_queries(&query_texts, opts.query_path_depth)?;
     // Subqueries require a two-phase (inner-then-outer) scan of the dump. The
     // full-report pipeline scans once and immediately builds the graph +
@@ -1507,6 +1619,7 @@ fn run(
     crate::trace::trim();
     // Fill in blank oql text and default `q{N}` names for the printed tables.
     finalize_query_labels(&mut query_results, &query_texts);
+    attach_viz(&mut query_results, &collected);
     report.queries = std::mem::take(&mut query_results);
     let out_text = match format {
         OutputFormat::Md => {
