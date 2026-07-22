@@ -137,6 +137,125 @@ fn query_count_matches_select_star_for_class_objects() {
     assert!(s_count > 0, "String count must be positive");
 }
 
+/// SW-2 regression: a `toString(s)` predicate in WHERE must be applied in the
+/// late (string-values) phase, not at scan time. Scan-time `toString` resolves
+/// to Null, so a carry-mode scan that fails to defer the predicate drops every
+/// row before the string side-table is built, silently yielding 0 rows for a
+/// query that should match. A positive pattern must return rows; a
+/// no-match pattern must return zero; and every returned value must satisfy the
+/// filter.
+#[test]
+fn query_subcommand_tostring_where_filters_in_late_phase() {
+    let Some(hprof) = philosophers() else { return };
+
+    // Positive: a substring known to appear in the dump's strings.
+    let rows = parse_row_count(&run_query_stdout(
+        &hprof,
+        "SELECT s FROM java.lang.String s WHERE toString(s) LIKE \".*philosopher.*\" LIMIT 3",
+    ));
+    assert!(
+        rows > 0,
+        "toString(s) LIKE positive pattern must return rows (was {rows})"
+    );
+
+    // The projected toString values must all contain the matched substring —
+    // proving the late filter actually applied, not that it returned everything.
+    let projected = run_query_stdout(
+        &hprof,
+        "SELECT toString(s) FROM java.lang.String s WHERE toString(s) LIKE \".*philosopher.*\" LIMIT 5",
+    );
+    let value_lines: Vec<&str> = projected
+        .lines()
+        .map(str::trim)
+        .filter(|l| {
+            !l.is_empty()
+                && !l.starts_with("==")
+                && !l.starts_with("SELECT")
+                && !l.starts_with('(')
+                && *l != "toString(s)"
+        })
+        .collect();
+    assert!(
+        !value_lines.is_empty(),
+        "expected at least one projected toString value:\n{projected}"
+    );
+    for v in &value_lines {
+        assert!(
+            v.contains("philosopher"),
+            "every matched row must contain 'philosopher', got: {v:?}\n{projected}"
+        );
+    }
+
+    // Negative: a pattern that cannot match yields exactly zero rows (not the
+    // full universe — which would signal the predicate was dropped).
+    let none = parse_row_count(&run_query_stdout(
+        &hprof,
+        "SELECT s FROM java.lang.String s WHERE toString(s) LIKE \".*zzzzzz_no_match_xyzzy.*\" LIMIT 5",
+    ));
+    assert_eq!(
+        none, 0,
+        "toString(s) LIKE impossible pattern must return 0 rows (was {none})"
+    );
+
+    // The filtered count must be strictly fewer than the unfiltered universe,
+    // confirming the predicate narrows the result rather than being ignored.
+    let all = parse_single_count(&run_query_stdout(
+        &hprof,
+        "SELECT COUNT(*) FROM java.lang.String",
+    ));
+    let matched = parse_single_count(&run_query_stdout(
+        &hprof,
+        "SELECT COUNT(*) FROM java.lang.String s WHERE toString(s) LIKE \".*philosopher.*\"",
+    ));
+    assert!(
+        matched > 0 && matched < all,
+        "filtered count ({matched}) must be >0 and < total ({all})"
+    );
+
+    // COUNT(*) over a toString-filtered set must equal the row count of the
+    // corresponding projection — the late aggregate fold must count exactly the
+    // kept objects.
+    let matched_rows = parse_row_count(&run_query_stdout(
+        &hprof,
+        "SELECT s FROM java.lang.String s WHERE toString(s) LIKE \".*philosopher.*\"",
+    ));
+    assert_eq!(
+        matched, matched_rows,
+        "COUNT(*) ({matched}) must equal projected row count ({matched_rows}) under the same toString filter"
+    );
+}
+
+/// SW-2 guard: aggregates that cannot be folded over the late string-filtered
+/// set (SUM/AVG/MIN/MAX, or COUNT over a non-projectable arg) must be rejected
+/// with an actionable plan error rather than silently returning 0/Null. Only
+/// COUNT(*) / COUNT(toString(s)) are supported with a toString(s) WHERE.
+#[test]
+fn query_subcommand_tostring_where_rejects_unsupported_aggregates() {
+    let Some(hprof) = philosophers() else { return };
+    for oql in [
+        "SELECT SUM(@usedHeapSize) FROM java.lang.String s WHERE toString(s) LIKE \".*a.*\"",
+        "SELECT AVG(@usedHeapSize) FROM java.lang.String s WHERE toString(s) LIKE \".*a.*\"",
+        "SELECT MIN(@usedHeapSize) FROM java.lang.String s WHERE toString(s) LIKE \".*a.*\"",
+        "SELECT MAX(@usedHeapSize) FROM java.lang.String s WHERE toString(s) LIKE \".*a.*\"",
+    ] {
+        let out = Command::new(BIN)
+            .arg("query")
+            .arg(&hprof)
+            .args(["--query", oql])
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !out.status.success(),
+            "expected rejection for unsupported aggregate + toString WHERE: {oql}"
+        );
+        assert!(
+            stderr.contains("toString(s) filter"),
+            "error must explain the toString-filter aggregate restriction, got:\n{stderr}"
+        );
+    }
+}
+
 /// Alias-qualified `@attr` (MAT syntax `s.@objectId`) reaches execution: the
 /// query runs without an `OQL parse error` and exits successfully.
 #[test]

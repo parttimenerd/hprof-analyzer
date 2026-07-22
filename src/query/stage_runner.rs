@@ -565,6 +565,41 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
 
     let columns: Vec<QueryColumn> = crate::query::execute::query_columns(q);
 
+    // Aggregate over the toString-filtered set. When the SELECT is an aggregate
+    // (e.g. `COUNT(*) ... WHERE toString(s) LIKE ...`), the late phase must fold
+    // the kept objects into a single aggregate row rather than emit one row per
+    // object. The per-object argument value is projected from the dense index
+    // via `project_string_row_item` (COUNT(*) ignores it; COUNT(toString(s))
+    // sees the decoded string). Plan-time gating (see plan.rs) restricts this to
+    // aggregate args that are projectable here, so no silent-null folding occurs.
+    if q.select.iter().any(|it| matches!(it, SelectItem::Aggregate { .. })) {
+        let mut accs: Vec<crate::query::execute::AggAcc> =
+            q.select.iter().map(crate::query::execute::init_agg_acc).collect();
+        for &idx in &kept {
+            for (acc, item) in accs.iter_mut().zip(q.select.iter()) {
+                if let SelectItem::Aggregate { arg, .. } = item {
+                    let v = project_string_row_item(arg, idx, ctx);
+                    crate::query::execute::fold_agg_acc(acc, v);
+                }
+            }
+        }
+        let row: Vec<QueryValue> = accs
+            .into_iter()
+            .map(crate::query::execute::finalize_agg_acc)
+            .collect();
+        let truncated = entry.carry.truncated() || ctx.string_values_truncated;
+        return QueryResult {
+            name: entry.name.clone(),
+            oql: String::new(),
+            columns,
+            row_count: 1,
+            rows: vec![row],
+            truncated,
+            error: None,
+            note: None,
+        };
+    }
+
     let out_rows: Vec<Vec<QueryValue>> = kept
         .iter()
         .map(|&idx| {

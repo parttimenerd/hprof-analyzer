@@ -586,6 +586,36 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
         if finalize_at == Phase::P1 {
             finalize_at = Phase::P2;
         }
+        // An aggregate combined with a toString(s) WHERE folds over the late,
+        // string-filtered set (see stage_runner::string_values_rows). Only
+        // aggregates whose argument is projectable from the late string context
+        // are supported: COUNT(*) and COUNT(toString(s)). SUM/AVG/MIN/MAX and
+        // COUNT over other args (e.g. @usedHeapSize) would fold over Null in the
+        // late phase — reject them with an actionable error instead of silently
+        // returning 0/Null.
+        if is_aggregate {
+            let ok = q.select.iter().all(|it| match it {
+                SelectItem::Aggregate { func, arg } => {
+                    matches!(func, AggFunc::Count)
+                        && matches!(
+                            arg.as_ref(),
+                            SelectItem::Star
+                                | SelectItem::ToString(_)
+                                | SelectItem::Attr(Attr::ToString(_))
+                        )
+                }
+                _ => false,
+            });
+            if !ok {
+                return Err(QueryError(
+                    "only COUNT(*) or COUNT(toString(s)) may be combined with a \
+                     toString(s) filter in WHERE; SUM/AVG/MIN/MAX (and COUNT over \
+                     other attributes) over a toString-filtered set are not \
+                     supported in this release"
+                        .into(),
+                ));
+            }
+        }
     }
 
     Ok(QueryPlan {
@@ -698,6 +728,27 @@ pub(crate) fn pred_uses_retained(p: &Predicate) -> bool {
         Predicate::Compare { lhs, rhs, .. } => {
             expr_any_attr(lhs, |a| matches!(a, Attr::RetainedHeapSize))
                 || expr_any_attr(rhs, |a| matches!(a, Attr::RetainedHeapSize))
+        }
+        _ => false,
+    }
+}
+
+/// True if any comparison in the predicate tree references `toString(s)`.
+/// Such predicates cannot be evaluated during the pass2 scan — the string
+/// value is decoded only after the backing-array pass (P2) — so a carry-mode
+/// scan must SKIP them (leaving the object to be carried) and defer them to the
+/// late stage, where `eval_tostring_pred` resolves them against the decoded
+/// text. Without this skip the scan would compare `toString(s)` against `Null`
+/// and drop every row before the late phase could re-filter (SW-2).
+pub(crate) fn pred_uses_tostring(p: &Predicate) -> bool {
+    match p {
+        Predicate::And(a, b) | Predicate::Or(a, b) => {
+            pred_uses_tostring(a) || pred_uses_tostring(b)
+        }
+        Predicate::Not(a) => pred_uses_tostring(a),
+        Predicate::Compare { lhs, rhs, .. } => {
+            expr_any_attr(lhs, |a| matches!(a, Attr::ToString(_)))
+                || expr_any_attr(rhs, |a| matches!(a, Attr::ToString(_)))
         }
         _ => false,
     }

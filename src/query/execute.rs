@@ -149,7 +149,7 @@ pub struct SingleScanExecutor<'a, R: ClassResolver> {
 /// Per-select-item running state for a scan-time aggregate accumulator.
 /// One entry per position in `query.select`; non-aggregate positions use
 /// `AggAcc::None` as a no-op placeholder.
-enum AggAcc {
+pub(crate) enum AggAcc {
     /// Placeholder for a non-aggregate SELECT item (Attr / Expr / Star / etc.).
     None,
     /// COUNT(*): every matched object increments the counter.
@@ -172,7 +172,7 @@ enum AggAcc {
 
 /// Build the initial `AggAcc` for one SELECT item. Non-aggregate items get
 /// `AggAcc::None`; aggregate items get their zero state.
-fn init_agg_acc(item: &SelectItem) -> AggAcc {
+pub(crate) fn init_agg_acc(item: &SelectItem) -> AggAcc {
     match item {
         SelectItem::Aggregate { func, arg } => match func {
             AggFunc::Count => {
@@ -196,7 +196,7 @@ fn init_agg_acc(item: &SelectItem) -> AggAcc {
 
 /// Fold one per-object `value` into the accumulator `acc` for the corresponding
 /// SELECT item. Called once per matched object.
-fn fold_agg_acc(acc: &mut AggAcc, value: QueryValue) {
+pub(crate) fn fold_agg_acc(acc: &mut AggAcc, value: QueryValue) {
     match acc {
         AggAcc::None => {}
         AggAcc::CountStar { n } => *n += 1,
@@ -293,7 +293,7 @@ fn fold_agg_acc(acc: &mut AggAcc, value: QueryValue) {
 }
 
 /// Finalize an `AggAcc` into its result `QueryValue`.
-fn finalize_agg_acc(acc: AggAcc) -> QueryValue {
+pub(crate) fn finalize_agg_acc(acc: AggAcc) -> QueryValue {
     match acc {
         AggAcc::None => QueryValue::Null,
         AggAcc::CountStar { n } => QueryValue::Int(n),
@@ -698,11 +698,15 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     }
     fn where_passes(&self, src_idx: usize, class_id: u64, blob: &[u8]) -> bool {
         for term in &self.plan.where_terms {
-            // In carry mode, @retainedHeapSize WHERE terms can't be evaluated
-            // during the scan (retained size is unknown); they are applied late
-            // in stage_runner. Skip them here so a retained predicate doesn't
-            // spuriously compare against Null and drop every row.
-            if self.carry.is_some() && crate::query::plan::pred_uses_retained(&term.pred) {
+            // In carry mode, @retainedHeapSize and toString() WHERE terms can't
+            // be evaluated during the scan (retained size / string value are
+            // unknown here); they are applied late in stage_runner. Skip them
+            // here so the predicate doesn't spuriously compare against Null and
+            // drop every row before the late phase runs.
+            if self.carry.is_some()
+                && (crate::query::plan::pred_uses_retained(&term.pred)
+                    || crate::query::plan::pred_uses_tostring(&term.pred))
+            {
                 continue;
             }
             if !self.eval_pred(&term.pred, src_idx, class_id, blob) {
@@ -780,8 +784,11 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     /// thus behave like the instance path's unknown-field handling).
     fn array_where_passes(&self, src_idx: usize, class_name: &str, length: u32) -> bool {
         for term in &self.plan.where_terms {
-            // See `where_passes`: skip retained terms in carry mode.
-            if self.carry.is_some() && crate::query::plan::pred_uses_retained(&term.pred) {
+            // See `where_passes`: skip retained/toString terms in carry mode.
+            if self.carry.is_some()
+                && (crate::query::plan::pred_uses_retained(&term.pred)
+                    || crate::query::plan::pred_uses_tostring(&term.pred))
+            {
                 continue;
             }
             if !self.array_eval_pred(&term.pred, src_idx, class_name, length) {
