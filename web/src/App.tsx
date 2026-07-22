@@ -1783,9 +1783,13 @@ function TopConsumersSection({ report }: { report: Report }) {
   const clsSort = useSortedRows<ClassRow>(t.biggest_classes, "retained");
   const objCap = useCapped(objSort.sorted);
   const clsCap = useCapped(clsSort.sorted);
+  // "Held via" names the dominant incoming Class#field referrer; the column is
+  // shown only when attribution data populated at least one owner.
+  const objHasOwner = t.biggest_objects.some((o) => !!o.owner);
+  const objCols = objHasOwner ? 6 : 5;
 
   // Column resize hooks for the two main tables.
-  const objResize = useColumnResize(5);
+  const objResize = useColumnResize(objCols);
   const clsResize = useColumnResize(4);
 
   return (
@@ -1794,6 +1798,12 @@ function TopConsumersSection({ report }: { report: Report }) {
       <p className="subtitle">Biggest individual objects, classes, and packages by retained heap.</p>
 
       <h3>Biggest Objects</h3>
+      {objHasOwner && (
+        <p className="subtitle">
+          The <strong>Held via</strong> column names the dominant incoming <code>Class#field</code>{" "}
+          reference that holds each object (the primary referrer; an object may have several).
+        </p>
+      )}
       <div className="resizable-table-wrap">
       <table className="resizable-table">
         {objResize.widths.some((w) => w > 0) && (
@@ -1808,6 +1818,9 @@ function TopConsumersSection({ report }: { report: Report }) {
             <SortableTh<ObjRow> label="Shallow" colKey="shallow" sortKey={objSort.sortKey} setSortKey={objSort.setSortKey} />
             <SortableTh<ObjRow> label="Retained" colKey="retained" sortKey={objSort.sortKey} setSortKey={objSort.setSortKey} />
             <SortableTh<ObjRow> label="% Heap" colKey="pct_bp" sortKey={objSort.sortKey} setSortKey={objSort.setSortKey} />
+            {objHasOwner && (
+              <th className="resizable">Held via (Class#field)<span className="col-resize-handle" onMouseDown={objResize.onMouseDown(5)} /></th>
+            )}
           </tr>
         </thead>
         <tbody>
@@ -1822,9 +1835,10 @@ function TopConsumersSection({ report }: { report: Report }) {
                 {formatBytes(o.retained)}
               </td>
               <td className="num">{fmtPct(pctOf(o.retained, total))}</td>
+              {objHasOwner && <td>{o.owner ? <code>{o.owner}</code> : "—"}</td>}
             </tr>
           ))}
-          <ShowMoreRow extra={objCap.extra} cols={5} showAll={objCap.showAll} setShowAll={objCap.setShowAll} />
+          <ShowMoreRow extra={objCap.extra} cols={objCols} showAll={objCap.showAll} setShowAll={objCap.setShowAll} />
         </tbody>
       </table>
       </div>

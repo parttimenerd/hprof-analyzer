@@ -1,6 +1,6 @@
 {
   "schema_version": 7,
-  "generated": "2026-07-22T22:40:38.370161000Z",
+  "generated": "2026-07-22T22:51:04.847586000Z",
   "overview": {
     "source_name": "dump_2_scala-doku.hprof",
     "file_path": "tests/fixtures/dump_2_scala-doku.hprof",
@@ -232302,7 +232302,7 @@
         "shallow": 32,
         "retained": 2622376,
         "pct_bp": 839,
-        "owner": "java.lang.invoke.MemberName#clazz"
+        "owner": "java.lang.invoke.DirectMethodHandle$Special#caller"
       },
       {
         "obj_index_1based": 48876,
@@ -232326,7 +232326,7 @@
         "shallow": 80,
         "retained": 302304,
         "pct_bp": 97,
-        "owner": "java.util.zip.ZipFile$CleanableResource#zsrc"
+        "owner": "java.util.HashMap$Node#value"
       },
       {
         "obj_index_1based": 883869,
@@ -232334,7 +232334,7 @@
         "shallow": 80,
         "retained": 302304,
         "pct_bp": 97,
-        "owner": "java.util.zip.ZipFile$CleanableResource#zsrc"
+        "owner": "java.util.HashMap$Node#value"
       },
       {
         "obj_index_1based": 7275,
@@ -232358,7 +232358,7 @@
         "shallow": 88,
         "retained": 114336,
         "pct_bp": 37,
-        "owner": "java.lang.Module#loader"
+        "owner": "java.lang.Thread#contextClassLoader"
       },
       {
         "obj_index_1based": 878469,
@@ -232390,7 +232390,7 @@
         "shallow": 80,
         "retained": 69856,
         "pct_bp": 22,
-        "owner": "java.util.zip.ZipFile$CleanableResource#zsrc"
+        "owner": "java.util.HashMap$Node#value"
       },
       {
         "obj_index_1based": 948402,
@@ -232406,7 +232406,7 @@
         "shallow": 80,
         "retained": 64264,
         "pct_bp": 21,
-        "owner": "java.util.zip.ZipFile$CleanableResource#zsrc"
+        "owner": "java.util.HashMap$Node#value"
       },
       {
         "obj_index_1based": 950182,
@@ -232422,7 +232422,7 @@
         "shallow": 96,
         "retained": 58648,
         "pct_bp": 19,
-        "owner": "jdk.internal.loader.BuiltinClassLoader$LoadedModule#loader"
+        "owner": "java.net.URLClassLoader#parent"
       },
       {
         "obj_index_1based": 882059,
@@ -232430,7 +232430,7 @@
         "shallow": 104,
         "retained": 54968,
         "pct_bp": 18,
-        "owner": "java.security.SecureRandom#provider"
+        "owner": "java.security.Provider$Service#provider"
       },
       {
         "obj_index_1based": 814657,
@@ -232438,7 +232438,7 @@
         "shallow": 80,
         "retained": 53776,
         "pct_bp": 17,
-        "owner": "java.util.zip.ZipFile$CleanableResource#zsrc"
+        "owner": "java.util.HashMap$Node#value"
       },
       {
         "obj_index_1based": 950519,

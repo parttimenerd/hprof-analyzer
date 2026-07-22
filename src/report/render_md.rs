@@ -1184,25 +1184,45 @@ this list is unfiltered — it includes every object directly dominated by a GC 
 down to the smallest. Use it when the suspect you care about didn't cross the \
 leak-suspect threshold, or to see the full retention picture._\n\n",
     );
-    let mut objs = Table::new(
-        &["#", "Class", "Shallow", "Retained", "% Heap"],
-        &[
-            Align::Right,
-            Align::Left,
-            Align::Right,
-            Align::Right,
-            Align::Right,
-        ],
-    );
+    // The "Held via" column names the dominant incoming `Class#field` reference
+    // (the primary referrer; an object may have others). Present only when
+    // attribution data exists (i.e. `--collections` was passed).
+    let obj_has_owner = t.biggest_objects.iter().any(|r| r.owner.is_some());
+    if obj_has_owner {
+        out.push_str(
+            "_The **Held via** column names the dominant incoming `Class#field` reference \
+that holds each object (the primary referrer; an object may have several)._\n\n",
+        );
+    }
+    let mut obj_headers: Vec<&str> = vec!["#", "Class", "Shallow", "Retained", "% Heap"];
+    let mut obj_aligns = vec![
+        Align::Right,
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+    ];
+    if obj_has_owner {
+        obj_headers.push("Held via (Class#field)");
+        obj_aligns.push(Align::Left);
+    }
+    let mut objs = Table::new(&obj_headers, &obj_aligns);
     for (rank, row) in t.biggest_objects.iter().enumerate() {
         let pct = pct_of_heap(row.retained, total_shallow);
-        objs.row([
+        let mut cells = vec![
             (rank + 1).to_string(),
             format!("`{}`", row.display_class),
             format_bytes(row.shallow),
             format_bytes(row.retained),
             format!("{:.1}%", pct),
-        ]);
+        ];
+        if obj_has_owner {
+            cells.push(match &row.owner {
+                Some(o) => format!("`{o}`"),
+                None => "—".to_string(),
+            });
+        }
+        objs.row(cells);
     }
     objs.render(out);
     out.push('\n');
