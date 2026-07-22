@@ -202,7 +202,7 @@ a stripped comment — it is not part of the OQL grammar and has no effect on th
 plain `query`-subcommand table output.
 
 ```
--- @viz <kind> [label=<col>] [value=<col>] [cap=<n>]
+-- @viz <kind> [label=<col>] [value=<col>] [cap=<n>] [title="<text>"] [name="<text>"]
 SELECT ...
 ```
 
@@ -212,15 +212,19 @@ SELECT ...
 | `label=<col>` | column supplying slice/bar labels (defaults to first non-numeric column) |
 | `value=<col>` | column supplying numeric magnitudes (defaults to first numeric column) |
 | `cap=<n>` | limit the **chart** to the first `n` rows (the table still shows all) |
+| `title="<text>"` | heading rendered above the chart; quote it for multiple words |
+| `name="<text>"` | display name for the whole query block, replacing the auto `q{N}` label |
 
 Column names may be attributes (`@usedHeapSize`), aliases, or positional. A
-malformed directive or an unchartable result falls back to a plain table with a
-warning — it never hard-fails the query.
+`title=`/`name=` value may be a single bare word or a `"quoted string"` for
+multiple words. A malformed directive or an unchartable result falls back to a
+plain table with a warning — it never hard-fails the query. Note that `name=`
+applies even when the chart itself cannot be drawn (it only labels the block).
 
 Example (as it appears in a `--query-file` or config entry):
 
 ```
--- @viz histogram label=@displayName value=@usedHeapSize cap=10
+-- @viz histogram title="Threads by heap" name=threads label=@displayName value=@usedHeapSize cap=10
 SELECT @displayName, @usedHeapSize FROM java.lang.Thread ORDER BY @usedHeapSize DESC
 ```
 

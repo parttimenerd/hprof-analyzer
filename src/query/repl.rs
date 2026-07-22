@@ -564,6 +564,13 @@ fn run_one(path: &str, text: &str, path_depth: usize) -> io::Result<QueryResult>
     // downgrade to a table with an explanatory note (charts never hard-fail).
     if result.error.is_none() {
         if let Some(spec) = viz {
+            // A `name="..."` directive overrides the `q1` label regardless of
+            // whether the chart itself resolves.
+            if let Some(name) = &spec.name {
+                if !name.is_empty() {
+                    result.name = name.clone();
+                }
+            }
             match crate::query::viz::resolve_columns(&spec, &result.columns, &result.rows) {
                 Ok(_) => result.viz = Some(spec),
                 Err(reason) => {

@@ -23,9 +23,10 @@ use logos::Logos;
 use crate::query::model::{QueryColumn, QueryValue};
 
 /// The declared visualization kind. `Table` is the no-op default.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum VizKind {
+    #[default]
     Table,
     Histogram,
     Piechart,
@@ -33,7 +34,7 @@ pub enum VizKind {
 }
 
 /// A parsed `-- @viz` directive, attached to a `QueryResult`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct VizSpec {
     pub kind: VizKind,
     /// Column name (alias or derived) for the label axis; `None` => positional.
@@ -45,6 +46,13 @@ pub struct VizSpec {
     /// Optional top-N cap for the CHART ONLY (table always shows all rows).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cap: Option<usize>,
+    /// Optional heading rendered above the chart (`title="..."`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Optional display name for the whole query block; overrides the `q{N}`
+    /// auto-label (`name="..."`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// Extract a leading `-- @viz ...` directive from the query text.
@@ -108,6 +116,7 @@ pub fn split_directive(text: &str) -> (String, Option<VizSpec>, Option<String>) 
 
 /// Tokens of the `@viz` directive body, lexed by logos.
 ///   - `=` separates a key from its value
+///   - `"..."` a double-quoted string (for multi-word `title=`/`name=` values)
 ///   - `@name` captures a column name with its leading `@` stripped
 ///   - a bare integer is the `cap` value
 ///   - any other word (kind name, arg key, unquoted column name) is an `Ident`
@@ -116,6 +125,10 @@ pub fn split_directive(text: &str) -> (String, Option<VizSpec>, Option<String>) 
 enum VizToken {
     #[token("=")]
     Eq,
+    // A double-quoted string; the surrounding quotes are stripped. No escape
+    // handling — titles are plain text, so a literal `"` simply ends the string.
+    #[regex(r#""[^"]*""#, |lex| { let s = lex.slice(); s[1..s.len() - 1].to_string() })]
+    Str(String),
     // `@column` — capture the name after '@' (dots/`$` allowed for field paths).
     #[regex(r"@[A-Za-z_][A-Za-z0-9_.$]*", |lex| lex.slice()[1..].to_string())]
     At(String),
@@ -148,6 +161,7 @@ where
     let value = select! {
         VizToken::Ident(s) => VizArgVal::Word(s),
         VizToken::At(s) => VizArgVal::Word(s),
+        VizToken::Str(s) => VizArgVal::Word(s),
         VizToken::Int(n) => VizArgVal::Number(n),
     };
     let arg = word
@@ -190,7 +204,7 @@ fn parse_directive_body(body: &str) -> Result<VizSpec, String> {
     let (kind_word, args) = viz_parser().parse(stream).into_result().map_err(|_errs| {
         // A structural error (e.g. `foo` with no `=`, or a stray token) means the
         // args were not well-formed `key=value` pairs.
-        "ignored @viz argument: expected key=value (label=, value=, or cap=)".to_string()
+        "ignored @viz argument: expected key=value (label=, value=, cap=, title=, or name=)".to_string()
     })?;
 
     let kind = match kind_word.to_ascii_lowercase().as_str() {
@@ -209,11 +223,15 @@ fn parse_directive_body(body: &str) -> Result<VizSpec, String> {
     let mut label_col = None;
     let mut value_col = None;
     let mut cap = None;
+    let mut title = None;
+    let mut name = None;
 
     for (key, val) in args {
         match key.to_ascii_lowercase().as_str() {
             "label" => label_col = Some(arg_word(&key, val)?),
             "value" => value_col = Some(arg_word(&key, val)?),
+            "title" => title = Some(arg_word(&key, val)?),
+            "name" => name = Some(arg_word(&key, val)?),
             "cap" => match val {
                 VizArgVal::Number(n) if n > 0 => cap = Some(n as usize),
                 _ => {
@@ -223,7 +241,7 @@ fn parse_directive_body(body: &str) -> Result<VizSpec, String> {
             other => {
                 return Err(format!(
                     "ignored @viz argument `{other}=`: unknown key \
-                     (expected label=, value=, or cap=)"
+                     (expected label=, value=, cap=, title=, or name=)"
                 ));
             }
         }
@@ -234,6 +252,8 @@ fn parse_directive_body(body: &str) -> Result<VizSpec, String> {
         label_col,
         value_col,
         cap,
+        title,
+        name,
     })
 }
 
@@ -541,6 +561,87 @@ mod tests {
         assert_eq!(spec.cap, Some(3));
     }
 
+    // ---------- title= / name= (chart heading + query label) ----------
+
+    #[test]
+    fn title_single_word_parses() {
+        let (_, spec, warn) = split_directive("-- @viz histogram title=Sizes\nSELECT * FROM C");
+        assert!(warn.is_none(), "warn: {warn:?}");
+        assert_eq!(spec.unwrap().title.as_deref(), Some("Sizes"));
+    }
+
+    #[test]
+    fn title_quoted_multiword_parses() {
+        let (_, spec, warn) =
+            split_directive("-- @viz histogram title=\"Top classes by size\"\nSELECT * FROM C");
+        assert!(warn.is_none(), "warn: {warn:?}");
+        assert_eq!(spec.unwrap().title.as_deref(), Some("Top classes by size"));
+    }
+
+    #[test]
+    fn name_quoted_multiword_parses() {
+        let (_, spec, warn) =
+            split_directive("-- @viz table name=\"big classes\"\nSELECT * FROM C");
+        assert!(warn.is_none(), "warn: {warn:?}");
+        assert_eq!(spec.unwrap().name.as_deref(), Some("big classes"));
+    }
+
+    #[test]
+    fn title_and_name_together_with_other_args() {
+        let (_, spec, warn) = split_directive(
+            "-- @viz piechart title=\"By retained\" name=ret value=n label=c cap=5\nSELECT * FROM C",
+        );
+        assert!(warn.is_none(), "warn: {warn:?}");
+        let spec = spec.unwrap();
+        assert_eq!(spec.title.as_deref(), Some("By retained"));
+        assert_eq!(spec.name.as_deref(), Some("ret"));
+        assert_eq!(spec.value_col.as_deref(), Some("n"));
+        assert_eq!(spec.label_col.as_deref(), Some("c"));
+        assert_eq!(spec.cap, Some(5));
+    }
+
+    #[test]
+    fn empty_quoted_title_is_empty_string() {
+        // An empty quoted string is a valid (if pointless) title, not malformed.
+        let (_, spec, warn) = split_directive("-- @viz histogram title=\"\"\nSELECT * FROM C");
+        assert!(warn.is_none(), "warn: {warn:?}");
+        assert_eq!(spec.unwrap().title.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn quoted_value_for_label_column_parses() {
+        // A quoted string is also accepted as a column-name arg value.
+        let (_, spec, warn) =
+            split_directive("-- @viz histogram label=\"my col\"\nSELECT * FROM C");
+        assert!(warn.is_none(), "warn: {warn:?}");
+        assert_eq!(spec.unwrap().label_col.as_deref(), Some("my col"));
+    }
+
+    #[test]
+    fn title_without_value_is_malformed() {
+        let (_, spec, warn) = split_directive("-- @viz histogram title=\nSELECT * FROM C");
+        assert!(spec.is_none());
+        assert!(warn.is_some());
+    }
+
+    #[test]
+    fn unterminated_quote_is_malformed_not_panic() {
+        let (oql, spec, warn) =
+            split_directive("-- @viz histogram title=\"unclosed\nSELECT * FROM C");
+        assert_eq!(oql.trim(), "SELECT * FROM C", "directive line still removed");
+        assert!(spec.is_none());
+        assert!(warn.is_some());
+    }
+
+    #[test]
+    fn title_is_case_insensitive_key() {
+        let (_, spec, warn) = split_directive("-- @viz histogram TITLE=Foo NAME=bar\nSELECT * FROM C");
+        assert!(warn.is_none(), "warn: {warn:?}");
+        let spec = spec.unwrap();
+        assert_eq!(spec.title.as_deref(), Some("Foo"));
+        assert_eq!(spec.name.as_deref(), Some("bar"));
+    }
+
     #[test]
     fn non_viz_comment_line_is_left_untouched() {
         // A `--` line that is not `@viz` must be preserved (the OQL parser will
@@ -558,6 +659,7 @@ mod tests {
             label_col: Some("c".into()),
             value_col: Some("n".into()),
             cap: None,
+            ..Default::default()
         };
         let columns = cols(&["c", "n"]);
         let rows = vec![
@@ -574,6 +676,7 @@ mod tests {
             label_col: None,
             value_col: None,
             cap: None,
+            ..Default::default()
         };
         let columns = cols(&["name", "count"]);
         let rows = vec![vec![QueryValue::Str("a".into()), QueryValue::Int(3)]];
@@ -588,6 +691,7 @@ mod tests {
             label_col: Some("displayName".into()),
             value_col: Some("retainedHeapSize".into()),
             cap: None,
+            ..Default::default()
         };
         // Column names carry the `@` as derived; the arg does not. Both resolve.
         let columns = cols(&["@displayName", "@retainedHeapSize"]);
@@ -602,6 +706,7 @@ mod tests {
             label_col: None,
             value_col: Some("missing".into()),
             cap: None,
+            ..Default::default()
         };
         let columns = cols(&["a", "b"]);
         let rows = vec![vec![QueryValue::Int(1), QueryValue::Int(2)]];
@@ -617,6 +722,7 @@ mod tests {
             label_col: Some("a".into()),
             value_col: Some("b".into()),
             cap: None,
+            ..Default::default()
         };
         let columns = cols(&["a", "b"]);
         let rows = vec![vec![
@@ -635,6 +741,7 @@ mod tests {
             label_col: None,
             value_col: None,
             cap: None,
+            ..Default::default()
         };
         let columns = cols(&["a", "b"]);
         let rows = vec![vec![
@@ -653,6 +760,7 @@ mod tests {
             label_col: None,
             value_col: None,
             cap: None,
+            ..Default::default()
         };
         let columns = cols(&["a"]);
         let rows = vec![vec![QueryValue::Str("x".into())]];

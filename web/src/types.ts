@@ -691,6 +691,8 @@ export interface VizSpec {
   label_col?: string;
   value_col?: string;
   cap?: number;
+  title?: string;
+  name?: string;
 }
 
 export interface QueryResult {

@@ -331,6 +331,10 @@ fn render_query_chart(q: &crate::query::model::QueryResult, out: &mut String) {
     if spec.kind == VizKind::Table {
         return;
     }
+    // A `title="..."` renders as a heading above the chart (or the treemap note).
+    if let Some(title) = &spec.title {
+        let _ = writeln!(out, "**{title}**\n");
+    }
     if spec.kind == VizKind::Treemap {
         let _ = writeln!(
             out,
@@ -3458,6 +3462,7 @@ mod tests {
             label_col: Some("name".into()),
             value_col: Some("bytes".into()),
             cap: None,
+            ..Default::default()
         }
     }
 
@@ -3504,6 +3509,27 @@ mod tests {
         assert!(
             beta_hashes > alpha_hashes,
             "larger value must draw a longer bar: alpha={alpha_hashes} beta={beta_hashes}\n{out}"
+        );
+    }
+
+    #[test]
+    fn viz_title_renders_as_heading_above_chart() {
+        let mut spec = viz(crate::query::viz::VizKind::Histogram);
+        spec.title = Some("Top classes by size".into());
+        let mut q = charted_result(crate::query::viz::VizKind::Histogram);
+        q.viz = Some(spec);
+        let mut out = String::new();
+        render_custom_queries(std::slice::from_ref(&q), &mut out);
+        assert!(
+            out.contains("**Top classes by size**"),
+            "title heading missing: {out}"
+        );
+        let title_pos = out.find("**Top classes by size**").unwrap();
+        // The chart fence is the one AFTER the title (the first ``` is the OQL block).
+        let chart_fence_pos = out[title_pos..].find("```").map(|p| title_pos + p).unwrap();
+        assert!(
+            title_pos < chart_fence_pos,
+            "title must precede the chart: {out}"
         );
     }
 

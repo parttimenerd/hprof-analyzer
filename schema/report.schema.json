@@ -3639,6 +3639,20 @@
             "null"
           ]
         },
+        "name": {
+          "description": "Optional display name for the whole query block; overrides the `q{N}`\nauto-label (`name=\"...\"`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "Optional heading rendered above the chart (`title=\"...\"`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "value_col": {
           "description": "Column name for the numeric value axis; `None` => positional.",
           "type": [

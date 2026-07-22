@@ -1003,6 +1003,15 @@ fn attach_viz(results: &mut [query::model::QueryResult], collected: &[CollectedQ
                 r.name = name.clone();
             }
         }
+        // A `-- @viz name="..."` directive overrides the label too (inline with
+        // the query text, so it wins over the positional/config name).
+        if let Some(spec) = &c.viz {
+            if let Some(name) = &spec.name {
+                if !name.is_empty() {
+                    r.name = name.clone();
+                }
+            }
+        }
         // A malformed directive recorded at collection time becomes a note.
         if let Some(w) = &c.warning {
             append_note(r, w);

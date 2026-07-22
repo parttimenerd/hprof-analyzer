@@ -725,13 +725,23 @@ export function QueryViz({ query }: { query: QueryResult }) {
   if (slices.length === 0) return null;
 
   const fmt = (n: number) => String(n);
+  let chart: React.ReactNode;
   switch (spec.kind) {
     case "piechart":
-      return <Pie data={slices} fmt={fmt} />;
+      chart = <Pie data={slices} fmt={fmt} />;
+      break;
     case "treemap":
-      return <QueryTreemap data={slices} />;
+      chart = <QueryTreemap data={slices} />;
+      break;
     case "histogram":
     default:
-      return <HBar data={slices} fmt={fmt} />;
+      chart = <HBar data={slices} fmt={fmt} />;
+      break;
   }
+  return (
+    <>
+      {spec.title && <h4>{spec.title}</h4>}
+      {chart}
+    </>
+  );
 }
