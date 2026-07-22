@@ -658,7 +658,9 @@ pub fn class_name_matches(name_dotted: &str, pattern: &str) -> bool {
 /// MAT matches class names like `java.util.regex.Pattern.matches`: the WHOLE
 /// string must match. We anchor the source as `^(?:<src>)$` to get that
 /// full/anchored semantics regardless of the user's pattern.
-pub fn compile_from_regex(spec: &crate::query::ast::ClassSpec) -> Result<Option<regex::Regex>, crate::query::QueryError> {
+pub fn compile_from_regex(
+    spec: &crate::query::ast::ClassSpec,
+) -> Result<Option<regex::Regex>, crate::query::QueryError> {
     if !spec.is_regex {
         return Ok(None);
     }

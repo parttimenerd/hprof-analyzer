@@ -3,7 +3,9 @@
 //! with no per-object heap rescan.
 
 use crate::query::ast::{AggFunc, Attr, Query, SelectItem};
-use crate::query::execute::{class_name_matches, class_name_matches_spec, column_name, compile_from_regex};
+use crate::query::execute::{
+    class_name_matches, class_name_matches_spec, column_name, compile_from_regex,
+};
 use crate::query::model::{QueryResult, QueryValue};
 use crate::query::plan::QueryPlan;
 

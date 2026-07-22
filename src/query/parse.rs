@@ -1327,7 +1327,11 @@ mod tests {
         // level after the branch tail and stored in `union_limit`.
         let q = parse("SELECT * FROM A UNION SELECT * FROM B LIMIT 5").unwrap();
         assert_eq!(q.union_branches.len(), 1);
-        assert_eq!(q.union_limit, Some(5), "bare-form trailing LIMIT is union-wide");
+        assert_eq!(
+            q.union_limit,
+            Some(5),
+            "bare-form trailing LIMIT is union-wide"
+        );
         assert_eq!(q.limit, None, "head keeps no per-branch LIMIT");
         assert_eq!(
             q.union_branches[0].limit, None,
@@ -1360,10 +1364,7 @@ mod tests {
     fn union_branch_inner_limit_preserved_with_union_wide_limit() {
         // A parenthesized branch may carry its OWN LIMIT (inside the parens) AND
         // the whole union may carry a trailing union-wide LIMIT after the `)`.
-        let q = parse(
-            "SELECT * FROM A UNION (SELECT * FROM B LIMIT 3) LIMIT 5",
-        )
-        .unwrap();
+        let q = parse("SELECT * FROM A UNION (SELECT * FROM B LIMIT 3) LIMIT 5").unwrap();
         assert_eq!(q.union_branches.len(), 1);
         assert_eq!(
             q.union_branches[0].limit,

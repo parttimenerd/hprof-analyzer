@@ -1293,7 +1293,10 @@ fn query_count_star_char_array_equals_scan_row_count() {
     let rows = query_row_count(&hprof, "SELECT * FROM char[]")
         .expect("SELECT * FROM char[] failed or had no row-count footer");
     assert!(count > 0, "COUNT(*) FROM char[] must be > 0; got {count}");
-    assert!(rows > 0, "SELECT * FROM char[] must return rows; got {rows}");
+    assert!(
+        rows > 0,
+        "SELECT * FROM char[] must return rows; got {rows}"
+    );
     assert_eq!(
         count, rows,
         "histogram COUNT(*) ({count}) must equal scan row count ({rows}) for char[] \
@@ -1439,4 +1442,3 @@ fn bad_regex_from_is_actionable_cli_error() {
         "bad regex must surface an actionable 'invalid regex' error, got:\n{combined}"
     );
 }
-

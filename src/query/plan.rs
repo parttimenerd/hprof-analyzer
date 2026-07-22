@@ -1028,8 +1028,7 @@ mod tests {
     // A valid quoted FROM regex plans cleanly (as a histogram-only aggregate).
     #[test]
     fn good_from_regex_plans_ok() {
-        let plan =
-            plan_query(&parse(r#"SELECT COUNT(*) FROM "java\.lang\..*""#).unwrap()).unwrap();
+        let plan = plan_query(&parse(r#"SELECT COUNT(*) FROM "java\.lang\..*""#).unwrap()).unwrap();
         assert_eq!(plan.kind, StageKind::HistogramOnly);
     }
 
