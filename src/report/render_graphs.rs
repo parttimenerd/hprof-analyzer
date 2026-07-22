@@ -13,6 +13,7 @@ pub fn render_markdown_graphs(r: &Report) -> String {
     render_toc_graphs(r, &mut out);
     render_executive_summary(r, &mut out);
     render_oom_triage(r, &mut out);
+    render_waste_summary_graphs(r, &mut out);
     render_system_overview_graphs(&r.overview, &mut out);
     render_leak_suspects_graphs(&r.leaks, &mut out);
     render_top_consumers_graphs(&r.top, r.leaks.total_shallow, &mut out);
@@ -38,13 +39,47 @@ pub fn render_markdown_graphs(r: &Report) -> String {
     out
 }
 
-/// Linked in-document table of contents for the graphics report. The anchors
+/// Waste Summary with a proportional bar per source (mirrors the plain-md
+/// section but adds a `bar` column scaled to the largest source).
+fn render_waste_summary_graphs(r: &Report, out: &mut String) {
+    use crate::md::{Align, Table, bar};
+    let Some(w) = r.waste_summary.as_ref() else {
+        return;
+    };
+    if w.total_bytes == 0 {
+        return;
+    }
+    out.push_str("## Waste Summary\n\n");
+    out.push_str(&format!(
+        "_Approximately **{}** looks reclaimable across the sources below. Figures are approximate and may overlap slightly._\n\n",
+        format_bytes(w.total_bytes)
+    ));
+    let max = w.sources.iter().map(|s| s.bytes).max().unwrap_or(0);
+    let mut t = Table::new(
+        &["Source", "Reclaimable", ""],
+        &[Align::Left, Align::Right, Align::Left],
+    );
+    for s in &w.sources {
+        let label = match &s.anchor {
+            Some(a) => format!("[{}](#{})", s.label, a),
+            None => s.label.clone(),
+        };
+        t.row([label, format_bytes(s.bytes), bar(s.bytes, max, 16)]);
+    }
+    t.render(out);
+    out.push('\n');
+}
+
+
 /// use GitHub's slug convention (lowercase, spaces → hyphens) matching the
 /// `##`/`###` headings emitted by the section renderers.
 fn render_toc_graphs(r: &Report, out: &mut String) {
     out.push_str("## Contents\n\n");
     out.push_str(&SectionId::Summary.toc_bullet());
     out.push_str(&SectionId::MemoryTriage.toc_bullet());
+    if waste_summary_present(r) {
+        out.push_str(&SectionId::WasteSummary.toc_bullet());
+    }
     out.push_str(&SectionId::SystemOverview.toc_bullet());
     out.push_str(&SectionId::LeakSuspects.toc_bullet());
     out.push_str(&SectionId::TopConsumers.toc_bullet());

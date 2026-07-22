@@ -698,8 +698,26 @@ export interface Report {
   references: ReferencesAnalysis;
   // Scalar leak-pattern indicators. Always-on; zero fields omitted.
   leak_indicators?: LeakIndicators;
+  // Headline reclaimable-bytes figure folding every quantifiable waste source.
+  // Absent when every source is zero.
+  waste_summary?: WasteSummary;
   // Fired OOM-triage signals, evaluated once in Rust (order = render order).
   triage?: TriageSignal[];
+}
+
+// One quantifiable waste source: a human label, approximate reclaimable bytes,
+// and an optional canonical section slug it drills into.
+export interface WasteSource {
+  label: string;
+  bytes: number;
+  anchor?: string;
+}
+
+// Headline "reclaimable N bytes" figure folding every waste source. Sources are
+// approximate and may overlap slightly; total_bytes is their sum.
+export interface WasteSummary {
+  total_bytes: number;
+  sources: WasteSource[];
 }
 
 declare global {

@@ -1,6 +1,6 @@
 {
-  "schema_version": 6,
-  "generated": "2026-07-22T22:17:06.484776000Z",
+  "schema_version": 7,
+  "generated": "2026-07-22T22:40:38.370161000Z",
   "overview": {
     "source_name": "dump_2_scala-doku.hprof",
     "file_path": "tests/fixtures/dump_2_scala-doku.hprof",
@@ -232310,7 +232310,7 @@
         "shallow": 64,
         "retained": 598600,
         "pct_bp": 192,
-        "owner": "jdk.internal.loader.URLClassPath$JarLoader#jar"
+        "owner": "java.util.jar.JarFile$JarFileEntry#this$0"
       },
       {
         "obj_index_1based": 76372,
@@ -232318,7 +232318,7 @@
         "shallow": 64,
         "retained": 598568,
         "pct_bp": 192,
-        "owner": "jdk.internal.loader.URLClassPath$JarLoader#jar"
+        "owner": "java.util.jar.JarFile$JarFileEntry#this$0"
       },
       {
         "obj_index_1based": 76390,
@@ -232358,7 +232358,7 @@
         "shallow": 88,
         "retained": 114336,
         "pct_bp": 37,
-        "owner": "java.lang.Thread#contextClassLoader"
+        "owner": "java.lang.Module#loader"
       },
       {
         "obj_index_1based": 878469,
@@ -232422,7 +232422,7 @@
         "shallow": 96,
         "retained": 58648,
         "pct_bp": 19,
-        "owner": "java.lang.Thread#contextClassLoader"
+        "owner": "jdk.internal.loader.BuiltinClassLoader$LoadedModule#loader"
       },
       {
         "obj_index_1based": 882059,
@@ -232430,7 +232430,7 @@
         "shallow": 104,
         "retained": 54968,
         "pct_bp": 18,
-        "owner": "java.security.Provider$Service#provider"
+        "owner": "java.security.SecureRandom#provider"
       },
       {
         "obj_index_1based": 814657,
@@ -234327,70 +234327,70 @@
           "upper_ratio_bp": 1000,
           "objects": 37926,
           "shallow": 3708904,
-          "wasted": 0
+          "wasted": 6196416
         },
         {
           "lower_ratio_bp": 1000,
           "upper_ratio_bp": 2000,
           "objects": 193,
           "shallow": 27824,
-          "wasted": 0
+          "wasted": 41232
         },
         {
           "lower_ratio_bp": 2000,
           "upper_ratio_bp": 3000,
           "objects": 94,
           "shallow": 9112,
-          "wasted": 0
+          "wasted": 11184
         },
         {
           "lower_ratio_bp": 3000,
           "upper_ratio_bp": 4000,
           "objects": 126,
           "shallow": 53640,
-          "wasted": 0
+          "wasted": 68648
         },
         {
           "lower_ratio_bp": 4000,
           "upper_ratio_bp": 5000,
           "objects": 245,
           "shallow": 106888,
-          "wasted": 0
+          "wasted": 107888
         },
         {
           "lower_ratio_bp": 5000,
           "upper_ratio_bp": 6000,
           "objects": 46,
           "shallow": 10496,
-          "wasted": 0
+          "wasted": 9008
         },
         {
           "lower_ratio_bp": 6000,
           "upper_ratio_bp": 7000,
           "objects": 40,
           "shallow": 5248,
-          "wasted": 0
+          "wasted": 3232
         },
         {
           "lower_ratio_bp": 7000,
           "upper_ratio_bp": 8000,
           "objects": 30,
           "shallow": 3440,
-          "wasted": 0
+          "wasted": 1536
         },
         {
           "lower_ratio_bp": 8000,
           "upper_ratio_bp": 9000,
           "objects": 15,
           "shallow": 6448,
-          "wasted": 0
+          "wasted": 1704
         },
         {
           "lower_ratio_bp": 9000,
           "upper_ratio_bp": 10000,
           "objects": 16,
           "shallow": 37632,
-          "wasted": 0
+          "wasted": 2152
         },
         {
           "lower_ratio_bp": 10000,
@@ -237550,6 +237550,35 @@
     "thread_local_null_key_count": 0,
     "direct_byte_buffer_capacity_sum": 140862014
   },
+  "waste_summary": {
+    "total_bytes": 7558645,
+    "sources": [
+      {
+        "label": "Under-filled object arrays",
+        "bytes": 6443000,
+        "anchor": "collections"
+      },
+      {
+        "label": "Duplicate primitive arrays",
+        "bytes": 717869
+      },
+      {
+        "label": "Duplicate String values",
+        "bytes": 217716,
+        "anchor": "duplicate-strings-approximate"
+      },
+      {
+        "label": "Under-filled collections",
+        "bytes": 180016,
+        "anchor": "collections"
+      },
+      {
+        "label": "String backing-array slack",
+        "bytes": 44,
+        "anchor": "duplicate-strings-approximate"
+      }
+    ]
+  },
   "triage": [
     {
       "id": "headline-retainer",
@@ -237614,6 +237643,14 @@
       "detail": "134.3 MB of native memory is held by live DirectByteBuffers — not counted in heap size but can dominate RSS.",
       "anchor": "leak-indicators",
       "anchor_label": "Leak Indicators"
+    },
+    {
+      "id": "sparse-object-arrays",
+      "severity": "info",
+      "title": "Sparse object arrays",
+      "detail": "38,119 object arrays are <=20% full (5.9 MB wasted on null slots) — sparse or multi-dimensional array structures consuming excess memory.",
+      "anchor": "collections",
+      "anchor_label": "Collections"
     },
     {
       "id": "fixed-per-object-overhead",

@@ -1,6 +1,6 @@
 {
-  "schema_version": 6,
-  "generated": "2026-07-21T09:42:11.288443000Z",
+  "schema_version": 7,
+  "generated": "2026-07-22T22:35:48.488559000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
     "file_path": "tests/fixtures/dump_4_philosophers.hprof",
@@ -89894,70 +89894,70 @@
           "upper_ratio_bp": 1000,
           "objects": 2438,
           "shallow": 2191024,
-          "wasted": 0
+          "wasted": 4292784
         },
         {
           "lower_ratio_bp": 1000,
           "upper_ratio_bp": 2000,
           "objects": 339,
           "shallow": 39192,
-          "wasted": 0
+          "wasted": 56936
         },
         {
           "lower_ratio_bp": 2000,
           "upper_ratio_bp": 3000,
           "objects": 92,
           "shallow": 17064,
-          "wasted": 0
+          "wasted": 22680
         },
         {
           "lower_ratio_bp": 3000,
           "upper_ratio_bp": 4000,
           "objects": 104,
           "shallow": 53248,
-          "wasted": 0
+          "wasted": 68432
         },
         {
           "lower_ratio_bp": 4000,
           "upper_ratio_bp": 5000,
           "objects": 246,
           "shallow": 102288,
-          "wasted": 0
+          "wasted": 104056
         },
         {
           "lower_ratio_bp": 5000,
           "upper_ratio_bp": 6000,
           "objects": 50,
           "shallow": 11408,
-          "wasted": 0
+          "wasted": 9824
         },
         {
           "lower_ratio_bp": 6000,
           "upper_ratio_bp": 7000,
           "objects": 40,
           "shallow": 5280,
-          "wasted": 0
+          "wasted": 3208
         },
         {
           "lower_ratio_bp": 7000,
           "upper_ratio_bp": 8000,
           "objects": 34,
           "shallow": 4520,
-          "wasted": 0
+          "wasted": 2008
         },
         {
           "lower_ratio_bp": 8000,
           "upper_ratio_bp": 9000,
           "objects": 18,
           "shallow": 6664,
-          "wasted": 0
+          "wasted": 1688
         },
         {
           "lower_ratio_bp": 9000,
           "upper_ratio_bp": 10000,
           "objects": 13,
           "shallow": 37048,
-          "wasted": 0
+          "wasted": 2112
         },
         {
           "lower_ratio_bp": 10000,
@@ -91092,6 +91092,21 @@
     "anonymous_class_count": 204,
     "thread_local_null_key_count": 0,
     "direct_byte_buffer_capacity_sum": 140862014
+  },
+  "waste_summary": {
+    "total_bytes": 4754568,
+    "sources": [
+      {
+        "label": "Under-filled object arrays",
+        "bytes": 4563728,
+        "anchor": "collections"
+      },
+      {
+        "label": "Under-filled collections",
+        "bytes": 190840,
+        "anchor": "collections"
+      }
+    ]
   },
   "triage": [
     {

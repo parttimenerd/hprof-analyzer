@@ -1294,7 +1294,10 @@ pub(crate) fn build_field_decode_views(
                 Some(i) => (i as u32, shallow[i] as u64),
                 None => (u32::MAX, 0),
             };
-            array_fill.add(non_null, count, arr_shallow, 0);
+            // Wasted bytes: unused (null) slots × the reference slot width — the
+            // reclaimable backing-store bytes if the array were sized to fit.
+            let arr_wasted = count.saturating_sub(non_null).saturating_mul(obj_ref_width as u64);
+            array_fill.add(non_null, count, arr_shallow, arr_wasted);
 
             // Top object arrays: fold EVERY object array. The per-class key is the
             // array class id read from the record; names resolved later via

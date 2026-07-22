@@ -253,6 +253,7 @@ pub fn render_markdown(r: &Report) -> String {
     render_toc(r, &mut out);
     render_executive_summary(r, &mut out);
     render_oom_triage(r, &mut out);
+    render_waste_summary(r, &mut out);
     render_system_overview(&r.overview, &mut out);
     render_leak_suspects(&r.leaks, &mut out);
     render_top_consumers(&r.top, r.leaks.total_shallow, &mut out);
@@ -286,6 +287,9 @@ fn render_toc(r: &Report, out: &mut String) {
     out.push_str("## Contents\n\n");
     out.push_str(&SectionId::Summary.toc_bullet());
     out.push_str(&SectionId::MemoryTriage.toc_bullet());
+    if waste_summary_present(r) {
+        out.push_str(&SectionId::WasteSummary.toc_bullet());
+    }
     out.push_str(&SectionId::SystemOverview.toc_bullet());
     out.push_str(&SectionId::LeakSuspects.toc_bullet());
     out.push_str(&SectionId::TopConsumers.toc_bullet());
@@ -468,7 +472,46 @@ fn format_signal_md(s: &crate::report::TriageSignal) -> String {
     format!("- **{}:** {}{}\n", s.title, s.detail, link)
 }
 
-/// Whether the Retention Concentration section has any data to render. Shared by
+/// Whether the report has a nonzero Waste Summary to render.
+pub(crate) fn waste_summary_present(r: &Report) -> bool {
+    r.waste_summary
+        .as_ref()
+        .is_some_and(|w| w.total_bytes > 0)
+}
+
+/// Waste Summary (§24): one headline "reclaimable N" figure folding every
+/// quantifiable waste source (under-filled collections & object arrays,
+/// duplicate Strings, String backing-array slack, duplicate primitive arrays),
+/// with a per-source breakdown linking into the section that details each.
+/// Sources are approximate and may overlap slightly.
+pub(crate) fn render_waste_summary(r: &Report, out: &mut String) {
+    let Some(w) = r.waste_summary.as_ref() else {
+        return;
+    };
+    if w.total_bytes == 0 {
+        return;
+    }
+    out.push_str("## Waste Summary\n\n");
+    out.push_str(&format!(
+        "_Approximately **{}** looks reclaimable across the sources below. Figures are approximate and may overlap slightly._\n\n",
+        format_bytes(w.total_bytes)
+    ));
+    let mut t = crate::md::Table::new(
+        &["Source", "Reclaimable"],
+        &[crate::md::Align::Left, crate::md::Align::Right],
+    );
+    for s in &w.sources {
+        let label = match &s.anchor {
+            Some(a) => format!("[{}](#{})", s.label, a),
+            None => s.label.clone(),
+        };
+        t.row([label, format_bytes(s.bytes)]);
+    }
+    t.render(out);
+    out.push('\n');
+}
+
+
 /// both renderers (and the graphs ToC) so presence stays in lock-step.
 pub(crate) fn retention_concentration_present(o: &SystemOverview) -> bool {
     let rc = &o.retention_concentration;

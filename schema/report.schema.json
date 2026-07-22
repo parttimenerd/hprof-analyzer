@@ -172,6 +172,17 @@
       "items": {
         "$ref": "#/$defs/TriageSignal"
       }
+    },
+    "waste_summary": {
+      "description": "One headline \"reclaimable N bytes\" figure folding every quantifiable\nwaste source. Present only when at least one source is nonzero. Additive;\n`#[serde(default)]` keeps older JSON (which lacks the field) loadable.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WasteSummary"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [
@@ -3415,6 +3426,56 @@
       "required": [
         "type_name",
         "count"
+      ]
+    },
+    "WasteSource": {
+      "description": "One reclaimable-waste source in the Waste Summary: a human label, the\napproximate reclaimable bytes, and an optional anchor to the section that\ndetails it. Additive.",
+      "type": "object",
+      "properties": {
+        "anchor": {
+          "description": "Canonical section slug this source drills into (e.g. \"collections\"),\nor None when there is no dedicated section.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bytes": {
+          "description": "Approximate reclaimable bytes attributed to this source.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "label": {
+          "description": "Human-readable source label, e.g. \"Under-filled collections\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "bytes"
+      ]
+    },
+    "WasteSummary": {
+      "description": "A single headline \"reclaimable N bytes\" figure folding every waste source\nthe report can quantify (under-filled collections & object arrays, duplicate\nString values, String backing-array slack, duplicate primitive arrays). The\nsources are approximate and may overlap slightly; `total_bytes` is their sum.\nPresent only when at least one source is nonzero. Additive; not part of MAT\nparity comparison.",
+      "type": "object",
+      "properties": {
+        "sources": {
+          "description": "Per-source breakdown, sorted by bytes desc. Only nonzero sources.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WasteSource"
+          }
+        },
+        "total_bytes": {
+          "description": "Sum of every source's bytes (the headline \"reclaimable\" figure).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "total_bytes",
+        "sources"
       ]
     }
   }

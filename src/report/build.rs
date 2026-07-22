@@ -99,8 +99,11 @@ pub fn build_model(
         biggest_collections,
         collection_contents,
         leak_indicators: build_leak_indicators(g),
+        waste_summary: None,
         triage: Vec::new(),
     };
+    // Fold every quantifiable waste source into one headline reclaimable figure.
+    report.waste_summary = build_waste_summary(&report);
     // Evaluate the OOM-triage rule framework once over the finished report.
     report.triage = crate::report::evaluate_triage(&report);
     // Invariant: the "% Heap" denominator is one number. `leaks.total_shallow`
@@ -124,6 +127,86 @@ fn is_anonymous_class(name: &str) -> bool {
     }
     // Lambda, cglib anon, and reflection proxy patterns
     name.contains("$$Lambda$") || name.contains("$$Anon") || name.contains("$Proxy")
+}
+
+/// Fold every quantifiable waste source into one headline "reclaimable N bytes"
+/// figure. Sources are approximate and may overlap slightly; `total_bytes` is
+/// their arithmetic sum (the plan's §24 headline). Returns `None` when every
+/// source is zero so the section is omitted rather than showing "0 B".
+///
+/// Reads only already-computed aggregates on the finished `Report`, so it runs
+/// after the rest of the model is built and adds no heap pass.
+fn build_waste_summary(report: &Report) -> Option<WasteSummary> {
+    let mut sources: Vec<WasteSource> = Vec::new();
+    let mut push = |label: &str, bytes: u64, anchor: Option<&str>| {
+        if bytes > 0 {
+            sources.push(WasteSource {
+                label: label.to_string(),
+                bytes,
+                anchor: anchor.map(|s| s.to_string()),
+            });
+        }
+    };
+
+    // Under-filled collections: (capacity − used) × slot width, already summed
+    // into each fill-ratio bucket's `wasted`.
+    let coll_fill: u64 = report
+        .collections
+        .collection_fill_ratio
+        .buckets
+        .iter()
+        .map(|b| b.wasted)
+        .sum();
+    push(
+        "Under-filled collections",
+        coll_fill,
+        Some(SectionId::Collections.slug()),
+    );
+
+    // Under-filled object arrays: null slots × reference width.
+    let arr_fill: u64 = report
+        .collections
+        .array_fill_ratio
+        .buckets
+        .iter()
+        .map(|b| b.wasted)
+        .sum();
+    push(
+        "Under-filled object arrays",
+        arr_fill,
+        Some(SectionId::Collections.slug()),
+    );
+
+    if let Some(dup) = report.overview.duplicate_strings.as_ref() {
+        push(
+            "Duplicate String values",
+            dup.approx_wasted_bytes,
+            Some(SectionId::DuplicateStrings.slug()),
+        );
+        if let Some(caw) = dup.char_array_waste.as_ref() {
+            push(
+                "String backing-array slack",
+                caw.total_wasted_bytes,
+                Some(SectionId::DuplicateStrings.slug()),
+            );
+        }
+    }
+
+    if let Some(dpa) = report.overview.duplicate_prim_arrays.as_ref() {
+        // Rendered as a `###` subsection of System Overview, no dedicated anchor.
+        push("Duplicate primitive arrays", dpa.total_wasted_bytes, None);
+    }
+
+    if sources.is_empty() {
+        return None;
+    }
+    // Largest reclaimable source first; ties broken by label for stable output.
+    sources.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.label.cmp(&b.label)));
+    let total_bytes = sources.iter().map(|s| s.bytes).sum();
+    Some(WasteSummary {
+        total_bytes,
+        sources,
+    })
 }
 
 fn build_leak_indicators(g: &Graph) -> LeakIndicators {

@@ -667,6 +667,7 @@ mod tests {
             biggest_collections: None,
             collection_contents: None,
             leak_indicators: Default::default(),
+            waste_summary: None,
             triage: Vec::new(),
         }
     }

@@ -131,6 +131,11 @@ function Nav({ report }: { report: Report }) {
   // ── Overview group ──
   items.push(
     ["memory-triage",  "Memory Triage",      "Overview"],
+  );
+  if (report.waste_summary && report.waste_summary.total_bytes > 0) {
+    items.push(["waste-summary", "Waste Summary"]);
+  }
+  items.push(
     ["system-overview", "System Overview"],
     ["hprof-record-census", "HPROF Record Census"],
   );
@@ -275,6 +280,51 @@ function OomTriage({ report }: { report: Report }) {
         ))}
       </ul>
     </div>
+  );
+}
+
+// ── Waste Summary ─────────────────────────────────────────────────────────
+// One headline "reclaimable N" figure folding every quantifiable waste source,
+// with a per-source breakdown that links into the section detailing each.
+// Sources are approximate and may overlap slightly. Mirrors the Rust md/graphs
+// "Waste Summary" section (same order, same values).
+function WasteSummarySection({ report }: { report: Report }) {
+  const w = report.waste_summary;
+  if (!w || w.total_bytes <= 0) return null;
+  const max = w.sources.reduce((m, s) => Math.max(m, s.bytes), 0);
+  return (
+    <section className="section" id="waste-summary" tabIndex={-1}>
+      <h2>Waste Summary</h2>
+      <p className="subtitle">
+        Approximately <strong>{formatBytes(w.total_bytes)}</strong> looks reclaimable across the
+        sources below. Figures are approximate and may overlap slightly.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Source</th>
+            <th className="num">Reclaimable</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {w.sources.map((s, i) => (
+            <tr key={i}>
+              <td>{s.anchor ? <a href={`#${s.anchor}`}>{s.label}</a> : s.label}</td>
+              <td className="num">{formatBytes(s.bytes)}</td>
+              <td className="num bar-cell">
+                <span className="bar-bg">
+                  <span
+                    className="bar-fill"
+                    style={{ width: `${max > 0 ? (s.bytes / max) * 100 : 0}%` }}
+                  />
+                </span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
   );
 }
 
@@ -3602,6 +3652,7 @@ export default function App({ report }: { report: Report }) {
       </div>
       <Nav report={report} />
       <OomTriage report={report} />
+      <WasteSummarySection report={report} />
       <KpiStrip report={report} />
       <SystemOverviewSection report={report} />
       <RecordCensusSection report={report} />

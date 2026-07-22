@@ -26,6 +26,7 @@
 pub enum SectionId {
     Summary,
     MemoryTriage,
+    WasteSummary,
     SystemOverview,
     RecordCensus,
     DuplicateStrings,
@@ -60,6 +61,7 @@ impl SectionId {
         match self {
             SectionId::Summary => "summary",
             SectionId::MemoryTriage => "memory-triage",
+            SectionId::WasteSummary => "waste-summary",
             SectionId::SystemOverview => "system-overview",
             SectionId::RecordCensus => "hprof-record-census",
             SectionId::DuplicateStrings => "duplicate-strings-approximate",
@@ -94,6 +96,7 @@ impl SectionId {
         match self {
             SectionId::Summary => "Summary",
             SectionId::MemoryTriage => "Memory Triage",
+            SectionId::WasteSummary => "Waste Summary",
             SectionId::SystemOverview => "System Overview",
             SectionId::RecordCensus => "HPROF Record Census",
             SectionId::DuplicateStrings => "Duplicate Strings (approximate)",

@@ -974,11 +974,43 @@ pub struct CollectionsAnalysis {
     pub kind_summary: CollectionKindSummary,
 }
 
-/// One collection-kind's aggregate stats. Additive.
+/// One reclaimable-waste source in the Waste Summary: a human label, the
+/// approximate reclaimable bytes, and an optional anchor to the section that
+/// details it. Additive.
 #[derive(
     Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
 )]
-pub struct CollectionKindStat {
+pub struct WasteSource {
+    /// Human-readable source label, e.g. "Under-filled collections".
+    pub label: String,
+    /// Approximate reclaimable bytes attributed to this source.
+    pub bytes: u64,
+    /// Canonical section slug this source drills into (e.g. "collections"),
+    /// or None when there is no dedicated section.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<String>,
+}
+
+/// A single headline "reclaimable N bytes" figure folding every waste source
+/// the report can quantify (under-filled collections & object arrays, duplicate
+/// String values, String backing-array slack, duplicate primitive arrays). The
+/// sources are approximate and may overlap slightly; `total_bytes` is their sum.
+/// Present only when at least one source is nonzero. Additive; not part of MAT
+/// parity comparison.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct WasteSummary {
+    /// Sum of every source's bytes (the headline "reclaimable" figure).
+    pub total_bytes: u64,
+    /// Per-source breakdown, sorted by bytes desc. Only nonzero sources.
+    pub sources: Vec<WasteSource>,
+}
+
+/// One collection-kind's aggregate stats. Additive.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]pub struct CollectionKindStat {
     pub kind: String,        // "list"/"map"/"set"/"deque"/"queue"/"tree"
     pub count: u64,          // number of collections of this kind (with a readable size)
     pub total_elements: u64, // sum of sizes
@@ -1259,7 +1291,7 @@ pub struct TriageSignal {
 
 /// Schema version for the machine-readable JSON output. Bump on any
 /// breaking change to the `Report` shape; the JSON always carries this.
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 7;
 
 /// One allocation site: a distinct HPROF stack-trace serial, its resolved frame
 /// lines, and the aggregate footprint of the objects allocated there.
@@ -1332,6 +1364,11 @@ pub struct Report {
     /// round-trip with older JSON.
     #[serde(default)]
     pub leak_indicators: LeakIndicators,
+    /// One headline "reclaimable N bytes" figure folding every quantifiable
+    /// waste source. Present only when at least one source is nonzero. Additive;
+    /// `#[serde(default)]` keeps older JSON (which lacks the field) loadable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waste_summary: Option<WasteSummary>,
     /// Fired OOM-triage signals, evaluated once over the finished report by the
     /// rule framework in `triage.rs`. Order is the registry order (render order).
     /// `#[serde(default)]` keeps pre-v4 JSON (which lacks the field) loadable.
