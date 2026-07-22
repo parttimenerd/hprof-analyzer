@@ -53,6 +53,28 @@ fn query_subcommand_count_prints_table() {
     );
 }
 
+/// Alias-qualified `@attr` (MAT syntax `s.@objectId`) reaches execution: the
+/// query runs without an `OQL parse error` and exits successfully.
+#[test]
+fn query_subcommand_alias_qualified_at_attr_parses() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query", "SELECT s.@objectId FROM java.lang.String s LIMIT 3"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("OQL parse error"),
+        "alias-qualified @attr should not be a parse error:\n{stderr}"
+    );
+    assert!(
+        out.status.success(),
+        "alias-qualified @attr query failed: {stderr}"
+    );
+}
+
 /// Two `--query` flags on the subcommand each print under their own sequential
 /// `== q1 ==` / `== q2 ==` label header (guards default-name assignment for the
 /// stdout table path, distinct from the rendered report path).

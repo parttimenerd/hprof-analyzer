@@ -135,22 +135,34 @@ fn parser<'a, I>() -> impl Parser<'a, I, Query, extra::Err<Rich<'a, Token>>>
 where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
 {
-    // attribute: @built-in | classof(x) | bare field
-    let attr = select! {
-        Token::At(name) => name,
-    }
-    .try_map(|name, span| match name.as_str() {
-        "objectId" => Ok(Attr::ObjectId),
-        "objectAddress" => Ok(Attr::ObjectAddress),
-        "usedHeapSize" => Ok(Attr::UsedHeapSize),
-        "retainedHeapSize" | "retainedHeap" => Ok(Attr::RetainedHeapSize),
-        "displayName" => Ok(Attr::DisplayName),
-        "length" => Ok(Attr::Length),
-        "inbounds" => Ok(Attr::Inbounds),
-        "outbounds" => Ok(Attr::Outbounds),
-        other => Err(Rich::custom(span, format!("unknown @attribute: @{other}"))),
-    })
-    .or(ident_ci("classof")
+    // attribute: [alias.]@built-in | classof(x) | bare field
+    //
+    // `@attr`, optionally alias-qualified as `alias.@attr`. The greedy ident
+    // regex swallows the trailing `.`, so `s.@objectId` tokenizes as `Ident("s.")`
+    // then `At("objectId")`; consume the optional trailing-dot prefix here so it
+    // is not swallowed as a `Field`. The prefix denotes the FROM object; dropped.
+    // Unknown names emit an actionable error but still yield a placeholder so the
+    // `@`-token stays committed (no backtracking into the bare-field arm, which
+    // would otherwise mask the `unknown @attribute` message).
+    let at_attr = select! { Token::Ident(p) if p.ends_with('.') => p }
+        .or_not()
+        .ignore_then(select! { Token::At(name) => name })
+        .validate(|name: String, e, emitter| match name.as_str() {
+            "objectId" => Attr::ObjectId,
+            "objectAddress" => Attr::ObjectAddress,
+            "usedHeapSize" => Attr::UsedHeapSize,
+            "retainedHeapSize" | "retainedHeap" => Attr::RetainedHeapSize,
+            "displayName" => Attr::DisplayName,
+            "length" => Attr::Length,
+            "inbounds" => Attr::Inbounds,
+            "outbounds" => Attr::Outbounds,
+            other => {
+                emitter.emit(Rich::custom(e.span(), format!("unknown @attribute: @{other}")));
+                Attr::ObjectId
+            }
+        });
+    let attr = at_attr
+        .or(ident_ci("classof")
         .ignore_then(just(Token::LParen))
         .ignore_then(any_ident())
         .then_ignore(just(Token::RParen))
@@ -1525,6 +1537,83 @@ mod tests {
                 assert!(words.contains(&w), "completion_words missing {w:?}");
             }
         }
+    }
+
+    // ============================================================
+    // Group — alias-qualified @attr (MAT: `s.@objectId`)
+    // ============================================================
+
+    #[test]
+    fn parse_prefixed_at_attr_single_select() {
+        let q = parse("SELECT s.@objectId FROM java.lang.String s").expect("should parse");
+        assert_eq!(q.select, vec![attr_sel(Attr::ObjectId)]);
+    }
+
+    #[test]
+    fn parse_prefixed_at_attr_with_dotted_field() {
+        let q = parse("SELECT s.@objectId, s.hash FROM java.lang.String s").expect("should parse");
+        assert_eq!(
+            q.select,
+            vec![attr_sel(Attr::ObjectId), attr_sel(field("hash"))],
+            "prefix dropped from @attr; `s.hash` alias-stripped to Field(\"hash\")"
+        );
+    }
+
+    #[test]
+    fn parse_bare_at_attr_still_works() {
+        let q = parse("SELECT @objectId FROM java.lang.String").expect("should parse");
+        assert_eq!(q.select, vec![attr_sel(Attr::ObjectId)]);
+    }
+
+    #[test]
+    fn parse_prefixed_at_attr_mixed_columns() {
+        let q = parse(
+            "SELECT s.@objectAddress, s.@usedHeapSize, s.@retainedHeapSize FROM java.lang.Object s",
+        )
+        .expect("should parse");
+        assert_eq!(
+            q.select,
+            vec![
+                attr_sel(Attr::ObjectAddress),
+                attr_sel(Attr::UsedHeapSize),
+                attr_sel(Attr::RetainedHeapSize),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_prefixed_at_attr_unknown_name_errors() {
+        let err = parse("SELECT s.@bogus FROM X s").expect_err("unknown @attr should error");
+        assert!(
+            err.0.contains("unknown @attribute"),
+            "actionable error expected, got: {}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn parse_prefixed_at_attr_in_where() {
+        let q = parse("SELECT * FROM java.lang.String s WHERE s.@objectId = 0").expect("should parse");
+        assert_eq!(
+            q.where_,
+            Some(cmp(Attr::ObjectId, CompareOp::Eq, Value::Int(0)))
+        );
+    }
+
+    #[test]
+    fn parse_prefixed_at_attr_alias_name_not_hardcoded() {
+        let q = parse("SELECT obj.@objectId FROM java.lang.Object obj").expect("should parse");
+        assert_eq!(q.select, vec![attr_sel(Attr::ObjectId)]);
+    }
+
+    #[test]
+    fn parse_prefixed_at_attr_in_order_by() {
+        let q = parse("SELECT * FROM java.lang.String s ORDER BY s.@retainedHeapSize DESC")
+            .expect("should parse");
+        assert_eq!(
+            q.order_by.map(|o| (o.key, o.dir)),
+            Some((Attr::RetainedHeapSize, SortDir::Desc))
+        );
     }
 
     // small helper: fluent DISTINCT flip for the ast_cases table
