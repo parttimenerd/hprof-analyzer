@@ -625,10 +625,19 @@ pub const RESERVED: &[&str] = &[
     "DESC",
     // MAT no-op keyword; blocked from alias/completion slots.
     "OBJECTS",
+    // Column-alias / retained-set modifier keywords.
+    "AS",
+    "RETAINED",
+    "SET",
 ];
 
 /// Aggregate function names (`agg_func`'s source set), upper-cased.
 pub const AGG_FUNCS: &[&str] = &["COUNT", "SUM", "MIN", "MAX", "AVG"];
+
+/// Built-in scalar/graph function names used in SELECT/predicate position.
+/// Source of truth for REPL completion; matches the `dom_fn` / `path` / `classof`
+/// parser arms so completions can never drift from the grammar.
+pub const FUNCS: &[&str] = &["classof", "toString", "path", "dominators", "dominatorof"];
 
 /// `@`-prefixed built-in attribute names (matching the `attr` parser's arms),
 /// including the leading `@` so they can be offered as completions directly.
@@ -652,6 +661,7 @@ pub fn completion_words() -> Vec<&'static str> {
         .chain(RESERVED.iter())
         .chain(AGG_FUNCS.iter())
         .chain(ATTRIBUTES.iter())
+        .chain(FUNCS.iter())
         .copied()
         .collect()
 }

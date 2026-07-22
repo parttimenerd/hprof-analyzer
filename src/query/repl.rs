@@ -15,50 +15,110 @@ use reedline::{
 };
 
 use crate::query::model::{QueryResult, QueryValue};
-use crate::query::parse::{AGG_FUNCS, ATTRIBUTES, KEYWORDS, RESERVED};
+use crate::query::parse::{AGG_FUNCS, ATTRIBUTES, FUNCS, KEYWORDS, RESERVED};
 
 /// Grammatical context of the cursor, driving which candidate set the completer
 /// offers. Determined by a lightweight word-scan (not the full parser) so that
 /// partial/incomplete input still completes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Ctx {
     /// Typing a class operand (after `FROM`/`INSTANCEOF`): offer class names.
     ClassName,
-    /// SELECT list or predicate/order operand: offer attributes/agg-funcs/classof.
+    /// SELECT list or predicate/order operand: offer attributes/agg-funcs/funcs.
     Attr,
     /// Clause position (line start, after a complete class, after `)`): keywords.
     Keyword,
+    /// After a dot in a dotted reference path (e.g. `s.` or `x.parent.`).
+    /// `dot_prefix` is everything up to and including the last `.` (used to
+    /// reconstruct the full replacement value); `seg_start` is the byte offset in
+    /// the original line where the segment after the last dot begins.
+    FieldName { dot_prefix: String, seg_start: usize },
+    /// After the literal word `AS` (in the select list): offer `RETAINED`.
+    AfterAs,
+    /// After `AS RETAINED`: offer `SET`.
+    AfterRetained,
 }
 
-/// Classify the cursor position from the text before the fragment (`before`) and
-/// the fragment being typed (`frag`). Case-insensitive word comparison; a simple
-/// scan is deliberate — it is robust for partial input and unit-testable.
+/// Test-facing wrapper: classify from `before`+`frag` as if `before` starts at
+/// byte 0 of the line. Only used in tests; production uses `classify_at` directly.
+#[cfg(test)]
 fn classify(before: &str, frag: &str) -> Ctx {
+    classify_at(before, frag, before.len())
+}
+
+/// Inner classify: `line_offset` is the byte position of `before[0]` within the
+/// full input line, used to compute the absolute `seg_start` for `FieldName`.
+fn classify_at(before: &str, frag: &str, line_offset: usize) -> Ctx {
+    // First compute the non-dot context so we can tell whether dots are field
+    // separators (Attr position) or part of a class name (ClassName position).
+    let base_ctx = classify_base(before, frag);
+
+    // Dotted field path only applies in attr/predicate position, not class position.
+    // If we're typing a class name after FROM, the dots are part of the class name.
+    let in_attr = matches!(base_ctx, Ctx::Attr);
+    if in_attr {
+        if let Some(dot_pos) = frag.rfind('.') {
+            let dot_prefix = frag[..=dot_pos].to_string();
+            let seg_start = line_offset + dot_pos + 1;
+            return Ctx::FieldName { dot_prefix, seg_start };
+        }
+        // Dot at the end of `before` means the delimiter scan consumed it.
+        if before.ends_with('.') {
+            let token_start = before
+                .rfind(|c: char| c.is_whitespace() || c == '(' || c == ',')
+                .map(|i| i + 1)
+                .unwrap_or(0);
+            let dot_prefix = before[token_start..].to_string();
+            // seg_start is right after the dot, i.e. line_offset + before.len()
+            return Ctx::FieldName { dot_prefix, seg_start: line_offset + before.len() };
+        }
+    }
+    base_ctx
+}
+
+/// Core classification ignoring dotted-path logic. Returns one of the simple
+/// non-FieldName contexts so `classify_at` can layer dot handling on top.
+fn classify_base(before: &str, frag: &str) -> Ctx {
     let mut words: Vec<&str> = before.split_whitespace().collect();
-    // The fragment may be included in `before` (callers pass either `line[..start]`
-    // or the whole line); drop a trailing word equal to it so it isn't mistaken
-    // for the previous significant word.
+    // Drop a trailing word equal to frag so it isn't mistaken for the previous
+    // significant word.
     if !frag.is_empty() && words.last().is_some_and(|w| *w == frag) {
         words.pop();
     }
     let last = words.last().copied();
     let eq = |w: &str, kw: &str| w.eq_ignore_ascii_case(kw);
 
+    // AS must be a committed word (in `before`) to enter AfterAs/AfterRetained;
+    // when AS is the fragment itself, it falls through to Attr (SELECT-list position).
+    if let Some(w) = last {
+        if eq(w, "RETAINED") && words.len() >= 2 {
+            let prev = words[words.len() - 2];
+            if eq(prev, "AS") {
+                return Ctx::AfterRetained;
+            }
+        }
+        if eq(w, "AS") {
+            return Ctx::AfterAs;
+        }
+    }
+
     // The class operand directly follows FROM or INSTANCEOF.
+    // OBJECTS is transparent: `FROM OBJECTS <class>` still needs a class name.
     if let Some(w) = last {
         if eq(w, "FROM") || eq(w, "INSTANCEOF") {
             return Ctx::ClassName;
+        }
+        if eq(w, "OBJECTS") {
+            if words.len() >= 2 && eq(words[words.len() - 2], "FROM") {
+                return Ctx::ClassName;
+            }
         }
     }
     // Once `@` is typed we are always naming an attribute.
     if frag.starts_with('@') {
         return Ctx::Attr;
     }
-    // A clause keyword being typed as the fragment must complete as a keyword,
-    // not be mistaken for an operand. Scoped to structural keywords that follow a
-    // SELECT list / completed FROM class (not predicate connectives) so attr-position
-    // single letters (e.g. `SELECT c`) are not hijacked; the last completed word must
-    // not already put us in an operand position.
+    // A clause keyword being typed as the fragment must complete as a keyword.
     const CLAUSE_KEYWORDS: &[&str] = &[
         "SELECT", "DISTINCT", "FROM", "WHERE", "UNION", "ORDER", "LIMIT",
     ];
@@ -89,15 +149,28 @@ fn classify(before: &str, frag: &str) -> Ctx {
             return Ctx::Attr;
         }
     }
+    // `FROM OBJECTS` — after consuming OBJECTS, still need a class.
+    let seen_from = seen("FROM");
+    if seen_from {
+        if let Some(from_pos) = words.iter().position(|w| eq(w, "FROM")) {
+            let after_from: Vec<&str> = words[from_pos + 1..].to_vec();
+            // OBJECTS is the only intervening word → class name is still missing.
+            if after_from.len() == 1 && eq(after_from[0], "OBJECTS") {
+                return Ctx::ClassName;
+            }
+        }
+    }
     Ctx::Keyword
 }
 
-/// A context-aware prefix completer. Holds the dump's class names (harvested once
-/// at REPL startup) and offers, per cursor context, class names / attributes /
-/// keywords sourced from the parser's canonical const slices so completions can
-/// never drift from the grammar.
+/// A context-aware prefix completer. Holds the dump's class names and instance
+/// field names (both harvested once at REPL startup) and offers, per cursor
+/// context, class names / field names / attributes / keywords sourced from the
+/// parser's canonical const slices so completions can never drift from the grammar.
 struct OqlCompleter {
     class_names: Vec<String>,
+    /// Sorted, deduped union of all instance field names across all classes.
+    field_names: Vec<String>,
 }
 
 impl OqlCompleter {
@@ -127,13 +200,13 @@ impl Completer for OqlCompleter {
         let upto = &line[..pos];
         // Delimit the fragment on whitespace, '(' and ',' so `SELECT a,b` and
         // `COUNT(x` complete their trailing word.
-        let start = upto
+        let delim_pos = upto
             .rfind(|c: char| c.is_whitespace() || c == '(' || c == ',')
             .map(|i| i + 1)
             .unwrap_or(0);
-        let frag = &upto[start..];
-        let before = &upto[..start];
-        let ctx = classify(before, frag);
+        let frag = &upto[delim_pos..];
+        let before = &upto[..delim_pos];
+        let ctx = classify_at(before, frag, delim_pos);
         let lower = frag.to_ascii_lowercase();
 
         match ctx {
@@ -143,43 +216,68 @@ impl Completer for OqlCompleter {
                 if frag.is_empty() {
                     return Vec::new();
                 }
-                Self::suggestions(
-                    self.class_names.iter().map(String::as_str),
-                    &lower,
-                    start,
-                    pos,
-                )
+                // Also offer OBJECTS so `FROM O<Tab>` completes it alongside class names.
+                let cands = self.class_names.iter().map(String::as_str)
+                    .chain(std::iter::once("OBJECTS"));
+                Self::suggestions(cands, &lower, delim_pos, pos)
             }
             Ctx::Attr => {
                 // The `@`-fragment sub-case: offer only attributes (the fragment
                 // is non-empty by construction once `@` is typed, so allow it).
                 if frag.starts_with('@') {
-                    return Self::suggestions(ATTRIBUTES.iter().copied(), &lower, start, pos);
+                    return Self::suggestions(ATTRIBUTES.iter().copied(), &lower, delim_pos, pos);
                 }
-                // Empty fragment here is an intentional improvement over the old
-                // silent behavior: offer the full attr/func set as a menu.
+                // Empty fragment here is an intentional improvement: offer the full
+                // attr/func set as a menu.
                 let cands = ATTRIBUTES
                     .iter()
                     .copied()
                     .chain(AGG_FUNCS.iter().copied())
-                    .chain(std::iter::once("classof"));
-                Self::suggestions(cands, &lower, start, pos)
+                    .chain(FUNCS.iter().copied());
+                Self::suggestions(cands, &lower, delim_pos, pos)
             }
             Ctx::Keyword => {
                 let cands = KEYWORDS.iter().copied().chain(RESERVED.iter().copied());
-                Self::suggestions(cands, &lower, start, pos)
+                Self::suggestions(cands, &lower, delim_pos, pos)
+            }
+            Ctx::FieldName { dot_prefix, seg_start } => {
+                // Segment after the last dot is the partial field name.
+                let seg = if seg_start <= pos { &line[seg_start..pos] } else { "" };
+                let seg_lower = seg.to_ascii_lowercase();
+                // Build suggestions whose value is the full dotted path prefix
+                // + the matching field name, replacing from delim_pos to pos.
+                self.field_names
+                    .iter()
+                    .filter(|f| f.to_ascii_lowercase().starts_with(&seg_lower))
+                    .map(|f| Suggestion {
+                        value: format!("{dot_prefix}{f}"),
+                        description: None,
+                        style: None,
+                        extra: None,
+                        span: Span { start: delim_pos, end: pos },
+                        append_whitespace: true,
+                    })
+                    .collect()
+            }
+            Ctx::AfterAs => {
+                // After `AS` in the select list, only `RETAINED` is useful.
+                Self::suggestions(std::iter::once("RETAINED"), &lower, delim_pos, pos)
+            }
+            Ctx::AfterRetained => {
+                // After `AS RETAINED`, `SET` closes the modifier.
+                Self::suggestions(std::iter::once("SET"), &lower, delim_pos, pos)
             }
         }
     }
 }
 
 /// Build a `Reedline` editor wired with the context-aware completer (seeded with
-/// the dump's `class_names`), a Tab-driven completion menu, and persistent
-/// history at `~/.hprof_oql_history` (falling back to in-memory history if the
-/// file cannot be opened). Returned rather than run so a smoke test can construct
-/// it without needing a live TTY.
-pub fn build_editor(class_names: Vec<String>) -> Reedline {
-    let completer = Box::new(OqlCompleter { class_names });
+/// the dump's `class_names` and `field_names`), a Tab-driven completion menu, and
+/// persistent history at `~/.hprof_oql_history` (falling back to in-memory history
+/// if the file cannot be opened). Returned rather than run so a smoke test can
+/// construct it without needing a live TTY.
+pub fn build_editor(class_names: Vec<String>, field_names: Vec<String>) -> Reedline {
+    let completer = Box::new(OqlCompleter { class_names, field_names });
     let completion_menu = Box::new(ColumnarMenu::default().with_name("completion_menu"));
 
     let mut keybindings = default_emacs_keybindings();
@@ -211,24 +309,38 @@ fn history_path() -> Option<std::path::PathBuf> {
     std::env::var_os("HOME").map(|home| std::path::Path::new(&home).join(".hprof_oql_history"))
 }
 
-/// Run pass1 over the dump to collect a sorted, deduped list of dotted class
-/// names for FROM/INSTANCEOF completion. On failure, warn once to stderr and
-/// return an empty list so the REPL still completes keywords/attributes.
-fn harvest_class_names(path: &str) -> Vec<String> {
+/// Run pass1 over the dump once to collect:
+/// - a sorted, deduped list of dotted class names for FROM/INSTANCEOF completion.
+/// - a sorted, deduped union of all instance field names across all classes.
+/// On failure, warn once to stderr and return empty lists so the REPL still
+/// completes keywords/attributes. Pass1 is run ONCE; both name sets are harvested
+/// from the same result to avoid a second scan.
+fn harvest_names(path: &str) -> (Vec<String>, Vec<String>) {
     match crate::pass1::Pass1::run(path) {
         Ok(p) => {
-            let mut names: Vec<String> = p
+            let mut class_names: Vec<String> = p
                 .class_map
                 .values()
                 .filter_map(|ci| p.strings.get(&ci.name_id).map(|s| s.replace('/', ".")))
                 .collect();
-            names.sort_unstable();
-            names.dedup();
-            names
+            class_names.sort_unstable();
+            class_names.dedup();
+
+            // Collect all instance field names across all classes (per-NAME, not
+            // per-object — tiny; field-name count ~thousands, not millions).
+            let mut field_names: Vec<String> = p
+                .class_map
+                .values()
+                .flat_map(|ci| ci.fields.iter().filter_map(|(nid, _)| p.strings.get(nid).cloned()))
+                .collect();
+            field_names.sort_unstable();
+            field_names.dedup();
+
+            (class_names, field_names)
         }
         Err(e) => {
-            eprintln!("warning: could not harvest class names for completion: {e}");
-            Vec::new()
+            eprintln!("warning: could not harvest names for completion: {e}");
+            (Vec::new(), Vec::new())
         }
     }
 }
@@ -239,11 +351,11 @@ fn harvest_class_names(path: &str) -> Vec<String> {
 /// `path_depth` is the BFS depth limit for `path(a, b)` queries, sourced from
 /// `--query-path-depth` (default: `DEFAULT_PATH_DEPTH_CAP`).
 pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
-    // Harvest class names once for FROM/INSTANCEOF completion. This pass1 is
+    // Harvest class names and field names once for completion. This pass1 is
     // cheap (no heap-object scan) and independent of the per-query pass1+pass2.
-    // On I/O failure, warn and proceed with an empty list rather than crashing.
-    let class_names = harvest_class_names(path);
-    let mut line_editor = build_editor(class_names);
+    // On I/O failure, warn and proceed with empty lists rather than crashing.
+    let (class_names, field_names) = harvest_names(path);
+    let mut line_editor = build_editor(class_names, field_names);
     let prompt = DefaultPrompt::default();
     let mut stdout = io::stdout();
     writeln!(
@@ -566,10 +678,18 @@ mod tests {
 
     // --- reedline completer + editor construction ---
 
-    /// Build a completer over a small fixed class list for tests.
+    /// Build a completer over a small fixed class and field list for tests.
     fn completer(classes: &[&str]) -> OqlCompleter {
         OqlCompleter {
             class_names: classes.iter().map(|s| s.to_string()).collect(),
+            field_names: Vec::new(),
+        }
+    }
+
+    fn completer_with_fields(classes: &[&str], fields: &[&str]) -> OqlCompleter {
+        OqlCompleter {
+            class_names: classes.iter().map(|s| s.to_string()).collect(),
+            field_names: fields.iter().map(|s| s.to_string()).collect(),
         }
     }
 
@@ -739,7 +859,7 @@ mod tests {
     /// The editor builds without a live TTY (construction smoke test).
     #[test]
     fn editor_builds() {
-        let _ = build_editor(vec!["java.lang.String".to_string()]);
+        let _ = build_editor(vec!["java.lang.String".to_string()], vec!["value".to_string()]);
     }
 
     /// Completer behavior: `SELECT * FROM<Tab>` (FROM being typed as the fragment)
@@ -749,6 +869,217 @@ mod tests {
         let mut c = completer(&[]);
         let v = values(&c.complete("SELECT * FROM", 13));
         assert!(v.contains(&"FROM".to_string()), "expected FROM in {v:?}");
+    }
+
+    // ---------- New context-aware completions ----------
+
+    // --- Gap 1: dotted reference-path field completion ---
+
+    #[test]
+    fn classify_dot_after_alias_is_field_name() {
+        // `SELECT s.` — base context is Attr, dot triggers FieldName.
+        let ctx = classify("SELECT ", "s.");
+        assert!(
+            matches!(ctx, Ctx::FieldName { ref dot_prefix, .. } if dot_prefix == "s."),
+            "got {ctx:?}"
+        );
+    }
+
+    #[test]
+    fn classify_dot_before_is_field_name_empty_frag() {
+        // `SELECT s.` with the dot at the end of `before`, frag empty.
+        let ctx = classify("SELECT s.", "");
+        assert!(
+            matches!(ctx, Ctx::FieldName { ref dot_prefix, .. } if dot_prefix == "s."),
+            "got {ctx:?}"
+        );
+    }
+
+    #[test]
+    fn classify_multihop_dot_is_field_name() {
+        // `SELECT x.parent.na` — frag has multiple dots; seg after last dot is `na`.
+        let ctx = classify("SELECT ", "x.parent.na");
+        assert!(
+            matches!(ctx, Ctx::FieldName { ref dot_prefix, .. } if dot_prefix == "x.parent."),
+            "got {ctx:?}"
+        );
+    }
+
+    #[test]
+    fn dot_in_class_position_not_field_name() {
+        // `FROM java.lang.String` — dots are part of the class name, not field paths.
+        let ctx = classify("SELECT * FROM ", "java.lang.String");
+        assert_eq!(ctx, Ctx::ClassName, "got {ctx:?}");
+    }
+
+    #[test]
+    fn field_completion_basic() {
+        let mut c = completer_with_fields(&[], &["name", "parent", "value"]);
+        let v = values(&c.complete("SELECT s.", 9));
+        assert!(v.contains(&"s.name".to_string()), "got {v:?}");
+        assert!(v.contains(&"s.parent".to_string()), "got {v:?}");
+        assert!(v.contains(&"s.value".to_string()), "got {v:?}");
+    }
+
+    #[test]
+    fn field_completion_prefix_filters() {
+        let mut c = completer_with_fields(&[], &["name", "parent", "value"]);
+        let v = values(&c.complete("SELECT s.na", 11));
+        assert!(v.contains(&"s.name".to_string()), "got {v:?}");
+        assert!(!v.contains(&"s.parent".to_string()), "got {v:?}");
+        assert!(!v.contains(&"s.value".to_string()), "got {v:?}");
+    }
+
+    #[test]
+    fn field_completion_span_replaces_from_token_start() {
+        // Span must start at the token start (after the space), not at seg_start.
+        let mut c = completer_with_fields(&[], &["name"]);
+        let s = c.complete("SELECT s.", 9);
+        assert!(!s.is_empty(), "expected suggestions");
+        // `SELECT ` is 7 chars; `s.` token starts at offset 7.
+        assert_eq!(s[0].span.start, 7, "span start: {:?}", s[0].span);
+        assert_eq!(s[0].span.end, 9, "span end: {:?}", s[0].span);
+        assert_eq!(s[0].value, "s.name");
+    }
+
+    #[test]
+    fn field_completion_multihop_replaces_full_token() {
+        // `SELECT x.parent.n` → suggestions for "n" prefix, replaces from token start.
+        // "SELECT x.parent.n" = 17 chars (S-E-L-E-C-T-sp-x-.-p-a-r-e-n-t-.-n).
+        let mut c = completer_with_fields(&[], &["name", "num"]);
+        let s = c.complete("SELECT x.parent.n", 17);
+        // token "x.parent.n" starts at offset 7, ends at 17.
+        let v = values(&s);
+        assert!(v.contains(&"x.parent.name".to_string()), "got {v:?}");
+        assert!(v.contains(&"x.parent.num".to_string()), "got {v:?}");
+        assert!(!s.is_empty());
+        assert_eq!(s[0].span.start, 7);
+        assert_eq!(s[0].span.end, 17);
+    }
+
+    #[test]
+    fn field_completion_does_not_offer_at_attributes() {
+        // After a dot, @-attributes must NOT appear.
+        let mut c = completer_with_fields(&[], &["name"]);
+        let v = values(&c.complete("SELECT s.", 9));
+        assert!(v.iter().all(|x| !x.starts_with('@')), "got {v:?}");
+    }
+
+    // --- Gap 2: function completions in Attr context ---
+
+    #[test]
+    fn attr_offers_tostring() {
+        let mut c = completer(&[]);
+        let v = values(&c.complete("SELECT toStr", 12));
+        assert!(v.contains(&"toString".to_string()), "got {v:?}");
+    }
+
+    #[test]
+    fn attr_offers_path() {
+        let mut c = completer(&[]);
+        let v = values(&c.complete("SELECT pa", 9));
+        assert!(v.contains(&"path".to_string()), "got {v:?}");
+    }
+
+    #[test]
+    fn attr_offers_dominators_and_dominatorof() {
+        let mut c = completer(&[]);
+        let v = values(&c.complete("SELECT dominat", 14));
+        assert!(v.contains(&"dominators".to_string()), "got {v:?}");
+        assert!(v.contains(&"dominatorof".to_string()), "got {v:?}");
+    }
+
+    #[test]
+    fn attr_still_offers_classof() {
+        let mut c = completer(&[]);
+        let v = values(&c.complete("SELECT cl", 9));
+        assert!(v.contains(&"classof".to_string()), "got {v:?}");
+    }
+
+    // --- Gap 3: AS / RETAINED SET completion ---
+
+    #[test]
+    fn classify_after_as_is_after_as() {
+        // After `AS` is completed (trailing space, empty frag) → AfterAs.
+        assert_eq!(classify("SELECT s AS ", ""), Ctx::AfterAs);
+        // Still AfterAs when the user is typing the "RETAINED" completion candidate.
+        assert_eq!(classify("SELECT s AS ", "RETAINED"), Ctx::AfterAs);
+        // Typing "AS" as the fragment itself is Attr (completing keyword AS).
+        assert_eq!(classify("SELECT s ", "AS"), Ctx::Attr);
+    }
+
+    #[test]
+    fn classify_after_as_retained_is_after_retained() {
+        // After both AS and RETAINED are committed → AfterRetained.
+        assert_eq!(classify("SELECT s AS RETAINED ", ""), Ctx::AfterRetained);
+        // Typing "SET" fragment with RETAINED committed → AfterRetained.
+        assert_eq!(classify("SELECT s AS RETAINED ", "SET"), Ctx::AfterRetained);
+    }
+
+    #[test]
+    fn after_as_offers_retained() {
+        let mut c = completer(&[]);
+        let v = values(&c.complete("SELECT s AS ", 12));
+        assert!(v.contains(&"RETAINED".to_string()), "got {v:?}");
+    }
+
+    #[test]
+    fn after_as_retained_offers_set() {
+        let mut c = completer(&[]);
+        let v = values(&c.complete("SELECT s AS RETAINED ", 21));
+        assert!(v.contains(&"SET".to_string()), "got {v:?}");
+    }
+
+    // --- Gap 4: FROM OBJECTS completion ---
+
+    #[test]
+    fn classify_after_from_objects_is_class_name() {
+        assert_eq!(classify("SELECT * FROM OBJECTS ", ""), Ctx::ClassName);
+    }
+
+    #[test]
+    fn from_offers_objects_and_class_names() {
+        // After `FROM`, both `OBJECTS` (keyword) and class names are offered.
+        let mut c = completer(&["com.acme.Foo"]);
+        // With a fragment that matches both "OBJECTS" and nothing from the class list.
+        let v = values(&c.complete("SELECT * FROM O", 15));
+        assert!(v.contains(&"OBJECTS".to_string()), "expected OBJECTS in {v:?}");
+        // With a fragment matching a class name prefix.
+        let v2 = values(&c.complete("SELECT * FROM co", 16));
+        assert!(v2.contains(&"com.acme.Foo".to_string()), "expected class name in {v2:?}");
+    }
+
+    #[test]
+    fn from_objects_then_class_name_completes() {
+        let mut c = completer(&["com.acme.Foo", "com.acme.Bar"]);
+        let v = values(&c.complete("SELECT * FROM OBJECTS com.", 25));
+        assert!(v.contains(&"com.acme.Foo".to_string()), "got {v:?}");
+        assert!(v.contains(&"com.acme.Bar".to_string()), "got {v:?}");
+    }
+
+    // --- Gap 5: INSTANCEOF in predicate offers class names ---
+
+    #[test]
+    fn instanceof_in_where_offers_class_names() {
+        assert_eq!(
+            classify("SELECT * FROM X WHERE @objectId INSTANCEOF ", ""),
+            Ctx::ClassName
+        );
+        let mut c = completer(&["com.acme.Widget"]);
+        let v = values(&c.complete("SELECT * FROM X WHERE @objectId INSTANCEOF com.", 47));
+        assert!(v.contains(&"com.acme.Widget".to_string()), "got {v:?}");
+    }
+
+    // --- Regression: old tests unchanged ---
+
+    #[test]
+    fn empty_fragment_attr_full_set_includes_funcs() {
+        // All function names are now offered in the full attr menu.
+        let mut c = completer(&[]);
+        let v = values(&c.complete("SELECT ", 7));
+        for func in ["classof", "toString", "path", "dominators", "dominatorof"] {
+            assert!(v.contains(&func.to_string()), "missing {func} in {v:?}");
+        }
     }
 
     // ---------- Task 34: !plan --raw and optimizer wiring tests ----------
