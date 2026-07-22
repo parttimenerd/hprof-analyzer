@@ -1329,6 +1329,72 @@ fn from_subquery_semijoin_is_bounded_by_outer() {
     );
 }
 
+/// SW-6 regression: `FROM (<inner>) LIMIT N` must return EXACTLY N rows when the
+/// semi-joined set has at least N members. The old bug applied the scan-time
+/// LIMIT before the semi-join, capping the scan on non-matching objects that the
+/// semi-join then discarded — yielding fewer than N rows (often zero). The outer
+/// FROM-subquery source matches every scanned object, so a premature cap is very
+/// likely to land on non-`String` objects; a correct engine defers the LIMIT to
+/// after the semi-join.
+#[test]
+fn from_subquery_limit_returns_exactly_n() {
+    let Some(hprof) = philosophers() else { return };
+    // Unbounded semi-join count is large (all Strings); LIMIT must not undershoot.
+    let full = query_row_count(&hprof, "SELECT @objectId FROM (SELECT * FROM java.lang.String s) x")
+        .expect("unbounded FROM-subquery failed or had no row count");
+    assert!(full >= 100, "fixture must have >= 100 strings; got {full}");
+    for n in [1u64, 5, 100] {
+        let got = query_row_count(
+            &hprof,
+            &format!("SELECT @objectId FROM (SELECT * FROM java.lang.String s) x LIMIT {n}"),
+        )
+        .expect("FROM-subquery + LIMIT failed or had no row count");
+        assert_eq!(
+            got, n,
+            "FROM-subquery LIMIT {n} must return EXACTLY {n} rows (SW-6), got {got}"
+        );
+    }
+}
+
+/// SW-6 regression: `FROM (<inner>) LIMIT N` with N larger than the semi-joined
+/// set returns the whole set (the LIMIT does not manufacture rows and does not
+/// truncate below the available matches).
+#[test]
+fn from_subquery_limit_above_set_returns_whole_set() {
+    let Some(hprof) = philosophers() else { return };
+    let threads = query_row_count(&hprof, "SELECT @objectId FROM java.lang.Thread")
+        .expect("plain thread count failed");
+    let semi_limited = query_row_count(
+        &hprof,
+        "SELECT @objectId FROM (SELECT * FROM java.lang.Thread s) x LIMIT 1000000",
+    )
+    .expect("FROM-subquery + huge LIMIT failed or had no row count");
+    assert_eq!(
+        semi_limited, threads,
+        "FROM-subquery LIMIT above the set size must return the whole semi-joined set \
+         ({threads}), got {semi_limited}"
+    );
+}
+
+/// SW-6 + ORDER BY: `FROM (<inner>) ORDER BY <k> DESC LIMIT N` must return the
+/// top N by the sort key (not the first N in scan order), and exactly N rows when
+/// the set is large enough. The sort happens before the semi-join preserves order,
+/// and the LIMIT is applied post-join.
+#[test]
+fn from_subquery_order_by_limit_returns_exactly_n() {
+    let Some(hprof) = philosophers() else { return };
+    let got = query_row_count(
+        &hprof,
+        "SELECT @objectId, @usedHeapSize FROM (SELECT * FROM java.lang.String s) x \
+         ORDER BY @usedHeapSize DESC LIMIT 5",
+    )
+    .expect("FROM-subquery + ORDER BY + LIMIT failed or had no row count");
+    assert_eq!(
+        got, 5,
+        "FROM-subquery ORDER BY ... LIMIT 5 must return EXACTLY 5 rows, got {got}"
+    );
+}
+
 /// `WHERE @objectAddress IN (<inner>)` keeps only objects whose address is in the
 /// inner result set. Filtering a class by its OWN addresses must return no more
 /// rows than the unfiltered scan (a bounded, non-expanding set). Exercised

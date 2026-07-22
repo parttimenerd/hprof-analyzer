@@ -664,6 +664,16 @@ pub fn run_single_dump(
                 .map(|i| keep.contains(&i))
                 .unwrap_or(false)
         });
+        // Apply the outer LIMIT now — deferred here because the scan could not
+        // early-stop without capping pre-semi-join rows (SW-6). `retain` keeps
+        // the outer scan/sort order, so this is the correct first-N / top-N.
+        if let Some(limit) = flat[*slot].1.limit {
+            if r.rows.len() > limit as usize {
+                r.rows.truncate(limit as usize);
+                // A LIMIT reached only after the semi-join is an explicit cap,
+                // not lost data; leave `truncated` reflecting inner-set loss only.
+            }
+        }
         r.row_count = r.rows.len() as u64;
         if *inner_trunc {
             r.truncated = true;

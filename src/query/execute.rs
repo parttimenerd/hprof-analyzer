@@ -873,6 +873,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                     truncated: false,
                     error: None,
                     note: None,
+                    viz: None,
                 };
             }
             let row: Vec<QueryValue> = accs.into_iter().map(finalize_agg_acc).collect();
@@ -885,6 +886,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 truncated: self.truncated,
                 error: None,
                 note: None,
+                viz: None,
             }
         } else {
             let mut rows = self.rows;
@@ -894,16 +896,22 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             // stage_runner, so it never reaches here with rows to sort; guard on
             // carry so we never emit a spurious note for a late-sorted query.
             if self.carry.is_none() {
+                // A FROM-subquery defers its LIMIT to the post-scan semi-join in
+                // run.rs (truncating here would cap rows the semi-join has not yet
+                // filtered). We still sort, so the semi-join preserves top-N order.
+                let defer_limit = self.query.from.as_subquery().is_some();
                 if let Some(ob) = &self.query.order_by {
                     match order_by_column_index(self.query, &columns, &ob.key) {
                         Some(idx) => {
                             sort_rows_by_column(&mut rows, idx, ob.dir);
-                            if let Some(limit) = self.plan.limit {
-                                if rows.len() > limit as usize {
-                                    rows.truncate(limit as usize);
-                                    // Truncation after an explicit sort is the intended
-                                    // top-N, not a lost-data warning: leave `truncated`
-                                    // reflecting only scan-cap loss (none on this path).
+                            if !defer_limit {
+                                if let Some(limit) = self.plan.limit {
+                                    if rows.len() > limit as usize {
+                                        rows.truncate(limit as usize);
+                                        // Truncation after an explicit sort is the intended
+                                        // top-N, not a lost-data warning: leave `truncated`
+                                        // reflecting only scan-cap loss (none on this path).
+                                    }
                                 }
                             }
                         }
@@ -916,9 +924,11 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                                  selected column on this query path; rows are in scan order",
                                 attr_name(&ob.key)
                             ));
-                            if let Some(limit) = self.plan.limit {
-                                if rows.len() > limit as usize {
-                                    rows.truncate(limit as usize);
+                            if !defer_limit {
+                                if let Some(limit) = self.plan.limit {
+                                    if rows.len() > limit as usize {
+                                        rows.truncate(limit as usize);
+                                    }
                                 }
                             }
                         }
@@ -934,6 +944,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 truncated: self.truncated,
                 error: None,
                 note,
+                viz: None,
             }
         }
     }
@@ -1017,8 +1028,12 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
         // When ORDER BY is present we must sort the FULL matched set in
         // `finish()` before applying LIMIT, so we cannot early-stop here — doing
         // so would take the first N in scan order, not the top N by the sort key.
-        // No-ORDER-BY queries keep the byte-identical early-stop.
-        if self.query.order_by.is_none() {
+        // A FROM-subquery source likewise cannot early-stop: the outer LIMIT is
+        // applied post-scan, after the semi-join in run.rs, so the scan must
+        // collect every match (a scan cap here would cap non-matching objects
+        // and the semi-join would then discard them → too few rows).
+        // No-ORDER-BY, no-subquery queries keep the byte-identical early-stop.
+        if self.query.order_by.is_none() && self.query.from.as_subquery().is_none() {
             if let Some(limit) = self.plan.limit {
                 if self.matched >= limit {
                     self.truncated = true;
@@ -1071,9 +1086,9 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
             }
             return;
         }
-        // See the ORDER BY note in `visit_instance`: don't early-stop when a
-        // sort is pending.
-        if self.query.order_by.is_none() {
+        // See the ORDER BY / FROM-subquery note in `visit_instance`: don't
+        // early-stop when a sort or a semi-join is pending.
+        if self.query.order_by.is_none() && self.query.from.as_subquery().is_none() {
             if let Some(limit) = self.plan.limit {
                 if self.matched >= limit {
                     self.truncated = true;
@@ -1599,6 +1614,7 @@ mod tests {
                 truncated: false,
                 error: None,
                 note: None,
+                viz: None,
             },
         );
         let q = crate::query::parse::parse("SELECT @retainedHeapSize FROM C").unwrap();
@@ -2674,6 +2690,59 @@ mod tests {
         let res = ex.finish("q1");
         assert_eq!(res.row_count, 2);
         assert!(res.truncated, "hitting the LIMIT cap must set truncated");
+    }
+
+    #[test]
+    fn from_subquery_does_not_early_stop_on_limit() {
+        // SW-6: a FROM-subquery source must NOT apply the scan-time LIMIT — the
+        // semi-join (run.rs) filters afterward and applies the LIMIT post-join.
+        // Early-stopping here would cap the scan before the semi-join sees the
+        // rows, discarding matches. So all matched instances are collected even
+        // though LIMIT 2 is present; the executor emits every scanned object and
+        // does NOT set `truncated` from a scan cap.
+        let q =
+            crate::query::parse::parse("SELECT * FROM (SELECT * FROM C c) x LIMIT 2").unwrap();
+        let plan = pq(&q);
+        let sc = FieldSchema::count_only();
+        let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
+        ex.visit_instance(1, 10, &[]);
+        ex.visit_instance(2, 10, &[]);
+        ex.visit_instance(3, 10, &[]);
+        ex.visit_instance(4, 10, &[]);
+        let res = ex.finish("q1");
+        assert_eq!(
+            res.row_count, 4,
+            "FROM-subquery scan must collect ALL matches (no scan-time LIMIT); \
+             the LIMIT is applied post-semi-join in run.rs"
+        );
+        assert!(
+            !res.truncated,
+            "FROM-subquery scan must not set truncated from a LIMIT cap"
+        );
+    }
+
+    #[test]
+    fn from_subquery_order_by_does_not_truncate_in_finish() {
+        // SW-6 + ORDER BY: a FROM-subquery still sorts in finish() (so the
+        // semi-join preserves top-N order) but must NOT truncate to LIMIT there;
+        // the post-join LIMIT in run.rs is the single cap. All matched rows come
+        // back, sorted ascending by @usedHeapSize (served here as the src_idx).
+        let q = crate::query::parse::parse(
+            "SELECT @objectId, @usedHeapSize FROM (SELECT * FROM C c) x \
+             ORDER BY @usedHeapSize ASC LIMIT 2",
+        )
+        .unwrap();
+        let plan = pq(&q);
+        let sc = FieldSchema::count_only();
+        let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
+        ex.visit_instance(3, 10, &[]);
+        ex.visit_instance(1, 10, &[]);
+        ex.visit_instance(2, 10, &[]);
+        let res = ex.finish("q1");
+        assert_eq!(
+            res.row_count, 3,
+            "FROM-subquery + ORDER BY must not truncate to LIMIT in finish()"
+        );
     }
 
     #[test]
