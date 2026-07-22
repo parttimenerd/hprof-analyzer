@@ -3,7 +3,7 @@
 //! with no per-object heap rescan.
 
 use crate::query::ast::{AggFunc, Attr, Query, SelectItem};
-use crate::query::execute::{class_name_matches, column_name};
+use crate::query::execute::{class_name_matches, class_name_matches_spec, column_name, compile_from_regex};
 use crate::query::model::{QueryResult, QueryValue};
 use crate::query::plan::QueryPlan;
 
@@ -22,8 +22,21 @@ pub fn run_histogram(q: &Query, plan: &QueryPlan, classes: &[ClassSummary]) -> Q
     let _ = plan; // WHERE on class handled via q.from / class name match
     let mut count = 0u64;
     let mut shallow = 0u64;
+    // Compile the FROM regex ONCE (if the target is a quoted regex), then reuse
+    // it across the per-class loop below — never recompile per class. The regex
+    // was already validated at plan time, so `.ok().flatten()` cannot lose an
+    // error here for a query that planned; a bare-ident/glob FROM yields `None`
+    // and falls through to `class_name_matches`.
+    let from_regex = q
+        .from
+        .class_spec()
+        .and_then(|spec| compile_from_regex(spec).ok().flatten());
     for c in classes {
-        if class_name_matches(c.name, q.from.class_name()) {
+        let matches = match q.from.class_spec() {
+            Some(spec) => class_name_matches_spec(c.name, spec, from_regex.as_ref()),
+            None => class_name_matches(c.name, q.from.class_name()),
+        };
+        if matches {
             count += c.count;
             shallow += c.shallow_total;
         }
@@ -122,6 +135,32 @@ mod tests {
     }
 
     // --- Extra edge-case tests ---
+
+    // MAT gap #5: quoted-regex FROM matches across classes in the histogram path.
+    #[test]
+    fn regex_from_matches_multiple_java_classes() {
+        // Both summary classes are under java.*, so a `java\..*` regex counts both.
+        let q = crate::query::parse::parse(r#"SELECT COUNT(*) FROM "java\..*""#).unwrap();
+        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let res = run_histogram(&q, &plan, &summaries());
+        assert_eq!(res.rows[0][0], QueryValue::Int(110));
+    }
+
+    #[test]
+    fn regex_from_trailing_string_matches_one_class() {
+        let q = crate::query::parse::parse(r#"SELECT COUNT(*) FROM ".*String""#).unwrap();
+        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let res = run_histogram(&q, &plan, &summaries());
+        assert_eq!(res.rows[0][0], QueryValue::Int(100));
+    }
+
+    #[test]
+    fn regex_from_matches_nothing_is_zero() {
+        let q = crate::query::parse::parse(r#"SELECT COUNT(*) FROM "no\.such\..*""#).unwrap();
+        let plan = crate::query::plan::plan_query(&q).unwrap();
+        let res = run_histogram(&q, &plan, &summaries());
+        assert_eq!(res.rows[0][0], QueryValue::Int(0));
+    }
 
     /// AVG(@usedHeapSize) plans as HistogramOnly (arg is UsedHeapSize, no
     /// instance_scalar need is set). Verifies 2400/100 == 24.0.

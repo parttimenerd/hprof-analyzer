@@ -1360,3 +1360,83 @@ fn no_edge_run_baseline_unchanged() {
         "no-edge run must not surface any edge-retention note:\n{text}"
     );
 }
+
+// ============================================================
+// MAT gap #5 — quoted/regex FROM class pattern (executor path)
+// ============================================================
+
+/// A quoted FROM target is matched as a Java-style regex: `FROM "java\.lang\..*"`
+/// matches MANY java.lang classes, so its COUNT must be > 0 AND >= the COUNT of a
+/// single exact java.lang class (java.lang.String).
+#[test]
+fn regex_from_matches_many_java_lang_classes() {
+    let Some(hprof) = philosophers() else { return };
+    let regex_count = query_count_value(&hprof, r#"SELECT COUNT(*) FROM "java\.lang\..*""#)
+        .expect("regex FROM query must succeed");
+    let string_count = query_count_value(&hprof, "SELECT COUNT(*) FROM java.lang.String")
+        .expect("exact FROM query must succeed");
+    assert!(
+        regex_count > 0,
+        "regex FROM java.lang.* should match instances, got {regex_count}"
+    );
+    assert!(
+        regex_count >= string_count,
+        "regex over java.lang.* ({regex_count}) must be >= java.lang.String alone ({string_count})"
+    );
+}
+
+/// `FROM ".*String"` (trailing-string regex) matches `java.lang.String`.
+#[test]
+fn regex_from_trailing_string_matches_java_lang_string() {
+    let Some(hprof) = philosophers() else { return };
+    let re_count = query_count_value(&hprof, r#"SELECT COUNT(*) FROM ".*String""#)
+        .expect(".*String regex query must succeed");
+    let exact = query_count_value(&hprof, "SELECT COUNT(*) FROM java.lang.String")
+        .expect("exact query must succeed");
+    assert!(
+        re_count >= exact && exact > 0,
+        ".*String ({re_count}) must include java.lang.String ({exact})"
+    );
+}
+
+/// A regex that matches no class → COUNT 0 (not an error).
+#[test]
+fn regex_from_matching_nothing_is_zero() {
+    let Some(hprof) = philosophers() else { return };
+    let n = query_count_value(&hprof, r#"SELECT COUNT(*) FROM "no\.such\.Class\d+""#)
+        .expect("no-match regex must still succeed with COUNT 0");
+    assert_eq!(n, 0, "regex matching nothing must yield COUNT 0");
+}
+
+/// A bare glob FROM still works unchanged after the regex migration.
+#[test]
+fn bare_glob_from_still_matches() {
+    let Some(hprof) = philosophers() else { return };
+    let n = query_count_value(&hprof, "SELECT COUNT(*) FROM java.util.*")
+        .expect("bare glob query must succeed");
+    // philosophers heap always has some java.util.* instances.
+    assert!(n > 0, "bare glob java.util.* should match, got {n}");
+}
+
+/// A bad quoted regex produces an actionable error naming the regex problem, at
+/// the CLI surface — exits non-zero, not a silent empty result.
+#[test]
+fn bad_regex_from_is_actionable_cli_error() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query", r#"SELECT COUNT(*) FROM "[""#])
+        .output()
+        .unwrap();
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        combined.contains("invalid regex"),
+        "bad regex must surface an actionable 'invalid regex' error, got:\n{combined}"
+    );
+}
+

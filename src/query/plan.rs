@@ -258,6 +258,14 @@ fn plan_single(q: &Query) -> Result<QueryPlan, QueryError> {
         reject_in_subqueries_if_correlated(pred)?;
     }
 
+    // Validate a quoted-regex FROM target once, at plan time, so a bad regex is
+    // an ACTIONABLE error here rather than a silent no-match (or per-row panic)
+    // during the scan. The compiled regex is discarded; the executor / histogram
+    // recompile the (now known-good) pattern once per query, never per object.
+    if let Some(spec) = q.from.class_spec() {
+        crate::query::execute::compile_from_regex(spec)?;
+    }
+
     // Plan any subqueries. A FROM-subquery is semi-joined by object identity, so
     // its inner must project whole objects; an IN-subquery is matched by address,
     // so its inner must project a single `@objectAddress` column. Both are run as
@@ -1003,6 +1011,26 @@ mod tests {
         assert_eq!(plan.kind, StageKind::HistogramOnly);
         assert!(!plan.needs.instance_scalar);
         assert!(!plan.needs.instance_string);
+    }
+
+    // MAT gap #5: a bad quoted FROM regex must be an actionable plan-time error.
+    #[test]
+    fn bad_from_regex_rejected_at_plan_time() {
+        let q = parse(r#"SELECT * FROM "[""#).expect("parses; regex is validated at plan");
+        let err = plan_query(&q).expect_err("bad regex must be rejected at plan time");
+        assert!(
+            err.0.contains("invalid regex") && err.0.contains('['),
+            "plan error must name the regex problem; got: {}",
+            err.0
+        );
+    }
+
+    // A valid quoted FROM regex plans cleanly (as a histogram-only aggregate).
+    #[test]
+    fn good_from_regex_plans_ok() {
+        let plan =
+            plan_query(&parse(r#"SELECT COUNT(*) FROM "java\.lang\..*""#).unwrap()).unwrap();
+        assert_eq!(plan.kind, StageKind::HistogramOnly);
     }
 
     #[test]

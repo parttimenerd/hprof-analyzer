@@ -36,6 +36,8 @@ chumsky = "0.13.0"
 ariadne = "0.6.0"
 logos = "0.16.1"
 reedline = "0.43"
+# full regex (not regex-lite) for MAT's quoted-FROM Java-Pattern class matching
+regex = "1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

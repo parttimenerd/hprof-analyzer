@@ -2,11 +2,11 @@
 //! ObjectVisitor and accumulates bounded rows during the pass2 2a scan.
 //! HistogramExecutor answers aggregate-only queries from per-class stats.
 
+use crate::query::ObjectVisitor;
 use crate::query::ast::{Attr, CompareOp, Query, SelectItem, Value};
 use crate::query::carry::Carry;
 use crate::query::model::{QueryColumn, QueryResult, QueryValue};
 use crate::query::plan::QueryPlan;
-use crate::query::ObjectVisitor;
 
 /// A cross-phase query whose Phase-1 matches were carried; finalized after
 /// retained sizes exist. `slot` is the query's index in the caller's list so
@@ -27,15 +27,32 @@ pub struct QueryExecState {
 }
 
 impl QueryExecState {
-    pub fn new() -> Self { Self::default() }
-    pub fn push_finished(&mut self, slot: usize, r: QueryResult) { self.finished.push((slot, r)); }
-    pub fn push_cross_phase(&mut self, slot: usize, name: String, plan: QueryPlan, carry: Carry) {
-        self.pending.push(CrossPhaseEntry { slot, name, plan, carry });
+    pub fn new() -> Self {
+        Self::default()
     }
-    pub fn finished_len(&self) -> usize { self.finished.len() }
-    pub fn pending_len(&self) -> usize { self.pending.len() }
-    pub fn pending(&self) -> &[CrossPhaseEntry] { &self.pending }
-    pub fn has_pending(&self) -> bool { !self.pending.is_empty() }
+    pub fn push_finished(&mut self, slot: usize, r: QueryResult) {
+        self.finished.push((slot, r));
+    }
+    pub fn push_cross_phase(&mut self, slot: usize, name: String, plan: QueryPlan, carry: Carry) {
+        self.pending.push(CrossPhaseEntry {
+            slot,
+            name,
+            plan,
+            carry,
+        });
+    }
+    pub fn finished_len(&self) -> usize {
+        self.finished.len()
+    }
+    pub fn pending_len(&self) -> usize {
+        self.pending.len()
+    }
+    pub fn pending(&self) -> &[CrossPhaseEntry] {
+        &self.pending
+    }
+    pub fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
     /// Consume into (finished slots, pending entries) for the stage runner.
     pub fn into_parts(self) -> (Vec<(usize, QueryResult)>, Vec<CrossPhaseEntry>) {
         (self.finished, self.pending)
@@ -46,24 +63,38 @@ impl QueryExecState {
 /// unit-tested against a fake and run against the real pass2 schema in prod.
 pub trait ClassResolver {
     fn class_name(&self, class_id: u64) -> Option<&str>;
-    fn field(&self, _class_id: u64, _name: &str) -> Option<(u32, crate::types::HprofType)> { None }
-    fn addr_of(&self, _src_idx: usize) -> Option<u64> { None }
-    fn shallow_of(&self, _src_idx: usize) -> Option<u32> { None }
+    fn field(&self, _class_id: u64, _name: &str) -> Option<(u32, crate::types::HprofType)> {
+        None
+    }
+    fn addr_of(&self, _src_idx: usize) -> Option<u64> {
+        None
+    }
+    fn shallow_of(&self, _src_idx: usize) -> Option<u32> {
+        None
+    }
     /// Reverse of `addr_of`: the dense object index for a heap address, or `None`
     /// if the address is not a live object. Backs RefWalk edge resolution.
-    fn index_of_addr(&self, _addr: u64) -> Option<usize> { None }
+    fn index_of_addr(&self, _addr: u64) -> Option<usize> {
+        None
+    }
     /// Reference (object-pointer) width in bytes, used to decode ref fields from
     /// an instance blob. Defaults to 8; `LiveResolver` returns the dump's real
     /// `id_size`.
-    fn ref_width(&self) -> usize { 8 }
+    fn ref_width(&self) -> usize {
+        8
+    }
 }
 
 #[cfg(test)]
-pub struct TestSchema { pub names: std::collections::HashMap<u64, String> }
+pub struct TestSchema {
+    pub names: std::collections::HashMap<u64, String>,
+}
 
 #[cfg(test)]
 impl ClassResolver for TestSchema {
-    fn class_name(&self, class_id: u64) -> Option<&str> { self.names.get(&class_id).map(|s| s.as_str()) }
+    fn class_name(&self, class_id: u64) -> Option<&str> {
+        self.names.get(&class_id).map(|s| s.as_str())
+    }
 }
 
 pub struct SingleScanExecutor<'a, R: ClassResolver> {
@@ -87,6 +118,13 @@ pub struct SingleScanExecutor<'a, R: ClassResolver> {
     /// IN-subquery, or before the driver injects them. `truncated` on any set
     /// means membership is incomplete and the outer result must be marked so.
     in_sets: Vec<InSet>,
+    /// Pre-compiled FROM regex for a quoted (`FROM "<regex>"`) class target,
+    /// compiled ONCE at executor construction (see [`compile_from_regex`]) and
+    /// reused for every object. `None` for a bare-ident/glob FROM (matched by
+    /// `class_name_matches`) or a subquery source. Compiling here — not in the
+    /// per-object `visit_instance`/`visit_array` hot path — is the performance
+    /// contract: a heap scan touches millions of objects but one regex.
+    from_regex: Option<regex::Regex>,
 }
 
 /// A resolved `IN (<subquery>)` membership set injected before the outer scan.
@@ -99,16 +137,48 @@ pub struct InSet {
     pub truncated: bool,
 }
 
+/// Compile the query's FROM regex once for executor construction. The regex was
+/// already validated (with an actionable error) at plan time via
+/// [`compile_from_regex`], so a compile failure here cannot happen for a query
+/// that planned successfully; if it somehow did, we fall back to `None` (no
+/// match) rather than panicking on the scan hot path.
+fn compile_from_query(query: &Query) -> Option<regex::Regex> {
+    query
+        .from
+        .class_spec()
+        .and_then(|spec| compile_from_regex(spec).ok().flatten())
+}
+
 impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     pub fn new(query: &'a Query, plan: &'a QueryPlan, resolver: &'a R) -> Self {
-        Self { query, plan, resolver, rows: Vec::new(), matched: 0, truncated: false, carry: None, in_sets: Vec::new() }
+        Self {
+            query,
+            plan,
+            resolver,
+            rows: Vec::new(),
+            matched: 0,
+            truncated: false,
+            carry: None,
+            in_sets: Vec::new(),
+            from_regex: compile_from_query(query),
+        }
     }
 
     /// Construct a cross-phase carry executor. `carry` should be an
     /// `index-only` carry sized by the caller's cap; matched indices are pushed
     /// into it during the scan and extracted with `take_carry` at scan end.
     pub fn new_carry(query: &'a Query, plan: &'a QueryPlan, resolver: &'a R, carry: Carry) -> Self {
-        Self { query, plan, resolver, rows: Vec::new(), matched: 0, truncated: false, carry: Some(carry), in_sets: Vec::new() }
+        Self {
+            query,
+            plan,
+            resolver,
+            rows: Vec::new(),
+            matched: 0,
+            truncated: false,
+            carry: Some(carry),
+            in_sets: Vec::new(),
+            from_regex: compile_from_query(query),
+        }
     }
 
     /// Inject the resolved `IN (<subquery>)` membership sets (one per plan
@@ -124,7 +194,9 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     }
 
     /// True if this executor is carrying indices for a later phase.
-    pub fn is_carry(&self) -> bool { self.carry.is_some() }
+    pub fn is_carry(&self) -> bool {
+        self.carry.is_some()
+    }
 
     /// Whether this query's FROM pattern can match an array class, so the scan
     /// only pays the per-array name-construction cost when some executor might
@@ -137,20 +209,33 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             return true;
         }
         let from = self.query.from.class_name();
+        // A quoted regex could match an array class name (e.g. `.*` or
+        // `java\.lang\..*\[\]`) without a literal `*`, so a regex FROM must see
+        // arrays too. Compiling once and testing per-array would be cheaper to
+        // gate, but arrays are a small minority; be conservative and include them.
+        if self.from_regex.is_some() {
+            return true;
+        }
         from.ends_with("[]") || from.contains('*')
     }
 
     /// The plan this executor runs (borrowed). Used by the driver to tag a
     /// carried query with its plan for the late phase.
-    pub fn plan(&self) -> &QueryPlan { self.plan }
+    pub fn plan(&self) -> &QueryPlan {
+        self.plan
+    }
 
     /// The query AST this executor runs (borrowed). Used by the driver to gather
     /// RefWalk hop field names when arming edge capture.
-    pub fn query(&self) -> &Query { self.query }
+    pub fn query(&self) -> &Query {
+        self.query
+    }
 
     /// The resolver this executor borrows. Used by the driver to decode ref
     /// fields from instance blobs during RefWalk edge capture.
-    pub fn resolver(&self) -> &'a R { self.resolver }
+    pub fn resolver(&self) -> &'a R {
+        self.resolver
+    }
 
     /// Consume a carry executor, returning the accumulated carry. Panics if this
     /// executor is not in carry mode (caller must check `is_carry`).
@@ -164,8 +249,14 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
         if self.query.from.as_subquery().is_some() {
             return true;
         }
-        let want = self.query.from.class_name();
-        match self.resolver.class_name(class_id) { None => false, Some(name) => class_name_matches(name, want) }
+        let Some(spec) = self.query.from.class_spec() else {
+            // No class spec means a subquery source, handled above.
+            return true;
+        };
+        match self.resolver.class_name(class_id) {
+            None => false,
+            Some(name) => class_name_matches_spec(name, spec, self.from_regex.as_ref()),
+        }
     }
     /// Strip a leading `<alias>.` from a field reference so `s.count` resolves as
     /// the bare field `count` when the FROM clause binds alias `s`. Fields with
@@ -181,11 +272,28 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
         name
     }
     fn project_row(&self, src_idx: usize, class_id: u64, blob: &[u8]) -> Vec<QueryValue> {
-        self.query.select.iter().map(|item| self.project_item(item, src_idx, class_id, blob)).collect()
+        self.query
+            .select
+            .iter()
+            .map(|item| self.project_item(item, src_idx, class_id, blob))
+            .collect()
     }
-    fn project_item(&self, item: &SelectItem, src_idx: usize, class_id: u64, blob: &[u8]) -> QueryValue {
+    fn project_item(
+        &self,
+        item: &SelectItem,
+        src_idx: usize,
+        class_id: u64,
+        blob: &[u8],
+    ) -> QueryValue {
         match item {
-            SelectItem::Star => QueryValue::ObjRef { index: src_idx as u64, class: self.resolver.class_name(class_id).unwrap_or("?").to_string() },
+            SelectItem::Star => QueryValue::ObjRef {
+                index: src_idx as u64,
+                class: self
+                    .resolver
+                    .class_name(class_id)
+                    .unwrap_or("?")
+                    .to_string(),
+            },
             SelectItem::Aggregate { .. } => QueryValue::Null,
             SelectItem::Attr(a) => self.project_attr(a, src_idx, class_id, blob),
             // path(a, b) is cross-phase (needs the ref graph); filled later, not here.
@@ -195,14 +303,27 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     fn project_attr(&self, a: &Attr, src_idx: usize, class_id: u64, blob: &[u8]) -> QueryValue {
         match a {
             Attr::ObjectId => QueryValue::Int(src_idx as i64),
-            Attr::ObjectAddress => self.resolver.addr_of(src_idx).map(|x| QueryValue::Int(x as i64)).unwrap_or(QueryValue::Null),
-            Attr::UsedHeapSize => self.resolver.shallow_of(src_idx).map(|x| QueryValue::Int(x as i64)).unwrap_or(QueryValue::Null),
+            Attr::ObjectAddress => self
+                .resolver
+                .addr_of(src_idx)
+                .map(|x| QueryValue::Int(x as i64))
+                .unwrap_or(QueryValue::Null),
+            Attr::UsedHeapSize => self
+                .resolver
+                .shallow_of(src_idx)
+                .map(|x| QueryValue::Int(x as i64))
+                .unwrap_or(QueryValue::Null),
             // filled cross-phase (stage runner) — retained size is unknown during the pass2 scan.
             Attr::RetainedHeapSize => QueryValue::Null,
             // dominator-tree attrs are cross-phase: the dominator tree exists only
             // post-scan, so these are filled by the stage runner, not here.
             Attr::Dominators(_) | Attr::DominatorOf(_) => QueryValue::Null,
-            Attr::ClassOf | Attr::DisplayName => QueryValue::Str(self.resolver.class_name(class_id).unwrap_or("?").to_string()),
+            Attr::ClassOf | Attr::DisplayName => QueryValue::Str(
+                self.resolver
+                    .class_name(class_id)
+                    .unwrap_or("?")
+                    .to_string(),
+            ),
             Attr::Length => QueryValue::Null,
             // inbound/outbound reference counts need the post-scan ref graph; filled later.
             Attr::Inbounds | Attr::Outbounds => QueryValue::Null,
@@ -222,20 +343,43 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             .map(|item| self.project_array_item(item, src_idx, class_name, length))
             .collect()
     }
-    fn project_array_item(&self, item: &SelectItem, src_idx: usize, class_name: &str, length: u32) -> QueryValue {
+    fn project_array_item(
+        &self,
+        item: &SelectItem,
+        src_idx: usize,
+        class_name: &str,
+        length: u32,
+    ) -> QueryValue {
         match item {
-            SelectItem::Star => QueryValue::ObjRef { index: src_idx as u64, class: class_name.to_string() },
+            SelectItem::Star => QueryValue::ObjRef {
+                index: src_idx as u64,
+                class: class_name.to_string(),
+            },
             SelectItem::Aggregate { .. } => QueryValue::Null,
             SelectItem::Attr(a) => self.project_array_attr(a, src_idx, class_name, length),
             // path(a, b) is cross-phase (needs the ref graph); filled later, not here.
             SelectItem::Path { .. } => QueryValue::Null,
         }
     }
-    fn project_array_attr(&self, a: &Attr, src_idx: usize, class_name: &str, length: u32) -> QueryValue {
+    fn project_array_attr(
+        &self,
+        a: &Attr,
+        src_idx: usize,
+        class_name: &str,
+        length: u32,
+    ) -> QueryValue {
         match a {
             Attr::ObjectId => QueryValue::Int(src_idx as i64),
-            Attr::ObjectAddress => self.resolver.addr_of(src_idx).map(|x| QueryValue::Int(x as i64)).unwrap_or(QueryValue::Null),
-            Attr::UsedHeapSize => self.resolver.shallow_of(src_idx).map(|x| QueryValue::Int(x as i64)).unwrap_or(QueryValue::Null),
+            Attr::ObjectAddress => self
+                .resolver
+                .addr_of(src_idx)
+                .map(|x| QueryValue::Int(x as i64))
+                .unwrap_or(QueryValue::Null),
+            Attr::UsedHeapSize => self
+                .resolver
+                .shallow_of(src_idx)
+                .map(|x| QueryValue::Int(x as i64))
+                .unwrap_or(QueryValue::Null),
             // filled cross-phase (stage runner) — retained size is unknown during the pass2 scan.
             Attr::RetainedHeapSize => QueryValue::Null,
             // dominator-tree attrs are cross-phase: filled by the stage runner.
@@ -253,18 +397,39 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     fn decode_field(&self, class_id: u64, name: &str, blob: &[u8]) -> QueryValue {
         use crate::types::HprofType;
         let name = self.strip_alias(name);
-        let Some((off, ty)) = self.resolver.field(class_id, name) else { return QueryValue::Null; };
+        let Some((off, ty)) = self.resolver.field(class_id, name) else {
+            return QueryValue::Null;
+        };
         let o = off as usize;
         match ty {
-            HprofType::Boolean | HprofType::Byte => blob.get(o).map(|&b| {
-                if ty == HprofType::Boolean { QueryValue::Bool(b != 0) } else { QueryValue::Int(b as i64) }
-            }).unwrap_or(QueryValue::Null),
-            HprofType::Short => read_be(blob, o, 2).map(|v| QueryValue::Int(v as i16 as i64)).unwrap_or(QueryValue::Null),
-            HprofType::Char => read_be(blob, o, 2).map(|v| QueryValue::Int(v as i64)).unwrap_or(QueryValue::Null),
-            HprofType::Int => read_be(blob, o, 4).map(|v| QueryValue::Int(v as i32 as i64)).unwrap_or(QueryValue::Null),
-            HprofType::Long => read_be(blob, o, 8).map(|v| QueryValue::Int(v as i64)).unwrap_or(QueryValue::Null),
-            HprofType::Float => read_be(blob, o, 4).map(|v| QueryValue::Float(f32::from_bits(v as u32) as f64)).unwrap_or(QueryValue::Null),
-            HprofType::Double => read_be(blob, o, 8).map(|v| QueryValue::Float(f64::from_bits(v))).unwrap_or(QueryValue::Null),
+            HprofType::Boolean | HprofType::Byte => blob
+                .get(o)
+                .map(|&b| {
+                    if ty == HprofType::Boolean {
+                        QueryValue::Bool(b != 0)
+                    } else {
+                        QueryValue::Int(b as i64)
+                    }
+                })
+                .unwrap_or(QueryValue::Null),
+            HprofType::Short => read_be(blob, o, 2)
+                .map(|v| QueryValue::Int(v as i16 as i64))
+                .unwrap_or(QueryValue::Null),
+            HprofType::Char => read_be(blob, o, 2)
+                .map(|v| QueryValue::Int(v as i64))
+                .unwrap_or(QueryValue::Null),
+            HprofType::Int => read_be(blob, o, 4)
+                .map(|v| QueryValue::Int(v as i32 as i64))
+                .unwrap_or(QueryValue::Null),
+            HprofType::Long => read_be(blob, o, 8)
+                .map(|v| QueryValue::Int(v as i64))
+                .unwrap_or(QueryValue::Null),
+            HprofType::Float => read_be(blob, o, 4)
+                .map(|v| QueryValue::Float(f32::from_bits(v as u32) as f64))
+                .unwrap_or(QueryValue::Null),
+            HprofType::Double => read_be(blob, o, 8)
+                .map(|v| QueryValue::Float(f64::from_bits(v)))
+                .unwrap_or(QueryValue::Null),
             HprofType::Object => QueryValue::Null,
         }
     }
@@ -277,17 +442,35 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             if self.carry.is_some() && crate::query::plan::pred_uses_retained(&term.pred) {
                 continue;
             }
-            if !self.eval_pred(&term.pred, src_idx, class_id, blob) { return false; }
+            if !self.eval_pred(&term.pred, src_idx, class_id, blob) {
+                return false;
+            }
         }
         true
     }
-    fn eval_pred(&self, pred: &crate::query::ast::Predicate, src_idx: usize, class_id: u64, blob: &[u8]) -> bool {
+    fn eval_pred(
+        &self,
+        pred: &crate::query::ast::Predicate,
+        src_idx: usize,
+        class_id: u64,
+        blob: &[u8],
+    ) -> bool {
         use crate::query::ast::Predicate as P;
         match pred {
-            P::And(a, b) => self.eval_pred(a, src_idx, class_id, blob) && self.eval_pred(b, src_idx, class_id, blob),
-            P::Or(a, b) => self.eval_pred(a, src_idx, class_id, blob) || self.eval_pred(b, src_idx, class_id, blob),
+            P::And(a, b) => {
+                self.eval_pred(a, src_idx, class_id, blob)
+                    && self.eval_pred(b, src_idx, class_id, blob)
+            }
+            P::Or(a, b) => {
+                self.eval_pred(a, src_idx, class_id, blob)
+                    || self.eval_pred(b, src_idx, class_id, blob)
+            }
             P::Not(a) => !self.eval_pred(a, src_idx, class_id, blob),
-            P::InstanceOf(cname) => self.resolver.class_name(class_id).map(|n| class_name_matches(n, cname)).unwrap_or(false),
+            P::InstanceOf(cname) => self
+                .resolver
+                .class_name(class_id)
+                .map(|n| class_name_matches(n, cname))
+                .unwrap_or(false),
             P::InSubquery { lhs, .. } => self.eval_in_subquery(lhs, src_idx),
             P::Compare { lhs, op, rhs } => {
                 // Pass the real `src_idx` so object-identity LHS attrs
@@ -324,15 +507,29 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             if self.carry.is_some() && crate::query::plan::pred_uses_retained(&term.pred) {
                 continue;
             }
-            if !self.array_eval_pred(&term.pred, src_idx, class_name, length) { return false; }
+            if !self.array_eval_pred(&term.pred, src_idx, class_name, length) {
+                return false;
+            }
         }
         true
     }
-    fn array_eval_pred(&self, pred: &crate::query::ast::Predicate, src_idx: usize, class_name: &str, length: u32) -> bool {
+    fn array_eval_pred(
+        &self,
+        pred: &crate::query::ast::Predicate,
+        src_idx: usize,
+        class_name: &str,
+        length: u32,
+    ) -> bool {
         use crate::query::ast::Predicate as P;
         match pred {
-            P::And(a, b) => self.array_eval_pred(a, src_idx, class_name, length) && self.array_eval_pred(b, src_idx, class_name, length),
-            P::Or(a, b) => self.array_eval_pred(a, src_idx, class_name, length) || self.array_eval_pred(b, src_idx, class_name, length),
+            P::And(a, b) => {
+                self.array_eval_pred(a, src_idx, class_name, length)
+                    && self.array_eval_pred(b, src_idx, class_name, length)
+            }
+            P::Or(a, b) => {
+                self.array_eval_pred(a, src_idx, class_name, length)
+                    || self.array_eval_pred(b, src_idx, class_name, length)
+            }
             P::Not(a) => !self.array_eval_pred(a, src_idx, class_name, length),
             P::InstanceOf(cname) => class_name_matches(class_name, cname),
             P::InSubquery { lhs, .. } => self.eval_in_subquery(lhs, src_idx),
@@ -344,22 +541,47 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     }
 
     pub fn finish(self, name: &str) -> QueryResult {
-        let columns = self.query.select.iter().map(|it| QueryColumn { name: column_name(it) }).collect();
-        QueryResult { name: name.to_string(), oql: String::new(), columns, row_count: self.rows.len() as u64, rows: self.rows, truncated: self.truncated, error: None, note: None }
+        let columns = self
+            .query
+            .select
+            .iter()
+            .map(|it| QueryColumn {
+                name: column_name(it),
+            })
+            .collect();
+        QueryResult {
+            name: name.to_string(),
+            oql: String::new(),
+            columns,
+            row_count: self.rows.len() as u64,
+            rows: self.rows,
+            truncated: self.truncated,
+            error: None,
+            note: None,
+        }
     }
 }
 
 impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
     fn visit_instance(&mut self, src_idx: usize, class_id: u64, blob: &[u8]) {
-        if !self.class_matches(class_id) { return; }
-        if !self.where_passes(src_idx, class_id, blob) { return; }
+        if !self.class_matches(class_id) {
+            return;
+        }
+        if !self.where_passes(src_idx, class_id, blob) {
+            return;
+        }
         if let Some(carry) = &mut self.carry {
             // Carry mode: no LIMIT here (retained ORDER BY + LIMIT run late);
             // the carry's own cap bounds memory and sets its truncated flag.
             carry.push_index(src_idx as u32);
             return;
         }
-        if let Some(limit) = self.plan.limit { if self.matched >= limit { self.truncated = true; return; } }
+        if let Some(limit) = self.plan.limit {
+            if self.matched >= limit {
+                self.truncated = true;
+                return;
+            }
+        }
         self.matched += 1;
         let row = self.project_row(src_idx, class_id, blob);
         self.rows.push(row);
@@ -369,14 +591,26 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
         // A FROM-subquery source matches every object (identity is constrained
         // by the outer semi-join), so it considers arrays too.
         let class_ok = self.query.from.as_subquery().is_some()
-            || class_name_matches(class_name, self.query.from.class_name());
-        if !class_ok { return; }
-        if !self.array_where_passes(src_idx, class_name, length) { return; }
+            || match self.query.from.class_spec() {
+                Some(spec) => class_name_matches_spec(class_name, spec, self.from_regex.as_ref()),
+                None => false,
+            };
+        if !class_ok {
+            return;
+        }
+        if !self.array_where_passes(src_idx, class_name, length) {
+            return;
+        }
         if let Some(carry) = &mut self.carry {
             carry.push_index(src_idx as u32);
             return;
         }
-        if let Some(limit) = self.plan.limit { if self.matched >= limit { self.truncated = true; return; } }
+        if let Some(limit) = self.plan.limit {
+            if self.matched >= limit {
+                self.truncated = true;
+                return;
+            }
+        }
         self.matched += 1;
         let row = self.project_array_row(src_idx, class_name, length);
         self.rows.push(row);
@@ -398,29 +632,86 @@ fn in_subquery_unresolved() -> bool {
 pub fn class_name_matches(name_dotted: &str, pattern: &str) -> bool {
     // Package-prefix wildcard `pkg.*`: the name must equal `pkg` or start with
     // `pkg` followed by a separator.
-    if let Some(prefix) = pattern.strip_suffix(".*").or_else(|| pattern.strip_suffix("/*")) {
+    if let Some(prefix) = pattern
+        .strip_suffix(".*")
+        .or_else(|| pattern.strip_suffix("/*"))
+    {
         if !sep_eq(name_dotted.get(..prefix.len()).unwrap_or(""), prefix) {
             return false;
         }
         return name_dotted.len() == prefix.len()
-            || matches!(name_dotted.as_bytes().get(prefix.len()), Some(b'.') | Some(b'/'));
+            || matches!(
+                name_dotted.as_bytes().get(prefix.len()),
+                Some(b'.') | Some(b'/')
+            );
     }
     name_dotted.len() == pattern.len() && sep_eq(name_dotted, pattern)
+}
+
+/// Compile the FROM spec's regex ONCE per query, or `Ok(None)` when the spec is
+/// not a quoted-regex target (bare ident/glob → matched by `class_name_matches`).
+/// A bad regex is an actionable [`QueryError`] naming the problem, surfaced at
+/// plan/construction time — never a silent `false` and never a per-row panic.
+/// The returned `Regex` is held on the executor / histogram loop and reused for
+/// every object, so `Regex::new` is NEVER called on the per-object hot path.
+///
+/// MAT matches class names like `java.util.regex.Pattern.matches`: the WHOLE
+/// string must match. We anchor the source as `^(?:<src>)$` to get that
+/// full/anchored semantics regardless of the user's pattern.
+pub fn compile_from_regex(spec: &crate::query::ast::ClassSpec) -> Result<Option<regex::Regex>, crate::query::QueryError> {
+    if !spec.is_regex {
+        return Ok(None);
+    }
+    let anchored = format!("^(?:{})$", spec.class_name);
+    match regex::Regex::new(&anchored) {
+        Ok(re) => Ok(Some(re)),
+        Err(e) => Err(crate::query::QueryError(format!(
+            "invalid regex in FROM \"{}\": {} \
+             (the quoted FROM target is matched as a Java-style regex; \
+             fix the pattern or use a bare class name / `pkg.*` glob instead)",
+            spec.class_name, e
+        ))),
+    }
+}
+
+/// Match a dotted class `name_dotted` against a FROM [`ClassSpec`]. When the spec
+/// is a quoted-regex target, `from_regex` MUST be the pre-compiled regex for that
+/// spec (compiled once via [`compile_from_regex`]); the name matches iff the
+/// whole string matches (Java `Pattern.matches` semantics). Otherwise this falls
+/// through to the exact/glob [`class_name_matches`]. `from_regex` being `None`
+/// for a regex spec means the caller failed to compile it — treated as no match
+/// (the actionable error is raised earlier at plan/construction time).
+pub fn class_name_matches_spec(
+    name_dotted: &str,
+    spec: &crate::query::ast::ClassSpec,
+    from_regex: Option<&regex::Regex>,
+) -> bool {
+    if spec.is_regex {
+        return match from_regex {
+            Some(re) => re.is_match(name_dotted),
+            None => false,
+        };
+    }
+    class_name_matches(name_dotted, &spec.class_name)
 }
 
 /// Byte-wise equality treating `/` and `.` as the same separator.
 fn sep_eq(a: &str, b: &str) -> bool {
     a.len() == b.len()
-        && a.bytes().zip(b.bytes()).all(|(x, y)| {
-            x == y || (matches!(x, b'.' | b'/') && matches!(y, b'.' | b'/'))
-        })
+        && a.bytes()
+            .zip(b.bytes())
+            .all(|(x, y)| x == y || (matches!(x, b'.' | b'/') && matches!(y, b'.' | b'/')))
 }
 
 /// Read `n` big-endian bytes at `off` as a u64. None if out of range.
 fn read_be(blob: &[u8], off: usize, n: usize) -> Option<u64> {
-    if off + n > blob.len() { return None; }
+    if off + n > blob.len() {
+        return None;
+    }
     let mut v = 0u64;
-    for i in 0..n { v = (v << 8) | blob[off + i] as u64; }
+    for i in 0..n {
+        v = (v << 8) | blob[off + i] as u64;
+    }
     Some(v)
 }
 
@@ -438,9 +729,12 @@ fn compare_values(lv: &QueryValue, op: CompareOp, rhs: &Value) -> bool {
     match ord {
         None => matches!(op, CompareOp::Ne),
         Some(o) => match op {
-            CompareOp::Eq => o.is_eq(), CompareOp::Ne => o.is_ne(),
-            CompareOp::Lt => o.is_lt(), CompareOp::Le => o.is_le(),
-            CompareOp::Gt => o.is_gt(), CompareOp::Ge => o.is_ge(),
+            CompareOp::Eq => o.is_eq(),
+            CompareOp::Ne => o.is_ne(),
+            CompareOp::Lt => o.is_lt(),
+            CompareOp::Le => o.is_le(),
+            CompareOp::Gt => o.is_gt(),
+            CompareOp::Ge => o.is_ge(),
         },
     }
 }
@@ -449,8 +743,15 @@ pub fn column_name(it: &SelectItem) -> String {
     match it {
         SelectItem::Star => "*".to_string(),
         SelectItem::Attr(a) => attr_name(a),
-        SelectItem::Aggregate { func, arg } => { let f = format!("{func:?}").to_uppercase(); format!("{f}({})", column_name(arg)) }
-        SelectItem::Path { from, to } => format!("path({}, {})", path_operand_name(from), path_operand_name(to)),
+        SelectItem::Aggregate { func, arg } => {
+            let f = format!("{func:?}").to_uppercase();
+            format!("{f}({})", column_name(arg))
+        }
+        SelectItem::Path { from, to } => format!(
+            "path({}, {})",
+            path_operand_name(from),
+            path_operand_name(to)
+        ),
     }
 }
 
@@ -501,10 +802,19 @@ mod tests {
     fn exec_state_separates_finished_and_pending() {
         use crate::query::plan::Phase;
         let mut st = QueryExecState::new();
-        st.push_finished(0, QueryResult {
-            name: "q1".into(), oql: String::new(), columns: vec![],
-            rows: vec![], row_count: 0, truncated: false, error: None, note: None,
-        });
+        st.push_finished(
+            0,
+            QueryResult {
+                name: "q1".into(),
+                oql: String::new(),
+                columns: vec![],
+                rows: vec![],
+                row_count: 0,
+                truncated: false,
+                error: None,
+                note: None,
+            },
+        );
         let q = crate::query::parse::parse("SELECT @retainedHeapSize FROM C").unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
         assert_eq!(plan.finalize_at, Phase::P3);
@@ -548,22 +858,32 @@ mod tests {
         ex.visit_instance(1, 10, &[]);
         ex.visit_instance(2, 10, &[]);
         let carry = ex.take_carry();
-        assert_eq!(carry.indices(), vec![1, 2], "retained WHERE must not filter during scan");
+        assert_eq!(
+            carry.indices(),
+            vec![1, 2],
+            "retained WHERE must not filter during scan"
+        );
     }
 
     #[test]
     fn carry_mode_ignores_limit_during_scan() {
         // LIMIT applies AFTER the retained ORDER BY (in stage_runner), so carry
         // mode must carry every match regardless of the query's LIMIT.
-        let q = parse(
-            "SELECT @objectId FROM com.acme.Foo ORDER BY @retainedHeapSize DESC LIMIT 1").unwrap();
+        let q = parse("SELECT @objectId FROM com.acme.Foo ORDER BY @retainedHeapSize DESC LIMIT 1")
+            .unwrap();
         let plan = plan_query(&q).unwrap();
         let sc = schema(&[(10, "com.acme.Foo")]);
         let carry = crate::query::carry::Carry::index_only(100);
         let mut ex = SingleScanExecutor::new_carry(&q, &plan, &sc, carry);
-        for i in 1..=5u32 { ex.visit_instance(i as usize, 10, &[]); }
+        for i in 1..=5u32 {
+            ex.visit_instance(i as usize, 10, &[]);
+        }
         let carry = ex.take_carry();
-        assert_eq!(carry.indices(), vec![1, 2, 3, 4, 5], "LIMIT must be deferred to the late phase");
+        assert_eq!(
+            carry.indices(),
+            vec![1, 2, 3, 4, 5],
+            "LIMIT must be deferred to the late phase"
+        );
     }
 
     #[test]
@@ -610,6 +930,135 @@ mod tests {
 
     // --- Additional edge-case tests (beyond the plan's two) ---
 
+    // --- MAT gap #5: quoted/regex FROM matcher unit tests ---
+
+    fn regex_spec(src: &str) -> crate::query::ast::ClassSpec {
+        crate::query::ast::ClassSpec {
+            instanceof: false,
+            class_name: src.into(),
+            is_regex: true,
+        }
+    }
+    fn glob_spec(src: &str) -> crate::query::ast::ClassSpec {
+        crate::query::ast::ClassSpec {
+            instanceof: false,
+            class_name: src.into(),
+            is_regex: false,
+        }
+    }
+
+    #[test]
+    fn matches_spec_regex_full_anchored_match() {
+        let spec = regex_spec(r"java\.lang\..*");
+        let re = compile_from_regex(&spec).unwrap();
+        assert!(class_name_matches_spec(
+            "java.lang.String",
+            &spec,
+            re.as_ref()
+        ));
+        // Full/anchored: a bare `lang` regex must NOT match the full name.
+        let lang = regex_spec("lang");
+        let lang_re = compile_from_regex(&lang).unwrap();
+        assert!(
+            !class_name_matches_spec("java.lang.String", &lang, lang_re.as_ref()),
+            "regex must match the WHOLE class name (Pattern.matches), not a substring"
+        );
+    }
+
+    #[test]
+    fn matches_spec_regex_trailing_string() {
+        let spec = regex_spec(".*String");
+        let re = compile_from_regex(&spec).unwrap();
+        assert!(class_name_matches_spec(
+            "java.lang.String",
+            &spec,
+            re.as_ref()
+        ));
+        assert!(!class_name_matches_spec(
+            "java.lang.Integer",
+            &spec,
+            re.as_ref()
+        ));
+    }
+
+    #[test]
+    fn matches_spec_regex_alternation() {
+        let spec = regex_spec("java\\.lang\\.String|java\\.util\\.HashMap");
+        let re = compile_from_regex(&spec).unwrap();
+        assert!(class_name_matches_spec(
+            "java.lang.String",
+            &spec,
+            re.as_ref()
+        ));
+        assert!(class_name_matches_spec(
+            "java.util.HashMap",
+            &spec,
+            re.as_ref()
+        ));
+        assert!(!class_name_matches_spec(
+            "java.lang.Integer",
+            &spec,
+            re.as_ref()
+        ));
+    }
+
+    #[test]
+    fn matches_spec_regex_dot_is_regex_metachar() {
+        // In regex mode a `.` is any-char (regex semantics, NOT glob).
+        let spec = regex_spec("java.lang.String");
+        let re = compile_from_regex(&spec).unwrap();
+        assert!(class_name_matches_spec(
+            "java.lang.String",
+            &spec,
+            re.as_ref()
+        ));
+        // `.` matches any single char, so `javaXlangXString` matches too.
+        assert!(class_name_matches_spec(
+            "javaXlangXString",
+            &spec,
+            re.as_ref()
+        ));
+    }
+
+    #[test]
+    fn matches_spec_glob_falls_through_to_class_name_matches() {
+        // A non-regex spec ignores from_regex and uses the exact/glob matcher.
+        let spec = glob_spec("com.acme.*");
+        assert!(compile_from_regex(&spec).unwrap().is_none());
+        assert!(class_name_matches_spec("com.acme.Foo", &spec, None));
+        assert!(!class_name_matches_spec("org.other.Foo", &spec, None));
+    }
+
+    #[test]
+    fn compile_from_regex_bad_pattern_is_actionable_error() {
+        let spec = regex_spec("[");
+        let err = compile_from_regex(&spec).expect_err("unclosed class must be an error");
+        assert!(
+            err.0.contains("invalid regex") && err.0.contains('['),
+            "error must name the regex problem; got: {}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn matches_spec_regex_matches_nothing_returns_false() {
+        let spec = regex_spec("no\\.such\\.Class");
+        let re = compile_from_regex(&spec).unwrap();
+        assert!(!class_name_matches_spec(
+            "java.lang.String",
+            &spec,
+            re.as_ref()
+        ));
+    }
+
+    #[test]
+    fn matches_spec_regex_none_when_uncompiled_is_false() {
+        // Defensive: a regex spec with no compiled regex must be a no-match,
+        // never a panic.
+        let spec = regex_spec("java\\.lang\\..*");
+        assert!(!class_name_matches_spec("java.lang.String", &spec, None));
+    }
+
     #[test]
     fn class_name_matches_exact() {
         assert!(class_name_matches("com.acme.Foo", "com.acme.Foo"));
@@ -642,7 +1091,10 @@ mod tests {
         // Array class names (dotted, with the `[]` suffix the resolver produces)
         // match exactly and are not spuriously matched by unrelated patterns.
         assert!(class_name_matches("char[]", "char[]"));
-        assert!(class_name_matches("java.lang.Object[]", "java.lang.Object[]"));
+        assert!(class_name_matches(
+            "java.lang.Object[]",
+            "java.lang.Object[]"
+        ));
         assert!(!class_name_matches("char[]", "byte[]"));
         // A shorter name than the wildcard prefix must not match (guards the
         // `get(..prefix.len())` slice returning None → false).
@@ -765,8 +1217,11 @@ mod tests {
         fn count_only() -> Self {
             FieldSchema {
                 names: std::iter::once((10u64, "C".to_string())).collect(),
-                fields: std::iter::once(("count".to_string(), (0u32, crate::types::HprofType::Int)))
-                    .collect(),
+                fields: std::iter::once((
+                    "count".to_string(),
+                    (0u32, crate::types::HprofType::Int),
+                ))
+                .collect(),
             }
         }
         fn with_fields(pairs: &[(&str, u32, crate::types::HprofType)]) -> Self {
@@ -878,7 +1333,12 @@ mod tests {
     fn decode_int_sign_extends_negative() {
         // 0xFFFFFFFF as i32 == -1.
         assert_eq!(
-            decode("i", 0, crate::types::HprofType::Int, &[0xff, 0xff, 0xff, 0xff]),
+            decode(
+                "i",
+                0,
+                crate::types::HprofType::Int,
+                &[0xff, 0xff, 0xff, 0xff]
+            ),
             QueryValue::Int(-1)
         );
     }
@@ -900,7 +1360,12 @@ mod tests {
     fn decode_float() {
         // 1.5f32 == bits 0x3FC00000.
         assert_eq!(
-            decode("f", 0, crate::types::HprofType::Float, &[0x3f, 0xc0, 0x00, 0x00]),
+            decode(
+                "f",
+                0,
+                crate::types::HprofType::Float,
+                &[0x3f, 0xc0, 0x00, 0x00]
+            ),
             QueryValue::Float(1.5)
         );
     }
@@ -955,7 +1420,10 @@ mod tests {
         let plan = crate::query::plan::plan_query(&q).unwrap();
         let sc = FieldSchema::count_only();
         let ex = SingleScanExecutor::new(&q, &plan, &sc);
-        assert_eq!(ex.decode_field(10, "missing", &[0, 0, 0, 1]), QueryValue::Null);
+        assert_eq!(
+            ex.decode_field(10, "missing", &[0, 0, 0, 1]),
+            QueryValue::Null
+        );
     }
 
     #[test]
@@ -997,16 +1465,36 @@ mod tests {
     #[test]
     fn compare_null_equals_null() {
         use crate::query::ast::{CompareOp, Value};
-        assert!(compare_values(&QueryValue::Null, CompareOp::Eq, &Value::Null));
-        assert!(!compare_values(&QueryValue::Null, CompareOp::Ne, &Value::Null));
+        assert!(compare_values(
+            &QueryValue::Null,
+            CompareOp::Eq,
+            &Value::Null
+        ));
+        assert!(!compare_values(
+            &QueryValue::Null,
+            CompareOp::Ne,
+            &Value::Null
+        ));
     }
 
     #[test]
     fn compare_int_vs_float_cross() {
         use crate::query::ast::{CompareOp, Value};
-        assert!(compare_values(&QueryValue::Int(2), CompareOp::Lt, &Value::Float(2.5)));
-        assert!(compare_values(&QueryValue::Float(2.5), CompareOp::Gt, &Value::Int(2)));
-        assert!(compare_values(&QueryValue::Int(3), CompareOp::Eq, &Value::Float(3.0)));
+        assert!(compare_values(
+            &QueryValue::Int(2),
+            CompareOp::Lt,
+            &Value::Float(2.5)
+        ));
+        assert!(compare_values(
+            &QueryValue::Float(2.5),
+            CompareOp::Gt,
+            &Value::Int(2)
+        ));
+        assert!(compare_values(
+            &QueryValue::Int(3),
+            CompareOp::Eq,
+            &Value::Float(3.0)
+        ));
     }
 
     #[test]
@@ -1027,16 +1515,25 @@ mod tests {
     #[test]
     fn compare_bool_ordering() {
         use crate::query::ast::{CompareOp, Value};
-        assert!(compare_values(&QueryValue::Bool(false), CompareOp::Lt, &Value::Bool(true)));
-        assert!(compare_values(&QueryValue::Bool(true), CompareOp::Eq, &Value::Bool(true)));
+        assert!(compare_values(
+            &QueryValue::Bool(false),
+            CompareOp::Lt,
+            &Value::Bool(true)
+        ));
+        assert!(compare_values(
+            &QueryValue::Bool(true),
+            CompareOp::Eq,
+            &Value::Bool(true)
+        ));
     }
 
     // --- WHERE combinators ---
 
     #[test]
     fn where_and_filters_both_bounds() {
-        let q = crate::query::parse::parse("SELECT @objectId FROM C WHERE count > 5 AND count < 100")
-            .unwrap();
+        let q =
+            crate::query::parse::parse("SELECT @objectId FROM C WHERE count > 5 AND count < 100")
+                .unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
         let sc = FieldSchema::count_only();
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
@@ -1050,8 +1547,9 @@ mod tests {
 
     #[test]
     fn where_or_matches_either() {
-        let q = crate::query::parse::parse("SELECT @objectId FROM C WHERE count < 5 OR count > 100")
-            .unwrap();
+        let q =
+            crate::query::parse::parse("SELECT @objectId FROM C WHERE count < 5 OR count > 100")
+                .unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
         let sc = FieldSchema::count_only();
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
@@ -1079,8 +1577,7 @@ mod tests {
 
     #[test]
     fn where_instanceof_matches_by_class_name() {
-        let q =
-            crate::query::parse::parse("SELECT @objectId FROM C WHERE x INSTANCEOF C").unwrap();
+        let q = crate::query::parse::parse("SELECT @objectId FROM C WHERE x INSTANCEOF C").unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
         let sc = FieldSchema::count_only();
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
@@ -1104,8 +1601,7 @@ mod tests {
     #[test]
     fn where_unknown_field_excludes_for_eq() {
         // Resolver has no "missing" -> decode Null; Null = 1 is a mismatch -> excluded.
-        let q =
-            crate::query::parse::parse("SELECT @objectId FROM C WHERE missing = 1").unwrap();
+        let q = crate::query::parse::parse("SELECT @objectId FROM C WHERE missing = 1").unwrap();
         let plan = crate::query::plan::plan_query(&q).unwrap();
         let sc = FieldSchema::count_only();
         let mut ex = SingleScanExecutor::new(&q, &plan, &sc);
@@ -1306,7 +1802,10 @@ mod tests {
         ex.visit_instance(1, 10, &[]);
         let res = ex.finish("q1");
         assert_eq!(res.row_count, 1);
-        assert!(res.truncated, "a truncated membership set taints the outer result");
+        assert!(
+            res.truncated,
+            "a truncated membership set taints the outer result"
+        );
     }
 
     #[test]
@@ -1322,6 +1821,9 @@ mod tests {
         ex.visit_instance(1, 10, &[]);
         ex.visit_instance(2, 20, &[]);
         let res = ex.finish("q1");
-        assert_eq!(res.row_count, 2, "FROM-subquery outer matches all objects pre-semijoin");
+        assert_eq!(
+            res.row_count, 2,
+            "FROM-subquery outer matches all objects pre-semijoin"
+        );
     }
 }

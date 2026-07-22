@@ -119,8 +119,14 @@ pub enum RefRole {
 pub struct ClassSpec {
     /// true for `FROM INSTANCEOF C` (subclasses included), false for `FROM C`.
     pub instanceof: bool,
-    /// The class name as written, e.g. `java.lang.String` or `com.acme.*`.
+    /// The class name (or regex source) as written, e.g. `java.lang.String`,
+    /// `com.acme.*`, or (when `is_regex`) a Java-style regex like `java\.lang\..*`.
     pub class_name: String,
+    /// true when the FROM target was a DOUBLE-QUOTED string (MAT regex form):
+    /// `class_name` is then a Java-style regex matched full/anchored against the
+    /// object's dotted class name. false for a bare identifier/glob target, which
+    /// uses the exact/glob matcher. Quoted regex is invalid with INSTANCEOF.
+    pub is_regex: bool,
 }
 
 /// A FROM source: either a class pattern or a nested (non-correlated) subquery

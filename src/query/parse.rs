@@ -274,11 +274,24 @@ where
         let from_class = ident_ci("INSTANCEOF")
             .or_not()
             .map(|i| i.is_some())
-            .then(any_ident())
-            .map(|(instanceof, class_name)| {
+            .then(
+                any_ident()
+                    .map(|name| (name, false))
+                    .or(select! { Token::Str(s) => (s, true) }.labelled("class regex")),
+            )
+            .validate(|(instanceof, (class_name, is_regex)), e, emitter| {
+                if instanceof && is_regex {
+                    emitter.emit(Rich::custom(
+                        e.span(),
+                        "INSTANCEOF requires a bare class name, not a quoted regex \
+                         (usage: FROM INSTANCEOF java.lang.Object, or drop INSTANCEOF \
+                         and use FROM \"<regex>\" for regex matching)",
+                    ));
+                }
                 FromSource::Class(ClassSpec {
                     instanceof,
                     class_name,
+                    is_regex,
                 })
             });
         let from_source = from_subquery.or(from_class);
@@ -758,6 +771,7 @@ mod tests {
             from: FromSource::Class(ClassSpec {
                 instanceof,
                 class_name: class_name.into(),
+                is_regex: false,
             }),
             alias: alias.map(|s| s.into()),
             where_,
@@ -1464,6 +1478,73 @@ mod tests {
             "INSTANCEOF flag must survive migration"
         );
         assert_eq!(q.from.class_name(), "java.util.List");
+    }
+
+    // ---------- MAT gap #5: quoted/regex FROM class pattern ----------
+
+    #[test]
+    fn from_quoted_string_is_regex() {
+        let q = parse(r#"SELECT * FROM "java.lang.*""#).unwrap();
+        let spec = q.from.class_spec().expect("class source");
+        assert_eq!(
+            spec,
+            &ClassSpec {
+                instanceof: false,
+                class_name: "java.lang.*".into(),
+                is_regex: true,
+            }
+        );
+    }
+
+    #[test]
+    fn from_quoted_alternation_regex() {
+        let q = parse(r#"SELECT * FROM ".*Ab.*|java.lang.Runtime""#).unwrap();
+        let spec = q.from.class_spec().expect("class source");
+        assert!(spec.is_regex, "double-quoted FROM must set is_regex");
+        assert_eq!(spec.class_name, ".*Ab.*|java.lang.Runtime");
+    }
+
+    #[test]
+    fn from_bare_ident_is_not_regex() {
+        let q = parse("SELECT * FROM java.lang.String").unwrap();
+        let spec = q.from.class_spec().expect("class source");
+        assert!(!spec.is_regex, "bare-ident FROM must NOT be regex");
+    }
+
+    #[test]
+    fn from_bare_glob_is_not_regex() {
+        let q = parse("SELECT * FROM com.acme.*").unwrap();
+        let spec = q.from.class_spec().expect("class source");
+        assert!(!spec.is_regex, "bare-glob FROM must NOT be regex");
+        assert_eq!(spec.class_name, "com.acme.*");
+    }
+
+    #[test]
+    fn instanceof_with_quoted_regex_is_rejected() {
+        let err = parse(r#"SELECT * FROM INSTANCEOF "java.lang.*""#)
+            .expect_err("INSTANCEOF with a quoted regex must be rejected");
+        assert!(
+            err.0.contains("INSTANCEOF") && err.0.to_lowercase().contains("bare class name"),
+            "error must actionably explain INSTANCEOF needs a bare class name; got: {}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn instanceof_with_bare_ident_still_valid() {
+        let q = parse("SELECT * FROM INSTANCEOF java.util.List").unwrap();
+        let spec = q.from.class_spec().expect("class source");
+        assert!(spec.instanceof);
+        assert!(!spec.is_regex);
+    }
+
+    #[test]
+    fn from_quoted_regex_with_alias() {
+        let q = parse(r#"SELECT * FROM "java\.lang\..*" s"#).unwrap();
+        let spec = q.from.class_spec().expect("class source");
+        assert!(spec.is_regex);
+        assert_eq!(spec.class_name, r"java\.lang\..*");
+        assert_eq!(q.alias.as_deref(), Some("s"));
     }
 
     #[test]
