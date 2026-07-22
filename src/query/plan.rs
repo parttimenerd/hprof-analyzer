@@ -3,7 +3,7 @@
 //! rejected here (not in the parser) with a message naming the construct.
 
 use crate::query::QueryError;
-use crate::query::ast::{Attr, Expr, Predicate, Query, RefRole, SelectItem, Value};
+use crate::query::ast::{AggFunc, Attr, Expr, Predicate, Query, RefRole, SelectItem, Value};
 use crate::query::carry::CarryLayout;
 use crate::query::runflags::EdgeDir;
 
@@ -367,6 +367,7 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
         && !needs.instance_string
         && where_terms.is_empty()
         && !agg_over_expr
+        && q.select.iter().all(agg_histogram_answerable)
     {
         needs.histogram = true;
         StageKind::HistogramOnly
@@ -962,6 +963,32 @@ fn reject_in_subqueries_if_correlated(pred: &Predicate) -> Result<(), QueryError
             Ok(())
         }
         Predicate::Compare { .. } | Predicate::InstanceOf(_) => Ok(()),
+    }
+}
+
+/// Returns `true` iff `item` is one of the three aggregate shapes that the
+/// histogram-only path can answer without touching per-object data:
+///
+///   1. `COUNT(*)` — answered from the class-summary row count.
+///   2. `SUM(@usedHeapSize)` — answered from the class-summary shallow total.
+///   3. `AVG(@usedHeapSize)` — answered from count + shallow total.
+///
+/// Every other aggregate (MIN, MAX, COUNT over a non-Star, SUM/AVG over
+/// anything other than `@usedHeapSize`) requires the per-object SingleScan path.
+/// Non-aggregate items also return `false` so any mix falls to SingleScan
+/// (though mixed non-aggregate + aggregate selects are rejected earlier by the
+/// planner before this check is reached).
+fn agg_histogram_answerable(item: &SelectItem) -> bool {
+    match item {
+        SelectItem::Aggregate { func, arg } => match (func, arg.as_ref()) {
+            (AggFunc::Count, SelectItem::Star) => true,
+            (AggFunc::Sum, SelectItem::Attr(Attr::UsedHeapSize)) => true,
+            (AggFunc::Avg, SelectItem::Attr(Attr::UsedHeapSize)) => true,
+            _ => false,
+        },
+        // Non-aggregate items: treat as not histogram-answerable so any stray
+        // mix falls through to SingleScan.
+        _ => false,
     }
 }
 
@@ -2528,6 +2555,134 @@ mod tests {
         let p3 = pq(&parse("SELECT @objectId FROM C WHERE @retainedHeapSize > 1024").unwrap())
             .unwrap();
         assert!(p3.needs.retained && p3.finalize_at == Phase::P3);
+    }
+
+    // ============================================================
+    // SW-4: MIN/MAX over @attr must route to SingleScan (not HistogramOnly)
+    // ============================================================
+
+    /// `MIN(s.@usedHeapSize)` must route to SingleScan, not HistogramOnly.
+    /// Before the fix the planner sends this to HistogramOnly which returns Null
+    /// for MIN/MAX because the histogram only knows count + shallow_total.
+    #[test]
+    fn min_used_heap_size_routes_single_scan() {
+        let plan = pq(
+            &parse("SELECT MIN(s.@usedHeapSize) FROM java.lang.String s").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            plan.kind,
+            StageKind::SingleScan,
+            "MIN(@usedHeapSize) must route to SingleScan so the per-object accumulator \
+             can compute the real minimum; got HistogramOnly (would return null)"
+        );
+    }
+
+    /// `MAX(s.@usedHeapSize)` must also route to SingleScan.
+    #[test]
+    fn max_used_heap_size_routes_single_scan() {
+        let plan = pq(
+            &parse("SELECT MAX(s.@usedHeapSize) FROM java.lang.String s").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            plan.kind,
+            StageKind::SingleScan,
+            "MAX(@usedHeapSize) must route to SingleScan; got HistogramOnly (would return null)"
+        );
+    }
+
+    /// `MIN(@objectId)` must route to SingleScan (histogram has no object-id info).
+    #[test]
+    fn min_object_id_routes_single_scan() {
+        let plan =
+            pq(&parse("SELECT MIN(s.@objectId) FROM java.lang.String s").unwrap()).unwrap();
+        assert_eq!(
+            plan.kind,
+            StageKind::SingleScan,
+            "MIN(@objectId) must route to SingleScan; histogram cannot answer it"
+        );
+    }
+
+    /// `MAX(@objectId)` must route to SingleScan.
+    #[test]
+    fn max_object_id_routes_single_scan() {
+        let plan =
+            pq(&parse("SELECT MAX(s.@objectId) FROM java.lang.String s").unwrap()).unwrap();
+        assert_eq!(
+            plan.kind,
+            StageKind::SingleScan,
+            "MAX(@objectId) must route to SingleScan; histogram cannot answer it"
+        );
+    }
+
+    /// `MIN(s.hash)` (plain instance field) must also route to SingleScan.
+    #[test]
+    fn min_instance_field_routes_single_scan() {
+        let plan =
+            pq(&parse("SELECT MIN(s.hash) FROM java.lang.String s").unwrap()).unwrap();
+        assert_eq!(
+            plan.kind,
+            StageKind::SingleScan,
+            "MIN over an instance field must route to SingleScan"
+        );
+    }
+
+    // Positive regression: the three histogram-answerable shapes must STAY on
+    // HistogramOnly (byte/RSS-identical fast path — do not regress this).
+
+    /// `COUNT(*)` must stay on HistogramOnly.
+    #[test]
+    fn count_star_stays_histogram_only() {
+        let plan =
+            pq(&parse("SELECT COUNT(*) FROM java.lang.String").unwrap()).unwrap();
+        assert_eq!(
+            plan.kind,
+            StageKind::HistogramOnly,
+            "COUNT(*) must stay on the fast histogram path"
+        );
+    }
+
+    /// `SUM(@usedHeapSize)` must stay on HistogramOnly.
+    #[test]
+    fn sum_used_heap_size_stays_histogram_only() {
+        let plan =
+            pq(&parse("SELECT SUM(@usedHeapSize) FROM java.lang.String").unwrap()).unwrap();
+        assert_eq!(
+            plan.kind,
+            StageKind::HistogramOnly,
+            "SUM(@usedHeapSize) must stay on the fast histogram path"
+        );
+    }
+
+    /// `AVG(@usedHeapSize)` must stay on HistogramOnly.
+    #[test]
+    fn avg_used_heap_size_stays_histogram_only() {
+        let plan =
+            pq(&parse("SELECT AVG(@usedHeapSize) FROM java.lang.String").unwrap()).unwrap();
+        assert_eq!(
+            plan.kind,
+            StageKind::HistogramOnly,
+            "AVG(@usedHeapSize) must stay on the fast histogram path"
+        );
+    }
+
+    /// A mixed MIN+SUM in the same SELECT must route to SingleScan (MIN is not
+    /// histogram-answerable, even though SUM would be alone).
+    #[test]
+    fn mixed_min_sum_routes_single_scan() {
+        let plan = pq(
+            &parse(
+                "SELECT MIN(s.@usedHeapSize), SUM(s.@usedHeapSize) FROM java.lang.String s",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            plan.kind,
+            StageKind::SingleScan,
+            "MIN+SUM mix must route to SingleScan (MIN is not histogram-answerable)"
+        );
     }
 }
 

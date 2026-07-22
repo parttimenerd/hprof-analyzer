@@ -2667,3 +2667,163 @@ fn sum_alias_does_not_crash() {
         "SUM(s) must yield 1 aggregate row, got:\n{stdout}"
     );
 }
+
+// ============================================================
+// SW-4: MIN/MAX over @attr correctness (histogram vs SingleScan routing)
+// ============================================================
+
+/// Extract the single integer value printed by a one-cell aggregate query.
+/// The query subcommand prints the column header, the numeric value, and a
+/// row-count footer; we look for the first line that parses as i64 (covers
+/// both positive and negative values, though heap sizes are always positive).
+/// Returns `None` if the command fails or produces no integer line.
+fn query_single_i64(hprof: &str, oql: &str) -> Option<i64> {
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(hprof)
+        .args(["--query", oql])
+        .output()
+        .unwrap();
+    if !out.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    stdout.lines().find_map(|l| l.trim().parse::<i64>().ok())
+}
+
+/// `MIN(s.@usedHeapSize)` must return a non-null positive integer.
+/// Before the fix this returned null because the planner wrongly routed the
+/// query to HistogramOnly which has no MIN/MAX implementation.
+#[test]
+fn min_used_heap_size_is_non_null_positive() {
+    let Some(hprof) = philosophers() else { return };
+    let val = query_single_i64(
+        &hprof,
+        "SELECT MIN(s.@usedHeapSize) FROM java.lang.String s",
+    )
+    .expect("MIN(s.@usedHeapSize) must return a non-null integer (was null before fix)");
+    assert!(
+        val > 0,
+        "MIN(@usedHeapSize) must be a positive integer (shallow size > 0); got {val}"
+    );
+}
+
+/// `MAX(s.@usedHeapSize)` must return a non-null positive integer.
+#[test]
+fn max_used_heap_size_is_non_null_positive() {
+    let Some(hprof) = philosophers() else { return };
+    let val = query_single_i64(
+        &hprof,
+        "SELECT MAX(s.@usedHeapSize) FROM java.lang.String s",
+    )
+    .expect("MAX(s.@usedHeapSize) must return a non-null integer (was null before fix)");
+    assert!(
+        val > 0,
+        "MAX(@usedHeapSize) must be a positive integer; got {val}"
+    );
+}
+
+/// MIN ≤ AVG ≤ MAX for @usedHeapSize on java.lang.String. This cross-validates
+/// all three paths and ensures they're mutually consistent after the fix.
+#[test]
+fn min_avg_max_used_heap_size_ordering() {
+    let Some(hprof) = philosophers() else { return };
+    let min = query_single_i64(
+        &hprof,
+        "SELECT MIN(s.@usedHeapSize) FROM java.lang.String s",
+    )
+    .expect("MIN(@usedHeapSize) must not be null");
+    let max = query_single_i64(
+        &hprof,
+        "SELECT MAX(s.@usedHeapSize) FROM java.lang.String s",
+    )
+    .expect("MAX(@usedHeapSize) must not be null");
+    // AVG may be fractional; parse as f64 then floor.
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query", "SELECT AVG(s.@usedHeapSize) FROM java.lang.String s"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "AVG(@usedHeapSize) failed");
+    let avg_str = String::from_utf8_lossy(&out.stdout);
+    let avg: f64 = avg_str
+        .lines()
+        .find_map(|l| l.trim().parse::<f64>().ok())
+        .expect("AVG(@usedHeapSize) must print a numeric value");
+    assert!(
+        min <= max,
+        "MIN({min}) must be <= MAX({max}) for @usedHeapSize"
+    );
+    assert!(
+        (min as f64) <= avg,
+        "MIN({min}) must be <= AVG({avg}) for @usedHeapSize"
+    );
+    assert!(
+        avg <= (max as f64) + 1.0,
+        "AVG({avg}) must be <= MAX({max}) for @usedHeapSize"
+    );
+}
+
+/// `MIN(s.@objectId)` must return a non-null non-negative integer.
+/// The histogram has no object-id information; this exercises SingleScan routing
+/// for a MIN over an @attr other than @usedHeapSize.
+#[test]
+fn min_object_id_is_non_null_non_negative() {
+    let Some(hprof) = philosophers() else { return };
+    let val = query_single_i64(
+        &hprof,
+        "SELECT MIN(s.@objectId) FROM java.lang.String s",
+    )
+    .expect("MIN(s.@objectId) must return a non-null integer");
+    assert!(
+        val >= 0,
+        "MIN(@objectId) must be a non-negative integer; got {val}"
+    );
+}
+
+/// `MAX(s.@objectId)` must return a non-null non-negative integer, and must be
+/// >= MIN(@objectId) for the same class.
+#[test]
+fn max_object_id_geq_min_object_id() {
+    let Some(hprof) = philosophers() else { return };
+    let min = query_single_i64(
+        &hprof,
+        "SELECT MIN(s.@objectId) FROM java.lang.String s",
+    )
+    .expect("MIN(@objectId) must not be null");
+    let max = query_single_i64(
+        &hprof,
+        "SELECT MAX(s.@objectId) FROM java.lang.String s",
+    )
+    .expect("MAX(@objectId) must not be null");
+    assert!(
+        min <= max,
+        "MIN({min}) must be <= MAX({max}) for @objectId"
+    );
+}
+
+/// Regression: SUM(@usedHeapSize) and COUNT(*) must still work (histogram fast
+/// path not broken by the new routing guard).
+#[test]
+fn sum_and_count_still_work_after_routing_fix() {
+    let Some(hprof) = philosophers() else { return };
+    let sum = query_single_i64(
+        &hprof,
+        "SELECT SUM(s.@usedHeapSize) FROM java.lang.String s",
+    )
+    .expect("SUM(@usedHeapSize) must still return a value after routing fix");
+    assert!(sum > 0, "SUM(@usedHeapSize) must be > 0; got {sum}");
+
+    let count =
+        query_count_value(&hprof, "SELECT COUNT(*) FROM java.lang.String")
+            .expect("COUNT(*) must still return a value after routing fix");
+    assert!(count > 0, "COUNT(*) must be > 0; got {count}");
+
+    // SUM / COUNT ~ AVG: sanity-check that SUM >= COUNT (all shallow sizes >= 1).
+    assert!(
+        sum >= count as i64,
+        "SUM({sum}) must be >= COUNT({count}) (shallow size >= 1 per object)"
+    );
+}
+
