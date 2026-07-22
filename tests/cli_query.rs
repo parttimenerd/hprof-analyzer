@@ -1442,3 +1442,102 @@ fn bad_regex_from_is_actionable_cli_error() {
         "bad regex must surface an actionable 'invalid regex' error, got:\n{combined}"
     );
 }
+
+// --- LIKE / NOT LIKE (MAT gap #4), exercised end-to-end through the scan ---
+// `@displayName` on an instance resolves to its class name (a string), so a LIKE
+// against it filters real objects during the pass-2 scan. We SELECT `@objectId`
+// (a per-object scan, not the histogram-only COUNT aggregate) and count rows.
+
+/// `WHERE @displayName LIKE "<full class name>"` matches every instance of that
+/// class (full/anchored Java-regex match), i.e. same count as the class alone.
+#[test]
+fn like_full_match_on_display_name_matches_all() {
+    let Some(hprof) = philosophers() else { return };
+    let all = query_row_count(&hprof, "SELECT @objectId FROM java.lang.String")
+        .expect("baseline java.lang.String count must succeed");
+    let liked = query_row_count(
+        &hprof,
+        r#"SELECT @objectId FROM java.lang.String WHERE @displayName LIKE "java\.lang\.String""#,
+    )
+    .expect("LIKE full-match query must succeed");
+    assert_eq!(
+        liked, all,
+        "LIKE on the exact class name must match all {all} instances, got {liked}"
+    );
+}
+
+/// LIKE is FULL/anchored: a bare `String` substring pattern would match under
+/// un-anchored semantics; a pattern that does not match the WHOLE class name
+/// yields zero rows.
+#[test]
+fn like_is_anchored_partial_pattern_matches_nothing() {
+    let Some(hprof) = philosophers() else { return };
+    // "String" alone is NOT a full match of "java.lang.String" → 0 rows.
+    let n = query_row_count(
+        &hprof,
+        r#"SELECT @objectId FROM java.lang.String WHERE @displayName LIKE "String""#,
+    )
+    .expect("anchored LIKE query must succeed");
+    assert_eq!(
+        n, 0,
+        "partial LIKE pattern must not match (full-match), got {n}"
+    );
+}
+
+/// `NOT LIKE` inverts LIKE: NOT LIKE the exact class name matches zero instances.
+#[test]
+fn not_like_exact_name_matches_nothing() {
+    let Some(hprof) = philosophers() else { return };
+    let n = query_row_count(
+        &hprof,
+        r#"SELECT @objectId FROM java.lang.String WHERE @displayName NOT LIKE "java\.lang\.String""#,
+    )
+    .expect("NOT LIKE query must succeed");
+    assert_eq!(
+        n, 0,
+        "NOT LIKE the exact class name must match nothing, got {n}"
+    );
+}
+
+/// A `.*` LIKE pattern is anchored `^(?:.*)$` and matches every string display
+/// name → same count as the class alone.
+#[test]
+fn like_wildcard_matches_all() {
+    let Some(hprof) = philosophers() else { return };
+    let all = query_row_count(&hprof, "SELECT @objectId FROM java.lang.String")
+        .expect("baseline count must succeed");
+    let liked = query_row_count(
+        &hprof,
+        r#"SELECT @objectId FROM java.lang.String WHERE @displayName LIKE ".*""#,
+    )
+    .expect("wildcard LIKE query must succeed");
+    assert_eq!(
+        liked, all,
+        "LIKE \".*\" must match all {all} rows, got {liked}"
+    );
+}
+
+/// A bad LIKE regex produces an actionable error naming the regex problem at the
+/// CLI surface — exits non-zero, not a silent empty result.
+#[test]
+fn bad_like_regex_is_actionable_cli_error() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
+            r#"SELECT @objectId FROM java.lang.String WHERE @displayName LIKE "[""#,
+        ])
+        .output()
+        .unwrap();
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        combined.contains("invalid regex in LIKE"),
+        "bad LIKE regex must surface an actionable error, got:\n{combined}"
+    );
+}

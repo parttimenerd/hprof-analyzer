@@ -2,11 +2,11 @@
 //! ObjectVisitor and accumulates bounded rows during the pass2 2a scan.
 //! HistogramExecutor answers aggregate-only queries from per-class stats.
 
-use crate::query::ObjectVisitor;
 use crate::query::ast::{Attr, CompareOp, Query, SelectItem, Value};
 use crate::query::carry::Carry;
 use crate::query::model::{QueryColumn, QueryResult, QueryValue};
 use crate::query::plan::QueryPlan;
+use crate::query::ObjectVisitor;
 
 /// A cross-phase query whose Phase-1 matches were carried; finalized after
 /// retained sizes exist. `slot` is the query's index in the caller's list so
@@ -125,6 +125,12 @@ pub struct SingleScanExecutor<'a, R: ClassResolver> {
     /// per-object `visit_instance`/`visit_array` hot path — is the performance
     /// contract: a heap scan touches millions of objects but one regex.
     from_regex: Option<regex::Regex>,
+    /// Pre-compiled `LIKE`/`NOT LIKE` RHS regexes, keyed by the raw pattern
+    /// string, compiled ONCE at executor construction (see
+    /// [`compile_like_regexes`]) and reused for every object. Same performance
+    /// contract as `from_regex`: the scan touches millions of objects but each
+    /// LIKE pattern is compiled exactly once. Empty when the query has no LIKE.
+    like_regexes: std::collections::HashMap<String, regex::Regex>,
 }
 
 /// A resolved `IN (<subquery>)` membership set injected before the outer scan.
@@ -149,6 +155,15 @@ fn compile_from_query(query: &Query) -> Option<regex::Regex> {
         .and_then(|spec| compile_from_regex(spec).ok().flatten())
 }
 
+/// Compile the query's LIKE regexes for executor construction. They were already
+/// validated (with an actionable error) at plan time via [`compile_like_regexes`],
+/// so a compile failure here cannot happen for a query that planned successfully;
+/// if it somehow did, we fall back to an empty map (LIKE then never matches)
+/// rather than panicking on the scan hot path.
+fn compile_like_for_query(query: &Query) -> std::collections::HashMap<String, regex::Regex> {
+    compile_like_regexes(query).unwrap_or_default()
+}
+
 impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     pub fn new(query: &'a Query, plan: &'a QueryPlan, resolver: &'a R) -> Self {
         Self {
@@ -161,6 +176,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             carry: None,
             in_sets: Vec::new(),
             from_regex: compile_from_query(query),
+            like_regexes: compile_like_for_query(query),
         }
     }
 
@@ -178,6 +194,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             carry: Some(carry),
             in_sets: Vec::new(),
             from_regex: compile_from_query(query),
+            like_regexes: compile_like_for_query(query),
         }
     }
 
@@ -448,6 +465,15 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
         }
         true
     }
+    /// Look up the pre-compiled LIKE regex for a Compare RHS. Returns `None` for
+    /// non-string RHS (LIKE is string-only) or when no pattern was compiled (a
+    /// query without LIKE). Never compiles on this hot path.
+    fn like_re_for(&self, rhs: &Value) -> Option<&regex::Regex> {
+        match rhs {
+            Value::Str(pat) => self.like_regexes.get(pat),
+            _ => None,
+        }
+    }
     fn eval_pred(
         &self,
         pred: &crate::query::ast::Predicate,
@@ -478,7 +504,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 // not a placeholder. Blob-scalar and class/type LHS attrs ignore
                 // the index, so this is a no-op for them.
                 let lv = self.project_attr(lhs, src_idx, class_id, blob);
-                compare_values(&lv, *op, rhs)
+                compare_values(&lv, *op, rhs, self.like_re_for(rhs))
             }
         }
     }
@@ -535,7 +561,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             P::InSubquery { lhs, .. } => self.eval_in_subquery(lhs, src_idx),
             P::Compare { lhs, op, rhs } => {
                 let lv = self.project_array_attr(lhs, src_idx, class_name, length);
-                compare_values(&lv, *op, rhs)
+                compare_values(&lv, *op, rhs, self.like_re_for(rhs))
             }
         }
     }
@@ -717,7 +743,35 @@ fn read_be(blob: &[u8], off: usize, n: usize) -> Option<u64> {
     Some(v)
 }
 
-fn compare_values(lv: &QueryValue, op: CompareOp, rhs: &Value) -> bool {
+/// Evaluate a WHERE comparison of a projected LHS `QueryValue` against a literal
+/// RHS `Value`. For `LIKE`/`NOT LIKE`, `like_re` MUST be the pre-compiled,
+/// anchored regex for the RHS pattern (compiled ONCE at plan/executor-construction
+/// time via [`compile_like_regexes`] — NEVER on this per-object hot path). LIKE is
+/// meaningful only for a string LHS; a non-string LHS never matches, so `Like` is
+/// `false` and `NotLike` is `true` ("not like" holds for anything that isn't a
+/// matching string). A missing `like_re` for a LIKE op (a wiring bug — the
+/// actionable compile error is raised earlier at plan time) is treated as no
+/// match rather than a panic.
+fn compare_values(
+    lv: &QueryValue,
+    op: CompareOp,
+    rhs: &Value,
+    like_re: Option<&regex::Regex>,
+) -> bool {
+    if matches!(op, CompareOp::Like | CompareOp::NotLike) {
+        let is_like = match (lv, rhs) {
+            (QueryValue::Str(s), Value::Str(_)) => {
+                like_re.map(|re| re.is_match(s)).unwrap_or(false)
+            }
+            // Non-string LHS (or non-string RHS): never "like".
+            _ => false,
+        };
+        return if matches!(op, CompareOp::Like) {
+            is_like
+        } else {
+            !is_like
+        };
+    }
     let ord = match (lv, rhs) {
         (QueryValue::Int(a), Value::Int(b)) => (*a).partial_cmp(b),
         (QueryValue::Int(a), Value::Float(b)) => (*a as f64).partial_cmp(b),
@@ -737,8 +791,58 @@ fn compare_values(lv: &QueryValue, op: CompareOp, rhs: &Value) -> bool {
             CompareOp::Le => o.is_le(),
             CompareOp::Gt => o.is_gt(),
             CompareOp::Ge => o.is_ge(),
+            // Handled above; unreachable here.
+            CompareOp::Like | CompareOp::NotLike => false,
         },
     }
+}
+
+/// Compile every `LIKE`/`NOT LIKE` RHS pattern in the query's WHERE predicate
+/// ONCE, keyed by the raw pattern string, so the per-object scan hot path only
+/// does a hash lookup + `Regex::is_match` (never `Regex::new`). Patterns are
+/// anchored `^(?:<pat>)$` to get Java `Pattern.matches` FULL-match semantics
+/// (mirroring [`compile_from_regex`]). A bad pattern is an ACTIONABLE error here,
+/// surfaced at plan time (see `plan_single`), not a per-row panic or silent false.
+pub fn compile_like_regexes(
+    query: &Query,
+) -> Result<std::collections::HashMap<String, regex::Regex>, crate::query::QueryError> {
+    let mut out = std::collections::HashMap::new();
+    if let Some(pred) = &query.where_ {
+        collect_like_regexes(pred, &mut out)?;
+    }
+    Ok(out)
+}
+
+fn collect_like_regexes(
+    pred: &crate::query::ast::Predicate,
+    out: &mut std::collections::HashMap<String, regex::Regex>,
+) -> Result<(), crate::query::QueryError> {
+    use crate::query::ast::Predicate as P;
+    match pred {
+        P::And(a, b) | P::Or(a, b) => {
+            collect_like_regexes(a, out)?;
+            collect_like_regexes(b, out)?;
+        }
+        P::Not(a) => collect_like_regexes(a, out)?,
+        P::Compare { op, rhs, .. } if matches!(op, CompareOp::Like | CompareOp::NotLike) => {
+            if let Value::Str(pat) = rhs {
+                if !out.contains_key(pat) {
+                    let anchored = format!("^(?:{pat})$");
+                    let re = regex::Regex::new(&anchored).map_err(|e| {
+                        crate::query::QueryError(format!(
+                            "invalid regex in LIKE \"{pat}\": {e} \
+                             (the LIKE right-hand side is matched as a Java-style regex \
+                             with whole-string semantics; fix the pattern)"
+                        ))
+                    })?;
+                    out.insert(pat.clone(), re);
+                }
+            }
+        }
+        // Non-LIKE compares, InstanceOf, and IN-subqueries carry no LIKE pattern.
+        P::Compare { .. } | P::InstanceOf(_) | P::InSubquery { .. } => {}
+    }
+    Ok(())
 }
 
 pub fn column_name(it: &SelectItem) -> String {
@@ -1457,11 +1561,31 @@ mod tests {
     fn compare_type_mismatch_eq_false_ne_true() {
         let lv = QueryValue::Int(1);
         let rhs = crate::query::ast::Value::Str("x".into());
-        assert!(!compare_values(&lv, crate::query::ast::CompareOp::Eq, &rhs));
-        assert!(compare_values(&lv, crate::query::ast::CompareOp::Ne, &rhs));
+        assert!(!compare_values(
+            &lv,
+            crate::query::ast::CompareOp::Eq,
+            &rhs,
+            None
+        ));
+        assert!(compare_values(
+            &lv,
+            crate::query::ast::CompareOp::Ne,
+            &rhs,
+            None
+        ));
         // Other ops on a mismatch are false.
-        assert!(!compare_values(&lv, crate::query::ast::CompareOp::Lt, &rhs));
-        assert!(!compare_values(&lv, crate::query::ast::CompareOp::Gt, &rhs));
+        assert!(!compare_values(
+            &lv,
+            crate::query::ast::CompareOp::Lt,
+            &rhs,
+            None
+        ));
+        assert!(!compare_values(
+            &lv,
+            crate::query::ast::CompareOp::Gt,
+            &rhs,
+            None
+        ));
     }
 
     #[test]
@@ -1470,12 +1594,14 @@ mod tests {
         assert!(compare_values(
             &QueryValue::Null,
             CompareOp::Eq,
-            &Value::Null
+            &Value::Null,
+            None
         ));
         assert!(!compare_values(
             &QueryValue::Null,
             CompareOp::Ne,
-            &Value::Null
+            &Value::Null,
+            None
         ));
     }
 
@@ -1485,17 +1611,20 @@ mod tests {
         assert!(compare_values(
             &QueryValue::Int(2),
             CompareOp::Lt,
-            &Value::Float(2.5)
+            &Value::Float(2.5),
+            None
         ));
         assert!(compare_values(
             &QueryValue::Float(2.5),
             CompareOp::Gt,
-            &Value::Int(2)
+            &Value::Int(2),
+            None
         ));
         assert!(compare_values(
             &QueryValue::Int(3),
             CompareOp::Eq,
-            &Value::Float(3.0)
+            &Value::Float(3.0),
+            None
         ));
     }
 
@@ -1505,12 +1634,14 @@ mod tests {
         assert!(compare_values(
             &QueryValue::Str("abc".into()),
             CompareOp::Lt,
-            &Value::Str("abd".into())
+            &Value::Str("abd".into()),
+            None
         ));
         assert!(compare_values(
             &QueryValue::Str("abc".into()),
             CompareOp::Eq,
-            &Value::Str("abc".into())
+            &Value::Str("abc".into()),
+            None
         ));
     }
 
@@ -1520,13 +1651,160 @@ mod tests {
         assert!(compare_values(
             &QueryValue::Bool(false),
             CompareOp::Lt,
-            &Value::Bool(true)
+            &Value::Bool(true),
+            None
         ));
         assert!(compare_values(
             &QueryValue::Bool(true),
             CompareOp::Eq,
-            &Value::Bool(true)
+            &Value::Bool(true),
+            None
         ));
+    }
+
+    // --- LIKE / NOT LIKE (compare_values) ---
+    // The compiled regex passed in is the anchored `^(?:<pat>)$` form the
+    // executor/plan build once via `compile_like_regexes`; here we build it
+    // inline to exercise `compare_values` in isolation.
+
+    fn like_re(pat: &str) -> regex::Regex {
+        regex::Regex::new(&format!("^(?:{pat})$")).unwrap()
+    }
+
+    #[test]
+    fn like_full_match_true() {
+        use crate::query::ast::{CompareOp, Value};
+        let re = like_re("m.*");
+        assert!(compare_values(
+            &QueryValue::Str("main".into()),
+            CompareOp::Like,
+            &Value::Str("m.*".into()),
+            Some(&re)
+        ));
+    }
+
+    #[test]
+    fn like_non_match_false() {
+        use crate::query::ast::{CompareOp, Value};
+        let re = like_re("m.*");
+        assert!(!compare_values(
+            &QueryValue::Str("worker".into()),
+            CompareOp::Like,
+            &Value::Str("m.*".into()),
+            Some(&re)
+        ));
+    }
+
+    #[test]
+    fn like_is_anchored_full_match_not_substring() {
+        use crate::query::ast::{CompareOp, Value};
+        // "submaine" contains "m.*" as a substring but is NOT a full match of
+        // `^(?:m.*)$`, so LIKE must be false (anchoring proof).
+        let re = like_re("m.*");
+        assert!(!compare_values(
+            &QueryValue::Str("submaine".into()),
+            CompareOp::Like,
+            &Value::Str("m.*".into()),
+            Some(&re)
+        ));
+    }
+
+    #[test]
+    fn not_like_inverts_like() {
+        use crate::query::ast::{CompareOp, Value};
+        let re = like_re("m.*");
+        // "main" matches → NOT LIKE is false.
+        assert!(!compare_values(
+            &QueryValue::Str("main".into()),
+            CompareOp::NotLike,
+            &Value::Str("m.*".into()),
+            Some(&re)
+        ));
+        // "worker" doesn't match → NOT LIKE is true.
+        assert!(compare_values(
+            &QueryValue::Str("worker".into()),
+            CompareOp::NotLike,
+            &Value::Str("m.*".into()),
+            Some(&re)
+        ));
+    }
+
+    #[test]
+    fn like_alternation_anchored() {
+        use crate::query::ast::{CompareOp, Value};
+        let re = like_re("foo|bar");
+        // Both alternatives match fully.
+        assert!(compare_values(
+            &QueryValue::Str("foo".into()),
+            CompareOp::Like,
+            &Value::Str("foo|bar".into()),
+            Some(&re)
+        ));
+        assert!(compare_values(
+            &QueryValue::Str("bar".into()),
+            CompareOp::Like,
+            &Value::Str("foo|bar".into()),
+            Some(&re)
+        ));
+        // "xfooy" is NOT a full match (anchoring wraps the whole alternation).
+        assert!(!compare_values(
+            &QueryValue::Str("xfooy".into()),
+            CompareOp::Like,
+            &Value::Str("foo|bar".into()),
+            Some(&re)
+        ));
+    }
+
+    #[test]
+    fn like_on_numeric_lhs_false_not_like_true() {
+        use crate::query::ast::{CompareOp, Value};
+        // A non-string LHS never matches a regex: LIKE is false, NOT LIKE true.
+        let re = like_re("m.*");
+        assert!(!compare_values(
+            &QueryValue::Int(42),
+            CompareOp::Like,
+            &Value::Str("m.*".into()),
+            Some(&re)
+        ));
+        assert!(compare_values(
+            &QueryValue::Int(42),
+            CompareOp::NotLike,
+            &Value::Str("m.*".into()),
+            Some(&re)
+        ));
+    }
+
+    #[test]
+    fn like_missing_compiled_regex_is_no_match() {
+        use crate::query::ast::{CompareOp, Value};
+        // A wiring bug (no compiled regex) is treated as no-match, never a panic.
+        assert!(!compare_values(
+            &QueryValue::Str("main".into()),
+            CompareOp::Like,
+            &Value::Str("m.*".into()),
+            None
+        ));
+    }
+
+    #[test]
+    fn compile_like_regexes_bad_pattern_is_actionable_error() {
+        let q = crate::query::parse::parse(r#"SELECT * FROM C WHERE name LIKE "[""#).unwrap();
+        let err = compile_like_regexes(&q).expect_err("unclosed class must be an error");
+        let msg = err.to_string();
+        assert!(msg.contains("invalid regex in LIKE"), "got: {msg}");
+        assert!(msg.contains("Java-style regex"), "got: {msg}");
+    }
+
+    #[test]
+    fn compile_like_regexes_collects_each_pattern_once() {
+        let q = crate::query::parse::parse(
+            r#"SELECT * FROM C WHERE name LIKE "a.*" AND other NOT LIKE "a.*""#,
+        )
+        .unwrap();
+        let map = compile_like_regexes(&q).unwrap();
+        // Two LIKE terms share one RHS pattern → compiled exactly once.
+        assert_eq!(map.len(), 1);
+        assert!(map.contains_key("a.*"));
     }
 
     // --- WHERE combinators ---

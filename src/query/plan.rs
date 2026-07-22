@@ -2,10 +2,10 @@
 //! each flag arms exactly one piece of machinery. Deferred constructs are
 //! rejected here (not in the parser) with a message naming the construct.
 
-use crate::query::QueryError;
 use crate::query::ast::{Attr, Predicate, Query, RefRole, SelectItem, Value};
 use crate::query::carry::CarryLayout;
 use crate::query::runflags::EdgeDir;
+use crate::query::QueryError;
 
 /// Default cap on late-phase emitted rows (dominator children) and retained-set
 /// closures, mirroring the scan-time `DEFAULT_CARRY_CAP`. Bounds late output so
@@ -265,6 +265,12 @@ fn plan_single(q: &Query) -> Result<QueryPlan, QueryError> {
     if let Some(spec) = q.from.class_spec() {
         crate::query::execute::compile_from_regex(spec)?;
     }
+
+    // Validate every `LIKE`/`NOT LIKE` RHS regex once, at plan time, so a bad
+    // pattern is an ACTIONABLE error here rather than a silent no-match (or
+    // per-row panic) during the scan. The compiled map is discarded; the executor
+    // recompiles the (now known-good) patterns once per query, never per object.
+    crate::query::execute::compile_like_regexes(q)?;
 
     // Plan any subqueries. A FROM-subquery is semi-joined by object identity, so
     // its inner must project whole objects; an IN-subquery is matched by address,

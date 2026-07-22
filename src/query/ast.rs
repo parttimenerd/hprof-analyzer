@@ -198,6 +198,12 @@ pub enum CompareOp {
     Le,
     Gt,
     Ge,
+    /// `LIKE` — RHS is a Java-style regex matched with FULL/ANCHORED semantics
+    /// (like `java.util.regex.Pattern.matches`, i.e. the whole string must
+    /// match), NOT a SQL glob. Meaningful only for string LHS/RHS.
+    Like,
+    /// `NOT LIKE` — negation of [`CompareOp::Like`].
+    NotLike,
 }
 
 #[derive(Debug, Clone, PartialEq)]

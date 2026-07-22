@@ -537,6 +537,8 @@ fn cmp_i64(l: i64, op: CompareOp, r: i64) -> bool {
         CompareOp::Eq => l == r, CompareOp::Ne => l != r,
         CompareOp::Lt => l < r, CompareOp::Le => l <= r,
         CompareOp::Gt => l > r, CompareOp::Ge => l >= r,
+        // LIKE/NOT LIKE are string-only; a numeric LHS never matches a regex.
+        CompareOp::Like => false, CompareOp::NotLike => true,
     }
 }
 fn cmp_f64(l: f64, op: CompareOp, r: f64) -> bool {
@@ -544,6 +546,8 @@ fn cmp_f64(l: f64, op: CompareOp, r: f64) -> bool {
         CompareOp::Eq => l == r, CompareOp::Ne => l != r,
         CompareOp::Lt => l < r, CompareOp::Le => l <= r,
         CompareOp::Gt => l > r, CompareOp::Ge => l >= r,
+        // LIKE/NOT LIKE are string-only; a numeric LHS never matches a regex.
+        CompareOp::Like => false, CompareOp::NotLike => true,
     }
 }
 
@@ -597,6 +601,9 @@ fn cmp_u64(lv: u64, op: CompareOp, rhs: &Value) -> bool {
         CompareOp::Eq => l == rv, CompareOp::Ne => l != rv,
         CompareOp::Lt => l < rv, CompareOp::Le => l <= rv,
         CompareOp::Gt => l > rv, CompareOp::Ge => l >= rv,
+        // LIKE/NOT LIKE are string-only; a numeric retained-size LHS never
+        // matches a regex, so LIKE is false and NOT LIKE is true.
+        CompareOp::Like => false, CompareOp::NotLike => true,
     }
 }
 

@@ -13,11 +13,11 @@ use chumsky::input::{Stream, ValueInput};
 use chumsky::prelude::*;
 use logos::Logos;
 
-use crate::query::QueryError;
 use crate::query::ast::{
     AggFunc, Attr, ClassSpec, CompareOp, FromSource, OrderBy, PathOperand, Predicate, Query,
     RefRole, SelectItem, SortDir, Value,
 };
+use crate::query::QueryError;
 
 /// OQL token kinds, lexed directly by logos.
 ///   - identifiers may contain `.`, `$`, and a trailing/embedded `*` glob
@@ -236,15 +236,26 @@ where
     }
     .labelled("literal value");
 
-    let op = select! {
+    // Symbolic comparison operators tokenized by logos.
+    let sym_op = select! {
         Token::Eq => CompareOp::Eq,
         Token::Ne => CompareOp::Ne,
         Token::Lt => CompareOp::Lt,
         Token::Le => CompareOp::Le,
         Token::Gt => CompareOp::Gt,
         Token::Ge => CompareOp::Ge,
-    }
-    .labelled("comparison operator");
+    };
+    // Word operators `LIKE` and `NOT LIKE` (Java-regex full-match; see
+    // `compare_values`). `NOT LIKE` is a two-token operator sequence that sits in
+    // OPERATOR position (right after the attribute LHS), which is structurally
+    // distinct from prefix `NOT` wrapping a whole predicate — prefix `NOT` is
+    // handled by the `not` combinator before any attribute is seen, so the two
+    // never collide. Try `NOT LIKE` before bare `LIKE`.
+    let not_like = ident_ci("NOT")
+        .ignore_then(ident_ci("LIKE"))
+        .to(CompareOp::NotLike);
+    let like = ident_ci("LIKE").to(CompareOp::Like);
+    let op = sym_op.or(not_like).or(like).labelled("comparison operator");
 
     // Optional `AS RETAINED SET` select modifier. `AS RETAINED` without a
     // trailing `SET` is a hard, actionable error rather than a silent miss.
@@ -561,6 +572,7 @@ pub const RESERVED: &[&str] = &[
     "AND",
     "OR",
     "NOT",
+    "LIKE",
     "INSTANCEOF",
     "IN",
     "ORDER",
@@ -2104,6 +2116,81 @@ mod tests {
         assert_eq!(
             q.order_by.map(|o| (o.key, o.dir)),
             Some((Attr::RetainedHeapSize, SortDir::Desc))
+        );
+    }
+
+    #[test]
+    fn parse_like_operator() {
+        let q = parse(r#"SELECT * FROM C WHERE name LIKE "m.*""#).unwrap();
+        assert_eq!(
+            q.where_.as_ref().unwrap(),
+            &cmp(field("name"), CompareOp::Like, Value::Str("m.*".into()))
+        );
+    }
+
+    #[test]
+    fn parse_like_case_insensitive_keyword() {
+        let q = parse(r#"SELECT * FROM C WHERE name like "m.*""#).unwrap();
+        assert_eq!(
+            q.where_.as_ref().unwrap(),
+            &cmp(field("name"), CompareOp::Like, Value::Str("m.*".into()))
+        );
+    }
+
+    #[test]
+    fn parse_not_like_operator() {
+        let q = parse(r#"SELECT * FROM C WHERE name NOT LIKE "m.*""#).unwrap();
+        assert_eq!(
+            q.where_.as_ref().unwrap(),
+            &cmp(field("name"), CompareOp::NotLike, Value::Str("m.*".into()))
+        );
+    }
+
+    #[test]
+    fn parse_not_like_case_insensitive_keyword() {
+        let q = parse(r#"SELECT * FROM C WHERE name not like "m.*""#).unwrap();
+        assert_eq!(
+            q.where_.as_ref().unwrap(),
+            &cmp(field("name"), CompareOp::NotLike, Value::Str("m.*".into()))
+        );
+    }
+
+    // CRITICAL DISAMBIGUATION: prefix `NOT` that wraps a whole predicate must
+    // still parse as `Not(Compare{Eq})`, NOT be confused with the `NOT LIKE`
+    // operator (which sits in operator position after an attribute LHS).
+    #[test]
+    fn parse_prefix_not_still_wraps_predicate() {
+        let q = parse(r#"SELECT * FROM C WHERE NOT name = "x""#).unwrap();
+        assert_eq!(
+            q.where_.as_ref().unwrap(),
+            &not(cmp(field("name"), CompareOp::Eq, Value::Str("x".into())))
+        );
+    }
+
+    // Prefix NOT wrapping a LIKE compare — `NOT (name LIKE "x")`, distinct from
+    // `name NOT LIKE "x"`. Both are valid but structurally different.
+    #[test]
+    fn parse_prefix_not_wrapping_like() {
+        let q = parse(r#"SELECT * FROM C WHERE NOT name LIKE "m.*""#).unwrap();
+        assert_eq!(
+            q.where_.as_ref().unwrap(),
+            &not(cmp(
+                field("name"),
+                CompareOp::Like,
+                Value::Str("m.*".into())
+            ))
+        );
+    }
+
+    #[test]
+    fn parse_like_combines_with_and() {
+        let q = parse(r#"SELECT * FROM C WHERE name LIKE "m.*" AND id = 1"#).unwrap();
+        assert_eq!(
+            q.where_.as_ref().unwrap(),
+            &and(
+                cmp(field("name"), CompareOp::Like, Value::Str("m.*".into())),
+                cmp(field("id"), CompareOp::Eq, Value::Int(1))
+            )
         );
     }
 
