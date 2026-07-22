@@ -58,6 +58,7 @@ pub fn run_histogram(q: &Query, plan: &QueryPlan, classes: &[ClassSummary]) -> Q
         truncated: false,
         error: None,
         note: None,
+        viz: None,
     }
 }
 

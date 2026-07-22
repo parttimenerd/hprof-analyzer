@@ -315,6 +315,7 @@ pub fn resume_without_late_ctx(state: QueryExecState) -> Vec<QueryResult> {
                 truncated: false,
                 error: Some(error.to_string()),
                 note: None,
+                viz: None,
             },
         ));
     }
@@ -394,6 +395,7 @@ fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
                     truncated: false,
                     error: Some(format!("stage op {other:?} not supported in this phase")),
                     note: None,
+                    viz: None,
                 };
             }
         }
@@ -448,6 +450,7 @@ fn dominator_rows(
         truncated,
         error: None,
         note: None,
+        viz: None,
     }
 }
 
@@ -540,6 +543,7 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
         truncated,
         error: None,
         note,
+        viz: None,
     }
 }
 
@@ -602,6 +606,7 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
             truncated,
             error: None,
             note: None,
+            viz: None,
         };
     }
 
@@ -633,6 +638,7 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
         truncated,
         error: None,
         note: None,
+        viz: None,
     }
 }
 
@@ -903,6 +909,7 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
         truncated,
         error: None,
         note: None,
+        viz: None,
     }
 }
 
@@ -1134,6 +1141,7 @@ mod tests {
                 truncated: false,
                 error: None,
                 note: None,
+                viz: None,
             },
         );
         st.push_cross_phase(0, "q_ret".to_string(), plan, carry);
