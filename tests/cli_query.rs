@@ -1971,3 +1971,48 @@ fn as_retained_set_does_not_produce_retained_column() {
         "output must not have a column named RETAINED:\n{stdout}"
     );
 }
+
+/// SELECT OBJECTS is a no-op: rows from `SELECT OBJECTS s … LIMIT 3` must be
+/// byte-identical to `SELECT s … LIMIT 3` (ignoring the echoed query header).
+#[test]
+fn select_objects_noop_rows_identical_to_plain_select() {
+    let Some(hprof) = philosophers() else { return };
+    let with_objects = query_stdout(
+        &hprof,
+        "SELECT OBJECTS s FROM java.lang.String s LIMIT 3",
+    );
+    let without_objects = query_stdout(
+        &hprof,
+        "SELECT s FROM java.lang.String s LIMIT 3",
+    );
+    // Skip the echoed query-text line — it differs only by the OBJECTS keyword.
+    // Data rows (column headers, values, row-count line) must match.
+    let data_rows = |s: &str| -> Vec<String> {
+        s.lines()
+            .filter(|l| !l.trim_start().starts_with("SELECT") && !l.starts_with("=="))
+            .map(|l| l.to_owned())
+            .collect()
+    };
+    assert_eq!(
+        data_rows(&with_objects),
+        data_rows(&without_objects),
+        "SELECT OBJECTS must produce identical data rows to SELECT"
+    );
+}
+
+/// Leading AS RETAINED SET parses and runs to completion without a parse error.
+#[test]
+fn leading_as_retained_set_end_to_end() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query", "SELECT AS RETAINED SET s FROM java.lang.String s LIMIT 1"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("OQL parse error"),
+        "leading AS RETAINED SET must not cause a parse error:\n{stderr}"
+    );
+}
