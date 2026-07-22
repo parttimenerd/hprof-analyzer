@@ -54,6 +54,27 @@ fn classify(before: &str, frag: &str) -> Ctx {
     if frag.starts_with('@') {
         return Ctx::Attr;
     }
+    // A clause keyword being typed as the fragment must complete as a keyword,
+    // not be mistaken for an operand. Scoped to structural keywords that follow a
+    // SELECT list / completed FROM class (not predicate connectives) so attr-position
+    // single letters (e.g. `SELECT c`) are not hijacked; the last completed word must
+    // not already put us in an operand position.
+    const CLAUSE_KEYWORDS: &[&str] = &[
+        "SELECT", "DISTINCT", "FROM", "WHERE", "UNION", "ORDER", "LIMIT",
+    ];
+    let operand_last = last.is_some_and(|w| {
+        ["FROM", "INSTANCEOF", "WHERE", "AND", "OR", "NOT", "BY"]
+            .iter()
+            .any(|kw| eq(w, kw))
+    });
+    if !frag.is_empty()
+        && !operand_last
+        && CLAUSE_KEYWORDS
+            .iter()
+            .any(|kw| kw.len() >= frag.len() && kw[..frag.len()].eq_ignore_ascii_case(frag))
+    {
+        return Ctx::Keyword;
+    }
     let seen = |kw: &str| words.iter().any(|w| eq(w, kw));
     // SELECT list: SELECT seen but FROM not yet reached.
     if seen("SELECT") && !seen("FROM") {
@@ -627,6 +648,35 @@ mod tests {
         );
     }
 
+    #[test]
+    fn classify_clause_keyword_typed_as_fragment_is_keyword() {
+        // Bug: `SELECT * FROM<Tab>` (FROM in the fragment, no trailing space) must
+        // classify as Keyword so FROM completes — not Attr (SELECT-list) or ClassName.
+        assert_eq!(classify("SELECT * ", "FROM"), Ctx::Keyword);
+    }
+
+    #[test]
+    fn classify_from_typed_still_class_after_space() {
+        // Regression: once FROM is completed (trailing space, empty frag) we are in
+        // ClassName position again.
+        assert_eq!(classify("SELECT * FROM ", ""), Ctx::ClassName);
+    }
+
+    #[test]
+    fn classify_count_not_hijacked_as_keyword() {
+        // Regression: COUNT is not a clause keyword prefix, so it stays attr position.
+        assert_eq!(classify("SELECT COUNT", "COUNT"), Ctx::Attr);
+    }
+
+    #[test]
+    fn classify_instanceof_typed_as_fragment_is_not_class_name() {
+        // Typing INSTANCEOF as the fragment must not misfire to ClassName; Keyword is
+        // preferred so INSTANCEOF completes.
+        let ctx = classify("SELECT * FROM X WHERE @objectId INSTANCEOF", "INSTANCEOF");
+        assert_ne!(ctx, Ctx::ClassName, "got {ctx:?}");
+        assert_eq!(ctx, Ctx::Keyword);
+    }
+
     // ---------- OqlCompleter::complete() ----------
 
     #[test]
@@ -686,6 +736,15 @@ mod tests {
     #[test]
     fn editor_builds() {
         let _ = build_editor(vec!["java.lang.String".to_string()]);
+    }
+
+    /// Completer behavior: `SELECT * FROM<Tab>` (FROM being typed as the fragment)
+    /// must offer the FROM keyword itself, proving the classifier fix flows through.
+    #[test]
+    fn from_typed_as_fragment_completes_keyword() {
+        let mut c = completer(&[]);
+        let v = values(&c.complete("SELECT * FROM", 13));
+        assert!(v.contains(&"FROM".to_string()), "expected FROM in {v:?}");
     }
 
     // ---------- Task 34: !plan --raw and optimizer wiring tests ----------
