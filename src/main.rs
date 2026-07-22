@@ -159,8 +159,13 @@ use clap_complete::Shell;
         hprof-analyzer heap.hprof report.json             # JSON (format from .json)\n  \
         hprof-analyzer heap.hprof -f md-graphs            # Markdown + ASCII graphs\n  \
         hprof-analyzer report.json report.html            # re-render saved JSON to HTML\n  \
+        hprof-analyzer query heap.hprof --query 'SELECT COUNT(*) FROM java.lang.String'  # ad-hoc OQL\n  \
+        hprof-analyzer query heap.hprof --repl            # interactive OQL shell\n  \
+        hprof-analyzer heap.hprof out.html --query-file q.oql       # queries folded into a report\n  \
         hprof-analyzer compare reports r1.json r2.json [r3.json …]  # cross-dump growth diff\n  \
         hprof-analyzer completions zsh > _hprof-analyzer  # shell completions\n\n\
+        OQL grammar, the -- @viz chart directive, and the --query= equals-form\n  \
+        gotcha are documented in docs/OQL.md.\n\n\
         Install zsh completions:\n  \
         hprof-analyzer completions zsh > \"${fpath[1]}/_hprof-analyzer\"",
     args_conflicts_with_subcommands = true
@@ -225,11 +230,15 @@ struct Cli {
     collection_config: Option<std::path::PathBuf>,
 
     /// Run an OQL query against the heap and include results in the report.
-    /// May be repeated. Example: --query "SELECT * FROM java.lang.String"
+    /// May be repeated. Example: --query "SELECT * FROM java.lang.String".
+    /// To embed a `-- @viz` chart directive, use the attached equals form so
+    /// the leading `--` is not read as a flag: --query="-- @viz histogram
+    /// <newline> SELECT ...". See docs/OQL.md for the full grammar.
     #[arg(long = "query", value_name = "OQL")]
     query: Vec<String>,
 
-    /// Read one OQL query per non-empty line from a file (lines starting with `#` are comments).
+    /// Read one OQL query per non-empty line from a file (lines starting with
+    /// `#` are comments; a `-- @viz` line attaches to the next query).
     #[arg(long = "query-file", value_name = "PATH", value_hint = ValueHint::FilePath)]
     query_file: Option<String>,
 
@@ -258,14 +267,19 @@ enum Cmd {
         cmd: DevCmd,
     },
     /// Run one or more OQL queries against a heap dump and print the results.
+    /// Fast query-only path (no full report): retained-size, dominator, and
+    /// reference-graph attributes (@retainedHeapSize, dominators(x), @inbounds,
+    /// path(a,b), ...) need the full report instead. See docs/OQL.md.
     Query {
         /// Path to the .hprof (or .hprof.zip) dump.
         #[arg(value_hint = ValueHint::FilePath)]
         input: String,
-        /// OQL query text (may be repeated).
+        /// OQL query text (may be repeated). For a `-- @viz` directive use the
+        /// attached equals form: --query="-- @viz histogram\nSELECT ...".
         #[arg(long = "query", value_name = "OQL")]
         query: Vec<String>,
-        /// Read queries from a file, one per line (`#` comments allowed).
+        /// Read queries from a file, one per line (`#` comments allowed; a
+        /// `-- @viz` line attaches to the next query).
         #[arg(long = "query-file", value_name = "PATH", value_hint = ValueHint::FilePath)]
         query_file: Option<String>,
         /// Max hops for OQL `path(a, b)` bounded walks (must be > 0).
