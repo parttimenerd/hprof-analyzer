@@ -3,7 +3,7 @@
 //! HistogramExecutor answers aggregate-only queries from per-class stats.
 
 use crate::query::ObjectVisitor;
-use crate::query::ast::{Attr, CompareOp, Query, SelectItem, Value};
+use crate::query::ast::{ArithOp, Attr, CompareOp, Expr, Query, SelectItem, UnaryOp, Value};
 use crate::query::carry::Carry;
 use crate::query::model::{QueryColumn, QueryResult, QueryValue};
 use crate::query::plan::QueryPlan;
@@ -324,7 +324,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             SelectItem::Path { .. } => QueryValue::Null,
             // toString(s) is cross-phase: resolved post-scan by the stage runner.
             SelectItem::ToString(_) => QueryValue::Null,
-            SelectItem::Expr(_) => unreachable!("Expr select item reached before arithmetic wiring"),
+            SelectItem::Expr(e) => self.eval_expr(e, src_idx, class_id, blob),
         }
     }
     fn project_attr(&self, a: &Attr, src_idx: usize, class_id: u64, blob: &[u8]) -> QueryValue {
@@ -390,7 +390,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             SelectItem::Path { .. } => QueryValue::Null,
             // toString(s) is cross-phase: resolved post-scan by the stage runner.
             SelectItem::ToString(_) => QueryValue::Null,
-            SelectItem::Expr(_) => unreachable!("Expr select item reached before arithmetic wiring"),
+            SelectItem::Expr(e) => self.eval_expr_array(e, src_idx, class_name, length),
         }
     }
     fn project_array_attr(
@@ -426,6 +426,38 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             Attr::RefPath { .. } => QueryValue::Null,
             // toString(s) is cross-phase: resolved post-scan by the stage runner.
             Attr::ToString(_) => QueryValue::Null,
+        }
+    }
+    /// Recursively evaluate an arithmetic `Expr` for an instance object. Leaf
+    /// `Expr::Attr` delegates to `project_attr`; `Expr::Lit` converts via
+    /// `value_to_qv`; `Binary`/`Unary` apply Java numeric semantics via `arith`/
+    /// `unary`. Undefined arithmetic (Null/Str/Bool operands, int div-by-zero)
+    /// yields `QueryValue::Null` rather than panicking — a row must never crash
+    /// the analyzer.
+    fn eval_expr(&self, e: &Expr, src_idx: usize, class_id: u64, blob: &[u8]) -> QueryValue {
+        match e {
+            Expr::Attr(a) => self.project_attr(a, src_idx, class_id, blob),
+            Expr::Lit(v) => value_to_qv(v),
+            Expr::Binary { op, lhs, rhs } => {
+                let l = self.eval_expr(lhs, src_idx, class_id, blob);
+                let r = self.eval_expr(rhs, src_idx, class_id, blob);
+                arith(&l, *op, &r)
+            }
+            Expr::Unary { op, arg } => unary(*op, &self.eval_expr(arg, src_idx, class_id, blob)),
+        }
+    }
+    /// Recursively evaluate an arithmetic `Expr` for an array object. Same
+    /// semantics as `eval_expr`; delegates attr leaves to `project_array_attr`.
+    fn eval_expr_array(&self, e: &Expr, src_idx: usize, class_name: &str, length: u32) -> QueryValue {
+        match e {
+            Expr::Attr(a) => self.project_array_attr(a, src_idx, class_name, length),
+            Expr::Lit(v) => value_to_qv(v),
+            Expr::Binary { op, lhs, rhs } => {
+                let l = self.eval_expr_array(lhs, src_idx, class_name, length);
+                let r = self.eval_expr_array(rhs, src_idx, class_name, length);
+                arith(&l, *op, &r)
+            }
+            Expr::Unary { op, arg } => unary(*op, &self.eval_expr_array(arg, src_idx, class_name, length)),
         }
     }
     fn decode_field(&self, class_id: u64, name: &str, blob: &[u8]) -> QueryValue {
@@ -520,10 +552,13 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 // (@objectAddress/@objectId) compare against the actual object,
                 // not a placeholder. Blob-scalar and class/type LHS attrs ignore
                 // the index, so this is a no-op for them.
-                let lhs_attr = lhs.as_attr().expect("Compare lhs is a single attr before arithmetic wiring");
-                let rhs_val = rhs.as_lit().expect("Compare rhs is a single literal before arithmetic wiring");
-                let lv = self.project_attr(lhs_attr, src_idx, class_id, blob);
-                compare_values(&lv, *op, rhs_val, self.like_re_for(rhs_val))
+                let lv = self.eval_expr(lhs, src_idx, class_id, blob);
+                let rv = self.eval_expr(rhs, src_idx, class_id, blob);
+                // LIKE regex is keyed by the literal RHS string pattern; only a
+                // string-literal RHS has one (arithmetic RHS → None, which is
+                // correct: LIKE RHS is validated as string literal at parse time).
+                let like_re = rhs.as_lit().and_then(|v| self.like_re_for(v));
+                compare_values(&lv, *op, &rv, like_re)
             }
         }
     }
@@ -579,10 +614,10 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             P::InstanceOf(cname) => class_name_matches(class_name, cname),
             P::InSubquery { lhs, .. } => self.eval_in_subquery(lhs, src_idx),
             P::Compare { lhs, op, rhs } => {
-                let lhs_attr = lhs.as_attr().expect("Compare lhs is a single attr before arithmetic wiring");
-                let rhs_val = rhs.as_lit().expect("Compare rhs is a single literal before arithmetic wiring");
-                let lv = self.project_array_attr(lhs_attr, src_idx, class_name, length);
-                compare_values(&lv, *op, rhs_val, self.like_re_for(rhs_val))
+                let lv = self.eval_expr_array(lhs, src_idx, class_name, length);
+                let rv = self.eval_expr_array(rhs, src_idx, class_name, length);
+                let like_re = rhs.as_lit().and_then(|v| self.like_re_for(v));
+                compare_values(&lv, *op, &rv, like_re)
             }
         }
     }
@@ -757,24 +792,103 @@ fn read_be(blob: &[u8], off: usize, n: usize) -> Option<u64> {
     Some(v)
 }
 
-/// Evaluate a WHERE comparison of a projected LHS `QueryValue` against a literal
-/// RHS `Value`. For `LIKE`/`NOT LIKE`, `like_re` MUST be the pre-compiled,
-/// anchored regex for the RHS pattern (compiled ONCE at plan/executor-construction
-/// time via [`compile_like_regexes`] — NEVER on this per-object hot path). LIKE is
-/// meaningful only for a string LHS; a non-string LHS never matches, so `Like` is
-/// `false` and `NotLike` is `true` ("not like" holds for anything that isn't a
-/// matching string). A missing `like_re` for a LIKE op (a wiring bug — the
-/// actionable compile error is raised earlier at plan time) is treated as no
-/// match rather than a panic.
+/// Convert a literal AST `Value` to a `QueryValue`.
+fn value_to_qv(v: &Value) -> QueryValue {
+    match v {
+        Value::Int(n) => QueryValue::Int(*n),
+        Value::Float(f) => QueryValue::Float(*f),
+        Value::Str(s) => QueryValue::Str(s.clone()),
+        Value::Bool(b) => QueryValue::Bool(*b),
+        Value::Null => QueryValue::Null,
+    }
+}
+
+/// Apply a binary arithmetic operator with Java numeric semantics.
+///
+/// - Both `Int`: result is `Int`, using wrapping arithmetic (Java `long` overflow
+///   wraps). Division by zero → `QueryValue::Null` (safe row-level sentinel; Java
+///   would throw `ArithmeticException` which must not crash the analyzer).
+///   `i64::MIN / -1` also uses `wrapping_div` so it wraps to `i64::MIN`.
+/// - Any `Float` operand: both sides promoted to `f64`, result is `Float`.
+///   Float division by zero → IEEE 754 `±inf`/`NaN` (Java parity).
+/// - Any `Null`/`Str`/`Bool`/`ObjRef` operand → `QueryValue::Null` (arithmetic
+///   undefined on those types; no coercion).
+fn arith(lhs: &QueryValue, op: ArithOp, rhs: &QueryValue) -> QueryValue {
+    match (lhs, rhs) {
+        (QueryValue::Int(a), QueryValue::Int(b)) => match op {
+            ArithOp::Add => QueryValue::Int(a.wrapping_add(*b)),
+            ArithOp::Sub => QueryValue::Int(a.wrapping_sub(*b)),
+            ArithOp::Mul => QueryValue::Int(a.wrapping_mul(*b)),
+            ArithOp::Div => {
+                if *b == 0 {
+                    QueryValue::Null
+                } else {
+                    QueryValue::Int(a.wrapping_div(*b))
+                }
+            }
+        },
+        // Any Float operand → promote both to f64.
+        (QueryValue::Float(a), QueryValue::Float(b)) => match op {
+            ArithOp::Add => QueryValue::Float(a + b),
+            ArithOp::Sub => QueryValue::Float(a - b),
+            ArithOp::Mul => QueryValue::Float(a * b),
+            ArithOp::Div => QueryValue::Float(a / b), // IEEE 754: ÷0 → ±inf/NaN
+        },
+        (QueryValue::Int(a), QueryValue::Float(b)) => {
+            let a = *a as f64;
+            match op {
+                ArithOp::Add => QueryValue::Float(a + b),
+                ArithOp::Sub => QueryValue::Float(a - b),
+                ArithOp::Mul => QueryValue::Float(a * b),
+                ArithOp::Div => QueryValue::Float(a / b),
+            }
+        }
+        (QueryValue::Float(a), QueryValue::Int(b)) => {
+            let b = *b as f64;
+            match op {
+                ArithOp::Add => QueryValue::Float(a + b),
+                ArithOp::Sub => QueryValue::Float(a - b),
+                ArithOp::Mul => QueryValue::Float(a * b),
+                ArithOp::Div => QueryValue::Float(a / b),
+            }
+        }
+        // Null/Str/Bool/ObjRef operands: arithmetic is undefined.
+        _ => QueryValue::Null,
+    }
+}
+
+/// Apply a unary operator. `Pos` is identity; `Neg` negates numeric values with
+/// wrapping semantics (`i64::MIN.wrapping_neg() == i64::MIN`). Non-numeric
+/// values under `Neg` yield `QueryValue::Null`.
+fn unary(op: UnaryOp, v: &QueryValue) -> QueryValue {
+    match op {
+        UnaryOp::Pos => v.clone(),
+        UnaryOp::Neg => match v {
+            QueryValue::Int(n) => QueryValue::Int(n.wrapping_neg()),
+            QueryValue::Float(f) => QueryValue::Float(-f),
+            _ => QueryValue::Null,
+        },
+    }
+}
+
+/// Evaluate a WHERE comparison of a projected LHS `QueryValue` against an
+/// evaluated RHS `QueryValue`. For `LIKE`/`NOT LIKE`, `like_re` MUST be the
+/// pre-compiled, anchored regex for the RHS pattern (compiled ONCE at
+/// plan/executor-construction time via [`compile_like_regexes`] — NEVER on this
+/// per-object hot path). LIKE is meaningful only for a string LHS; a non-string
+/// LHS never matches, so `Like` is `false` and `NotLike` is `true` ("not like"
+/// holds for anything that isn't a matching string). A missing `like_re` for a
+/// LIKE op (a wiring bug — the actionable compile error is raised earlier at plan
+/// time) is treated as no match rather than a panic.
 fn compare_values(
     lv: &QueryValue,
     op: CompareOp,
-    rhs: &Value,
+    rv: &QueryValue,
     like_re: Option<&regex::Regex>,
 ) -> bool {
     if matches!(op, CompareOp::Like | CompareOp::NotLike) {
-        let is_like = match (lv, rhs) {
-            (QueryValue::Str(s), Value::Str(_)) => {
+        let is_like = match (lv, rv) {
+            (QueryValue::Str(s), QueryValue::Str(_)) => {
                 like_re.map(|re| re.is_match(s)).unwrap_or(false)
             }
             // Non-string LHS (or non-string RHS): never "like".
@@ -786,14 +900,14 @@ fn compare_values(
             !is_like
         };
     }
-    let ord = match (lv, rhs) {
-        (QueryValue::Int(a), Value::Int(b)) => (*a).partial_cmp(b),
-        (QueryValue::Int(a), Value::Float(b)) => (*a as f64).partial_cmp(b),
-        (QueryValue::Float(a), Value::Int(b)) => a.partial_cmp(&(*b as f64)),
-        (QueryValue::Float(a), Value::Float(b)) => a.partial_cmp(b),
-        (QueryValue::Str(a), Value::Str(b)) => Some(a.as_str().cmp(b.as_str())),
-        (QueryValue::Bool(a), Value::Bool(b)) => Some(a.cmp(b)),
-        (QueryValue::Null, Value::Null) => Some(std::cmp::Ordering::Equal),
+    let ord = match (lv, rv) {
+        (QueryValue::Int(a), QueryValue::Int(b)) => (*a).partial_cmp(b),
+        (QueryValue::Int(a), QueryValue::Float(b)) => (*a as f64).partial_cmp(b),
+        (QueryValue::Float(a), QueryValue::Int(b)) => a.partial_cmp(&(*b as f64)),
+        (QueryValue::Float(a), QueryValue::Float(b)) => a.partial_cmp(b),
+        (QueryValue::Str(a), QueryValue::Str(b)) => Some(a.as_str().cmp(b.as_str())),
+        (QueryValue::Bool(a), QueryValue::Bool(b)) => Some(a.cmp(b)),
+        (QueryValue::Null, QueryValue::Null) => Some(std::cmp::Ordering::Equal),
         _ => None,
     };
     match ord {
@@ -877,7 +991,7 @@ pub fn column_name(it: &SelectItem) -> String {
             path_operand_name(to)
         ),
         SelectItem::ToString(a) => format!("toString({a})"),
-        SelectItem::Expr(_) => unreachable!("Expr select item reached before arithmetic wiring"),
+        SelectItem::Expr(e) => expr_name(e),
     }
 }
 
@@ -904,6 +1018,46 @@ fn path_operand_name(p: &crate::query::ast::PathOperand) -> String {
     use crate::query::ast::PathOperand;
     match p {
         PathOperand::Alias(s) | PathOperand::Class(s) => s.clone(),
+    }
+}
+
+/// Render an `Expr` as a readable default column name, e.g. `@usedHeapSize * 2`.
+/// `Binary` children that are themselves `Binary` are parenthesized so the output
+/// reads unambiguously. `Unary::Neg` renders as `-<operand>`.
+pub fn expr_name(e: &Expr) -> String {
+    match e {
+        Expr::Attr(a) => attr_name(a),
+        Expr::Lit(v) => match v {
+            Value::Int(n) => n.to_string(),
+            Value::Float(f) => f.to_string(),
+            Value::Str(s) => format!("\"{s}\""),
+            Value::Bool(b) => b.to_string(),
+            Value::Null => "null".to_string(),
+        },
+        Expr::Binary { op, lhs, rhs } => {
+            let op_str = match op {
+                ArithOp::Add => " + ",
+                ArithOp::Sub => " - ",
+                ArithOp::Mul => " * ",
+                ArithOp::Div => " / ",
+            };
+            // Wrap Binary children in parens so nested expressions read correctly.
+            let l = if matches!(lhs.as_ref(), Expr::Binary { .. }) {
+                format!("({})", expr_name(lhs))
+            } else {
+                expr_name(lhs)
+            };
+            let r = if matches!(rhs.as_ref(), Expr::Binary { .. }) {
+                format!("({})", expr_name(rhs))
+            } else {
+                expr_name(rhs)
+            };
+            format!("{l}{op_str}{r}")
+        }
+        Expr::Unary { op, arg } => match op {
+            UnaryOp::Neg => format!("-{}", expr_name(arg)),
+            UnaryOp::Pos => expr_name(arg),
+        },
     }
 }
 
@@ -936,7 +1090,6 @@ mod tests {
     use super::*;
     use crate::query::model::QueryValue;
     use crate::query::parse::parse;
-    use crate::query::plan::plan_query;
 
     fn schema(pairs: &[(u64, &str)]) -> TestSchema {
         TestSchema {
@@ -1604,7 +1757,7 @@ mod tests {
     #[test]
     fn compare_type_mismatch_eq_false_ne_true() {
         let lv = QueryValue::Int(1);
-        let rhs = crate::query::ast::Value::Str("x".into());
+        let rhs = QueryValue::Str("x".into());
         assert!(!compare_values(
             &lv,
             crate::query::ast::CompareOp::Eq,
@@ -1634,74 +1787,74 @@ mod tests {
 
     #[test]
     fn compare_null_equals_null() {
-        use crate::query::ast::{CompareOp, Value};
+        use crate::query::ast::CompareOp;
         assert!(compare_values(
             &QueryValue::Null,
             CompareOp::Eq,
-            &Value::Null,
+            &QueryValue::Null,
             None
         ));
         assert!(!compare_values(
             &QueryValue::Null,
             CompareOp::Ne,
-            &Value::Null,
+            &QueryValue::Null,
             None
         ));
     }
 
     #[test]
     fn compare_int_vs_float_cross() {
-        use crate::query::ast::{CompareOp, Value};
+        use crate::query::ast::CompareOp;
         assert!(compare_values(
             &QueryValue::Int(2),
             CompareOp::Lt,
-            &Value::Float(2.5),
+            &QueryValue::Float(2.5),
             None
         ));
         assert!(compare_values(
             &QueryValue::Float(2.5),
             CompareOp::Gt,
-            &Value::Int(2),
+            &QueryValue::Int(2),
             None
         ));
         assert!(compare_values(
             &QueryValue::Int(3),
             CompareOp::Eq,
-            &Value::Float(3.0),
+            &QueryValue::Float(3.0),
             None
         ));
     }
 
     #[test]
     fn compare_string_ordering() {
-        use crate::query::ast::{CompareOp, Value};
+        use crate::query::ast::CompareOp;
         assert!(compare_values(
             &QueryValue::Str("abc".into()),
             CompareOp::Lt,
-            &Value::Str("abd".into()),
+            &QueryValue::Str("abd".into()),
             None
         ));
         assert!(compare_values(
             &QueryValue::Str("abc".into()),
             CompareOp::Eq,
-            &Value::Str("abc".into()),
+            &QueryValue::Str("abc".into()),
             None
         ));
     }
 
     #[test]
     fn compare_bool_ordering() {
-        use crate::query::ast::{CompareOp, Value};
+        use crate::query::ast::CompareOp;
         assert!(compare_values(
             &QueryValue::Bool(false),
             CompareOp::Lt,
-            &Value::Bool(true),
+            &QueryValue::Bool(true),
             None
         ));
         assert!(compare_values(
             &QueryValue::Bool(true),
             CompareOp::Eq,
-            &Value::Bool(true),
+            &QueryValue::Bool(true),
             None
         ));
     }
@@ -1717,115 +1870,115 @@ mod tests {
 
     #[test]
     fn like_full_match_true() {
-        use crate::query::ast::{CompareOp, Value};
+        use crate::query::ast::CompareOp;
         let re = like_re("m.*");
         assert!(compare_values(
             &QueryValue::Str("main".into()),
             CompareOp::Like,
-            &Value::Str("m.*".into()),
+            &QueryValue::Str("m.*".into()),
             Some(&re)
         ));
     }
 
     #[test]
     fn like_non_match_false() {
-        use crate::query::ast::{CompareOp, Value};
+        use crate::query::ast::CompareOp;
         let re = like_re("m.*");
         assert!(!compare_values(
             &QueryValue::Str("worker".into()),
             CompareOp::Like,
-            &Value::Str("m.*".into()),
+            &QueryValue::Str("m.*".into()),
             Some(&re)
         ));
     }
 
     #[test]
     fn like_is_anchored_full_match_not_substring() {
-        use crate::query::ast::{CompareOp, Value};
+        use crate::query::ast::CompareOp;
         // "submaine" contains "m.*" as a substring but is NOT a full match of
         // `^(?:m.*)$`, so LIKE must be false (anchoring proof).
         let re = like_re("m.*");
         assert!(!compare_values(
             &QueryValue::Str("submaine".into()),
             CompareOp::Like,
-            &Value::Str("m.*".into()),
+            &QueryValue::Str("m.*".into()),
             Some(&re)
         ));
     }
 
     #[test]
     fn not_like_inverts_like() {
-        use crate::query::ast::{CompareOp, Value};
+        use crate::query::ast::CompareOp;
         let re = like_re("m.*");
         // "main" matches → NOT LIKE is false.
         assert!(!compare_values(
             &QueryValue::Str("main".into()),
             CompareOp::NotLike,
-            &Value::Str("m.*".into()),
+            &QueryValue::Str("m.*".into()),
             Some(&re)
         ));
         // "worker" doesn't match → NOT LIKE is true.
         assert!(compare_values(
             &QueryValue::Str("worker".into()),
             CompareOp::NotLike,
-            &Value::Str("m.*".into()),
+            &QueryValue::Str("m.*".into()),
             Some(&re)
         ));
     }
 
     #[test]
     fn like_alternation_anchored() {
-        use crate::query::ast::{CompareOp, Value};
+        use crate::query::ast::CompareOp;
         let re = like_re("foo|bar");
         // Both alternatives match fully.
         assert!(compare_values(
             &QueryValue::Str("foo".into()),
             CompareOp::Like,
-            &Value::Str("foo|bar".into()),
+            &QueryValue::Str("foo|bar".into()),
             Some(&re)
         ));
         assert!(compare_values(
             &QueryValue::Str("bar".into()),
             CompareOp::Like,
-            &Value::Str("foo|bar".into()),
+            &QueryValue::Str("foo|bar".into()),
             Some(&re)
         ));
         // "xfooy" is NOT a full match (anchoring wraps the whole alternation).
         assert!(!compare_values(
             &QueryValue::Str("xfooy".into()),
             CompareOp::Like,
-            &Value::Str("foo|bar".into()),
+            &QueryValue::Str("foo|bar".into()),
             Some(&re)
         ));
     }
 
     #[test]
     fn like_on_numeric_lhs_false_not_like_true() {
-        use crate::query::ast::{CompareOp, Value};
+        use crate::query::ast::CompareOp;
         // A non-string LHS never matches a regex: LIKE is false, NOT LIKE true.
         let re = like_re("m.*");
         assert!(!compare_values(
             &QueryValue::Int(42),
             CompareOp::Like,
-            &Value::Str("m.*".into()),
+            &QueryValue::Str("m.*".into()),
             Some(&re)
         ));
         assert!(compare_values(
             &QueryValue::Int(42),
             CompareOp::NotLike,
-            &Value::Str("m.*".into()),
+            &QueryValue::Str("m.*".into()),
             Some(&re)
         ));
     }
 
     #[test]
     fn like_missing_compiled_regex_is_no_match() {
-        use crate::query::ast::{CompareOp, Value};
+        use crate::query::ast::CompareOp;
         // A wiring bug (no compiled regex) is treated as no-match, never a panic.
         assert!(!compare_values(
             &QueryValue::Str("main".into()),
             CompareOp::Like,
-            &Value::Str("m.*".into()),
+            &QueryValue::Str("m.*".into()),
             None
         ));
     }
