@@ -368,9 +368,6 @@ where
             .then(retained_set.clone())
             .then_ignore(ident_ci("FROM"))
             // MAT allows `FROM OBJECTS <class>` as a no-op synonym for `FROM <class>`.
-            // Consume the optional OBJECTS marker here (before from_source) so it
-            // applies to both the class form and the parenthesized-subquery form.
-            // Style mirrors the INSTANCEOF .or_not() at from_class (line ~294).
             .then_ignore(ident_ci("OBJECTS").or_not())
             .then(from_source)
             .then(any_ident().and_is(reserved_ident().not()).or_not())
@@ -594,8 +591,7 @@ pub const RESERVED: &[&str] = &[
     "BY",
     "ASC",
     "DESC",
-    // MAT keyword: `FROM OBJECTS <class>` is a no-op synonym for `FROM <class>`.
-    // Listed here so it is never harvested as a class-name or alias completion.
+    // MAT no-op keyword; blocked from alias/completion slots.
     "OBJECTS",
 ];
 
@@ -2403,21 +2399,12 @@ mod tests {
         assert_eq!(q.alias.as_deref(), Some("s"));
     }
 
-    /// `FROM OBJECTS INSTANCEOF` is NOT valid in Eclipse MAT (OBJECTS and INSTANCEOF
-    /// are mutually exclusive). DECISION: we ACCEPT it as a harmless no-op (OBJECTS
-    /// is consumed, then INSTANCEOF proceeds normally), because chumsky has no clean
-    /// way to reject a keyword combination in two separate optional combinators
-    /// without backtracking complications. This test PINS that accepted-no-op
-    /// behavior so any future change to reject it will fail loudly and require a
-    /// deliberate decision.
-    ///
-    /// If you wish to reject this form in the future, emit a custom error via
-    /// `.validate` on `from_class` after checking both flags.
+    /// FROM OBJECTS INSTANCEOF: accepted as no-op (OBJECTS consumed first, then
+    /// INSTANCEOF sets its flag). Eclipse MAT rejects this combination, but chumsky
+    /// has no clean combinator path to reject it. This test pins the accepted behavior.
     #[test]
     fn from_objects_instanceof_is_accepted_as_noop() {
-        // OBJECTS is consumed as the optional marker; INSTANCEOF proceeds normally.
         let result = parse("SELECT * FROM OBJECTS INSTANCEOF java.lang.String");
-        // Pin current behavior: accepted (OBJECTS no-op, INSTANCEOF sets the flag).
         match result {
             Ok(q) => {
                 assert_eq!(
@@ -2425,17 +2412,12 @@ mod tests {
                     "java.lang.String",
                     "FROM OBJECTS INSTANCEOF: class must be java.lang.String"
                 );
-                // INSTANCEOF flag should be set because it was consumed normally.
                 assert!(
                     q.from.instanceof(),
                     "FROM OBJECTS INSTANCEOF: instanceof flag must be set"
                 );
             }
             Err(e) => {
-                // If a future implementation rejects this form, update the test to
-                // assert the actionable error message instead:
-                //   "FROM OBJECTS INSTANCEOF is not valid; use FROM OBJECTS <class>
-                //    or FROM INSTANCEOF <class>"
                 panic!(
                     "FROM OBJECTS INSTANCEOF currently accepted as no-op, \
                      but got parse error: {e}\n\
@@ -2446,14 +2428,8 @@ mod tests {
         }
     }
 
-    /// A bare `objects` used as a WHERE field must still work — adding OBJECTS to
-    /// RESERVED only blocks it in the alias position (after the class name), not
-    /// inside predicate expressions where `any_ident()` is used.
-    ///
-    /// NOTE: `objects` in a WHERE field position uses `any_ident()` which does NOT
-    /// check `RESERVED`, so this continues to work fine. The RESERVED set only
-    /// affects the alias slot (the `.and_is(reserved_ident().not())` guard at line
-    /// 371 in the SELECT production).
+    /// A bare `objects` used as a WHERE field must still work — RESERVED only blocks
+    /// the alias slot, not predicate fields (which use `any_ident()`).
     #[test]
     fn objects_as_where_field_still_parses() {
         // `objects` used as a plain field name in WHERE is not affected by RESERVED.
