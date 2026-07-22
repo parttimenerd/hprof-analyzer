@@ -560,6 +560,8 @@ struct ArrayWant {
     coll_kind: u8,
     /// Pretty class name of the owning collection instance.
     coll_class: String,
+    /// Heap address of the owning collection instance (for ContainerRecord capacity update).
+    coll_addr: u64,
 }
 
 /// Number of individual arrays and array classes surfaced per category.
@@ -1104,6 +1106,7 @@ pub(crate) fn build_field_decode_views(
                                             .unwrap_or(u32::MAX),
                                         coll_kind: descs[desc_idx].kind.discriminant(),
                                         coll_class: pretty_name(class_id, p1),
+                                        coll_addr: addr,
                                     },
                                 );
                             }
@@ -1307,10 +1310,10 @@ pub(crate) fn build_field_decode_views(
                         addr,
                         ContainerRecord {
                             container_idx: arr_idx,
-                            elements: count,
+                            elements: non_null, // used slots (non-null)
                             kind: 6,
                             container_class: pretty_name(array_class_id, p1),
-                            // Object array: length == capacity == elements.
+                            // Capacity = total slot count; elements = non-null slots.
                             capacity: count,
                         },
                     );
@@ -1350,6 +1353,14 @@ pub(crate) fn build_field_decode_views(
                 .saturating_mul(obj_ref_width as u64);
             coll_fill.add(used, count, want.coll_shallow, wasted);
             coll_fill_tracked += 1;
+            // Update the collection's ContainerRecord capacity to the real
+            // backing-array length (not available when the record was inserted).
+            if collect_attribution {
+                if let Some(rec) = container_records.get_mut(&want.coll_addr) {
+                    rec.elements = used;
+                    rec.capacity = count;
+                }
+            }
             if want.is_map {
                 // #13 map-collision proxy = occupied slots / capacity. A high
                 // occupancy vs. size disparity hints at collisions/chaining.

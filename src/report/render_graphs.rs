@@ -20,7 +20,7 @@ pub fn render_markdown_graphs(r: &Report) -> String {
     render_threads(&r.threads, true, &mut out);
     render_top_components(&r.top_components, true, &mut out);
     render_arrays_by_size(&r.arrays_by_size, true, &mut out);
-    render_collections(&r.collections, true, &mut out);
+    render_collections(&r.collections, &r.collection_attribution, true, &mut out);
     render_collection_attribution(&r.collection_attribution, true, &mut out);
     render_fields_by_size(&r.fields_by_size, true, &mut out);
     render_biggest_collections(&r.biggest_collections, true, &mut out);
@@ -44,7 +44,7 @@ pub fn render_markdown_graphs(r: &Report) -> String {
 fn render_toc_graphs(r: &Report, out: &mut String) {
     out.push_str("## Contents\n\n");
     out.push_str("- [Summary](#summary)\n");
-    out.push_str("- [OOM Triage](#oom-triage)\n");
+    out.push_str("- [Memory Triage](#memory-triage)\n");
     out.push_str("- [System Overview](#system-overview)\n");
     out.push_str("- [Leak Suspects](#leak-suspects)\n");
     out.push_str("- [Top Consumers](#top-consumers)\n");
@@ -514,7 +514,8 @@ fn render_leak_suspects_graphs(l: &LeakSuspects, out: &mut String) {
     }
 
     out.push_str(
-        "_Objects and class groups whose retained heap is large enough to be a likely OOM cause, ranked by retained heap._\n\n",
+        "_Objects and class groups retaining the most heap, ranked by retained size. \
+These are the most likely causes of excessive memory usage or OOM errors._\n\n",
     );
 
     // Share overview: one proportional bar per suspect, keyed to the largest

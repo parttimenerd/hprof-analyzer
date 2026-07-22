@@ -553,6 +553,7 @@ fn aggregate_collection_attribution(
     struct OverallAcc {
         total_elements: u64,
         total_retained: u64,
+        total_wasted_slots: u64,
         // Distinct container indices under this key: powers container_count and
         // dedups elements/retained so a shared container isn't double-counted.
         seen: std::collections::HashSet<u32>,
@@ -567,6 +568,7 @@ fn aggregate_collection_attribution(
         retained: u64,
         container_class: String,
         capacity: u64,
+        container_kind: u8,
     }
 
     let mut overall: HashMap<(String, String), OverallAcc> = HashMap::new();
@@ -583,6 +585,7 @@ fn aggregate_collection_attribution(
         let acc = overall.entry(key.clone()).or_insert_with(|| OverallAcc {
             total_elements: 0,
             total_retained: 0,
+            total_wasted_slots: 0,
             seen: std::collections::HashSet::new(),
             first_kind: rec.container_kind,
             mixed: false,
@@ -590,6 +593,7 @@ fn aggregate_collection_attribution(
         if acc.seen.insert(rec.container_idx) {
             acc.total_elements += rec.elements;
             acc.total_retained += retained_bytes;
+            acc.total_wasted_slots += rec.capacity.saturating_sub(rec.elements);
             // Mixed determination only considers DISTINCT containers.
             if rec.container_kind != acc.first_kind {
                 acc.mixed = true;
@@ -604,6 +608,7 @@ fn aggregate_collection_attribution(
             retained: 0,
             container_class: String::new(),
             capacity: 0,
+            container_kind: rec.container_kind,
         });
         if rec.elements > b.elements || (rec.elements == b.elements && retained_bytes > b.retained)
         {
@@ -611,6 +616,7 @@ fn aggregate_collection_attribution(
             b.retained = retained_bytes;
             b.container_class = crate::report::pretty_class_name(&rec.container_class);
             b.capacity = rec.capacity;
+            b.container_kind = rec.container_kind;
         }
     }
 
@@ -624,6 +630,7 @@ fn aggregate_collection_attribution(
             },
             total_elements: acc.total_elements,
             total_retained: acc.total_retained,
+            total_wasted_slots: acc.total_wasted_slots,
             container_count: acc.seen.len() as u64,
             holder_instances: holder_counts
                 .get(&crate::report::pretty_class_name(&holder_class))
@@ -652,6 +659,7 @@ fn aggregate_collection_attribution(
             elements: b.elements,
             retained: b.retained,
             capacity: b.capacity,
+            container_kind: kind_label(b.container_kind).to_string(),
         })
         .collect();
     // elements desc, retained desc, holder_class asc, field asc.

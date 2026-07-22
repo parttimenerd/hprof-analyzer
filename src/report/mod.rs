@@ -1294,11 +1294,11 @@ mod tests {
         let md = render_markdown(&r);
         let doc = Md::parse(&md);
 
-        // (a) new OOM-triage heading + headline retainer line present.
+        // (a) new memory-triage heading + headline retainer line present.
         let triage = doc
-            .section("OOM Triage")
-            .expect("missing OOM Triage heading");
-        assert_eq!(triage.level(), 2, "OOM Triage should be an H2 section");
+            .section("Memory Triage")
+            .expect("missing Memory Triage heading");
+        assert_eq!(triage.level(), 2, "Memory Triage should be an H2 section");
         // The headline retainer is a bullet, not just loose text.
         assert!(
             triage.has_bullet_starting_with("**Headline retainer:**"),
@@ -1315,9 +1315,9 @@ mod tests {
         );
 
         // The triage block must precede System Overview.
-        let tri = doc.heading_offset("OOM Triage").unwrap();
+        let tri = doc.heading_offset("Memory Triage").unwrap();
         let sys = doc.heading_offset("System Overview").unwrap();
-        assert!(tri < sys, "OOM Triage must come before System Overview");
+        assert!(tri < sys, "Memory Triage must come before System Overview");
 
         // (b) determinism guard: render twice == identical.
         assert_eq!(md, render_markdown(&r));

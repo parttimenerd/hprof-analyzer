@@ -10,8 +10,10 @@ pub(crate) fn render_record_census(out: &mut String, c: &crate::pass2::RecordCen
     use crate::md::{Align, Table};
     out.push_str("### HPROF Record Census\n\n");
     out.push_str(
-        "_Raw HPROF record-type composition of the dump (pass-1 counts); \
-         additive, not parity-compared._\n\n",
+        "_Raw HPROF record-type composition of the dump (pass-1 counts). \
+Useful for diagnosing truncated or unusual dumps (e.g. zero stack frames means \
+no allocation-site data; a mismatch between load-class and class-dump counts \
+can indicate a partial write). Additive, not parity-compared._\n\n",
     );
     let mut t = Table::new(&["Record Type", "Count"], &[Align::Left, Align::Right]);
     t.row(["UTF8 strings".into(), fmt_count(c.utf8_records)]);
@@ -216,8 +218,9 @@ pub(crate) fn render_leak_indicators(li: &crate::report::LeakIndicators, out: &m
     use crate::md::{Align, Table};
     out.push_str("## Leak Indicators\n\n");
     out.push_str(
-        "_Scalar signals for common Java leak patterns. Non-zero values here \
-         are worth investigating._\n\n",
+        "_Scalar signals for common Java leak patterns; non-zero values are flagged \
+in [Memory Triage](#memory-triage) above. This table provides the raw numbers \
+behind those bullets._\n\n",
     );
     let mut t = Table::new(&["Indicator", "Value"], &[Align::Left, Align::Right]);
     if li.anonymous_class_count > 0 {
@@ -257,7 +260,7 @@ pub fn render_markdown(r: &Report) -> String {
     render_threads(&r.threads, false, &mut out);
     render_top_components(&r.top_components, false, &mut out);
     render_arrays_by_size(&r.arrays_by_size, false, &mut out);
-    render_collections(&r.collections, false, &mut out);
+    render_collections(&r.collections, &r.collection_attribution, false, &mut out);
     render_collection_attribution(&r.collection_attribution, false, &mut out);
     render_fields_by_size(&r.fields_by_size, false, &mut out);
     render_biggest_collections(&r.biggest_collections, false, &mut out);
@@ -282,7 +285,7 @@ pub fn render_markdown(r: &Report) -> String {
 fn render_toc(r: &Report, out: &mut String) {
     out.push_str("## Contents\n\n");
     out.push_str("- [Summary](#summary)\n");
-    out.push_str("- [OOM Triage](#oom-triage)\n");
+    out.push_str("- [Memory Triage](#memory-triage)\n");
     out.push_str("- [System Overview](#system-overview)\n");
     out.push_str("- [Leak Suspects](#leak-suspects)\n");
     out.push_str("- [Top Consumers](#top-consumers)\n");
@@ -455,7 +458,7 @@ pub(crate) fn render_executive_summary(r: &Report, out: &mut String) {
 /// signals (evaluated once by the rule framework in `triage.rs` and stored on
 /// `Report.triage`). This renderer is a dumb formatter over that list.
 pub(crate) fn render_oom_triage(r: &Report, out: &mut String) {
-    out.push_str("## OOM Triage\n\n");
+    out.push_str("## Memory Triage\n\n");
     out.push_str("_Where the reachable heap is concentrated, at a glance._\n\n");
     for s in &r.triage {
         out.push_str(&format_signal_md(s));
@@ -643,18 +646,25 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
     summary.row(["Classes loaded".into(), fmt_count(o.classes_loaded)]);
     summary.row(["Class loaders".into(), fmt_count(o.classloaders_loaded)]);
     if o.unreachable_count > 0 {
+        let total = o.total_shallow + o.unreachable_shallow;
+        let pct = if total > 0 {
+            format!(" {:.1}% of total heap", o.unreachable_shallow as f64 / total as f64 * 100.0)
+        } else {
+            String::new()
+        };
         summary.row([
             "Unreachable objects (excluded)".into(),
             format!(
-                "{} ({})",
+                "{} ({};{})",
                 fmt_count(o.unreachable_count),
                 format_bytes(o.unreachable_shallow),
+                pct,
             ),
         ]);
     }
     if o.heap_fragmentation_ratio > 0.0 {
         summary.row([
-            "Heap fragmentation".into(),
+            "Heap fragmentation (unreachable / total)".into(),
             format!("{:.1}%", o.heap_fragmentation_ratio * 100.0),
         ]);
     }
@@ -803,18 +813,24 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
     if !o.loader_rollup.is_empty() {
         out.push_str("### Class Loaders\n\n");
         out.push_str(
-            "_Classes grouped by the loader that defined them; many loaders each holding heap \
-             can signal a class-loader leak._\n\n",
+            "_Classes grouped by the loader that defined them. \
+The **Loader** column shows the loader's class (e.g. `java/net/URLClassLoader`), \
+not an instance name — the hprof format does not record loader names. \
+Multiple rows with the same loader class are distinct loader instances; \
+many such instances each holding significant heap can signal a classloader leak. \
+The **Address** column distinguishes them._\n\n",
         );
         let mut t = Table::new(
             &[
                 "Loader",
+                "Address",
                 "Classes",
                 "Instances",
                 "Shallow Heap",
                 "Retained Heap",
             ],
             &[
+                Align::Left,
                 Align::Left,
                 Align::Right,
                 Align::Right,
@@ -823,8 +839,14 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
             ],
         );
         for r in &o.loader_rollup {
+            let addr = if r.loader_id == 0 {
+                "<boot>".into()
+            } else {
+                format!("0x{:x}", r.loader_id)
+            };
             t.row([
                 r.loader_label.clone().unwrap_or_else(|| "<unknown>".into()),
+                addr,
                 fmt_count(r.class_count),
                 fmt_count(r.instances),
                 format_bytes(r.shallow),
@@ -839,8 +861,12 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
     if !o.duplicate_classes.is_empty() {
         out.push_str("### Duplicate Classes\n\n");
         out.push_str(
-            "_Class names loaded by more than one class loader — a classic class-loader-leak \
-             signature (the same class re-loaded repeatedly)._\n\n",
+            "_Class names loaded by more than one class loader. \
+The same class loaded N times means N separate copies of its static state and \
+N times the metaspace cost — a typical symptom of classloader leaks (e.g. \
+each web-app reload or plugin load creates a new loader that never gets GC'd). \
+Check the per-loader breakdown: if one loader holds almost all the instances \
+the others are likely leaked copies._\n\n",
         );
         let mut t = Table::new(
             &["Class", "#Loaders", "Instances", "Retained Heap"],
@@ -913,7 +939,8 @@ fn render_leak_suspects(l: &LeakSuspects, out: &mut String) {
     }
 
     out.push_str(
-        "_Objects and class groups whose retained heap is large enough to be a likely OOM cause, ranked by retained heap._\n\n",
+        "_Objects and class groups retaining the most heap, ranked by retained size. \
+These are the most likely causes of excessive memory usage or OOM errors._\n\n",
     );
 
     for (rank, s) in l.suspects.iter().enumerate() {
@@ -945,6 +972,14 @@ fn render_leak_suspects(l: &LeakSuspects, out: &mut String) {
                 s.pretty_class,
                 format_bytes(s.shallow),
             ));
+            if s.pretty_class == "java.lang.Class" {
+                out.push_str(
+                    "_Note: `java.lang.Class` objects are normal — every loaded class has one. \
+This suspect reflects class-metadata memory, not a leak in application code. \
+It is worth investigating only if the instance count is unexpectedly high \
+(e.g. due to classloader leaks)._\n\n",
+                );
+            }
         }
 
         // Accumulation point: where the retained heap actually piles up.
@@ -979,14 +1014,15 @@ fn render_leak_suspects(l: &LeakSuspects, out: &mut String) {
             }
         }
 
-        // Accumulated objects (immediately dominated by the accumulation point).
-        if !s.dominated.is_empty() {
+        // Accumulated objects: by-class histogram only (the per-instance list
+        // is redundant for most cases and inflates the report).
+        if !s.dominated_by_class.is_empty() {
             use crate::md::{Align, Table};
             if s.dominated_total_count > s.dominated_shown {
                 out.push_str(&format!(
-                    "_Directly dominates {} objects (showing top {})._\n\n",
+                    "_Directly dominates {} objects (showing top {} classes by retained heap)._\n\n",
                     fmt_count(s.dominated_total_count),
-                    fmt_count(s.dominated_shown),
+                    fmt_count(s.dominated_by_class.len() as u64),
                 ));
             } else if s.dominated_total_count > 0 {
                 out.push_str(&format!(
@@ -994,28 +1030,6 @@ fn render_leak_suspects(l: &LeakSuspects, out: &mut String) {
                     fmt_count(s.dominated_total_count),
                 ));
             }
-            out.push_str(&format!(
-                "**Accumulated objects (top {} by retained heap):**\n\n",
-                s.dominated.len(),
-            ));
-            let mut t = Table::new(
-                &["Class", "Shallow", "Retained"],
-                &[Align::Left, Align::Right, Align::Right],
-            );
-            for row in &s.dominated {
-                t.row([
-                    format!("`{}`", row.display_class),
-                    format_bytes(row.shallow),
-                    format_bytes(row.retained),
-                ]);
-            }
-            t.render(out);
-            out.push('\n');
-        }
-
-        // By-class histogram of the accumulated objects.
-        if !s.dominated_by_class.is_empty() {
-            use crate::md::{Align, Table};
             out.push_str("**Accumulated objects by class:**\n\n");
             let mut t = Table::new(
                 &["Class", "Objects", "Shallow", "Retained"],
@@ -1037,9 +1051,12 @@ fn render_leak_suspects(l: &LeakSuspects, out: &mut String) {
         if let Some(path) = &s.root_path {
             render_root_path(path, out);
         }
-        // Full multi-level dominator subtree at the accumulation point.
+        // Full multi-level dominator subtree at the accumulation point — in a
+        // collapsible block to keep the report readable.
         if let Some(tree) = &s.dominator_tree {
+            out.push_str("<details>\n<summary>Dominator subtree</summary>\n\n");
             render_dom_tree_plain(tree, out);
+            out.push_str("</details>\n\n");
         }
         // Merged shortest paths to GC roots (group suspects only).
         if !s.is_single {
@@ -1057,7 +1074,10 @@ fn render_top_consumers(t: &TopConsumers, total_shallow: u64, out: &mut String) 
     out.push_str("## Top Consumers\n\n");
     out.push_str("### Biggest Objects (Top-Level Dominators)\n\n");
     out.push_str(
-        "_Individual objects retaining the most heap; `% Heap` is the share of total reachable heap._\n\n",
+        "_All top-level dominators ranked by retained heap. Unlike Leak Suspects, \
+this list is unfiltered — it includes every object directly dominated by a GC root, \
+down to the smallest. Use it when the suspect you care about didn't cross the \
+leak-suspect threshold, or to see the full retention picture._\n\n",
     );
     let mut objs = Table::new(
         &["#", "Class", "Shallow", "Retained", "% Heap"],
@@ -1517,7 +1537,126 @@ fn render_fill_ratio_table(
     out.push('\n');
 }
 
-pub(crate) fn render_collections(c: &CollectionsAnalysis, graphs: bool, out: &mut String) {
+/// Render a compact "Likely wasters" list from attribution, filtered to rows
+/// whose `container_kind` matches one of `kinds`, sorted by `total_wasted_slots`
+/// descending. Shows at most `n` entries. Skipped when attribution is absent or
+/// no rows have any wasted slots.
+fn render_top_contributors(
+    attribution: &Option<CollectionAttribution>,
+    kinds: &[&str],
+    n: usize,
+    out: &mut String,
+) {
+    use crate::md::{Align, Table};
+    let Some(a) = attribution else { return };
+    let mut rows: Vec<_> = a
+        .most_overall
+        .iter()
+        .filter(|r| kinds.iter().any(|k| *k == r.container_kind) && r.total_wasted_slots > 0)
+        .collect();
+    rows.sort_by(|a, b| b.total_wasted_slots.cmp(&a.total_wasted_slots));
+    rows.truncate(n);
+    if rows.is_empty() {
+        return;
+    }
+    out.push_str(
+        "_Likely wasters by field (dominant incoming `Class#field` — a hint, not a guarantee):_\n\n",
+    );
+    let mut t = Table::new(
+        &[
+            "Class#field",
+            "Containers",
+            "Wasted Slots",
+            "Total Elements",
+            "Total Retained",
+        ],
+        &[
+            Align::Left,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+        ],
+    );
+    for r in &rows {
+        t.row(vec![
+            format!("`{}#{}`", r.holder_class, r.field),
+            fmt_count(r.container_count),
+            fmt_count(r.total_wasted_slots),
+            fmt_count(r.total_elements),
+            format_bytes(r.total_retained),
+        ]);
+    }
+    t.render(out);
+    out.push('\n');
+}
+
+/// Render the single most-wasted container per field, filtered by kind, sorted
+/// by wasted slots (capacity - elements) descending. Skipped when absent.
+fn render_worst_single_containers(
+    attribution: &Option<CollectionAttribution>,
+    kinds: &[&str],
+    n: usize,
+    out: &mut String,
+) {
+    use crate::md::{Align, Table};
+    let Some(a) = attribution else { return };
+    let mut rows: Vec<_> = a
+        .biggest_single
+        .iter()
+        .filter(|r| {
+            kinds.iter().any(|k| *k == r.container_kind) && r.capacity > r.elements
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        b.capacity
+            .saturating_sub(b.elements)
+            .cmp(&a.capacity.saturating_sub(a.elements))
+    });
+    rows.truncate(n);
+    if rows.is_empty() {
+        return;
+    }
+    out.push_str("_Worst individual containers (most empty slots):_\n\n");
+    let mut t = Table::new(
+        &[
+            "Class#field",
+            "Container Class",
+            "Used",
+            "Capacity",
+            "Wasted Slots",
+            "Retained",
+        ],
+        &[
+            Align::Left,
+            Align::Left,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+        ],
+    );
+    for r in &rows {
+        let wasted = r.capacity.saturating_sub(r.elements);
+        t.row(vec![
+            format!("`{}#{}`", r.holder_class, r.field),
+            format!("`{}`", r.container_class),
+            fmt_count(r.elements),
+            fmt_count(r.capacity),
+            fmt_count(wasted),
+            format_bytes(r.retained),
+        ]);
+    }
+    t.render(out);
+    out.push('\n');
+}
+
+pub(crate) fn render_collections(
+    c: &CollectionsAnalysis,
+    attribution: &Option<CollectionAttribution>,
+    graphs: bool,
+    out: &mut String,
+) {
     use crate::md::{Align, Table, bar};
     out.push_str("## Collections\n\n");
     out.push_str(
@@ -1604,6 +1743,18 @@ pub(crate) fn render_collections(c: &CollectionsAnalysis, graphs: bool, out: &mu
         graphs,
         out,
     );
+    render_top_contributors(
+        attribution,
+        &["list", "set", "deque", "queue", "tree", "mixed"],
+        10,
+        out,
+    );
+    render_worst_single_containers(
+        attribution,
+        &["list", "set", "deque", "queue", "tree", "mixed"],
+        5,
+        out,
+    );
 
     // ── Collections by Size ──────────────────────────────────────────────────
     out.push_str("### Collections by Size\n\n");
@@ -1622,7 +1773,7 @@ pub(crate) fn render_collections(c: &CollectionsAnalysis, graphs: bool, out: &mu
             .map(|b| b.objects)
             .max()
             .unwrap_or(0);
-        let mut headers: Vec<&str> = vec!["Size ≤", "Collections", "Shallow"];
+        let mut headers: Vec<&str> = vec!["Size ≤", "Collections", "Total Shallow"];
         let mut aligns = vec![Align::Right, Align::Right, Align::Right];
         if graphs {
             headers.push("");
@@ -1677,6 +1828,8 @@ pub(crate) fn render_collections(c: &CollectionsAnalysis, graphs: bool, out: &mu
         graphs,
         out,
     );
+    render_top_contributors(attribution, &["object array"], 10, out);
+    render_worst_single_containers(attribution, &["object array"], 5, out);
 
     // ── Map Collision Ratio ──────────────────────────────────────────────────
     out.push_str("### Map Collision Ratio\n\n");
@@ -1693,6 +1846,8 @@ pub(crate) fn render_collections(c: &CollectionsAnalysis, graphs: bool, out: &mu
         graphs,
         out,
     );
+    render_top_contributors(attribution, &["map"], 10, out);
+    render_worst_single_containers(attribution, &["map"], 5, out);
 
     // ── Constant Primitive Arrays ────────────────────────────────────────────
     out.push_str("### Constant Primitive Arrays\n\n");
@@ -2527,7 +2682,11 @@ pub(crate) fn render_dominator_analysis(d: &DominatorAnalysis, graphs: bool, out
     out.push_str("### Big Drops\n\n");
     let threshold_mb = d.big_drops.threshold as f64 / (1024.0 * 1024.0);
     out.push_str(&format!(
-        "_Dominators where retained heap concentrates: retained heap minus the largest single child. Threshold {:.1} MB (1% of reachable shallow)._\n\n",
+        "_Dominators where retained heap does not flow into a single child — \
+the gap between an object's retained size and its largest child's retained size. \
+A large drop means this object directly owns a lot of memory spread across many children \
+(e.g. an array or collection). Threshold {:.1} MB (1% of reachable shallow). \
+Multiple rows with the same class are distinct objects._\n\n",
         threshold_mb,
     ));
     if d.big_drops.rows.is_empty() {
@@ -2542,6 +2701,7 @@ pub(crate) fn render_dominator_analysis(d: &DominatorAnalysis, graphs: bool, out
             .unwrap_or(0);
         let mut headers: Vec<&str> = vec![
             "Object",
+            "#",
             "Retained",
             "Largest Child",
             "Child Retained",
@@ -2549,6 +2709,7 @@ pub(crate) fn render_dominator_analysis(d: &DominatorAnalysis, graphs: bool, out
         ];
         let mut aligns = vec![
             Align::Left,
+            Align::Right,
             Align::Right,
             Align::Left,
             Align::Right,
@@ -2575,6 +2736,7 @@ pub(crate) fn render_dominator_analysis(d: &DominatorAnalysis, graphs: bool, out
             };
             let mut row = vec![
                 format!("`{}`", r.display_class),
+                format!("{}", r.obj_index_1based),
                 format_bytes(r.retained),
                 child,
                 format_bytes(r.largest_child_retained),
@@ -2701,6 +2863,17 @@ pub(crate) fn render_root_path(path: &[RootPathStep], out: &mut String) {
         return;
     }
     out.push_str("**Path to GC root (dominator chain):**\n\n");
+    if path.len() == 1 {
+        let step = &path[0];
+        let mut line = format!("1. `{}` ({})", step.display_class, format_bytes(step.retained));
+        if let Some(label) = &step.root_type_label {
+            line.push_str(&format!(" — GC root: {label} (this object is directly held by a GC root; no intermediate chain)"));
+        }
+        line.push('\n');
+        out.push_str(&line);
+        out.push('\n');
+        return;
+    }
     let last = path.len() - 1;
     for (i, step) in path.iter().enumerate() {
         let mut line = format!(
@@ -2722,26 +2895,57 @@ pub(crate) fn render_root_path(path: &[RootPathStep], out: &mut String) {
 
 /// Dominator subtree (plain md): the full multi-level dominator
 /// subtree at the accumulation point, as a nested bullet list indented two
-/// spaces per level. Uses an explicit stack (the tree can be deep) and emits
-/// nodes in the pre-order the `children` Vecs already carry (retained-desc).
+/// spaces per level. Sibling nodes with identical (class, shallow, retained)
+/// are collapsed into a single "N×" line to reduce noise in deep uniform trees.
 fn render_dom_tree_plain(root: &DomTreeNode, out: &mut String) {
     out.push_str("**Dominator subtree:**\n\n");
-    // Stack of (node, depth); push children reversed so pre-order pops in order.
-    let mut stack: Vec<(&DomTreeNode, usize)> = vec![(root, 0)];
-    while let Some((node, depth)) = stack.pop() {
-        let indent = "  ".repeat(depth);
-        out.push_str(&format!(
-            "{}- `{}` (shallow {}, retained {})\n",
-            indent,
-            node.display_class,
-            format_bytes(node.shallow),
-            format_bytes(node.retained),
-        ));
-        for child in node.children.iter().rev() {
-            stack.push((child, depth + 1));
-        }
-    }
+    render_dom_node(root, 0, out);
     out.push('\n');
+}
+
+fn render_dom_node(node: &DomTreeNode, depth: usize, out: &mut String) {
+    let indent = "  ".repeat(depth);
+    out.push_str(&format!(
+        "{}- `{}` (shallow {}, retained {})\n",
+        indent,
+        node.display_class,
+        format_bytes(node.shallow),
+        format_bytes(node.retained),
+    ));
+    // Group children by (class, shallow, retained) and collapse duplicates.
+    let mut i = 0;
+    while i < node.children.len() {
+        let child = &node.children[i];
+        let key = (&child.display_class, child.shallow, child.retained);
+        let mut count = 1usize;
+        while i + count < node.children.len() {
+            let next = &node.children[i + count];
+            if (&next.display_class, next.shallow, next.retained) == key {
+                count += 1;
+            } else {
+                break;
+            }
+        }
+        if count > 1 {
+            // Collapsed group: emit a summary line, recurse into first child's children.
+            let child_indent = "  ".repeat(depth + 1);
+            out.push_str(&format!(
+                "{}- `{}` ×{} (shallow {}, retained {} each)\n",
+                child_indent,
+                child.display_class,
+                count,
+                format_bytes(child.shallow),
+                format_bytes(child.retained),
+            ));
+            // Recurse into the children of the first representative.
+            for grandchild in &child.children {
+                render_dom_node(grandchild, depth + 2, out);
+            }
+        } else {
+            render_dom_node(child, depth + 1, out);
+        }
+        i += count;
+    }
 }
 
 /// Merged shortest paths to GC roots (plain md): the member objects' dominator

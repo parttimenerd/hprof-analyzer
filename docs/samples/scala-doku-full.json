@@ -1,6 +1,6 @@
 {
   "schema_version": 6,
-  "generated": "2026-07-21T11:12:58.436031000Z",
+  "generated": "2026-07-22T14:24:59.431743000Z",
   "overview": {
     "source_name": "dump_2_scala-doku.hprof",
     "file_path": "tests/fixtures/dump_2_scala-doku.hprof",
@@ -232310,7 +232310,7 @@
         "shallow": 64,
         "retained": 598600,
         "pct_bp": 192,
-        "owner": "jdk.internal.ref.CleanerImpl$PhantomCleanableRef#referent"
+        "owner": "java.util.jar.JarFile$JarFileEntry#this$0"
       },
       {
         "obj_index_1based": 76372,
@@ -232318,7 +232318,7 @@
         "shallow": 64,
         "retained": 598568,
         "pct_bp": 192,
-        "owner": "jdk.internal.ref.CleanerImpl$PhantomCleanableRef#referent"
+        "owner": "java.util.jar.JarFile$JarFileEntry#this$0"
       },
       {
         "obj_index_1based": 76390,
@@ -232326,7 +232326,7 @@
         "shallow": 80,
         "retained": 302304,
         "pct_bp": 97,
-        "owner": "java.util.zip.ZipFile$CleanableResource#zsrc"
+        "owner": "java.util.HashMap$Node#value"
       },
       {
         "obj_index_1based": 883869,
@@ -232334,7 +232334,7 @@
         "shallow": 80,
         "retained": 302304,
         "pct_bp": 97,
-        "owner": "java.util.zip.ZipFile$CleanableResource#zsrc"
+        "owner": "java.util.HashMap$Node#value"
       },
       {
         "obj_index_1based": 7275,
@@ -232358,7 +232358,7 @@
         "shallow": 88,
         "retained": 114336,
         "pct_bp": 37,
-        "owner": "jdk.internal.loader.NativeLibraries#loader"
+        "owner": "java.security.ProtectionDomain#classloader"
       },
       {
         "obj_index_1based": 878469,
@@ -232382,7 +232382,7 @@
         "shallow": 88,
         "retained": 74152,
         "pct_bp": 24,
-        "owner": "jdk.internal.loader.NativeLibraries#loader"
+        "owner": "java.security.ProtectionDomain#classloader"
       },
       {
         "obj_index_1based": 883950,
@@ -232390,7 +232390,7 @@
         "shallow": 80,
         "retained": 69856,
         "pct_bp": 22,
-        "owner": "java.util.zip.ZipFile$CleanableResource#zsrc"
+        "owner": "java.util.HashMap$Node#value"
       },
       {
         "obj_index_1based": 948402,
@@ -232406,7 +232406,7 @@
         "shallow": 80,
         "retained": 64264,
         "pct_bp": 21,
-        "owner": "java.util.zip.ZipFile$CleanableResource#zsrc"
+        "owner": "java.util.HashMap$Node#value"
       },
       {
         "obj_index_1based": 950182,
@@ -232422,7 +232422,7 @@
         "shallow": 96,
         "retained": 58648,
         "pct_bp": 19,
-        "owner": "java.net.URLClassLoader#parent"
+        "owner": "jdk.internal.loader.BuiltinClassLoader$LoadedModule#loader"
       },
       {
         "obj_index_1based": 882059,
@@ -232430,7 +232430,7 @@
         "shallow": 104,
         "retained": 54968,
         "pct_bp": 18,
-        "owner": "java.security.Provider$Service#provider"
+        "owner": "java.security.MessageDigest$Delegate$CloneableDelegate#provider"
       },
       {
         "obj_index_1based": 814657,
@@ -232438,7 +232438,7 @@
         "shallow": 80,
         "retained": 53776,
         "pct_bp": 17,
-        "owner": "java.util.zip.ZipFile$CleanableResource#zsrc"
+        "owner": "java.util.HashMap$Node#value"
       },
       {
         "obj_index_1based": 950519,
@@ -235497,16 +235497,8 @@
         "total_elements": 748374,
         "total_retained": 1236512,
         "container_count": 24979,
-        "holder_instances": 23997
-      },
-      {
-        "holder_class": "cafesat.sat.Vector",
-        "field": "underlying",
-        "container_kind": "object array",
-        "total_elements": 732280,
-        "total_retained": 3514944,
-        "container_count": 36614,
-        "holder_instances": 36614
+        "holder_instances": 23997,
+        "total_wasted_slots": 0
       },
       {
         "holder_class": "java.util.zip.ZipFile$Source",
@@ -235515,7 +235507,8 @@
         "total_elements": 730447,
         "total_retained": 730640,
         "container_count": 10,
-        "holder_instances": 10
+        "holder_instances": 10,
+        "total_wasted_slots": 0
       },
       {
         "holder_class": "cafesat.sat.Solver$Clause",
@@ -235524,7 +235517,8 @@
         "total_elements": 151616,
         "total_retained": 1698504,
         "container_count": 65565,
-        "holder_instances": 65565
+        "holder_instances": 65565,
+        "total_wasted_slots": 0
       },
       {
         "holder_class": "scala.collection.immutable.BitmapIndexedSetNode",
@@ -235533,16 +235527,18 @@
         "total_elements": 94791,
         "total_retained": 34364976,
         "container_count": 22790,
-        "holder_instances": 22791
+        "holder_instances": 22791,
+        "total_wasted_slots": 0
       },
       {
         "holder_class": "java.util.concurrent.ConcurrentHashMap$Node",
         "field": "val",
         "container_kind": "mixed",
-        "total_elements": 88917,
+        "total_elements": 88926,
         "total_retained": 99336,
         "container_count": 380,
-        "holder_instances": 7007
+        "holder_instances": 7007,
+        "total_wasted_slots": 260
       },
       {
         "holder_class": "scala.collection.immutable.BitmapIndexedSetNode",
@@ -235551,7 +235547,8 @@
         "total_elements": 72085,
         "total_retained": 674856,
         "container_count": 22410,
-        "holder_instances": 22791
+        "holder_instances": 22791,
+        "total_wasted_slots": 0
       },
       {
         "holder_class": "cafesat.sat.Solver",
@@ -235560,7 +235557,8 @@
         "total_elements": 36614,
         "total_retained": 4540184,
         "container_count": 1,
-        "holder_instances": 1
+        "holder_instances": 1,
+        "total_wasted_slots": 0
       },
       {
         "holder_class": "java.util.zip.ZipFile$Source",
@@ -235569,16 +235567,8 @@
         "total_elements": 24762,
         "total_retained": 99232,
         "container_count": 10,
-        "holder_instances": 10
-      },
-      {
-        "holder_class": "java.util.HashMap",
-        "field": "table",
-        "container_kind": "object array",
-        "total_elements": 20840,
-        "total_retained": 1686216,
-        "container_count": 349,
-        "holder_instances": 361
+        "holder_instances": 10,
+        "total_wasted_slots": 0
       },
       {
         "holder_class": "cafesat.common.FixedIntStack",
@@ -235587,7 +235577,8 @@
         "total_elements": 18307,
         "total_retained": 73248,
         "container_count": 1,
-        "holder_instances": 1
+        "holder_instances": 1,
+        "total_wasted_slots": 0
       },
       {
         "holder_class": "cafesat.sat.Solver",
@@ -235596,7 +235587,8 @@
         "total_elements": 18307,
         "total_retained": 73248,
         "container_count": 1,
-        "holder_instances": 1
+        "holder_instances": 1,
+        "total_wasted_slots": 0
       },
       {
         "holder_class": "cafesat.sat.Solver",
@@ -235605,16 +235597,8 @@
         "total_elements": 18307,
         "total_retained": 73248,
         "container_count": 1,
-        "holder_instances": 1
-      },
-      {
-        "holder_class": "cafesat.sat.Solver",
-        "field": "reasons",
-        "container_kind": "object array",
-        "total_elements": 18307,
-        "total_retained": 73248,
-        "container_count": 1,
-        "holder_instances": 1
+        "holder_instances": 1,
+        "total_wasted_slots": 0
       },
       {
         "holder_class": "cafesat.sat.Solver",
@@ -235623,7 +235607,8 @@
         "total_elements": 18307,
         "total_retained": 18328,
         "container_count": 1,
-        "holder_instances": 1
+        "holder_instances": 1,
+        "total_wasted_slots": 0
       },
       {
         "holder_class": "java.io.BufferedWriter",
@@ -235632,16 +235617,18 @@
         "total_elements": 16384,
         "total_retained": 32800,
         "container_count": 2,
-        "holder_instances": 2
+        "holder_instances": 2,
+        "total_wasted_slots": 0
       },
       {
-        "holder_class": "java.util.concurrent.ConcurrentHashMap",
+        "holder_class": "java.util.HashMap",
         "field": "table",
         "container_kind": "object array",
-        "total_elements": 15472,
-        "total_retained": 629248,
-        "container_count": 93,
-        "holder_instances": 117
+        "total_elements": 7601,
+        "total_retained": 1686216,
+        "container_count": 349,
+        "holder_instances": 361,
+        "total_wasted_slots": 13239
       },
       {
         "holder_class": "java.util.jar.Manifest",
@@ -235650,25 +235637,18 @@
         "total_elements": 5778,
         "total_retained": 1182480,
         "container_count": 8,
-        "holder_instances": 8
+        "holder_instances": 8,
+        "total_wasted_slots": 2414
       },
       {
-        "holder_class": "java.lang.invoke.MethodTypeForm",
-        "field": "lambdaForms",
+        "holder_class": "java.util.concurrent.ConcurrentHashMap",
+        "field": "table",
         "container_kind": "object array",
-        "total_elements": 5642,
-        "total_retained": 42616,
-        "container_count": 217,
-        "holder_instances": 250
-      },
-      {
-        "holder_class": "java.util.ImmutableCollections$SetN",
-        "field": "elements",
-        "container_kind": "object array",
-        "total_elements": 5376,
-        "total_retained": 92240,
-        "container_count": 148,
-        "holder_instances": 149
+        "total_elements": 5576,
+        "total_retained": 629248,
+        "container_count": 93,
+        "holder_instances": 117,
+        "total_wasted_slots": 9896
       },
       {
         "holder_class": "jdk.internal.math.FDBigInteger",
@@ -235677,7 +235657,8 @@
         "total_elements": 4656,
         "total_retained": 24800,
         "container_count": 341,
-        "holder_instances": 341
+        "holder_instances": 341,
+        "total_wasted_slots": 0
       },
       {
         "holder_class": "java.util.zip.ZipFile$Source",
@@ -235686,7 +235667,8 @@
         "total_elements": 4128,
         "total_retained": 16712,
         "container_count": 10,
-        "holder_instances": 10
+        "holder_instances": 10,
+        "total_wasted_slots": 0
       },
       {
         "holder_class": "java.util.HashMap$Node",
@@ -235695,7 +235677,18 @@
         "total_elements": 3205,
         "total_retained": 11376,
         "container_count": 211,
-        "holder_instances": 10167
+        "holder_instances": 10167,
+        "total_wasted_slots": 165
+      },
+      {
+        "holder_class": "java.util.ImmutableCollections$SetN",
+        "field": "elements",
+        "container_kind": "object array",
+        "total_elements": 2688,
+        "total_retained": 92240,
+        "container_count": 148,
+        "holder_instances": 149,
+        "total_wasted_slots": 2688
       },
       {
         "holder_class": "java.lang.invoke.MethodType",
@@ -235704,16 +235697,48 @@
         "total_elements": 2368,
         "total_retained": 22520,
         "container_count": 717,
-        "holder_instances": 894
+        "holder_instances": 894,
+        "total_wasted_slots": 0
       },
       {
-        "holder_class": "java.util.LinkedHashMap",
-        "field": "table",
+        "holder_class": "jdk.internal.module.SystemModuleFinders$3",
+        "field": "val$hash",
+        "container_kind": "primitive array",
+        "total_elements": 1920,
+        "total_retained": 2880,
+        "container_count": 60,
+        "holder_instances": 60,
+        "total_wasted_slots": 0
+      },
+      {
+        "holder_class": "java.util.HashMap$KeySet",
+        "field": "this$0",
+        "container_kind": "map",
+        "total_elements": 1916,
+        "total_retained": 190216,
+        "container_count": 5,
+        "holder_instances": 5,
+        "total_wasted_slots": 2212
+      },
+      {
+        "holder_class": "java.util.regex.Pattern$BitClass",
+        "field": "bits",
+        "container_kind": "primitive array",
+        "total_elements": 1792,
+        "total_retained": 1904,
+        "container_count": 7,
+        "holder_instances": 7,
+        "total_wasted_slots": 0
+      },
+      {
+        "holder_class": "scala.collection.immutable.BitmapIndexedMapNode",
+        "field": "content",
         "container_kind": "object array",
-        "total_elements": 2312,
-        "total_retained": 10000,
-        "container_count": 47,
-        "holder_instances": 5826
+        "total_elements": 1674,
+        "total_retained": 124400,
+        "container_count": 217,
+        "holder_instances": 218,
+        "total_wasted_slots": 0
       }
     ],
     "biggest_single": [
@@ -235723,7 +235748,8 @@
         "container_class": "byte[]",
         "elements": 261187,
         "retained": 261208,
-        "capacity": 261187
+        "capacity": 261187,
+        "container_kind": "primitive array"
       },
       {
         "holder_class": "cafesat.sat.Solver",
@@ -235731,7 +235757,8 @@
         "container_class": "cafesat.sat.Vector[]",
         "elements": 36614,
         "retained": 4540184,
-        "capacity": 36614
+        "capacity": 36614,
+        "container_kind": "object array"
       },
       {
         "holder_class": "cafesat.common.FixedIntStack",
@@ -235739,7 +235766,8 @@
         "container_class": "int[]",
         "elements": 18307,
         "retained": 73248,
-        "capacity": 18307
+        "capacity": 18307,
+        "container_kind": "primitive array"
       },
       {
         "holder_class": "cafesat.sat.Solver",
@@ -235747,7 +235775,8 @@
         "container_class": "int[]",
         "elements": 18307,
         "retained": 73248,
-        "capacity": 18307
+        "capacity": 18307,
+        "container_kind": "primitive array"
       },
       {
         "holder_class": "cafesat.sat.Solver",
@@ -235755,15 +235784,8 @@
         "container_class": "int[]",
         "elements": 18307,
         "retained": 73248,
-        "capacity": 18307
-      },
-      {
-        "holder_class": "cafesat.sat.Solver",
-        "field": "reasons",
-        "container_class": "cafesat.sat.Solver$Clause[]",
-        "elements": 18307,
-        "retained": 73248,
-        "capacity": 18307
+        "capacity": 18307,
+        "container_kind": "primitive array"
       },
       {
         "holder_class": "cafesat.sat.Solver",
@@ -235771,7 +235793,8 @@
         "container_class": "boolean[]",
         "elements": 18307,
         "retained": 18328,
-        "capacity": 18307
+        "capacity": 18307,
+        "container_kind": "primitive array"
       },
       {
         "holder_class": "java.lang.String",
@@ -235779,7 +235802,8 @@
         "container_class": "byte[]",
         "elements": 12096,
         "retained": 12112,
-        "capacity": 12096
+        "capacity": 12096,
+        "container_kind": "primitive array"
       },
       {
         "holder_class": "cafesat.sat.Solver$Clause",
@@ -235787,7 +235811,8 @@
         "container_class": "int[]",
         "elements": 8908,
         "retained": 35648,
-        "capacity": 8908
+        "capacity": 8908,
+        "container_kind": "primitive array"
       },
       {
         "holder_class": "java.util.zip.ZipFile$Source",
@@ -235795,7 +235820,8 @@
         "container_class": "int[]",
         "elements": 8781,
         "retained": 35144,
-        "capacity": 8781
+        "capacity": 8781,
+        "container_kind": "primitive array"
       },
       {
         "holder_class": "java.io.BufferedWriter",
@@ -235803,15 +235829,8 @@
         "container_class": "char[]",
         "elements": 8192,
         "retained": 16400,
-        "capacity": 8192
-      },
-      {
-        "holder_class": "java.util.HashMap",
-        "field": "table",
-        "container_class": "java.util.HashMap$Node[]",
-        "elements": 4096,
-        "retained": 591048,
-        "capacity": 4096
+        "capacity": 8192,
+        "container_kind": "primitive array"
       },
       {
         "holder_class": "java.util.jar.Manifest",
@@ -235819,23 +235838,17 @@
         "container_class": "java.util.HashMap",
         "elements": 2889,
         "retained": 591096,
-        "capacity": 2889
+        "capacity": 4096,
+        "container_kind": "map"
       },
       {
-        "holder_class": "java.util.ImmutableCollections$SetN",
-        "field": "elements",
-        "container_class": "java.lang.Object[]",
-        "elements": 2126,
-        "retained": 61712,
-        "capacity": 2126
-      },
-      {
-        "holder_class": "java.util.concurrent.ConcurrentHashMap",
+        "holder_class": "java.util.HashMap",
         "field": "table",
-        "container_class": "java.util.concurrent.ConcurrentHashMap$Node[]",
+        "container_class": "java.util.HashMap$Node[]",
         "elements": 2048,
-        "retained": 65880,
-        "capacity": 2048
+        "retained": 591048,
+        "capacity": 4096,
+        "container_kind": "object array"
       },
       {
         "holder_class": "java.util.zip.ZipFile$Source",
@@ -235843,7 +235856,8 @@
         "container_class": "int[]",
         "elements": 1463,
         "retained": 5872,
-        "capacity": 1463
+        "capacity": 1463,
+        "container_kind": "primitive array"
       },
       {
         "holder_class": "java.util.concurrent.ConcurrentHashMap$Node",
@@ -235851,15 +235865,17 @@
         "container_class": "byte[]",
         "elements": 1446,
         "retained": 1464,
-        "capacity": 1446
+        "capacity": 1446,
+        "container_kind": "primitive array"
       },
       {
-        "holder_class": "sun.nio.ch.Util$BufferCache",
-        "field": "buffers",
-        "container_class": "java.nio.ByteBuffer[]",
-        "elements": 1024,
-        "retained": 4112,
-        "capacity": 1024
+        "holder_class": "java.util.ImmutableCollections$SetN",
+        "field": "elements",
+        "container_class": "java.lang.Object[]",
+        "elements": 1063,
+        "retained": 61712,
+        "capacity": 2126,
+        "container_kind": "object array"
       },
       {
         "holder_class": "java.util.HashMap$EntrySet",
@@ -235867,7 +235883,8 @@
         "container_class": "java.util.HashMap",
         "elements": 781,
         "retained": 140424,
-        "capacity": 781
+        "capacity": 2048,
+        "container_kind": "map"
       },
       {
         "holder_class": "java.util.HashMap$KeySet",
@@ -235875,7 +235892,8 @@
         "container_class": "java.util.HashMap",
         "elements": 781,
         "retained": 140424,
-        "capacity": 781
+        "capacity": 2048,
+        "container_kind": "map"
       },
       {
         "holder_class": "org.renaissance.core.BenchmarkDescriptor",
@@ -235883,7 +235901,26 @@
         "container_class": "java.util.HashMap",
         "elements": 781,
         "retained": 140424,
-        "capacity": 781
+        "capacity": 2048,
+        "container_kind": "map"
+      },
+      {
+        "holder_class": "jdk.internal.util.ReferencedKeyMap",
+        "field": "map",
+        "container_class": "java.util.concurrent.ConcurrentHashMap",
+        "elements": 737,
+        "retained": 65944,
+        "capacity": 2048,
+        "container_kind": "map"
+      },
+      {
+        "holder_class": "java.util.concurrent.ConcurrentHashMap",
+        "field": "table",
+        "container_class": "java.util.concurrent.ConcurrentHashMap$Node[]",
+        "elements": 737,
+        "retained": 65880,
+        "capacity": 2048,
+        "container_kind": "object array"
       },
       {
         "holder_class": "sun.text.resources.cldr.FormatData",
@@ -235891,7 +235928,26 @@
         "container_class": "java.util.HashMap",
         "elements": 657,
         "retained": 28952,
-        "capacity": 657
+        "capacity": 1024,
+        "container_kind": "map"
+      },
+      {
+        "holder_class": "jdk.internal.loader.ArchivedClassLoaders",
+        "field": "packageToModule",
+        "container_class": "java.util.concurrent.ConcurrentHashMap",
+        "elements": 639,
+        "retained": 34864,
+        "capacity": 2048,
+        "container_kind": "map"
+      },
+      {
+        "holder_class": "jdk.internal.loader.ClassLoaders$AppClassLoader",
+        "field": "parallelLockMap",
+        "container_class": "java.util.concurrent.ConcurrentHashMap",
+        "elements": 638,
+        "retained": 50616,
+        "capacity": 2048,
+        "container_kind": "map"
       },
       {
         "holder_class": "java.util.HashSet",
@@ -235899,7 +235955,8 @@
         "container_class": "java.util.HashMap",
         "elements": 604,
         "retained": 23488,
-        "capacity": 604
+        "capacity": 1024,
+        "container_kind": "map"
       },
       {
         "holder_class": "java.util.Arrays$ArrayList",
@@ -235907,15 +235964,8 @@
         "container_class": "java.lang.String[]",
         "elements": 604,
         "retained": 2432,
-        "capacity": 604
-      },
-      {
-        "holder_class": "java.util.ArrayList",
-        "field": "elementData",
-        "container_class": "java.lang.Object[]",
-        "elements": 549,
-        "retained": 44512,
-        "capacity": 549
+        "capacity": 604,
+        "container_kind": "object array"
       }
     ],
     "truncated": false

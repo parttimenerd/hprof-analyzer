@@ -1010,6 +1010,11 @@ pub struct FieldAttributionRow {
     /// class has no histogram row. Additive.
     #[serde(default)]
     pub holder_instances: u64,
+    /// Sum of (capacity - elements) across all distinct containers reached by
+    /// this field. Counts empty slots, not bytes. Zero for classified
+    /// collections (their capacity is not cheaply available). Additive.
+    #[serde(default)]
+    pub total_wasted_slots: u64,
 }
 
 /// One holder `Class#field` whose single largest container is ranked by element count.
@@ -1028,6 +1033,9 @@ pub struct FieldAttributionBiggestRow {
     /// note; the backing array's true length is not cheaply joinable). Additive.
     #[serde(default)]
     pub capacity: u64,
+    /// Kind of the single largest container (same labels as `FieldAttributionRow::container_kind`).
+    #[serde(default)]
+    pub container_kind: String,
 }
 
 /// Container attribution by holder `Class#field`, present only when `--collections` was passed.
