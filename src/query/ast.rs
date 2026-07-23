@@ -137,6 +137,11 @@ pub enum Expr {
     Lit(Value),
     Binary { op: ArithOp, lhs: Box<Expr>, rhs: Box<Expr> },
     Unary { op: UnaryOp, arg: Box<Expr> },
+    /// A method/property invocation on a resolved receiver: `receiver.name(args)`.
+    /// Zero-arg for property forms. Dispatch is a FIXED table (MAT-API aliases +
+    /// emulated JDK methods) keyed on name + receiver class — NOT reflection.
+    /// Unknown methods are rejected at plan time (D5).
+    Method { receiver: Box<Expr>, name: String, args: Vec<Expr> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

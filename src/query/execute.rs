@@ -781,9 +781,9 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 arith(&l, *op, &r)
             }
             Expr::Unary { op, arg } => unary(*op, &self.eval_expr(arg, src_idx, class_id, blob)),
+            Expr::Method { .. } => QueryValue::Null, // D2 fills this
         }
     }
-    /// Recursively evaluate an arithmetic `Expr` for an array object. Same
     /// semantics as `eval_expr`; delegates attr leaves to `project_array_attr`.
     fn eval_expr_array(&self, e: &Expr, src_idx: usize, class_name: &str, length: u32) -> QueryValue {
         match e {
@@ -795,6 +795,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 arith(&l, *op, &r)
             }
             Expr::Unary { op, arg } => unary(*op, &self.eval_expr_array(arg, src_idx, class_name, length)),
+            Expr::Method { .. } => QueryValue::Null, // D2 fills this
         }
     }
     fn decode_field(&self, class_id: u64, name: &str, blob: &[u8]) -> QueryValue {
@@ -1692,6 +1693,7 @@ pub fn expr_name(e: &Expr) -> String {
             UnaryOp::Neg => format!("-{}", expr_name(arg)),
             UnaryOp::Pos => expr_name(arg),
         },
+        Expr::Method { name, args, .. } => format!("{name}({})", args.iter().map(expr_name).collect::<Vec<_>>().join(", ")), // D2 fills this
     }
 }
 

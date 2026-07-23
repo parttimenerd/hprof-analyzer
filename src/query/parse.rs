@@ -264,7 +264,33 @@ where
             .then_ignore(just(Token::RParen))
             .map(|arg| Expr::Attr(Attr::ToHex(Box::new(arg))));
 
-        let primary = tohex
+        // `receiver.name(args)` — the greedy Ident regex swallows `s.getName` as a
+        // single token. We match any dotted ident (contains `.`, does NOT end with
+        // `.`) immediately followed by `(…)`, splitting on the last `.` to separate
+        // the receiver alias from the method name. Zero-arg → empty Vec.
+        let method_call = select! {
+            Token::Ident(s) if s.contains('.') && !s.ends_with('.') => s
+        }
+        .then(
+            just(Token::LParen)
+                .ignore_then(
+                    expr.clone()
+                        .separated_by(just(Token::Comma))
+                        .collect::<Vec<_>>(),
+                )
+                .then_ignore(just(Token::RParen)),
+        )
+        .map(|(dotted, args): (String, Vec<Expr>)| {
+            let (recv, meth) = dotted.rsplit_once('.').unwrap();
+            Expr::Method {
+                receiver: Box::new(Expr::Attr(Attr::Field(recv.to_string()))),
+                name: meth.to_string(),
+                args,
+            }
+        });
+
+        let primary = method_call
+            .or(tohex)
             .or(lit)
             .or(just(Token::LParen)
                 .ignore_then(expr.clone())
@@ -792,6 +818,10 @@ fn normalize_expr(e: &mut Expr, alias: Option<&str>) {
             normalize_expr(rhs, alias);
         }
         Expr::Unary { arg, .. } => normalize_expr(arg, alias),
+        Expr::Method { receiver, args, .. } => { // D2 fills this
+            normalize_expr(receiver, alias);
+            for a in args { normalize_expr(a, alias); }
+        }
     }
 }
 
@@ -3527,5 +3557,60 @@ mod tests {
     fn parse_and_eval_tohex() {
         assert!(super::parse("SELECT toHex(@objectAddress) FROM java.lang.Thread LIMIT 1").is_ok());
         assert!(super::parse("SELECT toHex(255) FROM java.lang.Thread").is_ok());
+    }
+
+    // ============================================================
+    // Group D1 — method-call postfix syntax: receiver.name(args)
+    // ============================================================
+
+    #[test]
+    fn parse_method_postfix() {
+        assert!(super::parse("SELECT s.getName() FROM java.lang.Thread s").is_ok());
+        assert!(super::parse("SELECT i.intValue() FROM java.lang.Integer i").is_ok());
+        assert!(super::parse("SELECT a.get(0) FROM java.util.ArrayList a").is_ok());
+        assert!(super::parse("SELECT s.value.@length FROM java.lang.String s").is_ok());
+        assert!(super::parse("SELECT i.intValue() * 2 FROM java.lang.Integer i").is_ok());
+    }
+
+    #[test]
+    fn parse_method_postfix_ast_shape() {
+        // s.getName() → Expr::Method { receiver: Attr::Field("s"), name: "getName", args: [] }
+        let q = super::parse("SELECT s.getName() FROM java.lang.Thread s").unwrap();
+        match &q.select[0] {
+            SelectItem::Expr(e) => match e.as_ref() {
+                Expr::Method { receiver, name, args } => {
+                    assert!(
+                        matches!(receiver.as_ref(), Expr::Attr(Attr::Field(f)) if f == "s"),
+                        "expected Attr::Field(\"s\"), got {receiver:?}"
+                    );
+                    assert_eq!(name, "getName");
+                    assert!(args.is_empty(), "expected no args, got {args:?}");
+                }
+                other => panic!("expected Expr::Method, got {other:?}"),
+            },
+            other => panic!("expected SelectItem::Expr, got {other:?}"),
+        }
+
+        // a.get(0) → Expr::Method { receiver: Attr::Field("a"), name: "get", args: [Lit(Int(0))] }
+        let q = super::parse("SELECT a.get(0) FROM java.util.ArrayList a").unwrap();
+        match &q.select[0] {
+            SelectItem::Expr(e) => match e.as_ref() {
+                Expr::Method { receiver, name, args } => {
+                    assert!(
+                        matches!(receiver.as_ref(), Expr::Attr(Attr::Field(f)) if f == "a"),
+                        "expected Attr::Field(\"a\"), got {receiver:?}"
+                    );
+                    assert_eq!(name, "get");
+                    assert_eq!(args.len(), 1, "expected 1 arg, got {args:?}");
+                    assert!(
+                        matches!(&args[0], Expr::Lit(Value::Int(0))),
+                        "expected Int(0), got {:?}",
+                        &args[0]
+                    );
+                }
+                other => panic!("expected Expr::Method, got {other:?}"),
+            },
+            other => panic!("expected SelectItem::Expr, got {other:?}"),
+        }
     }
 }

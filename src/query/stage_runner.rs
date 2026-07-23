@@ -652,10 +652,10 @@ fn expr_has_attr(e: &Expr, pred: &impl Fn(&Attr) -> bool) -> bool {
         Expr::Lit(_) => false,
         Expr::Binary { lhs, rhs, .. } => expr_has_attr(lhs, pred) || expr_has_attr(rhs, pred),
         Expr::Unary { arg, .. } => expr_has_attr(arg, pred),
+        Expr::Method { receiver, args, .. } => // D2 fills this
+            expr_has_attr(receiver, pred) || args.iter().any(|a| expr_has_attr(a, pred)),
     }
 }
-
-/// Walk an Expr tree and return the first `Attr` leaf matching `pred`, if any.
 fn expr_find_attr<'e>(e: &'e Expr, pred: &impl Fn(&Attr) -> bool) -> Option<&'e Attr> {
     match e {
         Expr::Attr(a) if pred(a) => Some(a),
@@ -664,10 +664,10 @@ fn expr_find_attr<'e>(e: &'e Expr, pred: &impl Fn(&Attr) -> bool) -> Option<&'e 
             expr_find_attr(lhs, pred).or_else(|| expr_find_attr(rhs, pred))
         }
         Expr::Unary { arg, .. } => expr_find_attr(arg, pred),
+        Expr::Method { receiver, args, .. } => // D2 fills this
+            expr_find_attr(receiver, pred).or_else(|| args.iter().find_map(|a| expr_find_attr(a, pred))),
     }
 }
-
-/// Evaluate an `Expr` in the late phase, where exactly one category of Attr is
 /// "known" (its resolved value passed as `known`), identified by `is_known`.
 /// Any other Attr leaf is unknown at late phase → `QueryValue::Null`. Literals
 /// fold; Binary/Unary compose with Java arithmetic semantics (from execute.rs).
@@ -686,6 +686,7 @@ fn eval_late_expr(
             &eval_late_expr(rhs, is_known, known),
         ),
         Expr::Unary { op, arg } => unary(*op, &eval_late_expr(arg, is_known, known)),
+        Expr::Method { .. } => QueryValue::Null, // D2 fills this
     }
 }
 

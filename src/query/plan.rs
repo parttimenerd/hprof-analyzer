@@ -270,10 +270,12 @@ fn expr_for_each_attr(e: &Expr, f: &mut impl FnMut(&Attr)) {
             expr_for_each_attr(rhs, f);
         }
         Expr::Unary { arg, .. } => expr_for_each_attr(arg, f),
+        Expr::Method { receiver, args, .. } => { // D2 fills this
+            expr_for_each_attr(receiver, f);
+            for a in args { expr_for_each_attr(a, f); }
+        }
     }
 }
-
-/// Return true iff any `Attr` leaf in the `Expr` tree satisfies `pred`.
 fn expr_any_attr(e: &Expr, pred: impl Fn(&Attr) -> bool) -> bool {
     let mut found = false;
     expr_for_each_attr(e, &mut |a| {
