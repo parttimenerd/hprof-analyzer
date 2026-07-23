@@ -1127,6 +1127,34 @@ fn suggest_for_found(found: Option<&Token>) -> Option<String> {
     }
 }
 
+/// A hint for an `unexpected LParen` error: when a call like `SUMM(...)` names a
+/// function that doesn't exist, chumsky reports the `(` (the ident was consumed
+/// as a bare field), which points a caret at the paren rather than the real
+/// mistake. This looks back from the `(` at byte offset `lparen` for the callee
+/// identifier and, if it is a near-miss for a known function/aggregate, returns
+/// the intended name. Only known callables are candidates, so a valid call like
+/// `COUNT(` never triggers it.
+fn unknown_call_hint(src: &str, lparen: usize) -> Option<String> {
+    let before = &src[..lparen];
+    let trimmed = before.trim_end();
+    let start = trimmed
+        .rfind(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let callee = &trimmed[start..];
+    if callee.is_empty() {
+        return None;
+    }
+    // Don't suggest for a name that is already a valid callable.
+    let is_known = |name: &str| {
+        AGG_FUNCS.iter().chain(FUNCS.iter()).chain(METHODS.iter()).any(|k| k.eq_ignore_ascii_case(name))
+    };
+    if is_known(callee) {
+        return None;
+    }
+    did_you_mean(callee, AGG_FUNCS.iter().chain(FUNCS.iter()).copied())
+}
+
 /// A hint to append to an end-of-input parse error: if the source looks like a
 /// `SELECT ...` with no `FROM` clause, the most likely mistake is a missing
 /// FROM. Word-boundary, case-insensitive so `fromage` or `selection` don't
@@ -1164,6 +1192,15 @@ fn compact_error(src: &str, e: &Rich<'_, Token>) -> String {
             if e.found().is_none() {
                 if let Some(hint) = missing_from_hint(src) {
                     return format!("unexpected {found} at {line}:{col} — {hint}");
+                }
+            }
+            // An `unexpected LParen` usually means the preceding word was meant to
+            // be a function call but names an unknown function; suggest the nearest.
+            if matches!(e.found(), Some(Token::LParen)) {
+                if let Some(callee) = unknown_call_hint(src, span.start) {
+                    return format!(
+                        "unexpected {found} at {line}:{col} — did you mean `{callee}`?"
+                    );
                 }
             }
             let suggestion = suggest_for_found(e.found());
@@ -1231,6 +1268,13 @@ pub fn parse_or_report(src: &str) -> Result<Query, String> {
                                 format!("unexpected {found} — {hint}")
                             } else {
                                 format!("unexpected {found}")
+                            }
+                        } else if matches!(e.found(), Some(Token::LParen)) {
+                            match unknown_call_hint(src, span.start) {
+                                Some(callee) => {
+                                    format!("unexpected {found} — did you mean `{callee}`?")
+                                }
+                                None => format!("unexpected {found}"),
                             }
                         } else {
                             match suggest_for_found(e.found()) {
@@ -2836,6 +2880,35 @@ mod tests {
         assert!(missing_from_hint("SELECT selection").is_some());
         // Negative: no SELECT at all.
         assert!(missing_from_hint("DELETE X").is_none());
+    }
+
+    #[test]
+    fn unknown_function_call_suggests_nearest() {
+        // `SUMM(` — a typo of the aggregate `SUM` — should suggest `SUM`
+        // instead of the bare `unexpected LParen` that names the paren.
+        let err = parse("SELECT SUMM(@usedHeapSize) FROM java.lang.Thread")
+            .expect_err("SUMM is not a function");
+        assert!(
+            err.0.contains("did you mean") && err.0.contains("SUM"),
+            "expected a SUM suggestion for SUMM(, got: {}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn unknown_call_hint_helper_finds_the_callee() {
+        // The word immediately before `(` at the given byte offset is the callee.
+        let src = "SELECT SUMM(x) FROM C";
+        let lparen = src.find('(').unwrap();
+        assert_eq!(unknown_call_hint(src, lparen).as_deref(), Some("SUM"));
+        // A known function name yields no hint.
+        let src2 = "SELECT COUNT(x) FROM C";
+        let lp2 = src2.find('(').unwrap();
+        assert!(unknown_call_hint(src2, lp2).is_none());
+        // A wildly different name (no near match) yields no hint.
+        let src3 = "SELECT zzzzzz(x) FROM C";
+        let lp3 = src3.find('(').unwrap();
+        assert!(unknown_call_hint(src3, lp3).is_none());
     }
 
     #[test]
