@@ -318,20 +318,31 @@ pub fn refwalk_has_length_tail(q: &crate::query::ast::Query) -> bool {
     fn attr_has(a: &Attr) -> bool {
         match a {
             Attr::RefPath { tail, .. } => matches!(tail.as_ref(), Attr::Length) || attr_has(tail),
+            Attr::ToHex(inner) => expr_has(inner),
             _ => false,
+        }
+    }
+    // Mirror plan.rs `expr_for_each_attr`: a RefPath tail can hide inside any
+    // Binary/Unary/Method sub-expression, so the full tree must be walked (not
+    // just a bare-attr operand). The deferral gate + ref_walk arming both scan
+    // the whole expr on BOTH sides, so this capture-arming must match or a
+    // deferred term reads a Null tail and silently drops every row.
+    fn expr_has(e: &Expr) -> bool {
+        match e {
+            Expr::Attr(a) => attr_has(a),
+            Expr::Lit(_) => false,
+            Expr::Binary { lhs, rhs, .. } => expr_has(lhs) || expr_has(rhs),
+            Expr::Unary { arg, .. } => expr_has(arg),
+            Expr::Method { receiver, args, .. } => {
+                expr_has(receiver) || args.iter().any(expr_has)
+            }
         }
     }
     fn pred_has(p: &Predicate) -> bool {
         match p {
             Predicate::And(a, b) | Predicate::Or(a, b) => pred_has(a) || pred_has(b),
             Predicate::Not(a) => pred_has(a),
-            Predicate::Compare { lhs, .. } => {
-                if let Expr::Attr(a) = lhs {
-                    attr_has(a)
-                } else {
-                    false
-                }
-            }
+            Predicate::Compare { lhs, rhs, .. } => expr_has(lhs) || expr_has(rhs),
             Predicate::InSubquery { .. } | Predicate::InstanceOf(_) => false,
         }
     }
@@ -339,6 +350,7 @@ pub fn refwalk_has_length_tail(q: &crate::query::ast::Query) -> bool {
     let select_has = q.select.iter().any(|item| match item {
         SelectItem::Attr(a) => attr_has(a),
         SelectItem::Aggregate { arg, .. } => matches!(arg.as_ref(), SelectItem::Attr(a) if attr_has(a)),
+        SelectItem::Expr(e) => expr_has(e),
         _ => false,
     });
     select_has || q.where_.as_ref().is_some_and(pred_has)
@@ -361,20 +373,27 @@ pub fn refwalk_has_address_tail(q: &crate::query::ast::Query) -> bool {
             Attr::RefPath { tail, .. } => {
                 matches!(tail.as_ref(), Attr::ObjectAddress) || attr_has(tail)
             }
+            Attr::ToHex(inner) => expr_has(inner),
             _ => false,
+        }
+    }
+    // Full-tree walk, mirroring `refwalk_has_length_tail` — see the note there.
+    fn expr_has(e: &Expr) -> bool {
+        match e {
+            Expr::Attr(a) => attr_has(a),
+            Expr::Lit(_) => false,
+            Expr::Binary { lhs, rhs, .. } => expr_has(lhs) || expr_has(rhs),
+            Expr::Unary { arg, .. } => expr_has(arg),
+            Expr::Method { receiver, args, .. } => {
+                expr_has(receiver) || args.iter().any(expr_has)
+            }
         }
     }
     fn pred_has(p: &Predicate) -> bool {
         match p {
             Predicate::And(a, b) | Predicate::Or(a, b) => pred_has(a) || pred_has(b),
             Predicate::Not(a) => pred_has(a),
-            Predicate::Compare { lhs, .. } => {
-                if let Expr::Attr(a) = lhs {
-                    attr_has(a)
-                } else {
-                    false
-                }
-            }
+            Predicate::Compare { lhs, rhs, .. } => expr_has(lhs) || expr_has(rhs),
             Predicate::InSubquery { .. } | Predicate::InstanceOf(_) => false,
         }
     }
@@ -382,6 +401,7 @@ pub fn refwalk_has_address_tail(q: &crate::query::ast::Query) -> bool {
     let select_has = q.select.iter().any(|item| match item {
         SelectItem::Attr(a) => attr_has(a),
         SelectItem::Aggregate { arg, .. } => matches!(arg.as_ref(), SelectItem::Attr(a) if attr_has(a)),
+        SelectItem::Expr(e) => expr_has(e),
         _ => false,
     });
     select_has || q.where_.as_ref().is_some_and(pred_has)
@@ -529,6 +549,43 @@ mod tests {
         // A bare @length (no RefPath) is the array-FROM path, not a RefPath tail.
         let q = crate::query::parse::parse("SELECT @length FROM char[]").unwrap();
         assert!(!refwalk_has_length_tail(&q));
+    }
+
+    #[test]
+    fn refwalk_has_length_tail_detects_rhs_and_wrapped() {
+        // Tail on the RHS of a comparison must arm capture (the deferral gate and
+        // ref_walk arming both scan RHS, so capture must too or rows silently drop).
+        let q = crate::query::parse::parse(
+            "SELECT s FROM java.lang.String s WHERE 3 < s.value.@length",
+        )
+        .unwrap();
+        assert!(refwalk_has_length_tail(&q), "RHS @length tail must arm capture");
+        // Tail wrapped in an arithmetic Binary on the LHS.
+        let q = crate::query::parse::parse(
+            "SELECT s FROM java.lang.String s WHERE s.value.@length + 1 > 4",
+        )
+        .unwrap();
+        assert!(refwalk_has_length_tail(&q), "wrapped @length tail must arm capture");
+        // Tail wrapped in a SELECT-list expression.
+        let q = crate::query::parse::parse(
+            "SELECT s.value.@length + 1 FROM java.lang.String s",
+        )
+        .unwrap();
+        assert!(refwalk_has_length_tail(&q), "SELECT-expr @length tail must arm capture");
+    }
+
+    #[test]
+    fn refwalk_has_address_tail_detects_rhs_and_wrapped() {
+        let q = crate::query::parse::parse(
+            "SELECT s FROM java.util.HashMap$Node s WHERE 0 < s.key.@objectAddress",
+        )
+        .unwrap();
+        assert!(refwalk_has_address_tail(&q), "RHS @objectAddress tail must arm capture");
+        let q = crate::query::parse::parse(
+            "SELECT s.value.@objectAddress + 0 FROM java.util.HashMap$Node s",
+        )
+        .unwrap();
+        assert!(refwalk_has_address_tail(&q), "SELECT-expr @objectAddress tail must arm capture");
     }
 
     #[test]
