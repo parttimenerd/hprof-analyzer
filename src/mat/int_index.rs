@@ -26,7 +26,10 @@ pub struct IntIndexStreamer<W: Write> {
     /// `last + compressed_page_len`. After all pages, the last element equals
     /// the body length (= start of the pageStart array in the footer).
     page_starts: Vec<i64>,
-    /// Bytes of compressed body written so far.
+    /// Absolute byte offset of the next compressed page. Initialised to the
+    /// stream's start position (0 for a normal body, `divider` for a header
+    /// index) and advanced by each flushed page's compressed length, so that
+    /// every appended `page_starts` entry is already an absolute file offset.
     written: i64,
     /// Total number of values pushed.
     size: i64,
@@ -35,11 +38,23 @@ pub struct IntIndexStreamer<W: Write> {
 #[allow(dead_code)]
 impl<W: Write> IntIndexStreamer<W> {
     pub fn new(w: W) -> Self {
+        Self::with_position(w, 0)
+    }
+
+    /// Like `new`, but starts the `pageStart` array at `start` instead of 0.
+    ///
+    /// MAT's `IndexWriter.openStream(out, position)` lets a streamer append its
+    /// pages at a non-zero file offset (used for the header index of an
+    /// IntArray1N file, which begins right after the body region). `written`
+    /// is seeded with `start`; each recorded pageStart is therefore an absolute
+    /// file offset, and the final footer entry is `start + body_len` (= start
+    /// of that index's own footer within the file).
+    pub fn with_position(w: W, start: i64) -> Self {
         Self {
             w,
             page: Vec::with_capacity(PAGE_SIZE_INT),
-            page_starts: vec![0],
-            written: 0,
+            page_starts: vec![start],
+            written: start,
             size: 0,
         }
     }
