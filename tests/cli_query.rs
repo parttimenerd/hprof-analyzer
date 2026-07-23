@@ -1733,6 +1733,41 @@ fn retained_set_query_returns_rows_via_analyze_path() {
     );
 }
 
+/// Row-EXPANDING escalated ops (`dominators(x)`, `AS RETAINED SET`) emit rows
+/// that are NOT the originally matched objects — they are dominators / retained
+/// members — so the reachable-only source-index sidecar no longer aligns 1:1
+/// with the output rows. `run_oql_escalated` deliberately SKIPS reachability
+/// pruning for those slots. This guards that interaction through the `query`
+/// subcommand (reachable-only default): the query must render real rows, never
+/// crash on the sidecar mismatch, and never emit the pipeline error. Both the
+/// default and `--all` must succeed and produce the same row count (pruning is
+/// skipped either way for these ops).
+#[test]
+fn escalated_row_expanding_ops_survive_reachable_only() {
+    let Some(hprof) = philosophers() else { return };
+    for oql in [
+        "SELECT dominators(t) FROM java.lang.Thread t LIMIT 3",
+        "SELECT s AS RETAINED SET FROM java.lang.Thread s LIMIT 2",
+    ] {
+        let def = run_query_stdout(&hprof, oql);
+        let all = run_query_args(&hprof, &["--all"], oql);
+        assert!(
+            !def.to_lowercase().contains("the full analysis pipeline"),
+            "row-expanding escalated op hit the pipeline error ({oql}):\n{def}"
+        );
+        assert!(
+            !def.contains("error:"),
+            "row-expanding escalated op errored under reachable-only ({oql}):\n{def}"
+        );
+        assert_eq!(
+            parse_row_count(&def),
+            parse_row_count(&all),
+            "row-expanding ops skip reachability pruning, so default and --all \
+             row counts must match ({oql})"
+        );
+    }
+}
+
 /// `UNION` of two classes returns at least as many rows as either branch alone
 /// (set union is monotone: |A ∪ B| >= max(|A|, |B|)). Exercised through the
 /// `query` subcommand, which prints an `(N row[s])` footer per query.
