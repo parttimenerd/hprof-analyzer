@@ -231,10 +231,17 @@ where
                 "GCRoots" => Attr::GcRoots,
                 "GCRootInfo" | "info" => Attr::GcRootInfo,
                 other => {
-                    emitter.emit(Rich::custom(
-                        e.span(),
-                        format!("unknown @attribute: @{other}"),
-                    ));
+                    // Suggest the nearest known @attribute on a typo
+                    // (@objectAdress -> @objectAddress). ATTRIBUTES carries the
+                    // `@`-prefixed names; match against the bare form.
+                    let msg = match did_you_mean(
+                        other,
+                        ATTRIBUTES.iter().map(|a| a.trim_start_matches('@')),
+                    ) {
+                        Some(s) => format!("unknown @attribute: @{other} — did you mean `@{s}`?"),
+                        None => format!("unknown @attribute: @{other}"),
+                    };
+                    emitter.emit(Rich::custom(e.span(), msg));
                     Attr::ObjectId
                 }
             };
@@ -2759,6 +2766,17 @@ mod tests {
         assert!(
             err.0.contains("unknown @attribute"),
             "actionable error expected, got: {}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn unknown_at_attr_suggests_nearest() {
+        // A near-miss on a known attribute name gets a did-you-mean hint.
+        let err = parse("SELECT @objectAdress FROM X").expect_err("typo @attr should error");
+        assert!(
+            err.0.contains("did you mean `@objectAddress`?"),
+            "expected an @objectAddress suggestion, got: {}",
             err.0
         );
     }
