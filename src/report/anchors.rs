@@ -163,6 +163,7 @@ mod tests {
     const ALL: &[SectionId] = &[
         SectionId::Summary,
         SectionId::MemoryTriage,
+        SectionId::WasteSummary,
         SectionId::SystemOverview,
         SectionId::RecordCensus,
         SectionId::DuplicateStrings,

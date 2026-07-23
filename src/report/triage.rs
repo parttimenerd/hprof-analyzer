@@ -2411,4 +2411,182 @@ mod tests {
             .total_wasted_bytes = 1024;
         assert!(DuplicatePrimArrays.eval(&r).is_none());
     }
+
+    /// §836: every `TriageSignal.anchor` emitted by any rule must resolve to a
+    /// real `SectionId` slug — the guard that keeps §42.1 from silently regressing.
+    ///
+    /// We exercise two reports: an all-zero base (fires zero rules today but
+    /// any future always-on rule must still produce a valid anchor) and a
+    /// maximally-triggering report so as many anchor-bearing rules as possible
+    /// fire in one test run.
+    #[test]
+    fn all_triage_anchors_are_valid_section_slugs() {
+        use crate::report::anchors::SectionId;
+
+        // Build the complete set of valid slugs once.
+        const ALL_SECTIONS: &[SectionId] = &[
+            SectionId::Summary,
+            SectionId::MemoryTriage,
+            SectionId::WasteSummary,
+            SectionId::SystemOverview,
+            SectionId::RecordCensus,
+            SectionId::DuplicateStrings,
+            SectionId::DuplicateClasses,
+            SectionId::BoxedNumbers,
+            SectionId::HeaderOverhead,
+            SectionId::LeakSuspects,
+            SectionId::TopConsumers,
+            SectionId::DominatorAnalysis,
+            SectionId::Threads,
+            SectionId::TopComponents,
+            SectionId::ArraysBySize,
+            SectionId::Collections,
+            SectionId::ContainerAttribution,
+            SectionId::FieldsBySize,
+            SectionId::BiggestCollections,
+            SectionId::CollectionContents,
+            SectionId::References,
+            SectionId::UnreachableObjects,
+            SectionId::AllocationSites,
+            SectionId::RetentionConcentration,
+            SectionId::DominatorDepth,
+            SectionId::LeakIndicators,
+            SectionId::Glossary,
+        ];
+        let valid_slugs: std::collections::HashSet<&str> =
+            ALL_SECTIONS.iter().map(|s| s.slug()).collect();
+
+        let check_signals = |signals: Vec<TriageSignal>| {
+            for sig in &signals {
+                if let Some(anchor) = &sig.anchor {
+                    assert!(
+                        valid_slugs.contains(anchor.as_str()),
+                        "rule {:?} emitted anchor {:?} which is not a known SectionId slug; \
+                         valid slugs: {:?}",
+                        sig.id,
+                        anchor,
+                        valid_slugs
+                    );
+                }
+            }
+        };
+
+        // 1. Base (all-zero) report.
+        check_signals(evaluate_triage(&base_report()));
+
+        // 2. Maximally-triggering report — exercises as many rule paths as possible.
+        let mut r = base_report();
+        let heap = 100 * 1024 * 1024u64; // 100 MB
+        r.overview.total_shallow = heap;
+        r.overview.total_objects = 5_000_000;
+        r.leaks.total_shallow = heap;
+
+        // Headline retainer / concentration
+        r.leaks.suspects = vec![Suspect {
+            is_single: true,
+            pretty_class: "A".into(),
+            instance_count: 1,
+            retained: (heap * 9) / 10,
+            root_type_label: "Sticky Class".into(),
+            ..Default::default()
+        }];
+
+        // GC waste / unreachable
+        r.overview.heap_fragmentation_ratio = 0.5;
+        r.overview.unreachable_shallow = heap / 2;
+
+        // Classloader explosion + leak
+        r.overview.classloaders_loaded = 2000;
+        r.overview.classes_loaded = 60_000;
+        r.overview.duplicate_classes = vec![
+            DuplicateClass {
+                pretty_class: "com.example.Foo".into(),
+                loader_count: 2,
+                loaders: vec!["A".into(), "B".into()],
+                total_instances: 1,
+                total_retained: heap / 20,
+                per_loader: vec![],
+            },
+        ];
+
+        // Thread pinning
+        r.threads.threads = vec![ThreadInfo {
+            thread_serial: 1,
+            name: Some("worker-1".into()),
+            class_name: None,
+            frames: Vec::new(),
+            local_root_count: 40,
+            local_objects: None,
+            shallow: 0,
+            retained: (heap * 4) / 10,
+            max_local_retained: 0,
+            context_class_loader: None,
+            is_daemon: false,
+            ..Default::default()
+        }];
+
+        // Duplicate strings
+        r.overview.duplicate_strings = Some(crate::pass2::DupStrings {
+            distinct_values: 5_000,
+            duplicated_values: 4_000,
+            total_string_instances: 10_000,
+            approx_wasted_bytes: heap / 5,
+            top_duplicated: vec![],
+            length_histogram: vec![],
+            length_stats: Default::default(),
+            top_string_holders: vec![],
+            top_by_length: vec![],
+            char_array_waste: None,
+        });
+
+        // Off-heap
+        r.leak_indicators.direct_byte_buffer_capacity_sum = 200 * 1024 * 1024;
+
+        // ThreadLocal leak
+        r.leak_indicators.thread_local_null_key_count = 100;
+
+        // Dominator depth (shape rule)
+        r.overview.dominator_depth_histogram = vec![
+            DepthBucket { depth: 5, objects: 1000 },
+            DepthBucket { depth: 500, objects: 50 },
+        ];
+
+        // Collections waste (over-capacity): provide a fill-ratio bucket with
+        // upper_ratio_bp <= 5000 and non-trivial wasted bytes.
+        r.collections.collection_fill_ratio = CollectionFillRatio {
+            tracked: 1000,
+            total: 1000,
+            buckets: vec![FillRatioBucket {
+                lower_ratio_bp: 0,
+                upper_ratio_bp: 5000,
+                objects: 900,
+                shallow: heap / 5,
+                wasted: heap / 10, // 10% of heap wasted
+            }],
+        };
+
+        // Boxed primitives (boxed-primitive-bloat rule)
+        r.overview.histogram = vec![
+            HistRow {
+                pretty_class: "java.lang.Integer".into(),
+                instances: 2_000_000,
+                shallow: heap / 10,
+                retained: heap / 10,
+                max_instance_shallow: 16,
+                loader_id: 0,
+                loader_label: None,
+            },
+            HistRow {
+                pretty_class: "com.example.Event".into(),
+                instances: 15_000_000,
+                shallow: heap / 5,
+                retained: heap / 5,
+                max_instance_shallow: 13,
+                loader_id: 0,
+                loader_label: None,
+            },
+        ];
+
+        check_signals(evaluate_triage(&r));
+    }
 }

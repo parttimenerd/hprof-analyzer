@@ -1,6 +1,6 @@
 {
-  "schema_version": 8,
-  "generated": "2026-07-23T06:50:48.996925000Z",
+  "schema_version": 9,
+  "generated": "2026-07-23T09:42:10.772770000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
     "file_path": "tests/fixtures/dump_4_philosophers.hprof",
@@ -169,6 +169,9 @@
       "top1_bp": 2151,
       "top10_bp": 4472,
       "top100_bp": 7245,
+      "top1_retained": 2622376,
+      "top10_retained": 5450984,
+      "top100_retained": 8829552,
       "num_objects_ge_1pct": 12
     },
     "classes_loaded": 2784,
@@ -91129,7 +91132,7 @@
       "id": "shape",
       "severity": "info",
       "title": "Shape",
-      "detail": "deep (retention flows through long dominator chains — often nested collections or linked structures) — 90% of objects within depth 7, max depth 28.",
+      "detail": "shallow (most objects are held within a few hops of a GC root) — 90% of objects within depth 7, max depth 28.",
       "anchor": "dominator-depth-distribution",
       "anchor_label": "Dominator-Depth Distribution"
     },
@@ -91154,7 +91157,7 @@
       "id": "fixed-per-object-overhead",
       "severity": "warning",
       "title": "Fixed per-object header overhead",
-      "detail": "236,457 objects × 12 B header = 2.7 MB (23.3% of heap) is consumed by JVM object headers alone — consider value types, primitive arrays, or fewer wrapper objects.",
+      "detail": "236,457 objects × 12 B header = 2.7 MB (23.3% of reachable heap) is consumed by JVM object headers alone — consider value types, primitive arrays, or fewer wrapper objects.",
       "anchor": "object-header-overhead",
       "anchor_label": "Object Header Overhead"
     },
@@ -91165,6 +91168,18 @@
       "detail": "5,497 of 5,998 tracked collections (91.6%) are empty (size == 0) — pre-allocated but never populated containers waste object-header overhead; consider lazy initialisation or null.",
       "anchor": "collections",
       "anchor_label": "Collections"
+    },
+    {
+      "id": "not-analyzed-collections",
+      "severity": "info",
+      "title": "Collection analysis not run",
+      "detail": "Pass `--collections` to detect over-capacity backing arrays, unbounded collections, sparse object arrays, and constant primitive arrays."
+    },
+    {
+      "id": "not-analyzed-duplicates",
+      "severity": "info",
+      "title": "Duplicate-object analysis not run",
+      "detail": "Pass `--find-duplicates` to detect duplicate strings, duplicate primitive arrays, and boxed-number bloat."
     }
   ]
 }

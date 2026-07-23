@@ -2315,15 +2315,34 @@
           "format": "uint32",
           "minimum": 0
         },
+        "top100_retained": {
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
         "top10_bp": {
           "type": "integer",
           "format": "uint32",
+          "minimum": 0
+        },
+        "top10_retained": {
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
           "minimum": 0
         },
         "top1_bp": {
           "description": "Retained share of the top-1 / top-10 / top-100 top-level dominators, in\ninteger basis points (100 bp = 1%) of total reachable shallow heap.",
           "type": "integer",
           "format": "uint32",
+          "minimum": 0
+        },
+        "top1_retained": {
+          "description": "Exact retained bytes for the top-1 / top-10 / top-100 top-level dominators.\nDerive % from these rather than reconstructing from bp to avoid rounding loss.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
           "minimum": 0
         },
         "total_retained": {
