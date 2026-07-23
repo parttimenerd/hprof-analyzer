@@ -165,6 +165,13 @@
         "components": []
       }
     },
+    "top_retainers": {
+      "description": "Merged top-retainers: `Class#field` holders + `Class#method()` stack\nframes, sorted by total retained descending, capped at 20.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RetainerRow"
+      }
+    },
     "triage": {
       "description": "Fired OOM-triage signals, evaluated once over the finished report by the\nrule framework in `triage.rs`. Order is the registry order (render order).\n`#[serde(default)]` keeps pre-v4 JSON (which lacks the field) loadable.",
       "type": "array",
@@ -613,6 +620,14 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/FieldAttributionRow"
+          }
+        },
+        "tiny_overhead": {
+          "description": "Class#field pairs owning the most size-{0,1} collections,\nranked by wrapper-overhead bytes.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/TinyCollectionRow"
           }
         },
         "truncated": {
@@ -1995,6 +2010,13 @@
         "display_class": {
           "type": "string"
         },
+        "held_via": {
+          "description": "Stack-frame holding this object (`ClassName#methodName()`), when the\nobject is a significant local in a thread's stack frame and no field\nowner was found. `None` otherwise.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "obj_index_1based": {
           "type": "integer",
           "format": "uint",
@@ -2312,6 +2334,28 @@
           "default": null
         }
       }
+    },
+    "RetainerRow": {
+      "description": "One row of the merged Top Retainers table (§813).",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "retained": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "retained"
+      ]
     },
     "RetentionSummary": {
       "description": "B3: retention concentration over top-level dominators. Basis-point shares\n(of total reachable shallow heap) held by the top-1/10/100 objects, plus how\nmany single objects each hold >=1% of the heap. Answers \"one leak or many?\".",
@@ -3131,6 +3175,45 @@
       },
       "required": [
         "threads"
+      ]
+    },
+    "TinyCollectionRow": {
+      "description": "One row in the tiny-collection overhead ranking (§46.2).",
+      "type": "object",
+      "properties": {
+        "container_kind": {
+          "type": "string"
+        },
+        "empty_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "field": {
+          "type": "string"
+        },
+        "holder_class": {
+          "type": "string"
+        },
+        "overhead_bytes": {
+          "description": "Estimated overhead bytes: (empty_count + singleton_count) × 80.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "singleton_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "holder_class",
+        "field",
+        "container_kind",
+        "empty_count",
+        "singleton_count",
+        "overhead_bytes"
       ]
     },
     "TopArrayClassRow": {
