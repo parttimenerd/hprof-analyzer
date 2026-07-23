@@ -12,6 +12,7 @@
 use std::collections::HashMap;
 
 use crate::{
+    id_map::IndexCache,
     pass1::Pass1,
     report::{
         ArrayFillRatio, CollectionFillRatio, CollectionKindStat, CollectionKindSummary,
@@ -343,7 +344,7 @@ static REF_CLASSES: [&str; 3] = [
 /// Resolved role of an instance's class, computed at most once per distinct
 /// class-object address (there are only thousands of classes, so this is
 /// bounded).
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 enum ClassRole {
     /// Nothing to decode for this class.
     Plain,
@@ -927,6 +928,8 @@ pub(crate) fn build_field_decode_views(
 
     // Memoized per-class classification (bounded by #classes).
     let mut role_cache: HashMap<u64, ClassRole> = HashMap::new();
+    // Memoized per-class pretty name (bounded by #classes, avoids per-instance allocation).
+    let mut pretty_name_cache: HashMap<u64, String> = HashMap::new();
 
     // Collection views.
     let mut coll_size_acc = SizeHistAcc::default();
@@ -1050,6 +1053,7 @@ pub(crate) fn build_field_decode_views(
     // state (the only cross-record dependency, `wanted_arrays`, is resolved in a
     // post-pass loop). Only one record's bytes are resident at a time, so peak
     // RSS is unchanged.
+    let mut ic = IndexCache::new();
     scan_all_records(path, id_size, |rec| match rec {
         // ── on_instance: every INSTANCE_DUMP ──────────────────────────────────
         Record::Instance(addr, class_id, blob) => {
@@ -1081,9 +1085,8 @@ pub(crate) fn build_field_decode_views(
                 } => {
                     let is_map = descs[desc_idx].kind == CollKind::Map;
                     // Shallow size of THIS collection instance (precomputed vec).
-                    let coll_shallow = p1
-                        .id_map
-                        .index_of(addr)
+                    let coll_shallow = ic
+                        .index_of(&p1.id_map, addr)
                         .map(|i| shallow[i] as u64)
                         .unwrap_or(0);
                     // Read size (if this collection exposes a plain size field).
@@ -1107,7 +1110,7 @@ pub(crate) fn build_field_decode_views(
                     // the read size (0 when the collection has no plain
                     // size field, e.g. ConcurrentHashMap — documented limitation).
                     if collect_attribution {
-                        if let Some(cidx) = p1.id_map.index_of(addr) {
+                        if let Some(cidx) = ic.index_of(&p1.id_map, addr) {
                             if container_records.len() < CONTAINER_CAP {
                                 container_records.insert(
                                     addr,
@@ -1145,9 +1148,8 @@ pub(crate) fn build_field_decode_views(
                                         size: size.unwrap_or(0),
                                         is_map,
                                         coll_shallow,
-                                        coll_idx: p1
-                                            .id_map
-                                            .index_of(addr)
+                                        coll_idx: ic
+                                            .index_of(&p1.id_map, addr)
                                             .map(|i| i as u32)
                                             .unwrap_or(u32::MAX),
                                         coll_kind: descs[desc_idx].kind.discriminant(),
@@ -1173,7 +1175,7 @@ pub(crate) fn build_field_decode_views(
                             if is_tl_entry {
                                 tl_null_key_count += 1;
                             }
-                        } else if let Some(ridx) = p1.id_map.index_of(referent) {
+                        } else if let Some(ridx) = ic.index_of(&p1.id_map, referent) {
                             let name = class_name_of_index(ridx, p1);
                             let sh = shallow[ridx] as u64;
                             let hist = &mut ref_hist[kind_idx];
@@ -1255,8 +1257,10 @@ pub(crate) fn build_field_decode_views(
                     light_field_layout.insert(class_id, raw);
                 }
                 let layout = &light_field_layout[&class_id];
-                // Re-read class name inline (cheap; class_map lookup).
-                let holder_name = pretty_name(class_id, p1);
+                // Re-read class name inline (cheap; memoized per class).
+                let holder_name = pretty_name_cache
+                    .entry(class_id)
+                    .or_insert_with(|| pretty_name(class_id, p1));
                 for &(fname_id, offset) in layout {
                     let o = offset as usize;
                     if o + obj_ref_width <= blob.len() {
@@ -1342,13 +1346,13 @@ pub(crate) fn build_field_decode_views(
                     }
                 });
                 if let Some((key_off, val_off)) = *kv_offsets {
-                    if let Some(self_idx) = p1.id_map.index_of(addr) {
+                    if let Some(self_idx) = ic.index_of(&p1.id_map, addr) {
                         let ko = key_off as usize;
                         let vo = val_off as usize;
                         let key_dense = if ko + obj_ref_width <= blob.len() {
                             let r = read_ref(&blob[ko..], obj_ref_width);
                             if r != 0 {
-                                p1.id_map.index_of(r).map(|i| i as u32).unwrap_or(u32::MAX)
+                                ic.index_of(&p1.id_map, r).map(|i| i as u32).unwrap_or(u32::MAX)
                             } else {
                                 u32::MAX
                             }
@@ -1358,7 +1362,7 @@ pub(crate) fn build_field_decode_views(
                         let val_dense = if vo + obj_ref_width <= blob.len() {
                             let r = read_ref(&blob[vo..], obj_ref_width);
                             if r != 0 {
-                                p1.id_map.index_of(r).map(|i| i as u32).unwrap_or(u32::MAX)
+                                ic.index_of(&p1.id_map, r).map(|i| i as u32).unwrap_or(u32::MAX)
                             } else {
                                 u32::MAX
                             }
@@ -1374,7 +1378,7 @@ pub(crate) fn build_field_decode_views(
         Record::PrimArray(addr, elem_type, count, bytes) => {
             // Top prim arrays: fold EVERY primitive array (not just constant ones).
             // Key on the element type code; the name resolves without `class_ids`.
-            let (idx, sh) = match p1.id_map.index_of(addr) {
+            let (idx, sh) = match ic.index_of(&p1.id_map, addr) {
                 Some(i) => (i as u32, shallow[i] as u64),
                 None => (u32::MAX, 0),
             };
@@ -1454,7 +1458,7 @@ pub(crate) fn build_field_decode_views(
                 if r != 0 {
                     non_null += 1;
                     if collect_attribution && slot_targets.len() < COLL_VALUES_PER_COLLECTION {
-                        if let Some(ti) = p1.id_map.index_of(r) {
+                        if let Some(ti) = ic.index_of(&p1.id_map, r) {
                             slot_targets.push(ti as u32);
                         }
                     }
@@ -1462,7 +1466,7 @@ pub(crate) fn build_field_decode_views(
             }
             // #11 array fill ratio over ALL object arrays. Attribute THIS array's
             // own shallow size.
-            let (arr_idx, arr_shallow) = match p1.id_map.index_of(addr) {
+            let (arr_idx, arr_shallow) = match ic.index_of(&p1.id_map, addr) {
                 Some(i) => (i as u32, shallow[i] as u64),
                 None => (u32::MAX, 0),
             };

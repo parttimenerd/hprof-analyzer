@@ -13,6 +13,7 @@
 use std::{
     collections::HashMap,
     io::{self, ErrorKind},
+    time::Instant,
 };
 
 use crate::{
@@ -67,6 +68,15 @@ impl Pass2 {
         crate::cvec::CompressedU32,
         Option<crate::cvec::CompressedU32>,
     )> {
+        let _t_build = Instant::now();
+        macro_rules! t_phase {
+            ($label:expr) => {
+                if std::env::var_os("HPROF_TIMING").is_some() {
+                    eprintln!("[timing] {}: {:.3}s", $label, _t_build.elapsed().as_secs_f64());
+                }
+            };
+        }
+
         let n = p1.id_map.len();
         let id_size = p1.id_size;
         let ptr_size = id_size as usize;
@@ -380,6 +390,7 @@ impl Pass2 {
             }
         }
         crate::trace::probe("pass2: after 2a scan (out+in_degree filled)");
+        t_phase!("2a scan done");
 
         // Class objects already map to the java/lang/Class row (JLC_KEY) from Phase 0c.
         let jlc_idx = get_or_insert_class(JLC_KEY, &|| "java/lang/Class".to_string(), &|| 0);
@@ -631,6 +642,7 @@ impl Pass2 {
             &opts.coll_descs,
         )?;
         crate::trace::probe("pass2: after field_decode_views (3 extra scans done)");
+        t_phase!("fielddecode done");
 
         // Free class_ids now: build_field_decode_views was its last reader
         // (class_name_of_index uses it for referent class lookups). Releasing
@@ -754,6 +766,7 @@ impl Pass2 {
             None
         };
         crate::trace::probe("pass2: after compress-cold shallow+in_degree (before fwd_targets)");
+        t_phase!("compress-cold done");
 
         // ── Phase 3b: Build forward CSR ──────────────────────────────────
         // The forward fill runs FIRST (inside build); the inbound CSR is
@@ -965,6 +978,8 @@ impl Pass2 {
             total_inb,
             synthetic_edges,
         };
+
+        t_phase!("2b scan done");
 
         Ok((graph, inbound, shallow_c, class_idx_c, alloc_serial_c))
     }
