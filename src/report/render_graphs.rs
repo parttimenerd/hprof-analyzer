@@ -93,13 +93,15 @@ fn render_toc_graphs(r: &Report, out: &mut String) {
     if r.collection_attribution.is_some() {
         out.push_str(&SectionId::ContainerAttribution.toc_bullet());
     }
-    if r.fields_by_size.is_some() {
+    if r.fields_by_size.as_ref().map_or(false, |f| !f.rows.is_empty()) {
         out.push_str(&SectionId::FieldsBySize.toc_bullet());
     }
-    if r.biggest_collections.is_some() {
+    if r.biggest_collections.as_ref().map_or(false, |b| {
+        !b.combined.is_empty() || !b.by_kind.is_empty()
+    }) {
         out.push_str(&SectionId::BiggestCollections.toc_bullet());
     }
-    if r.collection_contents.is_some() {
+    if r.collection_contents.as_ref().map_or(false, |c| !c.rows.is_empty()) {
         out.push_str(&SectionId::CollectionContents.toc_bullet());
     }
     out.push_str(&SectionId::References.toc_bullet());
@@ -309,11 +311,13 @@ fn render_system_overview_graphs(o: &SystemOverview, out: &mut String) {
             "Shallow Heap",
             "Largest",
             "Retained Heap",
+            "% Heap",
             "",
         ],
         &[
             Align::Right,
             Align::Left,
+            Align::Right,
             Align::Right,
             Align::Right,
             Align::Right,
@@ -329,6 +333,7 @@ fn render_system_overview_graphs(o: &SystemOverview, out: &mut String) {
             format_bytes(row.shallow),
             format_bytes(row.max_instance_shallow),
             format_bytes(row.retained),
+            fmt_pct(pct_of_heap(row.retained, o.total_shallow)),
             bar(row.retained, hist_max, GRAPH_BAR_WIDTH),
         ]);
     }

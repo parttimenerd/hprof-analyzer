@@ -190,7 +190,7 @@ td:hover .copy-btn { visibility: visible; }
 
 /* Responsive tables: make every table scroll horizontally rather than overflow */
 /* display:block + overflow-x:auto is the only CSS-only approach that works on <table> */
-section table, .thread-overview-detail table, .thread-locals-detail table,
+section table, .thread-overview-detail table, .thread-locals-inline table,
 details > table, .sysprops table {
   display: block;
   overflow-x: auto;
@@ -200,10 +200,12 @@ details > table, .sysprops table {
 section table thead, section table tbody, section table tfoot,
 .thread-overview-detail table thead, .thread-overview-detail table tbody, .thread-overview-detail table tfoot,
 details > table thead, details > table tbody, details > table tfoot,
-.thread-locals-detail table thead, .thread-locals-detail table tbody, .thread-locals-detail table tfoot {
+.thread-locals-inline table thead, .thread-locals-inline table tbody, .thread-locals-inline table tfoot {
   display: table;
   width: 100%;
 }
+.thread-locals-inline { margin-top: 0.4rem; }
+.thread-locals-label { font-size: 0.82rem; color: var(--muted); margin: 0 0 0.25rem; font-weight: 600; }
 
 /* Resizable tables must stay as display:table so table-layout:fixed works.
    Restore display:table and use an outer wrapper for scroll instead.       */

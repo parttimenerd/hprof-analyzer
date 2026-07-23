@@ -600,7 +600,7 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
               <td className="num">{formatBytes(h.shallow)}</td>
               <td className="num">{formatBytes(h.max_instance_shallow)}</td>
               <td className="num">{formatBytes(h.retained)}</td>
-              <td className="num">{totalShallow > 0 ? (h.retained / totalShallow * 100).toFixed(2) + "%" : "—"}</td>
+              <td className="num">{fmtPct(pctOf(h.retained, totalShallow))}</td>
             </tr>
           ))}
           <ShowMoreRow extra={extra} cols={99} showAll={showAll} setShowAll={setShowAll} />
@@ -1930,8 +1930,8 @@ function TopConsumersSection({ report }: { report: Report }) {
 function ThreadLocalsTable({ objs }: { objs: ThreadLocalObj[] }) {
   if (objs.length === 0) return null;
   return (
-    <details className="thread-locals-detail">
-      <summary>Local root objects ({fmtCount(objs.length)})</summary>
+    <div className="thread-locals-inline">
+      <p className="thread-locals-label">Local root objects ({fmtCount(objs.length)})</p>
       <table>
         <thead>
           <tr>
@@ -1953,7 +1953,7 @@ function ThreadLocalsTable({ objs }: { objs: ThreadLocalObj[] }) {
             </tr>
           )} />
       </table>
-    </details>
+    </div>
   );
 }
 

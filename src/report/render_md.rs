@@ -302,13 +302,15 @@ fn render_toc(r: &Report, out: &mut String) {
     if r.collection_attribution.is_some() {
         out.push_str(&SectionId::ContainerAttribution.toc_bullet());
     }
-    if r.fields_by_size.is_some() {
+    if r.fields_by_size.as_ref().map_or(false, |f| !f.rows.is_empty()) {
         out.push_str(&SectionId::FieldsBySize.toc_bullet());
     }
-    if r.biggest_collections.is_some() {
+    if r.biggest_collections.as_ref().map_or(false, |b| {
+        !b.combined.is_empty() || !b.by_kind.is_empty()
+    }) {
         out.push_str(&SectionId::BiggestCollections.toc_bullet());
     }
-    if r.collection_contents.is_some() {
+    if r.collection_contents.as_ref().map_or(false, |c| !c.rows.is_empty()) {
         out.push_str(&SectionId::CollectionContents.toc_bullet());
     }
     out.push_str(&SectionId::References.toc_bullet());
@@ -736,19 +738,12 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
     summary.row(["Classes loaded".into(), fmt_count(o.classes_loaded)]);
     summary.row(["Class loaders".into(), fmt_count(o.classloaders_loaded)]);
     if o.unreachable_count > 0 {
-        let total = o.total_shallow + o.unreachable_shallow;
-        let pct = if total > 0 {
-            format!(" {:.1}% of total heap", o.unreachable_shallow as f64 / total as f64 * 100.0)
-        } else {
-            String::new()
-        };
         summary.row([
             "Unreachable objects (excluded)".into(),
             format!(
-                "{} ({};{})",
+                "{} ({})",
                 fmt_count(o.unreachable_count),
                 format_bytes(o.unreachable_shallow),
-                pct,
             ),
         ]);
     }
@@ -889,10 +884,12 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
             "Shallow Heap",
             "Largest",
             "Retained Heap",
+            "% Heap",
         ],
         &[
             Align::Right,
             Align::Left,
+            Align::Right,
             Align::Right,
             Align::Right,
             Align::Right,
@@ -912,6 +909,7 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
             format_bytes(row.shallow),
             format_bytes(row.max_instance_shallow),
             format_bytes(row.retained),
+            fmt_pct(pct_of_heap(row.retained, o.total_shallow)),
         ]);
     }
     hist.render(out);
@@ -1560,7 +1558,7 @@ pub(crate) fn render_arrays_by_size(a: &ArraysBySize, graphs: bool, out: &mut St
     out.push_str("## Arrays by Size\n\n");
     if a.obj_array_buckets.is_empty() && a.prim_array_buckets.is_empty() && a.zero_length_count == 0
     {
-        out.push_str("*No arrays found.*\n\n");
+        out.push_str("_No arrays found._\n\n");
         return;
     }
     out.push_str(
@@ -2761,7 +2759,7 @@ pub(crate) fn render_unreachable_histogram(o: &SystemOverview, graphs: bool, out
     use crate::md::{Align, Table, bar};
     out.push_str("## Unreachable Objects\n\n");
     if o.unreachable_histogram.is_empty() {
-        out.push_str("*No unreachable objects.*\n\n");
+        out.push_str("_No unreachable objects._\n\n");
         return;
     }
     out.push_str(&format!(
@@ -2952,7 +2950,7 @@ Multiple rows with the same class are distinct objects._\n\n",
         threshold_mb,
     ));
     if d.big_drops.rows.is_empty() {
-        out.push_str("*No significant drops.*\n\n");
+        out.push_str("_No significant drops._\n\n");
     } else {
         let drop_max = d
             .big_drops
@@ -3032,7 +3030,7 @@ Multiple rows with the same class are distinct objects._\n\n",
          a heavy dominated shallow heap under one class flags a retention hub._\n\n",
     );
     if d.immediate_dominators.rows.is_empty() {
-        out.push_str("*No immediate dominators.*\n\n");
+        out.push_str("_No immediate dominators._\n\n");
     } else {
         let shallow_max = d
             .immediate_dominators

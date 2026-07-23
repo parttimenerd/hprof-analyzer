@@ -40,6 +40,9 @@ const PROXY_BLOAT_PCT: f64 = 50.0;
 const PROXY_MIN_CLASSES: u64 = 200;
 /// Objects reachable only via soft/weak/phantom refs before the escape rule.
 const WEAKREF_FLOOR: u64 = 1000;
+/// Minimum shallow bytes of only-weakly-retained objects before the escape rule fires;
+/// a small count of large objects warrants attention even below the object floor.
+const WEAKREF_BYTES_FLOOR: u64 = 5 * 1024 * 1024; // 5 MB
 /// Wasted collection backing-array bytes as a share of heap.
 const OVERCAP_WASTE_PCT: f64 = 5.0;
 /// Total shallow bytes in constant-value primitive arrays before the rule.
@@ -70,6 +73,9 @@ const SWARM_PCT: f64 = 10.0;
 const SWARM_MAX_INSTANCE_BYTES: u64 = 64;
 /// Live ClassLoader-instance count before the classloader-explosion rule fires.
 const CLASSLOADER_EXPLOSION_FLOOR: u64 = 1000;
+/// Minimum retained bytes for the classloader-leak rule to fire (avoids false
+/// positives when duplicate loaders hold only a few KB of metadata).
+const CLASSLOADER_LEAK_RETAINED_FLOOR: u64 = 1024 * 1024; // 1 MB
 /// Live-thread count before the thread-swarm rule fires.
 const THREAD_SWARM_FLOOR: usize = 1000;
 /// `java.lang.ref.Finalizer` instance count that signals a backed-up queue.
@@ -493,8 +499,10 @@ impl Rule for ClassloaderLeak {
             .duplicate_classes
             .iter()
             // Gate on ≥3 loaders to avoid false positives from normal multi-loader
-            // setups (e.g. Scala's dual-loader for `$colon$colon` in 2 loaders).
-            .filter(|d| d.loader_count >= 3)
+            // setups (e.g. Scala's dual-loader for `$colon$colon` in 2 loaders),
+            // and require a meaningful retained-bytes stake so tiny metadata
+            // duplicates don't trigger a "classic reload leak" warning.
+            .filter(|d| d.loader_count >= 3 && d.total_retained >= CLASSLOADER_LEAK_RETAINED_FLOOR)
             .max_by_key(|d| d.total_retained)?;
         Some(signal(
             "classloader-leak",
@@ -570,13 +578,19 @@ struct WeakRefEscape;
 impl Rule for WeakRefEscape {
     fn eval(&self, r: &Report) -> Option<TriageSignal> {
         let refs = &r.references;
-        let only_weak: u64 = [&refs.soft, &refs.weak, &refs.phantom]
+        let only_weak_objects: u64 = [&refs.soft, &refs.weak, &refs.phantom]
             .into_iter()
             .flatten()
             .flat_map(|s| s.only_weakly_retained.iter())
             .map(|row| row.objects)
             .sum();
-        if only_weak < WEAKREF_FLOOR {
+        let only_weak_shallow: u64 = [&refs.soft, &refs.weak, &refs.phantom]
+            .into_iter()
+            .flatten()
+            .flat_map(|s| s.only_weakly_retained.iter())
+            .map(|row| row.shallow)
+            .sum();
+        if only_weak_objects < WEAKREF_FLOOR && only_weak_shallow < WEAKREF_BYTES_FLOOR {
             return None;
         }
         Some(signal(
@@ -584,8 +598,9 @@ impl Rule for WeakRefEscape {
             TriageSeverity::Info,
             "Weak-ref escape",
             format!(
-                "{} objects are reachable only via soft/weak/phantom references — likely reclaimable under memory pressure.",
-                fmt_count(only_weak),
+                "{} objects ({}) are reachable only via soft/weak/phantom references — likely reclaimable under memory pressure.",
+                fmt_count(only_weak_objects),
+                format_bytes(only_weak_shallow),
             ),
             Some(SectionId::References),
         ))
