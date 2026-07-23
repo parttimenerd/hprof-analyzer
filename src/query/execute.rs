@@ -3,7 +3,9 @@
 //! HistogramExecutor answers aggregate-only queries from per-class stats.
 
 use crate::query::ObjectVisitor;
-use crate::query::ast::{AggFunc, ArithOp, Attr, CompareOp, Expr, Query, SelectItem, UnaryOp, Value};
+use crate::query::ast::{
+    AggFunc, ArithOp, Attr, CompareOp, Expr, FromSource, Query, SelectItem, UnaryOp, Value,
+};
 use crate::query::carry::Carry;
 use crate::query::model::{QueryColumn, QueryResult, QueryValue};
 use crate::query::plan::QueryPlan;
@@ -163,6 +165,14 @@ pub struct SingleScanExecutor<'a, R: ClassResolver> {
     /// Accumulation happens per matched object in `visit_instance`/`visit_array`;
     /// `finish` finalizes each accumulator into the single result row.
     agg_acc: Option<Vec<AggAcc>>,
+    /// For a `FROM OBJECTS <address>` source, the single dense object index the
+    /// address resolves to (via [`ClassResolver::index_of_addr`]), computed ONCE
+    /// at construction — never per object. `None` when FROM is not an Object
+    /// source, OR when the address does not name a live object (missing address →
+    /// no object ever matches → zero rows, matching Eclipse MAT). The per-object
+    /// `visit_instance`/`visit_array` gate consults this only when FROM is Object,
+    /// so all other queries pay zero cost and stay byte/RSS-identical.
+    target_index: Option<usize>,
 }
 
 /// Per-select-item running state for a scan-time aggregate accumulator.
@@ -416,6 +426,14 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
         } else {
             None
         };
+        // Resolve a `FROM OBJECTS <address>` seed to its single dense index once,
+        // here — not in the per-object hot path. A missing address stays `None`
+        // and no object matches (zero rows, MAT parity).
+        let target_index = if let FromSource::Object(addr) = &query.from {
+            resolver.index_of_addr(*addr)
+        } else {
+            None
+        };
         Self {
             query,
             plan,
@@ -428,6 +446,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             from_regex: compile_from_query(query),
             like_regexes: compile_like_for_query(query),
             agg_acc,
+            target_index,
         }
     }
 
@@ -435,6 +454,11 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     /// `index-only` carry sized by the caller's cap; matched indices are pushed
     /// into it during the scan and extracted with `take_carry` at scan end.
     pub fn new_carry(query: &'a Query, plan: &'a QueryPlan, resolver: &'a R, carry: Carry) -> Self {
+        let target_index = if let FromSource::Object(addr) = &query.from {
+            resolver.index_of_addr(*addr)
+        } else {
+            None
+        };
         Self {
             query,
             plan,
@@ -449,6 +473,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             // Carry mode is always for cross-phase retained queries, never for
             // aggregates; no accumulator needed.
             agg_acc: None,
+            target_index,
         }
     }
 
@@ -477,6 +502,11 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
         // A FROM-subquery matches every object (identity is constrained by the
         // outer semi-join), so it must see arrays too.
         if self.query.from.as_subquery().is_some() {
+            return true;
+        }
+        // A `FROM OBJECTS <address>` object may itself be an array — we don't know
+        // its kind before resolving it — so the scan must deliver arrays too.
+        if matches!(self.query.from, FromSource::Object(_)) {
             return true;
         }
         let from = self.query.from.class_name();
@@ -1021,6 +1051,13 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
 
 impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
     fn visit_instance(&mut self, src_idx: usize, class_id: u64, blob: &[u8]) {
+        // `FROM OBJECTS <address>`: only the single resolved dense index matches.
+        // Gate only for an Object source so every other query is unaffected.
+        if let FromSource::Object(_) = &self.query.from {
+            if Some(src_idx) != self.target_index {
+                return;
+            }
+        }
         if !self.class_matches(class_id) {
             return;
         }
@@ -1081,9 +1118,17 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
     }
 
     fn visit_array(&mut self, src_idx: usize, class_name: &str, length: u32) {
+        // `FROM OBJECTS <address>`: only the single resolved dense index matches
+        // (the target object may be an array). Gate only for an Object source.
+        if let FromSource::Object(_) = &self.query.from {
+            if Some(src_idx) != self.target_index {
+                return;
+            }
+        }
         // A FROM-subquery source matches every object (identity is constrained
         // by the outer semi-join), so it considers arrays too.
         let class_ok = self.query.from.as_subquery().is_some()
+            || matches!(self.query.from, FromSource::Object(_))
             || match self.query.from.class_spec() {
                 Some(spec) => class_name_matches_spec(class_name, spec, self.from_regex.as_ref()),
                 None => false,

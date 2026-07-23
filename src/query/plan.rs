@@ -381,12 +381,20 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
     // carries only a class name (no super-chain), so the histogram cannot resolve
     // subclasses and would count only the exact class. Route instanceof aggregates
     // to SingleScan, where `class_matches` walks the hierarchy via `is_instance_of`.
+    //
+    // `FROM OBJECTS <address>` likewise must NOT use the histogram fast path: the
+    // histogram counts by class name, but an Object source has no class name and
+    // is restricted to a single dense index — a gate that lives only in the
+    // SingleScan `visit_*` path. Route it to SingleScan so the aggregate folds
+    // over at most the one matched object (COUNT(*) ≤ 1).
+    let is_object_from = matches!(q.from, crate::query::ast::FromSource::Object(_));
     let kind = if is_aggregate
         && !needs.instance_scalar
         && !needs.instance_string
         && where_terms.is_empty()
         && !agg_over_expr
         && !q.from.instanceof()
+        && !is_object_from
         && q.select.iter().all(agg_histogram_answerable)
     {
         needs.histogram = true;
@@ -1359,6 +1367,29 @@ mod tests {
     fn good_from_regex_plans_ok() {
         let plan = pq(&parse(r#"SELECT COUNT(*) FROM "java\.lang\..*""#).unwrap()).unwrap();
         assert_eq!(plan.kind, StageKind::HistogramOnly);
+    }
+
+    // `FROM OBJECTS <addr>` projections plan as a SingleScan: the single-object
+    // dense-index gate lives in the SingleScan visit path.
+    #[test]
+    fn plan_from_objects_projection_is_single_scan() {
+        let plan = pq(&parse("SELECT @objectAddress FROM OBJECTS 0x10").unwrap()).unwrap();
+        assert_eq!(plan.kind, StageKind::SingleScan);
+    }
+
+    // `COUNT(*) FROM OBJECTS <addr>` must NOT take the histogram fast path (which
+    // counts by class name and cannot express the single-index gate); it routes to
+    // SingleScan so the aggregate folds over at most one matched object (≤ 1).
+    #[test]
+    fn plan_count_from_objects_is_single_scan_not_histogram() {
+        let plan = pq(&parse("SELECT COUNT(*) FROM OBJECTS 0x10").unwrap()).unwrap();
+        assert_eq!(
+            plan.kind,
+            StageKind::SingleScan,
+            "COUNT(*) FROM OBJECTS must route to SingleScan (single-index gate), \
+             not the class-name histogram"
+        );
+        assert!(!plan.needs.histogram);
     }
 
     #[test]

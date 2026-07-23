@@ -3656,3 +3656,54 @@ fn viz_directive_line_in_query_file_attaches_to_next() {
         "query-file directive must attach a histogram viz:\n{stdout}"
     );
 }
+
+/// `FROM OBJECTS <address>` selects exactly the one heap object at that address.
+/// Take a real Thread address from a prior query, then query it back by address
+/// and confirm the same address appears; a bogus `FROM OBJECTS 0x1` yields no
+/// matching data row (MAT parity: missing address → zero rows, not an error).
+#[test]
+fn from_objects_single_address_returns_one_row() {
+    let Some(hprof) = philosophers() else { return };
+    // 1) Grab one real object address (decimal integer cell).
+    let seed = run_query_stdout(&hprof, "SELECT @objectAddress FROM java.lang.Thread LIMIT 1");
+    let addr = seed
+        .lines()
+        .find_map(|l| {
+            let t = l.trim();
+            // Skip the row-count footer like "(1 row)".
+            if t.starts_with('(') {
+                return None;
+            }
+            t.parse::<u64>().ok().filter(|&n| n != 0)
+        })
+        .unwrap_or_else(|| panic!("no object address in seed output:\n{seed}"));
+
+    // 2) Query that exact object by address; the same address must appear.
+    let by_addr = run_query_stdout(&hprof, &format!("SELECT @objectAddress FROM OBJECTS {addr}"));
+    assert!(
+        by_addr.lines().any(|l| l.trim() == addr.to_string()),
+        "FROM OBJECTS {addr} did not return that address:\n{by_addr}"
+    );
+    assert_eq!(
+        parse_row_count(&by_addr),
+        1,
+        "FROM OBJECTS <real addr> must return exactly one row:\n{by_addr}"
+    );
+
+    // 2b) COUNT(*) over the single object is exactly 1 (SingleScan aggregate path,
+    // not the class-name histogram).
+    let count = run_query_stdout(&hprof, &format!("SELECT COUNT(*) FROM OBJECTS {addr}"));
+    assert_eq!(
+        parse_single_count(&count),
+        1,
+        "COUNT(*) FROM OBJECTS <real addr> must be 1:\n{count}"
+    );
+
+    // 3) A bogus address returns zero data rows (no matching object).
+    let bogus = run_query_stdout(&hprof, "SELECT @objectAddress FROM OBJECTS 0x1");
+    assert_eq!(
+        parse_row_count(&bogus),
+        0,
+        "FROM OBJECTS 0x1 (bogus) must return zero rows:\n{bogus}"
+    );
+}
