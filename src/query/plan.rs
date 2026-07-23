@@ -608,9 +608,7 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
     // class is indeterminate at plan time).
     if needs.string_values {
         let class_name = q.from.class_name();
-        let is_string_from = class_name == "java.lang.String"
-            || class_name == "java/lang/String"
-            || class_name.ends_with(".String"); // allow simple short form
+        let is_string_from = is_string_class_name(class_name);
         let is_subquery = q.from.as_subquery().is_some();
         if is_subquery {
             return Err(QueryError(
@@ -772,6 +770,12 @@ fn select_uses_percentile(it: &SelectItem) -> bool {
 /// True if a predicate references `@retainedHeapSize` anywhere. Reused by the
 /// scan-time carry executor to skip retained WHERE terms (retained size is
 /// unknown during the pass2 scan; those terms are applied late in stage_runner).
+/// True if a FROM class name denotes java.lang.String (fully-qualified, slash
+/// form, or a simple `.String` short form). Single source of truth shared by the
+/// planner's toString gate and the executor's from_is_string check so they cannot drift.
+pub(crate) fn is_string_class_name(name: &str) -> bool {
+    name == "java.lang.String" || name == "java/lang/String" || name.ends_with(".String")
+}
 pub(crate) fn pred_uses_retained(p: &Predicate) -> bool {
     match p {
         Predicate::And(a, b) | Predicate::Or(a, b) => {

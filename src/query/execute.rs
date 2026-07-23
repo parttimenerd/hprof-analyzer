@@ -609,17 +609,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             SelectItem::Path { .. } => QueryValue::Null,
             // toString(s): the String path is decoded late (ResolveStringValues);
             // a non-String object gets MAT's fallback display form at scan time.
-            SelectItem::ToString(_) => {
-                if self.from_is_string() {
-                    QueryValue::Null
-                } else {
-                    let cname = self.resolver.class_name(class_id).unwrap_or("?");
-                    match self.resolver.addr_of(src_idx) {
-                        Some(a) => QueryValue::Str(format!("{cname} @ 0x{a:x}")),
-                        None => QueryValue::Str(format!("{cname} @ ?")),
-                    }
-                }
-            }
+            SelectItem::ToString(_) => self.tostring_display(class_id, src_idx),
             SelectItem::Expr(e) => self.eval_expr(e, src_idx, class_id, blob),
         }
     }
@@ -631,8 +621,28 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     // positive for this domain method.
     #[allow(clippy::wrong_self_convention)]
     fn from_is_string(&self) -> bool {
-        let cname = self.query.from.class_name();
-        cname == "java.lang.String" || cname == "java/lang/String" || cname.ends_with(".String")
+        crate::query::plan::is_string_class_name(self.query.from.class_name())
+    }
+    /// MAT's fallback display for a non-String object: `<class> @ 0x<addr>`.
+    /// Used by toString on any non-String FROM (String is decoded late instead).
+    fn tostring_display(&self, class_id: u64, src_idx: usize) -> QueryValue {
+        if self.from_is_string() {
+            return QueryValue::Null;
+        }
+        let cname = self.resolver.class_name(class_id).unwrap_or("?");
+        self.tostring_display_named(cname, src_idx)
+    }
+    /// Same MAT fallback display as `tostring_display`, but for callers that
+    /// already hold the class name as a `&str` (array rows carry no `class_id`).
+    /// The String-Null branch is preserved so the two forms stay in lock-step.
+    fn tostring_display_named(&self, class_name: &str, src_idx: usize) -> QueryValue {
+        if self.from_is_string() {
+            return QueryValue::Null;
+        }
+        match self.resolver.addr_of(src_idx) {
+            Some(a) => QueryValue::Str(format!("{class_name} @ 0x{a:x}")),
+            None => QueryValue::Str(format!("{class_name} @ ?")),
+        }
     }
     fn project_attr(&self, a: &Attr, src_idx: usize, class_id: u64, blob: &[u8]) -> QueryValue {
         match a {
@@ -669,15 +679,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 // String FROM is decoded late (ResolveStringValues). A non-String
                 // object has no decodable text, so we mirror MAT's fallback display
                 // form <class> @ 0x<addr>, computed here at scan time (no late op).
-                if self.from_is_string() {
-                    QueryValue::Null
-                } else {
-                    let cname = self.resolver.class_name(class_id).unwrap_or("?");
-                    match self.resolver.addr_of(src_idx) {
-                        Some(a) => QueryValue::Str(format!("{cname} @ 0x{a:x}")),
-                        None => QueryValue::Str(format!("{cname} @ ?")),
-                    }
-                }
+                self.tostring_display(class_id, src_idx)
             }
         }
     }
@@ -709,16 +711,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             SelectItem::Path { .. } => QueryValue::Null,
             // toString(s): arrays are never String-decoded, so this always renders
             // the MAT fallback display form <class> @ 0x<addr> at scan time.
-            SelectItem::ToString(_) => {
-                if self.from_is_string() {
-                    QueryValue::Null
-                } else {
-                    match self.resolver.addr_of(src_idx) {
-                        Some(a) => QueryValue::Str(format!("{class_name} @ 0x{a:x}")),
-                        None => QueryValue::Str(format!("{class_name} @ ?")),
-                    }
-                }
-            }
+            SelectItem::ToString(_) => self.tostring_display_named(class_name, src_idx),
             SelectItem::Expr(e) => self.eval_expr_array(e, src_idx, class_name, length),
         }
     }
@@ -757,14 +750,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 // Arrays are never String-decoded (from_is_string() is false here),
                 // so this always renders the MAT fallback display form
                 // <class> @ 0x<addr> at scan time — same shape as project_attr.
-                if self.from_is_string() {
-                    QueryValue::Null
-                } else {
-                    match self.resolver.addr_of(src_idx) {
-                        Some(a) => QueryValue::Str(format!("{class_name} @ 0x{a:x}")),
-                        None => QueryValue::Str(format!("{class_name} @ ?")),
-                    }
-                }
+                self.tostring_display_named(class_name, src_idx)
             }
         }
     }
