@@ -1481,12 +1481,48 @@ impl QueryPlan {
         }
         v
     }
+
+    /// A query is "resident-only" when every attribute it touches can be answered
+    /// from the persistent pass1 resolver + pass2 Graph tables WITHOUT reading any
+    /// transient per-object blob and WITHOUT any cross-phase table (retained,
+    /// dominators, ref-walk, string values, gc roots). Such queries can be served
+    /// from a warm REPL cache with an empty blob.
+    pub fn is_resident_only(&self) -> bool {
+        let n = &self.needs;
+        !n.instance_scalar
+            && !n.instance_string
+            && !n.retained
+            && !n.dominator_children
+            && !n.ref_walk
+            && !n.string_values
+            && !n.gc_roots
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::query::parse::parse;
+
+    #[test]
+    fn is_resident_only_classifies_needs() {
+        let mut p = QueryPlan::default();
+        p.needs.histogram = true;
+        assert!(p.is_resident_only(), "histogram-only must be resident");
+
+        let mut p2 = QueryPlan::default();
+        p2.needs.instance_scalar = true;
+        assert!(!p2.is_resident_only(), "instance_scalar needs the scan");
+
+        let mut p3 = QueryPlan::default();
+        p3.needs.retained = true;
+        assert!(!p3.is_resident_only(), "retained needs the full pipeline");
+
+        // runtime_type (class-metadata only) is still resident-only.
+        let mut p4 = QueryPlan::default();
+        p4.needs.runtime_type = true;
+        assert!(p4.is_resident_only(), "runtime_type is class metadata, resident");
+    }
 
     /// Convenience wrapper: plan with the canonical default depth (used by all
     /// tests that do not specifically test depth threading).
