@@ -880,7 +880,7 @@ impl Rule for BoxedPrimitiveBloat {
                 };
                 (inst + h.instances, sh + h.shallow, new_worst)
             });
-        if instances < BOXED_FLOOR_INSTANCES && pct_of(shallow, total) < BOXED_PCT {
+        if instances < BOXED_FLOOR_INSTANCES || pct_of(shallow, total) < BOXED_PCT {
             return None;
         }
         Some(with_bytes(
