@@ -44,8 +44,8 @@ const PROXY_BLOAT_PCT: f64 = 50.0;
 const PROXY_MIN_CLASSES: u64 = 200;
 /// Objects reachable only via soft/weak/phantom refs before the escape rule.
 const WEAKREF_FLOOR: u64 = 1000;
-/// Minimum shallow bytes of only-weakly-retained objects before the escape rule fires;
-/// a small count of large objects warrants attention even below the object floor.
+/// Minimum retained bytes of only-weakly-retained objects before the escape rule fires;
+/// a small count of objects retaining large subgraphs warrants attention even below the object floor.
 const WEAKREF_BYTES_FLOOR: u64 = 5 * 1024 * 1024; // 5 MB
 /// Wasted collection backing-array bytes as a share of heap.
 const OVERCAP_WASTE_PCT: f64 = 5.0;
@@ -646,13 +646,13 @@ impl Rule for WeakRefEscape {
             .flat_map(|s| s.only_weakly_retained.iter())
             .map(|row| row.objects)
             .sum();
-        let only_weak_shallow: u64 = [&refs.soft, &refs.weak, &refs.phantom]
+        let only_weak_retained: u64 = [&refs.soft, &refs.weak, &refs.phantom]
             .into_iter()
             .flatten()
             .flat_map(|s| s.only_weakly_retained.iter())
-            .map(|row| row.shallow)
+            .map(|row| row.retained)
             .sum();
-        if only_weak_objects < WEAKREF_FLOOR && only_weak_shallow < WEAKREF_BYTES_FLOOR {
+        if only_weak_objects < WEAKREF_FLOOR && only_weak_retained < WEAKREF_BYTES_FLOOR {
             return None;
         }
         Some(signal(
@@ -660,9 +660,9 @@ impl Rule for WeakRefEscape {
             TriageSeverity::Info,
             "Weak-ref escape",
             format!(
-                "{} objects ({}) are reachable only via soft/weak/phantom references — likely reclaimable under memory pressure.",
+                "{} objects only weakly retained, totaling {} — GC pressure or explicit clear() would reclaim them.",
                 fmt_count(only_weak_objects),
-                format_bytes(only_weak_shallow),
+                format_bytes(only_weak_retained),
             ),
             Some(SectionId::References),
         ))
