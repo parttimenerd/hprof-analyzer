@@ -1256,11 +1256,90 @@ fn stable_dedup(mut r: QueryResult) -> QueryResult {
     r
 }
 
+/// Warm REPL cache: heap scanned ONCE, resident tables kept alive so
+/// resident-only queries (see `QueryPlan::is_resident_only`) can be re-served
+/// without re-scanning. REPL-ONLY — never used by the one-shot query/analyze
+/// paths, which keep a byte/RSS-identity contract.
+pub struct ReplCache {
+    pub p1: crate::pass1::Pass1,
+    pub n: usize,
+    pub shallow: Vec<u32>,
+    pub class_ids: Vec<u32>,
+    pub dfn: Option<Vec<u32>>,
+    pub id_size: usize,
+    pub reachable_only: bool,
+}
+
+impl ReplCache {
+    pub fn build(path: &str, reachable_only: bool) -> std::io::Result<ReplCache> {
+        let opts = crate::AnalyzeOptions {
+            reachable_only,
+            ..crate::AnalyzeOptions::default()
+        };
+        // Pass1 owned by the cache (resolver source for Task 3's LiveResolver).
+        let p1_owned = crate::pass1::Pass1::run(path)?;
+        // Second Pass1 consumed by Pass2 (it moves id_map). Empty query set.
+        let p1_for_pass2 = crate::pass1::Pass1::run(path)?;
+        let flat: Vec<(Query, QueryPlan)> = Vec::new();
+        let mut empty = std::collections::HashMap::new();
+        let (g, _, shallow_c, ..) = crate::pass2::Pass2::build(
+            path,
+            p1_for_pass2,
+            crate::cvec::Codec::Zstd3,
+            &opts,
+            &flat,
+            &mut empty,
+        )?;
+        let n = g.n;
+        // g.shallow is emptied during build (compressed into shallow_c, the 3rd
+        // return element). Restore the full Vec<u32> from the compressed blob.
+        let shallow: Vec<u32> = shallow_c.restore()?;
+        let class_ids = p1_owned.class_ids.clone();
+        let dfn = if reachable_only {
+            Some(
+                crate::rpo_dfs::rpo_dfs(
+                    g.n,
+                    &g.gc_root_indices,
+                    &g.fwd_offsets,
+                    &g.fwd_targets,
+                )
+                .dfn,
+            )
+        } else {
+            None
+        };
+        let id_size = p1_owned.id_size as usize;
+        Ok(ReplCache {
+            p1: p1_owned,
+            n,
+            shallow,
+            class_ids,
+            dfn,
+            id_size,
+            reachable_only,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::query::parse::parse;
     use crate::query::plan::plan_query;
+
+    #[test]
+    fn repl_cache_builds_from_fixture() {
+        let cache = ReplCache::build("tests/fixtures/dump_4_philosophers.hprof", true)
+            .expect("cache build");
+        assert!(cache.n > 0, "some objects");
+        assert_eq!(cache.shallow.len(), cache.n, "shallow covers all objects");
+        assert_eq!(cache.class_ids.len(), cache.n, "class_ids covers all objects");
+        assert!(cache.dfn.is_some(), "reachable-only build computes dfn");
+
+        // --all build: no dfn.
+        let raw = ReplCache::build("tests/fixtures/dump_4_philosophers.hprof", false).expect("raw");
+        assert!(raw.dfn.is_none(), "raw build has no dfn");
+    }
 
     /// Minimal `ClassResolver` mapping a couple of class addresses to names;
     /// fields are unused by these class-only queries.
