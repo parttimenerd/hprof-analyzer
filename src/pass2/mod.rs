@@ -575,6 +575,7 @@ impl Pass2 {
         // below). All captured sets are bounded by #threads, so this stays off
         // the per-object RSS budget on multi-GB dumps.
         let thread_props = resolve_thread_names(path, &p1)?;
+        t_phase!("thread_names done");
 
         // Opt-in approximate duplicate-java.lang.String report. Runs two extra
         // full-file scans and keeps only hashes+lengths+counts (never the
@@ -619,6 +620,7 @@ impl Pass2 {
         // version from the decoded properties. Falls back to empty/None (never
         // garbage) if the layout does not match the Hashtable form.
         let (system_properties, jvm_version) = resolve_system_properties(path, &p1)?;
+        t_phase!("system_props done");
 
         // Always-on field-decode views (collections, arrays, references). One
         // shared 3-scan pass; all aggregates are capped (see fielddecode.rs), so

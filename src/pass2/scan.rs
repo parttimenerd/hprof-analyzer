@@ -717,3 +717,143 @@ mod tests {
         assert_eq!(rem, 3);
     }
 }
+
+/// Single-pass collection of instance blobs and primitive-array blobs for
+/// multiple disjoint wanted sets, avoiding repeated full-file scans.
+///
+/// Returns:
+/// - `inst_blobs`: addr → (class_id, blob bytes), for every addr in
+///   `wanted_inst` that appears in the dump as an INSTANCE_DUMP.
+/// - `prim_blobs`: addr → blob bytes, for every addr in `wanted_prim` that
+///   appears as a PRIM_ARRAY_DUMP.
+/// - `obj_blobs`: addr → element-ref bytes, for every addr in `wanted_obj`
+///   that appears as an OBJ_ARRAY_DUMP.
+pub(crate) fn collect_blobs(
+    path: &str,
+    id_size: u8,
+    wanted_inst: &std::collections::HashSet<u64>,
+    wanted_prim: &std::collections::HashSet<u64>,
+    wanted_obj: &std::collections::HashSet<u64>,
+) -> io::Result<(
+    std::collections::HashMap<u64, (u64, Vec<u8>)>,
+    std::collections::HashMap<u64, Vec<u8>>,
+    std::collections::HashMap<u64, Vec<u8>>,
+)> {
+    use crate::types::{HprofType, heap, tags};
+    let ids = id_size as u64;
+    let mut inst_blobs: std::collections::HashMap<u64, (u64, Vec<u8>)> =
+        std::collections::HashMap::new();
+    let mut prim_blobs: std::collections::HashMap<u64, Vec<u8>> =
+        std::collections::HashMap::new();
+    let mut obj_blobs: std::collections::HashMap<u64, Vec<u8>> =
+        std::collections::HashMap::new();
+
+    if wanted_inst.is_empty() && wanted_prim.is_empty() && wanted_obj.is_empty() {
+        return Ok((inst_blobs, prim_blobs, obj_blobs));
+    }
+
+    let mut r = crate::reader::HprofReader::open(path)?;
+    let mut scratch: Vec<u8> = Vec::with_capacity(256);
+    loop {
+        let tag = match r.u1() {
+            Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+            other => other?,
+        };
+        let _ts = r.u4()?;
+        let length = r.u4()? as u64;
+        match tag {
+            tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
+                let mut remaining = length;
+                while remaining > 0 {
+                    let sub_tag = r.u1()?;
+                    sub_remaining(&mut remaining, 1)?;
+                    match sub_tag {
+                        heap::ROOT_UNKNOWN
+                        | heap::ROOT_MONITOR_USED
+                        | heap::ROOT_STICKY_CLASS => {
+                            r.skip(ids)?;
+                            sub_remaining(&mut remaining, ids)?;
+                        }
+                        heap::ROOT_JNI_GLOBAL => {
+                            r.skip(2 * ids)?;
+                            sub_remaining(&mut remaining, 2 * ids)?;
+                        }
+                        heap::ROOT_JNI_LOCAL
+                        | heap::ROOT_JAVA_FRAME
+                        | heap::ROOT_THREAD_OBJ => {
+                            r.skip(ids + 8)?;
+                            sub_remaining(&mut remaining, ids + 8)?;
+                        }
+                        heap::ROOT_NATIVE_STACK | heap::ROOT_THREAD_BLOCK => {
+                            r.skip(ids + 4)?;
+                            sub_remaining(&mut remaining, ids + 4)?;
+                        }
+                        heap::HEAP_DUMP_INFO => {
+                            r.skip(4 + ids)?;
+                            sub_remaining(&mut remaining, 4 + ids)?;
+                        }
+                        heap::CLASS_DUMP => {
+                            let consumed = skip_class_dump(&mut r, id_size)?;
+                            sub_remaining(&mut remaining, consumed)?;
+                        }
+                        heap::INSTANCE_DUMP => {
+                            let addr = r.id()?;
+                            r.skip(4)?;
+                            let class_id = r.id()?;
+                            let data_len = r.u4()? as u64;
+                            sub_remaining(&mut remaining, ids + 4 + ids + 4 + data_len)?;
+                            if wanted_inst.contains(&addr) {
+                                r.read_bytes_reuse(&mut scratch, data_len as usize)?;
+                                inst_blobs.insert(addr, (class_id, scratch.clone()));
+                            } else {
+                                r.skip(data_len)?;
+                            }
+                        }
+                        heap::OBJ_ARRAY_DUMP => {
+                            let addr = r.id()?;
+                            r.skip(4)?;
+                            let count = r.u4()? as u64;
+                            r.skip(ids)?;
+                            let byte_len = count.saturating_mul(ids);
+                            sub_remaining(&mut remaining, ids + 4 + 4 + ids + byte_len)?;
+                            if wanted_obj.contains(&addr) {
+                                r.read_bytes_reuse(&mut scratch, byte_len as usize)?;
+                                obj_blobs.insert(addr, scratch.clone());
+                            } else {
+                                r.skip(byte_len)?;
+                            }
+                        }
+                        heap::PRIM_ARRAY_DUMP => {
+                            let addr = r.id()?;
+                            r.skip(4)?;
+                            let count = r.u4()? as u64;
+                            let elem_type = r.u1()?;
+                            let esz = HprofType::from_code(elem_type)
+                                .map(|t| t.byte_size() as u64)
+                                .unwrap_or(1);
+                            let byte_len = count.saturating_mul(esz);
+                            sub_remaining(&mut remaining, ids + 4 + 4 + 1 + byte_len)?;
+                            if wanted_prim.contains(&addr) {
+                                r.read_bytes_reuse(&mut scratch, byte_len as usize)?;
+                                prim_blobs.insert(addr, scratch.clone());
+                            } else {
+                                r.skip(byte_len)?;
+                            }
+                        }
+                        other => {
+                            return Err(io::Error::new(
+                                ErrorKind::InvalidData,
+                                format!(
+                                    "unknown heap sub-tag 0x{other:02x} in collect_blobs"
+                                ),
+                            ));
+                        }
+                    }
+                }
+            }
+            tags::HEAP_DUMP_END => break,
+            _ => r.skip(length)?,
+        }
+    }
+    Ok((inst_blobs, prim_blobs, obj_blobs))
+}
