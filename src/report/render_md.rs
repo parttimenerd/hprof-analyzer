@@ -2495,8 +2495,10 @@ pub(crate) fn render_biggest_collections(
     out.push_str("## Biggest Collections\n\n");
     out.push_str(
         "_The largest individual collection instances. Owner is the primary incoming \
-         `Class#field`; value type is the dominant runtime element type (`varies` when none \
-         dominates). Owner/retained/value columns require `--collections`._\n\n",
+         `Class#field`; value type is the dominant runtime element type of the \
+         backing array (the direct element, not the logical key/value — for a \
+         `Map<K,V>` this is often `Entry` or `Object`, not `V`). \
+         Owner/retained/value columns require `--collections`._\n\n",
     );
 
     // When per-kind breakdown is available show it directly (avoids listing every
