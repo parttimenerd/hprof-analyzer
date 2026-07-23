@@ -163,6 +163,31 @@ fn extract_receiver_class_from_full(full: &str, alias: &str) -> Option<String> {
     }
 }
 
+/// Short hint for a dispatched method name (MAT-style `receiver.method()`),
+/// shown in the completion menu. `None` when no useful one-liner applies.
+fn method_hint(m: &str) -> Option<String> {
+    let h = match m {
+        "length" | "size" => "element/char count",
+        "getKey" => "Map.Entry key",
+        "getValue" => "Map.Entry value",
+        "equals" => "reference equality",
+        "contains" => "substring/element test",
+        "intValue" | "longValue" | "shortValue" | "byteValue" => "boxed integer value",
+        "floatValue" | "doubleValue" => "boxed float value",
+        "booleanValue" => "boxed boolean value",
+        "charValue" => "boxed char value",
+        "toString" => "string form",
+        "getName" => "class/field name",
+        "getObjectAddress" => "heap address",
+        "getObjectId" => "dense object index",
+        "getUsedHeapSize" => "shallow size",
+        "getRetainedHeapSize" => "retained size",
+        "getClazz" => "defining class",
+        _ => return None,
+    };
+    Some(h.to_string())
+}
+
 /// Given a resolved `receiver_class` (or `None`), return the ordered list of
 /// method names to offer: class-relevant methods first (a stable partition of
 /// `METHODS`), then the rest. All names are still drawn from `parse::METHODS` so
@@ -315,25 +340,81 @@ fn classify_base(before: &str, frag: &str) -> Ctx {
 /// field names (both harvested once at REPL startup) and offers, per cursor
 /// context, class names / field names / attributes / keywords sourced from the
 /// parser's canonical const slices so completions can never drift from the grammar.
+///
+/// Class and field names are stored SORTED alongside a parallel lowercased copy
+/// so prefix matching is a binary-search over the lowercased slice (O(log n +
+/// matches)) rather than a full linear scan with a per-candidate allocation on
+/// every keystroke — the difference is felt on heaps with thousands of classes.
 struct OqlCompleter {
     class_names: Vec<String>,
+    /// `class_names[i]` lowercased, same index. Sorted (class_names is sorted and
+    /// ASCII-lowercasing preserves the a–z ordering of dotted Java names).
+    class_lower: Vec<String>,
     /// Sorted, deduped union of all instance field names across all classes.
     field_names: Vec<String>,
+    /// `field_names[i]` lowercased, same index.
+    field_lower: Vec<String>,
+}
+
+/// Build the parallel lowercased vector for a sorted name list. Kept as a free
+/// function so both `new`-style construction and tests share one code path.
+fn lowered(names: &[String]) -> Vec<String> {
+    names.iter().map(|n| n.to_ascii_lowercase()).collect()
+}
+
+/// Return the contiguous index range of `sorted_lower` whose entries start with
+/// `prefix` (already lowercased). Relies on `sorted_lower` being sorted: all
+/// prefix matches form one contiguous block, found with two binary searches.
+/// An empty prefix matches everything.
+fn prefix_range(sorted_lower: &[String], prefix: &str) -> std::ops::Range<usize> {
+    if prefix.is_empty() {
+        return 0..sorted_lower.len();
+    }
+    // Lower bound: first index whose entry is >= prefix.
+    let start = sorted_lower.partition_point(|s| s.as_str() < prefix);
+    // Upper bound: first index (from start) that does NOT start with prefix.
+    // Everything in [start, end) starts with prefix because the slice is sorted.
+    let end = start
+        + sorted_lower[start..].partition_point(|s| s.starts_with(prefix));
+    start..end
 }
 
 impl OqlCompleter {
+    /// Construct from class/field name lists, precomputing the parallel
+    /// lowercased vectors used for binary-search prefix matching. The lists are
+    /// sorted here (idempotent when the caller already sorted them, e.g.
+    /// `harvest_names`) so binary search is always valid.
+    fn new(mut class_names: Vec<String>, mut field_names: Vec<String>) -> Self {
+        class_names.sort_unstable();
+        class_names.dedup();
+        field_names.sort_unstable();
+        field_names.dedup();
+        let class_lower = lowered(&class_names);
+        let field_lower = lowered(&field_names);
+        OqlCompleter { class_names, class_lower, field_names, field_lower }
+    }
+
     /// Prefix-filter `cands` (case-insensitive) and wrap each in a `Suggestion`
-    /// replacing the fragment span `[start, pos)`.
+    /// replacing the fragment span `[start, pos)`. Candidates are ranked (shorter
+    /// names first, then lexicographic) and de-duped so the menu is useful, and an
+    /// optional short description hint is attached via `hint_for`.
     fn suggestions<'a, I>(cands: I, lower: &str, start: usize, pos: usize) -> Vec<Suggestion>
     where
         I: IntoIterator<Item = &'a str>,
     {
-        cands
+        let mut matched: Vec<&'a str> = cands
             .into_iter()
             .filter(|c| c.to_ascii_lowercase().starts_with(lower))
+            .collect();
+        // Rank: shorter (closer to the typed prefix) first, then lexicographic.
+        // Stable de-dup afterward keeps the first (best-ranked) of any duplicate.
+        matched.sort_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b)));
+        matched.dedup();
+        matched
+            .into_iter()
             .map(|c| Suggestion {
                 value: c.to_string(),
-                description: None,
+                description: hint_for(c),
                 style: None,
                 extra: None,
                 span: Span { start, end: pos },
@@ -341,6 +422,74 @@ impl OqlCompleter {
             })
             .collect()
     }
+
+    /// Binary-search prefix completion over a sorted `(names, lower)` pair. Builds
+    /// suggestions whose value is `dot_prefix` + the matching name, replacing the
+    /// span `[span_start, pos)`. Shorter names rank first (they most closely match
+    /// the typed prefix). Used for both class-name and dotted field completion.
+    fn ranged_suggestions(
+        names: &[String],
+        lower: &[String],
+        seg_lower: &str,
+        dot_prefix: &str,
+        span_start: usize,
+        pos: usize,
+    ) -> Vec<Suggestion> {
+        let range = prefix_range(lower, seg_lower);
+        let mut idxs: Vec<usize> = range.collect();
+        idxs.sort_by(|&a, &b| names[a].len().cmp(&names[b].len()).then_with(|| names[a].cmp(&names[b])));
+        idxs.into_iter()
+            .map(|i| Suggestion {
+                value: format!("{dot_prefix}{}", names[i]),
+                description: None,
+                style: None,
+                extra: None,
+                span: Span { start: span_start, end: pos },
+                append_whitespace: true,
+            })
+            .collect()
+    }
+}
+
+/// Short human hint for a completion candidate (attribute / function / method /
+/// keyword), shown in reedline's menu next to the value. Returns `None` for
+/// candidates with no useful one-liner (class/field names, plain keywords).
+fn hint_for(cand: &str) -> Option<String> {
+    let h = match cand {
+        // Attributes.
+        "@objectId" => "dense object index",
+        "@objectAddress" => "heap address",
+        "@usedHeapSize" => "shallow size (bytes)",
+        "@retainedHeapSize" => "retained size (bytes; needs full pipeline)",
+        "@displayName" => "class@id label",
+        "@name" => "class name",
+        "@length" => "array length",
+        "@inbounds" => "incoming references",
+        "@outbounds" => "outgoing references",
+        "@valueArray" => "primitive-array contents",
+        "@referenceArray" => "object-array elements",
+        "@GCRoots" => "GC root objects",
+        "@GCRootInfo" => "GC root kind/info",
+        "@info" => "GC root info string",
+        // Aggregates / functions.
+        "COUNT" => "row count",
+        "SUM" | "MIN" | "MAX" | "AVG" => "numeric aggregate",
+        "PERCENTILE" => "PERCENTILE(expr, p)",
+        "MEDIAN" => "50th percentile",
+        "classof" => "defining class",
+        "toString" => "string form",
+        "toHex" => "hex of a number",
+        "path" => "path(a,b): shortest ref path",
+        "dominators" => "immediate dominators (full pipeline)",
+        "dominatorof" => "dominator of (full pipeline)",
+        // Retained-set modifier.
+        "RETAINED" => "AS RETAINED SET",
+        "SET" => "closes AS RETAINED SET",
+        "OBJECTS" => "FROM OBJECTS <class>",
+        "INSTANCEOF" => "subtype match",
+        _ => return None,
+    };
+    Some(h.to_string())
 }
 
 /// Chart kinds accepted by the `-- @viz` directive (mirrors `viz::VizKind`).
@@ -442,10 +591,32 @@ impl Completer for OqlCompleter {
                 if frag.is_empty() {
                     return Vec::new();
                 }
-                // Also offer OBJECTS so `FROM O<Tab>` completes it alongside class names.
-                let cands = self.class_names.iter().map(String::as_str)
-                    .chain(std::iter::once("OBJECTS"));
-                Self::suggestions(cands, &lower, delim_pos, pos)
+                // Binary-search the sorted class names for the prefix range; this
+                // is O(log n + matches) instead of scanning every class per key.
+                let mut out = Self::ranged_suggestions(
+                    &self.class_names,
+                    &self.class_lower,
+                    &lower,
+                    "",
+                    delim_pos,
+                    pos,
+                );
+                // Also offer OBJECTS so `FROM O<Tab>` completes it; prepend so the
+                // keyword sorts ahead of same-prefix class names.
+                if "objects".starts_with(&lower) {
+                    out.insert(
+                        0,
+                        Suggestion {
+                            value: "OBJECTS".to_string(),
+                            description: hint_for("OBJECTS"),
+                            style: None,
+                            extra: None,
+                            span: Span { start: delim_pos, end: pos },
+                            append_whitespace: true,
+                        },
+                    );
+                }
+                out
             }
             Ctx::Attr => {
                 // The `@`-fragment sub-case: offer only attributes (the fragment
@@ -470,52 +641,44 @@ impl Completer for OqlCompleter {
                 // Segment after the last dot is the partial field name.
                 let seg = if seg_start <= pos { &line[seg_start..pos] } else { "" };
                 let seg_lower = seg.to_ascii_lowercase();
-                // Build suggestions whose value is the full dotted path prefix
-                // + the matching field name, replacing from delim_pos to pos.
-                self.field_names
-                    .iter()
-                    .filter(|f| f.to_ascii_lowercase().starts_with(&seg_lower))
-                    .map(|f| Suggestion {
-                        value: format!("{dot_prefix}{f}"),
-                        description: None,
-                        style: None,
-                        extra: None,
-                        span: Span { start: delim_pos, end: pos },
-                        append_whitespace: true,
-                    })
-                    .collect()
+                // Binary-search the sorted field names; value is dot_prefix + name.
+                Self::ranged_suggestions(
+                    &self.field_names,
+                    &self.field_lower,
+                    &seg_lower,
+                    &dot_prefix,
+                    delim_pos,
+                    pos,
+                )
             }
             Ctx::Method { dot_prefix, seg_start, receiver_class } => {
                 // Segment after the dot is the partial method/field name being typed.
                 let seg = if seg_start <= pos { &line[seg_start..pos] } else { "" };
                 let seg_lower = seg.to_ascii_lowercase();
-                // Offer methods (class-aware ordering) then field names. Both are
-                // prefixed by dot_prefix so the full replacement value is correct.
+                // Offer methods (class-aware ordering, with hints) then field names.
+                // Both are prefixed by dot_prefix so the replacement value is correct.
                 let ordered_methods = methods_ordered_for_class(receiver_class.as_deref());
                 let method_suggestions: Vec<Suggestion> = ordered_methods
                     .into_iter()
                     .filter(|m| m.to_ascii_lowercase().starts_with(&seg_lower))
                     .map(|m| Suggestion {
                         value: format!("{dot_prefix}{m}"),
-                        description: None,
+                        description: method_hint(m),
                         style: None,
                         extra: None,
                         span: Span { start: delim_pos, end: pos },
                         append_whitespace: true,
                     })
                     .collect();
-                let field_suggestions: Vec<Suggestion> = self.field_names
-                    .iter()
-                    .filter(|f| f.to_ascii_lowercase().starts_with(&seg_lower))
-                    .map(|f| Suggestion {
-                        value: format!("{dot_prefix}{f}"),
-                        description: None,
-                        style: None,
-                        extra: None,
-                        span: Span { start: delim_pos, end: pos },
-                        append_whitespace: true,
-                    })
-                    .collect();
+                // Field names via binary search (sorted), prefixed by dot_prefix.
+                let field_suggestions = Self::ranged_suggestions(
+                    &self.field_names,
+                    &self.field_lower,
+                    &seg_lower,
+                    &dot_prefix,
+                    delim_pos,
+                    pos,
+                );
                 method_suggestions.into_iter().chain(field_suggestions).collect()
             }
             Ctx::AfterAs => {
@@ -536,7 +699,7 @@ impl Completer for OqlCompleter {
 /// if the file cannot be opened). Returned rather than run so a smoke test can
 /// construct it without needing a live TTY.
 pub fn build_editor(class_names: Vec<String>, field_names: Vec<String>) -> Reedline {
-    let completer = Box::new(OqlCompleter { class_names, field_names });
+    let completer = Box::new(OqlCompleter::new(class_names, field_names));
     let completion_menu = Box::new(ColumnarMenu::default().with_name("completion_menu"));
 
     let mut keybindings = default_emacs_keybindings();
@@ -1331,21 +1494,142 @@ mod tests {
 
     /// Build a completer over a small fixed class and field list for tests.
     fn completer(classes: &[&str]) -> OqlCompleter {
-        OqlCompleter {
-            class_names: classes.iter().map(|s| s.to_string()).collect(),
-            field_names: Vec::new(),
-        }
+        OqlCompleter::new(classes.iter().map(|s| s.to_string()).collect(), Vec::new())
     }
 
     fn completer_with_fields(classes: &[&str], fields: &[&str]) -> OqlCompleter {
-        OqlCompleter {
-            class_names: classes.iter().map(|s| s.to_string()).collect(),
-            field_names: fields.iter().map(|s| s.to_string()).collect(),
-        }
+        OqlCompleter::new(
+            classes.iter().map(|s| s.to_string()).collect(),
+            fields.iter().map(|s| s.to_string()).collect(),
+        )
     }
 
     fn values(sugg: &[Suggestion]) -> Vec<String> {
         sugg.iter().map(|s| s.value.clone()).collect()
+    }
+
+    // ---------- prefix_range binary search ----------
+
+    #[test]
+    fn prefix_range_finds_contiguous_block() {
+        let names = vec![
+            "apple".to_string(),
+            "apply".to_string(),
+            "banana".to_string(),
+            "cherry".to_string(),
+        ];
+        let r = prefix_range(&names, "app");
+        assert_eq!(r, 0..2, "app matches apple+apply");
+        assert_eq!(prefix_range(&names, "ban"), 2..3);
+        assert_eq!(prefix_range(&names, "z"), 4..4, "no match → empty range");
+        assert_eq!(prefix_range(&names, ""), 0..4, "empty prefix matches all");
+    }
+
+    #[test]
+    fn completer_new_sorts_unsorted_input() {
+        // new() must sort so binary search is valid even if the caller didn't.
+        let mut c = OqlCompleter::new(
+            vec!["z.Zzz".to_string(), "a.Aaa".to_string(), "m.Mmm".to_string()],
+            Vec::new(),
+        );
+        // Prefix "a." must find a.Aaa via binary search despite unsorted input.
+        let v = values(&c.complete("SELECT * FROM a.", 16));
+        assert!(v.contains(&"a.Aaa".to_string()), "sorted binary search failed: {v:?}");
+        // And "m." finds only m.Mmm.
+        let v2 = values(&c.complete("SELECT * FROM m.", 16));
+        assert_eq!(v2, vec!["m.Mmm".to_string()], "got {v2:?}");
+    }
+
+    #[test]
+    fn completer_new_dedups_class_names() {
+        let c = OqlCompleter::new(
+            vec!["a.B".to_string(), "a.B".to_string(), "c.D".to_string()],
+            vec!["f".to_string(), "f".to_string()],
+        );
+        assert_eq!(c.class_names, vec!["a.B".to_string(), "c.D".to_string()]);
+        assert_eq!(c.field_names, vec!["f".to_string()]);
+    }
+
+    // ---------- ranking: shorter matches first ----------
+
+    #[test]
+    fn suggestions_rank_shorter_first() {
+        // From a set sharing the "s" prefix, shorter candidates come first.
+        let s = OqlCompleter::suggestions(
+            ["su", "sum", "summary", "s"].into_iter(),
+            "s",
+            0,
+            1,
+        );
+        let v = values(&s);
+        assert_eq!(v, vec!["s", "su", "sum", "summary"], "shorter-first ranking: {v:?}");
+    }
+
+    #[test]
+    fn suggestions_dedup_removes_repeats() {
+        let s = OqlCompleter::suggestions(["ab", "ab", "ac"].into_iter(), "a", 0, 1);
+        assert_eq!(values(&s), vec!["ab", "ac"], "duplicates must be removed");
+    }
+
+    #[test]
+    fn class_completion_ranks_shorter_first() {
+        let mut c = completer(&["com.acme.Fooo", "com.acme.Foo", "com.acme.Fo"]);
+        let v = values(&c.complete("SELECT * FROM com.acme.F", 24));
+        // All three match; shortest ("Fo") must lead.
+        assert_eq!(
+            v,
+            vec![
+                "com.acme.Fo".to_string(),
+                "com.acme.Foo".to_string(),
+                "com.acme.Fooo".to_string(),
+            ],
+            "class suggestions must rank shorter-first: {v:?}"
+        );
+    }
+
+    // ---------- inline description hints ----------
+
+    #[test]
+    fn attribute_suggestions_carry_hints() {
+        let mut c = completer(&[]);
+        let s = c.complete("SELECT @retainedHeapS", 21);
+        let hit = s.iter().find(|sg| sg.value == "@retainedHeapSize").expect("attr present");
+        assert!(
+            hit.description.as_deref().unwrap_or("").contains("retained"),
+            "attribute must carry a description hint: {:?}",
+            hit.description
+        );
+    }
+
+    #[test]
+    fn keyword_objects_carries_hint_in_class_position() {
+        let mut c = completer(&["com.acme.Foo"]);
+        let s = c.complete("SELECT * FROM O", 15);
+        let hit = s.iter().find(|sg| sg.value == "OBJECTS").expect("OBJECTS offered");
+        assert!(hit.description.is_some(), "OBJECTS must carry a hint");
+    }
+
+    #[test]
+    fn method_suggestions_carry_hints() {
+        let mut c = completer_with_fields(&["java.lang.Integer"], &[]);
+        let s = c.complete("SELECT i.intV FROM java.lang.Integer i", 13);
+        let hit = s.iter().find(|sg| sg.value == "i.intValue").expect("intValue offered");
+        assert!(
+            hit.description.as_deref().unwrap_or("").contains("integer"),
+            "method must carry a hint: {:?}",
+            hit.description
+        );
+    }
+
+    #[test]
+    fn class_and_field_names_have_no_hint() {
+        // Class/field names get no synthetic hint (only grammar candidates do).
+        let mut c = completer_with_fields(&["com.acme.Foo"], &["myField"]);
+        let cs = c.complete("SELECT * FROM com.", 18);
+        assert!(cs.iter().all(|s| s.description.is_none()), "class names must have no hint");
+        let fs = c.complete("SELECT s.myF", 12);
+        let field = fs.iter().find(|s| s.value == "s.myField");
+        assert!(field.is_some_and(|s| s.description.is_none()), "field names must have no hint");
     }
 
     // ---------- classify() ----------
