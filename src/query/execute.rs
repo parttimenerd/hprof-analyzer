@@ -682,6 +682,8 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 self.tostring_display(class_id, src_idx)
             }
             Attr::ToHex(inner) => match self.eval_expr(inner, src_idx, class_id, blob) {
+                // as u64: render high-bit addresses unsigned, not as -0x… (i64 stores
+                // addresses above i64::MAX as negative — see the lexer's u64-bit parse).
                 QueryValue::Int(n) => QueryValue::Str(format!("0x{:x}", n as u64)),
                 _ => QueryValue::Null,
             },
@@ -757,6 +759,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 self.tostring_display_named(class_name, src_idx)
             }
             Attr::ToHex(inner) => match self.eval_expr_array(inner, src_idx, class_name, length) {
+                // as u64: render high-bit addresses unsigned (see the instance arm above).
                 QueryValue::Int(n) => QueryValue::Str(format!("0x{:x}", n as u64)),
                 _ => QueryValue::Null,
             },
