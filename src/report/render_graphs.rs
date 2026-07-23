@@ -474,8 +474,6 @@ fn render_retention_concentration_graphs(o: &SystemOverview, out: &mut String) {
          **Top 10** / **Top 100**, the leak is spread across many peers (e.g. a big cache \
          or collection of similar objects) and no single free helps much._\n\n",
     );
-    let total = o.total_shallow;
-    let bp_to_bytes = |bp: u32| -> u64 { (bp as u64 * total) / 10_000 };
     let mut t = Table::new(
         &["Scope", "Retained Share", "Retained", ""],
         &[Align::Left, Align::Right, Align::Right, Align::Left],
@@ -483,19 +481,19 @@ fn render_retention_concentration_graphs(o: &SystemOverview, out: &mut String) {
     t.row([
         "Top 1 object".into(),
         fmt_pct(rc.top1_bp as f64 / 100.0),
-        format_bytes(bp_to_bytes(rc.top1_bp)),
+        format_bytes(rc.top1_retained),
         bar(rc.top1_bp as u64, 10_000, GRAPH_BAR_WIDTH),
     ]);
     t.row([
         "Top 10 objects".into(),
         fmt_pct(rc.top10_bp as f64 / 100.0),
-        format_bytes(bp_to_bytes(rc.top10_bp)),
+        format_bytes(rc.top10_retained),
         bar(rc.top10_bp as u64, 10_000, GRAPH_BAR_WIDTH),
     ]);
     t.row([
         "Top 100 objects".into(),
         fmt_pct(rc.top100_bp as f64 / 100.0),
-        format_bytes(bp_to_bytes(rc.top100_bp)),
+        format_bytes(rc.top100_retained),
         bar(rc.top100_bp as u64, 10_000, GRAPH_BAR_WIDTH),
     ]);
     t.render(out);

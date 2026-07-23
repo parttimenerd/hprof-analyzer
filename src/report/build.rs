@@ -1632,11 +1632,17 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
         let total_retained: u64 = tops.iter().sum();
         let one_pct = denom / 100;
         let num_objects_ge_1pct = tops.iter().filter(|&&r| r >= one_pct).count() as u64;
+        let top1_retained = prefix(1);
+        let top10_retained = prefix(10);
+        let top100_retained = prefix(100);
         RetentionSummary {
             total_retained,
-            top1_bp: bp(prefix(1)),
-            top10_bp: bp(prefix(10)),
-            top100_bp: bp(prefix(100)),
+            top1_bp: bp(top1_retained),
+            top10_bp: bp(top10_retained),
+            top100_bp: bp(top100_retained),
+            top1_retained,
+            top10_retained,
+            top100_retained,
             num_objects_ge_1pct,
         }
     };

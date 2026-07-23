@@ -152,6 +152,14 @@ pub struct RetentionSummary {
     pub top1_bp: u32,
     pub top10_bp: u32,
     pub top100_bp: u32,
+    /// Exact retained bytes for the top-1 / top-10 / top-100 top-level dominators.
+    /// Derive % from these rather than reconstructing from bp to avoid rounding loss.
+    #[serde(default)]
+    pub top1_retained: u64,
+    #[serde(default)]
+    pub top10_retained: u64,
+    #[serde(default)]
+    pub top100_retained: u64,
     /// Count of single objects each retaining >=1% of total reachable shallow.
     pub num_objects_ge_1pct: u64,
 }
@@ -1298,7 +1306,7 @@ pub struct TriageSignal {
 
 /// Schema version for the machine-readable JSON output. Bump on any
 /// breaking change to the `Report` shape; the JSON always carries this.
-pub const SCHEMA_VERSION: u32 = 8;
+pub const SCHEMA_VERSION: u32 = 9;
 
 /// One allocation site: a distinct HPROF stack-trace serial, its resolved frame
 /// lines, and the aggregate footprint of the objects allocated there.
