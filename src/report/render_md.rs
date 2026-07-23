@@ -558,12 +558,14 @@ pub(crate) fn render_retention_concentration(o: &SystemOverview, out: &mut Strin
         fmt_pct(rc.top100_bp as f64 / 100.0),
         format_bytes(bp_to_bytes(rc.top100_bp)),
     ]);
-    t.row([
-        "Objects each >=1%".into(),
-        fmt_count(rc.num_objects_ge_1pct),
-        String::new(),
-    ]);
     t.render(out);
+    if rc.num_objects_ge_1pct > 0 {
+        out.push_str(&format!(
+            "\n_{} {} each hold ≥1% of the reachable heap._\n",
+            fmt_count(rc.num_objects_ge_1pct),
+            plural_objects(rc.num_objects_ge_1pct),
+        ));
+    }
     out.push('\n');
 }
 

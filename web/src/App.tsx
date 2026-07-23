@@ -3313,12 +3313,11 @@ function RetentionConcentrationSection({ report }: { report: Report }) {
             <td>Top 100 objects</td>
             <td className="num">{fmtPct(rc.top100_bp / 100)}</td>
           </tr>
-          <tr>
-            <td>Objects each &ge;1%</td>
-            <td className="num">{fmtCount(rc.num_objects_ge_1pct)}</td>
-          </tr>
         </tbody>
       </table>
+      {rc.num_objects_ge_1pct > 0 && (
+        <p className="subtitle"><em>{fmtCount(rc.num_objects_ge_1pct)} {rc.num_objects_ge_1pct === 1 ? "object" : "objects"} each hold ≥1% of the reachable heap.</em></p>
+      )}
     </section>
   );
 }
