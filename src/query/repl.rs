@@ -617,6 +617,9 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
     let mut line_editor = build_editor(class_names, field_names);
     let prompt = DefaultPrompt::default();
     let mut stdout = io::stdout();
+    // Reachable-only (MAT parity) is the session default; `!all`/`!reachable`
+    // toggle it. Mirrors the `query` subcommand's default.
+    let mut reachable_only = true;
     writeln!(
         stdout,
         "hprof-analyzer OQL REPL. Type !help for commands, !quit or Ctrl-D to exit."
@@ -629,11 +632,11 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                     continue;
                 }
                 if let Some(cmd) = t.strip_prefix('!') {
-                    if handle_meta(cmd, path_depth, &mut stdout)? {
+                    if handle_meta(cmd, path_depth, &mut reachable_only, &mut stdout)? {
                         break;
                     }
                 } else {
-                    match run_one(path, t, path_depth) {
+                    match run_one(path, t, path_depth, reachable_only) {
                         Ok(res) => print_result(&res, &mut stdout)?,
                         Err(e) => writeln!(stdout, "error: {e}")?,
                     }
@@ -651,8 +654,14 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
 }
 
 /// Handle a meta-command (the text after the leading `!`). Returns `Ok(true)`
-/// when the command asks the REPL to quit.
-fn handle_meta(cmd: &str, path_depth: usize, out: &mut impl Write) -> io::Result<bool> {
+/// when the command asks the REPL to quit. `reachable_only` is the session's
+/// current GC-reachability mode; `!all`/`!reachable` mutate it.
+fn handle_meta(
+    cmd: &str,
+    path_depth: usize,
+    reachable_only: &mut bool,
+    out: &mut impl Write,
+) -> io::Result<bool> {
     let (verb, rest) = match cmd.split_once(char::is_whitespace) {
         Some((v, r)) => (v, r.trim()),
         None => (cmd, ""),
@@ -667,8 +676,33 @@ fn handle_meta(cmd: &str, path_depth: usize, out: &mut impl Write) -> io::Result
                 "  !plan [--raw] <oql>   show the query plan (no scan); --raw shows unoptimized plan"
             )?;
             writeln!(out, "  !explain [--raw] <oql> alias for !plan")?;
+            writeln!(
+                out,
+                "  !reachable            filter results to GC-reachable objects (MAT parity; default)"
+            )?;
+            writeln!(
+                out,
+                "  !all                  include unreachable objects (raw-heap scan)"
+            )?;
+            writeln!(out, "  !mode                 show the current reachability mode")?;
             writeln!(out, "  !quit                 exit")?;
             writeln!(out, "  <oql>                 run a query and print results")?;
+        }
+        "reachable" | "reachable-only" => {
+            *reachable_only = true;
+            writeln!(out, "mode: reachable-only (GC-reachable objects, MAT parity)")?;
+        }
+        "all" => {
+            *reachable_only = false;
+            writeln!(out, "mode: all (raw-heap scan, includes unreachable objects)")?;
+        }
+        "mode" => {
+            let m = if *reachable_only {
+                "reachable-only (GC-reachable objects, MAT parity)"
+            } else {
+                "all (raw-heap scan, includes unreachable objects)"
+            };
+            writeln!(out, "mode: {m}")?;
         }
         "plan" | "explain" => {
             // Detect optional --raw flag.
@@ -705,7 +739,7 @@ fn handle_meta(cmd: &str, path_depth: usize, out: &mut impl Write) -> io::Result
 /// Parse, plan, and execute a single OQL line against the dump at `path`,
 /// returning the (single) query result. Parse/plan failures are surfaced as
 /// `io::Error` so the caller prints `error: <msg>` and stays alive.
-fn run_one(path: &str, text: &str, path_depth: usize) -> io::Result<QueryResult> {
+fn run_one(path: &str, text: &str, path_depth: usize, reachable_only: bool) -> io::Result<QueryResult> {
     // Strip any leading `-- @viz` directive before parsing; the OQL lexer has no
     // comment rule. A malformed directive becomes a result note; a well-formed
     // one is attached after execution once the columns are known.
@@ -723,9 +757,11 @@ fn run_one(path: &str, text: &str, path_depth: usize) -> io::Result<QueryResult>
     // Derive a default view name from the FROM target BEFORE `q` is moved into
     // `run_single_dump`; a `@viz name="..."` directive below still overrides it.
     let default_name = crate::query::viz::default_view_name(&q);
-    // The REPL matches the `query` subcommand's reachable-only default (MAT
-    // parity); it has no --all escape, so raw-heap results need the subcommand.
-    let mut results = crate::query::run::run_single_dump(path, &[(q, plan)], true)?;
+    // Reachable-only (MAT parity) is the default, matching the `query`
+    // subcommand; `!all` toggles it off for the session so raw-heap (unreachable)
+    // objects appear, and `!reachable` turns it back on — no need to drop to the
+    // subcommand for an ad-hoc raw scan.
+    let mut results = crate::query::run::run_single_dump(path, &[(q, plan)], reachable_only)?;
     let mut result = results.pop().unwrap_or_else(|| QueryResult {
         name: "q1".into(),
         oql: text.into(),
@@ -817,9 +853,23 @@ mod tests {
     use crate::query::model::QueryColumn;
 
     fn meta_out(cmd: &str) -> (bool, String) {
+        let (quit, out, _mode) = meta_out_mode(cmd, true);
+        (quit, out)
+    }
+
+    /// Like `meta_out` but seeds the reachability mode and returns the resulting
+    /// mode so the `!all`/`!reachable`/`!mode` toggle can be asserted.
+    fn meta_out_mode(cmd: &str, initial: bool) -> (bool, String, bool) {
         let mut buf = Vec::new();
-        let quit = handle_meta(cmd, crate::query::DEFAULT_PATH_DEPTH_CAP, &mut buf).unwrap();
-        (quit, String::from_utf8(buf).unwrap())
+        let mut reachable_only = initial;
+        let quit = handle_meta(
+            cmd,
+            crate::query::DEFAULT_PATH_DEPTH_CAP,
+            &mut reachable_only,
+            &mut buf,
+        )
+        .unwrap();
+        (quit, String::from_utf8(buf).unwrap(), reachable_only)
     }
 
     #[test]
@@ -876,6 +926,43 @@ mod tests {
         let (quit, out) = meta_out("bogus");
         assert!(!quit);
         assert!(out.contains("unknown command"), "got: {out}");
+    }
+
+    #[test]
+    fn help_lists_reachability_toggles() {
+        let (_, out) = meta_out("help");
+        assert!(out.contains("!reachable"), "help missing !reachable: {out}");
+        assert!(out.contains("!all"), "help missing !all: {out}");
+        assert!(out.contains("!mode"), "help missing !mode: {out}");
+    }
+
+    #[test]
+    fn all_command_disables_reachable_only() {
+        // Seed reachable-only=true; `!all` must flip it off and say so.
+        let (quit, out, mode) = meta_out_mode("all", true);
+        assert!(!quit);
+        assert!(!mode, "!all must set reachable_only=false");
+        assert!(out.contains("mode: all"), "got: {out}");
+    }
+
+    #[test]
+    fn reachable_command_reenables_reachable_only() {
+        // Seed reachable-only=false; `!reachable` must flip it back on.
+        let (quit, out, mode) = meta_out_mode("reachable", false);
+        assert!(!quit);
+        assert!(mode, "!reachable must set reachable_only=true");
+        assert!(out.contains("mode: reachable-only"), "got: {out}");
+    }
+
+    #[test]
+    fn mode_command_reports_without_mutating() {
+        // `!mode` reports the current mode and leaves it unchanged.
+        let (_, out_on, mode_on) = meta_out_mode("mode", true);
+        assert!(mode_on, "!mode must not mutate (was true)");
+        assert!(out_on.contains("reachable-only"), "got: {out_on}");
+        let (_, out_off, mode_off) = meta_out_mode("mode", false);
+        assert!(!mode_off, "!mode must not mutate (was false)");
+        assert!(out_off.contains("mode: all"), "got: {out_off}");
     }
 
     fn print_to_string(res: &QueryResult) -> String {
