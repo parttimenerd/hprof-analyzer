@@ -3048,15 +3048,32 @@ Multiple rows with the same class are distinct objects._\n\n",
             .sum();
         let total_drop: u64 = d.big_drops.rows.iter().map(|r| r.drop_bytes).sum();
         let mut t = Table::new(&headers, &aligns);
-        for r in &d.big_drops.rows {
+        // Group consecutive rows sharing the same (class, drop_bytes) into a single
+        // "×N" row — identical entries come from multiple objects of the same type
+        // at the same drop level and repeat without adding new information.
+        let rows = &d.big_drops.rows;
+        let mut i = 0;
+        while i < rows.len() {
+            let r = &rows[i];
+            let count = rows[i..]
+                .iter()
+                .take_while(|x| {
+                    x.display_class == r.display_class && x.drop_bytes == r.drop_bytes
+                })
+                .count();
             let child = if r.largest_child_class.is_empty() {
                 "—".to_string()
             } else {
                 format!("`{}`", r.largest_child_class)
             };
+            let count_cell = if count > 1 {
+                format!("×{}", fmt_count(count as u64))
+            } else {
+                r.obj_index_1based.to_string()
+            };
             let mut row = vec![
                 format!("`{}`", r.display_class),
-                format!("{}", r.obj_index_1based),
+                count_cell,
                 format_bytes(r.retained),
                 child,
                 format_bytes(r.largest_child_retained),
@@ -3066,6 +3083,7 @@ Multiple rows with the same class are distinct objects._\n\n",
                 row.push(bar(r.drop_bytes, drop_max, render_graphs::GRAPH_BAR_WIDTH));
             }
             t.row(row);
+            i += count;
         }
         let mut total_row = vec![
             "**Total**".to_string(),
