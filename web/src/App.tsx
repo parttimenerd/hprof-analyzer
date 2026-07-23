@@ -1898,7 +1898,7 @@ function TopConsumersSection({ report }: { report: Report }) {
           <h3>Biggest Packages</h3>
           <p className="subtitle">
             Expand a package to drill into its sub-packages. Totals are cumulative over the subtree. Only top-level
-            dominators retaining at least {(t.threshold_bp / 100).toFixed(t.threshold_bp % 100 === 0 ? 0 : 2)}% of the
+            dominators retaining at least {fmtPct(t.threshold_bp / 100)} of the
             heap are included (smaller ones are pruned, MAT-style).
           </p>
           <TreemapBar

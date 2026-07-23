@@ -434,9 +434,9 @@ pub(crate) fn render_executive_summary(r: &Report, out: &mut String) {
     // entirely from the suspects list already rendered — no new data.
     let likely = match r.leaks.suspects.first() {
         Some(s) if pct_of(s.retained) >= CONCENTRATION_PCT => format!(
-            "**Likely problem:** `{}` retains {:.1}% of the reachable heap — investigate this first.",
+            "**Likely problem:** `{}` retains {} of the reachable heap — investigate this first.",
             s.pretty_class,
-            pct_of(s.retained),
+            fmt_pct(pct_of(s.retained)),
         ),
         Some(_) => {
             "**Likely problem:** retention is spread across several roots; no single object dominates."
@@ -621,10 +621,10 @@ fn render_dominator_depth_inner(o: &SystemOverview, graphs: bool, out: &mut Stri
         let hidden_objects: u64 = stats.rows[shown..].iter().map(|&(_, o, _, _)| o).sum();
         let last_cum = stats.rows.last().map(|&(_, _, _, c)| c).unwrap_or(0.0);
         out.push_str(&format!(
-            "\n_… (+{} deeper buckets, {} objects, {:.1}% cumulative — full data in JSON)_\n",
+            "\n_… (+{} deeper buckets, {} objects, {} cumulative — full data in JSON)_\n",
             hidden,
             fmt_count(hidden_objects),
-            last_cum,
+            fmt_pct(last_cum),
         ));
     }
     out.push('\n');
@@ -1152,7 +1152,7 @@ It is worth investigating only if the instance count is unexpectedly high \
             );
             for row in &s.dominated_by_class {
                 let pct_str = if s.retained > 0 {
-                    format!("{:.1}%", pct_of_heap(row.retained, s.retained))
+                    fmt_pct(pct_of_heap(row.retained, s.retained))
                 } else {
                     "—".to_string()
                 };
@@ -3431,7 +3431,7 @@ pub(crate) fn render_boxed_numbers(
     );
     for (i, row) in rows.iter().enumerate() {
         let pct = if total_shallow > 0 {
-            format!("{:.2}%", row.pct_of_heap_bp as f64 / 100.0)
+            fmt_pct(row.pct_of_heap_bp as f64 / 100.0)
         } else {
             "—".to_string()
         };

@@ -561,11 +561,11 @@ These are the most likely accumulation points for excessive memory usage._\n\n",
         let pct = pct_of_heap(s.retained, l.total_shallow);
 
         out.push_str(&format!(
-            "### {}. `{}` — retains {} ({:.1}% of {HEAP_BASIS_LABEL})\n\n",
+            "### {}. `{}` — retains {} ({} of {HEAP_BASIS_LABEL})\n\n",
             rank + 1,
             s.pretty_class,
             format_bytes(s.retained),
-            pct,
+            fmt_pct(pct),
         ));
 
         if s.is_single {
