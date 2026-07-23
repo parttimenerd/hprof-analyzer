@@ -2973,13 +2973,12 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
             <p className="subtitle">{fmtCount(stats.reference_instances)} reference instances.</p>
             <h4>Referent classes</h4>
             <RefClassTable rows={stats.referent_histogram ?? []} />
-            {(stats.only_weakly_retained ?? []).length > 0 && (
-              <>
-                <h4>Only-weakly retained (approximate)</h4>
-                <p className="subtitle">Objects with no incoming strong reference other than this reference chain — GC pressure would free them.</p>
-                <RefClassTable rows={stats.only_weakly_retained} />
-              </>
-            )}
+            <h4>Only-weakly retained (approximate)</h4>
+            <p className="subtitle">Objects with no incoming strong reference other than this reference chain — GC pressure would free them.</p>
+            {(stats.only_weakly_retained ?? []).length > 0
+              ? <RefClassTable rows={stats.only_weakly_retained} />
+              : <p className="subtitle"><em>None found — no objects are exclusively reachable via this reference kind.</em></p>
+            }
           </React.Fragment>
         ))
       )}

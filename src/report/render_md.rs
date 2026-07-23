@@ -2787,9 +2787,11 @@ or that native resources (file handles, native buffers) are not being released p
         ));
         out.push_str("#### Referent classes\n\n");
         render_class_table(&stats.referent_histogram, out);
-        if !stats.only_weakly_retained.is_empty() {
-            out.push_str("#### Only-weakly retained _(approximate)_\n\n");
-            out.push_str("_Objects with no incoming strong reference other than this reference chain — GC pressure would free them._\n\n");
+        out.push_str("#### Only-weakly retained _(approximate)_\n\n");
+        out.push_str("_Objects with no incoming strong reference other than this reference chain — GC pressure would free them._\n\n");
+        if stats.only_weakly_retained.is_empty() {
+            out.push_str("_None found — no objects are exclusively reachable via this reference kind._\n\n");
+        } else {
             render_class_table(&stats.only_weakly_retained, out);
         }
     }
