@@ -723,7 +723,9 @@ fn run_one(path: &str, text: &str, path_depth: usize) -> io::Result<QueryResult>
     // Derive a default view name from the FROM target BEFORE `q` is moved into
     // `run_single_dump`; a `@viz name="..."` directive below still overrides it.
     let default_name = crate::query::viz::default_view_name(&q);
-    let mut results = crate::query::run::run_single_dump(path, &[(q, plan)])?;
+    // The REPL matches the `query` subcommand's reachable-only default (MAT
+    // parity); it has no --all escape, so raw-heap results need the subcommand.
+    let mut results = crate::query::run::run_single_dump(path, &[(q, plan)], true)?;
     let mut result = results.pop().unwrap_or_else(|| QueryResult {
         name: "q1".into(),
         oql: text.into(),
