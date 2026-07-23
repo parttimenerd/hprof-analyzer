@@ -2650,6 +2650,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
             <tr>
               <th>Class#field</th>
               <th>Container Class</th>
+              <th>Kind</th>
               <th className="num">Elements</th>
               <th className="num">Capacity</th>
               <th className="num">Retained</th>
@@ -2660,12 +2661,13 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
               <tr key={i}>
                 <td><code>{r.holder_class}#{r.field}</code></td>
                 <td><code>{r.container_class}</code></td>
+                <td>{r.container_kind}</td>
                 <td className="num">{fmtCount(r.elements)}</td>
                 <td className="num">{fmtCount(r.capacity)}</td>
                 <td className="num">{formatBytes(r.retained)}</td>
               </tr>
             ))}
-            <ShowMoreRow extra={singleCap.extra} cols={5} showAll={singleCap.showAll} setShowAll={singleCap.setShowAll} />
+            <ShowMoreRow extra={singleCap.extra} cols={6} showAll={singleCap.showAll} setShowAll={singleCap.setShowAll} />
           </tbody>
         </table>
       )}

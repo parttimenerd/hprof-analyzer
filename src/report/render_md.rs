@@ -2334,11 +2334,13 @@ pub(crate) fn render_collection_attribution(
         let mut headers: Vec<&str> = vec![
             "Class#field",
             "Container Class",
+            "Kind",
             "Elements",
             "Capacity",
             "Retained",
         ];
         let mut aligns = vec![
+            Align::Left,
             Align::Left,
             Align::Left,
             Align::Right,
@@ -2354,6 +2356,7 @@ pub(crate) fn render_collection_attribution(
             let mut row = vec![
                 format!("`{}#{}`", r.holder_class, r.field),
                 format!("`{}`", r.container_class),
+                r.container_kind.clone(),
                 fmt_count(r.elements),
                 fmt_count(r.capacity),
                 format_bytes(r.retained),
