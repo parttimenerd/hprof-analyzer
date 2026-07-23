@@ -227,6 +227,31 @@ pub fn evaluate_triage(r: &Report) -> Vec<TriageSignal> {
         ));
     }
 
+    // Emit "not analyzed" notes for gated rules so absent signals are
+    // unambiguously "analysis was off" rather than "nothing found".
+    if r.biggest_collections.is_none() {
+        fired.push(signal(
+            "not-analyzed-collections",
+            TriageSeverity::Info,
+            "Collection analysis not run",
+            "Pass `--collections` to detect over-capacity backing arrays, unbounded \
+             collections, sparse object arrays, and constant primitive arrays."
+                .to_string(),
+            None,
+        ));
+    }
+    if r.overview.duplicate_strings.is_none() {
+        fired.push(signal(
+            "not-analyzed-duplicates",
+            TriageSeverity::Info,
+            "Duplicate-object analysis not run",
+            "Pass `--find-duplicates` to detect duplicate strings, duplicate primitive arrays, \
+             and boxed-number bloat."
+                .to_string(),
+            None,
+        ));
+    }
+
     fired
 }
 
@@ -562,7 +587,7 @@ impl Rule for ThreadPinning {
             TriageSeverity::Warning,
             "Thread pinning",
             format!(
-                "thread `{}` retains {} ({:.1}% of heap) and pins {} thread-local roots — a live thread is holding memory alive.",
+                "thread `{}` retains {} ({:.1}% of reachable heap) and pins {} thread-local roots — a live thread is holding memory alive.",
                 who,
                 format_bytes(t.retained),
                 share,
@@ -797,7 +822,7 @@ impl Rule for ObjectSwarm {
                 TriageSeverity::Warning,
                 "Object swarm",
                 format!(
-                    "{} live `{}` instances ({} shallow, {:.1}% of heap) — typically an unbounded queue, list, or log accumulation.",
+                    "{} live `{}` instances ({} shallow, {:.1}% of reachable heap) — typically an unbounded queue, list, or log accumulation.",
                     fmt_count(row.instances),
                     row.pretty_class,
                     format_bytes(row.shallow),
@@ -1142,7 +1167,7 @@ impl Rule for JniGlobalRefLeak {
             TriageSeverity::Warning,
             "JNI global-reference leak",
             format!(
-                "{} JNI Global roots retaining {} ({:.1}% of heap) — native code is accumulating global references without releasing them; audit `JNI_DeleteGlobalRef` call sites.",
+                "{} JNI Global roots retaining {} ({:.1}% of reachable heap) — native code is accumulating global references without releasing them; audit `JNI_DeleteGlobalRef` call sites.",
                 fmt_count(count),
                 format_bytes(retained),
                 pct_of(retained, total),
@@ -1205,7 +1230,7 @@ impl Rule for StaticFieldAnchor {
             TriageSeverity::Warning,
             "Static-field anchor",
             format!(
-                "`{}` is anchored via a static field (`Sticky Class` root) and retains {} ({:.1}% of heap) — this object lives for the classloader lifetime and is never evicted.",
+                "`{}` is anchored via a static field (`Sticky Class` root) and retains {} ({:.1}% of reachable heap) — this object lives for the classloader lifetime and is never evicted.",
                 s.pretty_class,
                 format_bytes(s.retained),
                 pct,
@@ -1500,7 +1525,7 @@ impl Rule for FixedPerObjectOverhead {
             TriageSeverity::Warning,
             "Fixed per-object header overhead",
             format!(
-                "{} objects × {} B header = {} ({:.1}% of heap) is consumed by JVM \
+                "{} objects × {} B header = {} ({:.1}% of reachable heap) is consumed by JVM \
                  object headers alone — consider value types, primitive arrays, or \
                  fewer wrapper objects.",
                 fmt_count(r.overview.total_objects),
@@ -1646,7 +1671,7 @@ impl Rule for DuplicatePrimArrays {
                 TriageSeverity::Warning,
                 "Duplicate primitive arrays",
                 format!(
-                    "{} ({:.1}% of heap) wasted by content-identical primitive arrays — \
+                    "{} ({:.1}% of reachable heap) wasted by content-identical primitive arrays — \
                      multiple copies of the same byte[]/int[]/etc. payload could be \
                      deduplicated or replaced with a shared constant.",
                     format_bytes(wasted),

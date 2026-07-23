@@ -2780,7 +2780,7 @@ pub(crate) fn render_unreachable_histogram(o: &SystemOverview, graphs: bool, out
     if unreachable_pct >= 5.0 {
         out.push_str(&format!(
             "_Unreachable objects are eligible for collection but have not yet been reclaimed. \
-At {:.1}% of total heap this is elevated — the JVM may not have had time to GC before the dump \
+At {:.1}% of reachable heap this is elevated — the JVM may not have had time to GC before the dump \
 was taken, or finalization may be backed up._\n\n",
             unreachable_pct
         ));
