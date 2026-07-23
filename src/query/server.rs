@@ -3,6 +3,10 @@
 //! GET /help returns the language reference. Loopback-only, sync tiny_http.
 
 use std::io;
+use std::io::Read;
+use std::sync::{Arc, Mutex};
+
+use tiny_http::{Response, Server};
 
 use crate::query::model::QueryResult;
 use crate::query::run::ReplCache;
@@ -160,9 +164,113 @@ fn internal_error(e: io::Error) -> serde_json::Value {
     })
 }
 
+/// Shared server state. `path`/`path_depth`/`reachable_only` are immutable; the
+/// warm ReplCache is behind a Mutex so worker threads can share (and lazily
+/// build) it. Field/scan-path queries rebuild pass1+pass2 per request via
+/// run_single_dump — no shared mutable heap state needed.
+pub struct ServerState {
+    path: String,
+    path_depth: usize,
+    reachable_only: bool,
+    cache: Mutex<Option<ReplCache>>,
+}
+
+impl ServerState {
+    pub fn load(path: &str, path_depth: usize, reachable_only: bool) -> io::Result<Self> {
+        Ok(ServerState {
+            path: path.to_string(),
+            path_depth,
+            reachable_only,
+            cache: Mutex::new(None),
+        })
+    }
+
+    /// Route (method, url, body) -> (http_status, json_body_string). Pure enough
+    /// to unit-test without a socket.
+    pub fn route(&self, method: &str, url: &str, body: &str) -> (u16, String) {
+        let path = url.split('?').next().unwrap_or(url);
+        match (method, path) {
+            ("POST", "/") | ("POST", "/query") => {
+                let oql = extract_oql(body);
+                let mut guard = self.cache.lock().unwrap();
+                let v = run_query_json(
+                    &self.path, &oql, self.path_depth, self.reachable_only, &mut guard,
+                );
+                let status = if v["ok"] == serde_json::json!(true) { 200 } else { 400 };
+                (status, v.to_string())
+            }
+            ("GET", "/help") => (200, help_json(&self.path).to_string()),
+            ("GET", "/") => (200, help_json(&self.path).to_string()),
+            _ => (404, serde_json::json!({
+                "ok": false,
+                "error": { "kind": "route", "message": format!("no route {method} {path}") }
+            }).to_string()),
+        }
+    }
+}
+
+/// Accept a raw OQL body or a {"query":"..."} JSON object.
+fn extract_oql(body: &str) -> String {
+    let trimmed = body.trim();
+    if trimmed.starts_with('{') {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            if let Some(q) = v.get("query").and_then(|q| q.as_str()) {
+                return q.to_string();
+            }
+        }
+    }
+    trimmed.to_string()
+}
+
 pub fn run_server(path: &str, path_depth: usize, port: u16) -> io::Result<()> {
-    let _ = (path, path_depth, port);
-    todo!("implemented in later tasks")
+    let addr = format!("127.0.0.1:{port}");
+    let server = Server::http(&addr)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("bind {addr} failed: {e}")))?;
+    let bound = server.server_addr();
+    println!("hprof-analyzer OQL server listening on http://{bound}");
+    println!("  POST OQL to /   (raw body or {{\"query\":\"...\"}}) -> JSON QueryResult");
+    println!("  GET  /help      -> language reference JSON");
+    println!("examples:");
+    println!("  curl -s http://{bound}/ -d 'SELECT @objectAddress FROM java.lang.Thread'");
+    println!("  curl -s http://{bound}/help | jq .");
+    println!("(loopback only; Ctrl-C to stop)");
+
+    let state = Arc::new(ServerState::load(path, path_depth, true)?);
+    let server = Arc::new(server);
+
+    let n_workers = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    let mut handles = Vec::with_capacity(n_workers);
+    for _ in 0..n_workers {
+        let server = Arc::clone(&server);
+        let state = Arc::clone(&state);
+        handles.push(std::thread::spawn(move || {
+            loop {
+                // recv() blocks; ANY Err (incl. "thread unblocked" on shutdown)
+                // ends this worker.
+                let mut request = match server.recv() {
+                    Ok(r) => r,
+                    Err(_) => break,
+                };
+                let method = request.method().as_str().to_string();
+                let url = request.url().to_string();
+                let mut body = String::new();
+                let _ = request.as_reader().read_to_string(&mut body);
+                let (status, json) = state.route(&method, &url, &body);
+                let resp = Response::from_string(json)
+                    .with_status_code(status)
+                    .with_header(
+                        "Content-Type: application/json"
+                            .parse::<tiny_http::Header>()
+                            .unwrap(),
+                    );
+                let _ = request.respond(resp);
+            }
+        }));
+    }
+    for h in handles {
+        let _ = h.join();
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -206,5 +314,92 @@ mod tests {
         assert!(v["aggregates"].as_array().unwrap().iter().any(|a| a == "COUNT"), "agg listed, got: {v}");
         assert!(v["methods"].as_array().unwrap().iter().any(|m| m == "size"), "method listed, got: {v}");
         assert!(v["classes"].is_array(), "classes array present, got: {v}");
+    }
+
+    #[test]
+    fn handle_post_roundtrips_json() {
+        let state = ServerState::load(FIXTURE, 5, true).expect("load");
+        let (status, body) = state.route("POST", "/", "SELECT @objectAddress FROM java.lang.Thread");
+        assert_eq!(status, 200, "ok status, body: {body}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["ok"], serde_json::json!(true), "expected ok, got: {v}");
+    }
+
+    #[test]
+    fn handle_post_json_body_extracts_query() {
+        let state = ServerState::load(FIXTURE, 5, true).expect("load");
+        let (status, body) = state.route("POST", "/", r#"{"query":"SELECT @objectAddress FROM java.lang.Thread"}"#);
+        assert_eq!(status, 200, "ok status, body: {body}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["ok"], serde_json::json!(true), "expected ok, got: {v}");
+    }
+
+    #[test]
+    fn handle_post_parse_error_is_400() {
+        let state = ServerState::load(FIXTURE, 5, true).expect("load");
+        let (status, body) = state.route("POST", "/", "SELCT bad");
+        assert_eq!(status, 400, "bad query -> 400, body: {body}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["ok"], serde_json::json!(false), "expected failure, got: {v}");
+    }
+
+    #[test]
+    fn handle_get_help_roundtrips_json() {
+        let state = ServerState::load(FIXTURE, 5, true).expect("load");
+        let (status, body) = state.route("GET", "/help", "");
+        assert_eq!(status, 200, "help status, body: {body}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!(v["keywords"].is_array(), "keywords present, got: {v}");
+    }
+
+    #[test]
+    fn handle_unknown_route_404() {
+        let state = ServerState::load(FIXTURE, 5, true).expect("load");
+        let (status, _body) = state.route("GET", "/nope", "");
+        assert_eq!(status, 404, "unknown route -> 404");
+    }
+
+    #[test]
+    fn real_socket_roundtrip() {
+        use std::io::{Read as _, Write as _};
+        use std::net::TcpStream;
+        use std::sync::Arc;
+
+        let server = Arc::new(tiny_http::Server::http("127.0.0.1:0").expect("bind ephemeral"));
+        let addr = match server.server_addr() {
+            tiny_http::ListenAddr::IP(a) => a,
+            other => panic!("expected IP addr, got {other:?}"),
+        };
+        let state = Arc::new(ServerState::load(FIXTURE, 5, true).expect("load"));
+
+        let srv = Arc::clone(&server);
+        let st = Arc::clone(&state);
+        let handle = std::thread::spawn(move || {
+            if let Ok(mut request) = srv.recv() {
+                let method = request.method().as_str().to_string();
+                let url = request.url().to_string();
+                let mut body = String::new();
+                let _ = request.as_reader().read_to_string(&mut body);
+                let (status, json) = st.route(&method, &url, &body);
+                let resp = tiny_http::Response::from_string(json).with_status_code(status);
+                let _ = request.respond(resp);
+            }
+        });
+
+        let oql = "SELECT @objectAddress FROM java.lang.Thread";
+        let mut stream = TcpStream::connect(addr).expect("connect");
+        let req = format!(
+            "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            oql.len(), oql
+        );
+        stream.write_all(req.as_bytes()).expect("write");
+        let mut resp = String::new();
+        stream.read_to_string(&mut resp).expect("read");
+        handle.join().expect("worker join");
+
+        let body = resp.split("\r\n\r\n").nth(1).unwrap_or("");
+        let v: serde_json::Value = serde_json::from_str(body)
+            .unwrap_or_else(|e| panic!("resp body not JSON ({e}); full response:\n{resp}"));
+        assert_eq!(v["ok"], serde_json::json!(true), "socket round-trip ok, got: {v}");
     }
 }
