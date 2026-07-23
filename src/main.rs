@@ -1586,6 +1586,28 @@ fn run(
     } else {
         &string_values
     };
+    // Build the query-gated GC-root-tags lookup (`dense_idx → heap::ROOT_*`) for
+    // `@GCRoots`/`@GCRootInfo`/`@info`, ONLY when some plan armed `needs.gc_roots`.
+    // Source: zip `g.gc_root_indices` with `g.gc_root_types`, which are aligned
+    // 1:1 by construction (both emitted together from the sorted root set in
+    // `pass2::mod`; the same pairing `report::build` trusts) — so no fragile
+    // address→dense re-derivation is needed and root types can't be mispaired.
+    // When no gcroot query ran, the empty static keeps this run byte/RSS-identical.
+    let gc_root_tags: std::collections::HashMap<u32, u8> =
+        if flat_queries.iter().any(|(_, p)| p.needs.gc_roots) {
+            g.gc_root_indices
+                .iter()
+                .zip(g.gc_root_types.iter())
+                .map(|(&idx, &ty)| (idx, ty))
+                .collect()
+        } else {
+            std::collections::HashMap::new()
+        };
+    let gc_root_tags_ref: &std::collections::HashMap<u32, u8> = if gc_root_tags.is_empty() {
+        &query::stage_runner::EMPTY_GC_ROOT_TAGS
+    } else {
+        &gc_root_tags
+    };
     let flat_results = query::stage_runner::resume(
         query_state,
         &query_asts,
@@ -1607,6 +1629,7 @@ fn run(
             retained_edges: retained_edges.as_ref(),
             string_values: sv_ref,
             string_values_truncated,
+            gc_root_tags: gc_root_tags_ref,
         },
     );
     let mut query_results = query::run::collapse_union_results(flat_results, &union_groups);

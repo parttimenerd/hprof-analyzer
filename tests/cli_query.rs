@@ -4358,3 +4358,66 @@ fn gcroot_query_only_mode_errors() {
         );
     }
 }
+
+/// Analyze-mode counterpart of `gcroot_query_only_mode_errors`: the FULL report
+/// path (top-level `--query`, not the `query` subcommand) resolves
+/// `@GCRootInfo`/`@GCRoots`/`@info` from the collected gc-root tables. A
+/// `java.lang.Thread` that is a GC root projects a root-type descriptor
+/// ("Thread"); non-root objects (and non-root Thread instances) project Null.
+#[test]
+fn gcroot_attrs_resolve_in_analyze_mode() {
+    let Some(hprof) = philosophers() else { return };
+    // Full analyze run with an inline query; the report renders a "Custom
+    // Queries" section containing the projected rows.
+    let out = Command::new(BIN)
+        .arg(&hprof)
+        .args([
+            "--query",
+            "SELECT @GCRootInfo, @objectId FROM java.lang.Thread LIMIT 200",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "analyze --query failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let md = String::from_utf8_lossy(&out.stdout);
+    // No query-only rejection in the full pipeline.
+    assert!(
+        !md.to_lowercase().contains("the full analysis pipeline"),
+        "analyze-mode gc-root query must not be rejected:\n{md}"
+    );
+    // At least one Thread is a GC root (ROOT_THREAD_OBJ) → "Thread" descriptor.
+    assert!(
+        md.contains("| Thread |") || md.contains("Thread |"),
+        "expected a root Thread descriptor in analyze-mode output:\n{md}"
+    );
+    // And at least one non-root Thread instance projects null.
+    assert!(
+        md.contains("| null |"),
+        "expected at least one non-root Thread (null descriptor):\n{md}"
+    );
+
+    // A clearly non-root class projects Null for every row.
+    let out2 = Command::new(BIN)
+        .arg(&hprof)
+        .args([
+            "--query",
+            "SELECT @GCRootInfo FROM java.lang.String LIMIT 3",
+        ])
+        .output()
+        .unwrap();
+    assert!(out2.status.success());
+    let md2 = String::from_utf8_lossy(&out2.stdout);
+    // Isolate the Custom Queries section and confirm no root descriptor leaked in.
+    if let Some(section) = md2.split("## Custom Queries").nth(1) {
+        let section = section.split("## Glossary").next().unwrap_or(section);
+        assert!(
+            !section.contains("Thread")
+                && !section.contains("JNI")
+                && !section.contains("System Class"),
+            "non-root String rows must all be null:\n{section}"
+        );
+    }
+}

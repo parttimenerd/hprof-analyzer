@@ -21,6 +21,37 @@ pub(crate) static EMPTY_REFWALK_TAILS: std::sync::LazyLock<
 pub(crate) static EMPTY_STRING_VALUES: std::sync::LazyLock<std::collections::HashMap<u32, String>> =
     std::sync::LazyLock::new(std::collections::HashMap::new);
 
+/// A shared empty gc-root-tags table, used as the default `gc_root_tags` borrow
+/// when no `@GCRoots`/`@GCRootInfo`/`@info` query ran (the common case). Keeps
+/// non-gcroot runs byte/RSS-identical: nothing is built or borrowed beyond this
+/// zero-entry map. Mirrors `EMPTY_STRING_VALUES`.
+pub static EMPTY_GC_ROOT_TAGS: std::sync::LazyLock<std::collections::HashMap<u32, u8>> =
+    std::sync::LazyLock::new(std::collections::HashMap::new);
+
+/// Human-readable label for an HPROF GC-root sub-tag (`types::heap::ROOT_*`), for
+/// `@GCRoots`/`@GCRootInfo`/`@info` in analyze mode. Labels follow MAT's GC-root
+/// naming (matching `report::format::gc_root_type_label`); an unrecognised code
+/// falls back to `"root tag N"` so the value is never silently empty for a root.
+pub fn root_tag_name(tag: u8) -> std::borrow::Cow<'static, str> {
+    use crate::types::heap;
+    let name = match tag {
+        heap::ROOT_SYSTEM_CLASS => "System Class",
+        heap::ROOT_JNI_GLOBAL => "JNI Global",
+        heap::ROOT_JNI_LOCAL => "JNI Local",
+        heap::ROOT_JAVA_FRAME => "Java Frame",
+        heap::ROOT_NATIVE_STACK => "Native Stack",
+        heap::ROOT_STICKY_CLASS => "Sticky Class",
+        heap::ROOT_THREAD_BLOCK => "Thread Block",
+        heap::ROOT_MONITOR_USED => "Busy Monitor",
+        heap::ROOT_THREAD_OBJ => "Thread",
+        heap::ROOT_UNKNOWN => "Unknown",
+        // Any code outside the known HPROF sub-tag set: surface the numeric tag
+        // rather than a misleading "Unknown" so the value stays diagnosable.
+        other => return std::borrow::Cow::Owned(format!("root tag {other}")),
+    };
+    std::borrow::Cow::Borrowed(name)
+}
+
 /// Maps a dense object index to its object address (and back, if needed) for
 /// building result rows in the late phase.
 pub struct IdMap<'a> {
@@ -94,6 +125,15 @@ pub struct LateCtx<'a> {
     /// only when a toString(s) query ran; empty otherwise (non-toString runs keep
     /// the shared `EMPTY_STRING_VALUES` borrow, byte/RSS-identical to before).
     pub string_values: &'a std::collections::HashMap<u32, String>,
+    /// GC-root sub-tag per root object: `dense_idx → heap::ROOT_*`. Populated
+    /// (query-gated) only when a `@GCRoots`/`@GCRootInfo`/`@info` query armed
+    /// `needs.gc_roots`; empty otherwise (non-gcroot runs keep the shared
+    /// `EMPTY_GC_ROOT_TAGS` borrow, byte/RSS-identical to before). A dense index
+    /// absent from the map is a non-root object → `@GCRootInfo`/`@info` project
+    /// `Null`. Built by zipping `g.gc_root_indices` with `g.gc_root_types` (the
+    /// two are aligned 1:1 by construction — see `pass2::mod` and
+    /// `report::build`), so no address→dense re-derivation is needed.
+    pub gc_root_tags: &'a std::collections::HashMap<u32, u8>,
 }
 
 impl LateCtx<'_> {
@@ -116,6 +156,13 @@ impl LateCtx<'_> {
     /// when no toString query ran or the instance was not captured (cap overflow).
     pub fn string_value(&self, dense: u32) -> Option<&str> {
         self.string_values.get(&dense).map(String::as_str)
+    }
+
+    /// The GC-root sub-tag of the object at `dense`, or `None` if it is not a
+    /// GC root (or no gcroot query armed the map). `@GCRootInfo`/`@GCRoots`
+    /// project the tag's label for a root and `Null` for a non-root.
+    pub fn gc_root_tag(&self, dense: u32) -> Option<u8> {
+        self.gc_root_tags.get(&dense).copied()
     }
 }
 
@@ -928,7 +975,7 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
     let columns: Vec<QueryColumn> = crate::query::execute::query_columns(q);
     let out_rows: Vec<Vec<QueryValue>> = rows
         .iter()
-        .map(|(idx, ret)| project_late_row(q, *idx, *ret))
+        .map(|(idx, ret)| project_late_row(q, *idx, *ret, ctx))
         .collect();
     QueryResult {
         name: entry.name.clone(),
@@ -979,12 +1026,26 @@ fn eval_retained_pred(p: &Predicate, ret: u64) -> bool {
 
 /// Project a late row. IndexOnly carries answer only @objectId / @retainedHeapSize;
 /// blob-dependent attrs need an IndexPlusScalars carry (later step) and are Null.
-fn project_late_row(q: &Query, idx: u32, ret: u64) -> Vec<QueryValue> {
+/// `@GCRoots`/`@GCRootInfo`/`@info` resolve here from the gc-root-tags lookup:
+/// a root object's tag maps to its MAT-style label; a non-root projects `Null`.
+fn project_late_row(q: &Query, idx: u32, ret: u64, ctx: &LateCtx) -> Vec<QueryValue> {
     q.select
         .iter()
         .map(|it| match it {
             SelectItem::Attr(Attr::ObjectId) => QueryValue::Int(idx as i64),
             SelectItem::Attr(Attr::RetainedHeapSize) => QueryValue::Int(ret as i64),
+            // Both `@GCRootInfo`/`@info` (parsed to `GcRootInfo`) and `@GCRoots`
+            // return the same single root descriptor: the tag's human label for a
+            // root, `Null` for a non-root. We don't model MAT's list-of-GCRootInfo
+            // objects; the root-type name is the achievable static analog and is
+            // non-empty for a root, which is what a user filtering "is this a
+            // root, and how is it rooted?" needs.
+            SelectItem::Attr(Attr::GcRootInfo) | SelectItem::Attr(Attr::GcRoots) => {
+                match ctx.gc_root_tag(idx) {
+                    Some(tag) => QueryValue::Str(root_tag_name(tag).into_owned()),
+                    None => QueryValue::Null,
+                }
+            }
             SelectItem::Star => QueryValue::ObjRef {
                 index: idx as u64,
                 class: "?".to_string(),
@@ -1092,6 +1153,7 @@ mod tests {
             retained_edges: None,
             string_values: &EMPTY_STRING_VALUES,
             string_values_truncated: false,
+            gc_root_tags: &EMPTY_GC_ROOT_TAGS,
         }
     }
 
@@ -1099,6 +1161,54 @@ mod tests {
 
     fn q_slice(q: &crate::query::ast::Query) -> Vec<crate::query::ast::Query> {
         vec![q.clone(), q.clone()]
+    }
+
+    #[test]
+    fn root_tag_name_table() {
+        use crate::types::heap;
+        assert_eq!(root_tag_name(heap::ROOT_SYSTEM_CLASS), "System Class");
+        assert_eq!(root_tag_name(heap::ROOT_JNI_GLOBAL), "JNI Global");
+        assert_eq!(root_tag_name(heap::ROOT_JNI_LOCAL), "JNI Local");
+        assert_eq!(root_tag_name(heap::ROOT_JAVA_FRAME), "Java Frame");
+        assert_eq!(root_tag_name(heap::ROOT_NATIVE_STACK), "Native Stack");
+        assert_eq!(root_tag_name(heap::ROOT_STICKY_CLASS), "Sticky Class");
+        assert_eq!(root_tag_name(heap::ROOT_THREAD_BLOCK), "Thread Block");
+        assert_eq!(root_tag_name(heap::ROOT_MONITOR_USED), "Busy Monitor");
+        assert_eq!(root_tag_name(heap::ROOT_THREAD_OBJ), "Thread");
+        assert_eq!(root_tag_name(heap::ROOT_UNKNOWN), "Unknown");
+        // An out-of-range code surfaces the numeric tag, never a silent empty.
+        assert_eq!(root_tag_name(0x42), "root tag 66");
+    }
+
+    /// A `@GCRootInfo` SELECT projects the root-tag label for a dense index that
+    /// is in the gc-root-tags map, and `Null` for a non-root index. `@GCRoots`
+    /// returns the same descriptor. Exercises `project_late_row` in analyze mode.
+    #[test]
+    fn gcroot_attrs_project_from_tag_map() {
+        use crate::types::heap;
+        let q = crate::query::parse::parse("SELECT @GCRootInfo, @GCRoots FROM C").unwrap();
+        let plan = pq(&q);
+        assert!(plan.needs.gc_roots, "query must arm needs.gc_roots");
+        let mut carry = crate::query::carry::Carry::index_only(10);
+        carry.push_index(3); // a root (Thread)
+        carry.push_index(5); // a non-root
+        let mut st = QueryExecState::new();
+        st.push_cross_phase(0, "q1".to_string(), plan, carry);
+        let retained = vec![0u64; 10];
+        let tags: std::collections::HashMap<u32, u8> =
+            [(3u32, heap::ROOT_THREAD_OBJ)].into_iter().collect();
+        let base = ctx(&retained);
+        let ctx = LateCtx {
+            gc_root_tags: &tags,
+            ..base
+        };
+        let out = resume(st, &q_slice(&q), &ctx);
+        let r = &out[0];
+        // Row order follows carry order (no ORDER BY on a late gc-root attr).
+        assert_eq!(r.rows[0][0], QueryValue::Str("Thread".to_string()));
+        assert_eq!(r.rows[0][1], QueryValue::Str("Thread".to_string()));
+        assert_eq!(r.rows[1][0], QueryValue::Null);
+        assert_eq!(r.rows[1][1], QueryValue::Null);
     }
 
     #[test]
@@ -1306,6 +1416,7 @@ mod dom_ctx_tests {
             retained_edges: None,
             string_values: &EMPTY_STRING_VALUES,
             string_values_truncated: false,
+            gc_root_tags: &EMPTY_GC_ROOT_TAGS,
         };
         assert_eq!(ctx.dc_off.len(), 5);
         assert_eq!(ctx.id_map.to_addr(0), id_map.to_addr(0));
@@ -1347,6 +1458,7 @@ mod dom_run_tests {
             retained_edges: None,
             string_values: &EMPTY_STRING_VALUES,
             string_values_truncated: false,
+            gc_root_tags: &EMPTY_GC_ROOT_TAGS,
         };
         assert_eq!(
             run_dominator_children(&[0u32], usize::MAX, &ctx),
@@ -1380,6 +1492,7 @@ mod dom_run_tests {
             retained_edges: None,
             string_values: &EMPTY_STRING_VALUES,
             string_values_truncated: false,
+            gc_root_tags: &EMPTY_GC_ROOT_TAGS,
         };
         assert_eq!(run_dominator_children(&[0u32], 1, &ctx).len(), 1);
     }
@@ -1405,6 +1518,7 @@ mod dom_run_tests {
             retained_edges: None,
             string_values: &EMPTY_STRING_VALUES,
             string_values_truncated: false,
+            gc_root_tags: &EMPTY_GC_ROOT_TAGS,
         };
         // idom = [MAX,0,0,1]: node 3's idom is 1, node 1's idom is 0, root 0 yields nothing.
         assert_eq!(run_dominator_of(&[3u32], &ctx), vec![1u32]);
@@ -1433,6 +1547,7 @@ mod dom_run_tests {
             retained_edges: None,
             string_values: &EMPTY_STRING_VALUES,
             string_values_truncated: false,
+            gc_root_tags: &EMPTY_GC_ROOT_TAGS,
         };
         let (mut set, truncated) = run_retained_set(&[0u32], usize::MAX, &ctx);
         set.sort_unstable();
@@ -1461,6 +1576,7 @@ mod dom_run_tests {
             retained_edges: None,
             string_values: &EMPTY_STRING_VALUES,
             string_values_truncated: false,
+            gc_root_tags: &EMPTY_GC_ROOT_TAGS,
         };
         let (set, truncated) = run_retained_set(&[0u32], 2, &ctx);
         assert_eq!(set.len(), 2);
@@ -1488,6 +1604,7 @@ mod dom_run_tests {
             retained_edges: None,
             string_values: &EMPTY_STRING_VALUES,
             string_values_truncated: false,
+            gc_root_tags: &EMPTY_GC_ROOT_TAGS,
         };
         let (mut set, _t) = run_retained_set(&[1u32, 0u32], usize::MAX, &ctx);
         set.sort_unstable();
@@ -1516,6 +1633,7 @@ mod dom_run_tests {
             retained_edges: None,
             string_values: &EMPTY_STRING_VALUES,
             string_values_truncated: false,
+            gc_root_tags: &EMPTY_GC_ROOT_TAGS,
         };
         let q = crate::query::parse::parse("SELECT dominators(s) FROM C s").unwrap();
         let plan = pq(&q);
@@ -1553,6 +1671,7 @@ mod dom_run_tests {
             retained_edges: None,
             string_values: &EMPTY_STRING_VALUES,
             string_values_truncated: false,
+            gc_root_tags: &EMPTY_GC_ROOT_TAGS,
         };
         let q = crate::query::parse::parse("SELECT dominatorof(s) FROM C s").unwrap();
         let plan = pq(&q);
@@ -1587,6 +1706,7 @@ mod dom_run_tests {
             retained_edges: None,
             string_values: &EMPTY_STRING_VALUES,
             string_values_truncated: false,
+            gc_root_tags: &EMPTY_GC_ROOT_TAGS,
         };
         let q = crate::query::parse::parse("SELECT s AS RETAINED SET FROM C s").unwrap();
         let plan = pq(&q);
@@ -1631,6 +1751,7 @@ mod refwalk_tests {
             retained_edges: None,
             string_values: &EMPTY_STRING_VALUES,
             string_values_truncated: false,
+            gc_root_tags: &EMPTY_GC_ROOT_TAGS,
         }
     }
 
@@ -1664,6 +1785,7 @@ mod refwalk_tests {
             retained_edges: None,
             string_values: &EMPTY_STRING_VALUES,
             string_values_truncated: false,
+            gc_root_tags: &EMPTY_GC_ROOT_TAGS,
         }
     }
 
@@ -1995,6 +2117,7 @@ mod edge_tests {
             retained_edges,
             string_values: &EMPTY_STRING_VALUES,
             string_values_truncated: false,
+            gc_root_tags: &EMPTY_GC_ROOT_TAGS,
         }
     }
 
@@ -2243,6 +2366,7 @@ mod tostring_tests {
             retained_edges: None,
             string_values: sv,
             string_values_truncated: false,
+            gc_root_tags: &EMPTY_GC_ROOT_TAGS,
         }
     }
 
@@ -2414,6 +2538,7 @@ mod tostring_tests {
             retained_edges: None,
             string_values: &sv,
             string_values_truncated: true,
+            gc_root_tags: &EMPTY_GC_ROOT_TAGS,
         };
 
         let (st, q) = string_state("SELECT toString(s) FROM java.lang.String s", &[0]);
@@ -2742,6 +2867,7 @@ mod arith_late_tests {
             retained_edges: None,
             string_values: &EMPTY_STRING_VALUES,
             string_values_truncated: false,
+            gc_root_tags: &EMPTY_GC_ROOT_TAGS,
         }
     }
 

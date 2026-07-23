@@ -625,6 +625,10 @@ pub(crate) fn resume_with_string_values(
         retained_edges: None,
         string_values: sv_ref,
         string_values_truncated: false,
+        // Query-only path never collects GC roots (`@GCRoots`/`@GCRootInfo`/
+        // `@info` entries route to `resume_without_late_ctx` for an actionable
+        // error); the empty map keeps this path byte-identical.
+        gc_root_tags: &stage_runner::EMPTY_GC_ROOT_TAGS,
     };
 
     // Split pending entries into three routes. toString-only and refwalk entries
