@@ -498,6 +498,14 @@ mod tests {
     }
 
     #[test]
+    fn parse_error_message_includes_suggestion() {
+        let mut cache = None;
+        let v = run_query_json(FIXTURE, "SELCT x FROM java.lang.Thread", 5, true, &mut cache);
+        assert_eq!(v["error"]["kind"], serde_json::json!("parse"));
+        assert!(v["error"]["message"].as_str().unwrap().contains("SELECT"), "suggestion in message: {v}");
+    }
+
+    #[test]
     fn handle_post_malformed_json_is_clear_request_error() {
         let state = ServerState::load(FIXTURE, 5, true).expect("load");
         // Body starts with `{` but is not valid JSON. Must NOT be fed to the OQL

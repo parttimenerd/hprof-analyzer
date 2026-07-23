@@ -1071,6 +1071,37 @@ fn line_col(src: &str, byte_offset: usize) -> (usize, usize) {
     (line, col)
 }
 
+/// Standard iterative Levenshtein edit distance over ASCII byte slices. Small
+/// inputs only (keyword-length tokens), so the O(n*m) DP is negligible.
+fn lev(a: &str, b: &str) -> usize {
+    let a = a.as_bytes();
+    let b = b.as_bytes();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut curr = vec![0usize; b.len() + 1];
+    for (i, &ca) in a.iter().enumerate() {
+        curr[0] = i + 1;
+        for (j, &cb) in b.iter().enumerate() {
+            let cost = if ca == cb { 0 } else { 1 };
+            curr[j + 1] = (prev[j + 1] + 1).min(curr[j] + 1).min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[b.len()]
+}
+
+/// Nearest candidate (edit distance <= 2, ASCII-case-insensitive) to `token`,
+/// used to append a "did you mean" hint to compact parse errors. Returns the
+/// candidate in its canonical casing.
+fn did_you_mean<'a>(token: &str, candidates: impl IntoIterator<Item = &'a str>) -> Option<String> {
+    let t = token.to_ascii_lowercase();
+    candidates
+        .into_iter()
+        .map(|c| (c, lev(&t, &c.to_ascii_lowercase())))
+        .filter(|(_, d)| *d <= 2)
+        .min_by_key(|(_, d)| *d)
+        .map(|(c, _)| c.to_string())
+}
+
 /// Compact single-line message for one chumsky error. Custom (`Rich::custom`)
 /// reasons — e.g. `dominators(x) requires ...` — are surfaced verbatim with a
 /// trailing `at <line>:<col>`; positional errors keep the `unexpected <found>`
@@ -1086,7 +1117,22 @@ fn compact_error(src: &str, e: &Rich<'_, Token>) -> String {
                 .found()
                 .map(|t| format!("{t:?}"))
                 .unwrap_or_else(|| "end of input".to_string());
-            format!("unexpected {found} at {line}:{col}")
+            let suggestion = match e.found() {
+                Some(Token::Ident(s)) => did_you_mean(
+                    s,
+                    KEYWORDS
+                        .iter()
+                        .chain(RESERVED.iter())
+                        .chain(AGG_FUNCS.iter())
+                        .chain(FUNCS.iter())
+                        .copied(),
+                ),
+                _ => None,
+            };
+            match suggestion {
+                Some(s) => format!("unexpected {found} at {line}:{col} — did you mean `{s}`?"),
+                None => format!("unexpected {found} at {line}:{col}"),
+            }
         }
     }
 }
@@ -3841,5 +3887,45 @@ mod tests {
         assert!(parse("SELECT @GCRoots FROM java.lang.Thread").is_ok());
         assert!(parse("SELECT @GCRootInfo FROM java.lang.Thread").is_ok());
         assert!(parse("SELECT @info FROM java.lang.Thread").is_ok());
+    }
+
+    // ============================================================
+    // Group: did-you-mean keyword suggestions in parse errors
+    // ============================================================
+
+    #[test]
+    fn typo_keyword_suggests_correction() {
+        let e = parse("SELCT x FROM C").unwrap_err();
+        assert!(e.0.to_lowercase().contains("did you mean") && e.0.contains("SELECT"),
+            "expected a SELECT suggestion, got: {:?}", e.0);
+    }
+
+    #[test]
+    fn lev_basic_distances() {
+        assert_eq!(lev("SELECT", "SELECT"), 0);
+        assert_eq!(lev("SELCT", "SELECT"), 1);
+        assert_eq!(lev("FRM", "FROM"), 1);
+        assert_eq!(lev("abc", "xyz"), 3);
+    }
+
+    #[test]
+    fn did_you_mean_finds_near_keyword() {
+        assert_eq!(did_you_mean("SELCT", KEYWORDS.iter().copied()), Some("SELECT".to_string()));
+        assert_eq!(did_you_mean("FRM", KEYWORDS.iter().copied()), Some("FROM".to_string()));
+    }
+
+    #[test]
+    fn did_you_mean_ignores_far_tokens() {
+        // A real class/identifier that is not close to any keyword must NOT trigger.
+        assert_eq!(did_you_mean("java", KEYWORDS.iter().copied()), None);
+    }
+
+    #[test]
+    fn no_suggestion_when_token_is_valid_identifier_far_from_keywords() {
+        // A well-formed query fragment that fails for other reasons must not get a
+        // spurious keyword suggestion appended.
+        let e = parse("SELECT x FROM").unwrap_err();
+        // "FROM" with nothing after -> unexpected end of input; found is None, no suggestion.
+        assert!(!e.0.contains("did you mean"), "no spurious suggestion: {:?}", e.0);
     }
 }
