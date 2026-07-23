@@ -225,6 +225,16 @@ hprof-analyzer report.json -f md-graphs       # Markdown with ASCII graphs
 hprof-analyzer report.json.gz -f md-graphs    # reads .gz transparently
 ```
 
+### JSON schema
+
+The JSON report format is described by [`docs/schema.json`](docs/schema.json)
+(JSON Schema draft-2020-12). To regenerate it after model changes:
+
+```sh
+hprof-analyzer dev emit-schema > schema/report.schema.json
+cp schema/report.schema.json docs/schema.json
+```
+
 ### Shell completions
 
 ```sh
