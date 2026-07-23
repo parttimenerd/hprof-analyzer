@@ -184,6 +184,10 @@ pub struct ClassSpec {
 pub enum FromSource {
     Class(ClassSpec),
     Subquery(Box<Query>),
+    /// A single heap object identified by address (decimal or hex literal, e.g.
+    /// `FROM OBJECTS 0x1295e2f8`). Resolved to one dense index via the
+    /// address->index map; a missing address yields zero rows (MAT parity).
+    Object(u64),
 }
 
 impl FromSource {
@@ -193,6 +197,7 @@ impl FromSource {
         match self {
             FromSource::Class(c) => &c.class_name,
             FromSource::Subquery(_) => "",
+            FromSource::Object(_) => "",
         }
     }
     /// The class spec for a class FROM, or `None` for a subquery source.
@@ -200,6 +205,7 @@ impl FromSource {
         match self {
             FromSource::Class(c) => Some(c),
             FromSource::Subquery(_) => None,
+            FromSource::Object(_) => None,
         }
     }
     /// Whether this is `FROM INSTANCEOF C` (subclasses included). `false` for a
@@ -212,6 +218,7 @@ impl FromSource {
         match self {
             FromSource::Subquery(q) => Some(q),
             FromSource::Class(_) => None,
+            FromSource::Object(_) => None,
         }
     }
 }

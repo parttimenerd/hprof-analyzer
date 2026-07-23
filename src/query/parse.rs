@@ -481,7 +481,40 @@ where
                     is_regex,
                 })
             });
-        let from_source = from_subquery.or(from_class);
+        // `FROM OBJECTS <address>`: a bare integer literal (decimal, hex, or
+        // octal — all collapse to `Token::Int`) names one heap object by address.
+        let from_object = select! { Token::Int(n) => n }.map(|n| FromSource::Object(n as u64));
+        // `FROM INSTANCEOF <address>` is a common mistake: INSTANCEOF takes a
+        // class, not an address. Detect INSTANCEOF followed by an int and emit an
+        // actionable error rather than a bare parse failure.
+        let instanceof_addr = ident_ci("INSTANCEOF")
+            .ignore_then(select! { Token::Int(_) => () })
+            .validate(|_, e, emitter| {
+                emitter.emit(Rich::custom(
+                    e.span(),
+                    "INSTANCEOF <address> is not supported; use INSTANCEOF <class> \
+                     (e.g. FROM INSTANCEOF java.lang.Thread)",
+                ));
+                FromSource::Object(0)
+            });
+        // `FROM OBJECTS (<expr>)` (arithmetic/boolean seed expressions) is a
+        // deferred MAT feature. A leading `(` here (after OBJECTS was consumed and
+        // it is NOT a `( SELECT ... )` subquery) means a not-yet-supported seed
+        // expression. `from_subquery` is tried first (see `from_source`), so this
+        // only fires for a `(` that failed to parse as a subquery.
+        let from_object_expr = just(Token::LParen).rewind().validate(|_, e, emitter| {
+            emitter.emit(Rich::custom(
+                e.span(),
+                "arithmetic/boolean FROM-OBJECTS expressions are not yet supported; \
+                 use FROM OBJECTS <address> (e.g. FROM OBJECTS 0x1295e2f8) or FROM <class>",
+            ));
+            FromSource::Object(0)
+        });
+        let from_source = from_subquery
+            .or(from_object)
+            .or(instanceof_addr)
+            .or(from_object_expr)
+            .or(from_class);
 
         // Predicate grammar. Defined inside the `base_query` recursive closure so
         // the `IN (<subquery>)` alternative can reuse `base_query` for the inner
@@ -1048,6 +1081,21 @@ mod tests {
             func,
             arg: Box::new(arg),
         }
+    }
+
+    #[test]
+    fn parse_from_objects_numeric_id() {
+        use super::FromSource;
+        assert_eq!(super::parse("SELECT * FROM OBJECTS 1").unwrap().from, FromSource::Object(1));
+        assert_eq!(super::parse("SELECT * FROM OBJECTS 0x10").unwrap().from, FromSource::Object(16));
+        assert_eq!(super::parse("SELECT * FROM OBJECTS 0x0").unwrap().from, FromSource::Object(0));
+    }
+    #[test]
+    fn reject_from_objects_expr_and_instanceof_addr() {
+        let e = super::parse("SELECT * FROM OBJECTS (1 + 2)").unwrap_err();
+        assert!(e.to_string().contains("arithmetic/boolean FROM-OBJECTS"), "got: {e}");
+        let e = super::parse("SELECT * FROM INSTANCEOF 0x1").unwrap_err();
+        assert!(e.to_string().to_lowercase().contains("instanceof"), "got: {e}");
     }
 
     // ============================================================
