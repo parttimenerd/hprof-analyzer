@@ -98,6 +98,29 @@ fn parse_row_count(stdout: &str) -> u64 {
     panic!("no `(N rows)` footer in:\n{stdout}");
 }
 
+/// A reference-path (N-hop `x.field.tail`) query must resolve in the `query`
+/// subcommand. The RefWalk CSR is built during the query scan (it drives the
+/// tail-scalar capture) but was previously discarded, forcing these queries to
+/// the "requires the full analysis pipeline" error. This threads the CSR into
+/// the resume window so RefPath queries resolve exactly as in the full report.
+#[test]
+fn refpath_query_resolves_in_query_subcommand() {
+    let Some(hprof) = philosophers() else { return };
+    // Previously errored with "requires the full analysis pipeline".
+    let out = run_query_stdout(&hprof, "SELECT t.name.hash FROM java.lang.Thread t LIMIT 5");
+    // The actionable error uses the phrase "the full analysis pipeline"; match
+    // that substring (not the exact "requires"/"require" verb form) so the test
+    // genuinely fails while the query still errors.
+    assert!(
+        !out.to_lowercase().contains("the full analysis pipeline"),
+        "still erroring:\n{out}"
+    );
+    assert!(
+        out.contains("name.hash") || out.contains("hash"),
+        "missing projection column:\n{out}"
+    );
+}
+
 /// SW-5 regression: the histogram (aggregate) `COUNT(*)` path must count the
 /// SAME object universe as the SingleScan (projection) `SELECT *` path. Class
 /// objects (HPROF `CLASS_DUMP` records, kind 3) are never delivered to the OQL
@@ -1686,14 +1709,14 @@ fn refwalk_object_ref_tail_projects_null_without_crashing() {
     );
 }
 
-/// The query-only fast path (`query` subcommand) never builds the reference CSR,
-/// so a RefWalk query cannot be answered there. It must exit 0 and surface an
-/// actionable inline `error:` that names the reference-path cause (distinct from
-/// the retained-size message) and points the user at the full report — NOT
-/// silently return empty rows and NOT reuse the misleading @retainedHeapSize
-/// wording.
+/// The `query` subcommand now threads the RefWalk CSR captured during the scan
+/// into the resume window, so a RefWalk (N-hop `x.field.tail`) query resolves
+/// there exactly as in the full report — it must NOT emit the old
+/// "requires the full analysis pipeline" error, and it must NOT reuse the
+/// @retainedHeapSize wording. (Previously this path returned an actionable error
+/// because the CSR was discarded.)
 #[test]
-fn refwalk_query_in_query_only_path_errors_actionably() {
+fn refwalk_query_in_query_only_path_resolves() {
     let Some(hprof) = philosophers() else { return };
     let out = Command::new(BIN)
         .arg("query")
@@ -1706,26 +1729,23 @@ fn refwalk_query_in_query_only_path_errors_actionably() {
         .unwrap();
     assert!(
         out.status.success(),
-        "query-only RefWalk query should exit 0 with an inline error: {}",
+        "query-only RefWalk query should exit 0: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
+    // No error block, and specifically not the old pipeline-required message.
     assert!(
-        stdout.contains("error:"),
-        "query-only RefWalk query must surface an inline error line:\n{stdout}"
+        !stdout.contains("error:"),
+        "RefWalk query should no longer surface an error line:\n{stdout}"
     );
     assert!(
-        stdout.contains("reference-path") || stdout.contains("reference graph"),
-        "error should name the reference-path cause (not the retained message):\n{stdout}"
+        !stdout.to_lowercase().contains("the full analysis pipeline"),
+        "RefWalk query must no longer require the full pipeline:\n{stdout}"
     );
+    // The projected refpath column renders.
     assert!(
-        stdout.contains("full report") || stdout.contains("full analysis pipeline"),
-        "error should tell the user to run the full report:\n{stdout}"
-    );
-    // Must NOT reuse the @retainedHeapSize wording for a RefWalk query.
-    assert!(
-        !stdout.contains("@retainedHeapSize"),
-        "RefWalk error must not reuse the retained-size message:\n{stdout}"
+        stdout.contains("next.hash") || stdout.contains("hash"),
+        "missing RefWalk projection column:\n{stdout}"
     );
 }
 

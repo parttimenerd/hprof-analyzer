@@ -1112,13 +1112,19 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
             ));
         }
         let mut no_in_sets = std::collections::HashMap::new();
-        let (.., query_state, _refwalk_csr, string_values, _sv_trunc) =
+        let (.., query_state, refwalk_csr, string_values, _sv_trunc) =
             pass2::Pass2::build(input, p1, cvec::Codec::Zstd3, &opts, &flat, &mut no_in_sets)?;
 
         // Query-only path: retained sizes/dominators are not computed, so cross-phase
         // (@retainedHeapSize) queries resolve to actionable errors here.
         // toString(s) queries (finalize_at=P2) use the decoded string_values map.
-        let flat_results = query::run::resume_with_string_values(query_state, &flat, string_values);
+        // RefPath (`x.field.tail`) queries use the RefWalk CSR captured in the scan.
+        let flat_results = query::run::resume_with_string_values(
+            query_state,
+            &flat,
+            string_values,
+            refwalk_csr,
+        );
         query::run::collapse_union_results(flat_results, &union_groups)
     };
 

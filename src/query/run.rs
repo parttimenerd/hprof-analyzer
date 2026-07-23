@@ -484,14 +484,25 @@ impl<'q, R: ClassResolver> ObjectVisitor for ScanDriver<'q, R> {
     }
 }
 
-/// Resume a `QueryExecState` with a minimal late context that provides only the
-/// decoded toString(s) string values. Entries that need retained/dominator/edge/
-/// refwalk data still get actionable errors (same as `resume_without_late_ctx`).
-/// Only entries whose plan exclusively uses `ResolveStringValues` are resolved here.
+/// Resume a `QueryExecState` with a late context that provides the decoded
+/// toString(s) string values AND (when built) the RefWalk CSR captured during
+/// the query scan. Entries are routed by what late data they need:
+///   * string-only (all ops `ResolveStringValues`) → resolved with the string ctx;
+///   * refwalk (`plan.needs.ref_walk`, i.e. N-hop `x.field.tail`) → resolved with
+///     the populated refwalk ctx via the same `run_entry_pub` path the full
+///     report uses (RefWalkResolve → `refpath_rows`);
+///   * everything else (retained sizes, dominators, edges) → still routed to
+///     `resume_without_late_ctx` for the actionable "needs the full pipeline"
+///     error, since the query-only path never builds those structures.
+///
+/// The refwalk ctx is gated on the CSR being present: when `refwalk_csr` is
+/// `None` (no RefWalk query ran) the borrowed slices are empty and the shared
+/// empty tail map is used, so non-RefWalk runs stay byte/RSS-identical.
 pub(crate) fn resume_with_string_values(
     state: crate::query::execute::QueryExecState,
     flat: &[(Query, QueryPlan)],
     string_values: std::collections::HashMap<u32, String>,
+    refwalk_csr: Option<crate::query::refwalk::RefWalkCsr>,
 ) -> Vec<crate::query::model::QueryResult> {
     use crate::query::plan::StageOp;
     use crate::query::stage_runner::{self, EMPTY_REFWALK_TAILS, EMPTY_STRING_VALUES};
@@ -502,6 +513,16 @@ pub(crate) fn resume_with_string_values(
     } else {
         &string_values
     };
+    // Build the refwalk ctx fields from the query-scan CSR, mirroring the full
+    // report window (main.rs). Empty/None-CSR → empty slices → identical to before.
+    let rw_off: &[u32] = refwalk_csr.as_ref().map_or(&[], |c| &c.fwd_off);
+    let rw_tgt: &[u32] = refwalk_csr.as_ref().map_or(&[], |c| &c.fwd_tgt);
+    let rw_field: &[u32] = refwalk_csr.as_ref().map_or(&[], |c| &c.fwd_field);
+    let rw_names: &[String] = refwalk_csr.as_ref().map_or(&[], |c| &c.field_names);
+    let rw_tails = refwalk_csr
+        .as_ref()
+        .map_or(&*EMPTY_REFWALK_TAILS, |c| &c.tails);
+    let rw_trunc = refwalk_csr.as_ref().is_some_and(|c| c.truncated);
     let ctx = stage_runner::LateCtx {
         retained: &[],
         idom: &[],
@@ -509,12 +530,12 @@ pub(crate) fn resume_with_string_values(
         dc_tgt: &[],
         shallow: &[],
         id_map: &id_map,
-        fwd_off: &[],
-        fwd_tgt: &[],
-        fwd_field: &[],
-        field_names: &[],
-        refwalk_tails: &EMPTY_REFWALK_TAILS,
-        refwalk_truncated: false,
+        fwd_off: rw_off,
+        fwd_tgt: rw_tgt,
+        fwd_field: rw_field,
+        field_names: rw_names,
+        refwalk_tails: rw_tails,
+        refwalk_truncated: rw_trunc,
         in_off: &[],
         in_tgt: &[],
         retained_edges: None,
@@ -522,10 +543,12 @@ pub(crate) fn resume_with_string_values(
         string_values_truncated: false,
     };
 
-    // Split pending entries: toString-only (all ops are ResolveStringValues) vs others.
-    // toString-only entries are resolved with the string-values ctx above; the rest
-    // go through `resume_without_late_ctx` which produces actionable errors for
-    // unsupported late ops (edge queries, refwalk, retained sizes, dominators).
+    // Split pending entries into three routes. toString-only and refwalk entries
+    // are resolved here with the ctx above (string ctx and refwalk ctx are the
+    // same struct; only the fields each op reads differ). Entries needing OTHER
+    // late data (retained sizes, dominators, edges) go through
+    // `resume_without_late_ctx` which produces actionable errors — the query-only
+    // path never builds those structures, so their behavior is unchanged.
     let (finished, pending) = state.into_parts();
     let mut slotted: Vec<(usize, crate::query::model::QueryResult)> = finished;
     let mut other_state = crate::query::execute::QueryExecState::new();
@@ -540,7 +563,12 @@ pub(crate) fn resume_with_string_values(
                 .late_ops
                 .iter()
                 .all(|op| matches!(op, StageOp::ResolveStringValues));
-        if is_string_only {
+        // A refwalk (N-hop reference-path) entry is driven entirely off the
+        // query AST via `refpath_rows`; the populated refwalk ctx above is all it
+        // needs. `run_entry_pub` dispatches its RefWalkResolve op to that path,
+        // exactly as `stage_runner::resume` does in the full report.
+        let is_refwalk = entry.plan.needs.ref_walk;
+        if is_string_only || is_refwalk {
             let q = &flat[entry.slot].0;
             let r = stage_runner::run_entry_pub(&entry, q, &ctx);
             slotted.push((entry.slot, r));
@@ -595,7 +623,7 @@ pub fn run_single_dump(
         // Fast path: no subqueries — one scan, no injection.
         let p1 = crate::pass1::Pass1::run(path)?;
         let mut empty = std::collections::HashMap::new();
-        let (.., state, _refwalk_csr, string_values, _sv_trunc) = crate::pass2::Pass2::build(
+        let (.., state, refwalk_csr, string_values, _sv_trunc) = crate::pass2::Pass2::build(
             path,
             p1,
             crate::cvec::Codec::Zstd3,
@@ -603,7 +631,7 @@ pub fn run_single_dump(
             &flat,
             &mut empty,
         )?;
-        let flat_results = resume_with_string_values(state, &flat, string_values);
+        let flat_results = resume_with_string_values(state, &flat, string_values, refwalk_csr);
         return Ok(collapse_union_results(flat_results, &groups));
     }
 
@@ -614,6 +642,9 @@ pub fn run_single_dump(
         .collect();
     let p1_inner = crate::pass1::Pass1::run(path)?;
     let mut empty = std::collections::HashMap::new();
+    // Inner subqueries feed only membership/identity sets via
+    // `resume_without_late_ctx`; a RefPath *inside* an inner subquery producing
+    // membership is an edge case not yet wired, so the inner CSR stays discarded.
     let (.., inner_state, _inner_refwalk_csr, _inner_sv, _inner_sv_trunc) =
         crate::pass2::Pass2::build(
             path,
@@ -660,7 +691,7 @@ pub fn run_single_dump(
 
     // ── Outer pass: scan again with IN sets injected ─────────────────────────
     let p1_outer = crate::pass1::Pass1::run(path)?;
-    let (.., outer_state, _outer_refwalk_csr, outer_sv, _outer_sv_trunc) =
+    let (.., outer_state, outer_refwalk_csr, outer_sv, _outer_sv_trunc) =
         crate::pass2::Pass2::build(
             path,
             p1_outer,
@@ -669,7 +700,8 @@ pub fn run_single_dump(
             &flat,
             &mut in_sets_by_slot,
         )?;
-    let mut flat_results = resume_with_string_values(outer_state, &flat, outer_sv);
+    let mut flat_results =
+        resume_with_string_values(outer_state, &flat, outer_sv, outer_refwalk_csr);
 
     // ── FROM-subquery semi-join: keep only outer rows whose dense index is in
     //    the inner result set (matched by dense index). ───────────────────────
