@@ -438,3 +438,26 @@ fn collections_report_is_deterministic() {
         "two --collections runs diverged; held-via attribution is nondeterministic"
     );
 }
+
+/// §847: a `.hprof` file with a valid magic but an unsupported id_size (3, not 4
+/// or 8) must fail with the `InvalidData` hint ("parsed as HPROF but a record was
+/// malformed"), not a bare parse error.  No LFS fixture needed — built in-memory.
+#[test]
+fn bad_id_size_gives_malformed_hint() {
+    // Minimal HPROF header: magic (null-terminated), id_size=3 (u32 BE), timestamp=0 (u64 BE).
+    let mut header: Vec<u8> = b"JAVA PROFILE 1.0.2\0".to_vec();
+    header.extend_from_slice(&3u32.to_be_bytes()); // id_size = 3 (unsupported)
+    header.extend_from_slice(&0u64.to_be_bytes()); // timestamp
+    let tmp = std::env::temp_dir().join(format!("hprof_badid_{}.hprof", std::process::id()));
+    std::fs::write(&tmp, &header).unwrap();
+
+    let out = Command::new(BIN).arg(&tmp).output().unwrap();
+    let _ = std::fs::remove_file(&tmp);
+    assert!(!out.status.success(), "bad id_size dump should fail");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("parsed as HPROF but a record was malformed")
+            || err.contains("unsupported id_size"),
+        "missing malformed-record hint for bad id_size, got: {err}"
+    );
+}

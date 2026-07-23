@@ -1771,7 +1771,7 @@ fn render_top_contributors(
         return;
     }
     out.push_str(
-        "_Likely wasters by field (dominant incoming `Class#field` — a hint, not a guarantee):_\n\n",
+        "_Likely wasters by field (dominant incoming `Class#field` referrer):_\n\n",
     );
     let mut t = Table::new(
         &[
