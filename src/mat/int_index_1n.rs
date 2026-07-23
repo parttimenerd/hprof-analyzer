@@ -382,6 +382,156 @@ mod tests {
     }
 
     #[test]
+    fn sorted_all_empty_entries() {
+        // All entries are empty — body should be zero bytes, every header = 0.
+        let entries: Vec<Vec<i32>> = vec![vec![], vec![], vec![]];
+        let file = write_sorted(Vec::new(), &entries).unwrap();
+
+        let n = file.len();
+        let divider = i64::from_be_bytes(file[n - 8..n].try_into().unwrap());
+
+        // Body has 0 values.
+        let body_region = &file[0..divider as usize];
+        let (_, _, bsize, _) = parse_footer(body_region);
+        assert_eq!(bsize, 0, "all-empty sorted body must have size 0");
+
+        // Header has 3 entries, all zero.
+        let hdr_region = &file[divider as usize..n - 8];
+        let (hpages, hpsize, hsize, hstarts) = parse_footer(hdr_region);
+        assert_eq!(hsize as usize, 3);
+        let hstarts_local: Vec<i64> = hstarts.iter().map(|&s| s - divider).collect();
+        let hdr_vals = decode_int_region(hdr_region, 0, hpages, hpsize, hsize, &hstarts_local);
+        assert!(hdr_vals.iter().all(|&v| v == 0), "all-empty headers must be 0: {hdr_vals:?}");
+
+        // Re-emit must be deterministic.
+        let again = write_sorted(Vec::new(), &entries).unwrap();
+        assert_eq!(again, file);
+    }
+
+    #[test]
+    fn unsorted_all_empty_entries() {
+        // Empty entries in unsorted layout: each emits len=0, then body_vals[pos]=0.
+        let entries: Vec<Vec<i32>> = vec![vec![], vec![], vec![]];
+        let file = write_unsorted(Vec::new(), &entries).unwrap();
+
+        let n = file.len();
+        let divider = i64::from_be_bytes(file[n - 8..n].try_into().unwrap());
+
+        let body_region = &file[0..divider as usize];
+        let (bpages, bpsize, bsize, bstarts) = parse_footer(body_region);
+        // 3 length ints emitted (each = 0).
+        assert_eq!(bsize, 3, "unsorted all-empty body has 3 length-0 ints");
+        let body_vals = decode_int_region(&file, 0, bpages, bpsize, bsize, &bstarts);
+        assert!(body_vals.iter().all(|&v| v == 0), "all length ints must be 0");
+
+        // Reconstruct.
+        let hdr_region = &file[divider as usize..n - 8];
+        let (hpages, hpsize, hsize, hstarts) = parse_footer(hdr_region);
+        let hstarts_local: Vec<i64> = hstarts.iter().map(|&s| s - divider).collect();
+        let hdr_vals = decode_int_region(hdr_region, 0, hpages, hpsize, hsize, &hstarts_local);
+        let mut recon: Vec<Vec<i32>> = Vec::new();
+        for &pos in &hdr_vals {
+            let p = pos as usize;
+            let len = body_vals[p] as usize;
+            recon.push(body_vals[p + 1..p + 1 + len].to_vec());
+        }
+        assert_eq!(recon, entries);
+    }
+
+    #[test]
+    fn sorted_single_entry_per_object() {
+        // Each object has exactly 1 value.
+        let entries: Vec<Vec<i32>> = vec![vec![10], vec![20], vec![30]];
+        let file = write_sorted(Vec::new(), &entries).unwrap();
+        let (_, _, recon) = decode_sorted_file(&file);
+        assert_eq!(recon, entries);
+        let again = write_sorted(Vec::new(), &recon).unwrap();
+        assert_eq!(again, file);
+    }
+
+    #[test]
+    fn unsorted_single_entry_per_object() {
+        let entries: Vec<Vec<i32>> = vec![vec![10], vec![20], vec![30]];
+        let file = write_unsorted(Vec::new(), &entries).unwrap();
+        let (_, _, recon) = decode_unsorted_file(&file);
+        assert_eq!(recon, entries);
+        let again = write_unsorted(Vec::new(), &recon).unwrap();
+        assert_eq!(again, file);
+    }
+
+    #[test]
+    fn sorted_mixed_empty_and_nonempty() {
+        // Interleaved empty/non-empty — exercises hole detection in header.
+        let entries: Vec<Vec<i32>> = vec![
+            vec![],
+            vec![1, 2, 3],
+            vec![],
+            vec![],
+            vec![99],
+            vec![],
+        ];
+        let file = write_sorted(Vec::new(), &entries).unwrap();
+        let (_, _, recon) = decode_sorted_file(&file);
+        assert_eq!(recon, entries, "sorted mixed roundtrip");
+        let again = write_sorted(Vec::new(), &recon).unwrap();
+        assert_eq!(again, file, "sorted mixed deterministic");
+    }
+
+    #[test]
+    fn unsorted_mixed_empty_and_nonempty() {
+        let entries: Vec<Vec<i32>> = vec![
+            vec![5, 6],
+            vec![],
+            vec![7],
+            vec![],
+            vec![8, 9, 10],
+        ];
+        let file = write_unsorted(Vec::new(), &entries).unwrap();
+        let (_, _, recon) = decode_unsorted_file(&file);
+        assert_eq!(recon, entries, "unsorted mixed roundtrip");
+        let again = write_unsorted(Vec::new(), &recon).unwrap();
+        assert_eq!(again, file, "unsorted mixed deterministic");
+    }
+
+    #[test]
+    fn sorted_single_object_single_value() {
+        let entries: Vec<Vec<i32>> = vec![vec![42]];
+        let file = write_sorted(Vec::new(), &entries).unwrap();
+        let (_, _, recon) = decode_sorted_file(&file);
+        assert_eq!(recon, entries);
+    }
+
+    #[test]
+    fn sorted_empty_file() {
+        // zero objects
+        let entries: Vec<Vec<i32>> = vec![];
+        let file = write_sorted(Vec::new(), &entries).unwrap();
+        let n = file.len();
+        let divider = i64::from_be_bytes(file[n - 8..n].try_into().unwrap());
+        // header has 0 entries, body has 0 entries.
+        let body_region = &file[0..divider as usize];
+        let (_, _, bsize, _) = parse_footer(body_region);
+        assert_eq!(bsize, 0);
+        let hdr_region = &file[divider as usize..n - 8];
+        let (_, _, hsize, _) = parse_footer(hdr_region);
+        assert_eq!(hsize, 0);
+    }
+
+    #[test]
+    fn unsorted_empty_file() {
+        let entries: Vec<Vec<i32>> = vec![];
+        let file = write_unsorted(Vec::new(), &entries).unwrap();
+        let n = file.len();
+        let divider = i64::from_be_bytes(file[n - 8..n].try_into().unwrap());
+        let body_region = &file[0..divider as usize];
+        let (_, _, bsize, _) = parse_footer(body_region);
+        assert_eq!(bsize, 0);
+        let hdr_region = &file[divider as usize..n - 8];
+        let (_, _, hsize, _) = parse_footer(hdr_region);
+        assert_eq!(hsize, 0);
+    }
+
+    #[test]
     fn rejects_oversized_position() {
         // A synthetic header position >= 2^32 must be rejected. We can't easily
         // build a 4 GiB body, so drive write_1n_tail directly.

@@ -181,4 +181,93 @@ mod tests {
         let bytes = compress_long(&vals);
         assert_eq!(decode_long(&bytes, vals.len()), vals);
     }
+
+    // --- mat_bits_long Java int-shift-wrap edge cases ---
+
+    /// When shift amount >= 32 Java int-literal `1 << x` wraps mod 32.
+    /// Shift 32 wraps to shift 0 → bit = 1 (not 0x1_0000_0000). This means
+    /// bit 32 of the mask is tested using int-bit 0, so the sign-extended value
+    /// equals 1i64, which is ALSO testing bit 0. The result: MAT "sees" bit 32
+    /// as set only when int-bit 0 is set, creating a false positive that widens
+    /// varying_bits to cover both bit 32 and bit 0 together.
+    #[test]
+    fn mat_bits_long_shift_wraps_at_32() {
+        // mask = 0x1_0000_0000 (only bit 32 set).
+        // Java: 1 << (64 - 0 - 1) = 1 << 63 wraps to 1 << 31 = -2147483648 → sign-ext = -2147483648i64 = 0xFFFF_FFFF_8000_0000.
+        // (mask & 0xFFFF_FFFF_8000_0000) != 0 only if bit 31 or bits 32-63 set — bit 32 IS set → leading stays 0.
+        let mask: i64 = 0x1_0000_0000i64;
+        let (varying, trailing) = mat_bits_long(mask);
+        // Trailing: shift 0 → int 1 → i64 1. bit 0 of mask = 0 → trailing increments.
+        // Continues until a shift where sign-extended int overlaps with set bit.
+        // bit 32 is set; shift=31 → 1<<(31&31)=2^31 sign-ext=0xFFFF_FFFF_8000_0000, (mask&that)!=0 → stop.
+        // trailing = 31, leading = 0, varying = 64 - 0 - 31 = 33.
+        assert_eq!(trailing, 31, "trailing for mask=0x1_0000_0000");
+        assert_eq!(varying, 33, "varying for mask=0x1_0000_0000");
+        // Roundtrip must still be exact.
+        let vals = vec![0i64, 0x1_0000_0000i64, 0x2_0000_0000i64];
+        let bytes = compress_long(&vals);
+        assert_eq!(decode_long(&bytes, vals.len()), vals);
+    }
+
+    /// Bit 63 of the mask: shift amount = 0 (leading=0, 64-0-1=63, 63&31=31).
+    /// Java: 1<<31 = -2147483648 sign-ext = 0xFFFF_FFFF_8000_0000.
+    /// (mask & 0xFFFF_FFFF_8000_0000) != 0 when bit 63 or bits 31-63 set.
+    #[test]
+    fn mat_bits_long_bit63_set() {
+        let mask: i64 = i64::MIN; // only bit 63
+        let (varying, trailing) = mat_bits_long(mask);
+        // leading=0: shift=63, 63&31=31 → 1<<31=-2^31 sign-ext=0xFFFF_FFFF_8000_0000,
+        // (mask & that) = (i64::MIN & 0xFFFF_FFFF_8000_0000) = i64::MIN ≠ 0 → stop, leading=0.
+        // trailing: shift=0 → 1<<0=1, mask&1=0 → trailing++; continue while no overlap.
+        // shift=31 → 0xFFFF_FFFF_8000_0000 & i64::MIN ≠ 0 → stop at trailing=31.
+        assert_eq!(varying + trailing, 64, "varying+trailing <= BIT");
+        let vals = vec![i64::MIN, 0i64, i64::MIN >> 1];
+        let bytes = compress_long(&vals);
+        assert_eq!(decode_long(&bytes, vals.len()), vals, "bit63 roundtrip");
+    }
+
+    /// varying=64 boundary: when every bit contributes, value_mask = u64::MAX
+    /// (the `if varying >= 64 { u64::MAX }` guard in compress_impl).
+    #[test]
+    fn mat_bits_long_varying64_guard() {
+        // mask = -1 (all bits set). leading=0 (any shift → bit set immediately).
+        // trailing=0 (shift=0 → 1 sign-ext=1, mask&1!=0 → stop). varying=64.
+        let mask: i64 = -1;
+        let (varying, trailing) = mat_bits_long(mask);
+        assert_eq!(varying, 64);
+        assert_eq!(trailing, 0);
+        // compress_impl must not panic on varying=64 (value_mask = u64::MAX).
+        let vals = vec![-1i64, 0i64, i64::MAX, i64::MIN];
+        let bytes = compress_long(&vals);
+        assert_eq!(decode_long(&bytes, vals.len()), vals, "varying=64 roundtrip");
+    }
+
+    /// A mask where only bits in the range [16, 47] are set — straddles the
+    /// int-shift wraparound at 32. Tests that both leading and trailing are
+    /// correctly computed using wrapped-shift semantics.
+    #[test]
+    fn mat_bits_long_straddle_32() {
+        // set bits 16..=47 → mask has 32 varying bits, 16 trailing zeros.
+        let mask: i64 = 0x0000_FFFF_FFFF_0000u64 as i64;
+        let (varying, trailing) = mat_bits_long(mask);
+        // trailing: bits 0-15 are 0, bit 16 is set.
+        //   shift 0..15: 1<<(k&31)=1<<k → sign-ext positive → mask&1<<k = 0 for k<16.
+        //   shift 16: 1<<16 → sign-ext = 65536 → mask & 65536 ≠ 0 → stop. trailing=16.
+        assert_eq!(trailing, 16);
+        // Must roundtrip.
+        let vals = vec![0x0000_FFFF_0000_0000i64, 0x0000_0001_0000_0000i64, 0i64];
+        let bytes = compress_long(&vals);
+        assert_eq!(decode_long(&bytes, vals.len()), vals, "straddle32 roundtrip");
+    }
+
+    /// Confirm that compress_int handles all-negative input (all bits set → mask=-1)
+    /// producing varying=32, trailing=0.
+    #[test]
+    fn compress_int_all_negative() {
+        let vals = vec![-1i32, -2i32, i32::MIN];
+        let bytes = compress_int(&vals);
+        assert_eq!(bytes[0], 32, "varying=32 for negative ints");
+        assert_eq!(bytes[1], 0, "trailing=0 for mask=-1");
+        assert_eq!(decode_int(&bytes, vals.len()), vals);
+    }
 }

@@ -1280,4 +1280,199 @@ mod tests {
         let blank_lines = content.lines().filter(|l| l.is_empty()).count();
         assert!(blank_lines >= 2, "expected blank lines between threads, got {blank_lines}");
     }
+
+    // ---- emit_outbound / emit_inbound / emit_dom_out roundtrip tests ----
+
+    fn read_sorted_1n(path: &std::path::Path) -> Vec<Vec<i32>> {
+        use crate::mat::int_index_1n;
+        let bytes = std::fs::read(path).unwrap();
+        let n = bytes.len();
+        let divider = i64::from_be_bytes(bytes[n - 8..n].try_into().unwrap()) as usize;
+
+        fn parse_footer(region: &[u8]) -> (usize, i32, i64, Vec<i64>) {
+            let n = region.len();
+            let size = i32::from_be_bytes(region[n - 4..n].try_into().unwrap());
+            let page_size = i32::from_be_bytes(region[n - 8..n - 4].try_into().unwrap());
+            let pages = (size as usize).div_ceil(page_size as usize);
+            let entries = pages + 1;
+            let footer_start = n - 8 - entries * 8;
+            let mut starts = Vec::with_capacity(entries);
+            for i in 0..entries {
+                let off = footer_start + i * 8;
+                starts.push(i64::from_be_bytes(region[off..off + 8].try_into().unwrap()));
+            }
+            (pages, page_size, size as i64, starts)
+        }
+
+        fn decode_region(file: &[u8], region: &[u8], pages: usize, psize: i32, size: i64, starts: &[i64]) -> Vec<i32> {
+            use crate::mat::codec::decode_int;
+            let mut out = Vec::with_capacity(size as usize);
+            for i in 0..pages {
+                let s = starts[i] as usize;
+                let e = starts[i + 1] as usize;
+                let n = ((psize as usize)).min(size as usize - i * psize as usize);
+                out.extend_from_slice(&decode_int(&file[s..e], n));
+            }
+            out
+        }
+
+        fn sorted_get(hdr: &[i32], body: &[i32], idx: usize) -> Vec<i32> {
+            let p0 = hdr[idx] as i64;
+            if p0 == 0 { return vec![]; }
+            let body_end = (body.len() + 1) as i64;
+            let mut p1 = if idx + 1 < hdr.len() { hdr[idx + 1] as i64 } else { body_end };
+            let mut j = idx + 2;
+            while p1 < p0 && j < hdr.len() { p1 = hdr[j] as i64; j += 1; }
+            if p1 < p0 { p1 = body_end; }
+            let s = (p0 - 1) as usize;
+            body[s..s + (p1 - p0) as usize].to_vec()
+        }
+
+        let body_region = &bytes[0..divider];
+        let (bp, bps, bs, bst) = parse_footer(body_region);
+        let body_vals = decode_region(&bytes, body_region, bp, bps, bs, &bst);
+
+        let hdr_region = &bytes[divider..n - 8];
+        let (hp, hps, hs, hst) = parse_footer(hdr_region);
+        let hst_local: Vec<i64> = hst.iter().map(|&s| s - divider as i64).collect();
+        let hdr_vals = decode_region(hdr_region, hdr_region, hp, hps, hs, &hst_local);
+
+        (0..hdr_vals.len()).map(|i| sorted_get(&hdr_vals, &body_vals, i)).collect()
+    }
+
+    fn read_unsorted_1n(path: &std::path::Path) -> Vec<Vec<i32>> {
+        let bytes = std::fs::read(path).unwrap();
+        let n = bytes.len();
+        let divider = i64::from_be_bytes(bytes[n - 8..n].try_into().unwrap()) as usize;
+
+        fn parse_footer(region: &[u8]) -> (usize, i32, i64, Vec<i64>) {
+            let n = region.len();
+            let size = i32::from_be_bytes(region[n - 4..n].try_into().unwrap());
+            let page_size = i32::from_be_bytes(region[n - 8..n - 4].try_into().unwrap());
+            let pages = (size as usize).div_ceil(page_size as usize);
+            let entries = pages + 1;
+            let footer_start = n - 8 - entries * 8;
+            let mut starts = Vec::with_capacity(entries);
+            for i in 0..entries {
+                let off = footer_start + i * 8;
+                starts.push(i64::from_be_bytes(region[off..off + 8].try_into().unwrap()));
+            }
+            (pages, page_size, size as i64, starts)
+        }
+
+        fn decode_region(file: &[u8], pages: usize, psize: i32, size: i64, starts: &[i64]) -> Vec<i32> {
+            use crate::mat::codec::decode_int;
+            let mut out = Vec::with_capacity(size as usize);
+            for i in 0..pages {
+                let s = starts[i] as usize;
+                let e = starts[i + 1] as usize;
+                let n = (psize as usize).min(size as usize - i * psize as usize);
+                out.extend_from_slice(&decode_int(&file[s..e], n));
+            }
+            out
+        }
+
+        let body_region = &bytes[0..divider];
+        let (bp, bps, bs, bst) = parse_footer(body_region);
+        let body_vals = decode_region(&bytes, bp, bps, bs, &bst);
+
+        let hdr_region = &bytes[divider..n - 8];
+        let (hp, hps, hs, hst) = parse_footer(hdr_region);
+        let hst_local: Vec<i64> = hst.iter().map(|&s| s - divider as i64).collect();
+        let hdr_vals = decode_region(hdr_region, hp, hps, hs, &hst_local);
+
+        let mut out = Vec::with_capacity(hdr_vals.len());
+        for &pos in &hdr_vals {
+            let p = pos as usize;
+            let len = body_vals[p] as usize;
+            out.push(body_vals[p + 1..p + 1 + len].to_vec());
+        }
+        out
+    }
+
+    #[test]
+    fn emit_outbound_roundtrip() {
+        let entries: Vec<Vec<i32>> = vec![
+            vec![5, 3, 1],  // object 0: class-ref + 2 refs
+            vec![],         // object 1: no outbound refs (hole)
+            vec![7, 2],     // object 2: class-ref + 1 ref
+            vec![9],        // object 3: class-ref only
+        ];
+        let tmp = std::env::temp_dir().join("mat_emit_outbound_rt");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        e.emit_outbound(&entries).unwrap();
+        let path = tmp.join("dump_.outbound.index");
+        let recon = read_sorted_1n(&path);
+        assert_eq!(recon, entries, "outbound sorted roundtrip");
+    }
+
+    #[test]
+    fn emit_inbound_roundtrip() {
+        let entries: Vec<Vec<i32>> = vec![
+            vec![],           // object 0: no inbound (hole)
+            vec![0, 2],       // object 1: referenced by 0 and 2
+            vec![0],          // object 2: referenced by 0
+            vec![],           // object 3: hole
+        ];
+        let tmp = std::env::temp_dir().join("mat_emit_inbound_rt");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        e.emit_inbound(&entries).unwrap();
+        let path = tmp.join("dump_.inbound.index");
+        let recon = read_sorted_1n(&path);
+        assert_eq!(recon, entries, "inbound sorted roundtrip");
+    }
+
+    #[test]
+    fn emit_dom_out_roundtrip() {
+        // domOut is UNSORTED: entries[0] = superroot children, entries[k+1] = children of k.
+        let entries: Vec<Vec<i32>> = vec![
+            vec![1, 2],    // superroot children: objects 1 and 2
+            vec![3],       // object 0 dominated by: 3
+            vec![],        // object 1: no dominated children
+            vec![],        // object 2: no dominated children
+            vec![],        // object 3: no dominated children
+        ];
+        let tmp = std::env::temp_dir().join("mat_emit_domout_rt");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        e.emit_dom_out(&entries).unwrap();
+        let path = tmp.join("dump_.domOut.index");
+        let recon = read_unsorted_1n(&path);
+        assert_eq!(recon, entries, "domOut unsorted roundtrip");
+    }
+
+    #[test]
+    fn emit_outbound_all_empty_roundtrip() {
+        let entries: Vec<Vec<i32>> = vec![vec![], vec![], vec![]];
+        let tmp = std::env::temp_dir().join("mat_emit_outbound_empty");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        e.emit_outbound(&entries).unwrap();
+        let recon = read_sorted_1n(&tmp.join("dump_.outbound.index"));
+        assert_eq!(recon, entries);
+    }
+
+    #[test]
+    fn emit_inbound_all_empty_roundtrip() {
+        let entries: Vec<Vec<i32>> = vec![vec![], vec![], vec![]];
+        let tmp = std::env::temp_dir().join("mat_emit_inbound_empty");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        e.emit_inbound(&entries).unwrap();
+        let recon = read_sorted_1n(&tmp.join("dump_.inbound.index"));
+        assert_eq!(recon, entries);
+    }
+
+    #[test]
+    fn emit_dom_out_all_empty_roundtrip() {
+        let entries: Vec<Vec<i32>> = vec![vec![], vec![], vec![]];
+        let tmp = std::env::temp_dir().join("mat_emit_domout_empty");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        e.emit_dom_out(&entries).unwrap();
+        let recon = read_unsorted_1n(&tmp.join("dump_.domOut.index"));
+        assert_eq!(recon, entries);
+    }
 }
