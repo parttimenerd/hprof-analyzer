@@ -600,64 +600,64 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
         }
     }
 
-    // `toString(s)`: decode each java.lang.String instance to its text value.
-    // Only valid when the FROM class is java.lang.String (exact or INSTANCEOF).
-    // Emits one ResolveStringValues op that runs at P2 after the backing-array
-    // decode pass. Non-String targets get an ACTIONABLE error at plan time.
+    // `toString(s)`: for FROM java.lang.String, decode each instance to its text
+    // value via a late ResolveStringValues op (runs at P2). For any other object
+    // class, MAT's fallback display form `<class> @ 0x<addr>` is produced at scan
+    // time (no late op, no retention) — so a non-String FROM is now ALLOWED and
+    // falls through with no gating. Only a subquery FROM is rejected (the element
+    // class is indeterminate at plan time).
     if needs.string_values {
         let class_name = q.from.class_name();
         let is_string_from = class_name == "java.lang.String"
             || class_name == "java/lang/String"
             || class_name.ends_with(".String"); // allow simple short form
-        // Subquery FROM is also rejected: toString(s) over a non-direct-String
-        // subquery source is unsupported in this version.
         let is_subquery = q.from.as_subquery().is_some();
-        if is_subquery || !is_string_from {
-            let source_desc = if is_subquery {
-                "a subquery result".to_string()
-            } else {
-                format!("'{class_name}'")
-            };
-            return Err(QueryError(format!(
-                "toString(s) is only valid for FROM java.lang.String; \
-                 the FROM class is {source_desc}. \
-                 Use: SELECT toString(s) FROM java.lang.String s"
-            )));
+        if is_subquery {
+            return Err(QueryError(
+                "toString over a subquery result is not supported; apply toString \
+                 inside the inner query, e.g. SELECT toString(s) FROM (<inner>) s \
+                 where the inner query yields java.lang.String"
+                    .to_string(),
+            ));
         }
-        late_ops.push(StageOp::ResolveStringValues);
-        if finalize_at == Phase::P1 {
-            finalize_at = Phase::P2;
-        }
-        // An aggregate combined with a toString(s) WHERE folds over the late,
-        // string-filtered set (see stage_runner::string_values_rows). Only
-        // aggregates whose argument is projectable from the late string context
-        // are supported: COUNT(*) and COUNT(toString(s)). SUM/AVG/MIN/MAX and
-        // COUNT over other args (e.g. @usedHeapSize) would fold over Null in the
-        // late phase — reject them with an actionable error instead of silently
-        // returning 0/Null.
-        if is_aggregate {
-            let ok = q.select.iter().all(|it| match it {
-                SelectItem::Aggregate { func, arg } => {
-                    matches!(func, AggFunc::Count)
-                        && matches!(
-                            arg.as_ref(),
-                            SelectItem::Star
-                                | SelectItem::ToString(_)
-                                | SelectItem::Attr(Attr::ToString(_))
-                        )
+        if is_string_from {
+            late_ops.push(StageOp::ResolveStringValues);
+            if finalize_at == Phase::P1 {
+                finalize_at = Phase::P2;
+            }
+            // An aggregate combined with a toString(s) WHERE folds over the late,
+            // string-filtered set (see stage_runner::string_values_rows). Only
+            // aggregates whose argument is projectable from the late string context
+            // are supported: COUNT(*) and COUNT(toString(s)). SUM/AVG/MIN/MAX and
+            // COUNT over other args (e.g. @usedHeapSize) would fold over Null in the
+            // late phase — reject them with an actionable error instead of silently
+            // returning 0/Null. (This gate applies ONLY to the late string-decode
+            // path; the scan-time non-String display form has no such constraint.)
+            if is_aggregate {
+                let ok = q.select.iter().all(|it| match it {
+                    SelectItem::Aggregate { func, arg } => {
+                        matches!(func, AggFunc::Count)
+                            && matches!(
+                                arg.as_ref(),
+                                SelectItem::Star
+                                    | SelectItem::ToString(_)
+                                    | SelectItem::Attr(Attr::ToString(_))
+                            )
+                    }
+                    _ => false,
+                });
+                if !ok {
+                    return Err(QueryError(
+                        "only COUNT(*) or COUNT(toString(s)) may be combined with a \
+                         toString(s) filter in WHERE; SUM/AVG/MIN/MAX (and COUNT over \
+                         other attributes) over a toString-filtered set are not \
+                         supported in this release"
+                            .into(),
+                    ));
                 }
-                _ => false,
-            });
-            if !ok {
-                return Err(QueryError(
-                    "only COUNT(*) or COUNT(toString(s)) may be combined with a \
-                     toString(s) filter in WHERE; SUM/AVG/MIN/MAX (and COUNT over \
-                     other attributes) over a toString-filtered set are not \
-                     supported in this release"
-                        .into(),
-                ));
             }
         }
+        // else: non-String class FROM -> generic scan-time display, no late op.
     }
 
     Ok(QueryPlan {
@@ -2270,19 +2270,55 @@ mod tests {
         assert_eq!(plan.finalize_at, Phase::P2);
     }
 
+    // Wave C: toString on a non-String FROM class is no longer a plan error.
+    // It now falls through to a scan-time display projection (<class> @ 0x<addr>)
+    // with NO late ResolveStringValues op. The String path is unchanged (below).
     #[test]
-    fn tostring_on_non_string_from_is_plan_error() {
-        let err =
-            pq(&parse("SELECT toString(s) FROM java.lang.Object s").unwrap()).unwrap_err();
+    fn tostring_non_string_no_longer_errors() {
+        let plan = pq(&parse("SELECT toString(t) FROM java.lang.Thread t").unwrap());
+        assert!(plan.is_ok(), "non-String toString should plan: {plan:?}");
+        let plan = plan.unwrap();
         assert!(
-            err.0.contains("java.lang.String") || err.0.contains("toString"),
-            "error must name java.lang.String or toString, got: {}",
+            !plan
+                .late_ops
+                .iter()
+                .any(|op| matches!(op, StageOp::ResolveStringValues)),
+            "non-String toString must NOT emit ResolveStringValues, got {:?}",
+            plan.late_ops
+        );
+    }
+
+    #[test]
+    fn tostring_string_still_uses_string_values() {
+        let plan =
+            pq(&parse("SELECT toString(s) FROM java.lang.String s").unwrap()).unwrap();
+        assert!(
+            format!("{plan:?}").contains("ResolveStringValues"),
+            "String toString must still emit ResolveStringValues, got {plan:?}"
+        );
+    }
+
+    #[test]
+    fn tostring_subquery_still_rejected() {
+        let plan =
+            pq(&parse("SELECT toString(s) FROM (SELECT * FROM java.lang.Object) s").unwrap());
+        assert!(plan.is_err(), "toString over a subquery must be rejected");
+        let err = plan.unwrap_err();
+        assert!(
+            err.0.contains("subquery") && err.0.contains("inner"),
+            "subquery toString error must guide the user to the inner query, got: {}",
             err.0
         );
+    }
+
+    // Formerly `tostring_on_non_string_from_is_plan_error`: non-String FROM now
+    // plans cleanly (scan-time display form), it is no longer an error.
+    #[test]
+    fn tostring_on_non_string_object_from_plans_ok() {
+        let plan = pq(&parse("SELECT toString(s) FROM java.lang.Object s").unwrap());
         assert!(
-            err.0.contains("java.lang.Object") || err.0.contains("FROM"),
-            "error must name the offending FROM class, got: {}",
-            err.0
+            plan.is_ok(),
+            "non-String Object FROM toString must plan: {plan:?}"
         );
     }
 
@@ -2295,15 +2331,14 @@ mod tests {
         );
     }
 
+    // Formerly `tostring_non_string_from_error_names_fix`: a non-String container
+    // class (HashMap) now plans cleanly as a scan-time display projection.
     #[test]
-    fn tostring_non_string_from_error_names_fix() {
-        // The error message must include the correct-usage hint.
-        let err =
-            pq(&parse("SELECT toString(s) FROM java.util.HashMap s").unwrap()).unwrap_err();
+    fn tostring_on_non_string_container_from_plans_ok() {
+        let plan = pq(&parse("SELECT toString(s) FROM java.util.HashMap s").unwrap());
         assert!(
-            err.0.contains("java.lang.String"),
-            "error must include the correct class name, got: {}",
-            err.0
+            plan.is_ok(),
+            "non-String HashMap FROM toString must plan: {plan:?}"
         );
     }
 

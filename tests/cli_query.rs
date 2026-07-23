@@ -225,8 +225,80 @@ fn query_subcommand_tostring_where_filters_in_late_phase() {
     );
 }
 
+/// Wave C: toString on a non-String object renders MAT's fallback display form
+/// `<class> @ 0x<addr>` at scan time (no late string decode). A Thread instance
+/// must print `java.lang.Thread @ 0x…`.
+#[test]
+fn tostring_non_string_shows_class_and_address() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT toString(t) FROM java.lang.Thread t LIMIT 1",
+    );
+    assert!(
+        out.contains("java.lang.Thread @ 0x"),
+        "non-String toString must render `<class> @ 0x<addr>`, got:\n{out}"
+    );
+}
+
+/// Wave C: a non-String toString in WHERE is evaluated at SCAN time (not
+/// deferred to the late phase), so a LIKE against the display form filters rows.
+#[test]
+fn tostring_non_string_in_where() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(
+        &hprof,
+        r#"SELECT @objectId FROM java.lang.Thread t WHERE toString(t) LIKE "java\.lang\.Thread.*" LIMIT 5"#,
+    );
+    let rows = parse_row_count(&out);
+    assert!(
+        rows > 0,
+        "non-String toString WHERE must match rows at scan time, got:\n{out}"
+    );
+
+    // Negative control: an impossible display-form pattern yields zero rows,
+    // proving the scan-time predicate is actually applied (not dropped).
+    let none = parse_row_count(&run_query_stdout(
+        &hprof,
+        r#"SELECT @objectId FROM java.lang.Thread t WHERE toString(t) LIKE ".*zzzzz_no_such_class.*""#,
+    ));
+    assert_eq!(
+        none, 0,
+        "impossible display-form pattern must return 0 rows, got:\n{out}"
+    );
+}
+
+/// Wave C extra: a non-String toString rendered alongside another column must
+/// carry the display form into the multi-column row.
+#[test]
+fn tostring_non_string_in_multi_column_select() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT @objectId, toString(t) FROM java.lang.Thread t LIMIT 1",
+    );
+    assert!(
+        out.contains("@ 0x"),
+        "multi-column non-String toString must include the display address, got:\n{out}"
+    );
+}
+
+/// Wave C byte-identity control: a plain `SELECT *` over the same non-String
+/// class (NO toString) must still work — the non-toString path is untouched.
+#[test]
+fn tostring_non_string_plain_star_unchanged() {
+    let Some(hprof) = philosophers() else { return };
+    let rows = parse_row_count(&run_query_stdout(
+        &hprof,
+        "SELECT * FROM java.lang.Thread LIMIT 5",
+    ));
+    assert!(
+        rows > 0,
+        "plain SELECT * over java.lang.Thread must still return rows"
+    );
+}
+
 /// SW-2 guard: aggregates that cannot be folded over the late string-filtered
-/// set (SUM/AVG/MIN/MAX, or COUNT over a non-projectable arg) must be rejected
 /// with an actionable plan error rather than silently returning 0/Null. Only
 /// COUNT(*) / COUNT(toString(s)) are supported with a toString(s) WHERE.
 #[test]
@@ -1919,31 +1991,30 @@ fn bad_like_regex_is_actionable_cli_error() {
 // MAT gap #3 — toString(s) for java.lang.String
 // ============================================================
 
-/// `toString(s) FROM java.lang.String` applied to a non-String class at plan time
-/// must produce an actionable `QueryError` naming the cause and the fix.
+/// Wave C: `toString(s)` on a non-String FROM class no longer errors. It now
+/// succeeds and renders MAT's fallback display form `<class> @ 0x<addr>` at scan
+/// time (formerly `tostring_non_string_from_is_plan_error`).
 #[test]
-fn tostring_non_string_from_is_plan_error() {
+fn tostring_non_string_from_now_renders_display_form() {
     let Some(hprof) = philosophers() else { return };
     let out = Command::new(BIN)
         .arg("query")
         .arg(&hprof)
-        .args(["--query", "SELECT toString(s) FROM java.lang.Object s"])
+        .args([
+            "--query",
+            "SELECT toString(s) FROM java.lang.Object s LIMIT 1",
+        ])
         .output()
         .unwrap();
-    let combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
+    assert!(
+        out.status.success(),
+        "non-String toString must now succeed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    // Plan-time error: exits non-zero or surfaces "error:" inline.
+    let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        !out.status.success() || combined.contains("error"),
-        "toString on non-String FROM must surface an error, got:\n{combined}"
-    );
-    // The error must name the actual FROM class.
-    assert!(
-        combined.contains("java.lang.Object") || combined.contains("toString"),
-        "error must name the FROM class or toString, got:\n{combined}"
+        stdout.contains("@ 0x"),
+        "non-String toString must render `<class> @ 0x<addr>`, got:\n{stdout}"
     );
 }
 
@@ -2061,8 +2132,14 @@ fn tostring_works_via_full_analyze_path() {
 /// the planner always rejects it. If the planner is later extended to allow
 /// broad-FROM toString with Null for non-String instances, this test MUST be
 /// updated to reflect the new documented behavior.
+/// Wave C: `toString(s)` over a BROAD quoted-regex FROM (e.g. `"java\.lang\..*"`)
+/// no longer errors. A regex FROM has `class_name = "java\.lang\..*"`, which does
+/// NOT equal `"java.lang.String"`, so `from_is_string()` is false and every matched
+/// object renders MAT's fallback display form `<class> @ 0x<addr>` at scan time
+/// (the exact-String decode path is only armed for an exact String FROM). This
+/// pins the extended behavior anticipated by the former plan-error test.
 #[test]
-fn tostring_broad_regex_from_is_plan_error() {
+fn tostring_broad_regex_from_renders_display_form() {
     let Some(hprof) = philosophers() else { return };
     let out = Command::new(BIN)
         .arg("query")
@@ -2073,26 +2150,15 @@ fn tostring_broad_regex_from_is_plan_error() {
         ])
         .output()
         .unwrap();
-    // Must fail (plan error), not silently succeed.
-    let combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
+    assert!(
+        out.status.success(),
+        "broad-regex toString must now succeed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
+    let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        !out.status.success() || combined.to_lowercase().contains("error"),
-        "toString over broad regex FROM must be a plan error, not silent success;\
-         got:\n{combined}"
-    );
-    // The actionable error must name the issue.
-    assert!(
-        combined.contains("java.lang.String") || combined.contains("toString"),
-        "plan error must mention java.lang.String or toString; got:\n{combined}"
-    );
-    // The error must suggest the correct form.
-    assert!(
-        combined.contains("java.lang.String"),
-        "actionable error must name the correct FROM class; got:\n{combined}"
+        stdout.contains("@ 0x"),
+        "broad-regex toString must render the `<class> @ 0x<addr>` display form; got:\n{stdout}"
     );
 }
 

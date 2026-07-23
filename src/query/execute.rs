@@ -607,10 +607,32 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             SelectItem::Attr(a) => self.project_attr(a, src_idx, class_id, blob),
             // path(a, b) is cross-phase (needs the ref graph); filled later, not here.
             SelectItem::Path { .. } => QueryValue::Null,
-            // toString(s) is cross-phase: resolved post-scan by the stage runner.
-            SelectItem::ToString(_) => QueryValue::Null,
+            // toString(s): the String path is decoded late (ResolveStringValues);
+            // a non-String object gets MAT's fallback display form at scan time.
+            SelectItem::ToString(_) => {
+                if self.from_is_string() {
+                    QueryValue::Null
+                } else {
+                    let cname = self.resolver.class_name(class_id).unwrap_or("?");
+                    match self.resolver.addr_of(src_idx) {
+                        Some(a) => QueryValue::Str(format!("{cname} @ 0x{a:x}")),
+                        None => QueryValue::Str(format!("{cname} @ ?")),
+                    }
+                }
+            }
             SelectItem::Expr(e) => self.eval_expr(e, src_idx, class_id, blob),
         }
+    }
+    /// True when the FROM class is java.lang.String (exact or short/slash form).
+    /// Only the String path is decoded late (ResolveStringValues); every other
+    /// class renders its toString at scan time as `<class> @ 0x<addr>`.
+    // `from_` here names the OQL FROM clause, not a type conversion, so the
+    // wrong_self_convention lint (which expects `from_*` to be static) is a false
+    // positive for this domain method.
+    #[allow(clippy::wrong_self_convention)]
+    fn from_is_string(&self) -> bool {
+        let cname = self.query.from.class_name();
+        cname == "java.lang.String" || cname == "java/lang/String" || cname.ends_with(".String")
     }
     fn project_attr(&self, a: &Attr, src_idx: usize, class_id: u64, blob: &[u8]) -> QueryValue {
         match a {
@@ -643,8 +665,20 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             // N-hop reference paths resolve against the forward-ref graph, which
             // only exists post-scan (P2). Filled by the stage runner, not here.
             Attr::RefPath { .. } => QueryValue::Null,
-            // toString(s) is cross-phase: resolved post-scan by the stage runner.
-            Attr::ToString(_) => QueryValue::Null,
+            Attr::ToString(_) => {
+                // String FROM is decoded late (ResolveStringValues). A non-String
+                // object has no decodable text, so we mirror MAT's fallback display
+                // form <class> @ 0x<addr>, computed here at scan time (no late op).
+                if self.from_is_string() {
+                    QueryValue::Null
+                } else {
+                    let cname = self.resolver.class_name(class_id).unwrap_or("?");
+                    match self.resolver.addr_of(src_idx) {
+                        Some(a) => QueryValue::Str(format!("{cname} @ 0x{a:x}")),
+                        None => QueryValue::Str(format!("{cname} @ ?")),
+                    }
+                }
+            }
         }
     }
     /// Project a SELECT row for an array object. Arrays carry no field blob and
@@ -673,8 +707,18 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             SelectItem::Attr(a) => self.project_array_attr(a, src_idx, class_name, length),
             // path(a, b) is cross-phase (needs the ref graph); filled later, not here.
             SelectItem::Path { .. } => QueryValue::Null,
-            // toString(s) is cross-phase: resolved post-scan by the stage runner.
-            SelectItem::ToString(_) => QueryValue::Null,
+            // toString(s): arrays are never String-decoded, so this always renders
+            // the MAT fallback display form <class> @ 0x<addr> at scan time.
+            SelectItem::ToString(_) => {
+                if self.from_is_string() {
+                    QueryValue::Null
+                } else {
+                    match self.resolver.addr_of(src_idx) {
+                        Some(a) => QueryValue::Str(format!("{class_name} @ 0x{a:x}")),
+                        None => QueryValue::Str(format!("{class_name} @ ?")),
+                    }
+                }
+            }
             SelectItem::Expr(e) => self.eval_expr_array(e, src_idx, class_name, length),
         }
     }
@@ -709,8 +753,19 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             Attr::Field(_) => QueryValue::Null,
             // Arrays have no reference fields to walk; a RefPath is Null.
             Attr::RefPath { .. } => QueryValue::Null,
-            // toString(s) is cross-phase: resolved post-scan by the stage runner.
-            Attr::ToString(_) => QueryValue::Null,
+            Attr::ToString(_) => {
+                // Arrays are never String-decoded (from_is_string() is false here),
+                // so this always renders the MAT fallback display form
+                // <class> @ 0x<addr> at scan time — same shape as project_attr.
+                if self.from_is_string() {
+                    QueryValue::Null
+                } else {
+                    match self.resolver.addr_of(src_idx) {
+                        Some(a) => QueryValue::Str(format!("{class_name} @ 0x{a:x}")),
+                        None => QueryValue::Str(format!("{class_name} @ ?")),
+                    }
+                }
+            }
         }
     }
     /// Recursively evaluate an arithmetic `Expr` for an instance object. Leaf
@@ -790,10 +845,13 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             // be evaluated during the scan (retained size / string value are
             // unknown here); they are applied late in stage_runner. Skip them
             // here so the predicate doesn't spuriously compare against Null and
-            // drop every row before the late phase runs.
+            // drop every row before the late phase runs. Only String toString is
+            // deferred: a non-String toString renders `<class> @ 0x<addr>` at scan
+            // time, so it IS known here and must be evaluated (not deferred).
             if self.carry.is_some()
                 && (crate::query::plan::pred_uses_retained(&term.pred)
-                    || crate::query::plan::pred_uses_tostring(&term.pred))
+                    || (self.from_is_string()
+                        && crate::query::plan::pred_uses_tostring(&term.pred)))
             {
                 continue;
             }
@@ -879,10 +937,12 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     /// thus behave like the instance path's unknown-field handling).
     fn array_where_passes(&self, src_idx: usize, class_name: &str, length: u32) -> bool {
         for term in &self.plan.where_terms {
-            // See `where_passes`: skip retained/toString terms in carry mode.
+            // See `where_passes`: skip retained/String-toString terms in carry
+            // mode. A non-String toString is scan-time-known, so it is NOT skipped.
             if self.carry.is_some()
                 && (crate::query::plan::pred_uses_retained(&term.pred)
-                    || crate::query::plan::pred_uses_tostring(&term.pred))
+                    || (self.from_is_string()
+                        && crate::query::plan::pred_uses_tostring(&term.pred)))
             {
                 continue;
             }
