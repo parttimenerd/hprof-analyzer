@@ -66,11 +66,44 @@ pub enum Token {
     #[regex(r#""[^"]*""#, |lex| { let s = lex.slice(); s[1..s.len()-1].to_string() })]
     Str(String),
 
-    // float before int so "1.5" isn't split. No leading '-': unary minus is a
-    // grammar-level operator (Token::Minus), so `1-2` lexes as 1, Minus, 2.
-    #[regex(r"[0-9]+\.[0-9]*", |lex| lex.slice().parse::<f64>().ok())]
+    // Numeric + char literals. All int forms collapse to Int(i64); all float
+    // forms to Float(f64) (our Value has no int/long/float/double/char split).
+    // Order: float before int so "1.5" isn't split. Char and all int forms all
+    // attach to Int. No leading '-': unary minus is a grammar operator.
+    //
+    // Float: `[digits].[digits]`, `[digits].`, dotless-with-suffix `[digits][fFdD]`,
+    // and exponent forms; optional trailing f/F/d/D stripped before parse.
+    #[regex(
+        r"[0-9]+\.[0-9]*([eE][+-]?[0-9]+)?[fFdD]?|[0-9]+([eE][+-]?[0-9]+)[fFdD]?|[0-9]+[fFdD]",
+        |lex| {
+            let s = lex.slice();
+            let core = s.trim_end_matches(|c| matches!(c, 'f' | 'F' | 'd' | 'D'));
+            core.parse::<f64>().ok()
+        },
+        priority = 4
+    )]
     Float(f64),
-    #[regex(r"[0-9]+", |lex| lex.slice().parse::<i64>().ok())]
+    // Char: exactly one char between single quotes, no escapes (MAT CHARACTER_LITERAL).
+    #[regex(r"'[^'\\\n\r]'", |lex| {
+        let s = lex.slice();
+        s[1..s.len() - 1].chars().next().map(|c| c as i64)
+    })]
+    // Hex: 0x… with optional L suffix.
+    #[regex(r"0[xX][0-9a-fA-F]+[lL]?", |lex| {
+        let s = lex.slice().trim_end_matches(|c| matches!(c, 'l' | 'L'));
+        i64::from_str_radix(&s[2..], 16).ok()
+    }, priority = 3)]
+    // Octal: leading 0 followed by 1+ octal digits, optional L. (Lone `0` and
+    // `08`/`09` fall through to the decimal arm — lenient MAT divergence.)
+    #[regex(r"0[0-7]+[lL]?", |lex| {
+        let s = lex.slice().trim_end_matches(|c| matches!(c, 'l' | 'L'));
+        i64::from_str_radix(s, 8).ok()
+    }, priority = 3)]
+    // Decimal int/long: digits with optional L. Also catches lone `0`, `08`, `09`.
+    #[regex(r"[0-9]+[lL]?", |lex| {
+        let s = lex.slice().trim_end_matches(|c| matches!(c, 'l' | 'L'));
+        s.parse::<i64>().ok()
+    })]
     Int(i64),
 
     // identifier / keyword / dotted class or field name, optional embedded '*'
@@ -91,6 +124,18 @@ pub fn tokenize_spanned(src: &str) -> Result<Vec<(Token, SimpleSpan)>, String> {
         match res {
             Ok(tok) => out.push((tok, (span.start..span.end).into())),
             Err(()) => {
+                let slice = &src[span.clone()];
+                if slice.starts_with('\'') {
+                    return Err(format!(
+                        "character literal must contain exactly one character: {slice:?} \
+                         (single-quoted, no escapes)"
+                    ));
+                }
+                if slice.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                    return Err(format!(
+                        "numeric literal out of range for a 64-bit signed integer: {slice:?}"
+                    ));
+                }
                 return Err(format!(
                     "unexpected character(s) at offset {}: {:?}",
                     span.start,
@@ -3308,5 +3353,56 @@ mod tests {
             }
             other => panic!("expected SUM aggregate, got {other:?}"),
         }
+    }
+
+    // ============================================================
+    // Group N — numeric-literal grammar (hex/octal/long/char/float suffixes)
+    // ============================================================
+
+    #[test]
+    fn lex_numeric_literal_forms() {
+        use super::Token::*;
+        let toks = |s: &str| {
+            super::tokenize_spanned(s)
+                .unwrap()
+                .into_iter()
+                .map(|(t, _)| t)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(toks("100"), vec![Int(100)]);
+        assert_eq!(toks("100L"), vec![Int(100)]);
+        assert_eq!(toks("100l"), vec![Int(100)]);
+        assert_eq!(toks("0xFF"), vec![Int(255)]);
+        assert_eq!(toks("0Xff"), vec![Int(255)]);
+        assert_eq!(toks("0xFFL"), vec![Int(255)]);
+        assert_eq!(toks("0144"), vec![Int(100)]);
+        assert_eq!(toks("0144L"), vec![Int(100)]);
+        assert_eq!(toks("0"), vec![Int(0)]);
+        assert_eq!(toks("08"), vec![Int(8)]); // lenient: not octal, plain decimal
+        assert_eq!(toks("'a'"), vec![Int(97)]);
+        assert_eq!(toks("1.5"), vec![Float(1.5)]);
+        assert_eq!(toks("7."), vec![Float(7.0)]);
+        assert_eq!(toks("1.5F"), vec![Float(1.5)]);
+        assert_eq!(toks("2.0D"), vec![Float(2.0)]);
+        assert_eq!(toks("5F"), vec![Float(5.0)]);
+        assert_eq!(toks("5D"), vec![Float(5.0)]);
+        assert_eq!(toks("1e5"), vec![Float(100000.0)]);
+        assert_eq!(toks("1.5e-3"), vec![Float(0.0015)]);
+        assert_eq!(toks("2E+2"), vec![Float(200.0)]);
+    }
+
+    #[test]
+    fn lex_numeric_literal_errors() {
+        assert!(super::tokenize_spanned("0xFFFFFFFFFFFFFFFFF").is_err()); // overflow
+        assert!(super::tokenize_spanned("''").is_err()); // empty char
+        assert!(super::tokenize_spanned("'ab'").is_err()); // multi-char
+        assert!(super::tokenize_spanned("0xZZ").is_ok()); // 0 int + xZZ ident, not an error
+    }
+
+    #[test]
+    fn numeric_literals_in_arithmetic() {
+        assert!(super::parse("SELECT 0xFF + 1 FROM java.lang.String").is_ok());
+        assert!(super::parse("SELECT 2 * 1.5D FROM java.lang.String").is_ok());
+        assert!(super::parse("SELECT -0144 FROM java.lang.String").is_ok());
     }
 }
