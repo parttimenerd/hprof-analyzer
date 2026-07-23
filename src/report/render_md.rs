@@ -2420,8 +2420,8 @@ pub(crate) fn render_fields_by_size(f: &Option<FieldsBySize>, graphs: bool, out:
         headers.push("Elements");
         aligns.push(Align::Right);
     }
-    headers.extend_from_slice(&["Holder Instances", "Retained"]);
-    aligns.extend_from_slice(&[Align::Right, Align::Right]);
+    headers.extend_from_slice(&["Holder Instances", "Sharing", "Retained"]);
+    aligns.extend_from_slice(&[Align::Right, Align::Right, Align::Right]);
     if graphs {
         headers.push("");
         aligns.push(Align::Left);
@@ -2444,6 +2444,12 @@ pub(crate) fn render_fields_by_size(f: &Option<FieldsBySize>, graphs: bool, out:
             row.push(fmt_count(r.elements));
         }
         row.push(fmt_count(r.holder_instances));
+        let sharing = if r.holder_instances > 0 {
+            format!("{:.1}×", r.pointees as f64 / r.holder_instances as f64)
+        } else {
+            "—".into()
+        };
+        row.push(sharing);
         row.push(format_bytes(r.total_retained));
         if graphs {
             row.push(bar(
@@ -2463,7 +2469,8 @@ pub(crate) fn render_fields_by_size(f: &Option<FieldsBySize>, graphs: bool, out:
     if has_elements {
         total_row.push(fmt_count(total_elements));
     }
-    total_row.push(String::new());
+    total_row.push(String::new()); // Holder Instances (already empty)
+    total_row.push(String::new()); // Sharing (no total)
     total_row.push(format_bytes(total_retained));
     if graphs {
         total_row.push(String::new());

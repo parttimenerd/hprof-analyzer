@@ -2878,6 +2878,7 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
               <th className="num">Pointees</th>
               {hasElements && <th className="num">Elements</th>}
               <th className="num">Holder Instances</th>
+              <th className="num">Sharing</th>
               <th className="num">Retained</th>
             </tr>
           </thead>
@@ -2890,10 +2891,11 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
                 <td className="num">{fmtCount(r.pointees)}</td>
                 {hasElements && <td className="num">{r.elements != null ? fmtCount(r.elements) : "—"}</td>}
                 <td className="num">{fmtCount(r.holder_instances)}</td>
+                <td className="num">{r.holder_instances > 0 ? `${(r.pointees / r.holder_instances).toFixed(1)}×` : "—"}</td>
                 <td className="num">{formatBytes(r.total_retained)}</td>
               </tr>
             ))}
-            <ShowMoreRow extra={extra} cols={hasElements ? 7 : 6} showAll={showAll} setShowAll={setShowAll} />
+            <ShowMoreRow extra={extra} cols={hasElements ? 8 : 7} showAll={showAll} setShowAll={setShowAll} />
           </tbody>
           <tfoot>
             <tr>
@@ -2902,6 +2904,7 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
               <td></td>
               <td className="num"><strong>{fmtCount(totalPointees)}</strong></td>
               {hasElements && <td className="num"><strong>{fmtCount(rows.reduce((s,r)=>s+(r.elements??0),0))}</strong></td>}
+              <td className="num"></td>
               <td className="num"></td>
               <td className="num"><strong>{formatBytes(totalRetained)}</strong></td>
             </tr>
