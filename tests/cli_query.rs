@@ -4290,8 +4290,8 @@ fn method_get_rejected_nonzero_exit() {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("requires a live JVM") && stderr.contains("@referenceArray"),
-        "get(0) rejection must be actionable (live-JVM + @referenceArray hint):\n{stderr}"
+        stderr.contains("requires a live JVM") && stderr.contains("elementData"),
+        "get(0) rejection must be actionable (live-JVM + elementData hint):\n{stderr}"
     );
 }
 

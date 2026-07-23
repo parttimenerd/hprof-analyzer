@@ -378,8 +378,8 @@ fn reject_unsupported_methods(q: &Query) -> Result<(), QueryError> {
         return Err(QueryError(format!(
             "method `{name}()` requires a live JVM and is not available in static \
              heap analysis. Supported methods: {supported}. For indexed array-element \
-             access use the `@referenceArray` attribute or the backing field directly \
-             (e.g. `a.elementData`)."
+             access, dereference the backing field directly (e.g. `a.elementData` for \
+             a list, then a field/scalar tail on that array)."
         )));
     }
     Ok(())
@@ -1529,7 +1529,7 @@ mod tests {
             err.0
         );
         assert!(
-            err.0.contains("@referenceArray") || err.0.contains("elementData"),
+            err.0.contains("elementData"),
             "get(0) rejection must include the array-element access hint; got: {}",
             err.0
         );
