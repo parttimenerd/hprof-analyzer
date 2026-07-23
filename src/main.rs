@@ -1607,7 +1607,7 @@ fn run(
         shallow_c,
         class_idx_c,
         alloc_serial_c,
-        query_state,
+        mut query_state,
         refwalk_csr,
         string_values,
         string_values_truncated,
@@ -1617,6 +1617,12 @@ fn run(
         &format!("pass2 n={}", g.n),
         t.elapsed().as_secs_f64(),
     );
+
+    // Take the per-slot source-index sidecar out of the query state now, before it
+    // is consumed by `resume` far below. It is populated only when the scan armed
+    // reachability capture (`opts.reachable_only`); otherwise it is empty and this
+    // is a cheap no-op, keeping the DEFAULT analyze run byte/RSS-identical.
+    let row_src_by_slot = query_state.take_row_src_by_slot();
 
     // Compress the three cold arrays (shallow, class_idx, id_map) that sit idle
     // across the rpo -> inbound -> dominator peak window, freeing their dense
@@ -1843,6 +1849,15 @@ fn run(
     let count = parent_pre_count;
     rpo.vertex = rpo_dfs::rebuild_vertex(&rpo.dfn, count);
     crate::trace::probe("main: after rebuild_vertex (post-inbound, dfn live)");
+    // Snapshot GC-reachability for `--reachable-only` OQL pruning BEFORE dfn is
+    // freed (it is emptied on the next line, then `rpo` is moved into the
+    // dominator stage). Guarded on the flag so the DEFAULT analyze run pays no
+    // clone and stays byte/RSS-identical. `None` = raw-heap (the analyze default).
+    let reach_dfn: Option<Vec<u32>> = if opts.reachable_only {
+        Some(rpo.dfn.clone())
+    } else {
+        None
+    };
     rpo.dfn = Vec::new();
     crate::trace::trim();
 
@@ -1984,6 +1999,41 @@ fn run(
             gc_root_tags: gc_root_tags_ref,
         },
     );
+
+    // `--reachable-only` OQL pruning (opt-in for the analyze command; the default
+    // is raw heap, kept byte-identical by the `None` guard). `resume` returns
+    // results in slot order (1:1 with `flat_queries`), so `flat_results[i]` is
+    // slot `i`. Prune each slot's rows by its scan-captured SOURCE dense index
+    // BEFORE UNION-collapse — the same exact-index approach the `query` subcommand
+    // uses, so a projected `@objectAddress` (a raw heap address) prunes correctly
+    // instead of being mis-read as a dense index. Row-EXPANDING late ops
+    // (dominators / AS RETAINED SET / edges) emit rows that are not the original
+    // matched objects, so the source sidecar does not align — those slots are left
+    // unpruned.
+    let mut flat_results = flat_results;
+    if let Some(dfn) = &reach_dfn {
+        for (slot, r) in flat_results.iter_mut().enumerate() {
+            let row_expanding = flat_queries.get(slot).is_some_and(|(_, p)| {
+                p.late_ops.iter().any(|op| {
+                    matches!(
+                        op,
+                        query::plan::StageOp::RetainedSet { .. }
+                            | query::plan::StageOp::DominatorChildren { .. }
+                            | query::plan::StageOp::DominatorOf
+                            | query::plan::StageOp::EdgeLookup { .. }
+                            | query::plan::StageOp::BoundedPath { .. }
+                    )
+                })
+            });
+            if row_expanding {
+                continue;
+            }
+            if let Some(src) = row_src_by_slot.get(&slot) {
+                query::run::filter_result_by_src(r, src, dfn);
+            }
+        }
+    }
+
     let mut query_results = query::run::collapse_union_results(flat_results, &union_groups);
 
     // Step D: surface the edge-retention note on edge-using result rows. Only

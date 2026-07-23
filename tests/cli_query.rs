@@ -4565,3 +4565,67 @@ fn query_reachable_only_is_default_and_all_is_superset() {
     assert_eq!(n_def, 27, "reachable-only Thread count must match MAT (27)");
     assert_eq!(n_all, 29, "raw-heap Thread count is 29");
 }
+
+/// Run the FULL analyze pipeline (top-level `--query`, NOT the `query`
+/// subcommand) with markdown output and return stdout. `extra` args (e.g.
+/// `--reachable-only`) are inserted before `--query`.
+fn run_analyze_md(hprof: &str, extra: &[&str], oql: &str) -> String {
+    let out = Command::new(BIN)
+        .arg(hprof)
+        .args(extra)
+        .args(["--query", oql])
+        .args(["-f", "md"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "analyze failed ({oql} {extra:?}): {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// Count the data rows in the `## Custom Queries` section whose first cell parses
+/// as a decimal integer — i.e. `SELECT @objectAddress` rows (each a bare heap
+/// address). Isolates the section so the surrounding report tables don't leak in.
+fn count_addr_rows_in_report(md: &str) -> usize {
+    let Some(section) = md.split("## Custom Queries").nth(1) else {
+        return 0;
+    };
+    let section = section.split("\n## ").next().unwrap_or(section);
+    section
+        .lines()
+        .filter(|l| {
+            // Markdown table data rows look like `| <addr> |`. Strip the pipes and
+            // check the single cell is a decimal integer (the address).
+            let t = l.trim();
+            let inner = t.trim_start_matches('|').trim_end_matches('|').trim();
+            !inner.is_empty()
+                && !inner.contains('|')
+                && inner.parse::<u64>().is_ok()
+        })
+        .count()
+}
+
+/// The analyze command defaults to RAW heap (byte-identity preserved); passing
+/// `--reachable-only` prunes OQL result rows to GC-reachable objects (MAT parity,
+/// 27 Threads) versus the raw-heap default (29). Uses the src-sidecar prune, so a
+/// projected `@objectAddress` (a raw heap address) prunes by its EXACT source
+/// dense index rather than being mis-read as one.
+#[test]
+fn analyze_reachable_only_filters_oql_rows() {
+    let Some(hprof) = philosophers() else { return };
+    let def = run_analyze_md(&hprof, &[], "SELECT @objectAddress FROM java.lang.Thread");
+    let ro = run_analyze_md(
+        &hprof,
+        &["--reachable-only"],
+        "SELECT @objectAddress FROM java.lang.Thread",
+    );
+    let n_def = count_addr_rows_in_report(&def);
+    let n_ro = count_addr_rows_in_report(&ro);
+    assert_eq!(n_def, 29, "raw-heap analyze Thread count is 29:\n{def}");
+    assert_eq!(
+        n_ro, 27,
+        "--reachable-only analyze must prune Thread rows to MAT parity (27):\n{ro}"
+    );
+}
