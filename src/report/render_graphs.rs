@@ -174,7 +174,7 @@ fn render_system_overview_graphs(o: &SystemOverview, out: &mut String) {
     if o.heap_fragmentation_ratio > 0.0 {
         summary.row([
             "Heap fragmentation (unreachable / heap total)".into(),
-            format!("{:.1}%", o.heap_fragmentation_ratio * 100.0),
+            fmt_pct(o.heap_fragmentation_ratio * 100.0),
         ]);
     }
     if o.top_class_concentration_bp > 0 {

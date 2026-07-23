@@ -796,7 +796,7 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
     if o.heap_fragmentation_ratio > 0.0 {
         summary.row([
             "Heap fragmentation (unreachable / heap total)".into(),
-            format!("{:.1}%", o.heap_fragmentation_ratio * 100.0),
+            fmt_pct(o.heap_fragmentation_ratio * 100.0),
         ]);
     }
     if o.top_class_concentration_bp > 0 {
@@ -1488,10 +1488,10 @@ pub(crate) fn render_threads(t: &ThreadOverview, graphs: bool, out: &mut String)
                 out.push_str(&format!("- `{}`\n", sf.frame));
                 for loc in &sf.locals {
                     out.push_str(&format!(
-                        "  - `{}` retains {} ({:.1}% of thread retained)\n",
+                        "  - `{}` retains {} ({} of thread retained)\n",
                         loc.display_class,
                         format_bytes(loc.retained),
-                        loc.pct
+                        fmt_pct(loc.pct)
                     ));
                 }
             }

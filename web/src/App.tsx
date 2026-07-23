@@ -1266,7 +1266,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
           {(o.heap_fragmentation_ratio ?? 0) > 0 && (
             <>
               <dt>Heap fragmentation (unreachable / heap total)</dt>
-              <dd>{((o.heap_fragmentation_ratio ?? 0) * 100).toFixed(1)}%</dd>
+              <dd>{fmtPct((o.heap_fragmentation_ratio ?? 0) * 100)}</dd>
             </>
           )}
           {(o.top_class_concentration_bp ?? 0) > 0 && (
@@ -3169,7 +3169,7 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
           </p>
           <p className="subtitle">
             {unreachablePct >= 5
-              ? `Unreachable objects are eligible for collection but have not yet been reclaimed. At ${unreachablePct.toFixed(1)}% of heap total (reachable + unreachable) this is elevated — the JVM may not have had time to GC before the dump was taken, or finalization may be backed up.`
+              ? `Unreachable objects are eligible for collection but have not yet been reclaimed. At ${fmtPct(unreachablePct)} of heap total (reachable + unreachable) this is elevated — the JVM may not have had time to GC before the dump was taken, or finalization may be backed up.`
               : "Unreachable objects are eligible for collection but have not yet been reclaimed. A small unreachable heap (< 5% of heap total) is normal between GC cycles."}
           </p>
           {data?.unreachable_composition && (
