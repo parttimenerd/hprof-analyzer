@@ -73,11 +73,12 @@ pub enum Token {
     //
     // Float: `[digits].[digits]`, `[digits].`, dotless-with-suffix `[digits][fFdD]`,
     // and exponent forms; optional trailing f/F/d/D stripped before parse.
+    // priority=4 beats Ident (default 2) so dotless 5F/5D lex as Float, not Ident
     #[regex(
         r"[0-9]+\.[0-9]*([eE][+-]?[0-9]+)?[fFdD]?|[0-9]+([eE][+-]?[0-9]+)[fFdD]?|[0-9]+[fFdD]",
         |lex| {
             let s = lex.slice();
-            let core = s.trim_end_matches(|c| matches!(c, 'f' | 'F' | 'd' | 'D'));
+            let core = s.trim_end_matches(['f', 'F', 'd', 'D']);
             core.parse::<f64>().ok()
         },
         priority = 4
@@ -90,18 +91,19 @@ pub enum Token {
     })]
     // Hex: 0x… with optional L suffix.
     #[regex(r"0[xX][0-9a-fA-F]+[lL]?", |lex| {
-        let s = lex.slice().trim_end_matches(|c| matches!(c, 'l' | 'L'));
+        let s = lex.slice().trim_end_matches(['l', 'L']);
         i64::from_str_radix(&s[2..], 16).ok()
     }, priority = 3)]
     // Octal: leading 0 followed by 1+ octal digits, optional L. (Lone `0` and
     // `08`/`09` fall through to the decimal arm — lenient MAT divergence.)
+    // leading 0 is a valid octal digit; from_str_radix(_, 8) handles the full slice
     #[regex(r"0[0-7]+[lL]?", |lex| {
-        let s = lex.slice().trim_end_matches(|c| matches!(c, 'l' | 'L'));
+        let s = lex.slice().trim_end_matches(['l', 'L']);
         i64::from_str_radix(s, 8).ok()
     }, priority = 3)]
     // Decimal int/long: digits with optional L. Also catches lone `0`, `08`, `09`.
     #[regex(r"[0-9]+[lL]?", |lex| {
-        let s = lex.slice().trim_end_matches(|c| matches!(c, 'l' | 'L'));
+        let s = lex.slice().trim_end_matches(['l', 'L']);
         s.parse::<i64>().ok()
     })]
     Int(i64),
