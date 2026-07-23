@@ -591,11 +591,38 @@ fn render_dominator_depth_inner(o: &SystemOverview, graphs: bool, out: &mut Stri
         .map(|i| i + 1)
         .unwrap_or(stats.rows.len());
     let shown = meaningful_end.min(DEPTH_CAP);
+
+    // Detect a constant-count tail run (e.g. a single linked-list chain where
+    // every depth has the same object count). If the last visible row starts a
+    // run of identical counts, collapse that run and annotate it as a chain.
+    let display_rows = &stats.rows[..shown];
+    let chain_start = if display_rows.len() >= 3 {
+        let tail_count = display_rows.last().map(|&(_, o, _, _)| o).unwrap_or(0);
+        let run_start = display_rows
+            .iter()
+            .rposition(|&(_, o, _, _)| o != tail_count)
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        // Only collapse runs of 3+ identical-count depths.
+        if display_rows.len().saturating_sub(run_start) >= 3 {
+            Some(run_start)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let visible_end = chain_start.unwrap_or(shown);
+
     let hidden = stats.rows.len() - shown;
     out.push_str("## Dominator-Depth Distribution\n\n");
     out.push_str(DEPTH_DIST_CAPTION);
     out.push_str(&depth_summary_line(&stats));
-    let obj_max = stats.rows.iter().map(|&(_, o, _, _)| o).max().unwrap_or(0);
+    let obj_max = stats.rows[..visible_end.max(1)]
+        .iter()
+        .map(|&(_, o, _, _)| o)
+        .max()
+        .unwrap_or(0);
     let mut headers: Vec<&str> = vec!["Depth", "Objects", "% Objects", "Cumulative %"];
     let mut aligns = vec![Align::Right, Align::Right, Align::Right, Align::Right];
     if graphs {
@@ -603,7 +630,7 @@ fn render_dominator_depth_inner(o: &SystemOverview, graphs: bool, out: &mut Stri
         aligns.push(Align::Left);
     }
     let mut t = Table::new(&headers, &aligns);
-    for &(depth, objects, pct, cum) in stats.rows.iter().take(shown) {
+    for &(depth, objects, pct, cum) in display_rows.iter().take(visible_end) {
         let mut row = vec![
             depth.to_string(),
             fmt_count(objects),
@@ -616,6 +643,23 @@ fn render_dominator_depth_inner(o: &SystemOverview, graphs: bool, out: &mut Stri
         t.row(row);
     }
     t.render(out);
+    // Annotate the collapsed chain run if present.
+    if let Some(start) = chain_start {
+        let chain_rows = &display_rows[start..];
+        let chain_objs = chain_rows.first().map(|&(_, o, _, _)| o).unwrap_or(0);
+        let first_depth = chain_rows.first().map(|&(d, _, _, _)| d).unwrap_or(0);
+        let last_depth = chain_rows.last().map(|&(d, _, _, _)| d).unwrap_or(0);
+        let chain_len = last_depth - first_depth + 1;
+        out.push_str(&format!(
+            "\n_… depths {}–{}: {} hop{} each with {} objects (a single growth-path chain; \
+full depth data in JSON)_\n",
+            first_depth,
+            last_depth,
+            chain_len,
+            if chain_len == 1 { "" } else { "s" },
+            fmt_count(chain_objs),
+        ));
+    }
     if hidden > 0 {
         // Count objects and compute cumulative % for the hidden tail
         let hidden_objects: u64 = stats.rows[shown..].iter().map(|&(_, o, _, _)| o).sum();
