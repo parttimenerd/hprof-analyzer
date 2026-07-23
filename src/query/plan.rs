@@ -286,6 +286,102 @@ fn expr_any_attr(e: &Expr, pred: impl Fn(&Attr) -> bool) -> bool {
     found
 }
 
+/// Visit every `Expr::Method` name reachable from an `Expr` tree (including the
+/// method receiver and its arguments, and any `Attr::ToHex(inner)` sub-expr),
+/// calling `f` with each method name. Used by the plan-time method validator.
+fn expr_for_each_method<'a>(e: &'a Expr, f: &mut impl FnMut(&'a str)) {
+    match e {
+        Expr::Attr(a) => {
+            if let Attr::ToHex(inner) = a {
+                expr_for_each_method(inner, f);
+            }
+        }
+        Expr::Lit(_) => {}
+        Expr::Binary { lhs, rhs, .. } => {
+            expr_for_each_method(lhs, f);
+            expr_for_each_method(rhs, f);
+        }
+        Expr::Unary { arg, .. } => expr_for_each_method(arg, f),
+        Expr::Method { receiver, name, args } => {
+            f(name.as_str());
+            expr_for_each_method(receiver, f);
+            for a in args {
+                expr_for_each_method(a, f);
+            }
+        }
+    }
+}
+
+/// Visit every `Expr::Method` name reachable from a `SelectItem` (recursing into
+/// aggregate args, `toString`/`path` carry no Expr method nodes but `Attr` can
+/// via `toHex`). Mirrors `expr_for_each_attr`'s coverage.
+fn select_item_for_each_method<'a>(it: &'a SelectItem, f: &mut impl FnMut(&'a str)) {
+    match it {
+        SelectItem::Expr(e) => expr_for_each_method(e, f),
+        SelectItem::Attr(a) => {
+            if let Attr::ToHex(inner) = a {
+                expr_for_each_method(inner, f);
+            }
+        }
+        SelectItem::Aggregate { arg, .. } => select_item_for_each_method(arg, f),
+        SelectItem::Star | SelectItem::Path { .. } | SelectItem::ToString(_) => {}
+    }
+}
+
+/// Visit every `Expr::Method` name reachable from a `Predicate` tree (both sides
+/// of every Compare). Mirrors the predicate walkers used for ref-path analysis.
+fn pred_for_each_method<'a>(p: &'a Predicate, f: &mut impl FnMut(&'a str)) {
+    match p {
+        Predicate::And(a, b) | Predicate::Or(a, b) => {
+            pred_for_each_method(a, f);
+            pred_for_each_method(b, f);
+        }
+        Predicate::Not(inner) => pred_for_each_method(inner, f),
+        Predicate::Compare { lhs, rhs, .. } => {
+            expr_for_each_method(lhs, f);
+            expr_for_each_method(rhs, f);
+        }
+        // InSubquery's inner is validated when it is planned as its own query;
+        // its `lhs` is an `Attr` (no method node).
+        Predicate::InstanceOf(_) | Predicate::InSubquery { .. } => {}
+    }
+}
+
+/// Reject any `receiver.method(args)` whose method name is not in
+/// [`crate::query::parse::METHODS`]. A scan-time `QueryValue` cannot carry an
+/// error, so unsupported/unknown method names must be caught here at plan time
+/// with an actionable message. `get` is deliberately absent from `METHODS`, so
+/// indexed object-array element access is rejected with an array-access hint.
+fn reject_unsupported_methods(q: &Query) -> Result<(), QueryError> {
+    let mut bad: Option<String> = None;
+    let mut check = |name: &str| {
+        if bad.is_none() && !crate::query::parse::METHODS.contains(&name) {
+            bad = Some(name.to_string());
+        }
+    };
+    for item in &q.select {
+        select_item_for_each_method(item, &mut check);
+    }
+    if let Some(pred) = &q.where_ {
+        pred_for_each_method(pred, &mut check);
+    }
+    if let Some(ob) = &q.order_by {
+        if let Attr::ToHex(inner) = &ob.key {
+            expr_for_each_method(inner, &mut check);
+        }
+    }
+    if let Some(name) = bad {
+        let supported = crate::query::parse::METHODS.join(", ");
+        return Err(QueryError(format!(
+            "method `{name}()` requires a live JVM and is not available in static \
+             heap analysis. Supported methods: {supported}. For indexed array-element \
+             access use the `@referenceArray` attribute or the backing field directly \
+             (e.g. `a.elementData`)."
+        )));
+    }
+    Ok(())
+}
+
 fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
     // Subqueries (FROM (...) and WHERE ... IN (...)) must be non-correlated:
     // the inner query may not reference an alias bound by the outer query.
@@ -295,6 +391,11 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
     if let Some(pred) = &q.where_ {
         reject_in_subqueries_if_correlated(pred)?;
     }
+
+    // Reject unsupported / non-emulable `receiver.method(args)` calls up front:
+    // a scan-time value cannot return an error, so unknown method names are
+    // caught here with an actionable message (before any heavy planning).
+    reject_unsupported_methods(q)?;
 
     // Validate a quoted-regex FROM target once, at plan time, so a bad regex is
     // an ACTIONABLE error here rather than a silent no-match (or per-row panic)
@@ -1385,6 +1486,57 @@ mod tests {
         assert_eq!(plan.kind, StageKind::HistogramOnly);
         assert!(!plan.needs.instance_scalar);
         assert!(!plan.needs.instance_string);
+    }
+
+    // D5: unsupported instance methods (no live JVM) are rejected at plan time.
+    #[test]
+    #[allow(non_snake_case)]
+    fn method_rejection_subList_hashCode() {
+        for q in [
+            "SELECT s.subList(0,1) FROM java.util.ArrayList s",
+            "SELECT s.hashCode() FROM java.lang.Object s",
+        ] {
+            let err = pq(&parse(q).unwrap()).unwrap_err();
+            assert!(
+                err.0.contains("requires a live JVM"),
+                "query `{q}` must be rejected with the live-JVM message; got: {}",
+                err.0
+            );
+        }
+    }
+
+    // D5: `get(n)` is intentionally NOT supported (indexed object-array element
+    // access is not emulable statically); the message must carry the array hint.
+    #[test]
+    fn method_rejection_get() {
+        let err = pq(&parse("SELECT a.get(0) FROM java.util.ArrayList a").unwrap()).unwrap_err();
+        assert!(
+            err.0.contains("requires a live JVM"),
+            "get(0) must be rejected; got: {}",
+            err.0
+        );
+        assert!(
+            err.0.contains("@referenceArray") || err.0.contains("elementData"),
+            "get(0) rejection must include the array-element access hint; got: {}",
+            err.0
+        );
+        assert!(
+            !err.0.contains(", get,") && !err.0.contains(" get "),
+            "`get` must NOT appear in the supported-methods list; got: {}",
+            err.0
+        );
+    }
+
+    // D5: guard against over-rejection — supported methods still plan cleanly,
+    // including a method used in a WHERE predicate.
+    #[test]
+    fn method_supported_names_ok() {
+        pq(&parse("SELECT i.intValue() FROM java.lang.Integer i").unwrap())
+            .expect("intValue() is supported and must plan");
+        pq(&parse("SELECT s.getName() FROM java.lang.String s").unwrap())
+            .expect("getName() is supported and must plan");
+        pq(&parse("SELECT * FROM java.lang.Integer i WHERE i.intValue() = 1").unwrap())
+            .expect("supported method in WHERE must plan");
     }
 
     // MAT gap #5: a bad quoted FROM regex must be an actionable plan-time error.

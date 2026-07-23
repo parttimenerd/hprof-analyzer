@@ -838,10 +838,10 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     }
     fn emulate_jvm_method(
         &self,
-        _receiver: &Expr,
+        receiver: &Expr,
         name: &str,
-        _args: &[Expr],
-        _src_idx: usize,
+        args: &[Expr],
+        src_idx: usize,
         class_id: u64,
         blob: &[u8],
     ) -> QueryValue {
@@ -867,6 +867,30 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                     QueryValue::Null
                 } else {
                     self.decode_field(class_id, "size", blob)
+                }
+            }
+            ("equals", _) => {
+                let recv = self.eval_expr(receiver, src_idx, class_id, blob);
+                let arg = args
+                    .first()
+                    .map(|a| self.eval_expr(a, src_idx, class_id, blob))
+                    .unwrap_or(QueryValue::Null);
+                QueryValue::Bool(qv_value_eq(&recv, &arg))
+            }
+            ("contains", "java.lang.String") => {
+                let recv = self.eval_expr(receiver, src_idx, class_id, blob);
+                let arg = args.first().map(|a| self.eval_expr(a, src_idx, class_id, blob));
+                match (recv, arg) {
+                    (QueryValue::Str(hay), Some(QueryValue::Str(needle))) => {
+                        QueryValue::Bool(hay.contains(&needle))
+                    }
+                    // At scan time a String receiver's decoded text is NOT available:
+                    // `Expr::Method` bypasses the `SelectItem::Expr` path that arms
+                    // `needs.string_values`, so the value side table is unpopulated and
+                    // the receiver projects the `<class> @ 0x<addr>` fallback (or Null),
+                    // never `QueryValue::Str(<content>)`. `contains` therefore yields
+                    // Null here rather than a wrong Bool. (D5 limitation, option (a).)
+                    _ => QueryValue::Null,
                 }
             }
             _ => QueryValue::Null, // ref-hop (D4) or rejection (D5)
@@ -1723,6 +1747,30 @@ pub(crate) fn query_columns(q: &Query) -> Vec<QueryColumn> {
                 .unwrap_or_else(|| column_name(it)),
         })
         .collect()
+}
+
+/// Value equality for `x.equals(y)`. Object refs compare by identity (dense
+/// index); scalars compare by value; mixed types are unequal. NOTE: this is
+/// NOT Java `Object.equals()` — user-defined overrides are unreachable in a
+/// static heap reader (no live JVM); this is reference-identity + primitive
+/// value equality only.
+fn qv_value_eq(a: &QueryValue, b: &QueryValue) -> bool {
+    use QueryValue::*;
+    match (a, b) {
+        (Null, Null) => true,
+        (Bool(x), Bool(y)) => x == y,
+        (Int(x), Int(y)) => x == y,
+        (Float(x), Float(y)) => x == y,
+        (Str(x), Str(y)) => x == y,
+        // Numeric cross-type: compare Int and Float by value so `i.equals(1)` and
+        // `f.equals(1.0)` behave intuitively across the boxing boundary.
+        (Int(x), Float(y)) | (Float(y), Int(x)) => (*x as f64) == *y,
+        // Object refs compare by heap identity (dense index); the class label is
+        // display metadata and does not affect identity.
+        (ObjRef { index: i, .. }, ObjRef { index: j, .. }) => i == j,
+        // Mixed / incomparable types are unequal (never panics).
+        _ => false,
+    }
 }
 
 fn is_boxed_integral(c: &str) -> bool {

@@ -4225,6 +4225,76 @@ fn method_alias_getname_equals_class() {
     );
 }
 
+/// D5: `equals` dispatches at scan time and yields a Bool column. `i.equals(i)`
+/// is reference-identity, so every row is `true`; `i.equals(1)` compares an
+/// object ref against an int literal (mixed types) and is `false` for all rows.
+/// Either way the column is a non-empty stream of bool literals.
+#[test]
+fn method_equals_returns_bool() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(&hprof, "SELECT i.equals(1) FROM java.lang.Integer i LIMIT 3");
+    let rows = extract_data_rows(&out);
+    assert!(!rows.is_empty(), "equals(1) produced no rows:\n{out}");
+    assert!(
+        rows.iter().all(|r| *r == "true" || *r == "false"),
+        "equals(1) column must be all bool literals; got {rows:?}\n{out}"
+    );
+    // Reference-identity: a value equals itself, so every row is `true`.
+    let selfeq = run_query_stdout(&hprof, "SELECT i.equals(i) FROM java.lang.Integer i LIMIT 3");
+    let self_rows = extract_data_rows(&selfeq);
+    assert!(!self_rows.is_empty(), "equals(i) produced no rows:\n{selfeq}");
+    assert!(
+        self_rows.iter().all(|r| *r == "true"),
+        "i.equals(i) must be true for every row (identity); got {self_rows:?}\n{selfeq}"
+    );
+}
+
+/// D5: `String.contains(...)` dispatches at scan time but is Null-limited: a
+/// String receiver's decoded text is not materialized during the pass2 scan
+/// (`Expr::Method` bypasses the `SelectItem::Expr` path that arms the string
+/// value table), so the receiver never projects `Str(<content>)` and `contains`
+/// yields `null` rather than a wrong Bool. This test pins that documented
+/// behavior — the query must still parse, plan, and run cleanly, and emit a
+/// `contains(...)` column (all `null`) rather than erroring.
+#[test]
+fn method_contains_string() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(&hprof, "SELECT s.contains(\"a\") FROM java.lang.String s LIMIT 3");
+    assert!(
+        out.contains("contains(\"a\")"),
+        "missing contains() column header:\n{out}"
+    );
+    let rows = extract_data_rows(&out);
+    assert!(!rows.is_empty(), "contains produced no rows:\n{out}");
+    // Documented D5 limitation (option a): Null-limited, never a spurious bool.
+    assert!(
+        rows.iter().all(|r| *r == "null"),
+        "String.contains is Null-limited at scan time; got {rows:?}\n{out}"
+    );
+}
+
+/// D5: an unsupported / non-emulable method (`get`) is rejected at plan time
+/// with an actionable message and a non-zero exit code.
+#[test]
+fn method_get_rejected_nonzero_exit() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query", "SELECT a.get(0) FROM java.util.ArrayList a"])
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "get(0) must exit non-zero (plan rejection)"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("requires a live JVM") && stderr.contains("@referenceArray"),
+        "get(0) rejection must be actionable (live-JVM + @referenceArray hint):\n{stderr}"
+    );
+}
+
 /// `s.getObjectAddress()` must produce the same values as `@objectAddress`.
 #[test]
 fn method_alias_getobjectaddress_equals_attr() {

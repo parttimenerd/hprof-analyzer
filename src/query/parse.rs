@@ -985,6 +985,18 @@ pub const AGG_FUNCS: &[&str] = &["COUNT", "SUM", "MIN", "MAX", "AVG", "PERCENTIL
 /// parser arms so completions can never drift from the grammar.
 pub const FUNCS: &[&str] = &["classof", "toString", "toHex", "path", "dominators", "dominatorof"];
 
+/// Supported method-call names for `receiver.name(args)` dispatch. Single source
+/// of truth shared by the plan-time validator and (Wave H) the REPL completer, so
+/// completions never drift from the dispatcher. NOTE: `get` is intentionally
+/// ABSENT — indexed object-array element access is not emulable statically.
+pub const METHODS: &[&str] = &[
+    "length", "size", "getKey", "getValue", "equals", "contains",
+    "intValue", "longValue", "shortValue", "byteValue",
+    "floatValue", "doubleValue", "booleanValue", "charValue",
+    "toString", "getName", "getObjectAddress", "getObjectId",
+    "getUsedHeapSize", "getRetainedHeapSize", "getClazz",
+];
+
 /// `@`-prefixed built-in attribute names (matching the `attr` parser's arms),
 /// including the leading `@` so they can be offered as completions directly.
 pub const ATTRIBUTES: &[&str] = &[
