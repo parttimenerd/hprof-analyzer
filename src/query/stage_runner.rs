@@ -1059,6 +1059,8 @@ fn project_late_row(q: &Query, idx: u32, ret: u64, ctx: &LateCtx) -> Vec<QueryVa
             SelectItem::Star => QueryValue::ObjRef {
                 index: idx as u64,
                 class: "?".to_string(),
+                // Late window: the dense-address table is compressed away, so
+                // resolving an address here would yield a misleading @0.
                 addr: None,
             },
             _ => QueryValue::Null,

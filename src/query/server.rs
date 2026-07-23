@@ -507,7 +507,13 @@ mod tests {
         let (s1, b1) = state.route("POST", "/", oql);
         let (s2, b2) = state.route_guarded("POST", "/", oql);
         assert_eq!(s1, s2, "guarded status matches");
-        assert_eq!(b1, b2, "guarded body matches");
+        // Bodies must match modulo elapsed_ms, which is legitimately
+        // non-deterministic wall-clock timing (not a guard divergence).
+        let mut v1: serde_json::Value = serde_json::from_str(&b1).unwrap();
+        let mut v2: serde_json::Value = serde_json::from_str(&b2).unwrap();
+        v1["result"]["elapsed_ms"] = serde_json::Value::Null;
+        v2["result"]["elapsed_ms"] = serde_json::Value::Null;
+        assert_eq!(v1, v2, "guarded body matches (modulo elapsed_ms)");
     }
 
     #[test]
