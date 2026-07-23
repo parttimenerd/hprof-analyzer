@@ -344,7 +344,7 @@ function KpiStrip({ report }: { report: Report }) {
   if (top && pct >= 50) {
     verdict = (
       <>
-        <strong>Likely problem:</strong> <code>{top.pretty_class}</code> retains {pct.toFixed(1)}% of the reachable heap
+        <strong>Likely problem:</strong> <code>{top.pretty_class}</code> retains {fmtPct(pct)} of the reachable heap
         — investigate this first.
       </>
     );
@@ -765,7 +765,7 @@ function SizeDistributionSection({ report }: { report: Report }) {
             <tr key={i}>
               <td className="num">{formatBytes(b.upper_bytes)}</td>
               <td className="num">{fmtCount(b.count)}</td>
-              <td className="num">{d.count > 0 ? (b.count / d.count * 100).toFixed(1) + "%" : "—"}</td>
+              <td className="num">{d.count > 0 ? fmtPct(b.count / d.count * 100) : "—"}</td>
             </tr>
           ))}
         </tbody>
@@ -1106,7 +1106,7 @@ function BoxedNumbersSection({ report }: { report: Report }) {
               </td>
               <td className="num">{fmtCount(row.instances)}</td>
               <td className="num">{formatBytes(row.total_shallow)}</td>
-              <td className="num">{total > 0 ? (row.pct_of_heap_bp / 100).toFixed(2) + "%" : "—"}</td>
+              <td className="num">{total > 0 ? fmtPct(row.pct_of_heap_bp / 100) : "—"}</td>
               <td className="num">{formatBytes(row.avg_shallow)}</td>
             </tr>
           ))}
@@ -1182,7 +1182,7 @@ function HeaderOverheadSection({ report }: { report: Report }) {
               <td className="num">{fmtCount(row.instances)}</td>
               <td className="num">{row.header_bytes} B</td>
               <td className="num">{formatBytes(row.total_header_bytes)}</td>
-              <td className="num">{(row.header_pct_of_shallow_bp / 100).toFixed(1)}%</td>
+              <td className="num">{fmtPct(row.header_pct_of_shallow_bp / 100)}</td>
               <td className="num">{formatBytes(row.avg_shallow)}</td>
             </tr>
           ))}
@@ -1272,7 +1272,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
           {(o.top_class_concentration_bp ?? 0) > 0 && (
             <>
               <dt>Top-class retained concentration</dt>
-              <dd>{((o.top_class_concentration_bp ?? 0) / 100).toFixed(1)}%</dd>
+              <dd>{fmtPct((o.top_class_concentration_bp ?? 0) / 100)}</dd>
             </>
           )}
         </dl>
@@ -1363,7 +1363,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
                           {r.root_type}
                         </td>
                         <td className="num">{fmtCount(r.count)}</td>
-                        <td className="num">{pct.toFixed(1)}%</td>
+                        <td className="num">{fmtPct(pct)}</td>
                       </tr>
                     );
                   })}
@@ -1553,7 +1553,7 @@ function DominatedByClass({ rows, suspectRetained }: { rows: HistRow[]; suspectR
               <td className="num">{fmtCount(r.instances)}</td>
               <td className="num">{formatBytes(r.shallow)}</td>
               <td className="num">{formatBytes(r.retained)}</td>
-              <td className="num">{suspectRetained > 0 ? pctOf(r.retained, suspectRetained).toFixed(1) + "%" : "—"}</td>
+              <td className="num">{suspectRetained > 0 ? fmtPct(pctOf(r.retained, suspectRetained)) : "—"}</td>
             </tr>
           ))}
           <ShowMoreRow extra={extra} cols={5} showAll={showAll} setShowAll={setShowAll} />
@@ -1649,7 +1649,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
       <p style={{ margin: "0.25rem 0" }}>
         Retains <strong title={fmtExactBytes(s.retained)}>{formatBytes(s.retained)}</strong>{" "}
         <span className="mat-exact">
-          {fmtExactBytes(s.retained)} ({share.toFixed(2)}%)
+          {fmtExactBytes(s.retained)} ({fmtPct(share)})
         </span>
         {s.shallow > 0 && <> · shallow {formatBytes(s.shallow)}</>}.
       </p>
@@ -2021,7 +2021,7 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
                     {sf.locals.map((loc, j) => (
                       <li key={j}>
                         <code>{loc.display_class}</code>{" "}
-                        <span className="path-ret">retains {formatBytes(loc.retained)} ({loc.pct.toFixed(1)}%)</span>
+                        <span className="path-ret">retains {formatBytes(loc.retained)} ({fmtPct(loc.pct)})</span>
                       </li>
                     ))}
                   </ul>
@@ -2192,7 +2192,7 @@ function TopComponentsSection({ data }: { data: TopComponents }) {
                   <code title={c.loader_label ?? undefined}>{fmtLoader(c.loader_label ?? "")}</code>
                 </td>
                 <td className="num">{formatBytes(c.retained)}</td>
-                <td className="num">{c.pct.toFixed(1)}%</td>
+                <td className="num">{fmtPct(c.pct)}</td>
                 <td>
                   {c.top_classes.map((cc, j) => (
                     <span key={j}>
@@ -2244,7 +2244,7 @@ function ArraysBySizeSection({ data, totalShallow }: { data?: ArraysBySize; tota
                   <td className="num">&le; {fmtCount(b.upper_len)}</td>
                   <td className="num">{fmtCount(b.objects)}</td>
                   <td className="num">{formatBytes(b.shallow)}</td>
-                  <td className="num">{totalShallow > 0 ? (b.shallow / totalShallow * 100).toFixed(1) + "%" : "—"}</td>
+                  <td className="num">{totalShallow > 0 ? fmtPct(b.shallow / totalShallow * 100) : "—"}</td>
                 </tr>
               ))}
             </tbody>
@@ -2253,7 +2253,7 @@ function ArraysBySizeSection({ data, totalShallow }: { data?: ArraysBySize; tota
                 <td className="num"><strong>Total</strong></td>
                 <td className="num"><strong>{fmtCount(totalObjects)}</strong></td>
                 <td className="num"><strong>{formatBytes(totalBytes)}</strong></td>
-                <td className="num"><strong>{totalShallow > 0 ? (totalBytes / totalShallow * 100).toFixed(1) + "%" : "—"}</strong></td>
+                <td className="num"><strong>{totalShallow > 0 ? fmtPct(totalBytes / totalShallow * 100) : "—"}</strong></td>
               </tr>
             </tfoot>
           </table>
@@ -3293,15 +3293,15 @@ function RetentionConcentrationSection({ report }: { report: Report }) {
         <tbody>
           <tr>
             <td>Top 1 object</td>
-            <td className="num">{(rc.top1_bp / 100).toFixed(1)}%</td>
+            <td className="num">{fmtPct(rc.top1_bp / 100)}</td>
           </tr>
           <tr>
             <td>Top 10 objects</td>
-            <td className="num">{(rc.top10_bp / 100).toFixed(1)}%</td>
+            <td className="num">{fmtPct(rc.top10_bp / 100)}</td>
           </tr>
           <tr>
             <td>Top 100 objects</td>
-            <td className="num">{(rc.top100_bp / 100).toFixed(1)}%</td>
+            <td className="num">{fmtPct(rc.top100_bp / 100)}</td>
           </tr>
           <tr>
             <td>Objects each &ge;1%</td>
@@ -3360,8 +3360,8 @@ function DominatorDepthSection({ report }: { report: Report }) {
               <tr key={i}>
                 <td className="num">{r.depth}</td>
                 <td className="num">{fmtCount(r.objects)}</td>
-                <td className="num">{r.pct.toFixed(2)}%</td>
-                <td className="num">{r.cum.toFixed(2)}%</td>
+                <td className="num">{fmtPct(r.pct)}</td>
+                <td className="num">{fmtPct(r.cum)}</td>
               </tr>
             )} />
         </table>
