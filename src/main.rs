@@ -833,6 +833,12 @@ fn run(
 
     let t = Instant::now();
     progress::phase("building object graph (pass 2)");
+    // Capture MAT class metadata from p1 before it is consumed by Pass2::build.
+    let mat_class_meta: Option<mat::MatClassMeta> = if mat.is_some() {
+        Some(mat::MatClassMeta::from_pass1(&p1))
+    } else {
+        None
+    };
     let (mut g, mut inbound, shallow_c, class_idx_c, alloc_serial_c) =
         pass2::Pass2::build(input, p1, compress, &opts)?;
     log(
@@ -1330,6 +1336,53 @@ fn run(
             o2ret_vals.push(g.retained[old_id as usize] as i64);
         }
         m.emit_long_index("o2ret", &o2ret_vals)?;
+    }
+
+    // MAT: emit i2sv2 (per-class retained-size cache) and .threads.
+    // Both depend on g.retained (just computed above) and mm (mat id map).
+    if let Some(ref m) = mat {
+        let mm = mat_map.as_ref().expect("mat_map built with mat");
+        let inv = mat_inv.as_ref().expect("mat_inv built when mat present");
+
+        // i2sv2: sum retained sizes by class (in mat-id order of the class object).
+        // inv[row] = old_class_obj_dense_id; mm.translate → class mat-id.
+        // Accumulate per-row retained sums, then emit (class_mat_id, sum) pairs.
+        let num_rows = g.class_names.len();
+        let mut per_class_retained: Vec<i64> = vec![0i64; num_rows];
+        for i in 0..g.n {
+            if g.idom[i] != u32::MAX {
+                let row = g.class_idx[i] as usize;
+                if row < num_rows {
+                    per_class_retained[row] += g.retained[i] as i64;
+                }
+            }
+        }
+        let class_iter = (0..num_rows).filter_map(|row| {
+            let old_cobj = inv[row];
+            if old_cobj < 0 { return None; }
+            let mat_cid = mm.translate(old_cobj);
+            if mat_cid <= 0 { return None; }
+            Some((mat_cid, per_class_retained[row]))
+        });
+        m.emit_i2sv2(class_iter)?;
+
+        // .threads: thread stacks (addresses from mm).
+        m.emit_threads(&g.thread_stacks, mm, &g.thread_local_frame_samples)?;
+
+        // .index: master Java serialization stream.
+        if let Some(ref meta) = mat_class_meta {
+            m.emit_dot_index(
+                meta,
+                &g.class_names,
+                &g.class_loader_id,
+                &g.class_obj_class_idx,
+                inv,
+                mm,
+                g.n,
+                &g.shallow,
+                &g.class_idx,
+            )?;
+        }
     }
 
     // Restore + aggregate + free the alloc stack serials in a bounded window

@@ -18,6 +18,13 @@ const KINDS: &[&str] = &[
     "idx", "a2s", "o2c", "domIn", "o2ret", "outbound", "inbound", "domOut",
 ];
 
+/// Phase 2 outputs: Java-serialization stream + plain-text threads + i2sv2 cache.
+const PHASE2_FILES: &[(&str, &str)] = &[
+    ("index",    "dump_.index"),
+    ("i2sv2",    "dump_.i2sv2.index"),
+    ("threads",  "dump_.threads"),
+];
+
 #[test]
 fn mat_indices_match_real_fixtures() {
     if !Path::new(DUMP).exists() {
@@ -136,5 +143,42 @@ fn mat_indices_match_real_fixtures() {
             mismatched.len(),
             KINDS.len()
         );
+    }
+}
+
+/// Verify that Phase 2 outputs (`.index`, `.i2sv2.index`, `.threads`) are emitted
+/// and have non-zero size. Does NOT assert byte-identity since the Java serialization
+/// stream contains approximate/best-effort data (loader ids, roots).
+#[test]
+fn mat_phase2_outputs_emitted() {
+    if !Path::new(DUMP).exists() {
+        eprintln!("skip mat_phase2_outputs_emitted: fixture dump absent at {DUMP}");
+        return;
+    }
+
+    let out_dir = std::env::temp_dir().join("hprof_mat_phase2_out");
+    let _ = std::fs::remove_dir_all(&out_dir);
+    std::fs::create_dir_all(&out_dir).expect("create out dir");
+
+    let report_out = out_dir.join("report.md");
+    let bin = env!("CARGO_BIN_EXE_hprof-analyzer");
+    let status = Command::new(bin)
+        .arg(DUMP)
+        .arg(&report_out)
+        .arg("--mat")
+        .arg(&out_dir)
+        .status()
+        .expect("spawn analyzer");
+    assert!(status.success(), "analyzer exited with failure: {status:?}");
+
+    for (label, filename) in PHASE2_FILES {
+        let path = out_dir.join(filename);
+        let bytes = std::fs::read(&path)
+            .unwrap_or_else(|e| panic!("Phase 2 file {filename} not emitted: {e}"));
+        assert!(
+            !bytes.is_empty(),
+            "Phase 2 file {filename} ({label}) was emitted but is empty"
+        );
+        eprintln!("  {label}: {} bytes OK", bytes.len());
     }
 }

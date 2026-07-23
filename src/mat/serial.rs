@@ -531,6 +531,28 @@ impl Ser {
         }
         self.u8(TC_ENDBLOCKDATA);
     }
+
+    /// Expose handle allocation for callers that write TC_OBJECT manually (e.g. BitField).
+    pub fn assign_handle_pub(&mut self) -> u32 {
+        self.assign_handle()
+    }
+
+    /// Write a TC_ARRAY of int (int[]). `words` is big-endian i32 elements.
+    pub fn write_int_array(&mut self, words: &[i32]) {
+        self.u8(TC_ARRAY);
+        let cd = ClassDesc {
+            name: "[I".into(),
+            uid: uid::INT_ARRAY,
+            flags: SC_SERIALIZABLE,
+            fields: vec![],
+        };
+        self.write_class_desc_chain(&[cd]);
+        let _handle = self.assign_handle();
+        self.i32(words.len() as i32);
+        for &w in words {
+            self.i32(w);
+        }
+    }
 }
 
 // ---- HashMapIntObject slot-order replication (mirrors MAT's collect.HashMapIntObject) ----
@@ -583,8 +605,9 @@ impl MatIntMap {
         m
     }
     fn init(&mut self, initial_capacity: i32) {
-        self.capacity = prime::next_prime(initial_capacity);
-        self.step = std::cmp::max(1, prime::prev_prime(initial_capacity / 3));
+        self.capacity = prime::next_prime(initial_capacity.max(2));
+        let step_floor = (initial_capacity / 3).max(2);
+        self.step = std::cmp::max(1, prime::prev_prime(step_floor));
         self.limit = (self.capacity as f64 * 0.75) as i32;
         self.size = 0;
         self.used = vec![false; self.capacity as usize];
