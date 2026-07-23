@@ -19,6 +19,10 @@ use crate::report::model::{Report, TriageSeverity, TriageSignal};
 /// If the single largest suspect retains at least this share of the reachable
 /// heap, the heap is called "highly concentrated".
 const CONCENTRATION_PCT: f64 = 50.0;
+/// Below this share the headline retainer is reported as Info with "diffuse"
+/// wording rather than Critical — the heap is spread too widely to name a
+/// single culprit worth acting on.
+const HEADLINE_LOW_WATER_PCT: f64 = 5.0;
 /// DirectByteBuffer capacity floor (bytes) before the off-heap rule fires.
 const DBB_FLOOR_BYTES: u64 = 64 * 1024 * 1024;
 /// Unreachable-shallow share of total heap at which the GC-waste rule fires.
@@ -319,17 +323,35 @@ impl Rule for HeadlineRetainer {
             } else {
                 "a class group"
             };
+            let pct = pct_of(s.retained, total);
+            let (severity, msg) = if pct >= HEADLINE_LOW_WATER_PCT {
+                (
+                    TriageSeverity::Critical,
+                    format!(
+                        "`{}` ({}) retains {} ({} of reachable heap).",
+                        s.pretty_class,
+                        kind,
+                        format_bytes(s.retained),
+                        fmt_pct(pct),
+                    ),
+                )
+            } else {
+                (
+                    TriageSeverity::Info,
+                    format!(
+                        "`{}` ({}) is the largest retainer at {} ({} of reachable heap) — heap is diffuse; no single object dominates.",
+                        s.pretty_class,
+                        kind,
+                        format_bytes(s.retained),
+                        fmt_pct(pct),
+                    ),
+                )
+            };
             Some(signal(
                 "headline-retainer",
-                TriageSeverity::Critical,
+                severity,
                 "Headline retainer",
-                format!(
-                    "`{}` ({}) retains {} ({} of reachable heap).",
-                    s.pretty_class,
-                    kind,
-                    format_bytes(s.retained),
-                    fmt_pct(pct_of(s.retained, total)),
-                ),
+                msg,
                 Some(SectionId::LeakSuspects),
             ))
         } else if let Some(o) = r.top.biggest_objects.first() {
