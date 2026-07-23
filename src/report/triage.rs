@@ -452,24 +452,39 @@ impl Rule for Shape {
         let total: u64 = hist.iter().map(|b| b.objects).sum();
         let max_depth = hist.iter().map(|b| b.depth).max().unwrap_or(0);
         let mut cum = 0u64;
+        let mut p50 = max_depth;
         let mut p90 = max_depth;
+        let mut p50_found = false;
         for b in hist {
             cum += b.objects;
+            if !p50_found && cum * 2 >= total {
+                p50 = b.depth;
+                p50_found = true;
+            }
             if cum * 10 >= total * 9 {
                 p90 = b.depth;
                 break;
             }
         }
-        let shape = if p90 <= 3 {
+        // When p90 >> p50, the tail is dominated by a single degenerate chain
+        // (e.g. a linked list at depth 11273 while the median is depth 10).
+        // State both so the reader can see the disparity rather than concluding
+        // the whole heap is deep.
+        let shape = if p50 <= 3 {
             "shallow (most objects are held within a few hops of a GC root)"
         } else {
             "deep (retention flows through long dominator chains — often nested collections or linked structures)"
+        };
+        let depth_clause = if p90 > p50 * 10 && p90 > 20 {
+            format!("median depth {p50}, p90 depth {p90} (outlier chain), max depth {max_depth}")
+        } else {
+            format!("90% of objects within depth {p90}, max depth {max_depth}")
         };
         Some(signal(
             "shape",
             TriageSeverity::Info,
             "Shape",
-            format!("{shape} — 90% of objects within depth {p90}, max depth {max_depth}."),
+            format!("{shape} — {depth_clause}."),
             Some(SectionId::DominatorDepth),
         ))
     }
