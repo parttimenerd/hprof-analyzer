@@ -2836,10 +2836,16 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
   const rows = data.rows ?? [];
   const totalRetained = rows.reduce((s, r) => s + r.total_retained, 0);
   const totalPointees = rows.reduce((s, r) => s + r.pointees, 0);
+  const hasElements = rows.some((r) => (r.elements ?? 0) > 0);
   const { visible, extra, showAll, setShowAll } = useCapped(rows);
   return (
     <section id="fields-by-retained-size-classfield">
       <h2>Fields by Retained Size (Class#field)</h2>
+      {data.truncated && (
+        <p className="subtitle">
+          Field grouping was truncated (group or pointee cap hit); ranking is a bounded sample.
+        </p>
+      )}
       <p className="subtitle">
         Which holder <code>Class#field</code> retains the most memory, summed over every object the
         field points at. Runtime pointee type is the dominant concrete class reached through the
@@ -2855,7 +2861,7 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
               <th>Runtime Pointee Type</th>
               <th>Category</th>
               <th className="num">Pointees</th>
-              <th className="num">Elements</th>
+              {hasElements && <th className="num">Elements</th>}
               <th className="num">Holder Instances</th>
               <th className="num">Retained</th>
             </tr>
@@ -2867,12 +2873,12 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
                 <td><code>{r.pointee_type}</code></td>
                 <td>{r.category ?? "—"}</td>
                 <td className="num">{fmtCount(r.pointees)}</td>
-                <td className="num">{r.elements != null ? fmtCount(r.elements) : "—"}</td>
+                {hasElements && <td className="num">{r.elements != null ? fmtCount(r.elements) : "—"}</td>}
                 <td className="num">{fmtCount(r.holder_instances)}</td>
                 <td className="num">{formatBytes(r.total_retained)}</td>
               </tr>
             ))}
-            <ShowMoreRow extra={extra} cols={7} showAll={showAll} setShowAll={setShowAll} />
+            <ShowMoreRow extra={extra} cols={hasElements ? 7 : 6} showAll={showAll} setShowAll={setShowAll} />
           </tbody>
           <tfoot>
             <tr>
@@ -2880,17 +2886,12 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
               <td></td>
               <td></td>
               <td className="num"><strong>{fmtCount(totalPointees)}</strong></td>
-              <td className="num"><strong>{fmtCount(rows.reduce((s,r)=>s+(r.elements??0),0))}</strong></td>
+              {hasElements && <td className="num"><strong>{fmtCount(rows.reduce((s,r)=>s+(r.elements??0),0))}</strong></td>}
               <td className="num"></td>
               <td className="num"><strong>{formatBytes(totalRetained)}</strong></td>
             </tr>
           </tfoot>
         </table>
-      )}
-      {data.truncated && (
-        <p className="subtitle">
-          Field grouping was truncated (group or pointee cap hit); ranking is a bounded sample.
-        </p>
       )}
     </section>
   );

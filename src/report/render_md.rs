@@ -2351,25 +2351,28 @@ pub(crate) fn render_fields_by_size(f: &Option<FieldsBySize>, graphs: bool, out:
         return;
     }
 
+    if f.truncated {
+        out.push_str(
+            "_Field grouping was truncated (group or pointee cap hit); ranking is a bounded \
+             sample._\n\n",
+        );
+    }
     let ret_max = f.rows.iter().map(|r| r.total_retained).max().unwrap_or(0);
+    // Only show Elements when at least one row is a collection (elements > 0).
+    let has_elements = f.rows.iter().any(|r| r.elements > 0);
     let mut headers: Vec<&str> = vec![
         "Class#field",
         "Runtime Pointee Type",
         "Category",
         "Pointees",
-        "Elements",
-        "Holder Instances",
-        "Retained",
     ];
-    let mut aligns = vec![
-        Align::Left,
-        Align::Left,
-        Align::Left,
-        Align::Right,
-        Align::Right,
-        Align::Right,
-        Align::Right,
-    ];
+    let mut aligns = vec![Align::Left, Align::Left, Align::Left, Align::Right];
+    if has_elements {
+        headers.push("Elements");
+        aligns.push(Align::Right);
+    }
+    headers.extend_from_slice(&["Holder Instances", "Retained"]);
+    aligns.extend_from_slice(&[Align::Right, Align::Right]);
     if graphs {
         headers.push("");
         aligns.push(Align::Left);
@@ -2387,10 +2390,12 @@ pub(crate) fn render_fields_by_size(f: &Option<FieldsBySize>, graphs: bool, out:
             format!("`{}`", r.pointee_type),
             r.category.clone(),
             fmt_count(r.pointees),
-            fmt_count(r.elements),
-            fmt_count(r.holder_instances),
-            format_bytes(r.total_retained),
         ];
+        if has_elements {
+            row.push(fmt_count(r.elements));
+        }
+        row.push(fmt_count(r.holder_instances));
+        row.push(format_bytes(r.total_retained));
         if graphs {
             row.push(bar(
                 r.total_retained,
@@ -2405,23 +2410,18 @@ pub(crate) fn render_fields_by_size(f: &Option<FieldsBySize>, graphs: bool, out:
         String::new(),
         String::new(),
         fmt_count(total_pointees),
-        fmt_count(total_elements),
-        String::new(),
-        format_bytes(total_retained),
     ];
+    if has_elements {
+        total_row.push(fmt_count(total_elements));
+    }
+    total_row.push(String::new());
+    total_row.push(format_bytes(total_retained));
     if graphs {
         total_row.push(String::new());
     }
     t.row(total_row);
     t.render(out);
     out.push('\n');
-
-    if f.truncated {
-        out.push_str(
-            "_Field grouping was truncated (group or pointee cap hit); ranking is a bounded \
-             sample._\n\n",
-        );
-    }
 }
 
 /// Largest individual collection instances: a combined ranking plus per-kind
