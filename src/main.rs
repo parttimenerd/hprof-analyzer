@@ -211,6 +211,34 @@ enum Cmd {
         #[command(subcommand)]
         cmd: DevCmd,
     },
+    /// Eclipse MAT cache generation
+    Mat {
+        #[command(subcommand)]
+        cmd: MatCmd,
+    },
+}
+
+/// `mat` subcommands.
+#[derive(Subcommand)]
+enum MatCmd {
+    /// Generate Eclipse MAT-compatible binary index files for a heap dump.
+    ///
+    /// Runs the full analysis pipeline on HPROF and writes the MAT cache files
+    /// into DIR (default: same directory as the dump). The files are named
+    /// `<dump>.<kind>.index` matching MAT's own naming convention. After this
+    /// completes, Eclipse MAT can open the dump instantly without re-parsing.
+    Caches {
+        /// The `.hprof[.gz]` heap dump to analyze.
+        #[arg(value_hint = ValueHint::FilePath)]
+        input: String,
+        /// Directory to write the MAT index files into. Defaults to the
+        /// directory containing the heap dump.
+        #[arg(value_hint = ValueHint::DirPath)]
+        dir: Option<String>,
+        /// Emit RSS trace lines to stderr (useful for memory profiling).
+        #[arg(long)]
+        trace_rss: bool,
+    },
 }
 
 /// `compare` subcommands: MAT-parity check, or cross-dump growth.
@@ -462,6 +490,46 @@ fn main() {
             },
             DevCmd::DumpPass1 { input } => {
                 if let Err(e) = dump_pass1_json(&input) {
+                    fail(e);
+                }
+            }
+        },
+        Some(Cmd::Mat { cmd }) => match cmd {
+            MatCmd::Caches { input, dir, trace_rss } => {
+                if !input_is_hprof(&input) {
+                    fail(format!("'{input}' does not look like a .hprof[.gz] file"));
+                }
+                if trace_rss {
+                    trace::set_enabled(true);
+                }
+                progress::set_enabled(std::io::stderr().is_terminal() && !trace_rss);
+                let mat_dir = dir.as_deref().unwrap_or_else(|| {
+                    std::path::Path::new(&input)
+                        .parent()
+                        .and_then(|p| p.to_str())
+                        .unwrap_or(".")
+                });
+                let base = std::path::Path::new(&input)
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("dump");
+                let prefix = base
+                    .strip_suffix(".hprof.gz")
+                    .or_else(|| base.strip_suffix(".hprof"))
+                    .unwrap_or(base);
+                let mat_emitter = match mat::MatEmitter::new(std::path::Path::new(mat_dir), prefix) {
+                    Ok(e) => e,
+                    Err(e) => fail(format!("cannot create MAT index dir '{mat_dir}': {e}")),
+                };
+                if let Err(e) = run(
+                    &input,
+                    Some("/dev/null"),
+                    OutputFormat::Md,
+                    false,
+                    cvec::Codec::Zstd3,
+                    DetailLevel::Default.options(),
+                    Some(mat_emitter),
+                ) {
                     fail(e);
                 }
             }

@@ -68,8 +68,9 @@
 
 use std::io::{self, Write};
 
-use super::codec::compress_int;
-use super::int_index::{IntIndexStreamer, PAGE_SIZE_INT};
+use super::int_index::IntIndexStreamer;
+#[cfg(test)]
+use super::int_index::PAGE_SIZE_INT;
 
 /// Number of bytes an [`IntIndexStreamer`] footer occupies for a value stream
 /// of `size` ints: `(pages + 1)` i64 pageStart entries + pageSize:i32 + size:i32.
@@ -182,7 +183,8 @@ fn write_1n_tail<W: Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mat::codec::decode_int;
+    use crate::mat::codec::{decode_int, compress_int};
+    use crate::mat::int_index::PAGE_SIZE_INT;
 
     /// Parse an IntIndexStreamer footer located at the end of `region`.
     /// Returns (pages, page_size, size, page_starts) with page_starts as
