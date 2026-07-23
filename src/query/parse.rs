@@ -814,7 +814,19 @@ fn normalize_select_item(item: &mut SelectItem, alias: Option<&str>) {
         SelectItem::Path { .. } => {}
         // `toString(s)` carries a single alias token; no dotted path to normalize.
         SelectItem::ToString(_) => {}
-        SelectItem::Expr(e) => normalize_expr(e, alias),
+        SelectItem::Expr(e) => {
+            normalize_expr(e, alias);
+            // Lowering `e.getKey()`/`e.getValue()` in `normalize_expr` turns the
+            // Method node into `Expr::Attr(RefPath)`. Fold that lone-attr Expr back
+            // to `SelectItem::Attr` so it flows through the SAME planner/refwalk
+            // path as `s.value.@length` (which the parser folds identically at
+            // parse time via the `expr_item` combinator). Without this fold the
+            // RefPath would sit inside a `SelectItem::Expr` that the refwalk hop
+            // collector does not descend into.
+            if let Expr::Attr(a) = e.as_ref() {
+                *item = SelectItem::Attr(a.clone());
+            }
+        }
     }
 }
 
@@ -846,7 +858,35 @@ fn normalize_expr(e: &mut Expr, alias: Option<&str>) {
             normalize_expr(rhs, alias);
         }
         Expr::Unary { arg, .. } => normalize_expr(arg, alias),
-        Expr::Method { receiver, args, .. } => { // D2 fills this
+        Expr::Method { receiver, name, args } => {
+            // Lower `e.getKey()` / `e.getValue()` (zero-arg) to a one-hop RefPath so
+            // they reuse the RefWalk late-resolution pipeline exactly like
+            // `s.value.@length`. MAT reflects into a live Map.Entry; our static
+            // analog follows the backing `key`/`value` reference field one hop and
+            // projects the resolved object's ADDRESS (identity) via `project_tail`.
+            // Only the exact zero-arg getKey/getValue forms with a bare-alias field
+            // receiver lower; every other method stays an `Expr::Method` and flows
+            // through the existing scan-time `dispatch_method`/`emulate_jvm_method`.
+            let hop_field = match name.as_str() {
+                "getKey" => Some("key"),
+                "getValue" => Some("value"),
+                _ => None,
+            };
+            if let (Some(field), true, Expr::Attr(Attr::Field(recv))) =
+                (hop_field, args.is_empty(), receiver.as_ref())
+            {
+                // Build hops carrying the receiver alias first (mirrors how a RefPath
+                // built during parse carries the alias until `normalize_attr` strips
+                // it). `recv` here is the bare receiver token (the FROM alias).
+                let mut new_attr = Attr::RefPath {
+                    hops: vec![recv.clone(), field.to_string()],
+                    tail: Box::new(Attr::ObjectAddress),
+                    role: RefRole::ProjectionOnly,
+                };
+                normalize_attr(&mut new_attr, alias);
+                *e = Expr::Attr(new_attr);
+                return;
+            }
             normalize_expr(receiver, alias);
             for a in args { normalize_expr(a, alias); }
         }
@@ -3710,5 +3750,72 @@ mod tests {
     fn parse_backing_array_attrs() {
         assert!(super::parse("SELECT @valueArray FROM java.lang.String").is_ok());
         assert!(super::parse("SELECT @referenceArray FROM java.util.ArrayList").is_ok());
+    }
+
+    // ============================================================
+    // D4b — getKey()/getValue() lower to key/value ref-hops projecting
+    // the resolved object's @objectAddress (identity).
+    // ============================================================
+
+    #[test]
+    fn getkey_lowers_to_key_refpath_objectaddress_tail() {
+        // `e.getKey()` normalizes to a one-hop RefPath: hops=["key"] (alias
+        // stripped), tail=@objectAddress, projection-only. It must NOT stay an
+        // Expr::Method — it rides the RefWalk late-resolution pipeline.
+        let q = super::parse("SELECT e.getKey() FROM java.util.HashMap$Node e").unwrap();
+        match &q.select[0] {
+            SelectItem::Attr(Attr::RefPath { hops, tail, role }) => {
+                assert_eq!(hops, &vec!["key".to_string()], "expected single 'key' hop");
+                assert_eq!(
+                    tail.as_ref(),
+                    &Attr::ObjectAddress,
+                    "getKey() tail must project the resolved object's address"
+                );
+                assert_eq!(*role, RefRole::ProjectionOnly);
+            }
+            other => panic!("expected SelectItem::Attr(RefPath), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn getvalue_lowers_to_value_refpath_objectaddress_tail() {
+        let q = super::parse("SELECT e.getValue() FROM java.util.HashMap$Node e").unwrap();
+        match &q.select[0] {
+            SelectItem::Attr(Attr::RefPath { hops, tail, .. }) => {
+                assert_eq!(hops, &vec!["value".to_string()]);
+                assert_eq!(tail.as_ref(), &Attr::ObjectAddress);
+            }
+            other => panic!("expected SelectItem::Attr(RefPath), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn non_refhop_methods_are_not_lowered() {
+        // getName()/intValue()/size() are scan-time emulated methods (D2/D3) and
+        // must remain Expr::Method — they must NOT be lowered to a RefPath.
+        for oql in [
+            "SELECT s.getName() FROM java.lang.Thread s",
+            "SELECT i.intValue() FROM java.lang.Integer i",
+            "SELECT c.size() FROM java.util.ArrayList c",
+        ] {
+            let q = super::parse(oql).unwrap();
+            assert!(
+                matches!(&q.select[0], SelectItem::Expr(e) if matches!(e.as_ref(), Expr::Method { .. })),
+                "method in `{oql}` was unexpectedly lowered away from Expr::Method: {:?}",
+                &q.select[0]
+            );
+        }
+    }
+
+    #[test]
+    fn getkey_with_args_is_not_lowered() {
+        // Only ZERO-arg getKey/getValue lower. A getKey(x) (unusual, but guard it)
+        // stays an Expr::Method and flows through scan-time dispatch.
+        let q = super::parse("SELECT e.getKey(1) FROM java.util.HashMap$Node e").unwrap();
+        assert!(
+            matches!(&q.select[0], SelectItem::Expr(e) if matches!(e.as_ref(), Expr::Method { .. })),
+            "getKey(1) with an arg must not lower: {:?}",
+            &q.select[0]
+        );
     }
 }

@@ -202,6 +202,14 @@ struct RefWalkState<'q, R: ClassResolver> {
     /// array's own dense index. Left `false` (no capture) otherwise so
     /// non-Length runs stay byte/RSS-identical.
     needs_length_tail: bool,
+    /// Armed when a RefPath tail is `@objectAddress` (e.g. `e.getKey()` lowered to
+    /// `RefPath{hops:["key"], tail:ObjectAddress}`). The dense→address table is
+    /// compressed away before the late window (`IdMap::new(&[])`), so each visited
+    /// object's OWN address is captured into `tails` keyed by its own dense index;
+    /// the walk resolves to that index and the late window reads the address back.
+    /// Left `false` (no capture) otherwise so non-address runs stay
+    /// byte/RSS-identical.
+    needs_address_tail: bool,
     resolver: &'q R,
 }
 
@@ -264,12 +272,15 @@ impl<'q, R: ClassResolver> ScanDriver<'q, R> {
         let mut per_query_hops: Vec<Vec<String>> = Vec::new();
         let mut per_query_tails: Vec<Vec<String>> = Vec::new();
         let mut needs_length_tail = false;
+        let mut needs_address_tail = false;
         for ex in execs {
             if ex.plan().needs.ref_walk {
                 per_query_hops.push(crate::query::refwalk::refwalk_field_names(ex.query()));
                 per_query_tails.push(crate::query::refwalk::refwalk_tail_field_names(ex.query()));
                 needs_length_tail |=
                     crate::query::refwalk::refwalk_has_length_tail(ex.query());
+                needs_address_tail |=
+                    crate::query::refwalk::refwalk_has_address_tail(ex.query());
             }
         }
         if per_query_hops.is_empty() {
@@ -288,6 +299,7 @@ impl<'q, R: ClassResolver> ScanDriver<'q, R> {
                 crate::query::refwalk::REFWALK_EDGE_CAP,
             ),
             needs_length_tail,
+            needs_address_tail,
             resolver,
         })
     }
@@ -296,19 +308,20 @@ impl<'q, R: ClassResolver> ScanDriver<'q, R> {
         self.execs.is_empty()
     }
     /// True if any armed executor's FROM pattern can match an array class, OR a
-    /// RefWalk query needs an `@length` tail (e.g. `s.value.@length`). The latter
-    /// walks from a non-array FROM (String) to an array target whose length is
-    /// only observable via `visit_array`, so the scan must deliver arrays even
-    /// though no executor's FROM is an array class. Lets the pass2 scan skip
-    /// per-array class-name construction entirely when no query targets arrays
-    /// (the common case), keeping the multi-GB array path allocation-free for
-    /// instance-only query sets.
+    /// RefWalk query needs an `@length` tail (e.g. `s.value.@length`) or an
+    /// `@objectAddress` tail that may land on an array (e.g. a `getValue()` hop).
+    /// The latter two walk from a non-array FROM to an array target only observable
+    /// via `visit_array`, so the scan must deliver arrays even though no executor's
+    /// FROM is an array class. Lets the pass2 scan skip per-array class-name
+    /// construction entirely when no query targets arrays (the common case),
+    /// keeping the multi-GB array path allocation-free for instance-only query
+    /// sets.
     pub fn wants_arrays(&self) -> bool {
         self.execs.iter().any(|e| e.wants_arrays())
             || self
                 .refwalk
                 .as_ref()
-                .is_some_and(|s| s.needs_length_tail)
+                .is_some_and(|s| s.needs_length_tail || s.needs_address_tail)
     }
     /// Finalize every executor into a `QueryExecState`, each tagged with its
     /// original `slot` (the query's index in the caller's list): row-mode
@@ -436,6 +449,39 @@ impl<'q, R: ClassResolver> ScanDriver<'q, R> {
                 state.tails.insert(src_idx as u32, v);
             }
         }
+        // Capture THIS object's own address into the tail table, keyed by its own
+        // dense index, when an `@objectAddress` RefPath tail is armed (e.g.
+        // `e.getKey()`). The dense→address table is gone in the late window, so the
+        // walked-to target's address is read back from here. Instances captured
+        // here; arrays captured in `capture_refwalk_array_addr`.
+        if state.needs_address_tail {
+            if let Some(addr) = state.resolver.addr_of(src_idx) {
+                state.tails.insert(
+                    src_idx as u32,
+                    crate::query::model::QueryValue::Int(addr as i64),
+                );
+            }
+        }
+    }
+
+    /// Record a visited array's own address into the tail table, keyed by its own
+    /// dense index, when an `@objectAddress` RefPath tail is armed (e.g. a
+    /// `getValue()` hop that lands on an array). Mirrors the instance capture in
+    /// `capture_refwalk`. No-op when unarmed — keeping non-address runs
+    /// byte/RSS-identical.
+    fn capture_refwalk_array_addr(&mut self, src_idx: usize) {
+        let Some(state) = self.refwalk.as_mut() else {
+            return;
+        };
+        if !state.needs_address_tail {
+            return;
+        }
+        if let Some(addr) = state.resolver.addr_of(src_idx) {
+            state.tails.insert(
+                src_idx as u32,
+                crate::query::model::QueryValue::Int(addr as i64),
+            );
+        }
     }
 
     /// Record a visited array's element count into the tail table, keyed by the
@@ -515,6 +561,7 @@ impl<'q, R: ClassResolver> ObjectVisitor for ScanDriver<'q, R> {
     }
     fn visit_array(&mut self, src_idx: usize, class_name: &str, length: u32) {
         self.capture_refwalk_array_length(src_idx, length);
+        self.capture_refwalk_array_addr(src_idx);
         for ex in &mut self.execs {
             ex.visit_array(src_idx, class_name, length);
         }

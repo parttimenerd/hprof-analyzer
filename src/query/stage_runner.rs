@@ -800,7 +800,16 @@ fn project_tail(
 ) -> Option<QueryValue> {
     match tail {
         Attr::ObjectId => Some(QueryValue::Int(dense as i64)),
-        Attr::ObjectAddress => Some(QueryValue::Int(ctx.id_map.to_addr(dense) as i64)),
+        // `@objectAddress` tail (e.g. `e.getKey()` → `RefPath{tail:ObjectAddress}`).
+        // The dense→address table is compressed away before the late window
+        // (`id_map` is empty in both the report and query paths), so the walked-to
+        // object's address is captured at scan time keyed by its own dense index
+        // (see `capture_refwalk`) and read back from the tail table here. Fall back
+        // to `id_map.to_addr` for contexts that do populate it (unit tests).
+        Attr::ObjectAddress => match ctx.refwalk_tail(dense) {
+            Some(v) => Some(v.clone()),
+            None => Some(QueryValue::Int(ctx.id_map.to_addr(dense) as i64)),
+        },
         Attr::Field(_) => match ctx.refwalk_tail(dense) {
             Some(v) => Some(v.clone()),
             None => {

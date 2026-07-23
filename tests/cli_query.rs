@@ -1323,10 +1323,6 @@ fn refpath_length_tail_where_only_arms_capture() {
     );
 }
 
-/// A query referencing a field that does not exist on the (exact) FROM class is
-/// rejected with an actionable `unknown field` error rather than silently
-/// returning an empty result. Validation runs inside the pass2 build where the
-/// class schema is live; the `query` subcommand surfaces it as an inline
 /// A multi-hop RefPath ending in `@length` resolves across classes and hops:
 /// `t.name.value.@length` walks Thread -> name (String) -> value (char[]) and
 /// projects the char array's element count. Proves the `@length` tail is not
@@ -1346,6 +1342,72 @@ fn refpath_length_tail_multi_hop_cross_class() {
     assert!(
         has_len,
         "no numeric @length row for multi-hop RefPath tail:\n{out}"
+    );
+}
+
+/// `e.getKey()` / `e.getValue()` (MAT Map.Entry methods) lower to a single
+/// `key`/`value` reference hop projecting the resolved object's ADDRESS. MAT
+/// reflects into a live entry; our static analog follows the fixed backing ref
+/// field and returns the target's identity (address). `java.util.HashMap$Node`
+/// (the JDK entry class, present in the philosophers fixture) has real `key` and
+/// `value` object-reference fields, so both must project non-null addresses.
+#[test]
+fn method_getkey_getvalue_lower_to_refhop_addresses() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT e.getKey(), e.getValue() FROM java.util.HashMap$Node e LIMIT 20",
+    );
+    assert!(
+        !out.contains("error:") && !out.to_lowercase().contains("the full analysis pipeline"),
+        "getKey()/getValue() should resolve via the RefWalk pipeline:\n{out}"
+    );
+    assert!(
+        parse_row_count(&out) > 0,
+        "HashMap$Node must exist and produce rows in the fixture:\n{out}"
+    );
+    // Each data row is "<keyAddr> | <valueAddr>". Collect the parsed cells and
+    // assert at least one row projects two non-null (non-zero) addresses — proving
+    // the ref hop resolved to a real object identity, not a silent null/zero.
+    let mut non_null_pairs = 0usize;
+    for l in out.lines() {
+        let cells: Vec<&str> = l.split('|').map(str::trim).collect();
+        if cells.len() != 2 {
+            continue;
+        }
+        let (Ok(k), Ok(v)) = (cells[0].parse::<u64>(), cells[1].parse::<u64>()) else {
+            continue;
+        };
+        if k > 0 && v > 0 {
+            non_null_pairs += 1;
+        }
+    }
+    assert!(
+        non_null_pairs > 0,
+        "getKey()/getValue() projected all-null/zero addresses — the ref hop did \
+         not resolve to a live object identity:\n{out}"
+    );
+}
+
+/// getKey()/getValue() lowering must NOT break the scan-time emulated methods
+/// (`getName()`, `intValue()`), which are dispatched at scan time and must keep
+/// returning their emulated scalar values (a class name, an int) — not addresses
+/// or nulls. Guards that only zero-arg getKey/getValue are lowered to ref-hops.
+#[test]
+fn scan_time_methods_still_work_after_getkey_lowering() {
+    let Some(hprof) = philosophers() else { return };
+    // intValue() on java.lang.Integer must yield integers (the boxed `value`).
+    let ints = run_query_stdout(
+        &hprof,
+        "SELECT i.intValue() FROM java.lang.Integer i LIMIT 5",
+    );
+    assert!(
+        !ints.contains("error:"),
+        "intValue() must still dispatch at scan time:\n{ints}"
+    );
+    assert!(
+        ints.lines().any(|l| l.trim().parse::<i64>().is_ok()),
+        "intValue() projected no integer — lowering leaked into scan-time dispatch:\n{ints}"
     );
 }
 

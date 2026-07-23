@@ -344,6 +344,49 @@ pub fn refwalk_has_length_tail(q: &crate::query::ast::Query) -> bool {
     select_has || q.where_.as_ref().is_some_and(pred_has)
 }
 
+/// True if any `Attr::RefPath` in the query has an `Attr::ObjectAddress` tail
+/// (e.g. `e.getKey()` lowered to `RefPath{hops:["key"], tail:ObjectAddress}`, or
+/// a written `s.value.@objectAddress`). Like `@length`, the walked-to object's
+/// address cannot be answered from its dense index alone in the late window: the
+/// dense→address table is compressed away before the late window to protect the
+/// RSS peak (`IdMap::new(&[])` in both the report and query paths). So each
+/// visited object's OWN address is captured at scan time, keyed by its own dense
+/// index, into the same tail table as scalar/length tails. This gates that
+/// capture so non-address-tail runs stay byte/RSS-identical.
+pub fn refwalk_has_address_tail(q: &crate::query::ast::Query) -> bool {
+    use crate::query::ast::{Attr, Expr, Predicate, SelectItem};
+
+    fn attr_has(a: &Attr) -> bool {
+        match a {
+            Attr::RefPath { tail, .. } => {
+                matches!(tail.as_ref(), Attr::ObjectAddress) || attr_has(tail)
+            }
+            _ => false,
+        }
+    }
+    fn pred_has(p: &Predicate) -> bool {
+        match p {
+            Predicate::And(a, b) | Predicate::Or(a, b) => pred_has(a) || pred_has(b),
+            Predicate::Not(a) => pred_has(a),
+            Predicate::Compare { lhs, .. } => {
+                if let Expr::Attr(a) = lhs {
+                    attr_has(a)
+                } else {
+                    false
+                }
+            }
+            Predicate::InSubquery { .. } | Predicate::InstanceOf(_) => false,
+        }
+    }
+
+    let select_has = q.select.iter().any(|item| match item {
+        SelectItem::Attr(a) => attr_has(a),
+        SelectItem::Aggregate { arg, .. } => matches!(arg.as_ref(), SelectItem::Attr(a) if attr_has(a)),
+        _ => false,
+    });
+    select_has || q.where_.as_ref().is_some_and(pred_has)
+}
+
 /// The query-gated RefWalk artifacts carried out of pass2 into the P2 late
 /// window: the per-field forward CSR, the interned hop field-name table (the
 /// `fwd_field` column's decoder), the captured tail-scalar side table, and
