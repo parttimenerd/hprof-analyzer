@@ -3151,6 +3151,10 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
   const sorted = React.useMemo(() => [...rows].sort((a, b) => b[sortKey] - a[sortKey]), [rows, sortKey]);
   const { visible, extra, showAll, setShowAll } = useCapped(sorted);
   const colCount = 1 + UNREACHABLE_COLS.length; // Class + data columns
+  const unreachablePct = React.useMemo(() => {
+    const total = (data?.total_shallow ?? 0) + (data?.unreachable_shallow ?? 0);
+    return total > 0 ? (data?.unreachable_shallow ?? 0) / total * 100 : 0;
+  }, [data]);
   return (
     <section id="unreachable-objects">
       <h2>Unreachable Objects</h2>
@@ -3162,6 +3166,11 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
             {fmtCount(data?.unreachable_count ?? 0)} unreachable objects retaining{" "}
             {formatBytes(data?.unreachable_shallow ?? 0)} shallow
             {` (${formatBytes(data?.unreachable_retained ?? 0)} retained within the unreachable forest; top ${fmtCount(rows.length)} classes by shallow).`}
+          </p>
+          <p className="subtitle">
+            {unreachablePct >= 5
+              ? `Unreachable objects are eligible for collection but have not yet been reclaimed. At ${unreachablePct.toFixed(1)}% of heap total (reachable + unreachable) this is elevated — the JVM may not have had time to GC before the dump was taken, or finalization may be backed up.`
+              : "Unreachable objects are eligible for collection but have not yet been reclaimed. A small unreachable heap (< 5% of heap total) is normal between GC cycles."}
           </p>
           {data?.unreachable_composition && (
             <UnreachableCompositionTable comp={data.unreachable_composition} />
