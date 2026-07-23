@@ -574,6 +574,8 @@ export interface FieldAttributionRow {
   total_retained: number;
   container_count: number;
   holder_instances: number;
+  total_wasted_slots?: number;
+  total_wasted_bytes?: number;
 }
 export interface FieldAttributionBiggestRow {
   holder_class: string;

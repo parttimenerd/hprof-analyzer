@@ -1060,6 +1060,11 @@ pub struct FieldAttributionRow {
     /// collections (their capacity is not cheaply available). Additive.
     #[serde(default)]
     pub total_wasted_slots: u64,
+    /// `total_wasted_slots × object-reference width (bytes)` — the actual bytes
+    /// of backing-array capacity that is null/unused. More directly comparable
+    /// than slot count when array types differ. Additive.
+    #[serde(default)]
+    pub total_wasted_bytes: u64,
 }
 
 /// One holder `Class#field` whose single largest container is ranked by element count.

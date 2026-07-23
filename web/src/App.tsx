@@ -2628,6 +2628,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
               <th className="num">Holder Instances</th>
               <th className="num">Total Elements</th>
               <th className="num">Total Retained</th>
+              <th className="num">Wasted Bytes</th>
             </tr>
           </thead>
           <tbody>
@@ -2639,9 +2640,10 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
                 <td className="num">{fmtCount(r.holder_instances)}</td>
                 <td className="num">{fmtCount(r.total_elements)}</td>
                 <td className="num">{formatBytes(r.total_retained)}</td>
+                <td className="num">{r.total_wasted_bytes != null ? formatBytes(r.total_wasted_bytes) : "—"}</td>
               </tr>
             ))}
-            <ShowMoreRow extra={overallCap.extra} cols={6} showAll={overallCap.showAll} setShowAll={overallCap.setShowAll} />
+            <ShowMoreRow extra={overallCap.extra} cols={7} showAll={overallCap.showAll} setShowAll={overallCap.setShowAll} />
           </tbody>
         </table>
       )}

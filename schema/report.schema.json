@@ -1444,6 +1444,13 @@
           "format": "uint64",
           "minimum": 0
         },
+        "total_wasted_bytes": {
+          "description": "`total_wasted_slots × object-reference width (bytes)` — the actual bytes\nof backing-array capacity that is null/unused. More directly comparable\nthan slot count when array types differ. Additive.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
         "total_wasted_slots": {
           "description": "Sum of (capacity - elements) across all distinct containers reached by\nthis field. Counts empty slots, not bytes. Zero for classified\ncollections (their capacity is not cheaply available). Additive.",
           "type": "integer",

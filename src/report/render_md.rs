@@ -1749,7 +1749,7 @@ fn render_fill_ratio_table(
 }
 
 /// Render a compact "Likely wasters" list from attribution, filtered to rows
-/// whose `container_kind` matches one of `kinds`, sorted by `total_wasted_slots`
+/// whose `container_kind` matches one of `kinds`, sorted by `total_wasted_bytes`
 /// descending. Shows at most `n` entries. Skipped when attribution is absent or
 /// no rows have any wasted slots.
 fn render_top_contributors(
@@ -1765,7 +1765,7 @@ fn render_top_contributors(
         .iter()
         .filter(|r| kinds.iter().any(|k| *k == r.container_kind) && r.total_wasted_slots > 0)
         .collect();
-    rows.sort_by_key(|r| std::cmp::Reverse(r.total_wasted_slots));
+    rows.sort_by_key(|r| std::cmp::Reverse(r.total_wasted_bytes.max(r.total_wasted_slots)));
     rows.truncate(n);
     if rows.is_empty() {
         return;
@@ -1773,11 +1773,13 @@ fn render_top_contributors(
     out.push_str(
         "_Likely wasters by field (dominant incoming `Class#field` referrer):_\n\n",
     );
+    let has_bytes = rows.iter().any(|r| r.total_wasted_bytes > 0);
+    let waste_header = if has_bytes { "Wasted Bytes" } else { "Wasted Slots" };
     let mut t = Table::new(
         &[
             "Class#field",
             "Containers",
-            "Wasted Slots",
+            waste_header,
             "Total Elements",
             "Total Retained",
         ],
@@ -1790,10 +1792,15 @@ fn render_top_contributors(
         ],
     );
     for r in &rows {
+        let waste_cell = if has_bytes {
+            format_bytes(r.total_wasted_bytes)
+        } else {
+            fmt_count(r.total_wasted_slots)
+        };
         t.row(vec![
             format!("`{}#{}`", r.holder_class, r.field),
             fmt_count(r.container_count),
-            fmt_count(r.total_wasted_slots),
+            waste_cell,
             fmt_count(r.total_elements),
             format_bytes(r.total_retained),
         ]);

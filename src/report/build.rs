@@ -348,6 +348,7 @@ fn build_collection_attribution(
         &g.retained,
         g.collection_attribution_truncated,
         &holder_counts,
+        g.ref_size as u64,
     ))
 }
 
@@ -637,6 +638,7 @@ fn aggregate_collection_attribution(
     retained: &[u64],
     truncated: bool,
     holder_counts: &std::collections::HashMap<String, u64>,
+    obj_ref_width: u64,
 ) -> CollectionAttribution {
     use std::collections::HashMap;
 
@@ -722,6 +724,7 @@ fn aggregate_collection_attribution(
             total_elements: acc.total_elements,
             total_retained: acc.total_retained,
             total_wasted_slots: acc.total_wasted_slots,
+            total_wasted_bytes: acc.total_wasted_slots.saturating_mul(obj_ref_width),
             container_count: acc.seen.len() as u64,
             holder_instances: holder_counts
                 .get(&crate::report::pretty_class_name(&holder_class))
@@ -3008,7 +3011,7 @@ mod attribution_tests {
         // Metric A: holder-instance lookup keyed by PRETTIFIED class name.
         let mut holders = std::collections::HashMap::new();
         holders.insert("com.foo.Big".to_string(), 3u64);
-        let ca = aggregate_collection_attribution(&raw, &retained, false, &holders);
+        let ca = aggregate_collection_attribution(&raw, &retained, false, &holders, 8);
         assert_eq!(ca.most_overall.len(), 2);
         assert_eq!(ca.most_overall[0].holder_class, "com/foo/Big");
         assert_eq!(ca.most_overall[0].total_elements, 100);
@@ -3041,7 +3044,7 @@ mod attribution_tests {
             rec(0, "com/foo/Cache", "map", 0, "java/util/HashMap", 42),
         ];
         let retained = vec![9000u64];
-        let ca = aggregate_collection_attribution(&raw, &retained, false, &no_holders());
+        let ca = aggregate_collection_attribution(&raw, &retained, false, &no_holders(), 8);
         assert_eq!(ca.most_overall.len(), 1);
         let row = &ca.most_overall[0];
         assert_eq!(row.container_count, 1, "shared container counted once");
@@ -3060,7 +3063,7 @@ mod attribution_tests {
             rec(1, "com/foo/Holder", "data", 6, "[Ljava/lang/Object;", 7),
         ];
         let retained = vec![100u64, 200u64];
-        let ca = aggregate_collection_attribution(&raw, &retained, false, &no_holders());
+        let ca = aggregate_collection_attribution(&raw, &retained, false, &no_holders(), 8);
         assert_eq!(ca.most_overall.len(), 1);
         assert_eq!(ca.most_overall[0].container_kind, "mixed");
         assert_eq!(ca.most_overall[0].container_count, 2);
@@ -3073,7 +3076,7 @@ mod attribution_tests {
     fn test_single_kind_label() {
         let raw = vec![rec(0, "com/foo/H", "arr", 7, "[I", 3)];
         let retained = vec![64u64];
-        let ca = aggregate_collection_attribution(&raw, &retained, true, &no_holders());
+        let ca = aggregate_collection_attribution(&raw, &retained, true, &no_holders(), 8);
         assert_eq!(ca.most_overall[0].container_kind, "primitive array");
         assert!(ca.truncated);
     }
@@ -3083,7 +3086,7 @@ mod attribution_tests {
     fn test_out_of_range_retained_is_zero() {
         let raw = vec![rec(99, "com/foo/H", "f", 0, "java/util/ArrayList", 1)];
         let retained = vec![10u64]; // idx 99 is out of range
-        let ca = aggregate_collection_attribution(&raw, &retained, false, &no_holders());
+        let ca = aggregate_collection_attribution(&raw, &retained, false, &no_holders(), 8);
         assert_eq!(ca.most_overall[0].total_retained, 0);
         assert_eq!(ca.biggest_single[0].retained, 0);
     }
