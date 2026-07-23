@@ -9,7 +9,7 @@
 //! reads in `eval`; each rule's doc-comment states that dependency explicitly.
 
 use crate::report::anchors::SectionId;
-use crate::report::format::{fmt_count, format_bytes};
+use crate::report::format::{fmt_count, fmt_pct, format_bytes};
 use crate::report::model::{Report, TriageSeverity, TriageSignal};
 
 // ── Thresholds ────────────────────────────────────────────────────────────────
@@ -324,11 +324,11 @@ impl Rule for HeadlineRetainer {
                 TriageSeverity::Critical,
                 "Headline retainer",
                 format!(
-                    "`{}` ({}) retains {} ({:.1}% of reachable heap).",
+                    "`{}` ({}) retains {} ({} of reachable heap).",
                     s.pretty_class,
                     kind,
                     format_bytes(s.retained),
-                    pct_of(s.retained, total),
+                    fmt_pct(pct_of(s.retained, total)),
                 ),
                 Some(SectionId::LeakSuspects),
             ))
@@ -338,10 +338,10 @@ impl Rule for HeadlineRetainer {
                 TriageSeverity::Warning,
                 "Headline retainer",
                 format!(
-                    "`{}` retains {} ({:.1}% of reachable heap).",
+                    "`{}` retains {} ({} of reachable heap).",
                     o.display_class,
                     format_bytes(o.retained),
-                    pct_of(o.retained, total),
+                    fmt_pct(pct_of(o.retained, total)),
                 ),
                 Some(SectionId::TopConsumers),
             ))
@@ -587,10 +587,10 @@ impl Rule for ThreadPinning {
             TriageSeverity::Warning,
             "Thread pinning",
             format!(
-                "thread `{}` retains {} ({:.1}% of reachable heap) and pins {} thread-local roots — a live thread is holding memory alive.",
+                "thread `{}` retains {} ({} of reachable heap) and pins {} thread-local roots — a live thread is holding memory alive.",
                 who,
                 format_bytes(t.retained),
-                share,
+                fmt_pct(share),
                 fmt_count(t.local_root_count),
             ),
             Some(SectionId::Threads),
@@ -822,11 +822,11 @@ impl Rule for ObjectSwarm {
                 TriageSeverity::Warning,
                 "Object swarm",
                 format!(
-                    "{} live `{}` instances ({} shallow, {:.1}% of reachable heap) — typically an unbounded queue, list, or log accumulation.",
+                    "{} live `{}` instances ({} shallow, {} of reachable heap) — typically an unbounded queue, list, or log accumulation.",
                     fmt_count(row.instances),
                     row.pretty_class,
                     format_bytes(row.shallow),
-                    pct_of(row.shallow, total),
+                    fmt_pct(pct_of(row.shallow, total)),
                 ),
                 Some(SectionId::SystemOverview),
             ),
@@ -1167,10 +1167,10 @@ impl Rule for JniGlobalRefLeak {
             TriageSeverity::Warning,
             "JNI global-reference leak",
             format!(
-                "{} JNI Global roots retaining {} ({:.1}% of reachable heap) — native code is accumulating global references without releasing them; audit `JNI_DeleteGlobalRef` call sites.",
+                "{} JNI Global roots retaining {} ({} of reachable heap) — native code is accumulating global references without releasing them; audit `JNI_DeleteGlobalRef` call sites.",
                 fmt_count(count),
                 format_bytes(retained),
-                pct_of(retained, total),
+                fmt_pct(pct_of(retained, total)),
             ),
             Some(SectionId::SystemOverview),
         ))
@@ -1202,8 +1202,8 @@ impl Rule for HeapCompositionSkew {
             TriageSeverity::Info,
             "Heap composition skew",
             format!(
-                "`{}` account for {:.1}% of reachable heap — the heap is bulk-data dominated; most memory is in raw buffers rather than object graphs.",
-                dominant.kind, pct,
+                "`{}` account for {} of reachable heap — the heap is bulk-data dominated; most memory is in raw buffers rather than object graphs.",
+                dominant.kind, fmt_pct(pct),
             ),
             Some(SectionId::SystemOverview),
         ))
@@ -1230,10 +1230,10 @@ impl Rule for StaticFieldAnchor {
             TriageSeverity::Warning,
             "Static-field anchor",
             format!(
-                "`{}` is anchored via a static field (`Sticky Class` root) and retains {} ({:.1}% of reachable heap) — this object lives for the classloader lifetime and is never evicted.",
+                "`{}` is anchored via a static field (`Sticky Class` root) and retains {} ({} of reachable heap) — this object lives for the classloader lifetime and is never evicted.",
                 s.pretty_class,
                 format_bytes(s.retained),
-                pct,
+                fmt_pct(pct),
             ),
             Some(SectionId::LeakSuspects),
         ))
@@ -1525,13 +1525,13 @@ impl Rule for FixedPerObjectOverhead {
             TriageSeverity::Warning,
             "Fixed per-object header overhead",
             format!(
-                "{} objects × {} B header = {} ({:.1}% of reachable heap) is consumed by JVM \
+                "{} objects × {} B header = {} ({} of reachable heap) is consumed by JVM \
                  object headers alone — consider value types, primitive arrays, or \
                  fewer wrapper objects.",
                 fmt_count(r.overview.total_objects),
                 header_bytes,
                 format_bytes(overhead),
-                pct,
+                fmt_pct(pct),
             ),
             Some(SectionId::HeaderOverhead),
         ))
@@ -1671,11 +1671,11 @@ impl Rule for DuplicatePrimArrays {
                 TriageSeverity::Warning,
                 "Duplicate primitive arrays",
                 format!(
-                    "{} ({:.1}% of reachable heap) wasted by content-identical primitive arrays — \
+                    "{} ({} of reachable heap) wasted by content-identical primitive arrays — \
                      multiple copies of the same byte[]/int[]/etc. payload could be \
                      deduplicated or replaced with a shared constant.",
                     format_bytes(wasted),
-                    pct_of(wasted, total),
+                    fmt_pct(pct_of(wasted, total)),
                 ),
                 Some(SectionId::DuplicateStrings),
             ),
