@@ -367,7 +367,7 @@ function KpiStrip({ report }: { report: Report }) {
       <div className="kpi-grid">
       <div className="kpi">
         <div className="kpi-value">{formatBytes(report.overview.total_shallow)}</div>
-        <div className="kpi-label">Total heap</div>
+        <div className="kpi-label">Total heap (reachable)</div>
       </div>
       <div className="kpi">
         <div className="kpi-value">{fmtCount(report.overview.total_objects)}</div>
@@ -1239,7 +1239,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
           )}
           <dt>Total objects</dt>
           <dd>{fmtCount(o.total_objects)}</dd>
-          <dt>Total shallow heap</dt>
+          <dt>Total heap (reachable)</dt>
           <dd>{formatBytes(o.total_shallow)}</dd>
           <dt>GC roots</dt>
           <dd>{fmtCount(o.gc_roots)}</dd>
@@ -1265,7 +1265,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
           )}
           {(o.heap_fragmentation_ratio ?? 0) > 0 && (
             <>
-              <dt>Heap fragmentation</dt>
+              <dt>Heap fragmentation (unreachable / heap total)</dt>
               <dd>{((o.heap_fragmentation_ratio ?? 0) * 100).toFixed(1)}%</dd>
             </>
           )}

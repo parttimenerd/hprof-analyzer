@@ -733,7 +733,7 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
         summary.row(["JVM version".into(), ver.clone()]);
     }
     summary.row(["Total objects".into(), fmt_count(o.total_objects)]);
-    summary.row(["Total shallow heap".into(), format_bytes(o.total_shallow)]);
+    summary.row(["Total heap (reachable)".into(), format_bytes(o.total_shallow)]);
     summary.row(["GC roots".into(), fmt_count(o.gc_roots)]);
     summary.row(["Classes loaded".into(), fmt_count(o.classes_loaded)]);
     summary.row(["Class loaders".into(), fmt_count(o.classloaders_loaded)]);
@@ -749,7 +749,7 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
     }
     if o.heap_fragmentation_ratio > 0.0 {
         summary.row([
-            "Heap fragmentation (unreachable / total)".into(),
+            "Heap fragmentation (unreachable / heap total)".into(),
             format!("{:.1}%", o.heap_fragmentation_ratio * 100.0),
         ]);
     }
@@ -1444,7 +1444,7 @@ pub(crate) fn render_threads(t: &ThreadOverview, graphs: bool, out: &mut String)
                 out.push_str(&format!("- `{}`\n", sf.frame));
                 for loc in &sf.locals {
                     out.push_str(&format!(
-                        "  - `{}` retains {} ({:.1}%)\n",
+                        "  - `{}` retains {} ({:.1}% of thread retained)\n",
                         loc.display_class,
                         format_bytes(loc.retained),
                         loc.pct
