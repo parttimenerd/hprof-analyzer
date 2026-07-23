@@ -1089,23 +1089,22 @@ fn run(
     let mat_class_obj_ids: Option<Vec<u32>> =
         if let (Some(ref inv), Some(ref fwd_snap)) = (mat_inv.as_ref(), mat_fwd_snap.as_ref()) {
             let class_idx_rows = &fwd_snap.2;
-            Some(
-                class_idx_rows
-                    .iter()
-                    .map(|&row| {
-                        let coid = inv[row as usize];
-                        if coid < 0 { u32::MAX } else { coid as u32 }
-                    })
-                    .collect(),
-            )
+            let result: Vec<u32> = class_idx_rows
+                .iter()
+                .map(|&row| {
+                    let coid = inv[row as usize];
+                    if coid < 0 { u32::MAX } else { coid as u32 }
+                })
+                .collect();
+            Some(result)
         } else {
             None
         };
     // MAT: emit `outbound` IntArray1N in MAT id order. mat-id 0 (synthetic root)
     // gets an empty entry. For mat-ids 1..N we look up the old dense-id in
     // mat_fwd_snap (fwd offsets, flat targets, per-object class-obj old id),
-    // sort+dedup the targets, translate each to mat-id (filtering unreachable),
-    // and prepend the class-object mat-id.
+    // sort+dedup the targets, translate each to mat-id (filtering unreachable and
+    // the synthetic mat-id-0 root), and prepend the class-object mat-id as entry[0].
     if let Some(ref m) = mat {
         let mm = mat_map.as_ref().expect("mat_map built with mat");
         if let Some((fwd_off, fwd_tgt, _class_idx_rows)) = mat_fwd_snap.as_ref() {

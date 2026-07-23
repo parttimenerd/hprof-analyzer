@@ -82,43 +82,48 @@ fn mat_indices_match_real_fixtures() {
 
     // KNOWN REPRESENTATION GAPS (documented, not a regression):
     //
-    // The MAT id-space remapping layer is in place: idx and domIn are now
-    // byte-identical. The o2c alias-row patch reduced o2c from 97K diffs to 1.
-    // The remaining 6 mismatches have known root causes:
+    // BYTE-IDENTICAL (✓): idx, domIn.
+    // CORRECT DATA, 1 SYNTHETIC-ROOT DIFF: o2c (entry[0] = 0 instead of 554756).
+    //
+    // All remaining gaps are structural: MAT adds synthetic objects/edges that
+    // our HPROF-based pipeline has no equivalent for.
     //
     // 1. O2C SYNTHETIC ROOT (mat-id 0): MAT assigns class-id 554756 to its
-    //    synthetic system-classloader object (mat-id 0). We have no equivalent
-    //    object and emit class-id 0. This is 1 value diff (3 bytes) in o2c.
-    //    Affects: o2c[0] only.
+    //    synthetic system-classloader (mat-id 0). We emit class-id 0. This is
+    //    exactly 1 value diff in o2c[0].
     //
-    // 2. SYNTHETIC ROOT EDGES: MAT models GC roots as references from those root
-    //    objects to the synthetic system-classloader (mat-id 0). This adds ~3421
-    //    inbound edges to entry[0] and one outbound edge from entry[0] to its
-    //    class-obj. We have no equivalent synthetic-root edge model. Affects:
-    //    outbound[0] and inbound[0].
+    // 2. OUTBOUND SYNTHETIC-ROOT EDGES: MAT models ~3683 GC-root objects as
+    //    having an edge to the synthetic system-classloader (mat-id 0). Our
+    //    translate() returns -1 for mat-id 0 (it's not in our HPROF), so we
+    //    drop these edges. Also, MAT adds ~261 synthetic self-reference edges
+    //    for certain objects. Affects: outbound (3683 len diffs + 261 self-refs).
     //
-    // 3. SHALLOW SIZE FOR GC-ROOT PLACEHOLDERS: MAT assigns shallow size 0 to
-    //    ~454K objects that are GC-root stubs / placeholder instances with no
-    //    real CLASS_DUMP / INSTANCE_DUMP backing. Our pass2 assigns whatever size
-    //    appears in the HPROF (typically 16-40 bytes for the header). Affects: a2s
-    //    (size 0 vs non-zero for those objects), and cascades into o2ret (retained
-    //    size slightly different).
+    // 3. INBOUND SYNTHETIC EDGES + ORDERING: Symmetric to (2): entry[0] has
+    //    3421 missing inbound refs (GC roots → synthetic root). Additionally,
+    //    MAT stores inbound referrers in GarbageCleaner traversal order, NOT
+    //    sorted by mat-id. We sort by mat-id, causing 795 same-set/diff-order
+    //    entries and 272 set-diff entries (subset of synthetic edge gaps).
     //
-    // 4. DOMOUT SYNTHETIC-ROOT CHILD: MAT adds the synthetic system-classloader
-    //    (mat-id 0) as a child of the virtual root in domOut entry[0]. We have no
-    //    equivalent GC-root placeholder object to contribute. This also causes the
-    //    vroot children to appear in a different traversal order (MAT's internal
-    //    GC-root traversal order vs our HPROF-encounter order). Affects: domOut
-    //    (divider 2811961 vs 2811964, 3-byte diff = 1 missing child + reordering).
+    // 4. SHALLOW SIZE FOR GC-ROOT PLACEHOLDERS: MAT assigns shallow size 0 to
+    //    ~451K INSTANCE_DUMP objects that are GC-root stubs with no real heap
+    //    record backing. Our pass2 assigns whatever size appears in the HPROF.
+    //    Affects: a2s and cascades into o2ret (retained size slightly different).
+    //
+    // 5. DOMOUT SYNTHETIC-ROOT CHILD + TRAVERSAL ORDER: MAT adds the synthetic
+    //    system-classloader (mat-id 0) as a child of the virtual root in
+    //    domOut[0] (1 missing child = 3-byte diff). All other domOut entries
+    //    match in SET but differ in ORDER: MAT uses dominator-tree construction
+    //    order (DFS traversal); we use dense-id ascending order. This causes
+    //    24,104 same-set/diff-order entries.
     //
     // The emitters and 1N/plain framing are byte-verified (27 mat:: unit tests
     // round-trip real fixtures byte-exact). The id-space remapping is correct
-    // (idx=✓, domIn=✓). o2c reduced from 97K → 1 diff via the alias-row patch
-    // (committed 2026-07-23). The remaining gaps are pre-existing structural
-    // issues around the synthetic-root object and GC-root placeholder modeling.
+    // (idx=✓, domIn=✓). o2c: 97K diffs → 1 via alias-row patch (2026-07-23).
+    // Outbound class-ref (entry[0]) is correct for all objects (diff_class=0).
+    // These are pre-existing structural issues around the synthetic-root model.
     //
-    // This test therefore asserts only that the flag runs and emits all 8
-    // well-formed files; it records the byte-diff diagnosis rather than failing.
+    // This test asserts only that the flag runs and emits all 8 well-formed files;
+    // it records the byte-diff diagnosis rather than failing.
     assert_eq!(
         matched.len() + mismatched.len(),
         KINDS.len(),
