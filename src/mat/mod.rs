@@ -1,4 +1,5 @@
 mod codec;
+mod serial;
 
 use std::io;
 use std::path::{Path, PathBuf};
