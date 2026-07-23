@@ -1102,6 +1102,24 @@ fn did_you_mean<'a>(token: &str, candidates: impl IntoIterator<Item = &'a str>) 
         .map(|(c, _)| c.to_string())
 }
 
+/// The nearest keyword/function to an unexpected identifier `found`, if any.
+/// Shared by the plain [`compact_error`] message and the ariadne
+/// [`parse_or_report`] caret diagnostic so both surface the same suggestion.
+fn suggest_for_found(found: Option<&Token>) -> Option<String> {
+    match found {
+        Some(Token::Ident(s)) => did_you_mean(
+            s,
+            KEYWORDS
+                .iter()
+                .chain(RESERVED.iter())
+                .chain(AGG_FUNCS.iter())
+                .chain(FUNCS.iter())
+                .copied(),
+        ),
+        _ => None,
+    }
+}
+
 /// Compact single-line message for one chumsky error. Custom (`Rich::custom`)
 /// reasons — e.g. `dominators(x) requires ...` — are surfaced verbatim with a
 /// trailing `at <line>:<col>`; positional errors keep the `unexpected <found>`
@@ -1117,18 +1135,7 @@ fn compact_error(src: &str, e: &Rich<'_, Token>) -> String {
                 .found()
                 .map(|t| format!("{t:?}"))
                 .unwrap_or_else(|| "end of input".to_string());
-            let suggestion = match e.found() {
-                Some(Token::Ident(s)) => did_you_mean(
-                    s,
-                    KEYWORDS
-                        .iter()
-                        .chain(RESERVED.iter())
-                        .chain(AGG_FUNCS.iter())
-                        .chain(FUNCS.iter())
-                        .copied(),
-                ),
-                _ => None,
-            };
+            let suggestion = suggest_for_found(e.found());
             match suggestion {
                 Some(s) => format!("unexpected {found} at {line}:{col} — did you mean `{s}`?"),
                 None => format!("unexpected {found} at {line}:{col}"),
@@ -1184,7 +1191,13 @@ pub fn parse_or_report(src: &str) -> Result<Query, String> {
                             .found()
                             .map(|t| format!("{t:?}"))
                             .unwrap_or_else(|| "end of input".to_string());
-                        format!("unexpected {found}")
+                        // Append the nearest-keyword hint (same as the plain
+                        // message path) so the CLI/REPL caret diagnostic also
+                        // suggests the intended keyword on a typo.
+                        match suggest_for_found(e.found()) {
+                            Some(s) => format!("unexpected {found} — did you mean `{s}`?"),
+                            None => format!("unexpected {found}"),
+                        }
                     }
                 };
                 let mut out = Vec::new();
@@ -2558,6 +2571,17 @@ mod tests {
         assert!(
             rep.contains("query:1:"),
             "expected caret location, got:\n{rep}"
+        );
+    }
+
+    #[test]
+    fn report_suggests_nearest_keyword_on_typo() {
+        // The CLI/REPL caret diagnostic must carry the did-you-mean hint too,
+        // not just the plain `parse` message the server uses.
+        let rep = parse_or_report("SELCT * FROM C").unwrap_err();
+        assert!(
+            rep.contains("did you mean `SELECT`?"),
+            "expected a SELECT suggestion in the report, got:\n{rep}"
         );
     }
 
