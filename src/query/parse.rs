@@ -258,7 +258,14 @@ where
         }
         .map(Expr::Lit);
 
-        let primary = lit
+        let tohex = ident_ci("toHex")
+            .ignore_then(just(Token::LParen))
+            .ignore_then(expr.clone())
+            .then_ignore(just(Token::RParen))
+            .map(|arg| Expr::Attr(Attr::ToHex(Box::new(arg))));
+
+        let primary = tohex
+            .or(lit)
             .or(just(Token::LParen)
                 .ignore_then(expr.clone())
                 .then_ignore(just(Token::RParen)))
@@ -858,7 +865,7 @@ pub const AGG_FUNCS: &[&str] = &["COUNT", "SUM", "MIN", "MAX", "AVG", "PERCENTIL
 /// Built-in scalar/graph function names used in SELECT/predicate position.
 /// Source of truth for REPL completion; matches the `dom_fn` / `path` / `classof`
 /// parser arms so completions can never drift from the grammar.
-pub const FUNCS: &[&str] = &["classof", "toString", "path", "dominators", "dominatorof"];
+pub const FUNCS: &[&str] = &["classof", "toString", "toHex", "path", "dominators", "dominatorof"];
 
 /// `@`-prefixed built-in attribute names (matching the `attr` parser's arms),
 /// including the leading `@` so they can be offered as completions directly.
@@ -3514,5 +3521,11 @@ mod tests {
         let by_name = super::parse("SELECT @name FROM java.lang.Thread").unwrap();
         let by_display = super::parse("SELECT @displayName FROM java.lang.Thread").unwrap();
         assert_eq!(by_name, by_display);
+    }
+
+    #[test]
+    fn parse_and_eval_tohex() {
+        assert!(super::parse("SELECT toHex(@objectAddress) FROM java.lang.Thread LIMIT 1").is_ok());
+        assert!(super::parse("SELECT toHex(255) FROM java.lang.Thread").is_ok());
     }
 }

@@ -255,7 +255,15 @@ fn item_is_aggregate(it: &SelectItem) -> bool {
 /// Visit every `Attr` leaf in an `Expr` tree (in-order), calling `f` on each.
 fn expr_for_each_attr(e: &Expr, f: &mut impl FnMut(&Attr)) {
     match e {
-        Expr::Attr(a) => f(a),
+        Expr::Attr(a) => {
+            f(a);
+            // `toHex(inner)` carries a nested Expr whose attr leaves (e.g.
+            // `@objectAddress` in `toHex(@objectAddress)`) must be discovered for
+            // phase/field/need analysis, so recurse into it.
+            if let Attr::ToHex(inner) = a {
+                expr_for_each_attr(inner, f);
+            }
+        }
         Expr::Lit(_) => {}
         Expr::Binary { lhs, rhs, .. } => {
             expr_for_each_attr(lhs, f);

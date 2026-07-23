@@ -109,6 +109,9 @@ pub enum Attr {
     /// Usable as a WHERE predicate LHS (`WHERE toString(s) LIKE "java.*"`).
     /// Only valid for `java.lang.String` FROM; non-String targets are an error.
     ToString(String),
+    /// `toHex(expr)` — format an integer/address as a lowercase `0x…` hex string.
+    /// Non-integer argument -> Null (no error).
+    ToHex(Box<Expr>),
     /// A bare instance field name, e.g. `count`, `value`.
     Field(String),
     /// An N-hop reference path: `x.parent.name` (after alias-strip) becomes

@@ -681,6 +681,10 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 // form <class> @ 0x<addr>, computed here at scan time (no late op).
                 self.tostring_display(class_id, src_idx)
             }
+            Attr::ToHex(inner) => match self.eval_expr(inner, src_idx, class_id, blob) {
+                QueryValue::Int(n) => QueryValue::Str(format!("0x{:x}", n as u64)),
+                _ => QueryValue::Null,
+            },
         }
     }
     /// Project a SELECT row for an array object. Arrays carry no field blob and
@@ -752,6 +756,10 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 // <class> @ 0x<addr> at scan time — same shape as project_attr.
                 self.tostring_display_named(class_name, src_idx)
             }
+            Attr::ToHex(inner) => match self.eval_expr_array(inner, src_idx, class_name, length) {
+                QueryValue::Int(n) => QueryValue::Str(format!("0x{:x}", n as u64)),
+                _ => QueryValue::Null,
+            },
         }
     }
     /// Recursively evaluate an arithmetic `Expr` for an instance object. Leaf
@@ -1698,6 +1706,7 @@ fn attr_name(a: &Attr) -> String {
         Attr::Dominators(a) => format!("dominators({a})"),
         Attr::DominatorOf(a) => format!("dominatorof({a})"),
         Attr::ToString(a) => format!("toString({a})"),
+        Attr::ToHex(inner) => format!("toHex({})", expr_name(inner)),
         Attr::Field(f) => f.clone(),
         Attr::RefPath { hops, tail, .. } => {
             let mut s = hops.join(".");

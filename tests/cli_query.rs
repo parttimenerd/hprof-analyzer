@@ -225,6 +225,38 @@ fn query_subcommand_tostring_where_filters_in_late_phase() {
     );
 }
 
+/// Wave F: `toHex(expr)` formats an integer/address as a lowercase `0x…` hex
+/// string; a non-integer argument yields Null (no `0x` in the output).
+#[test]
+fn tohex_formats_address() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(&hprof, "SELECT toHex(255) FROM java.lang.Thread LIMIT 1");
+    assert!(out.contains("0xff"), "got: {out}");
+    let out2 = run_query_stdout(
+        &hprof,
+        "SELECT toHex(\"x\") FROM java.lang.Thread LIMIT 1",
+    );
+    assert!(!out2.contains("0x"), "non-int arg should be Null, got: {out2}");
+}
+
+/// Wave F: `toHex` over an arithmetic expression proves the inner-expr attr
+/// walker discovers `@objectAddress` (phase/field/need analysis), and toHex
+/// works as one column among several.
+#[test]
+fn tohex_over_expr_and_multi_column() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT toHex(@objectAddress + 0) FROM java.lang.Thread LIMIT 1",
+    );
+    assert!(out.contains("0x"), "toHex over arithmetic expr should format hex, got: {out}");
+    let multi = run_query_stdout(
+        &hprof,
+        "SELECT @objectId, toHex(@objectAddress) FROM java.lang.Thread LIMIT 1",
+    );
+    assert!(multi.contains("0x"), "toHex in multi-column SELECT should format hex, got: {multi}");
+}
+
 /// Wave C: toString on a non-String object renders MAT's fallback display form
 /// `<class> @ 0x<addr>` at scan time (no late string decode). A Thread instance
 /// must print `java.lang.Thread @ 0x…`.
