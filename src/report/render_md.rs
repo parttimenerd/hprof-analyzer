@@ -2825,11 +2825,11 @@ pub(crate) fn render_unreachable_histogram(o: &SystemOverview, graphs: bool, out
         return;
     }
     out.push_str(&format!(
-        "_{} unreachable objects retaining {} shallow ({} retained within the \
-         unreachable forest; top {} classes by shallow)._\n\n",
+        "_{} unreachable objects, {} shallow heap \
+         (within the unreachable forest retained = shallow since all paths stay in-forest; \
+         top {} classes by shallow)._\n\n",
         fmt_count(o.unreachable_count),
         format_bytes(o.unreachable_shallow),
-        format_bytes(o.unreachable_retained),
         UNREACHABLE_HISTOGRAM_CAP,
     ));
     // Add context about what unreachable means and when it's a concern.

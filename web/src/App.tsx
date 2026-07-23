@@ -3168,9 +3168,9 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
       ) : (
         <>
           <p className="subtitle">
-            {fmtCount(data?.unreachable_count ?? 0)} unreachable objects retaining{" "}
-            {formatBytes(data?.unreachable_shallow ?? 0)} shallow
-            {` (${formatBytes(data?.unreachable_retained ?? 0)} retained within the unreachable forest; top ${fmtCount(rows.length)} classes by shallow).`}
+            {fmtCount(data?.unreachable_count ?? 0)} unreachable objects,{" "}
+            {formatBytes(data?.unreachable_shallow ?? 0)} shallow heap
+            {` (within the unreachable forest retained = shallow since all paths stay in-forest; top ${fmtCount(rows.length)} classes by shallow).`}
           </p>
           <p className="subtitle">
             {unreachablePct >= 5
