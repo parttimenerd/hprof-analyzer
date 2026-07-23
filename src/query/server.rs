@@ -127,6 +127,32 @@ pub fn run_query_json(
     }
 }
 
+/// Build the language-reference JSON served at GET /help. Keyword/attribute/
+/// function/aggregate/method lists come from the parse.rs const slices (the
+/// single source of truth the REPL completer also uses); class/field lists are
+/// harvested from the dump and capped so the payload stays small.
+pub fn help_json(path: &str) -> serde_json::Value {
+    use crate::query::parse::{AGG_FUNCS, ATTRIBUTES, FUNCS, KEYWORDS, METHODS, RESERVED};
+    const CAP: usize = 200;
+    let (classes, fields) = crate::query::repl::harvest_names(path);
+    let cap = |v: Vec<String>| -> Vec<String> { v.into_iter().take(CAP).collect() };
+    serde_json::json!({
+        "keywords": KEYWORDS,
+        "reserved": RESERVED,
+        "aggregates": AGG_FUNCS,
+        "functions": FUNCS,
+        "methods": METHODS,
+        "attributes": ATTRIBUTES,
+        "classes": cap(classes),
+        "fields": cap(fields),
+        "usage": {
+            "query": "POST / with the OQL as the raw body, or {\"query\":\"...\"}",
+            "response": "JSON {\"ok\":true,\"result\":<QueryResult>} or {\"ok\":false,\"error\":{...}}",
+            "example": "SELECT @objectAddress FROM java.lang.Thread"
+        }
+    })
+}
+
 fn internal_error(e: io::Error) -> serde_json::Value {
     serde_json::json!({
         "ok": false,
@@ -169,5 +195,16 @@ mod tests {
         let v = run_query_json(FIXTURE, "SELECT s.nope() FROM java.lang.String s", 5, true, &mut cache);
         assert_eq!(v["ok"], serde_json::json!(false), "failure flag, got: {v}");
         assert_eq!(v["error"]["kind"], serde_json::json!("plan"), "plan kind, got: {v}");
+    }
+
+    #[test]
+    fn help_json_lists_language_reference() {
+        let v = help_json(FIXTURE);
+        assert!(v["keywords"].as_array().unwrap().iter().any(|k| k == "SELECT"), "SELECT listed, got: {v}");
+        assert!(v["attributes"].as_array().unwrap().iter().any(|a| a == "@objectAddress"), "attr listed, got: {v}");
+        assert!(v["functions"].as_array().unwrap().iter().any(|f| f == "classof"), "func listed, got: {v}");
+        assert!(v["aggregates"].as_array().unwrap().iter().any(|a| a == "COUNT"), "agg listed, got: {v}");
+        assert!(v["methods"].as_array().unwrap().iter().any(|m| m == "size"), "method listed, got: {v}");
+        assert!(v["classes"].is_array(), "classes array present, got: {v}");
     }
 }
