@@ -3158,11 +3158,16 @@ pub(crate) fn render_root_path(path: &[RootPathStep], out: &mut String) {
 /// subtree at the accumulation point, as a nested bullet list indented two
 /// spaces per level. Sibling nodes with identical (class, shallow, retained)
 /// are collapsed into a single "N×" line to reduce noise in deep uniform trees.
+/// Depth and breadth are capped (depth ≤ 5, breadth ≤ 5 per node) to keep
+/// the rendered output scannable; a tail note is added when rows are omitted.
 fn render_dom_tree_plain(root: &DomTreeNode, out: &mut String) {
     out.push_str("**Dominator subtree:**\n\n");
     render_dom_node(root, 0, out);
     out.push('\n');
 }
+
+const DOM_TREE_MAX_DEPTH: usize = 5;
+const DOM_TREE_MAX_BREADTH: usize = 5;
 
 fn render_dom_node(node: &DomTreeNode, depth: usize, out: &mut String) {
     let indent = "  ".repeat(depth);
@@ -3173,9 +3178,21 @@ fn render_dom_node(node: &DomTreeNode, depth: usize, out: &mut String) {
         format_bytes(node.shallow),
         format_bytes(node.retained),
     ));
+    if depth >= DOM_TREE_MAX_DEPTH || node.children.is_empty() {
+        if depth >= DOM_TREE_MAX_DEPTH && !node.children.is_empty() {
+            let child_indent = "  ".repeat(depth + 1);
+            out.push_str(&format!(
+                "{}_… ({} deeper — full data in JSON)_\n",
+                child_indent,
+                node.children.len(),
+            ));
+        }
+        return;
+    }
     // Group children by (class, shallow, retained) and collapse duplicates.
     let mut i = 0;
-    while i < node.children.len() {
+    let mut shown = 0usize;
+    while i < node.children.len() && shown < DOM_TREE_MAX_BREADTH {
         let child = &node.children[i];
         let key = (&child.display_class, child.shallow, child.retained);
         let mut count = 1usize;
@@ -3206,6 +3223,16 @@ fn render_dom_node(node: &DomTreeNode, depth: usize, out: &mut String) {
             render_dom_node(child, depth + 1, out);
         }
         i += count;
+        shown += 1;
+    }
+    let remaining = node.children.len().saturating_sub(i);
+    if remaining > 0 {
+        let child_indent = "  ".repeat(depth + 1);
+        out.push_str(&format!(
+            "{}_… ({} more siblings — full data in JSON)_\n",
+            child_indent,
+            remaining,
+        ));
     }
 }
 
