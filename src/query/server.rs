@@ -225,29 +225,46 @@ impl ServerState {
     }
 }
 
+/// Upper bound on the OQL text the server will attempt to run. Real queries are
+/// well under a kilobyte; this guards against a client posting a multi-megabyte
+/// body, which the parser would otherwise echo back verbatim in its error
+/// message (a response-size amplification). 64 KiB is generous headroom.
+const MAX_OQL_LEN: usize = 64 * 1024;
+
 /// Extract the OQL to run from a request body. Accepts either a raw OQL string
 /// or a `{"query":"<OQL>"}` JSON object. A body starting with `{` is treated as
 /// JSON: if it fails to parse, or lacks a string `query` field, we return a
 /// clear error rather than feeding the braces to the OQL tokenizer (which would
-/// surface a baffling "unexpected character '{'" message).
+/// surface a baffling "unexpected character '{'" message). Over-long input is
+/// rejected up front so a giant junk body can't be echoed back in an error.
 fn extract_oql(body: &str) -> Result<String, String> {
     let trimmed = body.trim();
-    if trimmed.starts_with('{') {
+    let oql = if trimmed.starts_with('{') {
         let v: serde_json::Value = serde_json::from_str(trimmed).map_err(|e| {
             format!(
                 "malformed JSON body ({e}) - send a raw OQL string, or {{\"query\":\"<OQL>\"}}"
             )
         })?;
-        return match v.get("query") {
-            Some(serde_json::Value::String(q)) => Ok(q.clone()),
-            Some(_) => Err("JSON body field 'query' must be a string".to_string()),
-            None => Err(
-                "JSON body missing string field 'query' - use {\"query\":\"<OQL>\"} or send a raw OQL string"
-                    .to_string(),
-            ),
-        };
+        match v.get("query") {
+            Some(serde_json::Value::String(q)) => q.clone(),
+            Some(_) => return Err("JSON body field 'query' must be a string".to_string()),
+            None => {
+                return Err(
+                    "JSON body missing string field 'query' - use {\"query\":\"<OQL>\"} or send a raw OQL string"
+                        .to_string(),
+                )
+            }
+        }
+    } else {
+        trimmed.to_string()
+    };
+    if oql.len() > MAX_OQL_LEN {
+        return Err(format!(
+            "OQL too long ({} bytes; limit {MAX_OQL_LEN})",
+            oql.len()
+        ));
     }
-    Ok(trimmed.to_string())
+    Ok(oql)
 }
 
 pub fn run_server(path: &str, path_depth: usize, port: u16) -> io::Result<()> {
@@ -406,6 +423,21 @@ mod tests {
         assert_eq!(v["error"]["kind"], serde_json::json!("request"), "kind=request, got: {v}");
         let msg = v["error"]["message"].as_str().unwrap_or_default();
         assert!(msg.contains("must be a string"), "clear message, got: {msg:?}");
+    }
+
+    #[test]
+    fn handle_post_oversized_body_is_rejected_without_echo() {
+        let state = ServerState::load(FIXTURE, 5, true).expect("load");
+        // A body far over the cap must be rejected with a short error and must
+        // NOT be echoed back (response stays small, no parse-error amplification).
+        let big = "X".repeat(MAX_OQL_LEN + 1024);
+        let (status, body) = state.route("POST", "/", &big);
+        assert_eq!(status, 400, "oversized -> 400");
+        assert!(body.len() < 512, "error response stays small ({} bytes)", body.len());
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["error"]["kind"], serde_json::json!("request"), "kind=request, got: {v}");
+        let msg = v["error"]["message"].as_str().unwrap_or_default();
+        assert!(msg.contains("too long"), "clear message, got: {msg:?}");
     }
 
     #[test]
