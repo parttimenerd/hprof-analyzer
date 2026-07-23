@@ -931,9 +931,13 @@ pub struct TopArrayRow {
     pub length: u64,
     pub shallow: u64,
     pub obj_index_1based: u64,
-    /// Primary incoming reference (`Class#field`) that points at this array,
-    /// resolved from the `--collections` holder-edge scan. `None` when
-    /// `--collections` was off or no field edge references it. Additive.
+    /// Non-null (occupied) slot count for object arrays; `None` for primitive
+    /// arrays (every slot is always occupied). Additive.
+    #[serde(default)]
+    pub non_null: Option<u64>,
+    /// Primary incoming reference (`Class#field`) that points at this array.
+    /// Resolved unconditionally from instance-dump field edges (first-wins).
+    /// `None` when no field edge references this array. Additive.
     #[serde(default)]
     pub owner: Option<String>,
 }

@@ -2303,7 +2303,9 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
   const topArraysBlock = (t: TopArrays | undefined, kind: string) => {
     const individual = t?.top_individual ?? [];
     const byClass = t?.top_by_class ?? [];
+    const hasFill = individual.some((r) => r.non_null != null);
     const hasOwner = individual.some((r) => r.owner != null);
+    const colCount = 2 + (hasFill ? 1 : 0) + 1 + (hasOwner ? 1 : 0);
     return (
       <>
         <h3>Top Arrays ({kind})</h3>
@@ -2318,14 +2320,16 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
               <tr>
                 <th>Array class</th>
                 <th className="num">Length</th>
+                {hasFill && <th className="num">Used/Length</th>}
                 <th className="num">Shallow</th>
                 {hasOwner && <th>Owner (Class#field)</th>}
               </tr>
             </thead>
-            <CappedTbody rows={individual} cols={hasOwner ? 4 : 3} renderRow={(r, i) => (
+            <CappedTbody rows={individual} cols={colCount} renderRow={(r, i) => (
                 <tr key={i}>
                   <td><code>{r.array_class}</code></td>
                   <td className="num">{fmtCount(r.length)}</td>
+                  {hasFill && <td className="num">{r.non_null != null ? `${fmtCount(r.non_null)}/${fmtCount(r.length)}` : "—"}</td>}
                   <td className="num">{formatBytes(r.shallow)}</td>
                   {hasOwner && <td>{r.owner ? <code>{r.owner}</code> : "—"}</td>}
                 </tr>
@@ -2334,6 +2338,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
               <tr>
                 <td className="num"><strong>Total</strong></td>
                 <td className="num"></td>
+                {hasFill && <td className="num"></td>}
                 <td className="num"><strong>{formatBytes(individual.reduce((s, r) => s + r.shallow, 0))}</strong></td>
                 {hasOwner && <td></td>}
               </tr>

@@ -2379,6 +2379,7 @@ mod tests {
             length: 100_000_000,
             shallow: 100 * 1024 * 1024, // 50% — fires
             obj_index_1based: 1,
+            non_null: None,
             owner: None,
         }];
         let s = OversizedPrimArray.eval(&r).expect("huge array must fire");

@@ -3156,13 +3156,23 @@
           "format": "uint64",
           "minimum": 0
         },
+        "non_null": {
+          "description": "Non-null (occupied) slot count for object arrays; `None` for primitive\narrays (every slot is always occupied). Additive.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "default": null,
+          "minimum": 0
+        },
         "obj_index_1based": {
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
         "owner": {
-          "description": "Primary incoming reference (`Class#field`) that points at this array,\nresolved from the `--collections` holder-edge scan. `None` when\n`--collections` was off or no field edge references it. Additive.",
+          "description": "Primary incoming reference (`Class#field`) that points at this array.\nResolved unconditionally from instance-dump field edges (first-wins).\n`None` when no field edge references this array. Additive.",
           "type": [
             "string",
             "null"

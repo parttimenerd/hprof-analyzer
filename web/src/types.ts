@@ -523,7 +523,9 @@ export interface TopArrayRow {
   length: number;
   shallow: number;
   obj_index_1based: number;
-  // Primary incoming reference (`Class#field`). Absent when --collections off.
+  // Non-null (occupied) slot count for object arrays; absent for primitive arrays.
+  non_null?: number;
+  // Primary incoming reference (`Class#field`). Absent when no field edge found.
   owner?: string;
 }
 

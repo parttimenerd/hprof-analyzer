@@ -1,6 +1,6 @@
 {
   "schema_version": 9,
-  "generated": "2026-07-23T09:42:10.772770000Z",
+  "generated": "2026-07-23T10:20:20.455697000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
     "file_path": "tests/fixtures/dump_4_philosophers.hprof",
@@ -90578,6 +90578,7 @@
           "length": 131064,
           "shallow": 524272,
           "obj_index_1based": 2,
+          "non_null": null,
           "owner": null
         },
         {
@@ -90585,63 +90586,72 @@
           "length": 261187,
           "shallow": 261208,
           "obj_index_1based": 99101,
-          "owner": null
+          "non_null": null,
+          "owner": "java.util.zip.ZipFile$Source#cen"
         },
         {
           "array_class": "byte[]",
           "length": 238192,
           "shallow": 238208,
           "obj_index_1based": 70491,
-          "owner": null
+          "non_null": null,
+          "owner": "java.util.zip.ZipFile$Source#cen"
         },
         {
           "array_class": "byte[]",
           "length": 229980,
           "shallow": 230000,
           "obj_index_1based": 73387,
-          "owner": null
+          "non_null": null,
+          "owner": "java.util.zip.ZipFile$Source#cen"
         },
         {
           "array_class": "byte[]",
           "length": 144353,
           "shallow": 144376,
           "obj_index_1based": 72656,
-          "owner": null
+          "non_null": null,
+          "owner": "java.util.zip.ZipFile$Source#cen"
         },
         {
           "array_class": "long[]",
           "length": 8192,
           "shallow": 65552,
           "obj_index_1based": 72680,
-          "owner": null
+          "non_null": null,
+          "owner": "scala.concurrent.stm.skel.SimpleRandom$#states"
         },
         {
           "array_class": "byte[]",
           "length": 60231,
           "shallow": 60248,
           "obj_index_1based": 182193,
-          "owner": null
+          "non_null": null,
+          "owner": "java.util.zip.ZipFile$Source#cen"
         },
         {
           "array_class": "byte[]",
           "length": 46187,
           "shallow": 46208,
           "obj_index_1based": 99154,
-          "owner": null
+          "non_null": null,
+          "owner": "java.util.zip.ZipFile$Source#cen"
         },
         {
           "array_class": "int[]",
           "length": 8781,
           "shallow": 35144,
           "obj_index_1based": 182113,
-          "owner": null
+          "non_null": null,
+          "owner": "java.util.zip.ZipFile$Source#entries"
         },
         {
           "array_class": "int[]",
           "length": 7863,
           "shallow": 31472,
           "obj_index_1based": 76083,
-          "owner": null
+          "non_null": null,
+          "owner": "java.util.zip.ZipFile$Source#entries"
         }
       ],
       "top_by_class": [
@@ -90694,6 +90704,7 @@
           "length": 131072,
           "shallow": 524304,
           "obj_index_1based": 1,
+          "non_null": 131072,
           "owner": null
         },
         {
@@ -90701,6 +90712,7 @@
           "length": 7937,
           "shallow": 31768,
           "obj_index_1based": 236822,
+          "non_null": 7706,
           "owner": null
         },
         {
@@ -90708,20 +90720,23 @@
           "length": 4096,
           "shallow": 16400,
           "obj_index_1based": 39348,
-          "owner": null
+          "non_null": 2048,
+          "owner": "java.util.HashMap#table"
         },
         {
           "array_class": "java.util.HashMap$Node[]",
           "length": 4096,
           "shallow": 16400,
           "obj_index_1based": 76135,
-          "owner": null
+          "non_null": 1908,
+          "owner": "java.util.HashMap#table"
         },
         {
           "array_class": "java.lang.Object[]",
           "length": 2285,
           "shallow": 9160,
           "obj_index_1based": 70448,
+          "non_null": 408,
           "owner": null
         },
         {
@@ -90729,20 +90744,23 @@
           "length": 2126,
           "shallow": 8520,
           "obj_index_1based": 187292,
-          "owner": null
+          "non_null": 1063,
+          "owner": "java.util.ImmutableCollections$SetN#elements"
         },
         {
           "array_class": "scala.math.BigInt[]",
           "length": 2049,
           "shallow": 8216,
           "obj_index_1based": 74058,
-          "owner": null
+          "non_null": 0,
+          "owner": "scala.math.BigInt$#cache"
         },
         {
           "array_class": "scala.math.BigInt[]",
           "length": 2049,
           "shallow": 8216,
           "obj_index_1based": 146904,
+          "non_null": 0,
           "owner": null
         },
         {
@@ -90750,14 +90768,16 @@
           "length": 2048,
           "shallow": 8208,
           "obj_index_1based": 91191,
-          "owner": null
+          "non_null": 96,
+          "owner": "java.util.concurrent.atomic.AtomicReferenceArray#array"
         },
         {
           "array_class": "java.util.concurrent.ConcurrentHashMap$Node[]",
           "length": 2048,
           "shallow": 8208,
           "obj_index_1based": 240798,
-          "owner": null
+          "non_null": 749,
+          "owner": "java.util.concurrent.ConcurrentHashMap#table"
         }
       ],
       "top_by_class": [

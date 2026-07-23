@@ -2161,11 +2161,19 @@ fn render_top_arrays(t: &TopArrays, kind: &str, graphs: bool, out: &mut String) 
             .map(|r| r.shallow)
             .max()
             .unwrap_or(0);
-        // The Owner column (primary `Class#field` referrer) is present only when
-        // attribution data exists (i.e. `--collections` was passed).
+        // "Used/Length" fill column is shown when any row carries non_null data
+        // (object arrays only; primitive arrays always have non_null = None).
+        let has_fill = t.top_individual.iter().any(|r| r.non_null.is_some());
+        // The Owner column is present when any row has an owner label.
         let has_owner = t.top_individual.iter().any(|r| r.owner.is_some());
-        let mut headers: Vec<&str> = vec!["Array class", "Length", "Shallow"];
-        let mut aligns = vec![Align::Left, Align::Right, Align::Right];
+        let mut headers: Vec<&str> = vec!["Array class", "Length"];
+        let mut aligns = vec![Align::Left, Align::Right];
+        if has_fill {
+            headers.push("Used/Length");
+            aligns.push(Align::Right);
+        }
+        headers.push("Shallow");
+        aligns.push(Align::Right);
         if has_owner {
             headers.push("Owner (Class#field)");
             aligns.push(Align::Left);
@@ -2179,8 +2187,14 @@ fn render_top_arrays(t: &TopArrays, kind: &str, graphs: bool, out: &mut String) 
             let mut row = vec![
                 format!("`{}`", r.array_class),
                 fmt_count(r.length),
-                format_bytes(r.shallow),
             ];
+            if has_fill {
+                row.push(match r.non_null {
+                    Some(nn) => format!("{}/{}", fmt_count(nn), fmt_count(r.length)),
+                    None => "—".to_string(),
+                });
+            }
+            row.push(format_bytes(r.shallow));
             if has_owner {
                 row.push(match &r.owner {
                     Some(o) => format!("`{o}`"),
@@ -2193,11 +2207,11 @@ fn render_top_arrays(t: &TopArrays, kind: &str, graphs: bool, out: &mut String) 
             tbl.row(row);
         }
         let total_shallow: u64 = t.top_individual.iter().map(|r| r.shallow).sum();
-        let mut total_row = vec![
-            "**Total**".to_string(),
-            String::new(),
-            format!("**{}**", format_bytes(total_shallow)),
-        ];
+        let mut total_row = vec!["**Total**".to_string(), String::new()];
+        if has_fill {
+            total_row.push(String::new());
+        }
+        total_row.push(format!("**{}**", format_bytes(total_shallow)));
         if has_owner {
             total_row.push(String::new());
         }

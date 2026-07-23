@@ -577,6 +577,9 @@ struct TopArrayCand {
     obj_index: u32,
     length: u64,
     class_key: u64,
+    /// Non-null slot count for object arrays; `u64::MAX` signals "primitive
+    /// array" (render as `None` in the model).
+    non_null: u64,
 }
 impl PartialOrd for TopArrayCand {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
@@ -604,7 +607,7 @@ struct TopArrayAcc {
     by_class: HashMap<u64, (u64, u64)>,
 }
 impl TopArrayAcc {
-    fn add(&mut self, obj_index: u32, class_key: u64, length: u64, shallow: u64) {
+    fn add(&mut self, obj_index: u32, class_key: u64, length: u64, shallow: u64, non_null: u64) {
         let e = self.by_class.entry(class_key).or_insert((0, 0));
         e.0 += 1;
         e.1 += shallow;
@@ -614,6 +617,7 @@ impl TopArrayAcc {
             obj_index,
             length,
             class_key,
+            non_null,
         };
         if self.heap.len() < TOP_ARRAYS_N {
             self.heap.push(std::cmp::Reverse(cand));
@@ -649,6 +653,11 @@ impl TopArrayAcc {
                     length: c.length,
                     shallow: c.shallow,
                     obj_index_1based: c.obj_index as u64 + 1,
+                    non_null: if c.non_null == u64::MAX {
+                        None
+                    } else {
+                        Some(c.non_null)
+                    },
                     owner,
                 }
             })
@@ -957,6 +966,18 @@ pub(crate) fn build_field_decode_views(
     let mut container_records: HashMap<u64, ContainerRecord> = HashMap::new();
     let mut containers_truncated = false;
 
+    // ── Unconditional lightweight array owner map ─────────────────────────────
+    // First-wins `Class#field` label for every array address, built from the
+    // instance-dump field scan regardless of --collections. Bounded at 500K
+    // entries to avoid unbounded growth on huge heaps (the top-10 arrays are
+    // what this exists for; the cap is 50000× that).
+    const ARRAY_OWNER_CAP: usize = 500_000;
+    let mut array_owner_by_addr: HashMap<u64, String> = HashMap::new();
+    // Memoized per-class field layout for the lightweight scan: class_id →
+    // [(field_name_id, byte_offset)].  Populated unconditionally, separate from
+    // `obj_field_layout` (which uses interned u32 keys, only under --collections).
+    let mut light_field_layout: HashMap<u64, Vec<(u64, u32)>> = HashMap::new();
+
     // ── DirectByteBuffer capacity sum ────────────────────────────────────────
     // Resolve once before scan 1: find the class-object address for
     // java/nio/DirectByteBuffer and the byte-offset of the `capacity` field
@@ -995,9 +1016,9 @@ pub(crate) fn build_field_decode_views(
     let mut const_other: (u64, u64) = (0, 0);
     let mut const_truncated = false;
     // Per-group sample of member array addresses, used post-scan to resolve the
-    // dominant `Class#field` owner via `owner_by_addr`. Only populated under
-    // `--collections`; each group samples at most `CONST_ARRAY_OWNER_SAMPLE`
-    // addresses so memory stays bounded on heaps with huge constant-array groups.
+    // dominant `Class#field` owner via `owner_by_addr`. Each group samples at
+    // most `CONST_ARRAY_OWNER_SAMPLE` addresses so memory stays bounded on
+    // heaps with huge constant-array groups.
     let mut const_owner_samples: HashMap<(u8, u64, i64), Vec<u64>> = HashMap::new();
     let mut array_fill = FillAcc::default();
     // Raw per-obj-array (addr, non_null, count) collected during the pass; the
@@ -1208,6 +1229,40 @@ pub(crate) fn build_field_decode_views(
                     }
                 }
             }
+
+            // Unconditional lightweight array-owner fill: always record the
+            // first inbound `Class#field` edge for each pointee. Bounded by
+            // ARRAY_OWNER_CAP. Uses a separate layout cache (light_field_layout)
+            // keyed by (name_id, byte_offset) to avoid touching the interning
+            // maps above.
+            if array_owner_by_addr.len() < ARRAY_OWNER_CAP {
+                if !light_field_layout.contains_key(&class_id) {
+                    let raw = enumerate_object_fields(class_id, class_map, obj_ref_width);
+                    light_field_layout.insert(class_id, raw);
+                }
+                let layout = &light_field_layout[&class_id];
+                // Re-read class name inline (cheap; class_map lookup).
+                let holder_name = pretty_name(class_id, p1);
+                for &(fname_id, offset) in layout {
+                    let o = offset as usize;
+                    if o + obj_ref_width <= blob.len() {
+                        let pointee = read_ref(&blob[o..], obj_ref_width);
+                        if pointee != 0 && !array_owner_by_addr.contains_key(&pointee) {
+                            let fname = strings
+                                .get(&fname_id)
+                                .map(|s| s.as_str())
+                                .unwrap_or("");
+                            array_owner_by_addr.insert(
+                                pointee,
+                                format!("{}#{}", holder_name, fname),
+                            );
+                        }
+                    }
+                    if array_owner_by_addr.len() >= ARRAY_OWNER_CAP {
+                        break;
+                    }
+                }
+            }
         }
         // ── on_prim_array: every PRIM_ARRAY_DUMP ──────────────────────────────
         Record::PrimArray(addr, elem_type, count, bytes) => {
@@ -1218,7 +1273,7 @@ pub(crate) fn build_field_decode_views(
                 None => (u32::MAX, 0),
             };
             if idx != u32::MAX {
-                top_prim.add(idx, elem_type as u64, count, sh);
+                top_prim.add(idx, elem_type as u64, count, sh, u64::MAX);
             }
             // Attribution: record this primitive array as a container (kind 7).
             if collect_attribution && idx != u32::MAX {
@@ -1314,7 +1369,7 @@ pub(crate) fn build_field_decode_views(
             // array class id read from the record; names resolved later via
             // obj_array_name_of_key (no class_ids needed at assembly time).
             if arr_idx != u32::MAX {
-                top_obj.add(arr_idx, array_class_id, count, arr_shallow);
+                top_obj.add(arr_idx, array_class_id, count, arr_shallow, non_null);
             }
 
             // Attribution: record this object array as a container (kind 6).
@@ -1416,11 +1471,12 @@ pub(crate) fn build_field_decode_views(
     let attribution_truncated = edges_truncated || containers_truncated || coll_values_truncated;
 
     // ── Array-owner map: pointee address → primary `Class#field` (first-wins).
-    // Used to attribute each top individual array to a referencing field. Only
-    // built under --collections; keyed by address so it joins against the top
-    // arrays' addresses (resolved via id_map.addr_at). ────────────────────────
-    let owner_by_addr: Option<HashMap<u64, String>> = if collect_attribution {
-        let mut m: HashMap<u64, String> = HashMap::new();
+    // Built unconditionally from array_owner_by_addr (the lightweight scan).
+    // Under --collections, also merge edges-derived labels for collection
+    // backing arrays (these may override the light-scan label, giving the
+    // collection-aware attribution priority for tracked collections).
+    let owner_by_addr: HashMap<u64, String> = if collect_attribution {
+        let mut m = array_owner_by_addr;
         for e in &edges {
             m.entry(e.pointee).or_insert_with(|| {
                 format!(
@@ -1430,9 +1486,9 @@ pub(crate) fn build_field_decode_views(
                 )
             });
         }
-        Some(m)
+        m
     } else {
-        None
+        array_owner_by_addr
     };
 
     // ── Fields-by-size raw groups: (holder_class, field) → distinct pointee
@@ -1455,11 +1511,9 @@ pub(crate) fn build_field_decode_views(
     // Runtime element types resolved later in build_model. Only present under
     // `--collections`. ─────────────────────────────────────────────────────────
     let coll_values_raw: Option<Vec<CollValuesRaw>> = if collect_attribution {
-        if let Some(m) = owner_by_addr.as_ref() {
-            for c in &mut coll_values {
-                let addr = p1.id_map.addr_at(c.container_idx as usize);
-                c.owner = m.get(&addr).cloned();
-            }
+        for c in &mut coll_values {
+            let addr = p1.id_map.addr_at(c.container_idx as usize);
+            c.owner = owner_by_addr.get(&addr).cloned();
         }
         Some(coll_values)
     } else {
@@ -1512,16 +1566,16 @@ pub(crate) fn build_field_decode_views(
         constant_primitive_arrays: assemble_const_arrays(
             const_groups,
             const_owner_samples,
-            owner_by_addr.as_ref(),
+            Some(&owner_by_addr),
             const_other,
             const_truncated,
         ),
         top_prim_arrays: top_prim.into_top_arrays(
             p1,
             prim_array_name_of_key,
-            owner_by_addr.as_ref(),
+            Some(&owner_by_addr),
         ),
-        top_obj_arrays: top_obj.into_top_arrays(p1, obj_array_name_of_key, owner_by_addr.as_ref()),
+        top_obj_arrays: top_obj.into_top_arrays(p1, obj_array_name_of_key, Some(&owner_by_addr)),
         kind_summary,
     };
 
@@ -1968,7 +2022,7 @@ mod tests {
         // Feed more than TOP_ARRAYS_N candidates with increasing shallow; the
         // heap must retain only the TOP_ARRAYS_N largest.
         for i in 0..(TOP_ARRAYS_N as u32 + 5) {
-            acc.add(i, 0, i as u64, (i as u64) * 100);
+            acc.add(i, 0, i as u64, (i as u64) * 100, u64::MAX);
         }
         assert_eq!(acc.heap.len(), TOP_ARRAYS_N);
         // The retained candidates are the TOP_ARRAYS_N largest shallows.
