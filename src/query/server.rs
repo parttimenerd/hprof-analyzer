@@ -383,11 +383,15 @@ pub fn run_server(path: &str, path_depth: usize, port: u16) -> io::Result<()> {
         .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("bind {addr} failed: {e}")))?;
     let bound = server.server_addr();
     println!("hprof-analyzer OQL server listening on http://{bound}");
-    println!("  POST OQL to /   (raw body or {{\"query\":\"...\"}}) -> JSON QueryResult");
-    println!("  GET  /help      -> language reference JSON");
+    println!("  POST /         (raw body or {{\"query\":\"...\"}}) -> JSON QueryResult");
+    println!("  POST /stream   -> NDJSON: one meta line then one row per line");
+    println!("  GET  /help     -> language reference JSON");
+    println!("  GET  /schema   -> JSON Schema for QueryResult");
+    println!("  GET  /version  -> server version + endpoint catalog");
     println!("examples:");
     println!("  curl -s http://{bound}/ -d 'SELECT @objectAddress FROM java.lang.Thread'");
     println!("  curl -s http://{bound}/help | jq .");
+    println!("  curl -s http://{bound}/version | jq .endpoints");
     println!("(loopback only; Ctrl-C to stop)");
 
     let state = Arc::new(ServerState::load(path, path_depth, true)?);

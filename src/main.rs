@@ -570,6 +570,14 @@ fn main() {
                     "'{input}' is not an HPROF dump; the `query` subcommand needs a .hprof[.zip] file"
                 ));
             }
+            // --server and --repl take their queries from HTTP/stdin, so any
+            // --query/--query-file is dropped. Warn rather than silently ignore.
+            if (server || repl) && (!query.is_empty() || query_file.is_some()) {
+                let mode = if server { "--server" } else { "--repl" };
+                eprintln!(
+                    "warning: {mode} takes queries interactively; --query/--query-file are ignored"
+                );
+            }
             if server {
                 // Loopback HTTP server: POST OQL, get JSON back. Reads no stdin;
                 // --query/--query-file are ignored.

@@ -88,6 +88,32 @@ fn query_subcommand_without_any_query_fails_with_hint() {
     );
 }
 
+/// `--repl` with a `--query` warns that the inline query is ignored (rather
+/// than silently dropping it). Empty stdin makes the REPL exit immediately.
+#[test]
+fn repl_with_inline_query_warns_it_is_ignored() {
+    use std::io::Write;
+    use std::process::Stdio;
+    let Some(hprof) = philosophers() else { return };
+    let mut child = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--repl", "--query", "SELECT 1"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    // Close stdin (EOF) so the REPL exits without waiting for input.
+    drop(child.stdin.take());
+    let out = child.wait_with_output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--query/--query-file are ignored"),
+        "expected an ignored-query warning under --repl:\n{stderr}"
+    );
+}
+
 /// Run a query and return its trimmed stdout.
 fn run_query_stdout(hprof: &str, oql: &str) -> String {
     let out = Command::new(BIN)
