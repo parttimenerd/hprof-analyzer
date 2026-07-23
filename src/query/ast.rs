@@ -124,6 +124,13 @@ pub enum Attr {
         tail: Box<Attr>,
         role: RefRole,
     },
+    /// `@valueArray` — a String's backing char/byte `value` array (ObjRef).
+    /// Ref-hop attr: resolved in the late phase (P2); scan-time projection is Null.
+    ValueArray,
+    /// `@referenceArray` — an object-array's element refs, or an instance's
+    /// array-typed backing field (e.g. ArrayList.elementData) (ObjRef).
+    /// Ref-hop attr: resolved in the late phase (P2); scan-time projection is Null.
+    ReferenceArray,
 }
 
 /// An arithmetic expression over attribute/field/literal operands. Leaves are

@@ -675,6 +675,8 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             // N-hop reference paths resolve against the forward-ref graph, which
             // only exists post-scan (P2). Filled by the stage runner, not here.
             Attr::RefPath { .. } => QueryValue::Null,
+            // D4b: late resolution — ref-hop attrs; scan-time projects Null.
+            Attr::ValueArray | Attr::ReferenceArray => QueryValue::Null,
             Attr::ToString(_) => {
                 // String FROM is decoded late (ResolveStringValues). A non-String
                 // object has no decodable text, so we mirror MAT's fallback display
@@ -752,6 +754,8 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             Attr::Field(_) => QueryValue::Null,
             // Arrays have no reference fields to walk; a RefPath is Null.
             Attr::RefPath { .. } => QueryValue::Null,
+            // D4b: late resolution — ref-hop attrs; scan-time projects Null.
+            Attr::ValueArray | Attr::ReferenceArray => QueryValue::Null,
             Attr::ToString(_) => {
                 // Arrays are never String-decoded (from_is_string() is false here),
                 // so this always renders the MAT fallback display form
@@ -1811,6 +1815,9 @@ fn attr_name(a: &Attr) -> String {
             s.push_str(&attr_name(tail));
             s
         }
+        // D4b: late resolution — ref-hop attrs.
+        Attr::ValueArray => "@valueArray".into(),
+        Attr::ReferenceArray => "@referenceArray".into(),
     }
 }
 

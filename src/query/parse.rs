@@ -221,6 +221,8 @@ where
             "length" => Attr::Length,
             "inbounds" => Attr::Inbounds,
             "outbounds" => Attr::Outbounds,
+            "valueArray" => Attr::ValueArray,
+            "referenceArray" => Attr::ReferenceArray,
             other => {
                 emitter.emit(Rich::custom(
                     e.span(),
@@ -909,6 +911,8 @@ pub const ATTRIBUTES: &[&str] = &[
     "@length",
     "@inbounds",
     "@outbounds",
+    "@valueArray",
+    "@referenceArray",
 ];
 
 /// The union of every completion-candidate slice the parser exposes. The
@@ -3612,5 +3616,11 @@ mod tests {
             },
             other => panic!("expected SelectItem::Expr, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_backing_array_attrs() {
+        assert!(super::parse("SELECT @valueArray FROM java.lang.String").is_ok());
+        assert!(super::parse("SELECT @referenceArray FROM java.util.ArrayList").is_ok());
     }
 }
