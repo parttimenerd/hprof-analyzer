@@ -20,6 +20,7 @@ mod diff_reports;
 mod dominator;
 mod html;
 mod id_map;
+mod mat;
 mod md;
 #[cfg(test)]
 mod md_test;
