@@ -1376,41 +1376,68 @@ fn run_oql_escalated(
         (None, None)
     };
 
-    // Transpose the forward CSR into the inbound CSR (consumes fwd CSR).
-    let (inb_block_off, inb_data) = inbound.build_from_fwd(
-        std::mem::take(&mut g.fwd_offsets),
-        std::mem::take(&mut g.fwd_targets),
-        &rpo.dfn,
-    )?;
+    // Only the dominator/retained late ops actually consume the dominator tree
+    // and retained-size array (`JoinRetained`/`DominatorChildren`/`DominatorOf`/
+    // `RetainedSet`, surfaced as `needs.retained` / `needs.dominator_children`).
+    // RefWalk, edge (`@inbounds`/`@outbounds`/path), gc-root, and string-value
+    // ops escalate for their OWN structures and never read dominators. When no
+    // planned query needs dominators, SKIP the inbound-transpose +
+    // compute_dominators + build_dom_children_csr + compute_retained chain
+    // entirely — on a large heap those dominate escalation cost. `g.idom` /
+    // `g.retained` / dc_off / dc_tgt then stay empty and the LateCtx borrows
+    // empty slices (the ops that would read them do not run).
+    let needs_dominators = flat
+        .iter()
+        .any(|(_, p)| p.needs.retained || p.needs.dominator_children);
 
-    // Rebuild vertex from dfn, then free dfn; parent_pre stays live (never
-    // compressed under Codec::None) so compute_dominators reads it directly.
-    let mut rpo = rpo;
-    let count = rpo.parent_pre.len();
-    rpo.vertex = rpo_dfs::rebuild_vertex(&rpo.dfn, count);
-    rpo.dfn = Vec::new();
+    let (dc_off, dc_tgt): (Vec<u32>, Vec<u32>) = if needs_dominators {
+        // Transpose the forward CSR into the inbound CSR (consumes fwd CSR).
+        let (inb_block_off, inb_data) = inbound.build_from_fwd(
+            std::mem::take(&mut g.fwd_offsets),
+            std::mem::take(&mut g.fwd_targets),
+            &rpo.dfn,
+        )?;
 
-    g.idom =
-        dominator::compute_dominators(g.n, rpo, &g.gc_root_indices, &inb_block_off, &inb_data)?;
-    drop(inb_block_off);
-    drop(inb_data);
+        // Rebuild vertex from dfn, then free dfn; parent_pre stays live (never
+        // compressed under Codec::None) so compute_dominators reads it directly.
+        let mut rpo = rpo;
+        let count = rpo.parent_pre.len();
+        rpo.vertex = rpo_dfs::rebuild_vertex(&rpo.dfn, count);
+        rpo.dfn = Vec::new();
 
-    let (dc_off, dc_tgt) = retained::build_dom_children_csr(g.n, &g.idom);
+        g.idom = dominator::compute_dominators(
+            g.n,
+            rpo,
+            &g.gc_root_indices,
+            &inb_block_off,
+            &inb_data,
+        )?;
+        drop(inb_block_off);
+        drop(inb_data);
 
-    // g.shallow / g.class_idx are dense under Codec::None — no restore needed.
-    let class_count = g.class_names.len();
-    let (retained, has_same, _depth_counts) = retained::compute_retained(
-        g.n,
-        &g.idom,
-        &g.shallow,
-        &g.class_idx,
-        class_count,
-        &g.class_obj_class_idx,
-        &dc_off,
-        &dc_tgt,
-    );
-    g.retained = retained;
-    g.has_same_class_ancestor = has_same;
+        let (dc_off, dc_tgt) = retained::build_dom_children_csr(g.n, &g.idom);
+
+        // g.shallow / g.class_idx are dense under Codec::None — no restore needed.
+        let class_count = g.class_names.len();
+        let (retained, has_same, _depth_counts) = retained::compute_retained(
+            g.n,
+            &g.idom,
+            &g.shallow,
+            &g.class_idx,
+            class_count,
+            &g.class_obj_class_idx,
+            &dc_off,
+            &dc_tgt,
+        );
+        g.retained = retained;
+        g.has_same_class_ancestor = has_same;
+        (dc_off, dc_tgt)
+    } else {
+        // `rpo` and the forward CSR are simply dropped unused here — no dominator
+        // tree, no retained sizes. Empty dc_off/dc_tgt back the (unused) LateCtx
+        // dominator-children fields.
+        (Vec::new(), Vec::new())
+    };
 
     // Build the LateCtx exactly as run() does and resume the queries.
     let query_asts: Vec<query::ast::Query> = flat.iter().map(|(q, _)| q.clone()).collect();
