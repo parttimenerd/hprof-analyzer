@@ -217,6 +217,7 @@ where
             "usedHeapSize" => Attr::UsedHeapSize,
             "retainedHeapSize" | "retainedHeap" => Attr::RetainedHeapSize,
             "displayName" => Attr::DisplayName,
+            "name" => Attr::DisplayName,
             "length" => Attr::Length,
             "inbounds" => Attr::Inbounds,
             "outbounds" => Attr::Outbounds,
@@ -867,6 +868,7 @@ pub const ATTRIBUTES: &[&str] = &[
     "@usedHeapSize",
     "@retainedHeapSize",
     "@displayName",
+    "@name",
     "@length",
     "@inbounds",
     "@outbounds",
@@ -3497,5 +3499,20 @@ mod tests {
         assert!(super::parse("SELECT 0xFF + 1 FROM java.lang.String").is_ok());
         assert!(super::parse("SELECT 2 * 1.5D FROM java.lang.String").is_ok());
         assert!(super::parse("SELECT -0144 FROM java.lang.String").is_ok());
+    }
+
+    #[test]
+    fn parse_at_name_attribute() {
+        assert!(super::parse("SELECT @name FROM java.lang.Thread").is_ok());
+        assert!(super::parse(r#"SELECT * FROM java.lang.Thread WHERE @name = "java.lang.Thread""#)
+            .is_ok());
+    }
+
+    #[test]
+    fn parse_at_name_aliases_displayname() {
+        // `@name` must produce the SAME query AST as `@displayName`.
+        let by_name = super::parse("SELECT @name FROM java.lang.Thread").unwrap();
+        let by_display = super::parse("SELECT @displayName FROM java.lang.Thread").unwrap();
+        assert_eq!(by_name, by_display);
     }
 }
