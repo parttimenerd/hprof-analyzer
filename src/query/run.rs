@@ -566,8 +566,18 @@ pub(crate) fn resume_with_string_values(
         // A refwalk (N-hop reference-path) entry is driven entirely off the
         // query AST via `refpath_rows`; the populated refwalk ctx above is all it
         // needs. `run_entry_pub` dispatches its RefWalkResolve op to that path,
-        // exactly as `stage_runner::resume` does in the full report.
-        let is_refwalk = entry.plan.needs.ref_walk;
+        // exactly as `stage_runner::resume` does in the full report. But route it
+        // here ONLY when refwalk is the entry's SOLE late need: the query-only path
+        // builds no retained/dominator/edge structures, so an entry that ALSO needs
+        // those must fall to the error path — otherwise its retained/dominator/edge
+        // columns would silently project Null instead of erroring actionably.
+        let needs_only_refwalk = entry.plan.needs.ref_walk
+            && !entry.plan.needs.retained
+            && !entry.plan.needs.dominator_children
+            && !entry.plan.late_ops.iter().any(|op| {
+                matches!(op, StageOp::EdgeLookup { .. } | StageOp::BoundedPath { .. })
+            });
+        let is_refwalk = needs_only_refwalk;
         if is_string_only || is_refwalk {
             let q = &flat[entry.slot].0;
             let r = stage_runner::run_entry_pub(&entry, q, &ctx);

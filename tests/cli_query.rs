@@ -121,7 +121,31 @@ fn refpath_query_resolves_in_query_subcommand() {
     );
 }
 
-/// SW-5 regression: the histogram (aggregate) `COUNT(*)` path must count the
+/// A query that mixes a resolvable RefPath tail with a late need the query-only
+/// path CANNOT satisfy (retained/dominator/edge) must STILL error actionably —
+/// not silently project the unsatisfiable column as Null. Regression guard for
+/// the refwalk-route gate: routing on `needs.ref_walk` alone would send a mixed
+/// `t.name.hash, @retainedHeapSize` entry through the refwalk path, where the
+/// retained column falls through to Null instead of erroring.
+#[test]
+fn mixed_refpath_and_retained_query_still_errors() {
+    let Some(hprof) = philosophers() else { return };
+    // Confirm the pure retained query errors in the query-only path (baseline).
+    let pure = run_query_stdout(&hprof, "SELECT @retainedHeapSize FROM java.lang.Thread LIMIT 2");
+    assert!(
+        pure.to_lowercase().contains("the full analysis pipeline"),
+        "pure retained query should error in query-only path:\n{pure}"
+    );
+    // The mixed query must error the SAME way, not silently null the retained col.
+    let mixed = run_query_stdout(
+        &hprof,
+        "SELECT t.name.hash, t.@retainedHeapSize FROM java.lang.Thread t LIMIT 3",
+    );
+    assert!(
+        mixed.to_lowercase().contains("the full analysis pipeline"),
+        "mixed refpath+retained query must error, not silently null:\n{mixed}"
+    );
+}
 /// SAME object universe as the SingleScan (projection) `SELECT *` path. Class
 /// objects (HPROF `CLASS_DUMP` records, kind 3) are never delivered to the OQL
 /// visitor, so they must also be excluded from the histogram tally — otherwise
