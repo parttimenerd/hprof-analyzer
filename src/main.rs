@@ -1136,6 +1136,18 @@ fn fmt_query_value(v: &query::model::QueryValue) -> String {
 /// each result as a simple aligned text table to stdout. Never writes a file.
 fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
     let collected = collect_query_texts(&opts)?;
+    if collected.is_empty() {
+        // No `--query`, no `--query-file`, and no config `[[query]]` entries: the
+        // run would parse the dump and print nothing (exit 0), which reads as a
+        // silent success. Fail with an actionable message naming every OQL source.
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "no query given. Supply OQL with `--query \"SELECT ...\"` (repeatable), \
+             `--query-file <PATH>` (one per line), a `[[query]]` entry in \
+             `.hprof-analyzer.toml`, `--repl` (interactive shell), or `--server` \
+             (HTTP endpoint). See `hprof-analyzer query --help`.",
+        ));
+    }
     let query_texts: Vec<String> = collected.iter().map(|c| c.text.clone()).collect();
     let parsed = parse_plan_queries(&query_texts, opts.query_path_depth)?;
     let (flat, union_groups) = query::run::expand_union_queries(&parsed);

@@ -58,6 +58,36 @@ fn query_subcommand_count_prints_table() {
     );
 }
 
+/// `query <dump>` with no `--query`/`--query-file`/`--repl`/`--server` must fail
+/// with an actionable message instead of silently parsing the dump and printing
+/// nothing (which looked like a no-op success).
+#[test]
+fn query_subcommand_without_any_query_fails_with_hint() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN).arg("query").arg(&hprof).output().unwrap();
+    assert!(
+        !out.status.success(),
+        "expected non-zero exit for a query run with no OQL"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("no query given"),
+        "missing 'no query given' hint:\n{stderr}"
+    );
+    // The message must name each supported way to supply OQL.
+    for needle in ["--query", "--query-file", "--repl", "--server"] {
+        assert!(
+            stderr.contains(needle),
+            "hint should mention `{needle}`:\n{stderr}"
+        );
+    }
+    // Nothing should have been printed to stdout.
+    assert!(
+        String::from_utf8_lossy(&out.stdout).trim().is_empty(),
+        "expected empty stdout on the no-query error path"
+    );
+}
+
 /// Run a query and return its trimmed stdout.
 fn run_query_stdout(hprof: &str, oql: &str) -> String {
     let out = Command::new(BIN)
