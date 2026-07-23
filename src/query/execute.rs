@@ -823,6 +823,10 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             "getUsedHeapSize" => self.project_attr(&Attr::UsedHeapSize, src_idx, class_id, blob),
             "getRetainedHeapSize" => self.project_attr(&Attr::RetainedHeapSize, src_idx, class_id, blob),
             "getClazz" => self.project_attr(&Attr::ClassOf, src_idx, class_id, blob),
+            // For a String receiver this yields the `<class> @ 0x<addr>` display, not
+            // the decoded string content: `Expr::Method` bypasses the `SelectItem::Expr`
+            // path that arms `needs.string_values` in the planner, so the value side
+            // table is never populated. Non-String toString (the common case) is correct.
             "toString" => self.project_attr(&Attr::ToString(String::new()), src_idx, class_id, blob),
             "length" => self.project_attr(&Attr::Length, src_idx, class_id, blob),
             _ => self.emulate_jvm_method(receiver, name, args, src_idx, class_id, blob),
