@@ -83,17 +83,13 @@ fn mat_indices_match_real_fixtures() {
     // KNOWN REPRESENTATION GAPS (documented, not a regression):
     //
     // The MAT id-space remapping layer is in place: idx and domIn are now
-    // byte-identical. The remaining 6 mismatches have known root causes:
+    // byte-identical. The o2c alias-row patch reduced o2c from 97K diffs to 1.
+    // The remaining 6 mismatches have known root causes:
     //
-    // 1. PRIMITIVE-ARRAY / CLASS SERIAL ADDRESS MISMATCH (~9 class types, ~97K objects):
-    //    pass2 uses PRIM_KEY_BASE|type_code for primitive array classes and JLC_KEY
-    //    for java/lang/Class, but class_obj_class_idx uses heap addresses as keys.
-    //    When LOAD_CLASS address ≠ CLASS_DUMP address (e.g. for [I, [B, java/lang/Class),
-    //    the class-object at the CLASS_DUMP address has name_id=0 and gets registered
-    //    under "unknown@addr" → a different row from what instances use. As a result,
-    //    inv[row_[I] == -1 and all prim-array/class-obj instances get o2c=0.
-    //    Fix requires linking LOAD_CLASS serials to CLASS_DUMP addresses in pass1.
-    //    Affects: o2c, outbound (wrong class-ref slot), inbound (fewer edges).
+    // 1. O2C SYNTHETIC ROOT (mat-id 0): MAT assigns class-id 554756 to its
+    //    synthetic system-classloader object (mat-id 0). We have no equivalent
+    //    object and emit class-id 0. This is 1 value diff (3 bytes) in o2c.
+    //    Affects: o2c[0] only.
     //
     // 2. SYNTHETIC ROOT EDGES: MAT models GC roots as references from those root
     //    objects to the synthetic system-classloader (mat-id 0). This adds ~3421
@@ -117,8 +113,9 @@ fn mat_indices_match_real_fixtures() {
     //
     // The emitters and 1N/plain framing are byte-verified (27 mat:: unit tests
     // round-trip real fixtures byte-exact). The id-space remapping is correct
-    // (idx=✓, domIn=✓). The 6 remaining gaps are pre-existing data quality
-    // issues unrelated to the remapping layer.
+    // (idx=✓, domIn=✓). o2c reduced from 97K → 1 diff via the alias-row patch
+    // (committed 2026-07-23). The remaining gaps are pre-existing structural
+    // issues around the synthetic-root object and GC-root placeholder modeling.
     //
     // This test therefore asserts only that the flag runs and emits all 8
     // well-formed files; it records the byte-diff diagnosis rather than failing.
