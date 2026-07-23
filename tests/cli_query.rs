@@ -114,6 +114,54 @@ fn repl_with_inline_query_warns_it_is_ignored() {
     );
 }
 
+/// A `SELECT ... FROM <plain class name not in the dump>` returns zero rows and
+/// a note explaining the class is absent, so a typo'd class name is not
+/// mistaken for "exists but empty".
+#[test]
+fn query_from_unknown_class_notes_it_is_absent() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query", "SELECT * FROM com.example.DoesNotExist"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "unknown-class query should still exit 0: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("0 rows"),
+        "unknown class should yield zero rows:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("com.example.DoesNotExist") && stdout.to_lowercase().contains("no class"),
+        "expected a 'no class named ...' note:\n{stdout}"
+    );
+}
+
+/// A real class present in the dump must NOT get the "no class" note even when
+/// the query legitimately returns zero rows (WHERE excludes everything).
+#[test]
+fn query_from_known_class_has_no_absent_note() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        // java.lang.String exists; a never-true WHERE yields zero rows.
+        .args(["--query", "SELECT * FROM java.lang.String WHERE @objectId = 0"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "known-class query failed");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.to_lowercase().contains("no class"),
+        "known class must not get an absent-class note:\n{stdout}"
+    );
+}
+
 /// Run a query and return its trimmed stdout.
 fn run_query_stdout(hprof: &str, oql: &str) -> String {
     let out = Command::new(BIN)

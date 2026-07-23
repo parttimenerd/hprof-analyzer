@@ -1077,6 +1077,72 @@ fn finalize_query_labels(
     }
 }
 
+/// True when a FROM target is a *plain* class name — a bare dotted identifier,
+/// not `INSTANCEOF`, not a double-quoted regex, not a `pkg.*` glob, and not an
+/// array (`[]`) target. Only for such a FROM does "zero rows" unambiguously
+/// mean "no such class" (a glob/regex/instanceof can legitimately match nothing
+/// without any single named class being absent).
+fn is_plain_class_from(q: &query::ast::Query) -> Option<&str> {
+    let spec = q.from.class_spec()?;
+    if spec.instanceof || spec.is_regex {
+        return None;
+    }
+    let name = spec.class_name.as_str();
+    if name.contains('*') || name.ends_with("[]") || name.is_empty() {
+        return None;
+    }
+    Some(name)
+}
+
+/// Annotate each zero-row result whose query selects `FROM <plain class name>`
+/// with a note when that class is absent from the dump, so a typo'd or wrong
+/// class name is not silently reported as an empty-but-valid result. The dump's
+/// class-name set is resolved lazily (one cheap pass1) and ONLY when at least
+/// one result is a zero-row plain-class candidate, so the common (non-empty or
+/// non-plain) case pays nothing. Skips UNION-collapsed runs, where result and
+/// query indices no longer align one-to-one.
+fn annotate_missing_classes(
+    input: &str,
+    results: &mut [query::model::QueryResult],
+    queries: &[(query::ast::Query, query::plan::QueryPlan)],
+) {
+    // Index alignment (results[i] <-> queries[i]) only holds without UNION
+    // collapse, which is exactly when the counts match.
+    if results.len() != queries.len() {
+        return;
+    }
+    let has_candidate = results.iter().zip(queries.iter()).any(|(r, (q, _))| {
+        r.error.is_none() && r.row_count == 0 && is_plain_class_from(q).is_some()
+    });
+    if !has_candidate {
+        return;
+    }
+    // Resolve the dump's dotted class-name set once (slash-form normalized to
+    // dots, matching how FROM names are written and how LiveResolver maps them).
+    let Ok(p1) = Pass1::run(input) else { return };
+    let names: std::collections::HashSet<String> = p1
+        .class_map
+        .values()
+        .filter_map(|ci| p1.strings.get(&ci.name_id).map(|s| s.replace('/', ".")))
+        .collect();
+    for (r, (q, _)) in results.iter_mut().zip(queries.iter()) {
+        if r.error.is_some() || r.row_count != 0 {
+            continue;
+        }
+        if let Some(name) = is_plain_class_from(q) {
+            if !names.contains(name) {
+                append_note(
+                    r,
+                    &format!(
+                        "no class named `{name}` in this dump \
+                         (check the fully-qualified name, or use a `pkg.*` glob)"
+                    ),
+                );
+            }
+        }
+    }
+}
+
 /// Attach each collected query's [`VizSpec`] to its result, and fold any
 /// directive warning into the result `note`. A well-formed directive whose
 /// columns cannot be resolved against the actual result (unknown/non-numeric
@@ -1231,6 +1297,7 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
     // Fill in blank oql text and default names (from-target-derived, else
     // `q{N}`) for the printed tables.
     finalize_query_labels(&mut query_results, &query_texts, &parsed);
+    annotate_missing_classes(input, &mut query_results, &parsed);
     attach_viz(&mut query_results, &collected);
 
     let mut out = String::new();
@@ -1253,7 +1320,11 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
         }
         let plural = if r.row_count == 1 { "row" } else { "rows" };
         let trunc = if r.truncated { ", truncated" } else { "" };
-        out.push_str(&format!("({} {}{})\n\n", r.row_count, plural, trunc));
+        out.push_str(&format!("({} {}{})\n", r.row_count, plural, trunc));
+        if let Some(note) = &r.note {
+            out.push_str(&format!("note: {note}\n"));
+        }
+        out.push('\n');
     }
     print!("{out}");
     Ok(())
