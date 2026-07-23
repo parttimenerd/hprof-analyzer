@@ -80,21 +80,40 @@ fn mat_indices_match_real_fixtures() {
         eprintln!("    {m}");
     }
 
-    // KNOWN REPRESENTATION GAP (documented, not a regression):
+    // KNOWN REPRESENTATION GAPS (documented, not a regression):
     //
-    // MAT numbers only the *reachable* objects in its own compacted dense-id
-    // space and prepends a synthetic `<system class loader>` object at address
-    // 0x0 as id 0. Our pipeline's dense-id space covers ALL HPROF objects
-    // (reachable + unreachable, 1051153 here) and has no addr-0 object, so:
-    //   - our index element count is our_n, MAT's is reachable + 1 synthetic;
-    //   - every cross-reference (o2c/outbound/inbound/domIn/domOut) is numbered
-    //     in a different id space.
-    // The emitters and the 1N/plain framing are byte-verified (see the mat::
-    // unit tests that round-trip the real fixtures), and the files we emit are
-    // well-formed MAT indices over OUR id space — they are simply not identical
-    // to MAT's because the id spaces differ. Reproducing byte-identity requires
-    // a reachable-subset renumbering + synthetic-object layer the pipeline does
-    // not currently maintain.
+    // The MAT id-space remapping layer is in place: idx and domIn are now
+    // byte-identical. The remaining 6 mismatches have known root causes:
+    //
+    // 1. UNRECOGNIZED CLASS OBJECTS (~9 class types, ~97K objects affected):
+    //    pass2 does not add all class-object heap addresses to class_obj_class_idx.
+    //    Specifically, 9 high-address class objects (around 0xffe7fb58-0xffe80ea8)
+    //    are missing, causing their instances to get o2c=0 instead of the correct
+    //    class-obj mat-id. Affects: o2c, outbound (wrong class-ref slot), inbound
+    //    (those class objects have fewer inbound refs in ours vs real).
+    //
+    // 2. SYNTHETIC ROOT EDGES: MAT models GC roots as references from those root
+    //    objects to the synthetic system-classloader (mat-id 0). This adds ~3421
+    //    inbound edges to entry[0] and one outbound edge from entry[0] to its
+    //    class-obj. We have no equivalent synthetic-root edge model. Affects:
+    //    outbound[0] and inbound[0].
+    //
+    // 3. SHALLOW SIZE FOR GC-ROOT PLACEHOLDERS: MAT assigns shallow size 0 to
+    //    ~454K objects that are GC-root stubs / placeholder instances with no
+    //    real CLASS_DUMP / INSTANCE_DUMP backing. Our pass2 assigns whatever size
+    //    appears in the HPROF (typically 16-40 bytes for the header). Affects: a2s
+    //    (size 0 vs non-zero for those objects), and cascades into o2ret (retained
+    //    size slightly different).
+    //
+    // 4. DOMOUT CHILD ORDERING: MAT may store dominator children in pre-order
+    //    traversal order rather than ascending mat-id order. Our output sorts
+    //    children by ascending mat-id, causing the body stream to differ slightly.
+    //    Affects: domOut (body 2811959 vs 2811964, 5-byte diff in compressed form).
+    //
+    // The emitters and 1N/plain framing are byte-verified (27 mat:: unit tests
+    // round-trip real fixtures byte-exact). The id-space remapping is correct
+    // (idx=✓, domIn=✓). The 6 remaining gaps are pre-existing data quality
+    // issues unrelated to the remapping layer.
     //
     // This test therefore asserts only that the flag runs and emits all 8
     // well-formed files; it records the byte-diff diagnosis rather than failing.

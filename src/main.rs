@@ -856,18 +856,21 @@ fn run(
     // is compressed just below). Also precompute the histogram-row ->
     // class-object-id inverse table once; it feeds both o2c and the outbound
     // pseudo class element downstream.
-    let mat_inv: Option<Vec<i32>> = if let Some(ref m) = mat {
+    // MAT id-space remapping: addresses are only available now (before compress).
+    // We snapshot all g.n addresses so MatIdMap::build can sort reachable ones by
+    // address after idom is known (post compute_dominators). The snapshot is a
+    // Vec<u64> of length g.n (~8 MB at 1M objects), freed as soon as the map is
+    // built.
+    let (mat_inv, mat_addrs): (Option<Vec<i32>>, Option<Vec<u64>>) = if let Some(_) = mat {
         let id_map = inbound
             .id_map
             .as_ref()
             .expect("id_map must be live before compress_id_map for MAT idx emit");
-        m.emit_idx(g.n, |i| id_map.addr_at(i))?;
-        Some(mat::build_row_to_classobj_id(
-            &g.class_obj_class_idx,
-            g.class_names.len(),
-        ))
+        let addrs: Vec<u64> = (0..g.n).map(|i| id_map.addr_at(i)).collect();
+        let inv = mat::build_row_to_classobj_id(&g.class_obj_class_idx, g.class_names.len());
+        (Some(inv), Some(addrs))
     } else {
-        None
+        (None, None)
     };
     inbound.compress_id_map(compress)?;
     // shallow/class_idx were already compressed inside pass2 (before the
@@ -935,22 +938,21 @@ fn run(
     // coexists with the large inb_flat intermediate.
     let t = Instant::now();
     progress::phase("building inbound references");
-    // MAT: emit the `outbound` IntArray1N before build_from_fwd consumes the
-    // forward CSR. Each entry = [class-object id] ++ sorted-unique(fwd targets).
-    // class_idx is transiently restored from its compressed blob (~4 MB per 1M
-    // objects) just for this pass and dropped immediately. Zero cost when --mat
-    // is absent.
-    if let Some(ref m) = mat {
+    // MAT: snapshot the forward CSR and class_idx before build_from_fwd consumes
+    // them. We need these to assemble outbound entries in MAT id order after
+    // compute_dominators builds mat_map. Holding the snapshot through the
+    // dominator window is ~20-30 MB (offsets + flat targets + class rows).
+    let mat_fwd_snap: Option<(Vec<u32>, Vec<u32>, Vec<u32>)> = if mat.is_some() {
         let inv = mat_inv.as_ref().expect("mat_inv built when mat present");
         let class_idx: Vec<u32> = class_idx_c.restore()?;
         let n = g.n;
-        let mut entries: Vec<Vec<i32>> = Vec::with_capacity(n);
+        let fwd_off = g.fwd_offsets.clone();
+        let total_edges = g.fwd_offsets[n] as usize;
+        let mut fwd_tgt: Vec<u32> = Vec::with_capacity(total_edges);
         let mut buf: Vec<u32> = Vec::new();
-        let mut tgt: Vec<i32> = Vec::new();
         for i in 0..n {
             let lo = g.fwd_offsets[i] as usize;
             let hi = g.fwd_offsets[i + 1] as usize;
-            tgt.clear();
             if hi > lo {
                 let slice: &[u32] = if let Some(sl) = g.fwd_targets.range_slice(lo, hi) {
                     sl
@@ -958,20 +960,22 @@ fn run(
                     g.fwd_targets.copy_range(lo, hi, &mut buf);
                     &buf
                 };
-                tgt.extend(slice.iter().map(|&v| v as i32));
-                tgt.sort_unstable();
-                tgt.dedup();
+                fwd_tgt.extend_from_slice(slice);
             }
-            let mut e: Vec<i32> = Vec::with_capacity(tgt.len() + 1);
-            e.push(inv[class_idx[i] as usize]);
-            e.extend_from_slice(&tgt);
-            entries.push(e);
         }
+        // Also translate class-object ids to their inverse row (class_obj_old per obj)
+        // = inv[class_idx[i]], stored as the first element. We keep it as old dense-id
+        // here; translation to mat-id happens after mat_map is built.
+        let class_obj_ids: Vec<u32> = (0..n).map(|i| {
+            let row = class_idx[i];
+            let coid = inv[row as usize]; // -1 if missing, else old dense class-obj id
+            if coid < 0 { u32::MAX } else { coid as u32 }
+        }).collect();
         drop(class_idx);
-        m.emit_outbound(&entries)?;
-        drop(entries);
-        crate::trace::trim();
-    }
+        Some((fwd_off, fwd_tgt, class_obj_ids))
+    } else {
+        None
+    };
     // fwd_offsets and fwd_targets are moved into build_from_fwd so they can be
     // freed INSIDE the call, before Phase 4 allocates inb_data.
     let (inb_block_off, inb_data) = inbound.build_from_fwd(
@@ -998,18 +1002,14 @@ fn run(
         crate::trace::probe("main: after restore parent_pre (before dominator)");
     }
 
-    // MAT: emit the `inbound` IntArray1N before compute_dominators consumes
-    // `rpo` (we need rpo.vertex to map pre-order -> dense id). The inbound CSR
-    // stores each node's referrers as pre-order numbers (delta-vbyte, sorted by
-    // pre-order); MAT stores them as dense object ids in that same pre-order
-    // order. We decode the blocked CSR sequentially (nodes 0..n in order, no
-    // seeking) and translate each pre-order via rpo.vertex. Nodes with no
-    // referrer become MAT holes (empty entries). No pseudo class element
-    // (unlike outbound). Zero cost when --mat is absent.
-    if let Some(ref m) = mat {
+    // MAT: decode the inbound CSR into per-node referrer lists (keyed by OLD
+    // dense-id) before compute_dominators consumes rpo (we need rpo.vertex to
+    // map pre-order -> dense id). Translation to mat-ids happens after mat_map
+    // is built (post compute_dominators). Zero cost when --mat is absent.
+    let mat_inb_raw: Option<Vec<Vec<i32>>> = if mat.is_some() {
         let vertex = &rpo.vertex;
         let n = g.n;
-        let mut entries: Vec<Vec<i32>> = Vec::with_capacity(n);
+        let mut by_old: Vec<Vec<i32>> = Vec::with_capacity(n);
         let mut pos = 0usize;
         for _w in 0..n {
             let (count, c0) = vbyte::decode_one(&inb_data[pos..]);
@@ -1020,16 +1020,17 @@ fn run(
                 let (delta, c1) = vbyte::decode_one(&inb_data[pos..]);
                 pos += c1;
                 prev += delta;
-                // pre-order 0 = virtual root; real objects are pre-order >= 1.
-                // vertex maps pre-order -> node/dense id.
-                e.push(vertex[prev as usize] as i32);
+                // pre-order 0 = virtual root (skip it); real objects pre-order >= 1.
+                if prev > 0 {
+                    e.push(vertex[prev as usize] as i32); // old dense-id
+                }
             }
-            entries.push(e);
+            by_old.push(e);
         }
-        m.emit_inbound(&entries)?;
-        drop(entries);
-        crate::trace::trim();
-    }
+        Some(by_old)
+    } else {
+        None
+    };
 
     let t = Instant::now();
     progress::phase("computing dominators");
@@ -1038,22 +1039,113 @@ fn run(
     g.idom =
         dominator::compute_dominators(g.n, rpo, &g.gc_root_indices, &inb_block_off, &inb_data)?;
     log(verbose, "dominator", t.elapsed().as_secs_f64());
-    // MAT: emit the `domIn` IntIndex now that g.idom is set. MAT stores the
-    // immediate-dominator OBJECT id + 2, where the superroot has object id -1
-    // (so a root dominated by the superroot stores 1). Our idom uses `n` (the
-    // virtual root) for that case and u32::MAX for unreachable nodes; both map
-    // to the -1 superroot -> stored value 1.
+    // MAT id-space remapping: now that idom is set we can build the mapping from
+    // our dense-id space to MAT's (reachable-only, address-sorted, id-0=synthetic).
+    // mat_addrs was captured before compress_id_map; drop it right after emitting idx.
+    let mat_map: Option<mat::MatIdMap> = if let Some(addrs) = mat_addrs {
+        let mm = mat::MatIdMap::build(g.n, &g.idom, |i| addrs[i]);
+        // emit idx: mat-id 0 = address 0x0 (synthetic root), then sorted reachable
+        if let Some(ref m) = mat {
+            let mc = mm.mat_count();
+            let mut idx_vals: Vec<i64> = Vec::with_capacity(mc);
+            idx_vals.push(0i64); // synthetic root at address 0x0
+            for &old_id in mm.sorted() {
+                idx_vals.push(addrs[old_id as usize] as i64);
+            }
+            m.emit_long_index("idx", &idx_vals)?;
+        }
+        Some(mm)
+    } else {
+        None
+    };
+    // MAT: emit `outbound` IntArray1N in MAT id order. mat-id 0 (synthetic root)
+    // gets an empty entry. For mat-ids 1..N we look up the old dense-id in
+    // mat_fwd_snap (fwd offsets, flat targets, per-object class-obj old id),
+    // sort+dedup the targets, translate each to mat-id (filtering unreachable),
+    // and prepend the class-object mat-id.
     if let Some(ref m) = mat {
+        let mm = mat_map.as_ref().expect("mat_map built with mat");
+        if let Some((fwd_off, fwd_tgt, class_obj_ids)) = mat_fwd_snap.as_ref() {
+            let mc = mm.mat_count();
+            let mut entries: Vec<Vec<i32>> = Vec::with_capacity(mc);
+            entries.push(Vec::new()); // entry 0 = synthetic root (no outbound)
+            let mut tgt: Vec<i32> = Vec::new();
+            for &old_id in mm.sorted() {
+                let lo = fwd_off[old_id as usize] as usize;
+                let hi = fwd_off[old_id as usize + 1] as usize;
+                tgt.clear();
+                for &raw in &fwd_tgt[lo..hi] {
+                    let mid = mm.translate(raw as i32);
+                    if mid >= 0 { tgt.push(mid); }
+                }
+                tgt.sort_unstable();
+                tgt.dedup();
+                let coid = class_obj_ids[old_id as usize];
+                let class_mat = if coid == u32::MAX { 0 } else { mm.translate(coid as i32).max(0) };
+                // Remove the class-object mat-id from the targets: MAT stores it
+                // separately as entry[0] (the pseudo class-ref) and does NOT
+                // include it in the forward-reference list.
+                if let Ok(pos) = tgt.binary_search(&class_mat) {
+                    tgt.remove(pos);
+                }
+                let mut e: Vec<i32> = Vec::with_capacity(tgt.len() + 1);
+                e.push(class_mat);
+                e.extend_from_slice(&tgt);
+                entries.push(e);
+            }
+            m.emit_outbound(&entries)?;
+            drop(entries);
+            crate::trace::trim();
+        }
+    }
+    drop(mat_fwd_snap);
+    // MAT: emit `inbound` IntArray1N in MAT id order. mat-id 0 gets an empty entry.
+    // For mat-ids 1..N look up the old dense-id in mat_inb_raw, translate each
+    // referrer old-id to a mat-id (filtering unreachable).
+    if let Some(ref m) = mat {
+        let mm = mat_map.as_ref().expect("mat_map built with mat");
+        if let Some(by_old) = mat_inb_raw.as_ref() {
+            let mc = mm.mat_count();
+            let mut entries: Vec<Vec<i32>> = Vec::with_capacity(mc);
+            entries.push(Vec::new()); // entry 0 = synthetic root (no inbound)
+            for &old_id in mm.sorted() {
+                let raw = &by_old[old_id as usize];
+                let mut e: Vec<i32> = raw
+                    .iter()
+                    .filter_map(|&v| { let mid = mm.translate(v); if mid >= 0 { Some(mid) } else { None } })
+                    .collect();
+                e.sort_unstable();
+                entries.push(e);
+            }
+            m.emit_inbound(&entries)?;
+            drop(entries);
+            crate::trace::trim();
+        }
+    }
+    drop(mat_inb_raw);
+    // MAT: emit the `domIn` IntIndex in MAT id order. mat-id 0 (synthetic root)
+    // has no dominator (superroot = -1, stored as 1). For mat-ids 1..N look up
+    // the old dense-id, translate idom[old] to a mat-id, then add 2 per MAT's
+    // convention (superroot stored as 1, id 0 → 2, etc.).
+    if let Some(ref m) = mat {
+        let mm = mat_map.as_ref().expect("mat_map built with mat");
         let n_u = g.n as u32;
-        let domin: Vec<i32> = g
-            .idom
-            .iter()
-            .take(g.n)
-            .map(|&d| {
-                let obj = if d == n_u || d == u32::MAX { -1i32 } else { d as i32 };
-                obj + 2
-            })
-            .collect();
+        let mc = mm.mat_count();
+        let mut domin: Vec<i32> = Vec::with_capacity(mc);
+        // id-0 = synthetic superroot, its own dominator is the superroot (-1+2=1)
+        domin.push(1i32);
+        for &old_id in mm.sorted() {
+            let d = g.idom[old_id as usize];
+            let mat_idom = if d == n_u || d == u32::MAX {
+                // dominated by virtual root = MAT superroot (-1), stored +2 = 1
+                1i32
+            } else {
+                // translate old idom to mat-id (+2 per MAT convention)
+                let mid = mm.translate(d as i32);
+                if mid < 0 { 1i32 } else { mid + 2 }
+            };
+            domin.push(mat_idom);
+        }
         m.emit_dom_in(&domin)?;
     }
     // The inbound (referrer) CSR is consumed by the dominator and never read
@@ -1074,37 +1166,81 @@ fn run(
     let (dc_off, dc_tgt) = retained::build_dom_children_csr(g.n, &g.idom);
     crate::trace::probe("main: after build_dom_children_csr");
 
-    // MAT: emit the `domOut` IntArray1N (unsorted). It has n+1 entries: entry 0
-    // is the superroot's children (objects dominated by the virtual root, i.e.
-    // the GC roots / top-level dominators = vroot's children in our CSR), and
-    // entry k+1 is object k's dominator children. Our CSR fills children in
-    // ascending object-id order; MAT's own traversal order may differ, which
-    // can make this index diverge byte-for-byte (see the verification report).
+    // MAT: emit the `domOut` IntArray1N (unsorted) in MAT id order.
+    // mat_count+1 entries: entry 0 = synthetic root's children (= the objects
+    // whose MAT idom == superroot, i.e. our vroot's dom-children translated to
+    // mat-ids). Entry k+1 = dom-children of mat-id k (for k in 1..mat_count).
     if let Some(ref m) = mat {
+        let mm = mat_map.as_ref().expect("mat_map built with mat");
         let n = g.n;
-        let mut entries: Vec<Vec<i32>> = Vec::with_capacity(n + 1);
-        // entry 0 = vroot's children (dc_off[n]..dc_off[n+1]).
-        let lo = dc_off[n] as usize;
-        let hi = dc_off[n + 1] as usize;
-        entries.push(dc_tgt[lo..hi].iter().map(|&v| v as i32).collect());
-        // entry k+1 = children of object k.
-        for k in 0..n {
-            let lo = dc_off[k] as usize;
-            let hi = dc_off[k + 1] as usize;
-            entries.push(dc_tgt[lo..hi].iter().map(|&v| v as i32).collect());
+        let mc = mm.mat_count();
+        let mut entries: Vec<Vec<i32>> = Vec::with_capacity(mc + 1);
+
+        // entry 0: vroot's dom-children in mat-id space (sorted)
+        let lo0 = dc_off[n] as usize;
+        let hi0 = dc_off[n + 1] as usize;
+        let mut vroot_children: Vec<i32> = dc_tgt[lo0..hi0]
+            .iter()
+            .filter_map(|&v| {
+                let mid = mm.translate(v as i32);
+                if mid >= 0 { Some(mid) } else { None }
+            })
+            .collect();
+        vroot_children.sort_unstable();
+        entries.push(vroot_children);
+
+        // entries 1..mc: one per mat-id 1..mat_count (= sorted reachable objects)
+        for &old_id in mm.sorted() {
+            let lo = dc_off[old_id as usize] as usize;
+            let hi = dc_off[old_id as usize + 1] as usize;
+            let mut children: Vec<i32> = dc_tgt[lo..hi]
+                .iter()
+                .filter_map(|&v| {
+                    let mid = mm.translate(v as i32);
+                    if mid >= 0 { Some(mid) } else { None }
+                })
+                .collect();
+            children.sort_unstable();
+            entries.push(children);
         }
         m.emit_dom_out(&entries)?;
         drop(entries);
         crate::trace::trim();
     }
 
-    // MAT: emit o2c (dense id -> class-object id) and a2s (dense id -> shallow
-    // size) from the still-compressed blobs before they are restored/dropped.
-    // These stream directly out of the compressed forms.
+    // MAT: emit o2c (mat-id -> class-object mat-id) and a2s (mat-id -> shallow
+    // size) in MAT id order. Restore the compressed blobs transiently for random
+    // access by old dense-id; the restore below will do it again for the report
+    // phase (restoring a compressed blob is idempotent and cheap).
     if let Some(ref m) = mat {
+        let mm = mat_map.as_ref().expect("mat_map built with mat");
         let inv = mat_inv.as_ref().expect("mat_inv built when mat present");
-        m.emit_o2c(&class_idx_c, inv)?;
-        m.emit_a2s(&shallow_c)?;
+        let class_idx_vec: Vec<u32> = class_idx_c.restore()?;
+        let shallow_vec: Vec<u32> = shallow_c.restore()?;
+        let mc = mm.mat_count();
+
+        // o2c: mat-id 0 (synthetic root) → class-id 0
+        let mut o2c_vals: Vec<i32> = Vec::with_capacity(mc);
+        o2c_vals.push(0i32);
+        for &old_id in mm.sorted() {
+            let row = class_idx_vec[old_id as usize];
+            let class_obj_old = inv[row as usize]; // old dense class-object id (-1 = missing)
+            let class_obj_mat = mm.translate(class_obj_old);
+            o2c_vals.push(if class_obj_mat >= 0 { class_obj_mat } else { 0 });
+        }
+        drop(class_idx_vec);
+        m.emit_int_index("o2c", &o2c_vals)?;
+        drop(o2c_vals);
+
+        // a2s: mat-id 0 → size 0; others from shallow in old-id order
+        let mut a2s_vals: Vec<i32> = Vec::with_capacity(mc);
+        a2s_vals.push(0i32);
+        for &old_id in mm.sorted() {
+            let sz = shallow_vec[old_id as usize] as i64;
+            a2s_vals.push(mat::size_compress(sz));
+        }
+        drop(shallow_vec);
+        m.emit_int_index("a2s", &a2s_vals)?;
     }
 
     // Restore shallow/class_idx now that the CSR-build transient has freed
@@ -1134,11 +1270,17 @@ fn run(
     g.has_same_class_ancestor = has_same;
     log(verbose, "retained", t.elapsed().as_secs_f64());
 
-    // MAT: emit the `o2ret` LongIndex (dense id -> retained size in bytes) now
-    // that g.retained is populated.
+    // MAT: emit the `o2ret` LongIndex in MAT id order.
+    // mat-id 0 (synthetic root) gets 0 retained size.
     if let Some(ref m) = mat {
-        let ret_i64: Vec<i64> = g.retained.iter().map(|&r| r as i64).collect();
-        m.emit_o2ret(&ret_i64)?;
+        let mm = mat_map.as_ref().expect("mat_map built with mat");
+        let mc = mm.mat_count();
+        let mut o2ret_vals: Vec<i64> = Vec::with_capacity(mc);
+        o2ret_vals.push(0i64); // synthetic root
+        for &old_id in mm.sorted() {
+            o2ret_vals.push(g.retained[old_id as usize] as i64);
+        }
+        m.emit_long_index("o2ret", &o2ret_vals)?;
     }
 
     // Restore + aggregate + free the alloc stack serials in a bounded window

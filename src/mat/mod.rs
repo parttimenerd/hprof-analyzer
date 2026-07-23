@@ -11,6 +11,65 @@ use std::path::{Path, PathBuf};
 use crate::cvec::CompressedU32;
 use int_index::{IntIndexStreamer, LongIndexStreamer};
 
+/// Maps our internal dense-id space (all objects, encounter order) to MAT's
+/// id space (reachable-only, address-sorted, id-0 = synthetic system-classloader
+/// at address 0x0).
+///
+/// `old_to_mat[old_id]` = mat-id (1..=reachable_count), or -1 for unreachable
+/// objects and sentinel values. MAT id 0 is the synthetic root (address 0x0),
+/// never present in `old_to_mat`.
+pub struct MatIdMap {
+    /// old dense-id -> mat-id (1-based for real objects, -1 for unreachable)
+    old_to_mat: Vec<i32>,
+    /// reachable old-ids in address-ascending order (mat-id = index+1)
+    sorted: Vec<u32>,
+}
+
+impl MatIdMap {
+    /// Build the MAT id-space mapping.
+    ///
+    /// - `n`: `g.n` — total object count in our dense-id space
+    /// - `idom`: dominator array of length n+1; `idom[i] == u32::MAX` marks
+    ///   unreachable objects
+    /// - `addr_at`: closure returning the object address for a given dense-id;
+    ///   must be callable while the id_map is still live (before compress)
+    pub fn build(n: usize, idom: &[u32], addr_at: impl Fn(usize) -> u64) -> Self {
+        let mut sorted: Vec<u32> = (0..n as u32)
+            .filter(|&i| idom[i as usize] != u32::MAX)
+            .collect();
+        sorted.sort_by_key(|&i| addr_at(i as usize));
+
+        let mut old_to_mat = vec![-1i32; n];
+        for (mat_pos, &old_id) in sorted.iter().enumerate() {
+            // mat-id 0 = synthetic root; real objects start at 1
+            old_to_mat[old_id as usize] = (mat_pos + 1) as i32;
+        }
+
+        Self { old_to_mat, sorted }
+    }
+
+    /// Translate an old dense-id to a mat-id. Returns -1 for unreachable
+    /// objects or out-of-range values.
+    #[inline]
+    pub fn translate(&self, old: i32) -> i32 {
+        if old < 0 || old as usize >= self.old_to_mat.len() {
+            return -1;
+        }
+        self.old_to_mat[old as usize]
+    }
+
+    /// Total number of MAT objects (includes synthetic id-0 = reachable+1).
+    pub fn mat_count(&self) -> usize {
+        self.sorted.len() + 1
+    }
+
+    /// Reachable old-ids in address-ascending (= mat-id ascending) order.
+    /// `sorted()[i]` has mat-id `i + 1`.
+    pub fn sorted(&self) -> &[u32] {
+        &self.sorted
+    }
+}
+
 #[allow(dead_code)]
 pub struct MatEmitter {
     dir: PathBuf,
@@ -100,6 +159,32 @@ impl MatEmitter {
         let mut s = IntIndexStreamer::new(w);
         for &d in idom {
             s.push(d)?;
+        }
+        let w = s.finish()?;
+        w.into_inner().map_err(|e| e.into_error())?.sync_all()?;
+        Ok(())
+    }
+
+    /// Emit a named IntIndex from a pre-built `&[i32]` slice (used for remapped
+    /// o2c and a2s where values are assembled in MAT id order by the caller).
+    pub fn emit_int_index(&self, name: &str, vals: &[i32]) -> io::Result<()> {
+        let w = BufWriter::new(File::create(self.path(name))?);
+        let mut s = IntIndexStreamer::new(w);
+        for &v in vals {
+            s.push(v)?;
+        }
+        let w = s.finish()?;
+        w.into_inner().map_err(|e| e.into_error())?.sync_all()?;
+        Ok(())
+    }
+
+    /// Emit a named LongIndex from a pre-built `&[i64]` slice (used for remapped
+    /// idx and o2ret where values are assembled in MAT id order by the caller).
+    pub fn emit_long_index(&self, name: &str, vals: &[i64]) -> io::Result<()> {
+        let w = BufWriter::new(File::create(self.path(name))?);
+        let mut s = LongIndexStreamer::new(w);
+        for &v in vals {
+            s.push(v)?;
         }
         let w = s.finish()?;
         w.into_inner().map_err(|e| e.into_error())?.sync_all()?;
@@ -420,5 +505,46 @@ mod tests {
                 at
             );
         }
+    }
+
+    // ── MatIdMap unit tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn mat_id_map_address_sorted_reachable_only() {
+        // 5 objects: addresses out of order, object 2 is unreachable (idom==MAX)
+        // dense ids:   0      1      2          3      4
+        let addrs = [0x300u64, 0x100, 0x500, 0x200, 0x400];
+        // idom: 0→vroot(5), 1→0, 2→UNREACHABLE, 3→0, 4→0, vroot→vroot
+        let mut idom = vec![5u32, 0, u32::MAX, 0, 0, 5];
+        idom[5] = 5; // virtual root self-loop
+
+        let map = MatIdMap::build(5, &idom, |i| addrs[i]);
+
+        // mat-id 0 = synthetic; reachable sorted by addr: 1(0x100) 3(0x200) 0(0x300) 4(0x400)
+        assert_eq!(map.mat_count(), 5); // 4 reachable + synthetic id-0
+        assert_eq!(map.sorted(), &[1u32, 3, 0, 4]);
+
+        // old-id 1 → mat-id 1 (smallest addr among reachable)
+        assert_eq!(map.translate(1), 1);
+        assert_eq!(map.translate(3), 2);
+        assert_eq!(map.translate(0), 3);
+        assert_eq!(map.translate(4), 4);
+        // unreachable object 2 → -1
+        assert_eq!(map.translate(2), -1);
+        // out-of-range → -1
+        assert_eq!(map.translate(-1), -1);
+        assert_eq!(map.translate(99), -1);
+    }
+
+    #[test]
+    fn mat_id_map_all_reachable() {
+        // 3 objects, all reachable, already address-sorted
+        let addrs = [0x10u64, 0x20, 0x30];
+        let idom = vec![3u32, 3, 3, 3]; // all dominated by vroot (index 3)
+        let map = MatIdMap::build(3, &idom, |i| addrs[i]);
+        assert_eq!(map.mat_count(), 4);
+        assert_eq!(map.translate(0), 1);
+        assert_eq!(map.translate(1), 2);
+        assert_eq!(map.translate(2), 3);
     }
 }
