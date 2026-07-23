@@ -1938,11 +1938,13 @@ function TopConsumersSection({ report }: { report: Report }) {
 // the upstream (thread_serial-sorted) order for determinism.
 // a small table of a thread's GC-thread-local root
 // objects. Renders nothing for an empty list. Mirrors report.rs::render_thread_locals.
-function ThreadLocalsTable({ objs }: { objs: ThreadLocalObj[] }) {
+function ThreadLocalsTable({ objs, totalCount }: { objs: ThreadLocalObj[]; totalCount: number }) {
   if (objs.length === 0) return null;
   return (
     <div className="thread-locals-inline">
-      <p className="thread-locals-label">Local root objects ({fmtCount(objs.length)})</p>
+      <p className="thread-locals-label">Local root objects ({fmtCount(objs.length)}
+        {objs.length < totalCount && ` — showing top ${fmtCount(objs.length)} of ${fmtCount(totalCount)}; sizes overlap and do not sum to thread total`}
+      )</p>
       <table>
         <thead>
           <tr>
@@ -2010,7 +2012,7 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
             <span className="thread-meta-item"><span className="thread-meta-label">state</span>{t.thread_state.replace(/[\[\]]/g, "")}</span>
           )}
         </div>
-        {t.local_objects && <ThreadLocalsTable objs={t.local_objects} />}
+        {t.local_objects && <ThreadLocalsTable objs={t.local_objects} totalCount={t.local_root_count} />}
         {sig.length > 0 ? (
           <ul className="sig-frames">
             {sig.map((sf, i) => (
@@ -2021,7 +2023,7 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
                     {sf.locals.map((loc, j) => (
                       <li key={j}>
                         <code>{loc.display_class}</code>{" "}
-                        <span className="path-ret">retains {formatBytes(loc.retained)} ({fmtPct(loc.pct)})</span>
+                        <span className="path-ret">retains {formatBytes(loc.retained)} ({fmtPct(loc.pct)} of thread retained)</span>
                       </li>
                     ))}
                   </ul>
