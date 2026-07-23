@@ -1976,6 +1976,13 @@
         "display_class": {
           "type": "string"
         },
+        "field_edge": {
+          "description": "Field name on the parent node that points to this child; only present\nwhen `--ref-paths` was set and a consistent field name was found across\nall chains that pass through this node.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "object_count": {
           "description": "Number of member chains passing through this node.",
           "type": "integer",
@@ -2422,6 +2429,13 @@
       "properties": {
         "display_class": {
           "type": "string"
+        },
+        "field_edge": {
+          "description": "Name of the field on this object that points to the next hop (parent's\nfield → child). Only present when `--ref-paths` was set. Empty string\nmeans \"no field name available\" (class edge, array element, synthetic\nthread-local edge).",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "obj_index_1based": {
           "type": "integer",

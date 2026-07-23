@@ -422,6 +422,15 @@ pub struct Graph {
     /// means null or unresolvable. `None` when `--collections` was off.
     /// Consumed by build_model to show real K/V types in Biggest Collections.
     pub node_kv: Option<std::collections::HashMap<u32, (u32, u32)>>,
+    /// Per-edge field-name index, parallel to `fwd_targets` (same length).
+    /// `fwd_field_name_idx[pos]` is the index into `field_name_pool` for the
+    /// field that caused the edge at `fwd_targets[pos]`. 0 means "no name" (class
+    /// edges, array element edges, synthetic thread-local edges). Populated only
+    /// when `--ref-paths` is set; `None` on the default path (zero RSS).
+    pub fwd_field_name_idx: Option<Vec<u16>>,
+    /// Deduped field-name strings indexed by `fwd_field_name_idx`.
+    /// Pool[0] is always "" (no name). Populated only when `--ref-paths` is set.
+    pub field_name_pool: Option<Vec<String>>,
     /// Sum of `capacity` fields across all live `java/nio/DirectByteBuffer`
     /// instances. 0 when no such instances are found or the field cannot be
     /// resolved. Computed unconditionally during the pass2 field-decode scan.
@@ -660,10 +669,14 @@ impl InboundBuilder {
                             &id_map,
                             &class_addr_to_hist,
                             &field_plans_dense,
+                            &[], // named plans not needed for inbound pass
                             false,
                             true,
                             &mut fwd_t_stub,
                             &mut fwd_offsets_stub,
+                            &mut None, // no field name index for inbound pass
+                            &mut Vec::new(),
+                            &mut std::collections::HashMap::new(),
                             &mut inb_flat,
                             &mut in_cursors,
                             &mut scratch,

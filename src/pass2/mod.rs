@@ -306,6 +306,24 @@ impl Pass2 {
         }
         drop(field_plans);
 
+        // When --ref-paths is set, also build named plans (field name strings) for
+        // use during the forward-CSR fill to annotate each edge with its field name.
+        // Gated: the extra allocations are acceptable only under this explicit flag.
+        let field_plans_named_dense: Vec<FieldPlanNamed> = if opts.ref_paths {
+            let named = build_field_plans_named(&p1.class_map, &p1.strings, id_size as usize);
+            let mut dense: Vec<FieldPlanNamed> = vec![Vec::new(); n_dense_classes];
+            for (&class_addr, &hidx) in &class_addr_to_hist {
+                if let Some(plan) = named.get(&class_addr) {
+                    if !plan.is_empty() {
+                        dense[hidx as usize] = plan.clone();
+                    }
+                }
+            }
+            dense
+        } else {
+            Vec::new()
+        };
+
         // Compress class_idx and alloc_stack_serial NOW — before the 2a scan
         // allocates out_degree and in_degree (~4 GB). Both arrays are final at
         // this point and not read again until the retained/report phases. Freeing
@@ -719,6 +737,24 @@ impl Pass2 {
         // the rpo phase's arrays. The forward fill never touches inb_flat.
         let total_edges = *fwd_offsets.last().unwrap() as usize;
         let mut fwd_targets = crate::chunkvec::ChunkU32::zeroed(total_edges);
+        // Optional per-edge field-name index, populated only under --ref-paths.
+        // Parallel to fwd_targets (same indexing). 0 = "no name".
+        let mut fwd_field_name_idx_opt: Option<Vec<u16>> = if opts.ref_paths {
+            Some(vec![0u16; total_edges])
+        } else {
+            None
+        };
+        // Interned field-name pool (pool[0] = ""). Built only under --ref-paths.
+        let mut field_name_pool: Vec<String> = if opts.ref_paths {
+            let mut pool = Vec::new();
+            pool.push(String::new()); // index 0 = no name
+            pool
+        } else {
+            Vec::new()
+        };
+        // Reverse map name -> pool index, for dedup during the fill.
+        let mut field_name_pool_idx: std::collections::HashMap<String, u16> =
+            std::collections::HashMap::new();
         crate::trace::probe("pass2: after fwd_targets alloc");
         // B3: no fwd_cursor clone. fwd_offsets is advanced in place as the
         // write cursor during the fill, then restored by right-shift below.
@@ -743,10 +779,14 @@ impl Pass2 {
                             &p1.id_map,
                             &class_addr_to_hist,
                             &field_plans_dense,
+                            &field_plans_named_dense,
                             true,
                             false,
                             &mut fwd_targets,
                             &mut fwd_offsets,
+                            &mut fwd_field_name_idx_opt,
+                            &mut field_name_pool,
+                            &mut field_name_pool_idx,
                             &mut inb_flat_stub,
                             &mut in_degree_stub,
                             &mut scratch,
@@ -764,6 +804,7 @@ impl Pass2 {
         for &(src, dst) in &synthetic_edges {
             let pos = fwd_offsets[src as usize] as usize;
             fwd_targets.set(pos, dst);
+            // Synthetic edges have no field name (index 0 = "no name").
             fwd_offsets[src as usize] += 1;
         }
 
@@ -874,6 +915,12 @@ impl Pass2 {
             node_kv: fd_node_kv,
             direct_byte_buffer_capacity_sum: fd_dbb_capacity_sum,
             thread_local_null_key_count: fd_tl_null_key_count,
+            fwd_field_name_idx: fwd_field_name_idx_opt,
+            field_name_pool: if opts.ref_paths {
+                Some(field_name_pool)
+            } else {
+                None
+            },
             unreachable_retained: None,
         };
 
@@ -1082,19 +1129,24 @@ impl Pass2 {
         id_map: &crate::id_map::IdMap,
         class_addr_to_hist: &HashMap<u64, u32>,
         field_plans_dense: &[FieldPlan],
+        field_plans_named_dense: &[FieldPlanNamed],
         do_fwd: bool,
         do_inb: bool,
         fwd_targets: &mut crate::chunkvec::ChunkU32,
         fwd_offsets: &mut Vec<u32>,
+        fwd_field_name_idx: &mut Option<Vec<u16>>,
+        field_name_pool: &mut Vec<String>,
+        field_name_pool_idx: &mut std::collections::HashMap<String, u16>,
         inb_flat: &mut crate::chunkvec::ChunkU32,
         in_degree: &mut Vec<u32>,
         scratch: &mut Vec<u8>,
     ) -> io::Result<()> {
         let ids = id_size as u64;
         let mut cache = crate::id_map::IndexCache::new();
+        let do_names = fwd_field_name_idx.is_some() && do_fwd;
 
         macro_rules! add_edge {
-            ($src:expr, $dst_addr:expr, $excluded:expr) => {
+            ($src:expr, $dst_addr:expr, $excluded:expr, $name_idx:expr) => {
                 if $dst_addr != 0 {
                     if let Some(dst) = cache.index_of(id_map, $dst_addr) {
                         let src = $src as usize;
@@ -1102,6 +1154,11 @@ impl Pass2 {
                             // fwd_offsets[src] is the in-place write cursor.
                             let pos = fwd_offsets[src] as usize;
                             fwd_targets.set(pos, dst as u32);
+                            if do_names {
+                                if let Some(idx_vec) = fwd_field_name_idx.as_mut() {
+                                    idx_vec[pos] = $name_idx;
+                                }
+                            }
                             fwd_offsets[src] += 1;
                         }
                         if do_inb {
@@ -1165,6 +1222,7 @@ impl Pass2 {
                         do_inb,
                         fwd_targets,
                         fwd_offsets,
+                        fwd_field_name_idx,
                         inb_flat,
                         in_degree,
                     )?;
@@ -1190,15 +1248,35 @@ impl Pass2 {
                     };
 
                     // Edge: instance → class object
-                    add_edge!(src_idx, class_id, false);
+                    add_edge!(src_idx, class_id, false, 0u16);
 
                     // Edges from Object-type fields (dense Vec by class histogram idx)
                     if let Some(&cidx) = class_addr_to_hist.get(&class_id) {
-                        for &(off, excluded) in &field_plans_dense[cidx as usize] {
+                        let named_plan = if do_names && (cidx as usize) < field_plans_named_dense.len() {
+                            &field_plans_named_dense[cidx as usize]
+                        } else {
+                            &[][..]
+                        };
+                        for (fi, &(off, excluded)) in field_plans_dense[cidx as usize].iter().enumerate() {
                             let off = off as usize;
                             if off + id_size as usize <= scratch.len() {
                                 let ref_val = read_ref(&scratch[off..], id_size as usize);
-                                add_edge!(src_idx, ref_val, excluded);
+                                let name_idx = if do_names && fi < named_plan.len() {
+                                    let fname = &named_plan[fi].2;
+                                    if fname.is_empty() {
+                                        0u16
+                                    } else if let Some(&idx) = field_name_pool_idx.get(fname) {
+                                        idx
+                                    } else {
+                                        let new_idx = field_name_pool.len() as u16;
+                                        field_name_pool.push(fname.clone());
+                                        field_name_pool_idx.insert(fname.clone(), new_idx);
+                                        new_idx
+                                    }
+                                } else {
+                                    0u16
+                                };
+                                add_edge!(src_idx, ref_val, excluded, name_idx);
                             }
                         }
                     }
@@ -1224,12 +1302,12 @@ impl Pass2 {
                     };
 
                     // Edge: array → element class
-                    add_edge!(src_idx, elem_class_id, false);
+                    add_edge!(src_idx, elem_class_id, false, 0u16);
 
                     // Edges to elements
                     for chunk in scratch.chunks(ids as usize) {
                         let ref_val = read_id(chunk, id_size);
-                        add_edge!(src_idx, ref_val, false);
+                        add_edge!(src_idx, ref_val, false, 0u16);
                     }
                 }
                 heap::PRIM_ARRAY_DUMP => {
@@ -1267,6 +1345,7 @@ impl Pass2 {
         do_inb: bool,
         fwd_targets: &mut crate::chunkvec::ChunkU32,
         fwd_offsets: &mut Vec<u32>,
+        fwd_field_name_idx: &mut Option<Vec<u16>>,
         inb_flat: &mut crate::chunkvec::ChunkU32,
         in_degree: &mut Vec<u32>,
     ) -> io::Result<u64> {
@@ -1285,6 +1364,7 @@ impl Pass2 {
         consumed += ids * 4 + 4;
 
         let src_idx_opt = id_map.index_of(class_addr);
+        let _ = fwd_field_name_idx;
 
         macro_rules! add_edge_inner {
             ($src:expr, $dst_addr:expr) => {

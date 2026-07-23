@@ -1576,6 +1576,7 @@ function RootPathList({ steps }: { steps: RootPathStep[] }) {
       <ol className="accum-path">
         {steps.map((p, i) => (
           <li key={i}>
+            {p.field_edge && <span className="path-field">.{p.field_edge} → </span>}
             <code>{p.display_class}</code>{" "}
             <span className="path-ret">retains {formatBytes(p.retained)}</span>
             {i === last && p.root_type_label && (
@@ -1597,6 +1598,7 @@ function MergedPathsNode({ node, depth }: { node: MergedPathNode; depth: number 
   const hasChildren = node.children.length > 0;
   const label = (
     <>
+      {node.field_edge && <span className="path-field">.{node.field_edge} → </span>}
       <code>{node.display_class}</code>{" "}
       <span className="path-ret">
         {fmtCount(node.object_count)} object{node.object_count === 1 ? "" : "s"} · retained {formatBytes(node.retained)}

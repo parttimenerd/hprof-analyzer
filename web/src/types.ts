@@ -226,6 +226,7 @@ export interface RootPathStep {
   display_class: string;
   retained: number;
   root_type_label?: string;
+  field_edge?: string;
 }
 
 // One node of the full multi-level dominator subtree
@@ -246,6 +247,7 @@ export interface MergedPathNode {
   object_count: number;
   retained: number;
   root_type_label?: string;
+  field_edge?: string;
   children: MergedPathNode[];
 }
 

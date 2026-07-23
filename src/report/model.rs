@@ -454,6 +454,12 @@ pub struct RootPathStep {
     pub retained: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub root_type_label: Option<String>,
+    /// Name of the field on this object that points to the next hop (parent's
+    /// field → child). Only present when `--ref-paths` was set. Empty string
+    /// means "no field name available" (class edge, array element, synthetic
+    /// thread-local edge).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field_edge: Option<String>,
 }
 
 /// One immediately-dominated child of an accumulation point (a row of the
@@ -496,6 +502,11 @@ pub struct MergedPathNode {
     /// GC-root type label when this node is a root (the chain terminus).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub root_type_label: Option<String>,
+    /// Field name on the parent node that points to this child; only present
+    /// when `--ref-paths` was set and a consistent field name was found across
+    /// all chains that pass through this node.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field_edge: Option<String>,
     pub children: Vec<MergedPathNode>,
 }
 

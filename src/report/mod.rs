@@ -231,6 +231,8 @@ mod tests {
             thread_local_null_key_count: 0,
             unreachable_retained: None,
             node_kv: None,
+            fwd_field_name_idx: None,
+            field_name_pool: None,
         };
         (g, dc_off, dc_tgt)
     }

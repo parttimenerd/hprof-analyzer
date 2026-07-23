@@ -3301,10 +3301,15 @@ pub(crate) fn render_root_path(path: &[RootPathStep], out: &mut String) {
     }
     let last = path.len() - 1;
     for (i, step) in path.iter().enumerate() {
+        let class_label = if let Some(f) = &step.field_edge {
+            format!(".{f} → `{}`", step.display_class)
+        } else {
+            format!("`{}`", step.display_class)
+        };
         let mut line = format!(
-            "{}. `{}` ({})",
+            "{}. {} ({})",
             i + 1,
-            step.display_class,
+            class_label,
             format_bytes(step.retained),
         );
         if i == last {
@@ -3412,10 +3417,15 @@ fn render_merged_paths_plain(root: &MergedPathNode, out: &mut String) {
     let mut stack: Vec<(&MergedPathNode, usize)> = vec![(root, 0)];
     while let Some((node, depth)) = stack.pop() {
         let indent = "  ".repeat(depth);
+        let class_label = if let Some(f) = &node.field_edge {
+            format!(".{f} → `{}`", node.display_class)
+        } else {
+            format!("`{}`", node.display_class)
+        };
         let mut line = format!(
-            "{}- `{}` ({} {}, retained {})",
+            "{}- {} ({} {}, retained {})",
             indent,
-            node.display_class,
+            class_label,
             fmt_count(node.object_count),
             plural_objects(node.object_count),
             format_bytes(node.retained),

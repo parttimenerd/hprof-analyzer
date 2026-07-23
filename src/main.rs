@@ -72,6 +72,10 @@ pub struct AnalyzeOptions {
     pub collections: bool,
     pub collection_config: Option<std::path::PathBuf>,
     pub(crate) coll_descs: Vec<crate::pass2::CollDesc>,
+    /// Store field-name labels on forward edges so root-path steps show
+    /// `ParentClass.fieldName → ChildClass`. Gated: adds ~2 bytes per edge
+    /// (~100–500 MB extra RSS on multi-GB dumps).
+    pub ref_paths: bool,
 }
 
 #[cfg(test)]
@@ -172,6 +176,13 @@ struct Cli {
     /// Auto-discovers .hprof-analyzer.toml (CWD) or $HOME/.config/hprof-analyzer/collections.toml.
     #[arg(long, value_name = "PATH")]
     collection_config: Option<std::path::PathBuf>,
+
+    /// Store field-name labels on forward edges so that leak-suspect
+    /// "path to GC roots" steps show `ParentClass.fieldName → ChildClass`.
+    /// Gated (off by default): adds ~2 bytes per reference edge in the heap
+    /// (~100–500 MB extra RSS for large dumps). Analyze-only.
+    #[arg(long)]
+    ref_paths: bool,
 }
 
 /// Named subcommands. The default (no subcommand) analyzes or re-renders the
@@ -298,6 +309,7 @@ impl DetailLevel {
             collections: false,
             collection_config: None,
             coll_descs: Vec::new(),
+            ref_paths: false,
         }
     }
 }
@@ -481,6 +493,7 @@ fn run_default(cli: Cli) {
             coll_descs: crate::collection_config::load_collection_descs(
                 cli.collection_config.as_deref(),
             ),
+            ref_paths: cli.ref_paths,
             ..opts
         };
         if let Err(e) = run(

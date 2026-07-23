@@ -953,10 +953,15 @@ fn render_merged_paths_graphs(root: &MergedPathNode, out: &mut String) {
     out.push_str("```\n");
     while let Some(f) = stack.pop() {
         let prefix = tree_prefix(f.depth, f.is_last, &f.ancestors_continue);
+        let class_label = if let Some(fe) = &f.node.field_edge {
+            format!(".{fe} → {}", f.node.display_class)
+        } else {
+            f.node.display_class.clone()
+        };
         let mut line = format!(
             "{}{} ({} objects, retained {})",
             prefix,
-            f.node.display_class,
+            class_label,
             fmt_count(f.node.object_count),
             format_bytes(f.node.retained),
         );

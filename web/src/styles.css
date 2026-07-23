@@ -148,6 +148,7 @@ th.sortable.active { color: var(--accent); }
 .accum-path li:first-child::before { top: 0.6rem; }
 .accum-path li:last-child::before { bottom: calc(100% - 0.6rem); }
 .path-ret { color: var(--muted); font-size: 0.78rem; margin-left: 0.5rem; }
+.path-field { color: var(--muted); font-size: 0.85rem; }
 
 /* Exact retained byte + precise percent, MAT-report style ("509,972,304 (41.08%)"). */
 .mat-exact { color: var(--muted); font-size: 0.8rem; font-variant-numeric: tabular-nums; }

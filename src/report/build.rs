@@ -2404,6 +2404,26 @@ pub(crate) fn build_leak_suspects(
     // recursive borrows; find-or-create scans a node's `children` for a matching
     // label, so iterating members in a deterministic (ascending index) order
     // makes insertion order — and therefore the result — deterministic.
+
+    // Helper: look up the field name on `parent` that references `child`.
+    // Returns `None` when --ref-paths was not set or no matching named edge exists.
+    let field_name_for = |parent: usize, child: usize| -> Option<String> {
+        let pool = g.field_name_pool.as_ref()?;
+        let idx_vec = g.fwd_field_name_idx.as_ref()?;
+        let start = g.fwd_offsets[parent] as usize;
+        let end = g.fwd_offsets[parent + 1] as usize;
+        for pos in start..end {
+            if g.fwd_targets.get(pos) as usize == child {
+                let name_idx = idx_vec[pos] as usize;
+                if name_idx < pool.len() && !pool[name_idx].is_empty() {
+                    return Some(pool[name_idx].clone());
+                }
+                return None;
+            }
+        }
+        None
+    };
+
     let vroot_u32 = n as u32;
     let build_merged_paths = |members: &[u32], group_label: &str| -> Option<MergedPathNode> {
         if members.is_empty() {
@@ -2414,6 +2434,9 @@ pub(crate) fn build_leak_suspects(
             object_count: u64,
             retained: u64,
             root_type_label: Option<String>,
+            /// The field on the parent that points here. `None` when not all
+            /// member chains agree on a single field name, or --ref-paths off.
+            field_edge: Option<String>,
             children: Vec<usize>,
         }
         let mut arena: Vec<MNode> = Vec::new();
@@ -2424,6 +2447,7 @@ pub(crate) fn build_leak_suspects(
             object_count: 0,
             retained: 0,
             root_type_label: None,
+            field_edge: None,
             children: Vec::new(),
         });
 
@@ -2454,6 +2478,13 @@ pub(crate) fn build_leak_suspects(
             arena[node].retained += g.retained[m as usize];
             for (hop_i, &obj) in chain.iter().enumerate() {
                 let label = display_of(obj);
+                // The field edge on this node is the field on chain[hop_i+1]
+                // (the parent, one hop closer to root) that references obj.
+                let this_field_edge = if hop_i + 1 < chain.len() {
+                    field_name_for(chain[hop_i + 1], obj)
+                } else {
+                    None
+                };
                 // find-or-create a child of `node` with this label.
                 let existing = arena[node]
                     .children
@@ -2461,7 +2492,13 @@ pub(crate) fn build_leak_suspects(
                     .copied()
                     .find(|&c| arena[c].display_class == label);
                 let child = match existing {
-                    Some(c) => c,
+                    Some(c) => {
+                        // Clear field_edge if chains disagree.
+                        if arena[c].field_edge.as_deref() != this_field_edge.as_deref() {
+                            arena[c].field_edge = None;
+                        }
+                        c
+                    }
                     None => {
                         // Node cap: stop creating NEW nodes once reached, but keep
                         // accumulating into existing matching nodes above.
@@ -2474,6 +2511,7 @@ pub(crate) fn build_leak_suspects(
                             object_count: 0,
                             retained: 0,
                             root_type_label: None,
+                            field_edge: this_field_edge,
                             children: Vec::new(),
                         });
                         arena[node].children.push(idx);
@@ -2517,6 +2555,7 @@ pub(crate) fn build_leak_suspects(
                 object_count: node.object_count,
                 retained: node.retained,
                 root_type_label: node.root_type_label.clone(),
+                field_edge: node.field_edge.clone(),
                 children: node.children.iter().map(|&c| to_model(arena, c)).collect(),
             }
         }
@@ -2718,7 +2757,9 @@ pub(crate) fn build_leak_suspects(
 
     // For each SINGLE suspect, walk the DOMINATOR chain from the
     // suspect object up toward the GC root, emitting a bounded reference chain.
-    // This mirrors MAT's Leak Suspects "path to the accumulation point", which is
+    // For each SINGLE suspect, walk dominator chain from suspect object toward GC
+    // root (bounded by `root_path_max_depth`) and attaches the full dominator
+    // chain. This mirrors MAT's Leak Suspects "path to the accumulation point", which is
     // itself dominator-based: `idom[node]` is the object that must be released for
     // `node` to become collectable, so the chain suspect -> idom -> ... -> root is
     // exactly "what is keeping this alive". It reuses the already-resident `idom`
@@ -2741,11 +2782,19 @@ pub(crate) fn build_leak_suspects(
                 let root_type_label = root_type_of
                     .get(&(cur as u32))
                     .and_then(|&ty| gc_root_type_label_opt(ty).map(|l| l.to_string()));
+                // The field_edge for step i is the field on the NEXT hop (idom[cur])
+                // that references cur. We look it up here, before advancing cur.
+                let field_edge = if !is_root && idom != undef {
+                    field_name_for(idom as usize, cur)
+                } else {
+                    None
+                };
                 chain.push(RootPathStep {
                     obj_index_1based: cur + 1,
                     display_class: display_of(cur),
                     retained: g.retained[cur],
                     root_type_label,
+                    field_edge,
                 });
                 if is_root || idom == undef {
                     break;
