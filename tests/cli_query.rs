@@ -139,29 +139,90 @@ fn refpath_query_resolves_in_query_subcommand() {
     );
 }
 
-/// A query that mixes a resolvable RefPath tail with a late need the query-only
-/// path CANNOT satisfy (retained/dominator/edge) must STILL error actionably —
-/// not silently project the unsatisfiable column as Null. Regression guard for
-/// the refwalk-route gate: routing on `needs.ref_walk` alone would send a mixed
-/// `t.name.hash, @retainedHeapSize` entry through the refwalk path, where the
-/// retained column falls through to Null instead of erroring.
+/// A query that mixes a resolvable RefPath tail with a late need
+/// (retained/dominator/edge) auto-escalates the WHOLE query subcommand to the
+/// full pipeline: both the RefPath tail column AND the retained column resolve
+/// to real values, never the old "requires the full analysis pipeline" error.
+/// (Previously the query-only path could not satisfy the retained column, so it
+/// errored; escalation runs dominators+retained and answers both columns.)
 #[test]
-fn mixed_refpath_and_retained_query_still_errors() {
+fn mixed_refpath_and_retained_query_auto_escalates() {
     let Some(hprof) = philosophers() else { return };
-    // Confirm the pure retained query errors in the query-only path (baseline).
+    // The pure retained query now auto-escalates and returns numeric sizes.
     let pure = run_query_stdout(&hprof, "SELECT @retainedHeapSize FROM java.lang.Thread LIMIT 2");
     assert!(
-        pure.to_lowercase().contains("the full analysis pipeline"),
-        "pure retained query should error in query-only path:\n{pure}"
+        !pure.to_lowercase().contains("the full analysis pipeline"),
+        "pure retained query must auto-escalate, not error:\n{pure}"
     );
-    // The mixed query must error the SAME way, not silently null the retained col.
+    // The mixed query escalates too: neither column errors.
     let mixed = run_query_stdout(
         &hprof,
         "SELECT t.name.hash, t.@retainedHeapSize FROM java.lang.Thread t LIMIT 3",
     );
     assert!(
-        mixed.to_lowercase().contains("the full analysis pipeline"),
-        "mixed refpath+retained query must error, not silently null:\n{mixed}"
+        !mixed.to_lowercase().contains("the full analysis pipeline"),
+        "mixed refpath+retained query must auto-escalate, not error:\n{mixed}"
+    );
+}
+
+/// The `query` subcommand auto-escalates to the full analysis pipeline when a
+/// query needs a cross-phase feature (`@retainedHeapSize`), transparently
+/// running dominators + retained sizes instead of emitting the old
+/// "requires the full analysis pipeline" error. The escalated result carries
+/// real numeric retained sizes.
+#[test]
+fn query_retained_heap_size_auto_escalates() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT c.@retainedHeapSize FROM INSTANCEOF java.lang.Thread c",
+    );
+    assert!(
+        !out.contains("requires the full analysis pipeline"),
+        "must auto-escalate, not error:\n{out}"
+    );
+    // At least one data row whose first cell is a numeric retained size.
+    assert!(
+        out.lines().any(|l| {
+            l.trim()
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_digit())
+        }),
+        "expected at least one numeric retained-size row:\n{out}"
+    );
+}
+
+/// An escalated (cross-phase) query still honors the reachable-only default:
+/// the default result is a subset of the `--all` (raw-heap) result. Escalation
+/// runs the full pipeline either way; `reachable_only` governs final pruning.
+#[test]
+fn query_escalated_respects_reachable_only_default() {
+    let Some(hprof) = philosophers() else { return };
+    let count_numeric = |s: &str| -> usize {
+        s.lines()
+            .filter(|l| {
+                l.trim()
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_digit())
+            })
+            .count()
+    };
+    let def = run_query_stdout(
+        &hprof,
+        "SELECT c.@retainedHeapSize FROM java.lang.Thread c",
+    );
+    let all = run_query_args(
+        &hprof,
+        &["--all"],
+        "SELECT c.@retainedHeapSize FROM java.lang.Thread c",
+    );
+    let nd = count_numeric(&def);
+    let na = count_numeric(&all);
+    assert!(
+        na >= nd,
+        "escalated --all ({na}) must be a superset of reachable-only ({nd})"
     );
 }
 /// SAME object universe as the SingleScan (projection) `SELECT *` path. Class
@@ -684,8 +745,11 @@ fn query_subcommand_non_distinct_unchanged() {
 /// generic `@retainedHeapSize` message it used to emit. The process still exits
 /// 0 (the per-query error is printed in the result table), so we assert on the
 /// stdout message content.
+/// An edge query (`@inbounds`) in the `query` subcommand auto-escalates to the
+/// full analysis pipeline, which builds the inbound edge index, so it resolves
+/// instead of emitting the old edge-specific "full analysis pipeline" error.
 #[test]
-fn query_subcommand_edge_query_reports_edge_specific_error() {
+fn query_subcommand_edge_query_auto_escalates() {
     let Some(hprof) = philosophers() else { return };
     let out = Command::new(BIN)
         .arg("query")
@@ -693,24 +757,15 @@ fn query_subcommand_edge_query_reports_edge_specific_error() {
         .args(["--query", "SELECT @inbounds FROM java.lang.String LIMIT 5"])
         .output()
         .unwrap();
+    assert!(
+        out.status.success(),
+        "edge query escalation failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("edge queries"),
-        "edge query should surface an edge-specific error, got:\n{stdout}"
-    );
-    assert!(
-        stdout.contains("@inbounds"),
-        "edge error should name the edge feature:\n{stdout}"
-    );
-    // Regression: it must NOT misattribute the failure to retained-size support.
-    assert!(
-        !stdout.contains("@retainedHeapSize"),
-        "edge query error must not mention @retainedHeapSize:\n{stdout}"
-    );
-    // And it must point the user at the fix (run the full report).
-    assert!(
-        stdout.contains("drop --query-only"),
-        "edge error should tell the user how to fix it:\n{stdout}"
+        !stdout.contains("the full analysis pipeline"),
+        "edge query should auto-escalate, not error:\n{stdout}"
     );
 }
 
@@ -1882,8 +1937,12 @@ fn correlated_subquery_is_a_plan_error() {
 /// or dominators, so a `@retainedHeapSize` query cannot be answered. It must
 /// exit 0 and surface an actionable inline `error:` telling the user to run the
 /// full report — NOT silently return empty rows. Guards `resume_without_late_ctx`.
+/// The `query` subcommand auto-escalates to the full analysis pipeline when a
+/// query needs retained sizes, so a `SELECT @objectId, @retainedHeapSize` query
+/// resolves both columns with real values instead of surfacing the old inline
+/// "full report" error. Guards the escalation route in `run_queries`.
 #[test]
-fn retained_query_in_query_only_path_errors_actionably() {
+fn retained_query_in_query_subcommand_auto_escalates() {
     let Some(hprof) = philosophers() else { return };
     let out = Command::new(BIN)
         .arg("query")
@@ -1896,17 +1955,21 @@ fn retained_query_in_query_only_path_errors_actionably() {
         .unwrap();
     assert!(
         out.status.success(),
-        "query-only retained query should exit 0 with an inline error: {}",
+        "escalated retained query should exit 0: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("error:"),
-        "query-only retained query must surface an inline error line:\n{stdout}"
+        !stdout.contains("error:") && !stdout.contains("full analysis pipeline"),
+        "escalated retained query must not error:\n{stdout}"
     );
+    // At least one data row with two integer cells (objectId | retainedHeapSize).
     assert!(
-        stdout.contains("full report") || stdout.contains("full analysis pipeline"),
-        "error should tell the user to run the full report:\n{stdout}"
+        stdout.lines().any(|l| {
+            let cells: Vec<&str> = l.split('|').map(str::trim).collect();
+            cells.len() == 2 && cells.iter().all(|c| c.parse::<i64>().is_ok())
+        }),
+        "expected an (objectId, retainedHeapSize) integer row:\n{stdout}"
     );
 }
 
@@ -4405,17 +4468,19 @@ fn method_in_arithmetic() {
     assert!(!a.trim().is_empty());
 }
 
-/// `@GCRoots`, `@GCRootInfo`, and `@info` require the full analysis pipeline.
-/// In the query-only path they must produce an actionable "full analysis pipeline"
-/// error, not silently return Null rows. Mirrors the @retainedHeapSize test.
+/// `@GCRoots`, `@GCRootInfo`, and `@info` are cross-phase: the `query`
+/// subcommand auto-escalates to the full analysis pipeline so they resolve from
+/// the collected gc-root tables instead of emitting the old "full analysis
+/// pipeline" error. A Thread that is a GC root projects a root-type descriptor;
+/// non-root Threads project Null — but never an error.
 #[test]
-fn gcroot_query_only_mode_errors() {
+fn gcroot_query_only_mode_auto_escalates() {
     let Some(hprof) = philosophers() else { return };
     for attr in &["@GCRoots", "@GCRootInfo", "@info"] {
         let out = run_query_stdout(&hprof, &format!("SELECT {attr} FROM java.lang.Thread"));
         assert!(
-            out.to_lowercase().contains("the full analysis pipeline"),
-            "{attr} query must error in query-only path with 'full analysis pipeline':\n{out}"
+            !out.to_lowercase().contains("the full analysis pipeline"),
+            "{attr} query must auto-escalate, not error:\n{out}"
         );
     }
 }
