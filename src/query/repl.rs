@@ -787,6 +787,13 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
     // Reachable-only (MAT parity) is the session default; `!all`/`!reachable`
     // toggle it. Mirrors the `query` subcommand's default.
     let mut reachable_only = true;
+    // Per-session display + query state:
+    //   * `max_width` caps each printed cell (0 = unlimited); set via `!width N`.
+    //   * `last_query` is the most recent OQL text, re-run by `!last`.
+    //   * `last_result` is the most recent successful result, saved by `!save`.
+    let mut max_width: usize = 0;
+    let mut last_query: Option<String> = None;
+    let mut last_result: Option<QueryResult> = None;
     writeln!(
         stdout,
         "hprof-analyzer OQL REPL. Type !help for commands, !quit or Ctrl-D to exit."
@@ -811,6 +818,61 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                 // as a continuation line so the buffer is never silently dropped.
                 if buffer_lines.is_empty() && t.starts_with('!') {
                     let cmd = &t[1..];
+                    // Commands that execute or reference a query need session state
+                    // (path, last-query/result, width) that `handle_meta` doesn't
+                    // carry, so intercept them here before delegating the rest.
+                    let (verb, rest) = match cmd.split_once(char::is_whitespace) {
+                        Some((v, r)) => (v, r.trim()),
+                        None => (cmd, ""),
+                    };
+                    match verb {
+                        "width" => {
+                            handle_width(rest, &mut max_width, &mut stdout)?;
+                            stdout.flush()?;
+                            continue;
+                        }
+                        "count" => {
+                            if rest.is_empty() {
+                                writeln!(stdout, "usage: !count <oql>")?;
+                            } else {
+                                let wrapped = wrap_count(rest);
+                                if let Some(res) = run_and_print(
+                                    path, &wrapped, path_depth, reachable_only, max_width,
+                                    &mut stdout,
+                                )? {
+                                    last_query = Some(wrapped);
+                                    last_result = Some(res);
+                                }
+                            }
+                            stdout.flush()?;
+                            continue;
+                        }
+                        "last" => {
+                            match &last_query {
+                                None => writeln!(stdout, "(no previous query to re-run)")?,
+                                Some(q) => {
+                                    let q = q.clone();
+                                    if let Some(res) = run_and_print(
+                                        path, &q, path_depth, reachable_only, max_width,
+                                        &mut stdout,
+                                    )? {
+                                        last_result = Some(res);
+                                    }
+                                }
+                            }
+                            stdout.flush()?;
+                            continue;
+                        }
+                        "save" => {
+                            handle_save(
+                                rest, path, path_depth, reachable_only, max_width,
+                                &mut last_query, &mut last_result, &mut stdout,
+                            )?;
+                            stdout.flush()?;
+                            continue;
+                        }
+                        _ => {}
+                    }
                     if handle_meta(cmd, path_depth, &mut reachable_only, &names_for_meta, &mut stdout)?
                     {
                         break;
@@ -825,7 +887,12 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                     }
                     let query = buffer_lines.join("\n");
                     buffer_lines.clear();
-                    run_and_print(path, &query, path_depth, reachable_only, &mut stdout)?;
+                    if let Some(res) =
+                        run_and_print(path, &query, path_depth, reachable_only, max_width, &mut stdout)?
+                    {
+                        last_query = Some(query);
+                        last_result = Some(res);
+                    }
                     stdout.flush()?;
                     continue;
                 }
@@ -836,7 +903,12 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                     buffer_lines.clear();
                     let query = query.trim();
                     if !query.is_empty() {
-                        run_and_print(path, query, path_depth, reachable_only, &mut stdout)?;
+                        if let Some(res) = run_and_print(
+                            path, query, path_depth, reachable_only, max_width, &mut stdout,
+                        )? {
+                            last_query = Some(query.to_string());
+                            last_result = Some(res);
+                        }
                     }
                     stdout.flush()?;
                     continue;
@@ -844,7 +916,12 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                 // Single self-contained line (no pending buffer, no `;`): run it
                 // immediately so the common one-line case needs no terminator.
                 if buffer_lines.is_empty() {
-                    run_and_print(path, t, path_depth, reachable_only, &mut stdout)?;
+                    if let Some(res) =
+                        run_and_print(path, t, path_depth, reachable_only, max_width, &mut stdout)?
+                    {
+                        last_query = Some(t.to_string());
+                        last_result = Some(res);
+                    }
                     stdout.flush()?;
                 } else {
                     // Continuation of a multi-line statement.
@@ -863,19 +940,126 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
 
 /// Time, run, and print a single OQL statement, reporting elapsed wall time in
 /// the footer. Parse/plan/exec errors are printed as `error: <msg>` so the REPL
-/// stays alive.
+/// stays alive. Returns the successful `QueryResult` (so the caller can retain it
+/// for `!save`); returns `Ok(None)` when the query errored (already printed).
 fn run_and_print(
     path: &str,
     query: &str,
     path_depth: usize,
     reachable_only: bool,
+    max_width: usize,
     out: &mut impl Write,
-) -> io::Result<()> {
+) -> io::Result<Option<QueryResult>> {
     let start = Instant::now();
     match run_one(path, query, path_depth, reachable_only) {
-        Ok(res) => print_result(&res, start.elapsed(), out),
-        Err(e) => writeln!(out, "error: {e}"),
+        Ok(res) => {
+            print_result(&res, start.elapsed(), max_width, out)?;
+            Ok(Some(res))
+        }
+        Err(e) => {
+            writeln!(out, "error: {e}")?;
+            Ok(None)
+        }
     }
+}
+
+/// Set (or report) the per-cell display-width cap from a `!width` argument.
+/// `!width` with no argument reports the current setting; `!width 0` disables
+/// truncation; `!width N` caps each cell to N display chars. A non-numeric
+/// argument is rejected with a usage line (state left unchanged).
+fn handle_width(rest: &str, max_width: &mut usize, out: &mut impl Write) -> io::Result<()> {
+    if rest.is_empty() {
+        let cur = if *max_width == 0 {
+            "unlimited".to_string()
+        } else {
+            max_width.to_string()
+        };
+        writeln!(out, "cell width: {cur} (use `!width N`, or `!width 0` for unlimited)")?;
+        return Ok(());
+    }
+    match rest.parse::<usize>() {
+        Ok(n) => {
+            *max_width = n;
+            if n == 0 {
+                writeln!(out, "cell width: unlimited")?;
+            } else {
+                writeln!(out, "cell width: {n}")?;
+            }
+        }
+        Err(_) => writeln!(out, "usage: !width <N>  (N is a non-negative integer; 0 = unlimited)")?,
+    }
+    Ok(())
+}
+
+/// Wrap an OQL body in `SELECT COUNT(*) FROM ( <body> )` so `!count <oql>`
+/// reports the row count without printing every row. A body that is already a
+/// bare `COUNT(*)` select is passed through unchanged (wrapping it would be a
+/// redundant `COUNT(*)` over one row).
+fn wrap_count(body: &str) -> String {
+    let lower = body.to_ascii_lowercase();
+    // Cheap heuristic: if it already selects COUNT(*) as its first projection,
+    // don't double-wrap. Anything else gets wrapped as a subquery.
+    if lower.trim_start().starts_with("select") && lower.contains("count(*)") {
+        return body.to_string();
+    }
+    format!("SELECT COUNT(*) FROM ( {} )", body.trim())
+}
+
+/// `!save <file> [oql]`: write CSV to `file`. With an inline `<oql>` the query is
+/// run first (and becomes the new last-query/result); with no `<oql>` the most
+/// recent successful result is saved. Reports the row count written, or a clear
+/// message when there's nothing to save / the query errored.
+#[allow(clippy::too_many_arguments)]
+fn handle_save(
+    rest: &str,
+    path: &str,
+    path_depth: usize,
+    reachable_only: bool,
+    max_width: usize,
+    last_query: &mut Option<String>,
+    last_result: &mut Option<QueryResult>,
+    out: &mut impl Write,
+) -> io::Result<()> {
+    let (file, inline_oql) = match rest.split_once(char::is_whitespace) {
+        Some((f, q)) => (f.trim(), q.trim()),
+        None => (rest.trim(), ""),
+    };
+    if file.is_empty() {
+        writeln!(out, "usage: !save <file> [oql]  (with no oql, saves the last result)")?;
+        return Ok(());
+    }
+    // Resolve which result to save: run the inline query if given, else reuse the
+    // last successful result.
+    if !inline_oql.is_empty() {
+        let start = Instant::now();
+        match run_one(path, inline_oql, path_depth, reachable_only) {
+            Ok(res) => {
+                // Echo the table so the user sees what was saved, then persist.
+                print_result(&res, start.elapsed(), max_width, out)?;
+                *last_query = Some(inline_oql.to_string());
+                *last_result = Some(res);
+            }
+            Err(e) => {
+                writeln!(out, "error: {e}")?;
+                return Ok(());
+            }
+        }
+    }
+    let Some(res) = last_result.as_ref() else {
+        writeln!(out, "(nothing to save — run a query first, or use `!save <file> <oql>`)")?;
+        return Ok(());
+    };
+    let csv = result_to_csv(res);
+    match std::fs::write(file, csv.as_bytes()) {
+        Ok(()) => writeln!(
+            out,
+            "saved {} row{} to {file}",
+            res.row_count,
+            if res.row_count == 1 { "" } else { "s" },
+        )?,
+        Err(e) => writeln!(out, "error: could not write {file}: {e}")?,
+    }
+    Ok(())
 }
 
 /// Handle a meta-command (the text after the leading `!`). Returns `Ok(true)`
@@ -920,6 +1104,16 @@ fn handle_meta(
                 "  !all                  include unreachable objects (raw-heap scan)"
             )?;
             writeln!(out, "  !mode                 show the current reachability mode")?;
+            writeln!(
+                out,
+                "  !width [N]            cap each printed cell to N chars (0/absent = unlimited)"
+            )?;
+            writeln!(out, "  !count <oql>          run <oql> and print only its row count")?;
+            writeln!(out, "  !last                 re-run the previous query")?;
+            writeln!(
+                out,
+                "  !save <file> [oql]    write CSV to <file> (of <oql>, else the last result)"
+            )?;
             writeln!(out, "  !quit                 exit")?;
             writeln!(out, "  <oql>                 run a query and print results")?;
             writeln!(
@@ -1084,19 +1278,46 @@ fn run_one(path: &str, text: &str, path_depth: usize, reachable_only: bool) -> i
     Ok(result)
 }
 
-/// Print a `QueryResult` as a simple pipe-delimited table with a row-count and
+/// Print a `QueryResult` as a column-aligned table with a row-count and
 /// elapsed-time footer. If the result carries an error, print that instead of a
 /// table. `elapsed` is the wall time the query took (parse+plan+scan).
-fn print_result(res: &QueryResult, elapsed: std::time::Duration, out: &mut impl Write) -> io::Result<()> {
+/// `max_width` caps each cell's display width (0 = unlimited); over-long cells
+/// are truncated with a trailing `…`.
+fn print_result(
+    res: &QueryResult,
+    elapsed: std::time::Duration,
+    max_width: usize,
+    out: &mut impl Write,
+) -> io::Result<()> {
     if let Some(err) = &res.error {
         writeln!(out, "error: {err}")?;
         return Ok(());
     }
-    let headers: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-    writeln!(out, "{}", headers.join(" | "))?;
-    for row in &res.rows {
-        let cells: Vec<String> = row.iter().map(fmt_value).collect();
-        writeln!(out, "{}", cells.join(" | "))?;
+    // Materialize headers + truncated cells so widths can be measured once.
+    let headers: Vec<String> = res
+        .columns
+        .iter()
+        .map(|c| truncate_cell(&c.name, max_width))
+        .collect();
+    let body: Vec<Vec<String>> = res
+        .rows
+        .iter()
+        .map(|row| row.iter().map(|v| truncate_cell(&fmt_value(v), max_width)).collect())
+        .collect();
+    // Per-column display width = max over header + all cells (char count, since
+    // truncate_cell already bounded each string). Guards against ragged rows.
+    let ncols = headers.len();
+    let mut widths: Vec<usize> = headers.iter().map(|h| h.chars().count()).collect();
+    for row in &body {
+        for (i, cell) in row.iter().enumerate() {
+            if i < ncols {
+                widths[i] = widths[i].max(cell.chars().count());
+            }
+        }
+    }
+    write_row(&headers, &widths, out)?;
+    for row in &body {
+        write_row(row, &widths, out)?;
     }
     if let Some(note) = &res.note {
         writeln!(out, "-- {note}")?;
@@ -1112,6 +1333,39 @@ fn print_result(res: &QueryResult, elapsed: std::time::Duration, out: &mut impl 
         writeln!(out, "-- results truncated --")?;
     }
     Ok(())
+}
+
+/// Write one table row, each cell left-padded to its column width and joined by
+/// ` | `. The last cell is not padded (trailing whitespace is noise).
+fn write_row(cells: &[String], widths: &[usize], out: &mut impl Write) -> io::Result<()> {
+    let last = cells.len().saturating_sub(1);
+    for (i, cell) in cells.iter().enumerate() {
+        if i > 0 {
+            write!(out, " | ")?;
+        }
+        let w = widths.get(i).copied().unwrap_or(0);
+        let pad = w.saturating_sub(cell.chars().count());
+        if i == last {
+            write!(out, "{cell}")?;
+        } else {
+            write!(out, "{cell}{}", " ".repeat(pad))?;
+        }
+    }
+    writeln!(out)
+}
+
+/// Truncate `s` to at most `max_width` display chars, appending `…` when cut.
+/// `max_width == 0` means no limit. Operates on chars (not bytes) so multibyte
+/// class names / strings aren't split mid-codepoint.
+fn truncate_cell(s: &str, max_width: usize) -> String {
+    if max_width == 0 || s.chars().count() <= max_width {
+        return s.to_string();
+    }
+    // Reserve one column for the ellipsis (min width 1).
+    let keep = max_width.saturating_sub(1).max(1);
+    let mut out: String = s.chars().take(keep).collect();
+    out.push('…');
+    out
 }
 
 /// Human-friendly elapsed-time rendering: microseconds/milliseconds/seconds with
@@ -1136,6 +1390,33 @@ fn fmt_value(v: &QueryValue) -> String {
         QueryValue::Float(f) => f.to_string(),
         QueryValue::Str(s) => s.clone(),
         QueryValue::ObjRef { index, class } => format!("{class}@{index}"),
+    }
+}
+
+/// Serialize a `QueryResult` as RFC-4180-ish CSV: header row from column names,
+/// then one row per result row using the same cell rendering as the table (but
+/// UNtruncated — a saved file should be complete). Cells containing a comma,
+/// quote, or newline are wrapped in double quotes with `"` doubled.
+fn result_to_csv(res: &QueryResult) -> String {
+    let mut s = String::new();
+    let header: Vec<String> = res.columns.iter().map(|c| csv_escape(&c.name)).collect();
+    s.push_str(&header.join(","));
+    s.push('\n');
+    for row in &res.rows {
+        let cells: Vec<String> = row.iter().map(|v| csv_escape(&fmt_value(v))).collect();
+        s.push_str(&cells.join(","));
+        s.push('\n');
+    }
+    s
+}
+
+/// Quote a CSV field iff it contains a delimiter, quote, CR, or LF; doubling any
+/// embedded quote. Plain fields pass through unchanged.
+fn csv_escape(field: &str) -> String {
+    if field.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", field.replace('"', "\"\""))
+    } else {
+        field.to_string()
     }
 }
 
@@ -1362,7 +1643,7 @@ mod tests {
             viz: None,
         };
         let mut buf = Vec::new();
-        print_result(&res, std::time::Duration::from_millis(3), &mut buf).unwrap();
+        print_result(&res, std::time::Duration::from_millis(3), 0, &mut buf).unwrap();
         let out = String::from_utf8(buf).unwrap();
         assert!(out.contains("(1 row, 3.0ms)"), "elapsed footer wrong: {out}");
     }
@@ -1386,7 +1667,7 @@ mod tests {
 
     fn print_to_string(res: &QueryResult) -> String {
         let mut buf = Vec::new();
-        print_result(res, std::time::Duration::from_millis(0), &mut buf).unwrap();
+        print_result(res, std::time::Duration::from_millis(0), 0, &mut buf).unwrap();
         String::from_utf8(buf).unwrap()
     }
 
@@ -1488,6 +1769,201 @@ mod tests {
             }),
             "java.lang.String@7"
         );
+    }
+
+    // ---------- column alignment / truncation / CSV ----------
+
+    #[test]
+    fn print_result_aligns_columns() {
+        // Column 0 header "id" (2) vs widest cell "1000" (4) -> pad to 4.
+        let res = QueryResult {
+            name: "q1".into(),
+            oql: "SELECT id, name FROM C".into(),
+            columns: vec![
+                QueryColumn { name: "id".into() },
+                QueryColumn { name: "name".into() },
+            ],
+            rows: vec![
+                vec![QueryValue::Int(1), QueryValue::Str("alice".into())],
+                vec![QueryValue::Int(1000), QueryValue::Str("bob".into())],
+            ],
+            row_count: 2,
+            truncated: false,
+            error: None,
+            note: None,
+            viz: None,
+        };
+        let out = print_to_string(&res);
+        // Header cell "id" padded to width 4 -> "id  " before the separator.
+        assert!(out.contains("id   | name"), "header not aligned:\n{out}");
+        // First data row: "1" padded to width 4 -> "1   ".
+        assert!(out.contains("1    | alice"), "row1 not aligned:\n{out}");
+        // Widest row: "1000" occupies the full width, no extra pad.
+        assert!(out.contains("1000 | bob"), "row2 not aligned:\n{out}");
+    }
+
+    #[test]
+    fn print_result_does_not_pad_last_column() {
+        let res = QueryResult {
+            name: "q1".into(),
+            oql: "SELECT a, b FROM C".into(),
+            columns: vec![
+                QueryColumn { name: "a".into() },
+                QueryColumn { name: "b".into() },
+            ],
+            rows: vec![vec![QueryValue::Int(1), QueryValue::Str("x".into())]],
+            row_count: 1,
+            truncated: false,
+            error: None,
+            note: None,
+            viz: None,
+        };
+        let out = print_to_string(&res);
+        // No trailing spaces on any printed row (last column is unpadded).
+        for line in out.lines() {
+            assert_eq!(line, line.trim_end(), "trailing whitespace on line: {line:?}");
+        }
+    }
+
+    #[test]
+    fn truncate_cell_unlimited_is_identity() {
+        assert_eq!(truncate_cell("hello world", 0), "hello world");
+    }
+
+    #[test]
+    fn truncate_cell_shortens_and_appends_ellipsis() {
+        // max_width 5 -> keep 4 chars + '…'.
+        assert_eq!(truncate_cell("abcdefgh", 5), "abcd…");
+        // Exactly at the limit is untouched.
+        assert_eq!(truncate_cell("abcde", 5), "abcde");
+        // One over the limit is truncated.
+        assert_eq!(truncate_cell("abcdef", 5), "abcd…");
+    }
+
+    #[test]
+    fn truncate_cell_is_char_boundary_safe() {
+        // Multibyte chars must not be split mid-codepoint.
+        let s = "αβγδεζη"; // 7 Greek letters, 2 bytes each
+        let t = truncate_cell(s, 4);
+        assert_eq!(t.chars().count(), 4, "should keep 3 chars + ellipsis: {t:?}");
+        assert!(t.ends_with('…'), "should end with ellipsis: {t:?}");
+    }
+
+    #[test]
+    fn print_result_truncates_wide_cells() {
+        let res = QueryResult {
+            name: "q1".into(),
+            oql: "SELECT s FROM C".into(),
+            columns: vec![QueryColumn { name: "s".into() }],
+            rows: vec![vec![QueryValue::Str("aaaaaaaaaaaaaaaaaaaa".into())]],
+            row_count: 1,
+            truncated: false,
+            error: None,
+            note: None,
+            viz: None,
+        };
+        let mut buf = Vec::new();
+        print_result(&res, std::time::Duration::from_millis(0), 6, &mut buf).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(out.contains("aaaaa…"), "wide cell not truncated:\n{out}");
+        assert!(!out.contains("aaaaaaa"), "cell should be cut to 6 chars:\n{out}");
+    }
+
+    #[test]
+    fn csv_escape_plain_passthrough() {
+        assert_eq!(csv_escape("plain"), "plain");
+        assert_eq!(csv_escape("java.lang.String@7"), "java.lang.String@7");
+    }
+
+    #[test]
+    fn csv_escape_quotes_specials() {
+        assert_eq!(csv_escape("a,b"), "\"a,b\"");
+        assert_eq!(csv_escape("say \"hi\""), "\"say \"\"hi\"\"\"");
+        assert_eq!(csv_escape("line1\nline2"), "\"line1\nline2\"");
+        assert_eq!(csv_escape("cr\rlf"), "\"cr\rlf\"");
+    }
+
+    #[test]
+    fn result_to_csv_untruncated_and_escaped() {
+        let res = QueryResult {
+            name: "q1".into(),
+            oql: "SELECT id, note FROM C".into(),
+            columns: vec![
+                QueryColumn { name: "id".into() },
+                QueryColumn { name: "note".into() },
+            ],
+            rows: vec![
+                vec![QueryValue::Int(1), QueryValue::Str("has, comma".into())],
+                vec![
+                    QueryValue::Int(2),
+                    QueryValue::Str("aaaaaaaaaaaaaaaaaaaa".into()),
+                ],
+            ],
+            row_count: 2,
+            truncated: false,
+            error: None,
+            note: None,
+            viz: None,
+        };
+        let csv = result_to_csv(&res);
+        assert_eq!(
+            csv,
+            "id,note\n1,\"has, comma\"\n2,aaaaaaaaaaaaaaaaaaaa\n",
+            "csv mismatch:\n{csv}"
+        );
+    }
+
+    // ---------- !width ----------
+
+    fn width_out(rest: &str, initial: usize) -> (usize, String) {
+        let mut w = initial;
+        let mut buf = Vec::new();
+        handle_width(rest, &mut w, &mut buf).unwrap();
+        (w, String::from_utf8(buf).unwrap())
+    }
+
+    #[test]
+    fn width_sets_and_reports() {
+        let (w, out) = width_out("12", 0);
+        assert_eq!(w, 12);
+        assert!(out.contains("cell width: 12"), "got: {out}");
+    }
+
+    #[test]
+    fn width_zero_is_unlimited() {
+        let (w, out) = width_out("0", 40);
+        assert_eq!(w, 0);
+        assert!(out.contains("unlimited"), "got: {out}");
+    }
+
+    #[test]
+    fn width_no_arg_reports_current() {
+        let (w, out) = width_out("", 40);
+        assert_eq!(w, 40, "reporting must not mutate");
+        assert!(out.contains("cell width: 40"), "got: {out}");
+    }
+
+    #[test]
+    fn width_non_numeric_is_rejected_without_mutation() {
+        let (w, out) = width_out("abc", 25);
+        assert_eq!(w, 25, "bad arg must not mutate width");
+        assert!(out.contains("usage:"), "got: {out}");
+    }
+
+    // ---------- !count wrapping ----------
+
+    #[test]
+    fn wrap_count_wraps_plain_query() {
+        assert_eq!(
+            wrap_count("SELECT * FROM java.lang.String"),
+            "SELECT COUNT(*) FROM ( SELECT * FROM java.lang.String )"
+        );
+    }
+
+    #[test]
+    fn wrap_count_passes_through_existing_count() {
+        let q = "SELECT COUNT(*) FROM java.lang.String";
+        assert_eq!(wrap_count(q), q, "already-COUNT query must not double-wrap");
     }
 
     // --- reedline completer + editor construction ---
