@@ -1613,7 +1613,7 @@ pub(crate) fn render_arrays_by_size(a: &ArraysBySize, graphs: bool, out: &mut St
     let render_table = |title: &str, buckets: &[SizeHistogramBucket], out: &mut String| {
         out.push_str(&format!("### {title}\n\n"));
         if buckets.is_empty() {
-            out.push_str("_None._\n\n");
+            out.push_str("_No data for this section._\n\n");
             return;
         }
         let obj_max = buckets.iter().map(|b| b.objects).max().unwrap_or(0);
@@ -1690,7 +1690,7 @@ fn render_fill_ratio_table(
 ) {
     use crate::md::{Align, Table, bar};
     if buckets.is_empty() {
-        out.push_str("_None._\n\n");
+        out.push_str("_No data for this section._\n\n");
         return;
     }
     let obj_max = buckets.iter().map(|b| b.objects).max().unwrap_or(0);
@@ -1868,7 +1868,7 @@ pub(crate) fn render_collections(
     // ── Collections by Kind ──────────────────────────────────────────────────
     out.push_str("### Collections by Kind\n\n");
     if c.kind_summary.kinds.is_empty() {
-        out.push_str("_None._\n\n");
+        out.push_str("_No collection kinds found in this heap._\n\n");
     } else {
         let elem_max = c
             .kind_summary
@@ -1965,7 +1965,7 @@ pub(crate) fn render_collections(
         fmt_count(c.collections_by_size.empty_count),
     ));
     if c.collections_by_size.buckets.is_empty() {
-        out.push_str("_None._\n\n");
+        out.push_str("_No size distribution data — all tracked collections may be empty._\n\n");
     } else {
         let obj_max = c
             .collections_by_size
@@ -2078,7 +2078,7 @@ few instances) are hidden as noise._",
         out.push_str(&format!("_({skipped} trivial groups hidden.)_\n\n"));
     }
     if interesting_rows.is_empty() {
-        out.push_str("_None._\n\n");
+        out.push_str("_No constant primitive arrays found._\n\n");
     } else {
         let obj_max = interesting_rows.iter().map(|r| r.objects).max().unwrap_or(0);
         // The Owner column (dominant `Class#field` referrer) is present only when
@@ -2143,7 +2143,7 @@ fn render_top_arrays(t: &TopArrays, kind: &str, graphs: bool, out: &mut String) 
 
     // Largest individual arrays.
     if t.top_individual.is_empty() {
-        out.push_str("_None._\n\n");
+        out.push_str("_No data for this section._\n\n");
     } else {
         let sh_max = t
             .top_individual
@@ -2202,7 +2202,7 @@ fn render_top_arrays(t: &TopArrays, kind: &str, graphs: bool, out: &mut String) 
     // Largest array classes by aggregate shallow.
     out.push_str(&format!("#### Top Array Classes ({kind})\n\n"));
     if t.top_by_class.is_empty() {
-        out.push_str("_None._\n\n");
+        out.push_str("_No data for this section._\n\n");
     } else {
         let sh_max = t.top_by_class.iter().map(|r| r.shallow).max().unwrap_or(0);
         let mut headers: Vec<&str> = vec!["Array class", "Instances", "Shallow"];
@@ -2265,7 +2265,7 @@ pub(crate) fn render_collection_attribution(
     // ── Most Overall ─────────────────────────────────────────────────────────
     out.push_str("### Most Overall\n\n");
     if a.most_overall.is_empty() {
-        out.push_str("_None._\n\n");
+        out.push_str("_No collections exceeded the size threshold._\n\n");
     } else {
         let el_max = a
             .most_overall
@@ -2319,7 +2319,7 @@ pub(crate) fn render_collection_attribution(
     // ── Biggest Single ───────────────────────────────────────────────────────
     out.push_str("### Biggest Single\n\n");
     if a.biggest_single.is_empty() {
-        out.push_str("_None._\n\n");
+        out.push_str("_No single-element collections found._\n\n");
     } else {
         let el_max = a
             .biggest_single
@@ -2389,7 +2389,7 @@ pub(crate) fn render_fields_by_size(f: &Option<FieldsBySize>, graphs: bool, out:
     );
 
     if f.rows.is_empty() {
-        out.push_str("_None._\n\n");
+        out.push_str("_No field-size data — pass `--collections` to enable field attribution._\n\n");
         return;
     }
 
@@ -2528,7 +2528,7 @@ fn render_biggest_collection_table(
     use crate::md::{Align, Table, bar};
     out.push_str(&format!("### {title}\n\n"));
     if rows.is_empty() {
-        out.push_str("_None._\n\n");
+        out.push_str("_No data for this section._\n\n");
         return;
     }
     let has_retained = rows.iter().any(|r| r.retained.is_some());
@@ -2676,7 +2676,7 @@ pub(crate) fn render_collection_contents(
          class. Requires `--collections`._\n\n",
     );
     if c.rows.is_empty() {
-        out.push_str("_None._\n\n");
+        out.push_str("_No collection-contents data found._\n\n");
         return;
     }
     let mut t = Table::new(
