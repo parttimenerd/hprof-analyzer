@@ -314,6 +314,10 @@ pub(crate) fn fmt_pct(p: f64) -> String {
 /// use this label so all four formats agree on what "% Heap" means.
 pub const HEAP_BASIS_LABEL: &str = "reachable heap";
 
+/// Canonical label for the total reachable shallow heap scalar — used wherever
+/// the raw byte count is displayed so all four formats agree (§48.1).
+pub const HEAP_SCALAR_LABEL: &str = "Total reachable heap";
+
 /// Share of the reachable heap, as a 0.0–100.0 percentage. `part` is a retained
 /// or shallow byte count; `total` is the canonical reachable-shallow total
 /// ([`HEAP_BASIS_LABEL`]). Returns `0.0` when `total` is zero and **clamps to

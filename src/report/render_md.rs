@@ -361,7 +361,7 @@ pub(crate) fn render_executive_summary(r: &Report, out: &mut String) {
     let o = &r.overview;
     let mut stats = Table::new(&["Metric", "Value"], &[Align::Left, Align::Right]);
     stats.row([
-        "Total heap (reachable)".into(),
+        HEAP_SCALAR_LABEL.into(),
         format_bytes(o.total_shallow),
     ]);
     stats.row(["Objects".into(), fmt_count(o.total_objects)]);
@@ -777,7 +777,7 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
         summary.row(["JVM version".into(), ver.clone()]);
     }
     summary.row(["Total objects".into(), fmt_count(o.total_objects)]);
-    summary.row(["Total heap (reachable)".into(), format_bytes(o.total_shallow)]);
+    summary.row([HEAP_SCALAR_LABEL.into(), format_bytes(o.total_shallow)]);
     summary.row(["GC roots".into(), fmt_count(o.gc_roots)]);
     summary.row(["Classes loaded".into(), fmt_count(o.classes_loaded)]);
     summary.row(["Class loaders".into(), fmt_count(o.classloaders_loaded)]);
@@ -1494,6 +1494,10 @@ pub(crate) fn render_threads(t: &ThreadOverview, graphs: bool, out: &mut String)
         // Significant-frames interleave (frames with their retained locals),
         // when locals were sampled; otherwise the plain frame list.
         if !th.significant_frames.is_empty() {
+            out.push_str(&format!(
+                "_Frame percentages are of this thread's {} retained heap._\n\n",
+                format_bytes(th.retained)
+            ));
             for sf in &th.significant_frames {
                 out.push_str(&format!("- `{}`\n", sf.frame));
                 for loc in &sf.locals {

@@ -367,7 +367,7 @@ function KpiStrip({ report }: { report: Report }) {
       <div className="kpi-grid">
       <div className="kpi">
         <div className="kpi-value">{formatBytes(report.overview.total_shallow)}</div>
-        <div className="kpi-label">Total heap (reachable)</div>
+        <div className="kpi-label">Total reachable heap</div>
       </div>
       <div className="kpi">
         <div className="kpi-value">{fmtCount(report.overview.total_objects)}</div>
@@ -1239,7 +1239,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
           )}
           <dt>Total objects</dt>
           <dd>{fmtCount(o.total_objects)}</dd>
-          <dt>Total heap (reachable)</dt>
+          <dt>Total reachable heap</dt>
           <dd>{formatBytes(o.total_shallow)}</dd>
           <dt>GC roots</dt>
           <dd>{fmtCount(o.gc_roots)}</dd>
@@ -2014,6 +2014,8 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
         </div>
         {t.local_objects && <ThreadLocalsTable objs={t.local_objects} totalCount={t.local_root_count} />}
         {sig.length > 0 ? (
+          <>
+            <p className="subtitle"><em>Frame percentages are of this thread's {formatBytes(t.retained)} retained heap.</em></p>
           <ul className="sig-frames">
             {sig.map((sf, i) => (
               <li key={i}>
@@ -2031,6 +2033,7 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
               </li>
             ))}
           </ul>
+          </>
         ) : (
           <pre className="stack">{t.frames.join("\n")}</pre>
         )}

@@ -157,7 +157,7 @@ fn render_system_overview_graphs(o: &SystemOverview, out: &mut String) {
         summary.row(["JVM version".into(), ver.clone()]);
     }
     summary.row(["Total objects".into(), fmt_count(o.total_objects)]);
-    summary.row(["Total heap (reachable)".into(), format_bytes(o.total_shallow)]);
+    summary.row([HEAP_SCALAR_LABEL.into(), format_bytes(o.total_shallow)]);
     summary.row(["GC roots".into(), fmt_count(o.gc_roots)]);
     summary.row(["Classes loaded".into(), fmt_count(o.classes_loaded)]);
     summary.row(["Class loaders".into(), fmt_count(o.classloaders_loaded)]);
