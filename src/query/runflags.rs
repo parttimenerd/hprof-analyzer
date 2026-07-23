@@ -178,7 +178,28 @@ fn scan_select_item(item: &SelectItem, used: &mut BranchUse) {
         SelectItem::Star => {}
         // toString(s) uses the string-values side table, not edge CSRs.
         SelectItem::ToString(_) => {}
-        SelectItem::Expr(_) => unreachable!("Expr select item reached before arithmetic wiring"),
+        // An arithmetic/method-call column: recurse into the expression so a
+        // buried @inbounds/@outbounds still arms its edge index.
+        SelectItem::Expr(e) => scan_expr(e, used),
+    }
+}
+
+/// Inspect an arithmetic expression tree for edge-feature attrs on any leaf.
+fn scan_expr(e: &Expr, used: &mut BranchUse) {
+    match e {
+        Expr::Attr(a) => scan_attr(a, used),
+        Expr::Lit(_) => {}
+        Expr::Binary { lhs, rhs, .. } => {
+            scan_expr(lhs, used);
+            scan_expr(rhs, used);
+        }
+        Expr::Unary { arg, .. } => scan_expr(arg, used),
+        Expr::Method { receiver, args, .. } => {
+            scan_expr(receiver, used);
+            for a in args {
+                scan_expr(a, used);
+            }
+        }
     }
 }
 
@@ -190,10 +211,9 @@ fn scan_predicate(pred: &Predicate, used: &mut BranchUse) {
             scan_predicate(b, used);
         }
         Predicate::Not(a) => scan_predicate(a, used),
-        Predicate::Compare { lhs, .. } => {
-            if let Expr::Attr(a) = lhs {
-                scan_attr(a, used);
-            }
+        Predicate::Compare { lhs, rhs, .. } => {
+            scan_expr(lhs, used);
+            scan_expr(rhs, used);
         }
         // Edge usage inside an IN-subquery's inner query targets a *different*
         // FROM class; scoping that correctly is out of scope for this task, so
@@ -429,5 +449,45 @@ mod tests {
         let d2 = d;
         assert_eq!(d, d2);
         assert_ne!(EdgeDir::Inbound, EdgeDir::Outbound);
+    }
+
+    #[test]
+    fn method_call_select_item_does_not_panic() {
+        // A method-call expression as a SELECT item parses to SelectItem::Expr;
+        // scanning it for edge features must not panic (regression: this hit an
+        // `unreachable!` and crashed the full analyze pipeline).
+        let f = plan("SELECT s.name.toString() FROM java.lang.String s");
+        // No edge feature -> no retention.
+        assert!(!f.retain_inbound);
+        assert!(!f.outbounds_by_rescan);
+        assert!(!f.retain_forward);
+    }
+
+    #[test]
+    fn arithmetic_select_item_does_not_panic() {
+        let f = plan("SELECT @usedHeapSize * 2 FROM java.lang.String");
+        assert!(!f.retain_inbound);
+        assert!(!f.outbounds_by_rescan);
+    }
+
+    #[test]
+    fn edge_attr_inside_expr_select_item_counts() {
+        // @inbounds buried inside an arithmetic SELECT expression must still arm
+        // the inbound index and retain the FROM row.
+        let f = plan("SELECT @inbounds + 1 FROM java.lang.String");
+        assert!(f.retain_inbound, "expr-wrapped @inbounds must arm inbound");
+        assert!(f.retain_rows.is_some());
+        assert!(f.retain_rows.as_ref().unwrap().get(0));
+    }
+
+    #[test]
+    fn edge_attr_in_wrapped_where_compare_counts() {
+        // @outbounds inside an arithmetic WHERE comparison operand (not a bare
+        // Expr::Attr) must still be detected on both sides of the compare.
+        let f = plan("SELECT * FROM java.lang.String WHERE @outbounds + 0 > 3");
+        assert!(
+            f.outbounds_by_rescan,
+            "wrapped @outbounds in WHERE must arm rescan"
+        );
     }
 }
