@@ -4694,3 +4694,150 @@ fn analyze_reachable_only_filters_oql_rows() {
         "--reachable-only analyze must prune Thread rows to MAT parity (27):\n{ro}"
     );
 }
+
+/// End-to-end tests for `query --server`: spawn the real binary, drive it over a
+/// real TCP socket, and assert the HTTP status line, the `Content-Type` header
+/// the worker sets (which the in-process unit socket test omits), and the JSON
+/// body. Covers the CLI dispatch + `run_server` path the unit tests can't reach.
+mod server_cli {
+    use super::{philosophers, BIN};
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::process::{Child, Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    /// A spawned server + its port; kills the child on drop so a panicking test
+    /// never leaks a listener.
+    struct Server {
+        child: Child,
+        port: u16,
+    }
+    impl Drop for Server {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+
+    /// Pick an ephemeral port by binding :0, then release it for the child to
+    /// claim. A brief reuse race is acceptable for a loopback test.
+    fn free_port() -> u16 {
+        std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
+    }
+
+    /// Spawn `query <dump> --server --port <p>` and wait until it accepts a TCP
+    /// connection (up to ~5 s), so tests don't race the bind.
+    fn spawn(hprof: &str) -> Server {
+        let port = free_port();
+        let child = Command::new(BIN)
+            .arg("query")
+            .arg(hprof)
+            .args(["--server", "--port", &port.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn server");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+                return Server { child, port };
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!("server on port {port} never came up");
+    }
+
+    /// Minimal HTTP/1.1 request over a fresh connection. Returns (raw response).
+    fn http(port: u16, method: &str, path: &str, body: &str) -> String {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let req = format!(
+            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(req.as_bytes()).expect("write");
+        let mut resp = String::new();
+        stream.read_to_string(&mut resp).expect("read");
+        resp
+    }
+
+    /// Split a raw HTTP response into (status_line, headers_lowercased, body).
+    fn parse_resp(resp: &str) -> (String, String, String) {
+        let (head, body) = resp.split_once("\r\n\r\n").unwrap_or((resp, ""));
+        let mut lines = head.lines();
+        let status = lines.next().unwrap_or("").to_string();
+        let headers = lines.collect::<Vec<_>>().join("\n").to_lowercase();
+        (status, headers, body.to_string())
+    }
+
+    #[test]
+    fn server_post_query_returns_json_with_content_type() {
+        let Some(hprof) = philosophers() else { return };
+        let srv = spawn(&hprof);
+        let resp = http(
+            srv.port,
+            "POST",
+            "/",
+            "SELECT @objectAddress FROM java.lang.Thread",
+        );
+        let (status, headers, body) = parse_resp(&resp);
+        assert!(status.contains("200"), "expected 200, got status {status:?}\n{resp}");
+        assert!(
+            headers.contains("content-type: application/json"),
+            "worker must set JSON content-type, headers:\n{headers}"
+        );
+        let v: serde_json::Value =
+            serde_json::from_str(&body).unwrap_or_else(|e| panic!("body not JSON ({e}): {body}"));
+        assert_eq!(v["ok"], serde_json::json!(true), "expected ok: {v}");
+        assert!(v["result"]["row_count"].as_u64().unwrap() > 0, "some rows: {v}");
+    }
+
+    #[test]
+    fn server_parse_error_is_400_json() {
+        let Some(hprof) = philosophers() else { return };
+        let srv = spawn(&hprof);
+        let resp = http(srv.port, "POST", "/", "SELCT bad");
+        let (status, _headers, body) = parse_resp(&resp);
+        assert!(status.contains("400"), "expected 400, got {status:?}\n{resp}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["ok"], serde_json::json!(false), "failure: {v}");
+        assert_eq!(v["error"]["kind"], serde_json::json!("parse"), "parse kind: {v}");
+    }
+
+    #[test]
+    fn server_get_help_returns_language_reference() {
+        let Some(hprof) = philosophers() else { return };
+        let srv = spawn(&hprof);
+        let resp = http(srv.port, "GET", "/help", "");
+        let (status, _headers, body) = parse_resp(&resp);
+        assert!(status.contains("200"), "expected 200, got {status:?}\n{resp}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!(v["keywords"].is_array(), "keywords listed: {v}");
+        assert!(v["usage"].is_object(), "usage present: {v}");
+    }
+
+    #[test]
+    fn server_survives_many_sequential_requests() {
+        // Each request opens a fresh connection (Connection: close). Proves the
+        // worker loop keeps serving after handling a bad request in between.
+        let Some(hprof) = philosophers() else { return };
+        let srv = spawn(&hprof);
+        for i in 0..8 {
+            let oql = if i % 2 == 0 {
+                "SELECT @objectAddress FROM java.lang.Thread"
+            } else {
+                "TOTALLY INVALID"
+            };
+            let resp = http(srv.port, "POST", "/", oql);
+            let (status, _h, _b) = parse_resp(&resp);
+            let want = if i % 2 == 0 { "200" } else { "400" };
+            assert!(status.contains(want), "req {i} expected {want}, got {status:?}");
+        }
+    }
+}
