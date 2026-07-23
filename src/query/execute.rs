@@ -851,15 +851,15 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             ("floatValue" | "doubleValue", c) if is_boxed_fp(c) => {
                 self.decode_field(class_id, "value", blob)
             }
-            ("booleanValue", c) if c.ends_with(".Boolean") => {
+            ("booleanValue", "java.lang.Boolean") => {
                 self.decode_field(class_id, "value", blob)
             }
-            ("charValue", c) if c.ends_with(".Character") => {
+            ("charValue", "java.lang.Character") => {
                 self.decode_field(class_id, "value", blob)
             }
             ("size", c) if is_sized_collection(c) => {
                 // HashSet.size delegates to its backing `map` (one ref hop) — D4.
-                if c.ends_with(".HashSet") {
+                if c == "java.util.HashSet" {
                     QueryValue::Null
                 } else {
                     self.decode_field(class_id, "size", blob)
