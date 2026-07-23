@@ -819,7 +819,11 @@ pub fn run_single_dump(
     // Inner subqueries feed only membership/identity sets via
     // `resume_without_late_ctx`; a RefPath *inside* an inner subquery producing
     // membership is an edge case not yet wired, so the inner CSR stays discarded.
-    let (.., inner_state, _inner_refwalk_csr, _inner_sv, _inner_sv_trunc) =
+    // We DO bind the inner graph `inner_g` (for the reachability walk) because
+    // reachable-only must prune the inner membership/identity sets too: an
+    // unreachable object in a `... IN (SELECT ... FROM C)` set would let outer
+    // rows match against a MAT-invisible object, breaking parity.
+    let (inner_g, .., mut inner_state, _inner_refwalk_csr, _inner_sv, _inner_sv_trunc) =
         crate::pass2::Pass2::build(
             path,
             p1_inner,
@@ -828,7 +832,33 @@ pub fn run_single_dump(
             &inner_queries,
             &mut empty,
         )?;
-    let inner_results = crate::query::stage_runner::resume_without_late_ctx(inner_state);
+    // Take the per-inner-slot source-index sidecar (armed only under
+    // reachable-only) BEFORE `resume_without_late_ctx` consumes the state, then
+    // compute GC-reachability over the inner scan's forward CSR. `resume_*`
+    // returns results in slot order (1:1 with `inner_queries`/`inners`), so
+    // `inner_results[i]` is inner slot `i` and `inner_src_by_slot[&i]` its src.
+    let inner_src_by_slot = inner_state.take_row_src_by_slot();
+    let inner_dfn: Option<Vec<u32>> = reachable_only.then(|| {
+        crate::rpo_dfs::rpo_dfs(
+            inner_g.n,
+            &inner_g.gc_root_indices,
+            &inner_g.fwd_offsets,
+            &inner_g.fwd_targets,
+        )
+        .dfn
+    });
+    let mut inner_results = crate::query::stage_runner::resume_without_late_ctx(inner_state);
+    // Prune inner results to GC-reachable objects (MAT parity), keyed by the
+    // scan-captured source dense index — same mechanism as the outer/fast paths,
+    // so a projected `@objectAddress` prunes by exact source index, not a lossy
+    // value re-read. Skipped entirely under --all (`inner_dfn` is `None`).
+    if let Some(dfn) = &inner_dfn {
+        for (slot, r) in inner_results.iter_mut().enumerate() {
+            if let Some(src) = inner_src_by_slot.get(&slot) {
+                filter_result_by_src(r, src, dfn);
+            }
+        }
+    }
 
     // ── Materialize inner results into injectable sets ───────────────────────
     // IN-subqueries → per-outer-slot address membership sets (injected into the
@@ -929,8 +959,10 @@ pub fn run_single_dump(
         }
     }
 
-    // Reachable-only pruning already applied inside resume above (before the
-    // FROM semi-join), keyed by scan-captured source index; nothing to do here.
+    // Reachable-only pruning is fully applied by now: inner membership/identity
+    // sets were pruned right after the inner pass (above), and outer rows inside
+    // resume (before the FROM semi-join) — both keyed by scan-captured source
+    // index. Nothing to prune here.
     Ok(collapse_union_results(flat_results, &groups))
 }
 /// joined by object identity) or an IN-predicate membership set (on some LHS).

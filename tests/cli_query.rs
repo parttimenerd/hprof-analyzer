@@ -1902,6 +1902,36 @@ fn in_subquery_is_bounded_by_unfiltered() {
     );
 }
 
+/// The INNER subquery membership set must itself be pruned to GC-reachable
+/// objects under the reachable-only default (MAT parity). Regression for a bug
+/// where the inner pass routed through `resume_without_late_ctx` and skipped
+/// reachability filtering, so `... IN (SELECT ... FROM C)` could match outer
+/// rows against UNREACHABLE inner objects.
+///
+/// The outer `INSTANCEOF java.lang.Object` matches every object, so the row
+/// count is driven ENTIRELY by the inner Thread membership set: reachable-only
+/// yields MAT's 27 reachable Threads; `--all` yields all 29 (2 unreachable). If
+/// the inner set were not pruned, the reachable default would still admit the 2
+/// unreachable Threads' addresses and the two counts would coincide.
+#[test]
+fn in_subquery_inner_set_is_reachability_filtered() {
+    let Some(hprof) = philosophers() else { return };
+    let oql = "SELECT s.@objectAddress FROM INSTANCEOF java.lang.Object s \
+               WHERE s.@objectAddress IN (SELECT @objectAddress FROM java.lang.Thread)";
+    let reachable = parse_row_count(&run_query_stdout(&hprof, oql));
+    let all = parse_row_count(&run_query_args(&hprof, &["--all"], oql));
+    assert_eq!(
+        reachable, 27,
+        "reachable-only inner Thread set must be MAT's 27 reachable Threads, got {reachable}"
+    );
+    assert_eq!(all, 29, "--all inner Thread set must be all 29 Threads, got {all}");
+    assert!(
+        reachable < all,
+        "inner-set reachability pruning must drop the 2 unreachable Threads \
+         (reachable {reachable} vs all {all})"
+    );
+}
+
 /// A CORRELATED inner subquery — one whose body references an OUTER alias — is
 /// rejected at plan time (correlation is unsupported in this slice). Here the
 /// inner `WHERE s.hash > 0` references the outer alias `s`, so planning must fail
