@@ -989,7 +989,7 @@ fn parse_plan_queries(
 fn finalize_query_labels(
     results: &mut [query::model::QueryResult],
     query_texts: &[String],
-    queries: &[query::ast::Query],
+    queries: &[(query::ast::Query, query::plan::QueryPlan)],
 ) {
     use std::collections::HashSet;
     let mut seen: HashSet<String> = HashSet::new();
@@ -1000,6 +1000,7 @@ fn finalize_query_labels(
         if r.name.is_empty() {
             let base = queries
                 .get(i)
+                .map(|(q, _)| q)
                 .and_then(query::viz::default_view_name)
                 .unwrap_or_else(|| format!("q{}", i + 1));
             let mut name = base.clone();
@@ -1123,8 +1124,7 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
 
     // Fill in blank oql text and default names (from-target-derived, else
     // `q{N}`) for the printed tables.
-    let label_queries: Vec<query::ast::Query> = parsed.iter().map(|(q, _)| q.clone()).collect();
-    finalize_query_labels(&mut query_results, &query_texts, &label_queries);
+    finalize_query_labels(&mut query_results, &query_texts, &parsed);
     attach_viz(&mut query_results, &collected);
 
     let mut out = String::new();
@@ -1672,9 +1672,7 @@ fn run(
     crate::trace::trim();
     // Fill in blank oql text and default names (from-target-derived, else
     // `q{N}`) for the printed tables.
-    let label_queries: Vec<query::ast::Query> =
-        parsed_queries.iter().map(|(q, _)| q.clone()).collect();
-    finalize_query_labels(&mut query_results, &query_texts, &label_queries);
+    finalize_query_labels(&mut query_results, &query_texts, &parsed_queries);
     attach_viz(&mut query_results, &collected);
     report.queries = std::mem::take(&mut query_results);
     let out_text = match format {
