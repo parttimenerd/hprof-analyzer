@@ -50,10 +50,11 @@ fn query_subcommand_count_prints_table() {
     // The COUNT cell must be a non-negative integer on its own line.
     let has_count = stdout.lines().any(|l| l.trim().parse::<u64>().is_ok());
     assert!(has_count, "no integer count row found:\n{stdout}");
-    // An unnamed query is printed under a default `== q1 ==` label header.
+    // An unnamed query derives its label from the FROM target (Wave E): a
+    // `FROM java.lang.String` block renders under `== java.lang.String ==`.
     assert!(
-        stdout.contains("== q1 =="),
-        "missing default `q1` label header:\n{stdout}"
+        stdout.contains("== java.lang.String =="),
+        "missing FROM-target label header:\n{stdout}"
     );
 }
 
@@ -457,9 +458,9 @@ fn query_subcommand_parenthesized_union_branch_parses() {
     );
 }
 
-/// Two `--query` flags on the subcommand each print under their own sequential
-/// `== q1 ==` / `== q2 ==` label header (guards default-name assignment for the
-/// stdout table path, distinct from the rendered report path).
+/// Two `--query` flags on the subcommand each print under a label derived from
+/// their distinct FROM targets (Wave E), guarding default-name assignment for
+/// the stdout table path (distinct from the rendered report path).
 #[test]
 fn query_subcommand_two_queries_get_sequential_labels() {
     let Some(hprof) = philosophers() else { return };
@@ -477,8 +478,8 @@ fn query_subcommand_two_queries_get_sequential_labels() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("== q1 ==") && stdout.contains("== q2 =="),
-        "missing sequential q1/q2 label headers:\n{stdout}"
+        stdout.contains("== java.lang.String ==") && stdout.contains("== java.lang.Object =="),
+        "missing FROM-target label headers:\n{stdout}"
     );
 }
 
@@ -657,10 +658,11 @@ fn query_subcommand_query_file_skips_comments_and_blanks() {
         stdout.contains("COUNT(*)"),
         "missing COUNT header:\n{stdout}"
     );
-    // Exactly one query ran: exactly one result block, marked by its "== qN =="
-    // header. The comment/blank lines were skipped rather than run as queries.
+    // Exactly one query ran: exactly one result block, marked by its
+    // "== <name> ==" header (Wave E derives the name from the FROM target).
+    // The comment/blank lines were skipped rather than run as queries.
     assert_eq!(
-        stdout.matches("== q").count(),
+        stdout.lines().filter(|l| l.starts_with("== ")).count(),
         1,
         "expected exactly one query result:\n{stdout}"
     );
@@ -735,10 +737,10 @@ fn analyze_with_query_flag_still_produces_report() {
         md.contains("COUNT(*)"),
         "query result table missing COUNT(*) column:\n{md}"
     );
-    // An unnamed query gets a `q<N>` label, rendered as its `###` heading.
+    // An unnamed query derives its `###` heading from the FROM target (Wave E).
     assert!(
-        md.contains("### q1"),
-        "query heading missing its default `q1` name:\n{md}"
+        md.contains("### java.lang.String"),
+        "query heading missing its FROM-target name:\n{md}"
     );
 }
 
@@ -857,10 +859,10 @@ fn analyze_multiple_query_flags_render_all() {
         md.matches("COUNT(*)").count() >= 2,
         "expected both queries to render (>=2 COUNT(*) columns):\n{md}"
     );
-    // Unnamed queries get sequential `q<N>` labels rendered as `###` headings.
+    // Unnamed queries derive `###` headings from their distinct FROM targets.
     assert!(
-        md.contains("### q1") && md.contains("### q2"),
-        "expected both queries to render with default q1/q2 headings:\n{md}"
+        md.contains("### java.lang.String") && md.contains("### java.lang.Object"),
+        "expected both queries to render with FROM-target headings:\n{md}"
     );
 }
 
@@ -896,8 +898,14 @@ fn analyze_mixed_kind_queries_render_in_input_order() {
         String::from_utf8_lossy(&out.stderr)
     );
     let md = String::from_utf8_lossy(&out.stdout);
-    let q1 = md.find("### q1").expect("missing ### q1 heading");
-    let q2 = md.find("### q2").expect("missing ### q2 heading");
+    // Both queries share the FROM target `java.lang.String`, so Wave E's de-dup
+    // renders q1 as `### java.lang.String` and q2 as `### java.lang.String (2)`.
+    let q2 = md
+        .find("### java.lang.String (2)")
+        .expect("missing de-duped `### java.lang.String (2)` heading");
+    let q1 = md
+        .find("### java.lang.String")
+        .expect("missing `### java.lang.String` heading");
     assert!(q1 < q2, "q1 heading must precede q2 heading:\n{md}");
     let q1_block = &md[q1..q2];
     let q2_block = &md[q2..];
@@ -3616,6 +3624,103 @@ fn viz_directive_serializes_into_report_json() {
     assert!(
         stdout.contains("\"histogram\""),
         "viz kind histogram must appear:\n{}",
+        &stdout[..stdout.len().min(4000)]
+    );
+}
+
+/// Wave E: an unnamed `-- @viz` block derives its result `name` from the FROM
+/// target (here `java.lang.Thread`), NOT the positional `q1` fallback. Uses the
+/// JSON report where the block `name` is serialized.
+#[test]
+fn viz_block_without_name_uses_from_target() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg(&hprof)
+        .args(["--format", "json"])
+        .args([
+            "--query=-- @viz histogram label=name value=bytes\nSELECT @displayName AS name, @usedHeapSize AS bytes FROM java.lang.Thread LIMIT 5",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "analyze with unnamed viz query failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("\"name\": \"java.lang.Thread\"")
+            || stdout.contains("\"name\":\"java.lang.Thread\""),
+        "unnamed block must derive its name from the FROM target:\n{}",
+        &stdout[..stdout.len().min(4000)]
+    );
+    assert!(
+        !stdout.contains("\"name\": \"q1\"") && !stdout.contains("\"name\":\"q1\""),
+        "unnamed block must NOT fall back to the positional q1 label:\n{}",
+        &stdout[..stdout.len().min(4000)]
+    );
+}
+
+/// Wave E: an explicit `-- @viz name="..."` still overrides the FROM-target
+/// default — the derived name never clobbers a user-supplied one.
+#[test]
+fn viz_explicit_name_still_wins_over_from_target() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg(&hprof)
+        .args(["--format", "json"])
+        .args([
+            "--query=-- @viz histogram name=\"My Threads\" label=name value=bytes\nSELECT @displayName AS name, @usedHeapSize AS bytes FROM java.lang.Thread LIMIT 5",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "analyze with named viz query failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("\"name\": \"My Threads\"")
+            || stdout.contains("\"name\":\"My Threads\""),
+        "explicit @viz name must win over the FROM-target default:\n{}",
+        &stdout[..stdout.len().min(4000)]
+    );
+    assert!(
+        !stdout.contains("java.lang.Thread\"") || stdout.contains("\"My Threads\""),
+        "explicit name present:\n{}",
+        &stdout[..stdout.len().min(4000)]
+    );
+}
+
+/// Wave E: two unnamed queries over the SAME FROM target get de-duplicated
+/// names — the second becomes `java.lang.String (2)`.
+#[test]
+fn viz_duplicate_from_targets_are_deduped() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg(&hprof)
+        .args(["--format", "json"])
+        .args(["--query", "SELECT COUNT(*) FROM java.lang.String"])
+        .args(["--query", "SELECT COUNT(*) FROM java.lang.String"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "analyze with duplicate FROM targets failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("\"name\": \"java.lang.String\"")
+            || stdout.contains("\"name\":\"java.lang.String\""),
+        "first block keeps the bare FROM-target name:\n{}",
+        &stdout[..stdout.len().min(4000)]
+    );
+    assert!(
+        stdout.contains("\"name\": \"java.lang.String (2)\"")
+            || stdout.contains("\"name\":\"java.lang.String (2)\""),
+        "second identical block must be de-duped to `... (2)`:\n{}",
         &stdout[..stdout.len().min(4000)]
     );
 }

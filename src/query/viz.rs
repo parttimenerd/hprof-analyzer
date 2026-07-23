@@ -372,9 +372,59 @@ pub fn cell_as_label(v: &QueryValue) -> String {
     }
 }
 
+/// Derive a descriptive default view name from a query's FROM target, for a
+/// result/`@viz` block with no explicit name. Returns `None` for subquery/union
+/// sources (no single class), so the caller falls back to `q{N}`.
+pub fn default_view_name(q: &crate::query::ast::Query) -> Option<String> {
+    use crate::query::ast::FromSource;
+    if !q.union_branches.is_empty() {
+        return None; // a UNION has no single FROM target
+    }
+    match &q.from {
+        FromSource::Class(c) => Some(if c.instanceof {
+            format!("INSTANCEOF {}", c.class_name)
+        } else {
+            c.class_name.clone()
+        }),
+        FromSource::Object(addr) => Some(format!("object 0x{addr:x}")),
+        FromSource::Subquery(_) => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_view_name_from_target() {
+        use crate::query::parse::parse;
+        assert_eq!(
+            default_view_name(&parse("SELECT * FROM java.lang.String").unwrap()).as_deref(),
+            Some("java.lang.String")
+        );
+        assert_eq!(
+            default_view_name(&parse("SELECT * FROM INSTANCEOF java.lang.Thread").unwrap())
+                .as_deref(),
+            Some("INSTANCEOF java.lang.Thread")
+        );
+        assert_eq!(
+            default_view_name(&parse("SELECT * FROM OBJECTS 0x10").unwrap()).as_deref(),
+            Some("object 0x10")
+        );
+        assert_eq!(
+            default_view_name(
+                &parse("SELECT * FROM (SELECT * FROM java.lang.String)").unwrap()
+            ),
+            None
+        );
+        assert_eq!(
+            default_view_name(
+                &parse("SELECT * FROM java.lang.String UNION SELECT * FROM java.lang.Thread")
+                    .unwrap()
+            ),
+            None
+        );
+    }
 
     fn cols(names: &[&str]) -> Vec<QueryColumn> {
         names

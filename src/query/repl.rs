@@ -541,6 +541,9 @@ fn run_one(path: &str, text: &str, path_depth: usize) -> io::Result<QueryResult>
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("plan error: {}", e.0)))?;
     let plan =
         crate::query::optimize::optimize(plan, &q, &crate::query::optimize::SchemaStats::default());
+    // Derive a default view name from the FROM target BEFORE `q` is moved into
+    // `run_single_dump`; a `@viz name="..."` directive below still overrides it.
+    let default_name = crate::query::viz::default_view_name(&q);
     let mut results = crate::query::run::run_single_dump(path, &[(q, plan)])?;
     let mut result = results.pop().unwrap_or_else(|| QueryResult {
         name: "q1".into(),
@@ -559,6 +562,11 @@ fn run_one(path: &str, text: &str, path_depth: usize) -> io::Result<QueryResult>
             Some(n) => format!("{n}; {w}"),
             None => w,
         });
+    }
+    // A block with no explicit name derives its label from the FROM target
+    // (else `q1`). Runs before the `@viz name=` override below so that wins.
+    if result.name.is_empty() {
+        result.name = default_name.unwrap_or_else(|| "q1".to_string());
     }
     // Attach a well-formed chart spec only if its columns resolve; otherwise
     // downgrade to a table with an explanatory note (charts never hard-fail).

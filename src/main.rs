@@ -978,13 +978,41 @@ fn parse_plan_queries(
 /// Relies on `query_results` already being restored to the caller's input
 /// order (pass2 sorts it), so the positional zip against `query_texts` and the
 /// 1-based `q{N}` labels line up with the queries the user supplied.
-fn finalize_query_labels(results: &mut [query::model::QueryResult], query_texts: &[String]) {
+///
+/// An unnamed block derives a descriptive default from its FROM target (e.g.
+/// `java.lang.String`, `INSTANCEOF java.lang.Thread`, `object 0x10`) via
+/// [`query::viz::default_view_name`]; subquery/UNION sources have no single
+/// class, so those fall back to the positional `q{N}` label. Derived (and
+/// already-set) names are de-duplicated so two identical FROM targets render as
+/// `java.lang.String` and `java.lang.String (2)`. Explicit config-/directive
+/// names still win: they are applied later in [`attach_viz`].
+fn finalize_query_labels(
+    results: &mut [query::model::QueryResult],
+    query_texts: &[String],
+    queries: &[query::ast::Query],
+) {
+    use std::collections::HashSet;
+    let mut seen: HashSet<String> = HashSet::new();
     for (i, (r, text)) in results.iter_mut().zip(query_texts.iter()).enumerate() {
         if r.oql.is_empty() {
             r.oql = text.clone();
         }
         if r.name.is_empty() {
-            r.name = format!("q{}", i + 1);
+            let base = queries
+                .get(i)
+                .and_then(query::viz::default_view_name)
+                .unwrap_or_else(|| format!("q{}", i + 1));
+            let mut name = base.clone();
+            let mut n = 2;
+            while seen.contains(&name) {
+                name = format!("{base} ({n})");
+                n += 1;
+            }
+            r.name = name.clone();
+            seen.insert(name);
+        } else {
+            // An already-set name still participates in de-dup.
+            seen.insert(r.name.clone());
         }
     }
 }
@@ -1093,8 +1121,10 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
         query::run::collapse_union_results(flat_results, &union_groups)
     };
 
-    // Fill in blank oql text and default `q{N}` names for the printed tables.
-    finalize_query_labels(&mut query_results, &query_texts);
+    // Fill in blank oql text and default names (from-target-derived, else
+    // `q{N}`) for the printed tables.
+    let label_queries: Vec<query::ast::Query> = parsed.iter().map(|(q, _)| q.clone()).collect();
+    finalize_query_labels(&mut query_results, &query_texts, &label_queries);
     attach_viz(&mut query_results, &collected);
 
     let mut out = String::new();
@@ -1640,8 +1670,11 @@ fn run(
     drop(dc_off);
     drop(dc_tgt);
     crate::trace::trim();
-    // Fill in blank oql text and default `q{N}` names for the printed tables.
-    finalize_query_labels(&mut query_results, &query_texts);
+    // Fill in blank oql text and default names (from-target-derived, else
+    // `q{N}`) for the printed tables.
+    let label_queries: Vec<query::ast::Query> =
+        parsed_queries.iter().map(|(q, _)| q.clone()).collect();
+    finalize_query_labels(&mut query_results, &query_texts, &label_queries);
     attach_viz(&mut query_results, &collected);
     report.queries = std::mem::take(&mut query_results);
     let out_text = match format {
