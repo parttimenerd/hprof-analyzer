@@ -20,6 +20,7 @@ mat-oracle = []
 
 [dependencies]
 base64 = "0.22"
+tiny_http = "0.12"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 flate2 = "1"

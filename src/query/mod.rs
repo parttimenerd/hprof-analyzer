@@ -16,6 +16,7 @@ pub mod repl;
 pub mod retained_edges;
 pub mod run;
 pub mod runflags;
+pub mod server;
 pub mod stage_runner;
 pub mod stringvals;
 pub mod viz;
