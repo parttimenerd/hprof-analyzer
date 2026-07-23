@@ -529,7 +529,7 @@ These are the most likely accumulation points for excessive memory usage._\n\n",
             (rank + 1).to_string(),
             format!("`{}`", s.pretty_class),
             format_bytes(s.retained),
-            format!("{pct:.1}%"),
+            fmt_pct(pct),
             bar(s.retained, l.total_shallow, GRAPH_BAR_WIDTH),
         ]);
     }
@@ -701,7 +701,7 @@ that holds each object (the primary referrer; an object may have several)._\n\n"
             format!("`{}`", row.display_class),
             format_bytes(row.shallow),
             format_bytes(row.retained),
-            format!("{pct:.1}%"),
+            fmt_pct(pct),
         ];
         if obj_has_owner {
             cells.push(match &row.owner {
