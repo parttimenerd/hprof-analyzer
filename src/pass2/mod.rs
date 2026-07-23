@@ -422,6 +422,7 @@ impl Pass2 {
                             error: Some(e.0),
                             note: None,
                             viz: None,
+                            elapsed_ms: None,
                         },
                     )));
                 }

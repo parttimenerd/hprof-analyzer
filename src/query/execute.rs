@@ -1160,6 +1160,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                         error: None,
                         note: None,
                         viz: None,
+                        elapsed_ms: None,
                     },
                     None,
                 );
@@ -1176,6 +1177,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                     error: None,
                     note: None,
                     viz: None,
+                    elapsed_ms: None,
                 },
                 None,
             )
@@ -1244,6 +1246,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                     error: None,
                     note,
                     viz: None,
+                    elapsed_ms: None,
                 },
                 row_src,
             )
@@ -2026,6 +2029,7 @@ mod tests {
                 error: None,
                 note: None,
                 viz: None,
+                elapsed_ms: None,
             },
         );
         let q = crate::query::parse::parse("SELECT @retainedHeapSize FROM C").unwrap();

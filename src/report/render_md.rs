@@ -3170,6 +3170,7 @@ mod tests {
             error: None,
             note: None,
             viz: None,
+            elapsed_ms: None,
         };
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
@@ -3215,6 +3216,7 @@ mod tests {
             error: Some("parse failed near 'bogus'".into()),
             note: None,
             viz: None,
+            elapsed_ms: None,
         };
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
@@ -3245,6 +3247,7 @@ mod tests {
             error: None,
             note: None,
             viz: None,
+            elapsed_ms: None,
         };
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
@@ -3266,6 +3269,7 @@ mod tests {
             error: None,
             note: Some("edge retention capped at depth 5".into()),
             viz: None,
+            elapsed_ms: None,
         };
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
@@ -3287,6 +3291,7 @@ mod tests {
             error: None,
             note: None,
             viz: None,
+            elapsed_ms: None,
         };
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
@@ -3308,6 +3313,7 @@ mod tests {
             error: None,
             note: None,
             viz: None,
+            elapsed_ms: None,
         };
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
@@ -3330,6 +3336,7 @@ mod tests {
                 error: None,
                 note: None,
                 viz: None,
+                elapsed_ms: None,
             },
             QueryResult {
                 name: "second".into(),
@@ -3341,6 +3348,7 @@ mod tests {
                 error: None,
                 note: None,
                 viz: None,
+                elapsed_ms: None,
             },
         ];
         let mut out = String::new();
@@ -3375,6 +3383,7 @@ mod tests {
             error: None,
             note: None,
             viz: None,
+            elapsed_ms: None,
         };
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
@@ -3414,6 +3423,7 @@ mod tests {
             error: None,
             note: None,
             viz: None,
+            elapsed_ms: None,
         };
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
@@ -3447,6 +3457,7 @@ mod tests {
             error: None,
             note: None,
             viz: None,
+            elapsed_ms: None,
         };
         let mut out = String::new();
         render_custom_queries(std::slice::from_ref(&q), &mut out);
@@ -3480,6 +3491,7 @@ mod tests {
             error: None,
             note: None,
             viz: Some(viz(kind)),
+            elapsed_ms: None,
         }
     }
 

@@ -367,6 +367,7 @@ pub fn resume_without_late_ctx(state: QueryExecState) -> Vec<QueryResult> {
                 error: Some(error.to_string()),
                 note: None,
                 viz: None,
+                elapsed_ms: None,
             },
         ));
     }
@@ -447,6 +448,7 @@ fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
                     error: Some(format!("stage op {other:?} not supported in this phase")),
                     note: None,
                     viz: None,
+                    elapsed_ms: None,
                 };
             }
         }
@@ -502,6 +504,7 @@ fn dominator_rows(
         error: None,
         note: None,
         viz: None,
+        elapsed_ms: None,
     }
 }
 
@@ -595,8 +598,10 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
         error: None,
         note,
         viz: None,
+        elapsed_ms: None,
     }
 }
+
 
 /// Resolve toString(s) values for each carried dense index. For every String
 /// instance carried from the scan, look up its decoded text in `ctx.string_values`,
@@ -658,6 +663,7 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
             error: None,
             note: None,
             viz: None,
+            elapsed_ms: None,
         };
     }
 
@@ -690,6 +696,7 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
         error: None,
         note: None,
         viz: None,
+        elapsed_ms: None,
     }
 }
 
@@ -987,6 +994,7 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
         error: None,
         note: None,
         viz: None,
+        elapsed_ms: None,
     }
 }
 
@@ -1282,6 +1290,7 @@ mod tests {
                 error: None,
                 note: None,
                 viz: None,
+                elapsed_ms: None,
             },
         );
         st.push_cross_phase(0, "q_ret".to_string(), plan, carry);

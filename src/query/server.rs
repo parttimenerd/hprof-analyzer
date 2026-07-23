@@ -5,6 +5,7 @@
 use std::io;
 use std::io::Read;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use tiny_http::{Response, Server};
 
@@ -25,6 +26,7 @@ pub fn run_query_json(
     reachable_only: bool,
     cache: &mut Option<ReplCache>,
 ) -> serde_json::Value {
+    let started = Instant::now();
     let (cleaned, viz, warning) = crate::query::viz::split_directive(text);
 
     let q = match crate::query::parse::parse(&cleaned) {
@@ -88,6 +90,7 @@ pub fn run_query_json(
         error: Some("no result produced".into()),
         note: None,
         viz: None,
+        elapsed_ms: None,
     });
     // Fold a malformed-directive warning into the note (mirrors run_one).
     if let Some(w) = warning {
@@ -122,6 +125,7 @@ pub fn run_query_json(
         }
     }
 
+    result.elapsed_ms = Some(started.elapsed().as_millis() as u64);
     match serde_json::to_value(&result) {
         Ok(rv) => serde_json::json!({ "ok": true, "result": rv }),
         Err(e) => serde_json::json!({
@@ -531,6 +535,14 @@ mod tests {
         // GET on the POST-only /query path is likewise 405.
         let (status, _) = state.route("GET", "/query", "");
         assert_eq!(status, 405, "GET /query -> 405");
+    }
+
+    #[test]
+    fn ok_query_reports_elapsed_ms() {
+        let mut cache = None;
+        let v = run_query_json(FIXTURE, "SELECT @objectAddress FROM java.lang.Thread", 5, true, &mut cache);
+        assert_eq!(v["ok"], serde_json::json!(true), "ok: {v}");
+        assert!(v["result"]["elapsed_ms"].is_u64(), "elapsed_ms present & numeric: {v}");
     }
 
     #[test]

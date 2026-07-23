@@ -1688,6 +1688,7 @@ mod tests {
             error: None,
             note: None,
             viz: None,
+            elapsed_ms: None,
         };
         let b = QueryResult {
             name: "q".into(),
@@ -1699,6 +1700,7 @@ mod tests {
             error: None,
             note: None,
             viz: None,
+            elapsed_ms: None,
         };
         let out = concat_union(vec![a, b], 10);
         assert_eq!(out.row_count, 3);
@@ -1718,6 +1720,7 @@ mod tests {
                     error: None,
                     note: None,
                     viz: None,
+                    elapsed_ms: None,
                 },
                 QueryResult {
                     name: "q".into(),
@@ -1729,6 +1732,7 @@ mod tests {
                     error: None,
                     note: None,
                     viz: None,
+                    elapsed_ms: None,
                 },
             ],
             10,
@@ -1751,6 +1755,7 @@ mod tests {
             error: None,
             note: None,
             viz: None,
+            elapsed_ms: None,
         };
         // Second branch was itself truncated at scan time; UNION must carry that.
         let b = QueryResult {
@@ -1763,6 +1768,7 @@ mod tests {
             error: None,
             note: None,
             viz: None,
+            elapsed_ms: None,
         };
         let out = concat_union(vec![a, b], 100);
         assert_eq!(out.rows.len(), 2);
@@ -1784,6 +1790,7 @@ mod tests {
             error: None,
             note: None,
             viz: None,
+            elapsed_ms: None,
         }
     }
 
@@ -2074,6 +2081,7 @@ mod tests {
             error: None,
             note: None,
             viz: None,
+            elapsed_ms: None,
         };
         let flat = vec![branch(&[1, 2, 3]), branch(&[2, 3, 4])];
         let groups = vec![UnionGroup {
@@ -2112,6 +2120,7 @@ mod tests {
             error: None,
             note: None,
             viz: None,
+            elapsed_ms: None,
         }];
         let groups = vec![UnionGroup {
             head: 0,
@@ -2251,6 +2260,7 @@ mod tests {
             error: None,
             note: None,
             viz: None,
+            elapsed_ms: None,
         };
         // Explicit per-row source dense indices captured at scan time. The row
         // VALUES are irrelevant now — pruning is by the captured src, not by
@@ -2285,6 +2295,7 @@ mod tests {
             error: None,
             note: None,
             viz: None,
+            elapsed_ms: None,
         };
         let src = vec![0u32, 1];
         filter_result_by_src(&mut result, &src, &dfn);
@@ -2309,6 +2320,7 @@ mod tests {
             error: None,
             note: None,
             viz: None,
+            elapsed_ms: None,
         };
         // Empty src (no captured source object) → keep all rows.
         filter_result_by_src(&mut result, &[], &dfn);

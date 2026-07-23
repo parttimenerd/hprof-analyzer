@@ -48,6 +48,11 @@ pub struct QueryResult {
     /// absent so no-viz reports are byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub viz: Option<VizSpec>,
+    /// Wall-clock milliseconds this query took (parse+plan+run), set by the
+    /// server pipeline. Omitted from JSON when absent so the analyze report and
+    /// its golden snapshot stay byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<u64>,
 }
 
 #[cfg(test)]
@@ -68,6 +73,7 @@ mod tests {
             error: None,
             note: None,
             viz: None,
+            elapsed_ms: None,
         };
         let j = serde_json::to_string(&r).unwrap();
         assert!(j.contains("\"row_count\":1"));
@@ -102,6 +108,7 @@ mod tests {
             error: None,
             note: None,
             viz: None,
+            elapsed_ms: None,
         };
         let j = serde_json::to_string(&r).unwrap();
         let back: QueryResult = serde_json::from_str(&j).unwrap();
@@ -141,6 +148,7 @@ mod tests {
             error: Some("boom".into()),
             note: None,
             viz: None,
+            elapsed_ms: None,
         };
         let j = serde_json::to_string(&r).unwrap();
         assert!(

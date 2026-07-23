@@ -1322,6 +1322,7 @@ fn run_one(
         error: Some("no result produced".into()),
         note: None,
         viz: None,
+        elapsed_ms: None,
     });
     // Fold a malformed-directive warning into the note.
     if let Some(w) = warning {
@@ -1746,6 +1747,7 @@ mod tests {
             error: None,
             note: None,
             viz: None,
+            elapsed_ms: None,
         };
         let mut buf = Vec::new();
         print_result(&res, std::time::Duration::from_millis(3), 0, &mut buf).unwrap();
@@ -1765,6 +1767,7 @@ mod tests {
             error: None,
             note: Some("chart downgraded to table".into()),
             viz: None,
+            elapsed_ms: None,
         };
         let out = print_to_string(&res);
         assert!(out.contains("-- chart downgraded to table"), "note missing: {out}");
@@ -1794,6 +1797,7 @@ mod tests {
             error: None,
             note: None,
             viz: None,
+            elapsed_ms: None,
         };
         let out = print_to_string(&res);
         assert!(out.contains("a | b"), "header missing:\n{out}");
@@ -1816,6 +1820,7 @@ mod tests {
             error: None,
             note: None,
             viz: None,
+            elapsed_ms: None,
         };
         let out = print_to_string(&res);
         assert!(out.contains("(1 row,"), "singular footer missing:\n{out}");
@@ -1834,6 +1839,7 @@ mod tests {
             error: Some("boom".into()),
             note: None,
             viz: None,
+            elapsed_ms: None,
         };
         let out = print_to_string(&res);
         assert_eq!(out, "error: boom\n");
@@ -1851,6 +1857,7 @@ mod tests {
             error: None,
             note: None,
             viz: None,
+            elapsed_ms: None,
         };
         let out = print_to_string(&res);
         assert!(
@@ -1897,6 +1904,7 @@ mod tests {
             error: None,
             note: None,
             viz: None,
+            elapsed_ms: None,
         };
         let out = print_to_string(&res);
         // Header cell "id" padded to width 4 -> "id  " before the separator.
@@ -1922,6 +1930,7 @@ mod tests {
             error: None,
             note: None,
             viz: None,
+            elapsed_ms: None,
         };
         let out = print_to_string(&res);
         // No trailing spaces on any printed row (last column is unpadded).
@@ -1966,6 +1975,7 @@ mod tests {
             error: None,
             note: None,
             viz: None,
+            elapsed_ms: None,
         };
         let mut buf = Vec::new();
         print_result(&res, std::time::Duration::from_millis(0), 6, &mut buf).unwrap();
@@ -2009,6 +2019,7 @@ mod tests {
             error: None,
             note: None,
             viz: None,
+            elapsed_ms: None,
         };
         let csv = result_to_csv(&res);
         assert_eq!(

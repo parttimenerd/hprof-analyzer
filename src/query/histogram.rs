@@ -59,6 +59,7 @@ pub fn run_histogram(q: &Query, plan: &QueryPlan, classes: &[ClassSummary]) -> Q
         error: None,
         note: None,
         viz: None,
+        elapsed_ms: None,
     }
 }
 
