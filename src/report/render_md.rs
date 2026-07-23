@@ -2685,7 +2685,10 @@ pub(crate) fn render_references(rf: &ReferencesAnalysis, graphs: bool, out: &mut
     }
 
     let render_class_table = |rows: &[RefStatClassRow], out: &mut String| {
-        let obj_max = rows.iter().map(|r| r.objects).max().unwrap_or(0);
+        const REF_CLASS_CAP: usize = 20;
+        let shown = rows.len().min(REF_CLASS_CAP);
+        let displayed = &rows[..shown];
+        let obj_max = displayed.iter().map(|r| r.objects).max().unwrap_or(0);
         let mut headers: Vec<&str> = vec!["Class", "Objects", "Shallow"];
         let mut aligns = vec![Align::Left, Align::Right, Align::Right];
         if graphs {
@@ -2693,7 +2696,7 @@ pub(crate) fn render_references(rf: &ReferencesAnalysis, graphs: bool, out: &mut
             aligns.push(Align::Left);
         }
         let mut t = Table::new(&headers, &aligns);
-        for r in rows {
+        for r in displayed {
             let mut row = vec![
                 format!("`{}`", r.pretty_class),
                 fmt_count(r.objects),
@@ -2705,11 +2708,37 @@ pub(crate) fn render_references(rf: &ReferencesAnalysis, graphs: bool, out: &mut
             t.row(row);
         }
         t.render(out);
+        if rows.len() > REF_CLASS_CAP {
+            let hidden = rows.len() - REF_CLASS_CAP;
+            let tail_obj: u64 = rows[REF_CLASS_CAP..].iter().map(|r| r.objects).sum();
+            let tail_sh: u64 = rows[REF_CLASS_CAP..].iter().map(|r| r.shallow).sum();
+            out.push_str(&format!(
+                "_… {} more classes ({} objects, {} shallow)._\n",
+                fmt_count(hidden as u64),
+                fmt_count(tail_obj),
+                format_bytes(tail_sh),
+            ));
+        }
         out.push('\n');
     };
 
     for stats in [&rf.soft, &rf.weak, &rf.phantom].into_iter().flatten() {
         out.push_str(&format!("### {} References\n\n", stats.kind));
+        let kind_caption = match stats.kind.as_str() {
+            "Soft" => "_Soft references keep objects alive until the JVM needs memory — they are \
+cleared under GC pressure. A large soft-referenced heap is often a cache that grows \
+unbounded; consider bounding the cache size._",
+            "Weak" => "_Weak references do not prevent GC. Objects listed here are reachable only \
+via weak chains — under any GC they may be reclaimed. Large counts are usually benign._",
+            "Phantom" => "_Phantom references mark objects in finalization or cleanup pipelines. \
+A large backlog may indicate that the ReferenceQueue processor is too slow or blocked, \
+or that native resources (file handles, native buffers) are not being released promptly._",
+            _ => "",
+        };
+        if !kind_caption.is_empty() {
+            out.push_str(kind_caption);
+            out.push_str("\n\n");
+        }
         out.push_str(&format!(
             "_{} reference instances._\n\n",
             fmt_count(stats.reference_instances),
@@ -2718,6 +2747,7 @@ pub(crate) fn render_references(rf: &ReferencesAnalysis, graphs: bool, out: &mut
         render_class_table(&stats.referent_histogram, out);
         if !stats.only_weakly_retained.is_empty() {
             out.push_str("#### Only-weakly retained _(approximate)_\n\n");
+            out.push_str("_Objects with no incoming strong reference other than this reference chain — GC pressure would free them._\n\n");
             render_class_table(&stats.only_weakly_retained, out);
         }
     }
@@ -2742,6 +2772,26 @@ pub(crate) fn render_unreachable_histogram(o: &SystemOverview, graphs: bool, out
         format_bytes(o.unreachable_retained),
         UNREACHABLE_HISTOGRAM_CAP,
     ));
+    // Add context about what unreachable means and when it's a concern.
+    let total = o.total_shallow + o.unreachable_shallow;
+    let unreachable_pct = if total > 0 {
+        o.unreachable_shallow as f64 / total as f64 * 100.0
+    } else {
+        0.0
+    };
+    if unreachable_pct >= 5.0 {
+        out.push_str(&format!(
+            "_Unreachable objects are eligible for collection but have not yet been reclaimed. \
+At {:.1}% of total heap this is elevated — the JVM may not have had time to GC before the dump \
+was taken, or finalization may be backed up._\n\n",
+            unreachable_pct
+        ));
+    } else {
+        out.push_str(
+            "_Unreachable objects are eligible for collection but have not yet been reclaimed. \
+A small unreachable heap (< 5%) is normal between GC cycles._\n\n",
+        );
+    }
     // Composition by object kind (mirrors System Overview heap composition).
     if o.unreachable_composition.by_kind.len() > 1 {
         let mut headers: Vec<&str> = vec!["Kind", "Objects", "Shallow"];

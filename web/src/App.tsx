@@ -2936,6 +2936,15 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
     (s): s is ReferenceStats => s != null,
   );
 
+  const kindCaption = (kind: string) => {
+    switch (kind) {
+      case "Soft": return "Soft references keep objects alive until the JVM needs memory — cleared under GC pressure. A large soft-referenced heap is often an unbounded cache; consider bounding the cache size.";
+      case "Weak": return "Weak references do not prevent GC. Objects listed here are reachable only via weak chains — under any GC they may be reclaimed. Large counts are usually benign.";
+      case "Phantom": return "Phantom references mark objects in finalization or cleanup pipelines. A large backlog may indicate that the ReferenceQueue processor is too slow or blocked, or that native resources are not being released promptly.";
+      default: return "";
+    }
+  };
+
   return (
     <section id="references">
       <h2>References</h2>
@@ -2946,12 +2955,14 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
         kinds.map((stats) => (
           <React.Fragment key={stats.kind}>
             <h3>{stats.kind} References</h3>
+            <p className="subtitle">{kindCaption(stats.kind)}</p>
             <p className="subtitle">{fmtCount(stats.reference_instances)} reference instances.</p>
             <h4>Referent classes</h4>
             <RefClassTable rows={stats.referent_histogram ?? []} />
             {(stats.only_weakly_retained ?? []).length > 0 && (
               <>
                 <h4>Only-weakly retained (approximate)</h4>
+                <p className="subtitle">Objects with no incoming strong reference other than this reference chain — GC pressure would free them.</p>
                 <RefClassTable rows={stats.only_weakly_retained} />
               </>
             )}
