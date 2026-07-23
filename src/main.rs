@@ -329,6 +329,10 @@ fn resolve_format(explicit: Option<FormatArg>, out: Option<&str>) -> OutputForma
         if lower.ends_with(".json") || lower.ends_with(".json.gz") {
             return OutputFormat::Json;
         }
+        // `.graphs.md` → md-graphs (the convention used in docs/samples/).
+        if lower.ends_with(".graphs.md") {
+            return OutputFormat::MdGraphs;
+        }
         // .md / .markdown (and anything else) → plain Markdown.
     }
     OutputFormat::Md
@@ -565,6 +569,16 @@ fn analyze_error_hint(input: &str, e: &io::Error) -> String {
         return format!(
             "{msg}\n(hint: '{input}' appears truncated or corrupt — the parser \
              hit end of file mid-record; re-copy the .hprof dump and retry)"
+        );
+    }
+    // A structurally valid file that fails parsing (bad id_size, unknown sub-tag,
+    // 16-EiB guard, etc.) surfaces as InvalidData. Distinguish it from random I/O
+    // errors so the user knows the file was read but the format was unrecognised.
+    if e.kind() == io::ErrorKind::InvalidData {
+        return format!(
+            "{msg}\n(hint: '{input}' was parsed as HPROF but a record was \
+             malformed or uses an unsupported variant; verify the file is a \
+             complete, unmodified heap dump)"
         );
     }
     msg

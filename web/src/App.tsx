@@ -503,8 +503,19 @@ function SortableTh<T>({ label, colKey, sortKey, setSortKey }: {
   label: string; colKey: keyof T; sortKey: keyof T; setSortKey: (k: keyof T) => void;
 }) {
   const active = sortKey === colKey;
+  const handleKey = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSortKey(colKey); }
+  };
   return (
-    <th className={"num sortable" + (active ? " active" : "")} onClick={() => setSortKey(colKey)} title={`Sort by ${label} (descending)`}>
+    <th
+      className={"num sortable" + (active ? " active" : "")}
+      onClick={() => setSortKey(colKey)}
+      onKeyDown={handleKey}
+      tabIndex={0}
+      role="button"
+      aria-sort={active ? "descending" : "none"}
+      title={`Sort by ${label} (descending)`}
+    >
       {label} {active ? "▾" : ""}
     </th>
   );
