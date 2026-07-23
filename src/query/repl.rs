@@ -8,6 +8,7 @@
 //! foundation slice).
 
 use std::io::{self, Write};
+use std::time::Instant;
 
 use reedline::{
     ColumnarMenu, Completer, DefaultPrompt, Emacs, FileBackedHistory, KeyCode, KeyModifiers,
@@ -614,6 +615,9 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
     // cheap (no heap-object scan) and independent of the per-query pass1+pass2.
     // On I/O failure, warn and proceed with empty lists rather than crashing.
     let (class_names, field_names) = harvest_names(path);
+    // Keep our own copies for the `!classes`/`!fields` listing commands (the
+    // completer takes ownership of the originals).
+    let names_for_meta = (class_names.clone(), field_names.clone());
     let mut line_editor = build_editor(class_names, field_names);
     let prompt = DefaultPrompt::default();
     let mut stdout = io::stdout();
@@ -624,24 +628,65 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
         stdout,
         "hprof-analyzer OQL REPL. Type !help for commands, !quit or Ctrl-D to exit."
     )?;
+    writeln!(
+        stdout,
+        "mode: reachable-only (GC-reachable objects, MAT parity) — !all for raw heap.\n\
+         {} classes, {} field names loaded. End a query with `;` or a blank line.",
+        names_for_meta.0.len(),
+        names_for_meta.1.len(),
+    )?;
+    // Accumulator for multi-line queries: an OQL statement can span lines until
+    // it is terminated by a trailing `;` or a blank line. Meta-commands (`!...`)
+    // are recognized only at statement start (empty accumulator).
+    let mut buffer_lines: Vec<String> = Vec::new();
     loop {
         match line_editor.read_line(&prompt) {
-            Ok(Signal::Success(buffer)) => {
-                let t = buffer.trim();
-                if t.is_empty() {
-                    continue;
-                }
-                if let Some(cmd) = t.strip_prefix('!') {
-                    if handle_meta(cmd, path_depth, &mut reachable_only, &mut stdout)? {
+            Ok(Signal::Success(line)) => {
+                let t = line.trim();
+                // Meta-commands are only recognized at statement start (no pending
+                // buffer); a `!` while composing a multi-line statement is treated
+                // as a continuation line so the buffer is never silently dropped.
+                if buffer_lines.is_empty() && t.starts_with('!') {
+                    let cmd = &t[1..];
+                    if handle_meta(cmd, path_depth, &mut reachable_only, &names_for_meta, &mut stdout)?
+                    {
                         break;
                     }
-                } else {
-                    match run_one(path, t, path_depth, reachable_only) {
-                        Ok(res) => print_result(&res, &mut stdout)?,
-                        Err(e) => writeln!(stdout, "error: {e}")?,
-                    }
+                    stdout.flush()?;
+                    continue;
                 }
-                stdout.flush()?;
+                // Blank line: if we have a pending statement, run it; else ignore.
+                if t.is_empty() {
+                    if buffer_lines.is_empty() {
+                        continue;
+                    }
+                    let query = buffer_lines.join("\n");
+                    buffer_lines.clear();
+                    run_and_print(path, &query, path_depth, reachable_only, &mut stdout)?;
+                    stdout.flush()?;
+                    continue;
+                }
+                // A trailing `;` terminates the statement on this line.
+                if let Some(head) = t.strip_suffix(';') {
+                    buffer_lines.push(head.trim_end().to_string());
+                    let query = buffer_lines.join("\n");
+                    buffer_lines.clear();
+                    let query = query.trim();
+                    if !query.is_empty() {
+                        run_and_print(path, query, path_depth, reachable_only, &mut stdout)?;
+                    }
+                    stdout.flush()?;
+                    continue;
+                }
+                // Single self-contained line (no pending buffer, no `;`): run it
+                // immediately so the common one-line case needs no terminator.
+                if buffer_lines.is_empty() {
+                    run_and_print(path, t, path_depth, reachable_only, &mut stdout)?;
+                    stdout.flush()?;
+                } else {
+                    // Continuation of a multi-line statement.
+                    buffer_lines.push(line);
+                }
             }
             Ok(Signal::CtrlD) | Ok(Signal::CtrlC) => break,
             Err(e) => {
@@ -653,13 +698,32 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
     Ok(())
 }
 
+/// Time, run, and print a single OQL statement, reporting elapsed wall time in
+/// the footer. Parse/plan/exec errors are printed as `error: <msg>` so the REPL
+/// stays alive.
+fn run_and_print(
+    path: &str,
+    query: &str,
+    path_depth: usize,
+    reachable_only: bool,
+    out: &mut impl Write,
+) -> io::Result<()> {
+    let start = Instant::now();
+    match run_one(path, query, path_depth, reachable_only) {
+        Ok(res) => print_result(&res, start.elapsed(), out),
+        Err(e) => writeln!(out, "error: {e}"),
+    }
+}
+
 /// Handle a meta-command (the text after the leading `!`). Returns `Ok(true)`
 /// when the command asks the REPL to quit. `reachable_only` is the session's
-/// current GC-reachability mode; `!all`/`!reachable` mutate it.
+/// current GC-reachability mode; `!all`/`!reachable` mutate it. `names` is the
+/// harvested `(class_names, field_names)` pair backing `!classes`/`!fields`.
 fn handle_meta(
     cmd: &str,
     path_depth: usize,
     reachable_only: &mut bool,
+    names: &(Vec<String>, Vec<String>),
     out: &mut impl Write,
 ) -> io::Result<bool> {
     let (verb, rest) = match cmd.split_once(char::is_whitespace) {
@@ -678,6 +742,14 @@ fn handle_meta(
             writeln!(out, "  !explain [--raw] <oql> alias for !plan")?;
             writeln!(
                 out,
+                "  !classes [prefix]     list class names (optionally prefix-filtered)"
+            )?;
+            writeln!(
+                out,
+                "  !fields [prefix]      list instance field names (optionally prefix-filtered)"
+            )?;
+            writeln!(
+                out,
                 "  !reachable            filter results to GC-reachable objects (MAT parity; default)"
             )?;
             writeln!(
@@ -687,6 +759,45 @@ fn handle_meta(
             writeln!(out, "  !mode                 show the current reachability mode")?;
             writeln!(out, "  !quit                 exit")?;
             writeln!(out, "  <oql>                 run a query and print results")?;
+            writeln!(
+                out,
+                "  (queries may span multiple lines; end with `;` or a blank line)"
+            )?;
+        }
+        "classes" | "fields" => {
+            let (list, kind, kind_plural) = if verb == "classes" {
+                (&names.0, "class", "classes")
+            } else {
+                (&names.1, "field", "fields")
+            };
+            let prefix_lower = rest.to_ascii_lowercase();
+            let matches: Vec<&String> = list
+                .iter()
+                .filter(|n| prefix_lower.is_empty() || n.to_ascii_lowercase().starts_with(&prefix_lower))
+                .collect();
+            if matches.is_empty() {
+                if rest.is_empty() {
+                    writeln!(out, "(no {kind} names loaded)")?;
+                } else {
+                    writeln!(out, "(no {kind} names matching {rest:?})")?;
+                }
+            } else {
+                // Cap the dump so an unfiltered `!classes` on a huge heap doesn't
+                // flood the terminal; tell the user how to narrow it.
+                const CAP: usize = 200;
+                for n in matches.iter().take(CAP) {
+                    writeln!(out, "  {n}")?;
+                }
+                if matches.len() > CAP {
+                    writeln!(
+                        out,
+                        "  ... {} more (showing {CAP}; use `!{verb} <prefix>` to narrow)",
+                        matches.len() - CAP
+                    )?;
+                }
+                let label = if matches.len() == 1 { kind } else { kind_plural };
+                writeln!(out, "({} {label})", matches.len())?;
+            }
         }
         "reachable" | "reachable-only" => {
             *reachable_only = true;
@@ -810,9 +921,10 @@ fn run_one(path: &str, text: &str, path_depth: usize, reachable_only: bool) -> i
     Ok(result)
 }
 
-/// Print a `QueryResult` as a simple pipe-delimited table with a row-count
-/// footer. If the result carries an error, print that instead of a table.
-fn print_result(res: &QueryResult, out: &mut impl Write) -> io::Result<()> {
+/// Print a `QueryResult` as a simple pipe-delimited table with a row-count and
+/// elapsed-time footer. If the result carries an error, print that instead of a
+/// table. `elapsed` is the wall time the query took (parse+plan+scan).
+fn print_result(res: &QueryResult, elapsed: std::time::Duration, out: &mut impl Write) -> io::Result<()> {
     if let Some(err) = &res.error {
         writeln!(out, "error: {err}")?;
         return Ok(());
@@ -823,16 +935,33 @@ fn print_result(res: &QueryResult, out: &mut impl Write) -> io::Result<()> {
         let cells: Vec<String> = row.iter().map(fmt_value).collect();
         writeln!(out, "{}", cells.join(" | "))?;
     }
+    if let Some(note) = &res.note {
+        writeln!(out, "-- {note}")?;
+    }
     writeln!(
         out,
-        "({} row{})",
+        "({} row{}, {})",
         res.row_count,
-        if res.row_count == 1 { "" } else { "s" }
+        if res.row_count == 1 { "" } else { "s" },
+        fmt_elapsed(elapsed),
     )?;
     if res.truncated {
         writeln!(out, "-- results truncated --")?;
     }
     Ok(())
+}
+
+/// Human-friendly elapsed-time rendering: microseconds/milliseconds/seconds with
+/// a fixed precision, chosen by magnitude so short queries don't read as `0.00s`.
+fn fmt_elapsed(d: std::time::Duration) -> String {
+    let us = d.as_micros();
+    if us < 1_000 {
+        format!("{us}µs")
+    } else if us < 1_000_000 {
+        format!("{:.1}ms", us as f64 / 1_000.0)
+    } else {
+        format!("{:.2}s", us as f64 / 1_000_000.0)
+    }
 }
 
 /// Render a single `QueryValue` cell for the text table.
@@ -860,12 +989,23 @@ mod tests {
     /// Like `meta_out` but seeds the reachability mode and returns the resulting
     /// mode so the `!all`/`!reachable`/`!mode` toggle can be asserted.
     fn meta_out_mode(cmd: &str, initial: bool) -> (bool, String, bool) {
+        meta_out_mode_names(cmd, initial, &(Vec::new(), Vec::new()))
+    }
+
+    /// Full-control variant: also supplies the harvested `(classes, fields)` so
+    /// the `!classes`/`!fields` listing commands can be exercised.
+    fn meta_out_mode_names(
+        cmd: &str,
+        initial: bool,
+        names: &(Vec<String>, Vec<String>),
+    ) -> (bool, String, bool) {
         let mut buf = Vec::new();
         let mut reachable_only = initial;
         let quit = handle_meta(
             cmd,
             crate::query::DEFAULT_PATH_DEPTH_CAP,
             &mut reachable_only,
+            names,
             &mut buf,
         )
         .unwrap();
@@ -965,9 +1105,125 @@ mod tests {
         assert!(out_off.contains("mode: all"), "got: {out_off}");
     }
 
+    // ---------- !classes / !fields listing ----------
+
+    fn names(classes: &[&str], fields: &[&str]) -> (Vec<String>, Vec<String>) {
+        (
+            classes.iter().map(|s| s.to_string()).collect(),
+            fields.iter().map(|s| s.to_string()).collect(),
+        )
+    }
+
+    #[test]
+    fn help_lists_classes_and_fields() {
+        let (_, out) = meta_out("help");
+        assert!(out.contains("!classes"), "help missing !classes: {out}");
+        assert!(out.contains("!fields"), "help missing !fields: {out}");
+        // Multi-line note must be advertised too.
+        assert!(out.contains("multiple lines"), "help missing multi-line note: {out}");
+    }
+
+    #[test]
+    fn classes_lists_all_when_no_prefix() {
+        let n = names(&["java.lang.String", "java.util.HashMap"], &[]);
+        let (quit, out, _) = meta_out_mode_names("classes", true, &n);
+        assert!(!quit);
+        assert!(out.contains("java.lang.String"), "got: {out}");
+        assert!(out.contains("java.util.HashMap"), "got: {out}");
+        assert!(out.contains("(2 classes)"), "count footer missing: {out}");
+    }
+
+    #[test]
+    fn classes_prefix_filters_case_insensitively() {
+        let n = names(&["java.lang.String", "java.util.HashMap", "com.acme.Foo"], &[]);
+        let (_, out, _) = meta_out_mode_names("classes JAVA.UTIL", true, &n);
+        assert!(out.contains("java.util.HashMap"), "got: {out}");
+        assert!(!out.contains("java.lang.String"), "String should be filtered out: {out}");
+        assert!(!out.contains("com.acme.Foo"), "Foo should be filtered out: {out}");
+        assert!(out.contains("(1 class)"), "singular count footer missing: {out}");
+    }
+
+    #[test]
+    fn classes_no_match_reports_empty() {
+        let n = names(&["java.lang.String"], &[]);
+        let (_, out, _) = meta_out_mode_names("classes zzz", true, &n);
+        assert!(out.contains("no class names matching"), "got: {out}");
+    }
+
+    #[test]
+    fn classes_empty_universe_reports_none_loaded() {
+        let (_, out, _) = meta_out_mode_names("classes", true, &(Vec::new(), Vec::new()));
+        assert!(out.contains("no class names loaded"), "got: {out}");
+    }
+
+    #[test]
+    fn fields_lists_field_names() {
+        let n = names(&[], &["name", "parent", "value"]);
+        let (_, out, _) = meta_out_mode_names("fields", true, &n);
+        assert!(out.contains("name"), "got: {out}");
+        assert!(out.contains("parent"), "got: {out}");
+        assert!(out.contains("(3 fields)"), "count footer missing: {out}");
+    }
+
+    #[test]
+    fn fields_prefix_filters() {
+        let n = names(&[], &["name", "num", "parent"]);
+        let (_, out, _) = meta_out_mode_names("fields na", true, &n);
+        assert!(out.contains("name"), "got: {out}");
+        assert!(!out.contains("parent"), "parent should be filtered: {out}");
+    }
+
+    // ---------- elapsed-time footer ----------
+
+    #[test]
+    fn fmt_elapsed_scales_by_magnitude() {
+        use std::time::Duration;
+        assert_eq!(fmt_elapsed(Duration::from_micros(0)), "0µs");
+        assert_eq!(fmt_elapsed(Duration::from_micros(500)), "500µs");
+        assert_eq!(fmt_elapsed(Duration::from_micros(1_500)), "1.5ms");
+        assert_eq!(fmt_elapsed(Duration::from_millis(250)), "250.0ms");
+        assert_eq!(fmt_elapsed(Duration::from_millis(2_500)), "2.50s");
+    }
+
+    #[test]
+    fn print_result_footer_includes_elapsed() {
+        let res = QueryResult {
+            name: "q1".into(),
+            oql: "SELECT COUNT(*) FROM C".into(),
+            columns: vec![QueryColumn { name: "n".into() }],
+            rows: vec![vec![QueryValue::Int(1)]],
+            row_count: 1,
+            truncated: false,
+            error: None,
+            note: None,
+            viz: None,
+        };
+        let mut buf = Vec::new();
+        print_result(&res, std::time::Duration::from_millis(3), &mut buf).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(out.contains("(1 row, 3.0ms)"), "elapsed footer wrong: {out}");
+    }
+
+    #[test]
+    fn print_result_renders_note() {
+        let res = QueryResult {
+            name: "q1".into(),
+            oql: "SELECT * FROM C".into(),
+            columns: vec![QueryColumn { name: "x".into() }],
+            rows: vec![vec![QueryValue::Int(1)]],
+            row_count: 1,
+            truncated: false,
+            error: None,
+            note: Some("chart downgraded to table".into()),
+            viz: None,
+        };
+        let out = print_to_string(&res);
+        assert!(out.contains("-- chart downgraded to table"), "note missing: {out}");
+    }
+
     fn print_to_string(res: &QueryResult) -> String {
         let mut buf = Vec::new();
-        print_result(res, &mut buf).unwrap();
+        print_result(res, std::time::Duration::from_millis(0), &mut buf).unwrap();
         String::from_utf8(buf).unwrap()
     }
 
@@ -994,7 +1250,7 @@ mod tests {
         assert!(out.contains("a | b"), "header missing:\n{out}");
         assert!(out.contains("1 | x"), "row1 missing:\n{out}");
         assert!(out.contains("2 | y"), "row2 missing:\n{out}");
-        assert!(out.contains("(2 rows)"), "footer missing:\n{out}");
+        assert!(out.contains("(2 rows,"), "footer missing:\n{out}");
     }
 
     #[test]
@@ -1013,8 +1269,8 @@ mod tests {
             viz: None,
         };
         let out = print_to_string(&res);
-        assert!(out.contains("(1 row)"), "singular footer missing:\n{out}");
-        assert!(!out.contains("(1 rows)"), "should not pluralize:\n{out}");
+        assert!(out.contains("(1 row,"), "singular footer missing:\n{out}");
+        assert!(!out.contains("(1 rows"), "should not pluralize:\n{out}");
     }
 
     #[test]
