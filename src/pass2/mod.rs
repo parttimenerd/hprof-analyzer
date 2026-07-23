@@ -354,6 +354,11 @@ impl Pass2 {
         };
         crate::trace::probe("pass2: after early-compress class_idx+alloc_serial (before 2a scan)");
 
+        // Collect thread object addresses for capture during 2a scan.
+        let capture_thread_addrs: std::collections::HashSet<u64> =
+            p1.thread_serial_to_obj_id.values().copied().collect();
+        let mut captured_thread_blobs: HashMap<u64, (u64, Vec<u8>)> = HashMap::new();
+
         // ── Sub-pass 2a scan ─────────────────────────────────────────────
         {
             let mut r = HprofReader::open(path)?;
@@ -380,6 +385,10 @@ impl Pass2 {
                             &mut out_degree,
                             &mut in_degree,
                             &mut scratch,
+                            &capture_thread_addrs,
+                            &mut captured_thread_blobs,
+                            &std::collections::HashSet::new(),
+                            &mut HashMap::new(),
                         )?;
                     }
                     tags::HEAP_DUMP_END => break,
@@ -570,11 +579,10 @@ impl Pass2 {
         let alloc_frames_by_serial: Option<std::collections::HashMap<u32, Vec<String>>> =
             Some(resolve_alloc_frames(&p1));
 
-        // Decode each thread's java.lang.Thread.name via a bounded 3-pass
-        // worklist, while class_map/strings/id_map are still alive (freed just
-        // below). All captured sets are bounded by #threads, so this stays off
-        // the per-object RSS budget on multi-GB dumps.
-        let thread_props = resolve_thread_names(path, &p1)?;
+        // Decode each thread's java.lang.Thread.name. Thread instance blobs were
+        // captured during the 2a scan; remaining hops (String objects, backing
+        // arrays) need 2 more targeted collect_blobs calls instead of 3.
+        let thread_props = resolve_thread_names(path, &p1, captured_thread_blobs)?;
         t_phase!("thread_names done");
 
         // Opt-in approximate duplicate-java.lang.String report. Runs two extra
@@ -1001,6 +1009,10 @@ impl Pass2 {
         out_degree: &mut Vec<u32>,
         in_degree: &mut Vec<u32>,
         scratch: &mut Vec<u8>,
+        capture_inst: &std::collections::HashSet<u64>,
+        captured_inst: &mut HashMap<u64, (u64, Vec<u8>)>,
+        capture_obj: &std::collections::HashSet<u64>,
+        captured_obj: &mut HashMap<u64, Vec<u8>>,
     ) -> io::Result<()> {
         let ids = id_size as u64;
         let mut cache = crate::id_map::IndexCache::new();
@@ -1073,6 +1085,11 @@ impl Pass2 {
                     r.read_bytes_reuse(scratch, data_len as usize)?;
                     checked_sub!(remaining, ids + 4 + ids + 4 + data_len);
 
+                    // Capture blob for wanted addresses (e.g. thread objects).
+                    if !capture_inst.is_empty() && capture_inst.contains(&addr) {
+                        captured_inst.insert(addr, (class_id, scratch.clone()));
+                    }
+
                     let src_idx = match id_map.index_of(addr) {
                         Some(i) => i,
                         None => continue,
@@ -1112,6 +1129,11 @@ impl Pass2 {
                     }
                     r.read_bytes_reuse(scratch, byte_len as usize)?;
                     checked_sub!(remaining, ids + 4 + 4 + ids + byte_len);
+
+                    // Capture obj-array blob for wanted addresses (e.g. Hashtable table).
+                    if !capture_obj.is_empty() && capture_obj.contains(&addr) {
+                        captured_obj.insert(addr, scratch.clone());
+                    }
 
                     let src_idx = match id_map.index_of(addr) {
                         Some(i) => i,

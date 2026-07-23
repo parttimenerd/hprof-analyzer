@@ -135,9 +135,11 @@ pub(crate) fn resolve_alloc_frames(p1: &Pass1) -> std::collections::HashMap<u32,
 /// Strings/arrays they reference, so this stays off the per-object RSS budget
 /// even on multi-GB dumps.
 ///
-/// Runs TWO extra full-file sequential scans (fused via `collect_blobs`):
-///   Round 1: Thread objects + Thread$FieldHolder objects (JDK 17+) in one pass.
-///   Round 2: name String objects + backing PRIM_ARRAYs in one pass.
+/// `prefetched_thread_blobs`: instance blobs for thread objects captured during
+/// the 2a scan (addr → (class_id, blob)). When provided, skips the separate
+/// Round-1 file pass entirely. Remaining hops (String objects, backing arrays)
+/// still need 2 targeted collect_blobs calls.
+///
 /// Field offsets are derived from each object's ACTUAL class id (memoized),
 /// because a heap may hold several loader-distinct class objects named
 /// `java/lang/Thread` / `java/lang/String`, and thread objects are frequently
@@ -145,6 +147,7 @@ pub(crate) fn resolve_alloc_frames(p1: &Pass1) -> std::collections::HashMap<u32,
 pub(crate) fn resolve_thread_names(
     path: &str,
     p1: &Pass1,
+    prefetched_thread_blobs: HashMap<u64, (u64, Vec<u8>)>,
 ) -> io::Result<HashMap<u32, ThreadProps>> {
     let mut props: HashMap<u32, ThreadProps> = HashMap::new();
     if p1.thread_serial_to_obj_id.is_empty() {
@@ -161,20 +164,26 @@ pub(crate) fn resolve_thread_names(
             .map(|b| i32::from_be_bytes([b[0], b[1], b[2], b[3]]))
     };
 
-    // ── Round 1: Thread blobs (all threads). ────────────────────────────────
-    // We don't yet know holder addrs, so we start with just thread addrs.
-    // After extracting them, if any threads use FieldHolder (JDK 17+), we do a
-    // second pass that is fused with the String/array pass.
-    let wanted_threads: std::collections::HashSet<u64> =
-        p1.thread_serial_to_obj_id.values().copied().collect();
-
-    let (inst_blobs_r1, _, _) = collect_blobs(
-        path,
-        id_size,
-        &wanted_threads,
-        &std::collections::HashSet::new(),
-        &std::collections::HashSet::new(),
-    )?;
+    // ── Round 1: Thread blobs ────────────────────────────────────────────────
+    // Use pre-fetched blobs captured during the 2a scan when available; fall
+    // back to a targeted collect_blobs call only for any missing entries.
+    let mut inst_blobs_r1 = prefetched_thread_blobs;
+    let missing_threads: std::collections::HashSet<u64> = p1
+        .thread_serial_to_obj_id
+        .values()
+        .copied()
+        .filter(|a| !inst_blobs_r1.contains_key(a))
+        .collect();
+    if !missing_threads.is_empty() {
+        let (extra, _, _) = collect_blobs(
+            path,
+            id_size,
+            &missing_threads,
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+        )?;
+        inst_blobs_r1.extend(extra);
+    }
 
     // Extract thread fields from round-1 blobs.
     let mut thread_to_name_addr: HashMap<u64, u64> = HashMap::new();
