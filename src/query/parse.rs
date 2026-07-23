@@ -1155,6 +1155,19 @@ fn unknown_call_hint(src: &str, lparen: usize) -> Option<String> {
     did_you_mean(callee, AGG_FUNCS.iter().chain(FUNCS.iter()).copied())
 }
 
+/// An actionable message for an empty or whitespace-only query, replacing the
+/// cryptic "unexpected end of input" a blank string would otherwise produce.
+/// Returns `None` for any non-blank input so the normal parse path runs.
+fn blank_query_message(src: &str) -> Option<String> {
+    if src.trim().is_empty() {
+        Some(
+            "empty query — supply OQL, e.g. `SELECT * FROM java.lang.String`".to_string(),
+        )
+    } else {
+        None
+    }
+}
+
 /// A hint to append to an end-of-input parse error: if the source looks like a
 /// `SELECT ...` with no `FROM` clause, the most likely mistake is a missing
 /// FROM. Word-boundary, case-insensitive so `fromage` or `selection` don't
@@ -1170,6 +1183,25 @@ fn missing_from_hint(src: &str) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+/// A hint for an error following `ORDER` when the `BY` keyword is missing
+/// (`ORDER <key>` instead of `ORDER BY <key>`). Word-boundary, case-insensitive
+/// so `reorder` doesn't trigger it. Returns `None` when `ORDER` is absent or is
+/// correctly followed by `BY`.
+fn missing_by_hint(src: &str) -> Option<&'static str> {
+    let words: Vec<String> = src
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .filter(|w| !w.is_empty())
+        .map(|w| w.to_ascii_lowercase())
+        .collect();
+    let mut it = words.iter().enumerate();
+    while let Some((i, w)) = it.next() {
+        if w == "order" && words.get(i + 1).map(String::as_str) != Some("by") {
+            return Some("`ORDER` must be followed by `BY` (e.g. `ORDER BY @retainedHeapSize DESC`)");
+        }
+    }
+    None
 }
 
 /// Compact single-line message for one chumsky error. Custom (`Rich::custom`)
@@ -1194,6 +1226,11 @@ fn compact_error(src: &str, e: &Rich<'_, Token>) -> String {
                     return format!("unexpected {found} at {line}:{col} — {hint}");
                 }
             }
+            // `ORDER <key>` with no `BY` surfaces as an unexpected token right
+            // after ORDER; hint the missing BY before the generic suggestion.
+            if let Some(hint) = missing_by_hint(src) {
+                return format!("unexpected {found} at {line}:{col} — {hint}");
+            }
             // An `unexpected LParen` usually means the preceding word was meant to
             // be a function call but names an unknown function; suggest the nearest.
             if matches!(e.found(), Some(Token::LParen)) {
@@ -1216,6 +1253,9 @@ fn compact_error(src: &str, e: &Rich<'_, Token>) -> String {
 /// `unexpected <found> at <line>:<col>` (or the tokenizer's offset message) on
 /// failure. Backs [`parse`]; [`parse_or_report`] renders errors differently.
 fn parse_internal(src: &str) -> Result<Query, String> {
+    if let Some(msg) = blank_query_message(src) {
+        return Err(msg);
+    }
     let toks = tokenize_spanned(src)?;
     let eoi: SimpleSpan = (src.len()..src.len()).into();
     let stream = Stream::from_iter(toks).map(eoi, |(t, s): (Token, SimpleSpan)| (t, s));
@@ -1239,6 +1279,9 @@ pub fn parse(src: &str) -> Result<Query, QueryError> {
 /// Parse, returning either the [`Query`] or a rendered ariadne diagnostic string
 /// (caret + red underline) for CLI/REPL display.
 pub fn parse_or_report(src: &str) -> Result<Query, String> {
+    if let Some(msg) = blank_query_message(src) {
+        return Err(msg);
+    }
     // Tokenizer errors have no chumsky span to underline; surface the message.
     let toks = match tokenize_spanned(src) {
         Ok(t) => t,
@@ -1269,6 +1312,8 @@ pub fn parse_or_report(src: &str) -> Result<Query, String> {
                             } else {
                                 format!("unexpected {found}")
                             }
+                        } else if let Some(hint) = missing_by_hint(src) {
+                            format!("unexpected {found} — {hint}")
                         } else if matches!(e.found(), Some(Token::LParen)) {
                             match unknown_call_hint(src, span.start) {
                                 Some(callee) => {
@@ -1854,7 +1899,7 @@ mod tests {
     fn error_cases() {
         // Each entry: (src, substring the message must contain)
         let cases: Vec<(&str, &str)> = vec![
-            ("", "unexpected"),                             // 1 empty
+            ("", "empty query"),                            // 1 empty
             ("SELECT", "unexpected"),                       // 2 select only
             ("SELECT *", "unexpected"),                     // 3 missing FROM
             ("SELECT * FROM", "unexpected"),                // 4 FROM no class
@@ -1884,11 +1929,14 @@ mod tests {
                 err.contains(needle),
                 "error for {src:?} should contain {needle:?}, got: {err}"
             );
-            // Compact messages carry a line:col (except tokenizer-offset errors).
-            assert!(
-                err.contains(':') || err.contains("offset"),
-                "error for {src:?} should carry a location, got: {err}"
-            );
+            // Compact messages carry a line:col (except tokenizer-offset errors
+            // and the blank-query guard, which fires before any tokens exist).
+            if !src.trim().is_empty() {
+                assert!(
+                    err.contains(':') || err.contains("offset"),
+                    "error for {src:?} should carry a location, got: {err}"
+                );
+            }
         }
     }
 
@@ -2867,6 +2915,44 @@ mod tests {
             "expected a missing-FROM hint, got: {}",
             err.0
         );
+    }
+
+    #[test]
+    fn blank_query_gives_actionable_message() {
+        // An empty or whitespace-only query should explain what OQL to supply,
+        // not the cryptic "unexpected end of input".
+        for src in ["", "   ", "\n\t "] {
+            let err = parse(src).expect_err("blank query should error");
+            assert!(
+                err.0.contains("empty query") && err.0.contains("SELECT"),
+                "expected an actionable blank-query message, got: {}",
+                err.0
+            );
+        }
+    }
+
+    #[test]
+    fn order_without_by_is_hinted() {
+        // `ORDER @objectId` (missing BY) should hint `ORDER BY`.
+        let err = parse("SELECT * FROM java.lang.Thread ORDER @objectId")
+            .expect_err("ORDER without BY should error");
+        assert!(
+            err.0.contains("ORDER BY"),
+            "expected an ORDER BY hint, got: {}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn missing_by_hint_helper_is_word_bounded() {
+        // Positive: ORDER present, no BY.
+        assert!(missing_by_hint("SELECT * FROM C ORDER x").is_some());
+        // Negative: ORDER BY present.
+        assert!(missing_by_hint("SELECT * FROM C ORDER BY x").is_none());
+        // Negative: no ORDER at all.
+        assert!(missing_by_hint("SELECT * FROM C").is_none());
+        // Negative: `order` only as a substring must not count.
+        assert!(missing_by_hint("SELECT reorder FROM C").is_none());
     }
 
     #[test]
