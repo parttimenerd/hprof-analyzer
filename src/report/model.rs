@@ -710,7 +710,8 @@ pub struct SignificantLocal {
     pub display_class: String,
     /// Retained heap of the local object.
     pub retained: u64,
-    /// Retained heap as a percentage of the owning thread's retained heap.
+    /// Retained heap as a percentage of total reachable shallow heap (same
+    /// basis as every other "% Heap" figure in the report).
     pub pct: f64,
 }
 

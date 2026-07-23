@@ -522,7 +522,7 @@ fn render_leak_suspects_graphs(l: &LeakSuspects, out: &mut String) {
 
     out.push_str(
         "_Objects and class groups retaining the most heap, ranked by retained size. \
-These are the most likely causes of excessive memory usage or OOM errors._\n\n",
+These are the most likely accumulation points for excessive memory usage._\n\n",
     );
 
     // Share overview: one proportional bar per suspect, keyed to the largest
@@ -679,7 +679,7 @@ These are the most likely causes of excessive memory usage or OOM errors._\n\n",
 /// Top Consumers with share bars on Biggest Objects / Classes and a tree-drawn
 /// package hierarchy (box-drawing connectors + a retained-heap bar per row).
 fn render_top_consumers_graphs(t: &TopConsumers, total_shallow: u64, out: &mut String) {
-    use crate::md::{Align, Table, bar, sparkline, tree_prefix};
+    use crate::md::{Align, Table, bar, tree_prefix};
     out.push_str("## Top Consumers\n\n");
     out.push_str("### Biggest Objects (Top-Level Dominators)\n\n");
     out.push_str(
@@ -787,12 +787,6 @@ that holds each object (the primary referrer; an object may have several)._\n\n"
             format_bytes(d.total)
         ));
         let counts: Vec<u64> = d.buckets.iter().map(|b| b.count).collect();
-        out.push_str(&format!(
-            "`{}`  ({} – {})\n\n",
-            sparkline(&counts),
-            format_bytes(d.min),
-            format_bytes(d.max),
-        ));
         let bmax = counts.iter().copied().max().unwrap_or(0);
         let mut buckets = Table::new(
             &["Size ≤", "Count", ""],

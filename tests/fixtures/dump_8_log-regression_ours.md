@@ -446,7 +446,7 @@ _Directly dominates 37 objects._
 | `java.util.HashMap$Node[]`      |       1 |   528 B |    528 B |
 | `java.lang.Class`               |       2 |     0 B |      0 B |
 
-**Path to GC root (dominator chain):**
+**Dominator chain to GC root:**
 
 1. `org.apache.spark.storage.memory.MemoryStore` (109.9 MB)
 

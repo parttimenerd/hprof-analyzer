@@ -204,6 +204,7 @@ pub fn bar(value: u64, max: u64, width: usize) -> String {
 /// A one-line sparkline of `values`, one glyph per value, scaled to the series
 /// max. An empty series yields an empty string; an all-zero series yields the
 /// lowest glyph repeated (a flat baseline).
+#[allow(dead_code)]
 pub fn sparkline(values: &[u64]) -> String {
     if values.is_empty() {
         return String::new();

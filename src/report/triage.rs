@@ -492,6 +492,9 @@ impl Rule for ClassloaderLeak {
             .overview
             .duplicate_classes
             .iter()
+            // Gate on ≥3 loaders to avoid false positives from normal multi-loader
+            // setups (e.g. Scala's dual-loader for `$colon$colon` in 2 loaders).
+            .filter(|d| d.loader_count >= 3)
             .max_by_key(|d| d.total_retained)?;
         Some(signal(
             "classloader-leak",

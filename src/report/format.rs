@@ -214,6 +214,11 @@ pub(crate) fn fmt_count(n: u64) -> String {
     group_thousands(&n.to_string())
 }
 
+/// `"1 object"` vs `"N objects"`. Use with `fmt_count` for the number part.
+pub(crate) fn plural_objects(n: u64) -> &'static str {
+    if n == 1 { "object" } else { "objects" }
+}
+
 /// Insert comma thousands-separators into a bare decimal-digit string. The one
 /// place grouping is implemented; `fmt_count` and the diff signed-delta grouper
 /// both call it so grouping can never drift between count displays.

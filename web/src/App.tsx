@@ -1517,12 +1517,12 @@ function AccumulationPath({ s }: { s: Suspect }) {
   );
 }
 
-function DominatedByClass({ rows }: { rows: HistRow[] }) {
+function DominatedByClass({ rows, suspectRetained }: { rows: HistRow[]; suspectRetained: number }) {
   if (rows.length === 0) return null;
   const { visible, extra, showAll, setShowAll } = useCapped(rows);
   return (
-    <details>
-      <summary>Accumulated objects grouped by class ({rows.length})</summary>
+    <details open>
+      <summary>Accumulated objects by class ({rows.length})</summary>
       <table>
         <thead>
           <tr>
@@ -1530,6 +1530,7 @@ function DominatedByClass({ rows }: { rows: HistRow[] }) {
             <th className="num">Instances</th>
             <th className="num">Shallow</th>
             <th className="num">Retained</th>
+            <th className="num">% of suspect</th>
           </tr>
         </thead>
         <tbody>
@@ -1541,9 +1542,10 @@ function DominatedByClass({ rows }: { rows: HistRow[] }) {
               <td className="num">{fmtCount(r.instances)}</td>
               <td className="num">{formatBytes(r.shallow)}</td>
               <td className="num">{formatBytes(r.retained)}</td>
+              <td className="num">{suspectRetained > 0 ? pctOf(r.retained, suspectRetained).toFixed(1) + "%" : "—"}</td>
             </tr>
           ))}
-          <ShowMoreRow extra={extra} cols={4} showAll={showAll} setShowAll={setShowAll} />
+          <ShowMoreRow extra={extra} cols={5} showAll={showAll} setShowAll={setShowAll} />
         </tbody>
       </table>
     </details>
@@ -1558,7 +1560,7 @@ function RootPathList({ steps }: { steps: RootPathStep[] }) {
   const last = steps.length - 1;
   return (
     <details>
-      <summary>Path to GC root · dominator chain ({steps.length} step{steps.length === 1 ? "" : "s"})</summary>
+      <summary>Dominator chain to GC root ({steps.length} step{steps.length === 1 ? "" : "s"})</summary>
       <ol className="accum-path">
         {steps.map((p, i) => (
           <li key={i}>
@@ -1630,7 +1632,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
   return (
     <div className="suspect" id={`suspect-${rank}`}>
       <h3 style={{ margin: "0 0 0.25rem" }}>
-        <span className="rank">Problem Suspect {rank}</span> <code>{s.pretty_class}</code>
+        <span className="rank">Suspect #{rank}</span> <code>{s.pretty_class}</code>
         <span className="pill">{s.is_single ? "single object" : `class group ×${fmtCount(s.instance_count)}`}</span>
       </h3>
       <p style={{ margin: "0.25rem 0" }}>
@@ -1666,8 +1668,8 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
           {s.accumulation_retained != null && <> retaining {formatBytes(s.accumulation_retained)}</>}.
         </p>
       )}
+      <DominatedByClass rows={s.dominated_by_class} suspectRetained={s.retained} />
       <AccumulationPath s={s} />
-      <DominatedByClass rows={s.dominated_by_class} />
       {s.dominated.length > 0 && (
         <details>
           <summary>
@@ -2669,11 +2671,32 @@ function BiggestCollectionsTable({ rows, title }: { rows: BiggestCollectionRow[]
   if (rows.length === 0) return null;
   const hasRetained = rows.some((r) => r.retained != null);
   const hasOwner = rows.some((r) => r.owner != null);
-  const hasValue = rows.some((r) => r.dominant_value_type != null);
   const hasBreakdown = rows.some((r) => (r.value_type_breakdown?.length ?? 0) > 0);
+  // Drop standalone Value Type column when breakdown is present (it duplicates the lead entry).
+  const hasValue = !hasBreakdown && rows.some((r) => r.dominant_value_type != null);
   const totalElements = rows.reduce((s, r) => s + r.elements, 0);
   const totalRetained = rows.reduce((s, r) => s + (r.retained ?? 0), 0);
-  const { visible, extra, showAll, setShowAll } = useCapped(rows);
+
+  // Coalesce consecutive identical rows.
+  type Coalesced = { row: BiggestCollectionRow; count: number };
+  const coalesced: Coalesced[] = [];
+  for (const r of rows) {
+    const last = coalesced[coalesced.length - 1];
+    if (
+      last &&
+      last.row.kind === r.kind &&
+      last.row.container_class === r.container_class &&
+      last.row.elements === r.elements &&
+      last.row.owner === r.owner &&
+      last.row.retained === r.retained
+    ) {
+      last.count++;
+    } else {
+      coalesced.push({ row: r, count: 1 });
+    }
+  }
+
+  const { visible, extra, showAll, setShowAll } = useCapped(coalesced);
   return (
     <>
       <h3>{title}</h3>
@@ -2690,11 +2713,14 @@ function BiggestCollectionsTable({ rows, title }: { rows: BiggestCollectionRow[]
           </tr>
         </thead>
         <tbody>
-          {visible.map((r, i) => (
+          {visible.map(({ row: r, count }, i) => (
             <tr key={i}>
               <td>{r.kind}</td>
-              <td><code>{r.container_class}</code></td>
-              <td className="num">{fmtCount(r.elements)}</td>
+              <td>
+                <code>{r.container_class}</code>
+                {count > 1 && <span className="muted"> ×{fmtCount(count)}</span>}
+              </td>
+              <td className="num">{count > 1 ? `${fmtCount(r.elements)} each` : fmtCount(r.elements)}</td>
               {hasValue && <td>{r.dominant_value_type ? <code>{r.dominant_value_type}</code> : "—"}</td>}
               {hasBreakdown && (
                 <td>
@@ -3165,7 +3191,7 @@ function AllocSitesSection({ data }: { data: AllocSites }) {
   return (
     <section id="allocation-sites">
       <h2>Allocation Sites</h2>
-      <p className="subtitle">Objects grouped by the stack trace that allocated them.</p>
+      <p className="subtitle">Objects grouped by the stack trace that allocated them. Shallow heap is additive; retained is omitted because summing per-object retained over-counts shared subgraphs.</p>
       {!data.traces_present ? (
         <p className="subtitle">
           Allocation tracking was off in this dump (<code>stack_trace_serial = 0</code>); no allocation sites available.
@@ -3177,7 +3203,6 @@ function AllocSitesSection({ data }: { data: AllocSites }) {
               <th>Stack</th>
               <th className="num">Objects</th>
               <th className="num">Shallow</th>
-              <th className="num">Retained</th>
             </tr>
           </thead>
           <tbody>
@@ -3201,19 +3226,15 @@ function AllocSitesSection({ data }: { data: AllocSites }) {
                 </td>
                 <td className="num">{fmtCount(s.object_count)}</td>
                 <td className="num">{formatBytes(s.shallow_total)}</td>
-                <td className="num" title={fmtExactBytes(s.retained_total)}>
-                  {formatBytes(s.retained_total)}
-                </td>
               </tr>
             ))}
-            <ShowMoreRow extra={extra} cols={4} showAll={showAll} setShowAll={setShowAll} />
+            <ShowMoreRow extra={extra} cols={3} showAll={showAll} setShowAll={setShowAll} />
           </tbody>
           <tfoot>
             <tr>
               <td className="num"><strong>Total</strong></td>
               <td className="num"><strong>{fmtCount(data.sites.reduce((s, r) => s + r.object_count, 0))}</strong></td>
               <td className="num"><strong>{formatBytes(data.sites.reduce((s, r) => s + r.shallow_total, 0))}</strong></td>
-              <td className="num"><strong>{formatBytes(data.sites.reduce((s, r) => s + r.retained_total, 0))}</strong></td>
             </tr>
           </tfoot>
         </table>

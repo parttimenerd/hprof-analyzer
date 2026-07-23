@@ -1451,7 +1451,7 @@ mod tests {
                 frames: vec!["x.y (Unknown Source)".to_string()],
             },
         ];
-        let ov = build_thread_overview(&g);
+        let ov = build_thread_overview(&g, 0);
         assert_eq!(ov.threads.len(), 2);
         assert_eq!(ov.threads[0].thread_serial, 7);
         assert_eq!(

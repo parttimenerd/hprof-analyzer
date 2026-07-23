@@ -2400,7 +2400,7 @@
           "type": "string"
         },
         "pct": {
-          "description": "Retained heap as a percentage of the owning thread's retained heap.",
+          "description": "Retained heap as a percentage of total reachable shallow heap (same\nbasis as every other \"% Heap\" figure in the report).",
           "type": "number",
           "format": "double"
         },

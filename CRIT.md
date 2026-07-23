@@ -785,6 +785,8 @@ Ordered by impact. **Effort** now uses the §22 classes: **H** = render-only (da
 | P0 | **Heap Origin** spine — one lead-in linking the 5 attribution axes (§25) | H (ordering + links) |
 | P0 | Biggest Collections: remove Combined+ByKind duplication (§10.1) | C |
 | P0 | Constant Primitive Arrays: filter noise (§8.6) | C |
+| **P0** | **BUG: Allocation Sites reports 84.82 GB retained on a 29.8 MB heap** — `e.2 += g.retained[i]` (build.rs:1098) sums nested/overlapping per-object retained sizes ~2,800× (sample md:3411 vs total shallow md:96); drop the multi-counted Retained column (shallow is additive) and reconcile the impossible `953,964 > 952,666` object count (§53.1) | H |
+| **P0** | **BUG: Dominator-Depth footer prints `10000.0% cumulative`** — `last_cum * 100.0` (render_md.rs:626) rescales an already-0–100 percent (format.rs:244/268; table body renders it right at md:3457); drop the `* 100.0` so the footer reads `100.0%` (§53.2) | H |
 | **P1** | **Triage: rank fired signals by reclaimable bytes**, split 5 orientation signals from real problems (§26.2) | C/F |
 | **P1** | **Triage: calibrate false-positive rules** (classloader-leak, threadlocal-leak, name-pattern session/connection/listener, interned-string-bloat) (§26.3) | C |
 | **P1** | **Triage: "not analyzed" note for gated rules** so absence ≠ clean (§26.4b) | F |
@@ -809,6 +811,17 @@ Ordered by impact. **Effort** now uses the §22 classes: **H** = render-only (da
 | **P1** | **Collection waste: cost single/tiny collections as overhead** (user-requested) — 204 size-≤1 + 5,806 empty are *counted* (sample 2758–2762) but never costed or ranked; a 1-entry HashMap is ≥90% wrapper overhead. Add a size-{0,1} overhead ranking by owning `Class#field` with a "replace with `Map.of`/`List.of`/lazy-init" headline (§46.2) | C |
 | **P1** | **Location `Class#method` for stack-held big values** (user-requested) — the largest object in the sample (`Thread` 22.9 MB / 76.7%, sample 2323) is stack-held yet shows no origin, while a 9 KB heap array prints its `Class#field`. Add a **Held via** column that reads `Class#field` (heap) or `Class#method` (stack, from `SignificantFrame.frame` model.rs:698) on *every single-big-value view* — Top Consumers, Leak Suspects, biggest collections/arrays, dup-strings/boxed (§47.1, §47.2) | H + gated A |
 | **P1** | **Retained-holder table: rank `Class#field` AND `Class#method` together** (user-requested) — "Fields by Retained Size" (sample 3047) already ranks `Class#field`; add the stack half (sum `SignificantLocal.retained` per frame, model.rs:698–712 — the frame-granularity of the existing `Max. Locals' Retained`) and **merge** into one retained-sorted "who holds the most, field or frame" view; keep the additive/`>100%` caveat (§47.4 ↔ §45) | C + gated A |
+| **P1** | **References: rank/size referents by RETAINED, not shallow** — referent tables show `Objects \| Shallow` only (render_md.rs:2630; `RefStatClassRow` model.rs:1206), but a soft-referenced 64 B `HashMap` header can retain a 40 MB cache; the "Only-weakly retained" table's retained size *is* the reclaim-on-clear estimate. Add a `retained` field/column (§50.1) | A (row field) + C (only-weakly sum) |
+| **P1** | **`weak-ref-escape` triage gates on object COUNT (≥1000), not bytes** — `WeakRefEscape` sums `row.objects` vs `WEAKREF_FLOOR=1000` (triage.rs:570–576, 42), so 40 escapees retaining 200 MB stay silent while 1,200 tiny ones fire; re-gate on retained bytes + attach `bytes` so it ranks by reclaim potential like the other byte rules (§50.5) | H/C |
+| **P1** | **Biggest Collections "Value Type" for maps is always the internal `Node`/`Entry` wrapper** — every map row shows `HashMap$Node`/`ConcurrentHashMap$Node`/`LinkedHashMap$Entry` (sample md:3097/3100/3115), a tautology that never names the key/value class; walk one hop past the node to tally `Node.key`/`Node.value` classes so the column says what maps actually hold (§52.1, §28.5) | A |
+| **P1** | **`ClassloaderLeak` triage rule has NO threshold — Warns on any duplicate class** — `max_by_key(total_retained)?` always fires (triage.rs:488), flagging `$colon$colon` in 2 loaders (sample md:65) as a "classic reload leak" (false positive on normal Scala); gate on `loader_count >= ~5` (or diff-growth) + retained floor, downgrade to Info for low counts (§54.1) | C |
+| **P1** | **Class Histogram "% Heap" column exists in HTML only, at a precision used nowhere else** — HTML adds a per-class `% Heap` col (App.tsx:581/603, `(retained/totalShallow*100).toFixed(2)`, no `<0.1%` floor) that md (render_md.rs:882–919) and graphs (render_graphs.rs:304–334) lack; the same label means 1-decimal-floored `fmt_pct` in Leak Suspects. Add the column to md+graphs via `fmt_pct`/`fmtPct` or drop it; unify the basis (§56.1, §45.2, §48) | C |
+| **P2** | **HTML distribution tables add hand-rolled percent columns md/graphs don't render** — Top-Dominator "% of Dom." (App.tsx:757 `.toFixed(1)`, no floor) is HTML-only; `_bp` percents use three rounding rules (App.tsx:1098 `.toFixed(2)`, 1174/757 `.toFixed(1)`), none via `fmtPct`; route all through the shared formatter and match column sets across formats (§56.2, §41, §45) | C |
+| **P2** | **Top Arrays shows Length + Shallow but never fill/null-density** — the 131,072-slot `Object[]`/512 KB (sample md:2941) can't be told from padding, though Fill Ratio knows 37,926 object arrays are 0–10% full wasting 5.9 MB (md:2800); `TopArrayRow` (model.rs:920) has no fill field. Add a Used/Length column to Top Arrays (all formats+JSON) reusing the per-array non-null count the fill pass derives (§57.1, §7.3, §8.4) | C→A |
+| **P2** | **The single largest array is unattributed** — biggest `Object[]` + 5 of top-10 show Owner `—` (sample md:2941+); `TopArrayRow.owner` (model.rs:925) is filled only from the `--collections` collection-backing scan, so raw application arrays go unnamed and are absent from "Likely wasters by field" (md:2817). Widen array attribution to any inbound `Class#field` edge (§57.2, §47, §30.2a) | C |
+| **P2** | **`_bp` percentages render at four different precisions, none floored** — the same "% of reachable heap" prints `{:.0}%` (fill labels render_md.rs:1587), `{:.1}%` (concentration 547, header 3357), `{:.2}%` (boxed 3284), plus HTML `.toFixed` (§56.2); none uses `fmt_pct`, so sub-0.05% shares read `0.0%` not `<0.1%`. Route every `bp/100.0` through `fmt_pct`; mirror in format.ts (§58.1, §45.1, §41.3) | C |
+| **P2** | **Retention Concentration back-computes bytes from a rounded bp** — `bp_to_bytes = (bp*total)/10_000` (render_md.rs:540, render_graphs.rs:473) reconstructs the "Retained" column from the stored basis point, quantizing an exact value the pass had (~3 KB steps at 30 MB) and inheriting the §53.1/§53.2 corruption; store `top{1,10,100}_retained: u64` on `RetentionSummary` (model.rs:148) and derive % from bytes, not bytes from % (§58.2, §53) | C (SCHEMA bump) |
+| **P2** | **ToC links to Option-backed sections that render only "None"** — ToC gates `fields_by_size`/`biggest_collections`/`collection_contents`/`alloc_sites` on `Option::is_some()` (render_md.rs:306–317) but bodies guard on the inner vec (`f.rows.is_empty()`, 2311), so a Some-but-empty analysis yields a ToC bullet jumping to a heading whose only content is "None"; match the ToC guard to the body check, mirror in `render_toc_graphs` (§59.2, §31.4, §42) | C |
 | **P2** | **Commit a `compare` sample + golden test** — the entire diff output path (~200 lines, real sign/format edges) has no sample in docs/samples and no regression guard (§37.4) | F (capture+regen) |
 | **P2** | **`md-graphs` silently downgrades to plain md when inferred** — `graphs.md` output path can't express it (main.rs:313); warn on stderr or honor the `.graphs.md` convention the samples already use (§38.1) | F |
 | **P2** | **`--detail max` feeds the dominator blow-up** — sets `dominator_tree_max_nodes=100_000` (main.rs:282), 20× the default §28.1 already flags; apply the rendered-tree collapse regardless of `--detail` (§38.3) | C |
@@ -846,6 +859,7 @@ Ordered by impact. **Effort** now uses the §22 classes: **H** = render-only (da
 | P2 | Duplicate Strings: skip binary/garbage values in Longest (§2.4) | A |
 | P2 | Immediate Dominators: add `dominated_retained` so hub axis is comparable (§25.4); **this single Add also enables any Reference-Hubs view — extend Immediate Dominators rather than adding a separate section (§34.5, §35.3)** | A |
 | P3 | HTML: interactive sortable/filterable class histogram — the MAT feature (§19.7) | H (UI) |
+| P3 | **Empty sections use three inconsistent syntaxes and mostly bare "None"** — 12× `_None._` (render_md.rs:1536…2577), 6 descriptive `_No X_`, 4 asterisk `*No X.*` (1525…); normalize to one underscore syntax and give each empty section a "what's absent and why" message (the six descriptive ones are the template) (§59.1, §31.4, §33) | F |
 | P3 | Port retained treemap to md-graphs (already in HTML) (§20.1) | H |
 | P3 | Back-port graphs box-drawing tree + in-table bar columns to plain md (§29.1, §29.4) | C |
 | P3 | Cap-honest "Total (top N shown)" labels + sub-0.1% rounding (§27.6, §27.7) — *root-cause fix is the shared `fmt_pct` "<0.1%" guard, §41.3* | F |
@@ -887,6 +901,22 @@ Ordered by impact. **Effort** now uses the §22 classes: **H** = render-only (da
 | **P2** | **Local-root table is a bounded, non-summing sample but says neither** — header `_Local roots: 124._` but only 19 rows shown (sample 2512 vs 2517–2537), capped by `--detail`; add a "showing top N of M; sizes overlap and do not sum to the thread total" line (both counts already in the model, model.rs:654/659; reuses the §47.3 overlap caveat) (§49.3) | F |
 | P3 | **"Local roots: N" line is emitted for some threads, omitted for others** — gated on `local_root_count > 0` (render_md.rs:1344), so thread 2 "Reference Handler" (sample 2571) shows no count line and the absence is ambiguous (zero vs omitted); always emit it, printing `0` when empty (§31.4 emptiness principle, per-thread) (§49.4) | F |
 | **P2** | **md shows local roots inline; HTML double-nests them behind a collapsed `<details>`** — `ThreadLocalsTable` (App.tsx:1849–1850) wraps the table in a collapsed disclosure *inside* the already-collapsed per-thread card (App.tsx:1896), so expanding a thread in HTML still hides its locals; md renders them inline unconditionally (render_md.rs:1353). Unify default visibility across formats (§49.5, parity) | F |
+| **P2** | **References histogram is uncapped and renders a 1-object / 0-byte long tail** — Weak is 22 rows / 13 singletons incl. a literal `` `java.security.SecureClassLoader` \| 1 \| 0 B `` (sample 3220); `render_class_table` iterates the full vec with no cap (render_md.rs:2628–2649) while the section one below caps at `UNREACHABLE_HISTOGRAM_CAP`. Cap + fold the tail into "… N more classes" (§50.2) | C |
+| **P2** | **References: add a per-kind verdict/action caption** — the section states "what they point at" (render_md.rs:2621) but never whether it's a problem; the *correct* action differs by kind (soft=cache-tuning, weak=usually benign, phantom=cleanup-lag), so `975 weak reference instances` reads as alarming when routine. One static caption per kind, mirrored md/graphs/HTML (§50.6) | F |
+| **P2** | **Unreachable garbage-root tree object count is a cumulative subtree total shown like a per-node count** — `node.objects` is "objects in subtree" (model.rs:63) but renders as bare `({} objects)` (render_md.rs:2765/2773/2798/2808); the sample nests 70⊇69⊇68 (md:3300–3302) so children never sum to the parent. Label "in subtree" on the root, drop on interior nodes (§51.1) | H |
+| **P2** | **Unreachable histogram `Retained` column overlaps and isn't additive, with no caveat** — retained sets nest (String 25.4 KB shallow / 86.5 KB retained, md:3262), so summing the column blows past the header's `673.0 KB`; add the §27/§48-style "only Shallow sums; Retained overlaps" caption, mirrored md/graphs/HTML (§51.3) | F |
+| **P2** | **Unreachable histogram graphs bar is on Objects (count), not Shallow (bytes)** — `bar(r.objects, obj_max, …)` (render_md.rs:2738) flattens the fact that `int[]` (1,642 obj / 569.6 KB) is ~9:1 the collectable heap vs `byte[]` (1,084 obj / 61.1 KB) down to ~1.5:1; bar `r.shallow` (the additive axis) instead — same as §50.3/§44 (§51.4) | H |
+| **P2** | **Biggest Collections "Value Type" and "Value Types (top)" are the same string on every row** — `dominant_value_type` (render_md.rs:2497) duplicates the breakdown's lead entry (`java.lang.Class` / `java.lang.Class ×485`, md:3079; all 24 map rows), wasting ~40 cols; drop the standalone column, keep the breakdown (§52.2) | F |
+| **P2** | **Biggest Collections lists byte-identical instance rows with no coalescing** — 6 consecutive identical `ArrayList\|3\|String\|…\|144 B` rows (md:3084–3089) and an entire 11-row all-identical `ArrayDeque\|Inflater\|112 B` deque section (md:3131–3141) drown the ranking; coalesce on (kind,class,elements,value,owner) with a `×N instances` multiplier + summed retained (§52.3, §28.1 collapse) | C |
+| **P2** | **Dominator-Depth degenerate 41,355-hop tail floods the table** — ~28 identical `31 \| <0.1% \| 70.1%` rows (md:3438–3457) from a single linked-list/cycle chain slip past the per-row `>=0.1%` cutoff; detect constant-count runs and collapse with a growth-path note (§53.3, §27.4, §20.4) | C |
+| **P2** | **`Shape` triage p90 depth = 11273 is corrupted by the degenerate chain** — cum-90% depth (triage.rs:423–431) is dragged to 11273 by the single 41,355-hop chain (sample md:60) though the heap is mostly shallow (median ~10, md:3419); de-artifact the tail (shares §53.3 fix) or report median vs p90 and reword the verdict (§54.2, §27.4) | C |
+| **P2** | **Two "tiny-object swarm" triage rules use opposite count-vs-% logic** — `ObjectSwarm` needs count AND % (10M floor, triage.rs:769/773), `BoxedPrimitiveBloat` fires on count OR % (5M floor, triage.rs:825); normalize to a byte-share gate with count as a noise floor, align the floors (§54.3, §26.2, §50.5) | C |
+| P2 | **String Length Distribution draws the same histogram twice in graphs** — `if graphs` emits both `sparkline(&counts)` (render_md.rs:135) and a bar-column table over the same `counts` (render_md.rs:136–149); the sparkline (sample graphs 224) is a lower-res duplicate of the table's bars (226–241). Drop the sparkline line (§55.1, §44.4) | F |
+| P2 | **Top-Dominator Size Distribution repeats sparkline + min/max in graphs** — sparkline (render_graphs.rs:791–794; sample 5909) duplicates the bucket-table bars (5911–5932) and its `(0 B – 22.9 MB)` label re-prints the "Smallest / largest retained" bullet three lines up (5905); delete the sparkline block (§55.2, §44.4) | F |
+| P3 | **References graphs bar annotates Objects (count), not Shallow/Retained (bytes)** — `bar(r.objects, obj_max, …)` (render_md.rs:2644) steers the eye by population, and the §44.2 min-visible floor makes 1- and 2-object rows tie at `▏` (sample graphs 6701–6702); bar the byte axis instead (§50.3) | H |
+| P3 | **References: "Only-weakly retained" sub-table silently vanishes under Weak/Phantom** — gated on non-empty (render_md.rs:2660; HTML App.tsx:2926), it shows under Soft but is absent under Weak/Phantom in the sample, so "no escape" is an ambiguous gap not a stated fact; always emit the heading with an explicit "None" note (§31.4 principle) (§50.4) | H |
+| P3 | **Garbage-root trees print `(1 objects)`** — the `" objects"` literal (render_md.rs:2765/2773/2798/2808) never pluralizes; 5 of the sample's garbage roots are single-object `int[] … (1 objects)` (md:3296–3312), and every 1-object Leak Suspect (md:2271+) too. Add a shared `plural()` helper, mirror in web/src/format.ts (§51.2) | F |
+| P3 | **Retention Concentration puts a count in the "Retained Share" percent column** — `Objects each >=1% \| 4 \| (empty)` (render_md.rs:561; sample md:3421) reads "4" as a share and leaves the byte cell blank; move it to a caption or its own labeled row (§53.4, §45) | F |
 
 *Already satisfied (do not re-do):* structured JSON triage (`Report.triage`, §19.9);
 schema versioning (`schema_version`=6, §19.8) — *present and enforced on read-back (main.rs:709),
@@ -4323,3 +4353,834 @@ rendered byte value; §49.1 changes only a *label* (or adds a second percent). T
 analogue of the §45/§48 percentage-basis work: it finds the one remaining place a percentage silently switches
 denominator, plus four presentation defects that make an otherwise highly-actionable section (frame → retained
 size → code location) read as buggy or incomplete.
+
+## 50. References (Soft/Weak/Phantom) Section Audit (pass 31)
+
+The References section (`render_references`, render_md.rs:2618–2665; shared by md + graphs; HTML
+`ReferencesSection`/`RefClassTable`, App.tsx:2908–2937) reports, per reference kind, a referent-class
+histogram and — where populated — an "only-weakly-retained" breakdown. It is the report's only view of the
+soft/weak/phantom subsystem, and it is the one section a developer consults to answer "is a soft-reference
+cache holding real heap, or are these references clean?" Auditing the sample (scala-doku-full.md:3169–3245,
+scala-doku-full.graphs.md same range) against the model (`ReferenceStats`/`RefStatClassRow`, model.rs:1202–
+1238) and the one triage rule that reads this data (`WeakRefEscape`, triage.rs:565–590) surfaces six defects
+that make this section long on rows and short on decisions: it denominates referents in *shallow* bytes (the
+one number that cannot indicate a reclaim opportunity), renders an uncapped long tail of 1-object / 0-byte
+noise, attaches the graphs bar to the wrong axis, presents an inconsistent per-kind structure, gates its triage
+rule on an object *count* rather than bytes, and never states a verdict or action. No earlier pass has examined
+this section beyond §12's brief early critique (which predates the current renderer) and §22's completeness
+matrix.
+
+### 50.1 Referent classes are ranked and sized by *shallow* bytes — the one measure that can't tell you if reclaiming helps (new, P1, Compute-cheap→Add)
+
+Every referent row prints `Class | Objects | Shallow` (render_md.rs:2630/2641; `RefStatClassRow` carries only
+`{pretty_class, objects, shallow}`, model.rs:1206–1210). In the sample, Soft's top row is
+`` `java.lang.invoke.LambdaForm` | 178 | 8.3 KB `` (scala-doku-full.md:3181) and the entire Soft table sums to
+well under 15 KB shallow. But *shallow* size of a referent is nearly meaningless for the question this section
+exists to answer: a soft-referenced 64-byte `HashMap` header can retain a 40 MB cache, and this table would
+show it as "64 B". The developer wants to know **how much heap becomes reclaimable if these referents are
+cleared** — i.e. the *retained* size of the only-weakly-retained referents — and the section shows the opposite
+(shallow of *all* referents, strong-held or not).
+
+**Reason / fix:** rank and size the "Only-weakly retained" table by **retained** bytes, not shallow — that
+table already isolates the referents with `idom == u32::MAX` (reachable only via the weak edge, model.rs:1214–
+1215), so their retained size *is* the reclaim-on-clear estimate. The plain "Referent classes" histogram can
+keep `Objects` but should add a `Retained` (or "Reclaimable if cleared") column so a heavy soft cache is
+visible. **Availability:** the referent's retained size is not in `RefStatClassRow` today, so this is **Add**
+(one `retained: u64` field on the row, summed during the existing reference scan that already groups referents
+by class); the "only-weakly" subset already knows its members, so summing their retained is **Compute-cheap**
+once the retained-per-object array is in scope. Must land in md/graphs (render_md.rs:2630) + HTML
+(`RefClassTable`, App.tsx) + JSON (`RefStatClassRow`, SCHEMA bump) together.
+
+### 50.2 The referent histogram is uncapped and renders a 1-object / 0-byte long tail as noise (new, P2, Compute-cheap)
+
+`render_class_table` iterates `stats.referent_histogram` in full with no cap and no tiny-row folding
+(render_md.rs:2628–2649). In the sample the Weak table is **22 rows** (scala-doku-full.md:3206–3229), of which
+**13 are single-object rows** and one — `` `java.security.SecureClassLoader` | 1 | 0 B `` (line 3220) — is a
+literal **0-byte row**. The signal (`MethodType`, 894 objects / 34.9 KB) is one line; the other 21 rows are a
+scrolling tail of loader/logging singletons that carry no decision.
+
+**Reason / fix:** cap the histogram (the report caps every other class table — e.g. `UNREACHABLE_HISTOGRAM_CAP`,
+used one section below at render_md.rs:2684) and fold the tail into a `… and N more classes (M objects, X B)`
+row, mirroring the folding the plan already mandates elsewhere. At minimum, drop 0-byte rows or rows below a
+1-object-and-≤a-few-bytes floor — a `0 B` referent tells the reader nothing. This also fixes the graphs variant,
+where each of those 1-object rows still gets a min-visible `▏` bar (see §50.3). **Availability: Compute-cheap**
+(truncate + sum the remainder at render; the rows are already sorted). md/graphs (render_md.rs:2637 loop) + HTML
+(`RefClassTable`) together; JSON already carries the full vec, so add a cap constant consumed by all renderers.
+
+### 50.3 The graphs bar annotates *Objects* (count), not *Shallow* (bytes), and the min-visible floor makes 1 and 2 objects identical (new, P2, Have)
+
+In the graphs variant the appended bar is proportional to `r.objects` against `obj_max`
+(render_md.rs:2629/2644). The sample shows `` `[Ljava.lang.Object;` | 2 | 64 B | ▏ `` and
+`` `java.util.ArrayList` | 1 | 24 B | ▏ `` (scala-doku-full.graphs.md ~6701–6702; References section at 6682) rendering the **same** `▏`
+bar for 1 and 2 objects — the §44.2 min-visible floor collapses the low tail into visual ties. Worse, the bar is
+on the *count* axis while the meaningful magnitude is *bytes*: a class with 894 tiny `MethodType`s gets a full
+bar, while a class with 2 objects retaining a large cache would get `▏`. The chart therefore steers the eye by
+*population*, not *memory* — the opposite of the report's stated goal.
+
+**Reason / fix:** put the bar on the byte column that matters. Once §50.1 adds `Retained`, bar on retained; until
+then, bar on `Shallow` (already present) rather than `Objects`. This makes the ASCII chart honest about *memory*
+and stops 1-vs-2-object rows from tying. **Availability: Have** (change the `bar(r.objects, obj_max, …)` argument
+to the byte column and recompute `obj_max` as the byte max; render-only, no model change). This is the §44 "bar
+the meaningful axis" principle applied to the one section §44 did not walk. graphs-only edit (render_md.rs:2644);
+HTML has no bar here so no parity change, but if HTML later adds one it must use the same axis.
+
+### 50.4 "Only-weakly retained" appears under Soft but silently vanishes under Weak/Phantom — structure looks inconsistent (new, P3, Have)
+
+The `#### Only-weakly retained _(approximate)_` sub-table is gated on `!stats.only_weakly_retained.is_empty()`
+(render_md.rs:2660; HTML App.tsx:2926 mirrors the gate). In the sample it renders under **Soft** (one row,
+`Class$ReflectionData`, scala-doku-full.md:3196–3198) but is **absent** under Weak and Phantom. A reader cannot
+tell whether Weak/Phantom genuinely have zero only-weakly-retained referents or whether the sub-section was
+dropped — the same silent-gap ambiguity §49.4 flagged for the per-thread "Local roots" line and §31.4 flagged
+for empty sections generally.
+
+**Reason / fix:** when the vec is empty, still emit the sub-heading with an explicit `_None — all referents are
+also strongly reachable._` so every reference kind has the same two-part structure. This makes "no escape" a
+*stated fact* (the reassuring answer to "is anything leaking through weak refs?") rather than a missing block.
+**Availability: Have** (emit the heading + a one-line note in the else branch; render-only). md/graphs
+(render_md.rs:2660) + HTML (App.tsx:2926) together.
+
+### 50.5 The `weak-ref-escape` triage rule gates on object *count* (≥1000), not retained bytes — it can't fire on a few huge escapees and cries wolf on many tiny ones (new, P1, Have)
+
+`WeakRefEscape` sums `row.objects` across all three kinds' `only_weakly_retained` and fires only when the total
+≥ `WEAKREF_FLOOR = 1000` (triage.rs:570–576, 42). This is a *count* threshold on data whose whole point is
+*reclaimable bytes*: 1,200 only-weakly-retained 16-byte objects (19 KB) trips the rule, while 40 only-weakly-
+retained objects each retaining 5 MB (200 MB reclaimable) stays silent because 40 < 1000. In the sample the
+count is 21 (Soft) so the rule correctly stays quiet — but for the wrong reason (count, not size). The signal
+also carries no `bytes`, so under the §26.2/Phase-5 "rank problems by reclaimable bytes" ordering it sorts to
+the bottom regardless of how much heap would actually free up.
+
+**Reason / fix:** gate on **retained bytes** of the only-weakly-retained set (with a small floor to suppress
+trivia) and attach that byte figure via `with_bytes(…)` so the signal ranks by reclaim potential like the other
+byte-denominated rules (off-heap, gc-waste, over-capacity-collections, triage.rs). This is the same
+count-vs-bytes correction §46.1 made for collection waste and §50.1 makes for the section itself. **Availability:
+Have** once §50.1's retained-per-referent lands (the rule can then sum retained instead of `objects`); until
+then it is **Compute-cheap** if the reference scan can expose an only-weakly retained-byte total. The message
+should also switch from "N objects … likely reclaimable" to "N MB retained only via soft/weak/phantom refs —
+reclaimable under memory pressure."
+
+### 50.6 The section states *what refs point at* but never whether it's a problem or what to do (new, P2, Format/prose)
+
+The only prose is the caption `_Soft/weak/phantom reference referents (what they point at)._`
+(render_md.rs:2621) and the per-kind `_N reference instances._` line (render_md.rs:2655). There is no verdict
+("these referents are clean" / "this soft cache holds X MB you could evict") and no recommended action — the
+same actionability gap §33 flagged report-wide, here made sharper because the *correct* action differs by kind:
+soft-ref escapees are a *cache-tuning* signal (they'll clear under pressure — usually fine), weak-ref escapees
+are usually *benign* (canonicalizing maps), and a large phantom-referent set can indicate *cleanup lag* (native
+resources awaiting `Cleaner`). Presenting all three identically with no framing invites the reader to treat
+`975 weak reference instances` as alarming when it is routine.
+
+**Reason / fix:** add a one-line "what this means / what to do" caption per kind — e.g. under Soft:
+_"Soft referents clear under memory pressure; a large only-weakly-retained total here is reclaimable cache, not
+a leak — tune cache size if it dominates."_ Tie the verdict to the §50.1 retained total so the prose can say
+"clean" when the reclaimable bytes are negligible. **Availability: Format/prose** (static per-kind captions;
+no model change). Mirror the wording across md/graphs (render_md.rs:2653) + HTML (App.tsx:2922) so all three
+formats give the same guidance (comparability rule).
+
+### 50.7 Summary and Priority-Summary deltas
+
+- **§50.1 (P1, Add):** rank/size referents (esp. only-weakly-retained) by **retained** bytes — shallow of a
+  referent can't indicate a reclaim opportunity; add a `retained` column/field and a "reclaimable if cleared"
+  read on the only-weakly table.
+- **§50.2 (P2, Compute-cheap):** cap the referent histogram and fold the 1-object / 0-byte long tail (Weak is
+  22 rows, 13 singletons, one literal `0 B` row in the sample).
+- **§50.3 (P2, Have):** move the graphs bar off *Objects* (count) onto the byte axis so the chart steers by
+  memory, and 1-vs-2-object rows stop tying at the min-visible floor.
+- **§50.4 (P3, Have):** always emit "Only-weakly retained" per kind (with an explicit "None" note) so the
+  per-kind structure is uniform and "no escape" is a stated fact, not a silent gap.
+- **§50.5 (P1, Have/Compute-cheap):** re-gate `WeakRefEscape` on **retained bytes** (not ≥1000 objects) and
+  attach `bytes` so it ranks by reclaim potential — today it can miss a few huge escapees and fire on many tiny
+  ones.
+- **§50.6 (P2, Format/prose):** add per-kind verdict/action captions (soft = cache-tuning, weak = usually
+  benign, phantom = cleanup-lag) so the reader knows whether the numbers are a problem.
+
+§50.1 and §50.5 are the load-bearing pair: both correct the same **count/shallow-vs-retained** category error
+that recurs across the tool (§46.1 collection waste, §27.1 "% Heap"), applied to the one subsystem whose entire
+value is "how much becomes collectable." §50.2/50.3/50.4/50.6 are the presentation half — cap the noise, bar the
+right axis, keep the structure uniform, and say what to do — none of which change a rendered byte value except
+by adding the retained column §50.1 introduces.
+
+## 51. Unreachable Objects Section & Garbage-Root Trees Audit (pass 32)
+
+The always-on **Unreachable Objects** section (render_md.rs:2671, `render_unreachable_histogram`; sample
+scala-doku-full.md:3247) is a genuine differentiator — it inventories heap that is *already* collectable, which
+MAT discards outright. Precisely because it is unique the presentation has to be crisp, and this pass finds four
+defects that either mislead the reader on scale or corrupt the prose.
+
+### 51.1 Garbage-root tree `(N objects)` is a cumulative subtree count rendered as if it were the node's own population (new, P2, Have)
+
+The tree lines print `{} objects` from `node.objects` (render_md.rs:2765/2773/2798/2808), and per the model that
+field is "Number of real objects in the subtree rooted at this node" (model.rs:63) — i.e. **cumulative**,
+including all descendants. The sample makes the ambiguity visible: garbage root #3 reads
+`**java.lang.ref.SoftReference** — 3.2 KB (70 objects)`, its child `java.lang.Class$ReflectionData — 3.2 KB
+(69 objects)`, then `java.lang.reflect.Field[] — 3.1 KB (68 objects)` (scala-doku-full.md:3300-3302). A reader
+naturally sums the children expecting them to add up to the parent, but the numbers *nest* (70 ⊇ 69 ⊇ 68), so
+any attempt to reconcile the tree fails silently. The retained bytes nest correctly (that is what a dominator
+tree is), but the object count is presented with identical syntax and no cue that one is a running total and the
+other is a per-node figure.
+
+**Reason / fix:** label the count as cumulative — e.g. `(70 objects in subtree)` on the root line and drop it on
+interior nodes (the retained byte already conveys subtree magnitude), or render the *node-local* object count
+instead so children can be summed. Either removes the false invitation to add. **Availability: Have** — the model
+already distinguishes; this is a render-string change in the four `({} objects)` sites (render_md.rs:2765/2773/
+2798/2808) plus the graphs mirror and App.tsx garbage-root renderer (comparability rule). Simplest: change the
+literal to `"({} objects in subtree)"` on the root and `""` on children.
+
+### 51.2 `(1 objects)` — ungrammatical singular across every objects-count site (new, P3, Format/prose)
+
+`fmt_count(objects)` is always suffixed with the bare literal `" objects"` (render_md.rs:2765/2773/2798/2808 in
+this section; also Leak Suspects at md:2271-2281, e.g. `` `java.time.zone.ZoneRulesProvider` (1 objects, retained
+198.4 KB) ``). Single-object roots are extremely common in this section — garbage roots #1, #2, #4, #5, #6 are all
+`int[] — … (1 objects)` (scala-doku-full.md:3296-3312). The tool otherwise takes pains with formatting (§41);
+`(1 objects)` reads as a bug to a careful reviewer and undermines trust in the numbers next to it.
+
+**Reason / fix:** a `plural(n, "object")` helper (or inline `if n == 1 { "object" } else { "objects" }`) shared by
+the garbage-root renderer, Leak Suspects, and any other `N objects` callsite. **Availability: Format/prose** — no
+model change; a one-line helper in format.rs consumed everywhere the `" objects"` literal appears, mirrored in
+web/src/format.ts so HTML pluralizes identically (comparability).
+
+### 51.3 Histogram `Retained` column overlaps and can exceed the section's own shallow total, with no caveat (new, P2, Format/prose)
+
+The per-class histogram carries a `Retained` column (render_md.rs:2735, model.rs:47) whose values *overlap*: a
+class's retained heap includes objects counted under other classes' rows. In the sample `java.lang.String` shows
+`25.4 KB shallow / 86.5 KB retained` and `java.lang.ref.SoftReference` shows `840 B / 14.0 KB`
+(scala-doku-full.md:3262/3271) — sum the `Retained` column and it wildly exceeds the section header's `673.0 KB
+retained within the unreachable forest`. This is correct dominator behavior (retained sets nest and overlap), but
+the report presents shallow and retained as peer columns with no note that only *shallow* is additive. The same
+overlap caveat §27/§48 demanded for the reachable Top Consumers table is absent here.
+
+**Reason / fix:** add a one-line caption under the histogram: _"Retained sizes overlap and are not additive; only
+the Shallow column sums to the section total."_ **Availability: Format/prose** — static caption, no data change.
+Mirror in graphs + App.tsx histogram (comparability). This is the unreachable-section instance of the report-wide
+"retained columns don't sum" hazard.
+
+### 51.4 Graphs bar is on the Objects (count) axis, not bytes — same defect as §50.3, here on a bigger table (new, P2, Have)
+
+In the `graphs` variant the histogram's appended bar is `bar(r.objects, obj_max, …)` (render_md.rs:2738) — the
+identical count-axis choice §50.3 flagged for References. It bites harder here because the class populations and
+byte sizes diverge sharply: `int[]` has 1,642 objects / 569.6 KB while `byte[]` has 1,084 objects / 61.1 KB
+(scala-doku-full.md:3260-3261), so a byte-proportional bar would show `int[]` dominating ~9:1, but the count bar
+shows only ~1.5:1 — visually flattening the fact that primitive `int[]` *is* essentially the entire 673 KB of
+collectable heap. A developer scanning the bars to find "where is the reclaimable memory" is steered to
+population, not memory.
+
+**Reason / fix:** bar `r.shallow` (the additive, section-summing axis) against a shallow-max, matching the fix
+proposed in §50.3 for References and §44 report-wide. **Availability: Have** — `shallow` is already in the row;
+swap the two args at render_md.rs:2738 and the graphs/HTML mirrors. Prefer shallow over retained for the bar
+denominator here specifically because retained is non-additive (§51.3), so a retained bar would not sum to the
+whole and would double-count nested classes.
+
+### 51.5 Summary and Priority-Summary deltas
+
+- **§51.1 (P2, Have):** garbage-root tree object counts are cumulative-subtree totals rendered like per-node
+  counts (parent 70 ⊇ child 69 ⊇ 68 in the sample) — label as "in subtree" or drop on interior nodes so readers
+  stop trying to sum them.
+- **§51.2 (P3, Format/prose):** fix `(1 objects)` via a shared `plural()` helper — the singular is pervasive
+  (5 of the sample's garbage roots, plus every 1-object Leak Suspect).
+- **§51.3 (P2, Format/prose):** caption the histogram that `Retained` overlaps and is not additive; only
+  `Shallow` sums to the section total (retained-column values in the sample exceed the 673 KB header if summed).
+- **§51.4 (P2, Have):** move the graphs histogram bar off the *Objects* count axis onto *Shallow* bytes, so the
+  chart shows that `int[]` is ~9:1 the collectable heap rather than a flattened ~1.5:1.
+
+§51.1/§51.3 are the correctness pair (counts that don't sum, bytes that don't sum, both unlabeled); §51.2/§51.4
+mirror recurring report-wide fixes (pluralization hygiene, bar-the-byte-axis) into this section. None change a
+computed value — §51.1 and §51.4 are pure render-arg/label swaps, §51.2/§51.3 are prose — so all four are
+safely shippable in one render-only commit with no SCHEMA bump.
+
+## 52. Biggest Collections & Collection Contents: Value-Type Usefulness and Row Noise (pass 33)
+
+The `--collections` pair — **Biggest Collections** (render_md.rs:2393, sample scala-doku-full.md:3068) and
+**Collection Contents by Type** (render_md.rs:2563, sample md:3155) — is where the tool answers "which containers
+hold the heap and what's inside them." This pass audits whether the *value-type* columns actually tell the reader
+what is inside, and whether the row set is legible. Both fail in ways the sample makes stark.
+
+### 52.1 For maps, the "Value Type" is always the internal entry-node wrapper — a tautology, never the key/value class (new, P1, Add)
+
+Every map row in the sample reports its value type as the map's own internal `Node`/`Entry` struct:
+`java.util.HashMap → java.util.HashMap$Node ×2,048` (md:3097), `ConcurrentHashMap → ConcurrentHashMap$Node`
+(md:3100), `LinkedHashMap → LinkedHashMap$Entry ×132` (md:3115). This is what the map's backing `table[]` array
+literally points at, so it is *always* true and *never* informative — it tells the reader "this HashMap contains
+HashMap nodes," which conveys nothing about whether the map holds `String→URL`, `Class→Loader`, or a 40 MB cache.
+Collection Contents by Type repeats the tautology at the class level: `java.util.HashMap | 349 | 7,601 |
+HashMap$Node ×7,601` (md:3160). The one collection kind where value type is *useful* — the map, whose whole point
+is key/value payload — is exactly the kind where the column is dead. (Lists do better: `ArrayList → java.lang.Class
+×485` at md:3079 is genuinely the element type.) §28.5 flagged "unwrap map-entry wrappers" abstractly; this is the
+concrete symptom in the shipped sample.
+
+**Reason / fix:** for map-kind collections, walk one level past the `Node`/`Entry` and tally the runtime class of
+`Node.key` (and/or `Node.value`) instead of the node struct itself, so the column reads e.g. `String→ZoneRules
+×455` rather than `ConcurrentHashMap$Node ×455`. **Availability: Add** — the collection-values pass
+(src/pass2) already dereferences the backing array to reach the nodes; it must follow the node's `key`/`value`
+fields one more hop and record *those* target classes. Land the shape (`dominant_value_type`/breakdown carrying
+key/value classes for maps) in the model + all three renderers + JSON together (comparability). This is the single
+most valuable fix in the collections area: it turns a dead column into "what your maps are actually keyed/valued
+by," directly serving "where does the heap come from."
+
+### 52.2 "Value Type" and "Value Types (top)" are the same string on nearly every row — redundant columns (new, P2, Format)
+
+The table emits both `dominant_value_type` (render_md.rs:2497) and `value_type_breakdown` (render_md.rs:2503).
+When one type dominates — which is almost always, since a typed collection holds one element class — the two
+columns are byte-identical: `java.lang.Class` / `java.lang.Class ×485` (md:3079), `HashMap$Node` /
+`HashMap$Node ×2,048` (md:3097). Across the entire sample map table (24 rows) *every* row has this duplication;
+the list table is the same but for the `varies` case (which never occurs in the sample). Two columns, ~40
+characters of horizontal budget, carrying one fact.
+
+**Reason / fix:** drop the standalone `Value Type` column and keep only `Value Types (top)` (the breakdown already
+leads with the dominant type and its count). If a single-type shorthand is wanted, render the breakdown's first
+entry without the `×N` when the list has length 1. **Availability: Format** — pure render change
+(render_md.rs:2461–2467/2496–2512 + graphs + App.tsx); `dominant_value_type` stays in JSON for machine readers,
+so no SCHEMA change. Narrower tables also mitigate the §32 HTML horizontal-scroll and §44 md-width problems.
+
+### 52.3 Byte-identical rows repeat with no coalescing — the ranking is mostly duplicate noise (new, P2, Compute-cheap)
+
+The "largest individual collection instances" tables are flooded with identical rows. The map table opens with two
+byte-for-byte duplicates — `HashMap | 2,048 | HashMap$Node | Manifest#entries | 577.2 KB` twice (md:3097–3098) —
+and the list table has **six** consecutive identical `ArrayList | 3 | String | ConcurrentHashMap$Node#val | 144 B`
+rows (md:3084–3089) plus more at 80 B, while the deque table is **eleven** identical `ArrayDeque | 1 | Inflater |
+inflaterCache | 112 B` rows (md:3131–3141) — the entire deque section is one row repeated 11×. These are distinct
+object instances, so listing each is *correct*, but as a ranked "biggest" view it is noise: the reader learns
+"there are 11 one-element inflater caches" far better from one coalesced row than from eleven identical lines that
+push the genuinely-large entries off a scanned screen.
+
+**Reason / fix:** coalesce rows that are identical on (kind, container_class, elements, dominant_value_type, owner)
+into one row with a `×N instances` multiplier and summed retained — the same `×N` collapse §28.1/§3.1 applied to
+dominator subtrees. Keep a per-instance mode behind `--detail max` for the rare case someone wants every instance.
+**Availability: Compute-cheap** — group the existing `Vec<BiggestCollectionRow>` before rendering; add an
+`instances: u64` (default 1) to the row so JSON carries the count. Coalescing also fixes the deque "Total: 11"
+(md:3143) reading as eleven findings when it is one pattern. Mirror across md/graphs/HTML + JSON.
+
+### 52.4 Summary and Priority-Summary deltas
+
+- **§52.1 (P1, Add):** map "Value Type" is always the internal `Node`/`Entry` wrapper (tautology, md:3097/3100/
+  3115) — walk one hop to the node's key/value class so the column says what maps actually hold; the highest-value
+  collections fix for "where does the heap come from."
+- **§52.2 (P2, Format):** `Value Type` and `Value Types (top)` are identical on every sample row (md:3079/3097) —
+  drop the standalone column, keep the breakdown; narrower table helps §32/§44 width.
+- **§52.3 (P2, Compute-cheap):** coalesce byte-identical instance rows with a `×N` multiplier — the sample has 6
+  identical list rows (md:3084–3089) and an 11-row all-identical deque section (md:3131–3141) drowning the ranking.
+
+§52.1 is the load-bearing item: it converts the map value-type column from a tautology into payload-class
+attribution, the collections-side counterpart to §47's `Class#field` heap attribution. §52.2/§52.3 are legibility
+(kill the redundant column, collapse duplicate rows) and change no computed byte value.
+
+## 53. Allocation Sites, Retention Concentration & Dominator-Depth: Impossible Numbers (pass 34)
+
+This pass audits the three tail sections that quantify *where* and *how deep* the heap sits (render_md.rs:3136,
+524, 579; sample scala-doku-full.md:3407/3413/3424). Two of them print physically-impossible figures in the
+shipped sample — a retained size 2,800× the entire heap, and a cumulative percentage of 10000% — both traceable
+to a specific line. These are the most concrete correctness bugs found in this whole review series.
+
+### 53.1 Allocation Sites reports 84.82 GB retained on a 30 MB heap — naive retained-sum multi-counts nested dominators (new, P0, Have)
+
+The sample's entire Allocation Sites section is one row: `serial 1 | 953,964 | 30.4 MB | 84.82 GB`
+(scala-doku-full.md:3411). The heap's **total reachable shallow is 29.8 MB** (System Overview, md:96) and the
+headline retainer keeps 22.9 MB — so **84.82 GB retained is ~2,800× the whole heap**, an impossible value. Two
+things are wrong: (a) the object count `953,964` exceeds the dump's `Total objects 952,666` (md:93) by ~1,300;
+(b) the retained total is nonsense. The cause is at build.rs:1098: `e.2 += self.g.retained[i]` sums *every*
+object's individual retained size into the bucket. Retained sets nest — a parent's retained size already includes
+all its descendants — so summing per-object retained across ~950k objects counts the same bytes thousands of
+times. This is the exact non-additive-retained hazard §51.3/§27 warn about, here escaping into a headline number.
+Worse, when there is no real stack data every object falls into a single synthetic `serial 1` bucket (md renders
+`serial {stack_serial}` when `frames` is empty, render_md.rs:3169), so the "allocation site" is meaningless *and*
+carries an impossible retained figure.
+
+**Reason / fix (two parts):** (1) **Never sum retained across objects** — either drop the Retained column from
+alloc-sites entirely (shallow *is* additive and honest), or compute a true bucket-retained via a dominator pass
+over the bucket's object set (expensive; the shallow column already answers "how much did this site allocate").
+(2) The `953,964 > 952,666` count discrepancy signals the serial stream and object count are misaligned
+(build.rs:1092's overrun guard silently `return`s, so extra serials are counted as… nothing — yet the count is
+still too high, meaning `idx` advances on skipped/serial-0 objects); reconcile `object_count` to real objects.
+**Availability: Have** — removing the multi-counted Retained column is a one-line render + model change; the
+honest shallow total is already correct. This is P0: a 84 GB figure on a 30 MB heap destroys trust in every other
+number in the report.
+
+### 53.2 Dominator-Depth footer prints "10000.0% cumulative" — a percent scaled by 100 twice (new, P0, Have)
+
+The hidden-tail footer reads `_… (+41305 deeper buckets, 284,826 objects, 10000.0% cumulative — full data in
+JSON)_` (scala-doku-full.md:3486). Cumulative percent cannot exceed 100%. The bug is at render_md.rs:626:
+`last_cum * 100.0`. But `depth_stats` already returns `cum` on the **0.0–100.0 scale** — format.rs:268 computes
+`cum = running / total_f * 100.0` and the docstring (format.rs:244) states "percents are 0.0–100.0". The table
+body renders it correctly as `fmt_pct(cum)` (render_md.rs:610, e.g. `70.1%` at md:3457), because `fmt_pct` just
+appends `%` without rescaling. The footer alone multiplies the already-percent value by 100 → `100.0 → 10000.0`.
+
+**Reason / fix:** drop the `* 100.0` at render_md.rs:626 — pass `last_cum` straight to `fmt_pct` like the table
+body does, so the footer reads `100.0% cumulative`. **Availability: Have** — one-line fix. Verify the graphs +
+HTML depth renderers don't repeat the double-scale (render_dominator_depth_graphs delegates to the same
+`_inner`, so fixing once fixes both; check App.tsx depth footer for the same `*100`). Add a unit test asserting
+the footer cumulative equals the last table row's cumulative.
+
+### 53.3 The degenerate 41,355-hop depth tail floods the table and hints at an unhandled artifact (new, P2, Compute-cheap)
+
+The depth summary says `the deepest chain is 41355 hops` (md:3421) and the table's tail from depth 23 onward is a
+flat run of `31 objects | <0.1% | 70.1%` repeating for ~28 identical rows (md:3438–3457) before the footer folds
+`+41305 deeper buckets`. A 41,355-deep dominator chain is not a real object nesting — it is the signature of a
+linked-list / self-referential structure (or a pathological cycle broken arbitrarily by the dominator pass),
+exactly the artifact §27.4 flagged for the depth-p90 statistic. Presented raw, it (a) makes the "deepest chain"
+headline alarming without explanation, and (b) pads the table with ~28 visually-identical `31 | <0.1%` rows that
+carry no signal.
+
+**Reason / fix:** detect a long flat tail (constant object count across many consecutive depths = a single chain
+descending one hop at a time) and collapse it with a note: _"depths 23–41355 are a single ~31-object chain
+descending one level per hop (likely a linked list or cycle) — see §27.4."_ The existing `>= 0.1%` cutoff already
+trims most, but the run of exactly-31 rows slips through because the cutoff is per-row, not run-aware. **Availability:
+Compute-cheap** — detect `objects[d] == objects[d+1]` runs in `render_dominator_depth_inner` before the DEPTH_CAP
+slice; add a "growth-path" bullet (§20.4) naming the class if the chain's dominant class is known.
+
+### 53.4 Retention Concentration puts a count in the "Retained Share" column with an empty Retained cell (new, P3, Format)
+
+The concentration table's last row is `Objects each >=1% | 4 | (empty)` (scala-doku-full.md:3421, render_md.rs:561).
+The value `4` is an object *count*, but it sits under the `Retained Share` header (a percentage column, e.g.
+`76.7%` above it) and leaves the `Retained` byte column blank. A reader scanning the column reads "4" as a share.
+It is a different kind of fact (how many objects individually exceed 1% of heap) shoehorned into a percentage row.
+
+**Reason / fix:** move it out of the table into a caption line — _"4 individual objects each retain ≥1% of the
+reachable heap"_ — or give it its own two-cell row (`Objects ≥1% of heap | 4`) with a header that isn't
+"Retained Share". **Availability: Format** — render-only (render_md.rs:557–563 + graphs + App.tsx concentration
+panel); no model change. Ties into §45's percentage-basis-consistency theme: don't put counts in percent columns.
+
+### 53.5 Summary and Priority-Summary deltas
+
+- **§53.1 (P0, Have):** Allocation Sites reports **84.82 GB retained on a 29.8 MB heap** (md:3411 vs md:96) —
+  `e.2 += g.retained[i]` (build.rs:1098) sums nested/overlapping retained sizes ~2,800×; drop the multi-counted
+  Retained column (shallow is additive and correct). Also reconcile the `953,964 > 952,666` object count.
+- **§53.2 (P0, Have):** Dominator-Depth footer prints **`10000.0% cumulative`** (md:3486) — `last_cum * 100.0`
+  (render_md.rs:626) rescales an already-0–100 percent (format.rs:244/268); drop the `* 100.0`.
+- **§53.3 (P2, Compute-cheap):** collapse the degenerate 41,355-hop flat tail (~28 identical `31 | <0.1%` rows,
+  md:3438–3457) with a linked-list/cycle note (§27.4/§20.4) instead of padding the table.
+- **§53.4 (P3, Format):** move `Objects each >=1% | 4` out of the `Retained Share` percentage column (md:3421)
+  into a caption or its own labeled row — a count doesn't belong in a percent column (§45).
+
+§53.1 and §53.2 are P0 correctness bugs: both print numbers that are physically impossible (retained > total
+heap; cumulative > 100%), both from a single identifiable line, both one-line fixes, and both catastrophic for
+reader trust. They are the counterpart in the *rendered* output to the shallow-vs-retained additivity category
+error §51.3/§52 trace through the model. §53.3/§53.4 are the surrounding legibility cleanup.
+
+## 54. Triage Rule-by-Rule: False Positives & Inconsistent Gating (pass 35)
+
+`triage.rs` ships **38 rules** (registry `rules()`, triage.rs:139–181). §26/§45 audited thresholds abstractly and
+§50.5 fixed one rule's count-vs-byte gate; this pass reads the actual rule bodies and the sample's fired signals
+(Memory Triage, scala-doku-full.md:57–72) to find rules that fire wrongly or gate inconsistently with their peers.
+Three concrete defects, each visible in the shipped sample.
+
+### 54.1 `ClassloaderLeak` has NO threshold — it fires as a Warning on any duplicate class, misfiring on normal Scala/library code (new, P1, Compute-cheap)
+
+The rule (triage.rs:488) does `duplicate_classes.iter().max_by_key(|d| d.total_retained)?` and then *always*
+emits a `Warning` if any duplicate exists — there is no `loader_count` floor and no retained floor. In the sample
+it fires: `Classloader leak: scala.collection.immutable.$colon$colon is loaded by 2 class loaders (8.6 MB
+retained) — classic reload leak.` (md:65). A Scala cons cell (`::`) present in two class loaders is completely
+routine in any Scala app (the bootstrap and app loaders both see core collection classes); calling it a "classic
+reload leak" Warning is a false positive that will fire on essentially every non-trivial JVM app. A real
+classloader/reload leak shows *many* loaders (tens to hundreds) of the *same* application class accumulating over
+redeploys, not 2 loaders of a stdlib class.
+
+**Reason / fix:** gate on (a) `loader_count >= N` (start at ~5, well above the 2–3 seen in healthy bootstrap/app/
+platform splits) OR (b) a monotonic-growth signal in diff mode, and (c) a retained floor so trivial dups stay
+quiet. Downgrade to Info unless the loader count is high. The message should distinguish "loaded by 2 loaders
+(normal bootstrap/app split)" from "loaded by 40 loaders (reload leak)." **Availability: Compute-cheap** —
+`loader_count` and `total_retained` are already on the row; add the two comparisons. This is the highest-FP-risk
+rule in the set because it has literally zero gating.
+
+### 54.2 `Shape` reports a p90 depth of 11273 — the degenerate 41,355-hop chain (§53.3) corrupts the statistic (new, P2, Compute-cheap)
+
+The Shape rule computes p90 as the depth at which cumulative objects reach 90% (triage.rs:423–431) and prints
+`deep … — 90% of objects within depth 11273, max depth 41355.` in the sample (md:60). But §53's depth table shows
+cumulative reaches only ~70% by depth 20 and the entire tail from depth 23 onward is a single ~31-object chain
+descending one hop per level (md:3438–3457). So the *real* mass sits shallow (>67% within 12 hops) and the p90 of
+11273 is an artifact: the 90th-percentile object is dragged deep purely by one pathological linked-list/cycle
+chain that §27.4 and §53.3 already identify. "90% of objects within depth 11273" is actively misleading — it
+tells the developer the heap is deeply chained when it is mostly shallow with one long tail.
+
+**Reason / fix:** compute p90 (and the "deep/shallow" verdict) over the *de-artifacted* distribution — exclude the
+constant-count single-chain tail §53.3 proposes detecting, or report p90 alongside the median so the spread is
+visible (median is ~10 hops per the summary line, md:3419, vs p90 11273 — the 1000× gap is itself the tell).
+Better: when p90/median exceeds a large ratio, say "mostly shallow (median 10 hops) with a long ~31-object chain
+to depth 41355 — likely a linked list or cycle" instead of a flat "deep." **Availability: Compute-cheap** — the
+histogram is already summed here; add the median and the run-detection §53.3 shares. Fixing §53.3's render and
+this rule together keeps the depth story consistent across the table and the triage bullet (comparability).
+
+### 54.3 Structurally identical "swarm of tiny objects" rules use opposite count-vs-percent boolean logic (new, P2, Compute-cheap)
+
+Two rules detect "very many small instances of one class": `ObjectSwarm` (triage.rs:760) and
+`BoxedPrimitiveBloat` (triage.rs:799). They gate oppositely. `ObjectSwarm` requires **both** a count floor and a
+percent floor — `instances >= SWARM_FLOOR_INSTANCES` (10,000,000) in the filter (triage.rs:769) *and*
+`pct_of(shallow) >= SWARM_PCT` (line 773), a conjunction. `BoxedPrimitiveBloat` returns None only when **both**
+fail — `if instances < BOXED_FLOOR_INSTANCES && pct_of(shallow) < BOXED_PCT` (triage.rs:825), i.e. it fires if
+**either** the 5,000,000-instance floor *or* the 5%-of-heap share is crossed, a disjunction. So one rule needs
+count AND bytes, the sibling needs count OR bytes. On a heap with 6M boxed Integers at 3% of heap, BoxedBloat
+fires (count alone) but an equivalent 6M-instance swarm of another tiny class would *not* fire ObjectSwarm (below
+the 10M count floor even at high %). The 10M vs 5M floors and AND vs OR logic are unexplained and produce
+inconsistent sensitivity for the same underlying phenomenon.
+
+**Reason / fix:** pick one policy for "swarm" rules and document the provenance (§26.7). The byte-share axis is the
+one that matters for "where is heap wasted" (§26.2/§50.5), so prefer: fire on `pct_of(shallow) >= PCT` with the
+instance floor only as a *noise gate* (skip tiny heaps), identically across both rules. Align SWARM_FLOOR_INSTANCES
+and BOXED_FLOOR_INSTANCES or justify the difference in a comment. **Availability: Compute-cheap** — both rules
+already have `instances`, `shallow`, and `total`; normalize the two conditionals. Ties into §50.5 (weak-ref
+count-gate) and §26.2 (rank by reclaimable bytes): the whole rule set should gate on bytes and use counts only to
+suppress noise.
+
+### 54.4 Summary and Priority-Summary deltas
+
+- **§54.1 (P1, Compute-cheap):** `ClassloaderLeak` (triage.rs:488) has zero gating — fires a Warning on any
+  duplicate class; the sample flags `$colon$colon` in 2 loaders (md:65) as a "classic reload leak," a false
+  positive on normal Scala. Add a `loader_count >= ~5` (or diff-growth) + retained floor; downgrade to Info for
+  low loader counts.
+- **§54.2 (P2, Compute-cheap):** `Shape` p90 = 11273 (md:60) is corrupted by the degenerate 41,355-hop chain
+  (§53.3/§27.4) — the heap is mostly shallow (median ~10). De-artifact the tail or report median vs p90 and switch
+  the verdict wording.
+- **§54.3 (P2, Compute-cheap):** `ObjectSwarm` (count AND %) and `BoxedPrimitiveBloat` (count OR %) gate the same
+  "tiny-object swarm" phenomenon with opposite boolean logic and mismatched 10M/5M floors (triage.rs:769/773 vs
+  825); normalize to a byte-share gate with count as a noise floor (§26.2/§50.5).
+
+§54.1 is the load-bearing item — an ungated Warning that misfires on nearly every real Scala/Java app is worse
+than a missing rule, because false alarms train the reader to ignore triage. §54.2 shares the fix with §53.3 (one
+tail-detection serves both the depth table and this bullet); §54.3 continues the §50.5/§26.2 program of gating the
+whole rule set on reclaimable bytes rather than raw counts.
+
+## 55. Graphs-Sample ASCII-Chart Audit: Redundant Sparklines (pass 36)
+
+Line-by-line read of `docs/samples/scala-doku-full.graphs.md` (backlog item B) for chart legibility. The
+`md-graphs` renderer's job is to add proportional bars/sparklines on top of the plain `md` tables (src/md.rs:150-155
+docstring). The audit finds the additions are *sound* mathematically — `bar()` (md.rs:169) and `sparkline()`
+(md.rs:207) both normalize to the series max, so a table's bar column and a standalone sparkline over the same
+counts always agree in shape — but in two sections the renderer emits *both* a standalone sparkline **and** a
+bar-column table over the identical histogram, doubling the visual and the vertical space for zero added
+information.
+
+### 55.1 String Length Distribution renders the same histogram twice (P2, Format)
+
+`docs/samples/scala-doku-full.graphs.md:224` prints `` `▂▂▂▄▅▇█▂▂▂▂▂▂▂▂` `` — a 15-glyph sparkline over the
+string-length histogram — immediately followed (lines 226-241) by a three-column table whose bar column
+(`████████████████` peaking at bucket "64") plots the *same 15 counts*. The source is render_md.rs:133-149: line
+133 collects `counts`, then under `if graphs` line 135 emits `sparkline(&counts)` **and** lines 136-149 emit a
+`Table` whose third column is `bar(b.count, bmax, GRAPH_BAR_WIDTH)` over the same `counts`. Because both primitives
+scale to the same max (`bmax` == the sparkline's internal `max`), the sparkline is a lower-resolution duplicate of
+the table's bar column — the table already shows the shape *plus* the exact per-bucket values and upper bounds.
+
+**Reason / fix:** the standalone sparkline is pure redundancy here; the bar-column table is strictly more
+informative (same shape, plus labels and counts). Drop the `sparkline(&counts)` line (render_md.rs:135) from the
+histogram section, keeping the bar-column table. This is the concrete instance §44.4 flagged abstractly ("relocate
+redundant sparkline"); a sparkline earns its place only where there is *no* accompanying bar table (a compact
+inline trend), which is not the case in either histogram section. **Availability: Format** — delete one line; the
+plain-`md` branch (lines 150-155) is untouched, and no model/JSON change.
+
+### 55.2 Top-Dominator Size Distribution: duplicate sparkline + duplicated min/max label (P2, Format)
+
+`docs/samples/scala-doku-full.graphs.md:5909` prints `` `▂▂▂▂█▄▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂`  (0 B – 22.9 MB) `` followed
+(lines 5911-5932) by a 21-row `Size ≤ / Count / bar` table over the same bucket counts. Two separate redundancies:
+(1) the sparkline duplicates the table's bar column exactly as in §55.1 (source render_graphs.rs:789-808: line 790
+collects `counts`, 791-793 emits the sparkline, 795-807 emits the bar table over the same `counts`); (2) the
+sparkline's trailing label `(0 B – 22.9 MB)` re-prints the "Smallest / largest retained: 0 B / 22.9 MB" bullet that
+appears three lines above it (sample 5905; source render_graphs.rs:780-784). So the reader sees the min/max range
+stated twice and the distribution shape drawn twice within one short section.
+
+**Reason / fix:** delete the sparkline block (render_graphs.rs:791-794) and keep the labeled bucket table — it
+carries the shape, the per-bucket counts, and the bucket bounds, and the min/max/median/total already appear as
+bullets above it. If a one-glance trend line is still wanted, it belongs in the `compare` output where successive
+dumps' distributions are shown side by side (§44.4), not stacked on top of a table that already draws the same
+bars. **Availability: Format** — remove one `push_str`; no model/JSON change, plain `md` unaffected.
+
+### 55.3 Summary and Priority-Summary deltas
+
+- **§55.1 (P2, Format):** String Length Distribution (graphs.md:224 vs 226-241) draws the length histogram as both a
+  standalone sparkline and a bar-column table over the same `counts` (render_md.rs:135 + 136-149); the sparkline is a
+  lower-res duplicate. Drop render_md.rs:135.
+- **§55.2 (P2, Format):** Top-Dominator Size Distribution (graphs.md:5909 vs 5911-5932) repeats the same
+  double-render (render_graphs.rs:791-794 sparkline + 795-807 bar table) *and* re-prints the min/max range already in
+  the bullets above (5905). Drop the sparkline block.
+
+Both are the concrete symptoms §44.4 predicted: a sparkline adds value only where it stands alone as a compact trend;
+stacked above a bar-column table over identical data it is noise. The fix is two deletions and shortens two sections
+without losing any datum, keeping `md-graphs` legible and reinforcing the rule that each visual should show data no
+other visual in the same section already shows.
+
+## 56. HTML-Only Columns & Hand-Rolled Percentages: Cross-Format Comparability Breaks (pass 37)
+
+A report is trustworthy only if a developer can open the HTML, the plain `md`, and the JSON side by side and see the
+*same* numbers. This pass reads `web/src/App.tsx` against `render_md.rs`/`render_graphs.rs` for the two ways that
+guarantee fails: (a) the HTML renders **columns the Markdown views do not**, so a value exists in one format and not
+the others; and (b) the HTML computes several of those percentages with inline `x / y * 100).toFixed(n)` arithmetic
+that **bypasses the shared `fmtPct`/`pctOf` helpers** it already imports (App.tsx:3), so even where a percent is
+shown in more than one place it is rounded differently and lacks the `<0.1%` floor. `format.ts` exists precisely to
+keep HTML "match[ing] the Markdown/JSON views byte-for-byte" (format.ts:1-2) — these sites defeat that intent.
+
+### 56.1 Class Histogram: HTML has a "% Heap" column md/graphs lack, at a precision used nowhere else (P1, Compute-cheap)
+
+The Class Histogram renders **different column sets per format**:
+- **md** (render_md.rs:882-919): `# / Class / Instances / Shallow Heap / Largest / Retained Heap` — six columns, no
+  percentage.
+- **graphs** (render_graphs.rs:304-334): the same six plus a retained-proportional `bar()` column.
+- **HTML** (App.tsx:578-603): `# / Class / [Loader] / Instances / Shallow Heap / Largest / Retained Heap / % Heap` —
+  it adds a **Loader** column (when `showLoader`) *and* a **"% Heap"** column (header App.tsx:581) that neither
+  Markdown view has.
+
+Two problems. (1) **Comparability:** a reader cross-referencing the histogram sees a per-class "% Heap" figure only
+in HTML; it is absent from md, graphs, and — since it is computed at render time from `retained`/`totalShallow` — it
+is not a stored field either. (2) **Precision inconsistency:** the value is `(h.retained / totalShallow *
+100).toFixed(2)` (App.tsx:603) — **two** decimals with **no `<0.1%` floor**, while every *other* "% Heap" column in
+the tool goes through `fmt_pct` at **one** decimal with the floor (render_md.rs:609-610 for Leak Suspects/Top
+Consumers; the HTML mirror is `fmtPct`, format.ts:31). So the label "% Heap" means one-decimal-floored in Leak
+Suspects and two-decimal-unfloored in the histogram, *within the same HTML page*.
+
+**Reason / fix:** decide whether "% of reachable heap" belongs in the histogram at all; if yes (it is useful — it
+tells you what fraction of the heap each class dominates), add the column to **md and graphs too** and render it
+through `fmt_pct` (Rust) / `fmtPct` (TS) so all three agree at one decimal with the `<0.1%` floor. If no, drop the
+HTML column. Either way the three formats must carry the same columns (plan comparability rule). **Availability:
+Compute-cheap** — `retained` and the reachable-heap denominator (`overview.total_shallow`, the §48/§45 basis) are
+already present in every format; this is a column-parity + one-helper-call change, no new data. Ties to §45.2
+(single `HEAP_BASIS_LABEL`) and §48 (one denominator): the histogram % must use the *same* basis and formatter as
+every other "% Heap".
+
+### 56.2 Two HTML distribution tables add hand-rolled percent columns md/graphs don't render (P2, Compute-cheap)
+
+The same pattern recurs in two size-distribution tables that §55 showed render only `bound / count / bar` in md and
+graphs:
+- **Top-Dominator Size Distribution** (App.tsx:748-757): HTML adds a **"% of Dom."** column computed
+  `(b.count / d.count * 100).toFixed(1)` (App.tsx:757) — one decimal, **no `<0.1%` floor**, so a real 0.02%-of-
+  dominators bucket prints `0.0%` (indistinguishable from empty). md/graphs (render_graphs.rs:795-807) show only
+  `Size ≤ / Count / bar`.
+- **Class Histogram → retention** aside: the Retention Concentration and header-overhead tables use the `_bp`
+  (basis-point) path — `(row.pct_of_heap_bp / 100).toFixed(2)` (App.tsx:1098) and `(…header_pct_of_shallow_bp /
+  100).toFixed(1)` (App.tsx:1174) — i.e. **three different rounding rules** (`.toFixed(2)` here, `.toFixed(1)`
+  there) for percentages on one page, none through `fmtPct`.
+
+**Reason / fix:** for the "% of Dom." column, either add the same column to md/graphs (routed through the shared
+formatter) or drop it; for the `_bp` sites, route the basis-point value through a single `fmtPct(bp / 100)` so the
+floor and decimal count match the rest of the report. A bucket that is a real but sub-0.1% share should read
+`<0.1%`, never `0.0%` — the whole reason `fmtPct` exists (format.ts:29-33). **Availability: Compute-cheap** — every
+value is already in the row; this is routing existing numbers through the existing helper. Reinforces §41
+(formatting primitives) and §45 (percentage-basis consistency): the HTML must use `fmtPct`/`pctOf` everywhere it
+prints a percent, exactly as `format.ts` promises.
+
+### 56.3 Summary and Priority-Summary deltas
+
+- **§56.1 (P1, Compute-cheap):** Class Histogram carries a per-class "% Heap" column in **HTML only** (App.tsx:581/
+  603), computed `.toFixed(2)` with no `<0.1%` floor — md (render_md.rs:882-919) and graphs
+  (render_graphs.rs:304-334) have no such column, and the "% Heap" label elsewhere means one-decimal-floored
+  (`fmt_pct`). Add the column to md+graphs through `fmt_pct`/`fmtPct`, or drop it; unify the basis (§45.2/§48).
+- **§56.2 (P2, Compute-cheap):** HTML adds a "% of Dom." column to Top-Dominator Size Distribution (App.tsx:757,
+  `.toFixed(1)`, no floor) that md/graphs don't render, and formats `_bp` percents with three different rounding
+  rules (App.tsx:1098 `.toFixed(2)`, 1174 `.toFixed(1)`, 757 `.toFixed(1)` no floor); route all through `fmtPct`
+  and match column sets across formats.
+
+Both findings are one theme: the HTML has quietly grown percent columns and rounding rules the Markdown/JSON views
+don't share, defeating the byte-for-byte-parity contract that `format.ts` was written to uphold (format.ts:1-2). The
+fix is mechanical — either add the column to all three formats or remove it, and in every case call the shared
+formatter — but the payoff is real: a developer who computes "class X is 3.5% of the heap" from the HTML should get
+the identical figure from the md report and the same value, unrounded, from the JSON. §56.1 is the load-bearing one
+because the histogram is a primary "where is the heap" table and the divergent column is the most likely to be
+quoted.
+
+## 57. Arrays Section: Size and Waste Are Computed but Never Joined (pass 38)
+
+§7 gave the Arrays section an early, bullet-style pass; this revisits it with field/line citations now that the
+later passes have set the bar. The finding: the report *separately* knows (a) which individual arrays are biggest
+(Top Arrays) and (b) that tens of thousands of object arrays are nearly empty (Array Fill Ratio) — but the two are
+rendered as disconnected tables, so a developer can never see that a specific big array is mostly null padding, and
+the single largest array in the dump is left completely unattributed. Both the "where is the heap" and "where is it
+wasted" questions are answerable from data already on the `Report`; they just aren't joined.
+
+### 57.1 Top Arrays shows Length and Shallow but never fill/null-density (P2, Compute-cheap→Add)
+
+`TopArrayRow` (model.rs:920-930) carries `array_class / length / shallow / obj_index_1based / owner` — **no
+occupied-slot or null-count field.** So `render_top_arrays` (render_md.rs:2056-2119) renders columns
+`Array class / Length / Shallow / [Owner] / [bar]` and nothing about how full the array is. In the sample the top
+object array is `` `java.lang.Object[]` | 131,072 | 512.0 KB | — `` (scala-doku-full.md:2941): a half-megabyte array
+with **no indication whether those 131,072 slots are populated or 95% null.** Meanwhile the Array Fill Ratio section
+three tables up reports **37,926 object arrays in the 0–10%-full bucket wasting 5.9 MB** (md:2800) — the largest
+single array-waste line in the whole dump — but bucketed and nameless. The reader cannot cross the two: is that
+131K-slot `Object[]` one of the 37,926 near-empty ones, or a genuinely-full 512 KB payload? The report has the
+answer and won't say.
+
+**Reason / fix:** add a **"Used / Length"** (or "Fill %") column to the Top Arrays *individual* table so the biggest
+arrays are immediately triaged as "full and legitimately large" vs "huge and mostly empty — reclaimable." For object
+arrays the non-null count is exactly what the fill-ratio pass computes per array (it must count non-null slots to
+bucket them, `ArrayFillRatio`, model.rs:868-875); the question is whether that per-array count is *retained* or only
+folded into buckets. **Availability: Compute-cheap if the fill pass keeps the per-array non-null count for the
+top-N arrays it already visits; Add (small) if the count is currently discarded after bucketing** — either way it
+piggybacks a pass that already touches every object array. Route the new column through all three renderers +
+`types.ts` (the §56 comparability rule). This directly upgrades the Arrays section from "here are big arrays" to
+"here are big arrays *and which ones are padding*," serving "where is heap wasted" at the per-instance level §8's
+fill-ratio buckets only serve in aggregate. (Supersedes §7.3 with a concrete field/line grounding.)
+
+### 57.2 The single largest array is unattributed; fill-ratio attribution stops at collection backing stores (P2, Compute-cheap)
+
+The biggest object array — `java.lang.Object[]` 131,072 slots (md:2941) — has Owner `—`, as do 5 of the top-10
+object arrays (md:2941/2944/2945/2948/2950) and every primitive array below the top few. `TopArrayRow.owner`
+(model.rs:925-929) is populated only from "the `--collections` holder-edge scan," which resolves arrays that back a
+*tracked collection* (HashMap#table etc.) but leaves raw application `Object[]`/`Formula[]` unattributed. The
+Fill-Ratio "Likely wasters by field" table (md:2817-2819) has the same blind spot: it names only
+`HashMap#table` / `ConcurrentHashMap#table` / `SetN#elements` — the collection internals — never the raw
+`cafesat.*[]` arrays that dominate Top Arrays with real owners (`cafesat.sat.Solver#watched`, md:2942). So the two
+attribution surfaces cover *collection-backing* arrays well and *raw* arrays not at all, and the largest single
+array in the dump falls in the gap.
+
+**Reason / fix:** widen array owner-resolution beyond the collection holder-edge scan to any inbound
+`Class#field` edge (the same field-attribution machinery §47 proposes for the single-big-value views), so a raw
+`Object[]` held by an application field gets a `Class#field` label like the collection-backed ones already do. A
+131 KB-slot array with Owner `—` is the report failing at its core job — telling you *where the heap comes from* —
+for the biggest array it found. **Availability: Compute-cheap** where an inbound-edge index exists (the dominator /
+reference machinery already walks incoming edges); **Add** only if the array's referrers aren't retained. Ties to
+§47 (field-labeled attribution) and §30.2a (path-to-GC-roots): the same inbound-edge plumbing serves all three.
+
+### 57.3 Summary and Priority-Summary deltas
+
+- **§57.1 (P2, Compute-cheap→Add):** Top Arrays (render_md.rs:2077-2102) shows `Length` + `Shallow` but no fill/
+  null-density, so the 131,072-slot `Object[]` (md:2941) can't be told apart from padding; the Fill Ratio section
+  knows 37,926 arrays are 0–10% full wasting 5.9 MB (md:2800) but bucketed and nameless. Add a Used/Length column to
+  the individual Top Arrays table (all three formats + JSON), reusing the per-array non-null count the fill pass
+  already needs. `TopArrayRow` (model.rs:920) has no fill field today.
+- **§57.2 (P2, Compute-cheap):** the biggest object array and 5 of the top 10 have Owner `—` (md:2941+) because
+  `TopArrayRow.owner` (model.rs:925) is filled only from the `--collections` holder-edge scan (collection backing
+  stores); raw application arrays go unattributed and are absent from "Likely wasters by field" (md:2817). Widen
+  array attribution to any inbound `Class#field` edge (shared with §47/§30.2a plumbing).
+
+Both findings share one root: the Arrays section computes size (Top Arrays) and waste (Fill Ratio) in separate
+passes and never joins them, and attribution is scoped to collection internals rather than arbitrary fields. §57.1
+is the higher-leverage fix — a single Used/Length column turns the largest "where is the heap" table into a "where
+is it wasted" table at the instance level — and it reuses a count the fill-ratio pass already derives, so the cost
+is a column, not a scan.
+
+## 58. Basis-Point (`_bp`) Storage & Rounding Pipeline: Four Precisions, One Lossy Round-Trip (pass 39)
+
+Deep-dive E, focused on the ten `_bp` (integer basis-point, 100 bp = 1%) fields the model uses to store
+percentages. §27/§45/§53 audited individual percentages; this pass follows the whole `_bp` pipeline
+model→renderer and finds three systemic problems: the same "share of reachable heap" concept is printed at **four
+different decimal precisions**, **none** of them routed through the `<0.1%`-floored `fmt_pct`, and one table
+**reconstructs bytes from a rounded basis-point value** the analysis pass had exactly — a lossy round-trip that
+discards precision the tool already computed.
+
+The ten fields (model.rs): `top1_bp`/`top10_bp`/`top100_bp` (152-154), `pct_of_heap_bp` (260),
+`header_pct_of_shallow_bp` (280), `top_class_concentration_bp` (372), `pct_bp` (576), `threshold_bp` (623),
+`lower_ratio_bp`/`upper_ratio_bp` (838-839). All document "100 bp = 1%"; the doc discipline is good. The rendering is
+where it breaks.
+
+### 58.1 Four different decimal precisions for the same "% of reachable heap" concept (P2, Compute-cheap)
+
+Every `_bp` render is `bp as f64 / 100.0` formatted with a hardcoded precision, and they disagree:
+- **`{:.0}%`** — fill-ratio bucket labels (`fill_ratio_label`, render_md.rs:1587-1589: `"{lo:.0}–{hi:.0}%"`).
+- **`{:.1}%`** — Retention Concentration Top-1/10/100 (render_md.rs:547/552/557), header-overhead
+  `header_pct_of_shallow_bp` (3357), top-class concentration (765).
+- **`{:.2}%`** — Boxed-Numbers `pct_of_heap_bp` (render_md.rs:3284).
+- Plus the **HTML** adds `.toFixed(1)`/`.toFixed(2)` on the *same* `_bp` values (§56.2, App.tsx:1098/1174).
+
+So "share of reachable heap" prints as `41%`, `41.1%`, and `41.08%` in three different sections of one report, and
+**none** of the four goes through `fmt_pct` (format.rs:299), so a real sub-0.05% share renders as `0.0%`/`0.00%`
+instead of `<0.1%` — the exact defect `fmt_pct` was written to prevent (§41.3/§45.1). A reader comparing the
+Boxed-Numbers "0.02% of heap" against a Concentration row rounded to "0.0%" cannot tell they mean the same magnitude.
+
+**Reason / fix:** route every `_bp`→percent render through one helper — `fmt_pct(bp as f64 / 100.0)` — so all
+`_bp` percentages share one decimal count *and* the `<0.1%` floor. If a section genuinely needs 2 decimals (the
+MAT-style exact figure, §32.7 `.mat-exact`), make that an explicit second formatter used consistently, not an
+ad-hoc `{:.2}` at one callsite. **Availability: Compute-cheap** — replace ~7 `format!("{:.N}%", bp as f64 / 100.0)`
+sites with one shared call; mirror in `web/src/format.ts` so HTML matches (§56). This is the Rust-side companion to
+§56.2 (which found the same disorder in App.tsx) and closes §45.1 for the `_bp` path specifically.
+
+### 58.2 Retention Concentration reconstructs bytes from a rounded bp — a lossy round-trip (P2, Compute-cheap)
+
+`render_retention_concentration` builds the "Retained" byte column by *back-computing bytes from the stored basis
+point*: `let bp_to_bytes = |bp: u32| -> u64 { (bp as u64 * total) / 10_000 };` (render_md.rs:540, identical in
+render_graphs.rs:473), then `format_bytes(bp_to_bytes(rc.top1_bp))` (548/553/558). But `top1_bp` is itself a rounded
+integer basis point — the concentration pass computed the true retained bytes of the top-1/10/100 dominators, then
+stored only `round(retained / total * 10_000)` and threw the bytes away, so the table reconstructs an
+*approximation* of a value the tool had exactly. At 30 MB total, one basis point ≈ 3 KB, so the reconstructed
+"Retained" is quantized to ~3 KB steps and can disagree with the true retained by up to half a bucket. Worse, this
+is the very table §53.1/§53.2 flagged for physically-impossible values (84 GB retained, 10000% cumulative): the
+byte column is derived from the same corrupted `_bp`, so fixing the bp fixes both the percent *and* the bytes, but
+storing bytes directly would have made the byte column immune to the percentage bug entirely.
+
+**Reason / fix:** store the true retained bytes for top-1/10/100 alongside (or instead of) the basis point —
+`RetentionSummary` (model.rs:148-157) already carries `total_retained: u64`, so adding `top1_retained`/
+`top10_retained`/`top100_retained: u64` is natural and lets the "Retained" column print the exact figure while the
+percent is derived *from the bytes* at render time (the correct direction: bytes are the ground truth, percent is
+the derived view — never the reverse). **Availability: Compute-cheap** — the concentration pass already sums these
+retained bytes to compute the bp; keep them instead of discarding. SCHEMA bump (Option fields, per the plan's
+`#[serde(default)]` rule); mirror in `types.ts`. Removes the `bp_to_bytes` round-trip in both md and graphs.
+
+### 58.3 Summary and Priority-Summary deltas
+
+- **§58.1 (P2, Compute-cheap):** the same "% of reachable heap" concept renders at `{:.0}%` (fill labels
+  render_md.rs:1587), `{:.1}%` (concentration 547, header 3357, top-class 765), and `{:.2}%` (boxed 3284) — plus the
+  HTML's own `.toFixed` (§56.2) — and **none** uses `fmt_pct`, so sub-0.05% shares print `0.0%` not `<0.1%`. Route
+  every `_bp`→percent through `fmt_pct(bp/100.0)`; mirror in format.ts.
+- **§58.2 (P2, Compute-cheap):** Retention Concentration's "Retained" byte column is back-computed from the rounded
+  bp (`bp_to_bytes`, render_md.rs:540 / render_graphs.rs:473), quantizing an exact value the pass had (~3 KB steps
+  at 30 MB) and inheriting the §53.1/§53.2 corruption. Store `top{1,10,100}_retained: u64` on `RetentionSummary`
+  (model.rs:148) and derive the percent *from* the bytes; SCHEMA bump + `types.ts`.
+
+The unifying defect: percentages are treated as the stored ground truth and bytes as the derived quantity, when it
+should be the reverse — bytes are exact and additive, percentages are the lossy view. §58.2 is the higher-leverage
+fix because it both removes a lossy round-trip *and* makes the "Retained" column immune to the concentration-percent
+bug (§53); §58.1 is the mechanical cleanup that finally brings the `_bp` path under the `fmt_pct` contract the rest
+of the report already follows (§41.3/§45.1/§56.2).
+
+## 59. Empty-Section Rendering: Three Syntaxes, Generic Messages, and ToC Links to "None" (pass 40)
+
+Deep-dive F revisited at source depth. §31 discussed degenerate-heap behavior abstractly; this pass audits the
+*actual empty-branch code* in `render_md.rs` and finds the report handles "this section has no data" three
+incompatible ways, uses a bare uninformative placeholder for most sections, and — because the ToC and section bodies
+guard on *different* predicates — links the reader to sections whose entire content is the word "None." All
+fixtures on disk are 20–73 MB (no tiny/empty dump exists, itself §31.1's open item), so this is grounded in the
+render code and its guards rather than a captured tiny-dump sample.
+
+### 59.1 Three different empty-message syntaxes coexist in one renderer (P3, Format)
+
+An exhaustive grep of `render_md.rs` empty-branches yields **three mutually inconsistent placeholder styles**:
+- **Bare generic underscore** — `"_None._"` appears **12 times** (render_md.rs:1536, 1613, 1680, 1738, 1791, 2001,
+  2066, 2125, 2188, 2242, 2312, 2451, 2577 …), the default for most tables.
+- **Descriptive underscore** — six section-specific messages: `"_No dominant retainer found._"` (427),
+  `"_No package retains more than 1% of the total retained heap._"` (1277), `"_No thread call stacks were recorded
+  in this dump._"` (1324), `"_No class-loader components were resolved in this dump._"` (1474), `"_No soft, weak, or
+  phantom references found._"`, `"_No per-frame allocation data is available…_"`.
+- **Asterisk style** — four `"*No X.*"` messages: `"*No arrays found.*"` (1525), `"*No immediate dominators.*"`,
+  `"*No significant drops.*"`, `"*No unreachable objects.*"`.
+
+So within one document the reader sees `_None._`, `_No thread call stacks were recorded in this dump._`, and
+`*No arrays found.*` — italic-via-underscore *and* italic-via-asterisk, generic *and* specific — depending on which
+section happens to be empty. The asterisk vs underscore choice is cosmetically identical in rendered Markdown but
+signals two different authors/eras, and the graphs renderer (render_graphs.rs) shares almost none of these strings
+(it delegates to the shared fns), so an empty section can even read differently between md and md-graphs.
+
+**Reason / fix:** pick one syntax (underscore, matching the dominant 12 callsites) and one policy: every empty
+section states *what* is absent and *why it might be*, not a bare "None." A reader who sees `_None._` under "Fields
+by Retained Size" cannot tell whether the analysis ran and found nothing or was skipped; `_No field retains a
+significant share (requires `--collections`)._` answers both. **Availability: Format** — replace the 12 bare
+`_None._` with section-specific messages (the six descriptive ones are the model to follow) and normalize the four
+asterisk strings to underscore. No model/JSON change. This is the §31.4/§33 actionability principle applied to the
+empty state: an empty section is still a finding ("no leak-shaped concentration here") and should say so.
+
+### 59.2 ToC lists Option-backed sections whose body renders only "None" (P2, Compute-cheap)
+
+The ToC (`render_toc`, render_md.rs:286-327) gates four sections on `Option::is_some()`:
+`fields_by_size.is_some()` (306), `biggest_collections.is_some()` (309), `collection_contents.is_some()` (312),
+`alloc_sites.is_some()` (317). But the *bodies* guard on the **inner vec** being empty: `render_fields_by_size`
+emits the full `## Fields by Retained Size (Class#field)` heading + two-sentence intro prose, then
+`if f.rows.is_empty() { out.push_str("_None._"); return; }` (render_md.rs:2304-2313). So when the analysis produced
+a `Some(FieldsBySize { rows: [] })` — ran but found nothing — the ToC shows a clickable "Fields by Retained Size"
+bullet that jumps to a heading whose entire content is intro prose and the word "None." The same
+`is_some()`-in-ToC / `rows.is_empty()`-in-body split applies to all four Option-backed sections.
+
+This is the §31.4 mismatch made concrete: the ToC promises a section, the anchor resolves (§42 anchor integrity is
+fine), but the destination is empty. Worse than a bare empty section, because the ToC *advertised* it. **Reason /
+fix:** make the ToC guard match the body's real emptiness check — e.g. `r.fields_by_size.as_ref().is_some_and(|f|
+!f.rows.is_empty())` — so an Option-Some-but-empty section is neither listed nor headed; or, conversely, always
+emit the heading and give it a useful empty message (59.1) and keep the ToC link honest by pointing at a section
+that at least explains its emptiness. **Availability: Compute-cheap** — the emptiness predicate is one field access
+already performed in the body; hoist the same check into the ToC guard. Do it identically in `render_toc` and
+`render_toc_graphs` (the §55/§56 comparability rule — ToC parity across formats).
+
+### 59.3 Summary and Priority-Summary deltas
+
+- **§59.1 (P3, Format):** empty sections use three syntaxes — 12× bare `_None._` (render_md.rs:1536…2577), 6
+  descriptive `_No X_`, 4 asterisk `*No X.*` (1525…) — mixing generic and specific, underscore and asterisk, in one
+  renderer; graphs shares almost none of the strings. Normalize to one underscore syntax and give every empty
+  section a "what's absent and why" message (the six descriptive ones are the template).
+- **§59.2 (P2, Compute-cheap):** the ToC gates `fields_by_size`/`biggest_collections`/`collection_contents`/
+  `alloc_sites` on `Option::is_some()` (render_md.rs:306-317) but the bodies guard on the inner vec (e.g.
+  `f.rows.is_empty()`, 2311), so an Option-Some-but-empty analysis yields a ToC link to a heading whose only content
+  is "None." Match the ToC guard to the body's emptiness check (or emit a useful empty message); mirror in
+  `render_toc_graphs`.
+
+Both are the empty-state corollary of the document's recurring theme: the report is rich when data exists and
+under-considered when it doesn't. §59.2 is the higher priority because a ToC link that leads to nothing erodes trust
+in the whole navigation (§42), and the fix is a one-field predicate already computed in the body; §59.1 is a
+Format-only normalization that turns twelve uninformative "None"s into statements a developer can act on (§33).

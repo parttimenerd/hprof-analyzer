@@ -69,7 +69,7 @@ pub fn build_model(
     crate::trace::probe("build_model: after leak_suspects aggregates");
     let top = build_top_consumers(g, opts.top_consumers);
     crate::trace::probe("build_model: after top_consumers aggregates");
-    let threads = build_thread_overview(g);
+    let threads = build_thread_overview(g, overview.total_shallow);
     crate::trace::probe("build_model: after thread_overview aggregates");
     let top_components = build_top_components(&overview);
     crate::trace::probe("build_model: after top_components aggregates");
@@ -1164,7 +1164,7 @@ pub(crate) fn build_alloc_sites_from<I: Iterator<Item = u32>>(
 /// Resolve each thread stack into a `ThreadInfo`. The thread's class name is
 /// looked up via its object index (`u32::MAX` = unresolved). Small: one entry
 /// per stack trace.
-pub(crate) fn build_thread_overview(g: &Graph) -> ThreadOverview {
+pub(crate) fn build_thread_overview(g: &Graph, total_shallow: u64) -> ThreadOverview {
     let threads = g
         .thread_stacks
         .iter()
@@ -1233,7 +1233,7 @@ pub(crate) fn build_thread_overview(g: &Graph) -> ThreadOverview {
                 .map(|addr| loader_label_for_addr(g, addr));
 
             // Gated per-frame significant locals (only when --thread-locals ran).
-            let (significant_frames, max_local_retained) = build_significant_frames(g, t, retained);
+            let (significant_frames, max_local_retained) = build_significant_frames(g, t, total_shallow);
 
             ThreadInfo {
                 thread_serial: t.thread_serial,
@@ -1282,7 +1282,7 @@ fn loader_label_for_addr(g: &Graph, addr: u64) -> String {
 fn build_significant_frames(
     g: &Graph,
     t: &crate::pass2::ThreadStack,
-    thread_retained: u64,
+    total_shallow: u64,
 ) -> (Vec<SignificantFrame>, u64) {
     use std::collections::BTreeMap;
     let Some(pairs) = g.thread_local_frame_samples.get(&t.thread_serial) else {
@@ -1321,8 +1321,8 @@ fn build_significant_frames(
                     .unwrap_or_else(|| "<unknown>".to_string());
                 let retained = g.retained.get(li as usize).copied().unwrap_or(0);
                 max_local_retained = max_local_retained.max(retained);
-                let pct = if thread_retained > 0 {
-                    retained as f64 / thread_retained as f64 * 100.0
+                let pct = if total_shallow > 0 {
+                    retained as f64 / total_shallow as f64 * 100.0
                 } else {
                     0.0
                 };
