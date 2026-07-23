@@ -13,10 +13,12 @@ _How the reachable heap grew across a time series of dumps of the same applicati
 
 - **Δ Objects (r1→rN):** −98,418
 - **Δ Shallow heap (r1→rN):** +377.4 KB
+- **Gross growth (classes that grew, r1→rN):** +13.2 MB
+- **Gross reclaimed (classes that shrank, r1→rN):** −33.9 MB
+- **Gross Retained churn (growth + reclaimed, r1→rN):** +47.2 MB
 - **Net Δ Retained (all classes, r1→rN):** −20.7 MB
-- **Gross Retained churn (all classes, per-step):** +13.2 MB grown / −33.9 MB reclaimed
 
-### Growth Leaders (by Δ retained)
+### Growth Leaders (by peak−baseline retained)
 
 | Class                                                                 |       r1 |       r2 |  Δ(r1→rN) |
 | --------------------------------------------------------------------- | -------: | -------: | --------: |
@@ -119,9 +121,7 @@ _How the reachable heap grew across a time series of dumps of the same applicati
 | ------------------------- | -----: | -----: | -------: |
 | `scala.runtime.LazyVals$` | 2.5 MB | 2.5 MB |   −104 B |
 
-### Disappeared Leak Suspects (resolved)
-
-_Informational: these were flagged in an earlier dump but are gone from the current one — a fixed or transient issue, not a current problem. Listed last for that reason._
+### Disappeared Leak Suspects
 
 | Suspect            |     r1 |  r2 | Δ(r1→rN) |
 | ------------------ | -----: | --: | -------: |

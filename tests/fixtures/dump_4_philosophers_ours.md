@@ -56,13 +56,12 @@ _Where the reachable heap is concentrated, at a glance._
 
 - **Headline retainer:** `scala.concurrent.stm.ccstm.InTxnImpl` (a class group) retains 2.7 MB (22.9% of reachable heap). See [Leak Suspects](#leak-suspects).
 - **Concentration:** diffuse — retention is spread across multiple roots, so there is no single object to free. See [Leak Suspects](#leak-suspects).
-- **Shape:** shallow (most objects are held within a few hops of a GC root) — 90% of objects within depth 7, max depth 28. See [Dominator-Depth Distribution](#dominator-depth-distribution).
-- **One leak or many:** the single biggest object, `scala.runtime.LazyVals$`, retains 21.5% and the top 10 retain 44.7% of reachable heap; 12 object(s) each hold >=1%. See [Top Consumers](#top-consumers).
+- **Shape:** deep (retention flows through long dominator chains — often nested collections or linked structures) — 90% of objects within depth 7, max depth 28. See [Dominator-Depth Distribution](#dominator-depth-distribution).
+- **One leak or many:** the single biggest object, `scala.runtime.LazyVals$`, retains 21.5% and the top 10 retain 44.7% of the heap; 12 object(s) each hold >=1%. See [Top Consumers](#top-consumers).
 - **Off-heap (DirectByteBuffer):** 134.3 MB of native memory is held by live DirectByteBuffers — not counted in heap size but can dominate RSS. See [Leak Indicators](#leak-indicators).
-- **Fixed per-object header overhead:** 236,457 objects × 12 B header = 2.7 MB (23.3% of reachable heap) is consumed by JVM object headers alone — consider value types, primitive arrays, or fewer wrapper objects. See [Object Header Overhead](#object-header-overhead).
+- **Fixed per-object header overhead:** 236,457 objects × 12 B header = 2.7 MB (23.3% of heap) is consumed by JVM object headers alone — consider value types, primitive arrays, or fewer wrapper objects. See [Header Overhead](#header-overhead).
 - **Empty-collection cemetery:** 5,497 of 5,998 tracked collections (91.6%) are empty (size == 0) — pre-allocated but never populated containers waste object-header overhead; consider lazy initialisation or null. See [Collections](#collections).
-- **Collection analysis not run:** Pass `--collections` to detect over-capacity backing arrays, unbounded collections, sparse object arrays, and constant primitive arrays.
-- **Duplicate-object analysis not run:** Pass `--find-duplicates` to detect duplicate strings, duplicate primitive arrays, and boxed-number bloat.
+- **Collection waste not analyzed:** _Collection waste not analyzed — re-run with `--collections` to check for wasted capacity._
 
 ## Waste Summary
 

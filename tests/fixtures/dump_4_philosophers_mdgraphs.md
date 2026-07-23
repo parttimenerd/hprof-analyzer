@@ -8,8 +8,7 @@ _All sizes are binary (1 KB = 1024 bytes, 1 MB = 1024 KB, and so on)._
 ## Contents
 
 - [Summary](#summary)
-- [Memory Triage](#memory-triage)
-- [Waste Summary](#waste-summary)
+- [OOM Triage](#oom-triage)
 - [System Overview](#system-overview)
 - [Leak Suspects](#leak-suspects)
 - [Top Consumers](#top-consumers)
@@ -56,22 +55,12 @@ _Where the reachable heap is concentrated, at a glance._
 
 - **Headline retainer:** `scala.concurrent.stm.ccstm.InTxnImpl` (a class group) retains 2.7 MB (22.9% of reachable heap). See [Leak Suspects](#leak-suspects).
 - **Concentration:** diffuse — retention is spread across multiple roots, so there is no single object to free. See [Leak Suspects](#leak-suspects).
-- **Shape:** shallow (most objects are held within a few hops of a GC root) — 90% of objects within depth 7, max depth 28. See [Dominator-Depth Distribution](#dominator-depth-distribution).
-- **One leak or many:** the single biggest object, `scala.runtime.LazyVals$`, retains 21.5% and the top 10 retain 44.7% of reachable heap; 12 object(s) each hold >=1%. See [Top Consumers](#top-consumers).
+- **Shape:** deep (retention flows through long dominator chains — often nested collections or linked structures) — 90% of objects within depth 7, max depth 28. See [Dominator-Depth Distribution](#dominator-depth-distribution).
+- **One leak or many:** the single biggest object, `scala.runtime.LazyVals$`, retains 21.5% and the top 10 retain 44.7% of the heap; 12 object(s) each hold >=1%. See [Top Consumers](#top-consumers).
 - **Off-heap (DirectByteBuffer):** 134.3 MB of native memory is held by live DirectByteBuffers — not counted in heap size but can dominate RSS. See [Leak Indicators](#leak-indicators).
-- **Fixed per-object header overhead:** 236,457 objects × 12 B header = 2.7 MB (23.3% of reachable heap) is consumed by JVM object headers alone — consider value types, primitive arrays, or fewer wrapper objects. See [Object Header Overhead](#object-header-overhead).
+- **Fixed per-object header overhead:** 236,457 objects × 12 B header = 2.7 MB (23.3% of heap) is consumed by JVM object headers alone — consider value types, primitive arrays, or fewer wrapper objects. See [Header Overhead](#header-overhead).
 - **Empty-collection cemetery:** 5,497 of 5,998 tracked collections (91.6%) are empty (size == 0) — pre-allocated but never populated containers waste object-header overhead; consider lazy initialisation or null. See [Collections](#collections).
-- **Collection analysis not run:** Pass `--collections` to detect over-capacity backing arrays, unbounded collections, sparse object arrays, and constant primitive arrays.
-- **Duplicate-object analysis not run:** Pass `--find-duplicates` to detect duplicate strings, duplicate primitive arrays, and boxed-number bloat.
-
-## Waste Summary
-
-_Approximately **4.5 MB** looks reclaimable across the sources below. Figures are approximate and may overlap slightly._
-
-| Source                                     | Reclaimable |                  |
-| ------------------------------------------ | ----------: | ---------------- |
-| [Under-filled object arrays](#collections) |      4.4 MB | ████████████████ |
-| [Under-filled collections](#collections)   |    186.4 KB | ▋                |
+- **Collection waste not analyzed:** _Collection waste not analyzed — re-run with `--collections` to check for wasted capacity._
 
 ## System Overview
 
@@ -79,21 +68,21 @@ _Reachable-heap totals and the largest classes by retained heap._
 
 ### Heap Summary
 
-| Property                                      | Value                |
-| --------------------------------------------- | -------------------- |
-| HPROF format                                  | JAVA PROFILE 1.0.2   |
-| File size                                     | 22.6 MB              |
-| Identifier size                               | 64-bit               |
-| Compressed OOPs                               | yes                  |
-| Dump created                                  | 2026-07-08T12:44:59Z |
-| Total objects                                 | 236,457              |
-| Total reachable heap                          | 11.6 MB              |
-| GC roots                                      | 1,681                |
-| Classes loaded                                | 2,784                |
-| Class loaders                                 | 5                    |
-| Unreachable objects (excluded)                | 5,970 (816.8 KB)     |
-| Heap fragmentation (unreachable / heap total) | 6.4%                 |
-| Top-class retained concentration              | 31.9%                |
+| Property                         | Value                |
+| -------------------------------- | -------------------- |
+| HPROF format                     | JAVA PROFILE 1.0.2   |
+| File size                        | 22.6 MB              |
+| Identifier size                  | 64-bit               |
+| Compressed OOPs                  | yes                  |
+| Dump created                     | 2026-07-08T12:44:59Z |
+| Total objects                    | 236,457              |
+| Total reachable heap             | 11.6 MB              |
+| GC roots                         | 1,681                |
+| Classes loaded                   | 2,784                |
+| Class loaders                    | 5                    |
+| Unreachable objects (excluded)   | 5,970 (816.8 KB)     |
+| Heap fragmentation               | 6.4%                 |
+| Top-class retained concentration | 31.9%                |
 
 - **Class loaders (labels):** java/net/URLClassLoader, jdk/internal/loader/ClassLoaders$AppClassLoader, jdk/internal/loader/ClassLoaders$PlatformClassLoader
 
@@ -109,9 +98,9 @@ _Reachable-heap totals and the largest classes by retained heap._
 
 | Kind             | Objects | Shallow Heap |                  |
 | ---------------- | ------: | -----------: | ---------------- |
-| Instances        | 201,988 |       4.1 MB | █████▌           |
-| Object arrays    |   5,834 |       3.0 MB | ████             |
-| Primitive arrays |  25,851 |       4.6 MB | ██████▎          |
+| Instances        | 201,988 |       4.1 MB | ██████████████▏  |
+| Object arrays    |   5,834 |       3.0 MB | ██████████▍      |
+| Primitive arrays |  25,851 |       4.6 MB | ████████████████ |
 | Class objects    |   2,784 |      33.6 KB | ▏                |
 
 ### HPROF Record Census
@@ -144,117 +133,61 @@ _Raw HPROF record-type composition of the dump (pass-1 counts). Useful for diagn
 
 _Duplicate-string analysis not run (pass `--find-duplicates`)._
 
-### Duplicate Primitive Arrays (approximate)
-
-_Duplicate primitive-array analysis not run (pass `--find-duplicates`)._
-
-### Boxed Numbers
-
-_Wrapper types whose instances occupy heap that could be replaced with primitives._
-
-|  # | Class                 | Instances | Total Shallow | % of Heap | Avg Size |
-| -: | --------------------- | --------: | ------------: | --------: | -------: |
-|  1 | `java.lang.Long`      |       256 |        6.0 KB |      0.1% |     24 B |
-|  2 | `java.lang.Integer`   |       301 |        4.7 KB |     <0.1% |     16 B |
-|  3 | `java.lang.Byte`      |       256 |        4.0 KB |     <0.1% |     16 B |
-|  4 | `java.lang.Short`     |       256 |        4.0 KB |     <0.1% |     16 B |
-|  5 | `java.lang.Character` |       128 |        2.0 KB |     <0.1% |     16 B |
-|  6 | `java.lang.Boolean`   |         2 |          32 B |      0.0% |     16 B |
-|  7 | `java.lang.Double`    |         1 |          24 B |      0.0% |     24 B |
-|  8 | `java.lang.Float`     |         1 |          16 B |      0.0% |     16 B |
-
-### Object Header Overhead
-
-_Classes where object headers consume a large share of shallow heap. The practical action is to reduce object *count*: merge small objects, use primitive arrays instead of boxed wrappers, or replace fine-grained instances with a flat array of fields. Value types (Project Valhalla) eliminate headers entirely but are not yet generally available._
-
-|  # | Class                                                 | Instances | Hdr/obj | Total Headers | Hdr % | Avg Size |
-| -: | ----------------------------------------------------- | --------: | ------: | ------------: | ----: | -------: |
-|  1 | `java.lang.Object`                                    |   134,275 |    12 B |        1.5 MB | 75.0% |     16 B |
-|  2 | `java.lang.String`                                    |    23,331 |    12 B |      273.4 KB | 50.0% |     24 B |
-|  3 | `java.util.HashMap$Node`                              |     9,876 |    12 B |      115.7 KB | 37.5% |     32 B |
-|  4 | `java.util.concurrent.ConcurrentHashMap$Node`         |     7,160 |    12 B |       83.9 KB | 37.5% |     32 B |
-|  5 | `java.util.jar.Attributes`                            |     5,477 |    12 B |       64.2 KB | 75.0% |     16 B |
-|  6 | `java.lang.Class`                                     |     2,793 |    12 B |       32.7 KB | 95.5% |     12 B |
-|  7 | `java.util.LinkedHashMap$Entry`                       |     1,199 |    12 B |       14.1 KB | 30.0% |     40 B |
-|  8 | `scala.concurrent.stm.skel.CallbackList`              |       774 |    12 B |        9.1 KB | 50.0% |     24 B |
-|  9 | `java.lang.invoke.MemberName`                         |       763 |    12 B |        8.9 KB | 30.0% |     40 B |
-| 10 | `jdk.internal.util.WeakReferenceKey`                  |       669 |    12 B |        7.8 KB | 37.5% |     32 B |
-| 11 | `java.lang.invoke.MethodType`                         |       666 |    12 B |        7.8 KB | 30.0% |     40 B |
-| 12 | `java.lang.invoke.ResolvedMethodName`                 |       578 |    12 B |        6.8 KB | 75.0% |     16 B |
-| 13 | `java.lang.Class[]`                                   |       523 |    12 B |        6.1 KB | 41.0% |     29 B |
-| 14 | `java.lang.String[]`                                  |       450 |    12 B |        5.3 KB | 31.0% |     38 B |
-| 15 | `java.lang.invoke.LambdaForm$Name`                    |       367 |    12 B |        4.3 KB | 37.5% |     32 B |
-| 16 | `java.lang.module.ModuleDescriptor$Exports`           |       367 |    12 B |        4.3 KB | 50.0% |     24 B |
-| 17 | `jdk.internal.math.FDBigInteger`                      |       341 |    12 B |        4.0 KB | 37.5% |     32 B |
-| 18 | `java.lang.Integer`                                   |       301 |    12 B |        3.5 KB | 75.0% |     16 B |
-| 19 | `sun.security.util.KnownOIDs`                         |       264 |    12 B |        3.1 KB | 30.0% |     40 B |
-| 20 | `java.lang.ThreadLocal$ThreadLocalMap$Entry`          |       261 |    12 B |        3.1 KB | 37.5% |     32 B |
-| 21 | `java.lang.Long`                                      |       256 |    12 B |        3.0 KB | 50.0% |     24 B |
-| 22 | `java.lang.Byte`                                      |       256 |    12 B |        3.0 KB | 75.0% |     16 B |
-| 23 | `java.lang.Short`                                     |       256 |    12 B |        3.0 KB | 75.0% |     16 B |
-| 24 | `java.util.ImmutableCollections$Set12`                |       245 |    12 B |        2.9 KB | 50.0% |     24 B |
-| 25 | `java.util.HashSet`                                   |       212 |    12 B |        2.5 KB | 75.0% |     16 B |
-| 26 | `java.lang.invoke.DirectMethodHandle`                 |       196 |    12 B |        2.3 KB | 30.0% |     40 B |
-| 27 | `jdk.internal.module.ServicesCatalog$ServiceProvider` |       190 |    12 B |        2.2 KB | 50.0% |     24 B |
-| 28 | `java.security.AccessControlContext`                  |       162 |    12 B |        1.9 KB | 30.0% |     40 B |
-| 29 | `java.lang.Thread$FieldHolder`                        |       160 |    12 B |        1.9 KB | 30.0% |     40 B |
-| 30 | `java.lang.invoke.MethodTypeForm`                     |       159 |    12 B |        1.9 KB | 37.5% |     32 B |
-
 ### Class Histogram (by Retained Heap)
 
 _Top 50 classes ranked by retained heap; the full list is in the JSON output._
 
 |  # | Class                                                                 | Instances | Shallow Heap |  Largest | Retained Heap | % Heap |                  |
 | -: | --------------------------------------------------------------------- | --------: | -----------: | -------: | ------------: | -----: | ---------------- |
-|  1 | `java.lang.Object[]`                                                  |     2,237 |       1.3 MB | 512.0 KB |        3.7 MB |  31.9% | █████            |
-|  2 | `scala.concurrent.stm.ccstm.InTxnImpl`                                |       129 |      18.1 KB |    144 B |        3.7 MB |  31.4% | █████            |
-|  3 | `java.lang.Class`                                                     |     2,793 |      34.3 KB |   1.1 KB |        3.6 MB |  30.6% | ████▉            |
-|  4 | `byte[]`                                                              |    24,078 |       2.6 MB | 255.1 KB |        2.6 MB |  21.9% | ███▌             |
-|  5 | `scala.runtime.LazyVals$`                                             |         1 |         16 B |     16 B |        2.5 MB |  21.5% | ███▍             |
-|  6 | `java.lang.Object`                                                    |   134,275 |       2.0 MB |     16 B |        2.0 MB |  17.6% | ██▊              |
-|  7 | `java.lang.String`                                                    |    23,331 |     546.8 KB |     24 B |        1.8 MB |  15.2% | ██▍              |
-|  8 | `java.util.HashMap`                                                   |       361 |      16.9 KB |     48 B |        1.5 MB |  13.2% | ██               |
-|  9 | `java.util.HashMap$Node[]`                                            |       395 |      96.7 KB |  16.0 KB |        1.5 MB |  13.2% | ██               |
-| 10 | `java.util.HashMap$Node`                                              |     9,876 |     308.6 KB |     32 B |        1.5 MB |  12.5% | █▉               |
-| 11 | `java.util.zip.ZipFile$Source`                                        |        19 |       1.5 KB |     80 B |        1.3 MB |  11.1% | █▊               |
-| 12 | `java.lang.ref.SoftReference`                                         |       151 |       5.9 KB |     40 B |        1.1 MB |   9.5% | █▌               |
-| 13 | `long[]`                                                              |       173 |       1.1 MB |  64.0 KB |        1.1 MB |   9.4% | █▌               |
-| 14 | `java.util.jar.JarFile`                                               |        19 |       1.2 KB |     64 B |        1.1 MB |   9.4% | █▌               |
-| 15 | `java.util.jar.Manifest`                                              |         8 |        192 B |     24 B |        1.1 MB |   9.3% | █▍               |
-| 16 | `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread` |       128 |      16.0 KB |    128 B |        1.0 MB |   9.0% | █▍               |
-| 17 | `scala.concurrent.stm.ccstm.Handle[]`                                 |       283 |       1.0 MB |   4.0 KB |        1.0 MB |   8.7% | █▍               |
-| 18 | `int[]`                                                               |     1,346 |     875.9 KB |  34.3 KB |      875.9 KB |   7.4% | █▏               |
-| 19 | `java.util.concurrent.ConcurrentHashMap`                              |       117 |       7.3 KB |     64 B |      611.6 KB |   5.1% | ▊                |
-| 20 | `java.util.concurrent.ConcurrentHashMap$Node[]`                       |        93 |      65.9 KB |   8.0 KB |      604.7 KB |   5.1% | ▊                |
-| 21 | `java.util.LinkedHashMap`                                             |     5,517 |     344.8 KB |     64 B |      507.4 KB |   4.3% | ▋                |
-| 22 | `java.util.concurrent.ConcurrentHashMap$Node`                         |     7,160 |     223.8 KB |     32 B |      463.1 KB |   3.9% | ▌                |
-| 23 | `java.util.jar.Attributes`                                            |     5,477 |      85.6 KB |     16 B |      448.0 KB |   3.8% | ▌                |
-| 24 | `scala.concurrent.stm.skel.CallbackList`                              |       774 |      18.1 KB |     24 B |      417.2 KB |   3.5% | ▌                |
-| 25 | `scala.Function1[]`                                                   |       774 |     399.1 KB |    528 B |      399.1 KB |   3.4% | ▌                |
-| 26 | `java.lang.Thread`                                                    |        27 |       2.7 KB |    104 B |      309.2 KB |   2.6% | ▍                |
-| 27 | `java.net.URLClassLoader`                                             |         2 |        176 B |     88 B |      243.7 KB |   2.0% | ▎                |
-| 28 | `java.time.zone.ZoneRulesProvider`                                    |         0 |          0 B |      0 B |      198.4 KB |   1.7% | ▎                |
-| 29 | `org.renaissance.scala.stm.RealityShowPhilosophers$CameraThread`      |         1 |        120 B |    120 B |      157.5 KB |   1.3% | ▏                |
-| 30 | `java.util.LinkedHashMap$Entry`                                       |     1,199 |      46.8 KB |     40 B |      152.7 KB |   1.3% | ▏                |
-| 31 | `java.util.ArrayList`                                                 |       102 |       2.4 KB |     24 B |      150.9 KB |   1.3% | ▏                |
-| 32 | `org.renaissance.core.ModuleLoader`                                   |         2 |         48 B |     24 B |      149.8 KB |   1.3% | ▏                |
-| 33 | `sun.util.calendar.ZoneInfoFile`                                      |         0 |          0 B |      0 B |      145.4 KB |   1.2% | ▏                |
-| 34 | `java.util.LinkedHashSet`                                             |        38 |        608 B |     16 B |      144.6 KB |   1.2% | ▏                |
-| 35 | `java.lang.invoke.MethodType`                                         |       666 |      26.0 KB |     40 B |      134.6 KB |   1.1% | ▏                |
-| 36 | `scala.collection.mutable.ArrayBuffer`                                |         1 |         24 B |     24 B |      126.1 KB |   1.1% | ▏                |
-| 37 | `java.time.zone.TzdbZoneRulesProvider`                                |         1 |         24 B |     24 B |      118.2 KB |   1.0% | ▏                |
-| 38 | `byte[][]`                                                            |         1 |       1.4 KB |   1.4 KB |       94.1 KB |   0.8% | ▏                |
-| 39 | `java.util.ImmutableCollections$SetN`                                 |       149 |       3.5 KB |     24 B |       91.5 KB |   0.8% | ▏                |
-| 40 | `sun.security.util.KnownOIDs`                                         |       264 |      10.3 KB |     40 B |       88.5 KB |   0.7% | ▏                |
-| 41 | `org.renaissance.core.BenchmarkSuite`                                 |         1 |         32 B |     32 B |       77.0 KB |   0.6% | ▏                |
-| 42 | `java.util.Optional`                                                  |         4 |         64 B |     16 B |       73.9 KB |   0.6% | ▏                |
-| 43 | `char[]`                                                              |       225 |      71.8 KB |  16.0 KB |       71.8 KB |   0.6% | ▏                |
-| 44 | `java.util.HashSet`                                                   |       212 |       3.3 KB |     16 B |       66.7 KB |   0.6% | ▏                |
-| 45 | `jdk.internal.loader.ClassLoaders$AppClassLoader`                     |         1 |         96 B |     96 B |       66.0 KB |   0.6% | ▏                |
-| 46 | `java.lang.Module`                                                    |        70 |       3.3 KB |     48 B |       65.5 KB |   0.6% | ▏                |
-| 47 | `scala.concurrent.stm.skel.SimpleRandom$`                             |         1 |         24 B |     24 B |       64.5 KB |   0.5% | ▏                |
-| 48 | `sun.util.cldr.CLDRLocaleProviderAdapter`                             |         1 |         80 B |     80 B |       62.6 KB |   0.5% | ▏                |
-| 49 | `sun.util.locale.provider.LocaleProviderAdapter`                      |         0 |          0 B |      0 B |       62.3 KB |   0.5% | ▏                |
+|  1 | `java.lang.Object[]`                                                  |     2,237 |       1.3 MB | 512.0 KB |        3.7 MB |  31.9% | ████████████████ |
+|  2 | `scala.concurrent.stm.ccstm.InTxnImpl`                                |       129 |      18.1 KB |    144 B |        3.7 MB |  31.4% | ███████████████▊ |
+|  3 | `java.lang.Class`                                                     |     2,793 |      34.3 KB |   1.1 KB |        3.6 MB |  30.6% | ███████████████▎ |
+|  4 | `byte[]`                                                              |    24,078 |       2.6 MB | 255.1 KB |        2.6 MB |  21.9% | ██████████▉      |
+|  5 | `scala.runtime.LazyVals$`                                             |         1 |         16 B |     16 B |        2.5 MB |  21.5% | ██████████▊      |
+|  6 | `java.lang.Object`                                                    |   134,275 |       2.0 MB |     16 B |        2.0 MB |  17.6% | ████████▊        |
+|  7 | `java.lang.String`                                                    |    23,331 |     546.8 KB |     24 B |        1.8 MB |  15.2% | ███████▋         |
+|  8 | `java.util.HashMap`                                                   |       361 |      16.9 KB |     48 B |        1.5 MB |  13.2% | ██████▋          |
+|  9 | `java.util.HashMap$Node[]`                                            |       395 |      96.7 KB |  16.0 KB |        1.5 MB |  13.2% | ██████▌          |
+| 10 | `java.util.HashMap$Node`                                              |     9,876 |     308.6 KB |     32 B |        1.5 MB |  12.5% | ██████▎          |
+| 11 | `java.util.zip.ZipFile$Source`                                        |        19 |       1.5 KB |     80 B |        1.3 MB |  11.1% | █████▌           |
+| 12 | `java.lang.ref.SoftReference`                                         |       151 |       5.9 KB |     40 B |        1.1 MB |   9.5% | ████▊            |
+| 13 | `long[]`                                                              |       173 |       1.1 MB |  64.0 KB |        1.1 MB |   9.4% | ████▋            |
+| 14 | `java.util.jar.JarFile`                                               |        19 |       1.2 KB |     64 B |        1.1 MB |   9.4% | ████▋            |
+| 15 | `java.util.jar.Manifest`                                              |         8 |        192 B |     24 B |        1.1 MB |   9.3% | ████▋            |
+| 16 | `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread` |       128 |      16.0 KB |    128 B |        1.0 MB |   9.0% | ████▍            |
+| 17 | `scala.concurrent.stm.ccstm.Handle[]`                                 |       283 |       1.0 MB |   4.0 KB |        1.0 MB |   8.7% | ████▎            |
+| 18 | `int[]`                                                               |     1,346 |     875.9 KB |  34.3 KB |      875.9 KB |   7.4% | ███▋             |
+| 19 | `java.util.concurrent.ConcurrentHashMap`                              |       117 |       7.3 KB |     64 B |      611.6 KB |   5.1% | ██▌              |
+| 20 | `java.util.concurrent.ConcurrentHashMap$Node[]`                       |        93 |      65.9 KB |   8.0 KB |      604.7 KB |   5.1% | ██▌              |
+| 21 | `java.util.LinkedHashMap`                                             |     5,517 |     344.8 KB |     64 B |      507.4 KB |   4.3% | ██▏              |
+| 22 | `java.util.concurrent.ConcurrentHashMap$Node`                         |     7,160 |     223.8 KB |     32 B |      463.1 KB |   3.9% | █▉               |
+| 23 | `java.util.jar.Attributes`                                            |     5,477 |      85.6 KB |     16 B |      448.0 KB |   3.8% | █▉               |
+| 24 | `scala.concurrent.stm.skel.CallbackList`                              |       774 |      18.1 KB |     24 B |      417.2 KB |   3.5% | █▊               |
+| 25 | `scala.Function1[]`                                                   |       774 |     399.1 KB |    528 B |      399.1 KB |   3.4% | █▋               |
+| 26 | `java.lang.Thread`                                                    |        27 |       2.7 KB |    104 B |      309.2 KB |   2.6% | █▎               |
+| 27 | `java.net.URLClassLoader`                                             |         2 |        176 B |     88 B |      243.7 KB |   2.0% | █                |
+| 28 | `java.time.zone.ZoneRulesProvider`                                    |         0 |          0 B |      0 B |      198.4 KB |   1.7% | ▊                |
+| 29 | `org.renaissance.scala.stm.RealityShowPhilosophers$CameraThread`      |         1 |        120 B |    120 B |      157.5 KB |   1.3% | ▋                |
+| 30 | `java.util.LinkedHashMap$Entry`                                       |     1,199 |      46.8 KB |     40 B |      152.7 KB |   1.3% | ▋                |
+| 31 | `java.util.ArrayList`                                                 |       102 |       2.4 KB |     24 B |      150.9 KB |   1.3% | ▋                |
+| 32 | `org.renaissance.core.ModuleLoader`                                   |         2 |         48 B |     24 B |      149.8 KB |   1.3% | ▋                |
+| 33 | `sun.util.calendar.ZoneInfoFile`                                      |         0 |          0 B |      0 B |      145.4 KB |   1.2% | ▌                |
+| 34 | `java.util.LinkedHashSet`                                             |        38 |        608 B |     16 B |      144.6 KB |   1.2% | ▌                |
+| 35 | `java.lang.invoke.MethodType`                                         |       666 |      26.0 KB |     40 B |      134.6 KB |   1.1% | ▌                |
+| 36 | `scala.collection.mutable.ArrayBuffer`                                |         1 |         24 B |     24 B |      126.1 KB |   1.1% | ▌                |
+| 37 | `java.time.zone.TzdbZoneRulesProvider`                                |         1 |         24 B |     24 B |      118.2 KB |   1.0% | ▍                |
+| 38 | `byte[][]`                                                            |         1 |       1.4 KB |   1.4 KB |       94.1 KB |   0.8% | ▍                |
+| 39 | `java.util.ImmutableCollections$SetN`                                 |       149 |       3.5 KB |     24 B |       91.5 KB |   0.8% | ▍                |
+| 40 | `sun.security.util.KnownOIDs`                                         |       264 |      10.3 KB |     40 B |       88.5 KB |   0.7% | ▎                |
+| 41 | `org.renaissance.core.BenchmarkSuite`                                 |         1 |         32 B |     32 B |       77.0 KB |   0.6% | ▎                |
+| 42 | `java.util.Optional`                                                  |         4 |         64 B |     16 B |       73.9 KB |   0.6% | ▎                |
+| 43 | `char[]`                                                              |       225 |      71.8 KB |  16.0 KB |       71.8 KB |   0.6% | ▎                |
+| 44 | `java.util.HashSet`                                                   |       212 |       3.3 KB |     16 B |       66.7 KB |   0.6% | ▎                |
+| 45 | `jdk.internal.loader.ClassLoaders$AppClassLoader`                     |         1 |         96 B |     96 B |       66.0 KB |   0.6% | ▎                |
+| 46 | `java.lang.Module`                                                    |        70 |       3.3 KB |     48 B |       65.5 KB |   0.6% | ▎                |
+| 47 | `scala.concurrent.stm.skel.SimpleRandom$`                             |         1 |         24 B |     24 B |       64.5 KB |   0.5% | ▎                |
+| 48 | `sun.util.cldr.CLDRLocaleProviderAdapter`                             |         1 |         80 B |     80 B |       62.6 KB |   0.5% | ▎                |
+| 49 | `sun.util.locale.provider.LocaleProviderAdapter`                      |         0 |          0 B |      0 B |       62.3 KB |   0.5% | ▎                |
 | 50 | `java.lang.invoke.MemberName`                                         |       763 |      29.8 KB |     40 B |       55.7 KB |   0.5% | ▏                |
 
 ### Class Loaders
@@ -264,9 +197,9 @@ _Classes grouped by the loader that defined them; many loaders each holding heap
 | Loader                                               | Classes | Instances | Shallow Heap | Retained Heap |                  |
 | ---------------------------------------------------- | ------: | --------: | -----------: | ------------: | ---------------- |
 | <boot>                                               |   1,705 |   232,740 |      10.1 MB |       31.4 MB | ████████████████ |
-| java/net/URLClassLoader                              |     709 |     3,322 |       1.5 MB |        7.1 MB | █████████▋       |
-| java/net/URLClassLoader                              |     575 |       330 |      18.0 KB |        2.6 MB | ███▌             |
-| jdk/internal/loader/ClassLoaders$AppClassLoader      |      81 |        64 |       1.3 KB |      236.2 KB | ▎                |
+| java/net/URLClassLoader                              |     709 |     3,322 |       1.5 MB |        7.1 MB | ███▌             |
+| java/net/URLClassLoader                              |     575 |       330 |      18.0 KB |        2.6 MB | █▎               |
+| jdk/internal/loader/ClassLoaders$AppClassLoader      |      81 |        64 |       1.3 KB |      236.2 KB | ▏                |
 | jdk/internal/loader/ClassLoaders$PlatformClassLoader |       1 |         1 |         16 B |        7.4 KB | ▏                |
 
 ### Duplicate Classes
@@ -300,151 +233,151 @@ _Class names loaded by more than one class loader — a classic class-loader-lea
 
 | Loader                                | Instances | Shallow | Retained Heap |                  |
 | ------------------------------------- | --------: | ------: | ------------: | ---------------- |
-| `java/net/URLClassLoader` @0x80300d20 |         1 |    24 B |      126.1 KB | ▏                |
+| `java/net/URLClassLoader` @0x80300d20 |         1 |    24 B |      126.1 KB | ████████████████ |
 | `java/net/URLClassLoader` @0x8e800048 |         3 |    72 B |         784 B | ▏                |
 
 **`scala.math.BigInt$`** — per loader:
 
 | Loader                                | Instances | Shallow | Retained Heap |                  |
 | ------------------------------------- | --------: | ------: | ------------: | ---------------- |
-| `java/net/URLClassLoader` @0x8e800048 |         1 |    16 B |        8.2 KB | ▏                |
-| `java/net/URLClassLoader` @0x80300d20 |         1 |    32 B |        8.1 KB | ▏                |
+| `java/net/URLClassLoader` @0x8e800048 |         1 |    16 B |        8.2 KB | ████████████████ |
+| `java/net/URLClassLoader` @0x80300d20 |         1 |    32 B |        8.1 KB | ███████████████▊ |
 
 **`scala.math.BigInt[]`** — per loader:
 
 | Loader                                | Instances | Shallow | Retained Heap |                  |
 | ------------------------------------- | --------: | ------: | ------------: | ---------------- |
-| `java/net/URLClassLoader` @0x80300d20 |         1 |  8.0 KB |        8.0 KB | ▏                |
-| `java/net/URLClassLoader` @0x8e800048 |         1 |  8.0 KB |        8.0 KB | ▏                |
+| `java/net/URLClassLoader` @0x80300d20 |         1 |  8.0 KB |        8.0 KB | ████████████████ |
+| `java/net/URLClassLoader` @0x8e800048 |         1 |  8.0 KB |        8.0 KB | ████████████████ |
 
 **`scala.collection.immutable.$colon$colon`** — per loader:
 
 | Loader                                | Instances | Shallow | Retained Heap |                  |
 | ------------------------------------- | --------: | ------: | ------------: | ---------------- |
-| `java/net/URLClassLoader` @0x8e800048 |        30 |   720 B |        5.8 KB | ▏                |
+| `java/net/URLClassLoader` @0x8e800048 |        30 |   720 B |        5.8 KB | ████████████████ |
 | `java/net/URLClassLoader` @0x80300d20 |         0 |     0 B |          40 B | ▏                |
 
 **`scala.collection.immutable.Range`** — per loader:
 
 | Loader                                | Instances | Shallow | Retained Heap |                  |
 | ------------------------------------- | --------: | ------: | ------------: | ---------------- |
-| `java/net/URLClassLoader` @0x80300d20 |       128 |  5.0 KB |        5.5 KB | ▏                |
+| `java/net/URLClassLoader` @0x80300d20 |       128 |  5.0 KB |        5.5 KB | ████████████████ |
 | `java/net/URLClassLoader` @0x8e800048 |         0 |     0 B |          32 B | ▏                |
 
 **`scala.collection.mutable.Buffer`** — per loader:
 
 | Loader                                | Instances | Shallow | Retained Heap |                  |
 | ------------------------------------- | --------: | ------: | ------------: | ---------------- |
-| `java/net/URLClassLoader` @0x80300d20 |         0 |     0 B |        3.3 KB | ▏                |
-| `java/net/URLClassLoader` @0x8e800048 |         0 |     0 B |         192 B | ▏                |
+| `java/net/URLClassLoader` @0x80300d20 |         0 |     0 B |        3.3 KB | ████████████████ |
+| `java/net/URLClassLoader` @0x8e800048 |         0 |     0 B |         192 B | ▉                |
 
 **`scala.Some`** — per loader:
 
 | Loader                                | Instances | Shallow | Retained Heap |                  |
 | ------------------------------------- | --------: | ------: | ------------: | ---------------- |
-| `java/net/URLClassLoader` @0x80300d20 |        92 |  1.4 KB |        1.5 KB | ▏                |
-| `java/net/URLClassLoader` @0x8e800048 |        18 |   288 B |         568 B | ▏                |
+| `java/net/URLClassLoader` @0x80300d20 |        92 |  1.4 KB |        1.5 KB | ████████████████ |
+| `java/net/URLClassLoader` @0x8e800048 |        18 |   288 B |         568 B | █████▊           |
 
 **`scala.collection.mutable.IndexedSeq`** — per loader:
 
 | Loader                                | Instances | Shallow | Retained Heap |                  |
 | ------------------------------------- | --------: | ------: | ------------: | ---------------- |
-| `java/net/URLClassLoader` @0x80300d20 |         0 |     0 B |        1.9 KB | ▏                |
-| `java/net/URLClassLoader` @0x8e800048 |         0 |     0 B |         152 B | ▏                |
+| `java/net/URLClassLoader` @0x80300d20 |         0 |     0 B |        1.9 KB | ████████████████ |
+| `java/net/URLClassLoader` @0x8e800048 |         0 |     0 B |         152 B | █▏               |
 
 **`scala.collection.IndexedSeq`** — per loader:
 
 | Loader                                | Instances | Shallow | Retained Heap |                  |
 | ------------------------------------- | --------: | ------: | ------------: | ---------------- |
-| `java/net/URLClassLoader` @0x80300d20 |         0 |     0 B |        1.5 KB | ▏                |
-| `java/net/URLClassLoader` @0x8e800048 |         0 |     0 B |         152 B | ▏                |
+| `java/net/URLClassLoader` @0x80300d20 |         0 |     0 B |        1.5 KB | ████████████████ |
+| `java/net/URLClassLoader` @0x8e800048 |         0 |     0 B |         152 B | █▌               |
 
 **`scala.collection.Iterable`** — per loader:
 
 | Loader                                | Instances | Shallow | Retained Heap |                  |
 | ------------------------------------- | --------: | ------: | ------------: | ---------------- |
-| `java/net/URLClassLoader` @0x80300d20 |         0 |     0 B |        1.2 KB | ▏                |
-| `java/net/URLClassLoader` @0x8e800048 |         0 |     0 B |         136 B | ▏                |
+| `java/net/URLClassLoader` @0x80300d20 |         0 |     0 B |        1.2 KB | ████████████████ |
+| `java/net/URLClassLoader` @0x8e800048 |         0 |     0 B |         136 B | █▊               |
 
 **`scala.collection.immutable.Vector`** — per loader:
 
 | Loader                                | Instances | Shallow | Retained Heap |                  |
 | ------------------------------------- | --------: | ------: | ------------: | ---------------- |
-| `java/net/URLClassLoader` @0x80300d20 |         2 |   112 B |         976 B | ▏                |
-| `java/net/URLClassLoader` @0x8e800048 |         0 |     0 B |         104 B | ▏                |
+| `java/net/URLClassLoader` @0x80300d20 |         2 |   112 B |         976 B | ████████████████ |
+| `java/net/URLClassLoader` @0x8e800048 |         0 |     0 B |         104 B | █▋               |
 
 **`scala.Array$`** — per loader:
 
 | Loader                                | Instances | Shallow | Retained Heap |                  |
 | ------------------------------------- | --------: | ------: | ------------: | ---------------- |
-| `java/net/URLClassLoader` @0x80300d20 |         1 |    96 B |         648 B | ▏                |
-| `java/net/URLClassLoader` @0x8e800048 |         1 |    16 B |         264 B | ▏                |
+| `java/net/URLClassLoader` @0x80300d20 |         1 |    96 B |         648 B | ████████████████ |
+| `java/net/URLClassLoader` @0x8e800048 |         1 |    16 B |         264 B | ██████▌          |
 
 **`scala.collection.immutable.Map`** — per loader:
 
 | Loader                                | Instances | Shallow | Retained Heap |                  |
 | ------------------------------------- | --------: | ------: | ------------: | ---------------- |
-| `java/net/URLClassLoader` @0x8e800048 |         0 |     0 B |         640 B | ▏                |
-| `java/net/URLClassLoader` @0x80300d20 |         0 |     0 B |         144 B | ▏                |
+| `java/net/URLClassLoader` @0x8e800048 |         0 |     0 B |         640 B | ████████████████ |
+| `java/net/URLClassLoader` @0x80300d20 |         0 |     0 B |         144 B | ███▌             |
 
 **`scala.collection.mutable.AbstractSeq`** — per loader:
 
 | Loader                                | Instances | Shallow | Retained Heap |                  |
 | ------------------------------------- | --------: | ------: | ------------: | ---------------- |
-| `java/net/URLClassLoader` @0x80300d20 |         0 |     0 B |         696 B | ▏                |
-| `java/net/URLClassLoader` @0x8e800048 |         0 |     0 B |          48 B | ▏                |
+| `java/net/URLClassLoader` @0x80300d20 |         0 |     0 B |         696 B | ████████████████ |
+| `java/net/URLClassLoader` @0x8e800048 |         0 |     0 B |          48 B | █                |
 
 **`scala.collection.mutable.HashMap`** — per loader:
 
 | Loader                                | Instances | Shallow | Retained Heap |                  |
 | ------------------------------------- | --------: | ------: | ------------: | ---------------- |
-| `java/net/URLClassLoader` @0x8e800048 |         3 |    96 B |         712 B | ▏                |
-| `java/net/URLClassLoader` @0x80300d20 |         0 |     0 B |          32 B | ▏                |
+| `java/net/URLClassLoader` @0x8e800048 |         3 |    96 B |         712 B | ████████████████ |
+| `java/net/URLClassLoader` @0x80300d20 |         0 |     0 B |          32 B | ▋                |
 
 **`scala.Function1`** — per loader:
 
 | Loader                                | Instances | Shallow | Retained Heap |                  |
 | ------------------------------------- | --------: | ------: | ------------: | ---------------- |
-| `java/net/URLClassLoader` @0x8e800048 |         0 |     0 B |         552 B | ▏                |
-| `java/net/URLClassLoader` @0x80300d20 |         0 |     0 B |          64 B | ▏                |
+| `java/net/URLClassLoader` @0x8e800048 |         0 |     0 B |         552 B | ████████████████ |
+| `java/net/URLClassLoader` @0x80300d20 |         0 |     0 B |          64 B | █▊               |
 
 **`scala.Predef$`** — per loader:
 
 | Loader                                | Instances | Shallow | Retained Heap |                  |
 | ------------------------------------- | --------: | ------: | ------------: | ---------------- |
-| `java/net/URLClassLoader` @0x80300d20 |         1 |    48 B |         520 B | ▏                |
-| `java/net/URLClassLoader` @0x8e800048 |         1 |    16 B |          88 B | ▏                |
+| `java/net/URLClassLoader` @0x80300d20 |         1 |    48 B |         520 B | ████████████████ |
+| `java/net/URLClassLoader` @0x8e800048 |         1 |    16 B |          88 B | ██▋              |
 
 **`scala.collection.AbstractSeq`** — per loader:
 
 | Loader                                | Instances | Shallow | Retained Heap |                  |
 | ------------------------------------- | --------: | ------: | ------------: | ---------------- |
-| `java/net/URLClassLoader` @0x80300d20 |         0 |     0 B |         528 B | ▏                |
-| `java/net/URLClassLoader` @0x8e800048 |         0 |     0 B |          40 B | ▏                |
+| `java/net/URLClassLoader` @0x80300d20 |         0 |     0 B |         528 B | ████████████████ |
+| `java/net/URLClassLoader` @0x8e800048 |         0 |     0 B |          40 B | █▏               |
 
 **`scala.collection.immutable.Vector$`** — per loader:
 
 | Loader                                | Instances | Shallow | Retained Heap |                  |
 | ------------------------------------- | --------: | ------: | ------------: | ---------------- |
-| `java/net/URLClassLoader` @0x8e800048 |         1 |    16 B |         296 B | ▏                |
-| `java/net/URLClassLoader` @0x80300d20 |         1 |    24 B |         176 B | ▏                |
+| `java/net/URLClassLoader` @0x8e800048 |         1 |    16 B |         296 B | ████████████████ |
+| `java/net/URLClassLoader` @0x80300d20 |         1 |    24 B |         176 B | █████████▌       |
 
 **`scala.runtime.ScalaRunTime$`** — per loader:
 
 | Loader                                | Instances | Shallow | Retained Heap |                  |
 | ------------------------------------- | --------: | ------: | ------------: | ---------------- |
-| `java/net/URLClassLoader` @0x8e800048 |         1 |    16 B |         224 B | ▏                |
-| `java/net/URLClassLoader` @0x80300d20 |         1 |    16 B |         184 B | ▏                |
+| `java/net/URLClassLoader` @0x8e800048 |         1 |    16 B |         224 B | ████████████████ |
+| `java/net/URLClassLoader` @0x80300d20 |         1 |    16 B |         184 B | █████████████▏   |
 
 ## Leak Suspects
 
-_Objects and class groups retaining the most heap, ranked by retained size. These are the most likely accumulation points for excessive memory usage._
+_Objects and class groups whose retained heap is large enough to be a likely OOM cause, ranked by retained heap._
 
 |  # | Suspect                                | Retained | % Heap |                  |
 | -: | -------------------------------------- | -------: | -----: | ---------------- |
-|  1 | `scala.concurrent.stm.ccstm.InTxnImpl` |   2.7 MB |  22.9% | ███▋             |
-|  2 | `scala.runtime.LazyVals$`              |   2.5 MB |  21.5% | ███▍             |
-|  3 | `java.util.zip.ZipFile$Source`         |   1.3 MB |  11.1% | █▊               |
+|  1 | `scala.concurrent.stm.ccstm.InTxnImpl` |   2.7 MB |  22.9% | ████████████████ |
+|  2 | `scala.runtime.LazyVals$`              |   2.5 MB |  21.5% | ███████████████  |
+|  3 | `java.util.zip.ZipFile$Source`         |   1.3 MB |  11.1% | ███████▊         |
 
 ### 1. `scala.concurrent.stm.ccstm.InTxnImpl` — retains 2.7 MB (22.9% of reachable heap)
 
@@ -5554,26 +5487,26 @@ _Individual objects retaining the most heap; `% Heap` is the share of total reac
 
 |  # | Class                                                            | Shallow | Retained | % Heap |                  |
 | -: | ---------------------------------------------------------------- | ------: | -------: | -----: | ---------------- |
-|  1 | `scala.runtime.LazyVals$`                                        |    32 B |   2.5 MB |  21.5% | ███▍             |
-|  2 | `java.util.jar.JarFile`                                          |    64 B | 584.6 KB |   4.9% | ▊                |
-|  3 | `java.util.jar.JarFile`                                          |    64 B | 522.1 KB |   4.4% | ▋                |
-|  4 | `java.lang.Thread`                                               |   104 B | 302.4 KB |   2.5% | ▍                |
-|  5 | `java.util.zip.ZipFile$Source`                                   |    80 B | 295.2 KB |   2.5% | ▍                |
-|  6 | `java.util.zip.ZipFile$Source`                                   |    80 B | 267.9 KB |   2.3% | ▎                |
-|  7 | `java.util.zip.ZipFile$Source`                                   |    80 B | 260.6 KB |   2.2% | ▎                |
-|  8 | `java.time.zone.ZoneRulesProvider`                               |    16 B | 198.4 KB |   1.7% | ▎                |
-|  9 | `java.net.URLClassLoader`                                        |    88 B | 170.4 KB |   1.4% | ▏                |
-| 10 | `java.util.zip.ZipFile$Source`                                   |    80 B | 160.8 KB |   1.4% | ▏                |
-| 11 | `org.renaissance.scala.stm.RealityShowPhilosophers$CameraThread` |   120 B | 155.3 KB |   1.3% | ▏                |
-| 12 | `sun.util.calendar.ZoneInfoFile`                                 |   120 B | 145.4 KB |   1.2% | ▏                |
-| 13 | `sun.security.util.KnownOIDs`                                    |  1.1 KB |  88.5 KB |   0.7% | ▏                |
-| 14 | `java.lang.Object[]`                                             |  8.9 KB |  75.5 KB |   0.6% | ▏                |
-| 15 | `java.net.URLClassLoader`                                        |    88 B |  73.0 KB |   0.6% | ▏                |
-| 16 | `java.util.zip.ZipFile$Source`                                   |    80 B |  68.2 KB |   0.6% | ▏                |
-| 17 | `jdk.internal.loader.ClassLoaders$AppClassLoader`                |    96 B |  65.9 KB |   0.6% | ▏                |
-| 18 | `scala.concurrent.stm.skel.SimpleRandom$`                        |    24 B |  64.0 KB |   0.5% | ▏                |
-| 19 | `sun.util.locale.provider.LocaleProviderAdapter`                 |    24 B |  62.3 KB |   0.5% | ▏                |
-| 20 | `sun.security.provider.Sun`                                      |   104 B |  53.7 KB |   0.5% | ▏                |
+|  1 | `scala.runtime.LazyVals$`                                        |    32 B |   2.5 MB |  21.5% | ████████████████ |
+|  2 | `java.util.jar.JarFile`                                          |    64 B | 584.6 KB |   4.9% | ███▋             |
+|  3 | `java.util.jar.JarFile`                                          |    64 B | 522.1 KB |   4.4% | ███▎             |
+|  4 | `java.lang.Thread`                                               |   104 B | 302.4 KB |   2.5% | █▉               |
+|  5 | `java.util.zip.ZipFile$Source`                                   |    80 B | 295.2 KB |   2.5% | █▊               |
+|  6 | `java.util.zip.ZipFile$Source`                                   |    80 B | 267.9 KB |   2.3% | █▋               |
+|  7 | `java.util.zip.ZipFile$Source`                                   |    80 B | 260.6 KB |   2.2% | █▋               |
+|  8 | `java.time.zone.ZoneRulesProvider`                               |    16 B | 198.4 KB |   1.7% | █▏               |
+|  9 | `java.net.URLClassLoader`                                        |    88 B | 170.4 KB |   1.4% | █                |
+| 10 | `java.util.zip.ZipFile$Source`                                   |    80 B | 160.8 KB |   1.4% | █                |
+| 11 | `org.renaissance.scala.stm.RealityShowPhilosophers$CameraThread` |   120 B | 155.3 KB |   1.3% | ▉                |
+| 12 | `sun.util.calendar.ZoneInfoFile`                                 |   120 B | 145.4 KB |   1.2% | ▉                |
+| 13 | `sun.security.util.KnownOIDs`                                    |  1.1 KB |  88.5 KB |   0.7% | ▌                |
+| 14 | `java.lang.Object[]`                                             |  8.9 KB |  75.5 KB |   0.6% | ▍                |
+| 15 | `java.net.URLClassLoader`                                        |    88 B |  73.0 KB |   0.6% | ▍                |
+| 16 | `java.util.zip.ZipFile$Source`                                   |    80 B |  68.2 KB |   0.6% | ▍                |
+| 17 | `jdk.internal.loader.ClassLoaders$AppClassLoader`                |    96 B |  65.9 KB |   0.6% | ▍                |
+| 18 | `scala.concurrent.stm.skel.SimpleRandom$`                        |    24 B |  64.0 KB |   0.5% | ▍                |
+| 19 | `sun.util.locale.provider.LocaleProviderAdapter`                 |    24 B |  62.3 KB |   0.5% | ▍                |
+| 20 | `sun.security.provider.Sun`                                      |   104 B |  53.7 KB |   0.5% | ▎                |
 
 ### Biggest Classes by Retained Heap
 
@@ -5581,20 +5514,20 @@ _Classes whose instances together retain the most heap._
 
 |  # | Class                                                                 | Instances | Retained Heap |                  |
 | -: | --------------------------------------------------------------------- | --------: | ------------: | ---------------- |
-|  1 | `java.lang.Class`                                                     |     1,697 |        3.4 MB | ████▋            |
-|  2 | `scala.concurrent.stm.ccstm.InTxnImpl`                                |        94 |        2.7 MB | ███▋             |
-|  3 | `java.util.zip.ZipFile$Source`                                        |        19 |        1.3 MB | █▊               |
-|  4 | `java.util.jar.JarFile`                                               |        19 |        1.1 MB | █▌               |
-|  5 | `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread` |       128 |        1.0 MB | █▍               |
-|  6 | `java.lang.String`                                                    |     9,412 |      626.9 KB | ▊                |
-|  7 | `java.lang.Thread`                                                    |        25 |      308.5 KB | ▍                |
-|  8 | `java.net.URLClassLoader`                                             |         2 |      243.5 KB | ▎                |
-|  9 | `org.renaissance.scala.stm.RealityShowPhilosophers$CameraThread`      |         1 |      155.3 KB | ▏                |
-| 10 | `java.lang.Object[]`                                                  |         4 |      106.6 KB | ▏                |
-| 11 | `java.lang.invoke.MethodType`                                         |       660 |       84.0 KB | ▏                |
-| 12 | `jdk.internal.loader.ClassLoaders$AppClassLoader`                     |         1 |       65.9 KB | ▏                |
-| 13 | `scala.concurrent.stm.skel.SimpleRandom$`                             |         1 |       64.0 KB | ▏                |
-| 14 | `java.lang.Module`                                                    |        61 |       63.1 KB | ▏                |
+|  1 | `java.lang.Class`                                                     |     1,697 |        3.4 MB | ████████████████ |
+|  2 | `scala.concurrent.stm.ccstm.InTxnImpl`                                |        94 |        2.7 MB | ████████████▍    |
+|  3 | `java.util.zip.ZipFile$Source`                                        |        19 |        1.3 MB | ██████           |
+|  4 | `java.util.jar.JarFile`                                               |        19 |        1.1 MB | █████            |
+|  5 | `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread` |       128 |        1.0 MB | ████▊            |
+|  6 | `java.lang.String`                                                    |     9,412 |      626.9 KB | ██▊              |
+|  7 | `java.lang.Thread`                                                    |        25 |      308.5 KB | █▍               |
+|  8 | `java.net.URLClassLoader`                                             |         2 |      243.5 KB | █                |
+|  9 | `org.renaissance.scala.stm.RealityShowPhilosophers$CameraThread`      |         1 |      155.3 KB | ▋                |
+| 10 | `java.lang.Object[]`                                                  |         4 |      106.6 KB | ▍                |
+| 11 | `java.lang.invoke.MethodType`                                         |       660 |       84.0 KB | ▍                |
+| 12 | `jdk.internal.loader.ClassLoaders$AppClassLoader`                     |         1 |       65.9 KB | ▎                |
+| 13 | `scala.concurrent.stm.skel.SimpleRandom$`                             |         1 |       64.0 KB | ▎                |
+| 14 | `java.lang.Module`                                                    |        61 |       63.1 KB | ▎                |
 | 15 | `sun.security.provider.Sun`                                           |         1 |       53.7 KB | ▏                |
 | 16 | `jdk.internal.loader.ClassLoaders$PlatformClassLoader`                |         1 |       51.4 KB | ▏                |
 | 17 | `java.lang.module.ModuleDescriptor`                                   |        62 |       40.0 KB | ▏                |
@@ -5611,28 +5544,30 @@ _Retained-size spread across all 13945 top-level dominators (the biggest memory 
 - Median retained: 64 B
 - Total retained (top-level): 11.6 MB
 
-|   Size ≤ | Count | % of Dom. |                  |
-| -------: | ----: | --------: | ---------------- |
-|      1 B |   456 |      3.3% | █                |
-|      8 B |   101 |      0.7% | ▏                |
-|     16 B |   275 |      2.0% | ▌                |
-|     32 B |   850 |      6.1% | █▉               |
-|     64 B | 7,077 |     50.7% | ████████████████ |
-|    128 B | 3,741 |     26.8% | ████████▍        |
-|    256 B |   629 |      4.5% | █▍               |
-|    512 B |   317 |      2.3% | ▋                |
-|   1.0 KB |   220 |      1.6% | ▍                |
-|   2.0 KB |    53 |      0.4% | ▏                |
-|   4.0 KB |    29 |      0.2% | ▏                |
-|   8.0 KB |    20 |      0.1% | ▏                |
-|  16.0 KB |    11 |      0.1% | ▏                |
-|  32.0 KB |   140 |      1.0% | ▎                |
-|  64.0 KB |     8 |      0.1% | ▏                |
-| 128.0 KB |     6 |     <0.1% | ▏                |
-| 256.0 KB |     5 |     <0.1% | ▏                |
-| 512.0 KB |     4 |     <0.1% | ▏                |
-|   1.0 MB |     2 |     <0.1% | ▏                |
-|   4.0 MB |     1 |     <0.1% | ▏                |
+`▂▂▂▂█▄▂▂▂▂▂▂▂▂▂▂▂▂▂▂`  (0 B – 2.5 MB)
+
+|   Size ≤ | Count |                  |
+| -------: | ----: | ---------------- |
+|      1 B |   456 | █                |
+|      8 B |   101 | ▏                |
+|     16 B |   275 | ▌                |
+|     32 B |   850 | █▉               |
+|     64 B | 7,077 | ████████████████ |
+|    128 B | 3,741 | ████████▍        |
+|    256 B |   629 | █▍               |
+|    512 B |   317 | ▋                |
+|   1.0 KB |   220 | ▍                |
+|   2.0 KB |    53 | ▏                |
+|   4.0 KB |    29 | ▏                |
+|   8.0 KB |    20 | ▏                |
+|  16.0 KB |    11 | ▏                |
+|  32.0 KB |   140 | ▎                |
+|  64.0 KB |     8 | ▏                |
+| 128.0 KB |     6 | ▏                |
+| 256.0 KB |     5 | ▏                |
+| 512.0 KB |     4 | ▏                |
+|   1.0 MB |     2 | ▏                |
+|   4.0 MB |     1 | ▏                |
 
 ### Biggest Packages by Retained Heap
 
@@ -5640,31 +5575,31 @@ _Retained heap aggregated by package prefix (rows retaining <1% of the total are
 
 | Package          | Objects |  Shallow | Retained |                  |
 | ---------------- | ------: | -------: | -------: | ---------------- |
-| `scala`          |     493 |  28.7 KB |   5.3 MB | ███████▎         |
-| ├─ `concurrent`  |     381 |  27.5 KB |   2.8 MB | ███▊             |
-| │  └─ `stm`      |     378 |  27.5 KB |   2.8 MB | ███▊             |
-| │  │  └─ `ccstm` |     360 |  27.4 KB |   2.7 MB | ███▋             |
-| └─ `runtime`     |      18 |    160 B |   2.5 MB | ███▍             |
-| `java`           |  12,366 | 351.4 KB |   4.5 MB | ██████▏          |
-| ├─ `util`        |     663 |  13.4 KB |   2.5 MB | ███▍             |
-| │  ├─ `zip`      |     126 |   4.9 KB |   1.3 MB | █▊               |
-| │  └─ `jar`      |      42 |   1.7 KB |   1.1 MB | █▌               |
-| ├─ `lang`        |  11,173 | 321.4 KB |   1.4 MB | █▉               |
-| │  └─ `invoke`   |   1,177 |  42.6 KB | 233.5 KB | ▎                |
-| ├─ `net`         |      89 |   6.1 KB | 258.7 KB | ▎                |
-| └─ `time`        |     153 |   3.8 KB | 230.7 KB | ▎                |
-| │  └─ `zone`     |      11 |    208 B | 205.6 KB | ▎                |
-| `org`            |     326 |  19.9 KB |   1.2 MB | █▋               |
-| └─ `renaissance` |     326 |  19.9 KB |   1.2 MB | █▋               |
-| │  └─ `scala`    |     270 |  19.2 KB |   1.2 MB | █▋               |
-| │     └─ `stm`   |     270 |  19.2 KB |   1.2 MB | █▋               |
-| `sun`            |     268 |   6.9 KB | 465.9 KB | ▋                |
-| ├─ `util`        |      87 |   1.9 KB | 288.3 KB | ▍                |
-| │  └─ `calendar` |       5 |    176 B | 145.5 KB | ▏                |
-| └─ `security`    |      54 |   1.9 KB | 157.9 KB | ▏                |
-| `jdk`            |     347 |  10.3 KB | 170.1 KB | ▏                |
-| └─ `internal`    |     344 |  10.3 KB | 170.0 KB | ▏                |
-|    └─ `loader`   |      39 |    576 B | 124.3 KB | ▏                |
+| `scala`          |     493 |  28.7 KB |   5.3 MB | ████████████████ |
+| ├─ `concurrent`  |     381 |  27.5 KB |   2.8 MB | ████████▍        |
+| │  └─ `stm`      |     378 |  27.5 KB |   2.8 MB | ████████▍        |
+| │  │  └─ `ccstm` |     360 |  27.4 KB |   2.7 MB | ████████▏        |
+| └─ `runtime`     |      18 |    160 B |   2.5 MB | ███████▌         |
+| `java`           |  12,366 | 351.4 KB |   4.5 MB | █████████████▌   |
+| ├─ `util`        |     663 |  13.4 KB |   2.5 MB | ███████▌         |
+| │  ├─ `zip`      |     126 |   4.9 KB |   1.3 MB | ███▉             |
+| │  └─ `jar`      |      42 |   1.7 KB |   1.1 MB | ███▎             |
+| ├─ `lang`        |  11,173 | 321.4 KB |   1.4 MB | ████▎            |
+| │  └─ `invoke`   |   1,177 |  42.6 KB | 233.5 KB | ▋                |
+| ├─ `net`         |      89 |   6.1 KB | 258.7 KB | ▊                |
+| └─ `time`        |     153 |   3.8 KB | 230.7 KB | ▋                |
+| │  └─ `zone`     |      11 |    208 B | 205.6 KB | ▌                |
+| `org`            |     326 |  19.9 KB |   1.2 MB | ███▋             |
+| └─ `renaissance` |     326 |  19.9 KB |   1.2 MB | ███▋             |
+| │  └─ `scala`    |     270 |  19.2 KB |   1.2 MB | ███▋             |
+| │     └─ `stm`   |     270 |  19.2 KB |   1.2 MB | ███▋             |
+| `sun`            |     268 |   6.9 KB | 465.9 KB | █▍               |
+| ├─ `util`        |      87 |   1.9 KB | 288.3 KB | ▊                |
+| │  └─ `calendar` |       5 |    176 B | 145.5 KB | ▍                |
+| └─ `security`    |      54 |   1.9 KB | 157.9 KB | ▍                |
+| `jdk`            |     347 |  10.3 KB | 170.1 KB | ▌                |
+| └─ `internal`    |     344 |  10.3 KB | 170.0 KB | ▌                |
+|    └─ `loader`   |      39 |    576 B | 124.3 KB | ▎                |
 
 ## Dominator Analysis
 
@@ -11304,13 +11239,12 @@ _Allocation-site records are present but contain no per-frame data. To capture m
 
 _Share of the reachable heap retained by the few largest top-level dominators (a dominator's retained size is everything it keeps alive). Read it as a concentration curve: if **Top 1** is already high, one object is the leak and freeing it reclaims most of the heap; if the share only climbs as you widen to **Top 10** / **Top 100**, the leak is spread across many peers (e.g. a big cache or collection of similar objects) and no single free helps much._
 
-| Scope           | Retained Share | Retained |                  |
-| --------------- | -------------: | -------: | ---------------- |
-| Top 1 object    |          21.5% |   2.5 MB | ███▍             |
-| Top 10 objects  |          44.7% |   5.2 MB | ███████▏         |
-| Top 100 objects |          72.5% |   8.4 MB | ███████████▌     |
-
-_12 objects each hold ≥1% of the reachable heap._
+| Scope             | Retained Share |                  |
+| ----------------- | -------------: | ---------------- |
+| Top 1 object      |          21.5% | ███▍             |
+| Top 10 objects    |          44.7% | ███████▏         |
+| Top 100 objects   |          72.5% | ███████████▌     |
+| Objects each >=1% |             12 |                  |
 
 ## Dominator-Depth Distribution
 
@@ -11332,8 +11266,22 @@ _Half of all live objects sit within 3 hops of a GC root; the deepest chain is 2
 |    10 |   1,911 |      0.8% |        99.2% | ▏                |
 |    11 |     914 |      0.4% |        99.6% | ▏                |
 |    12 |     608 |      0.3% |        99.9% | ▏                |
-
-_… (+16 deeper buckets, 305 objects, 100.0% cumulative — full data in JSON)_
+|    13 |     205 |      0.1% |       100.0% | ▏                |
+|    14 |      16 |     <0.1% |       100.0% | ▏                |
+|    15 |      13 |     <0.1% |       100.0% | ▏                |
+|    16 |      10 |     <0.1% |       100.0% | ▏                |
+|    17 |      10 |     <0.1% |       100.0% | ▏                |
+|    18 |      11 |     <0.1% |       100.0% | ▏                |
+|    19 |       8 |     <0.1% |       100.0% | ▏                |
+|    20 |       5 |     <0.1% |       100.0% | ▏                |
+|    21 |       4 |     <0.1% |       100.0% | ▏                |
+|    22 |       4 |     <0.1% |       100.0% | ▏                |
+|    23 |       4 |     <0.1% |       100.0% | ▏                |
+|    24 |       4 |     <0.1% |       100.0% | ▏                |
+|    25 |       4 |     <0.1% |       100.0% | ▏                |
+|    26 |       4 |     <0.1% |       100.0% | ▏                |
+|    27 |       2 |     <0.1% |       100.0% | ▏                |
+|    28 |       1 |     <0.1% |       100.0% | ▏                |
 
 ## Leak Indicators
 

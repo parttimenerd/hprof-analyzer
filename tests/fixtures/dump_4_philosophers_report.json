@@ -1,6 +1,6 @@
 {
   "schema_version": 9,
-  "generated": "2026-07-23T10:59:09.278986000Z",
+  "generated": "2026-07-23T11:56:17.020969000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
     "file_path": "tests/fixtures/dump_4_philosophers.hprof",
@@ -65032,7 +65032,8 @@
         "shallow": 120,
         "retained": 159016,
         "pct_bp": 130,
-        "owner": null
+        "owner": null,
+        "held_via": "org.renaissance.scala.stm.RealityShowPhilosophers$#time()"
       },
       {
         "obj_index_1based": 235715,
@@ -91199,7 +91200,7 @@
       "id": "shape",
       "severity": "info",
       "title": "Shape",
-      "detail": "shallow (most objects are held within a few hops of a GC root) — 90% of objects within depth 7, max depth 28.",
+      "detail": "deep (retention flows through long dominator chains — often nested collections or linked structures) — 90% of objects within depth 7, max depth 28.",
       "anchor": "dominator-depth-distribution",
       "anchor_label": "Dominator-Depth Distribution"
     },
@@ -91207,7 +91208,7 @@
       "id": "one-leak-or-many",
       "severity": "info",
       "title": "One leak or many",
-      "detail": "the single biggest object, `scala.runtime.LazyVals$`, retains 21.5% and the top 10 retain 44.7% of reachable heap; 12 object(s) each hold >=1%.",
+      "detail": "the single biggest object, `scala.runtime.LazyVals$`, retains 21.5% and the top 10 retain 44.7% of the heap; 12 object(s) each hold >=1%.",
       "anchor": "top-consumers",
       "anchor_label": "Top Consumers"
     },
@@ -91217,16 +91218,15 @@
       "title": "Off-heap (DirectByteBuffer)",
       "detail": "134.3 MB of native memory is held by live DirectByteBuffers — not counted in heap size but can dominate RSS.",
       "anchor": "leak-indicators",
-      "anchor_label": "Leak Indicators",
-      "bytes": 140862014
+      "anchor_label": "Leak Indicators"
     },
     {
       "id": "fixed-per-object-overhead",
       "severity": "warning",
       "title": "Fixed per-object header overhead",
-      "detail": "236,457 objects × 12 B header = 2.7 MB (23.3% of reachable heap) is consumed by JVM object headers alone — consider value types, primitive arrays, or fewer wrapper objects.",
-      "anchor": "object-header-overhead",
-      "anchor_label": "Object Header Overhead"
+      "detail": "236,457 objects × 12 B header = 2.7 MB (23.3% of heap) is consumed by JVM object headers alone — consider value types, primitive arrays, or fewer wrapper objects.",
+      "anchor": "header-overhead",
+      "anchor_label": "Header Overhead"
     },
     {
       "id": "empty-collection-cemetery",
@@ -91237,16 +91237,137 @@
       "anchor_label": "Collections"
     },
     {
-      "id": "not-analyzed-collections",
+      "id": "collections-not-analyzed",
       "severity": "info",
-      "title": "Collection analysis not run",
-      "detail": "Pass `--collections` to detect over-capacity backing arrays, unbounded collections, sparse object arrays, and constant primitive arrays."
+      "title": "Collection waste not analyzed",
+      "detail": "_Collection waste not analyzed — re-run with `--collections` to check for wasted capacity._"
+    }
+  ],
+  "top_retainers": [
+    {
+      "name": "scala.concurrent.stm.ccstm.InTxnImpl#topLevelAtomicImpl()",
+      "kind": "stack-frame",
+      "retained": 3818040
     },
     {
-      "id": "not-analyzed-duplicates",
-      "severity": "info",
-      "title": "Duplicate-object analysis not run",
-      "detail": "Pass `--find-duplicates` to detect duplicate strings, duplicate primitive arrays, and boxed-number bloat."
+      "name": "scala.concurrent.stm.ccstm.InTxnImpl#topLevelAttempt()",
+      "kind": "stack-frame",
+      "retained": 3059312
+    },
+    {
+      "name": "scala.concurrent.stm.ccstm.InTxnImpl#runBlock()",
+      "kind": "stack-frame",
+      "retained": 1811192
+    },
+    {
+      "name": "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread#$anonfun$run$2()",
+      "kind": "stack-frame",
+      "retained": 1187536
+    },
+    {
+      "name": "scala.concurrent.stm.ccstm.InTxnRefOps#get()",
+      "kind": "stack-frame",
+      "retained": 1010432
+    },
+    {
+      "name": "scala.concurrent.stm.ccstm.InTxnImpl#awaitRetry()",
+      "kind": "stack-frame",
+      "retained": 742200
+    },
+    {
+      "name": "scala.concurrent.stm.ccstm.InTxnImpl#topLevelComplete()",
+      "kind": "stack-frame",
+      "retained": 653760
+    },
+    {
+      "name": "scala.concurrent.stm.ccstm.InTxnImpl#attemptTopLevelComplete()",
+      "kind": "stack-frame",
+      "retained": 537352
+    },
+    {
+      "name": "scala.concurrent.stm.ccstm.InTxnImpl#revalidateImpl()",
+      "kind": "stack-frame",
+      "retained": 356648
+    },
+    {
+      "name": "org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread#$anonfun$run$3()",
+      "kind": "stack-frame",
+      "retained": 297040
+    },
+    {
+      "name": "org.renaissance.scala.stm.RealityShowPhilosophers$#time()",
+      "kind": "stack-frame",
+      "retained": 160864
+    },
+    {
+      "name": "scala.concurrent.stm.ccstm.InTxnImpl#finishTopLevelCommit()",
+      "kind": "stack-frame",
+      "retained": 148552
+    },
+    {
+      "name": "scala.concurrent.stm.ccstm.InTxnImpl#detach()",
+      "kind": "stack-frame",
+      "retained": 118752
+    },
+    {
+      "name": "scala.concurrent.stm.ccstm.InTxnRefOps#set()",
+      "kind": "stack-frame",
+      "retained": 89232
+    },
+    {
+      "name": "scala.concurrent.stm.ccstm.InTxnRefOps#acquireOwnership()",
+      "kind": "stack-frame",
+      "retained": 89184
+    },
+    {
+      "name": "scala.concurrent.stm.ccstm.TxnSlotManager#release()",
+      "kind": "stack-frame",
+      "retained": 84800
+    },
+    {
+      "name": "scala.concurrent.stm.ccstm.InTxnImpl#topLevelBegin()",
+      "kind": "stack-frame",
+      "retained": 59488
+    },
+    {
+      "name": "scala.concurrent.stm.ccstm.InTxnImpl#commitWrites()",
+      "kind": "stack-frame",
+      "retained": 59408
+    },
+    {
+      "name": "scala.concurrent.stm.ccstm.InTxnImpl#revalidate()",
+      "kind": "stack-frame",
+      "retained": 59376
+    },
+    {
+      "name": "scala.concurrent.stm.ccstm.WakeupManager#trigger()",
+      "kind": "stack-frame",
+      "retained": 35632
+    },
+    {
+      "name": "scala.concurrent.stm.ccstm.InTxnImpl#checkRead()",
+      "kind": "stack-frame",
+      "retained": 29728
+    },
+    {
+      "name": "scala.concurrent.stm.ccstm.AccessHistory#resetAccessHistory()",
+      "kind": "stack-frame",
+      "retained": 29704
+    },
+    {
+      "name": "scala.concurrent.stm.ccstm.TxnSlotManager#assign()",
+      "kind": "stack-frame",
+      "retained": 8592
+    },
+    {
+      "name": "scala.concurrent.stm.ccstm.TxnSlotManager#beginLookup()",
+      "kind": "stack-frame",
+      "retained": 8480
+    },
+    {
+      "name": "scala.concurrent.stm.ccstm.TxnSlotManager#lookup()",
+      "kind": "stack-frame",
+      "retained": 8480
     }
   ]
 }
