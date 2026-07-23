@@ -68,21 +68,22 @@ _Reachable-heap totals and the largest classes by retained heap._
 
 ### Heap Summary
 
-| Property                         | Value                |
-| -------------------------------- | -------------------- |
-| HPROF format                     | JAVA PROFILE 1.0.2   |
-| File size                        | 20.3 MB              |
-| Identifier size                  | 64-bit               |
-| Compressed OOPs                  | yes                  |
-| Dump created                     | 2026-07-08T12:44:20Z |
-| Total objects                    | 334,875              |
-| Total reachable heap             | 11.3 MB              |
-| GC roots                         | 1,553                |
-| Classes loaded                   | 2,285                |
-| Class loaders                    | 5                    |
-| Unreachable objects (excluded)   | 3,716 (659.6 KB)     |
-| Heap fragmentation               | 5.4%                 |
-| Top-class retained concentration | 55.2%                |
+| Property                         | Value                             |
+| -------------------------------- | --------------------------------- |
+| HPROF format                     | JAVA PROFILE 1.0.2                |
+| File size                        | 20.3 MB                           |
+| Identifier size                  | 64-bit                            |
+| Compressed OOPs                  | yes                               |
+| Dump created                     | 2026-07-08T12:44:20Z              |
+| Total objects                    | 334,875                           |
+| Total reachable heap             | 11.3 MB                           |
+| Off-heap / on-heap               | 134.3 MB off-heap (11.9× on-heap) |
+| GC roots                         | 1,553                             |
+| Classes loaded                   | 2,285                             |
+| Class loaders                    | 5                                 |
+| Unreachable objects (excluded)   | 3,716 (659.6 KB)                  |
+| Heap fragmentation               | 5.4%                              |
+| Top-class retained concentration | 55.2%                             |
 
 - **Class loaders (labels):** java/net/URLClassLoader, jdk/internal/loader/ClassLoaders$AppClassLoader, jdk/internal/loader/ClassLoaders$PlatformClassLoader
 

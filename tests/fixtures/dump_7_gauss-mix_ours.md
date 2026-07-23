@@ -77,21 +77,22 @@ _Reachable-heap totals and the largest classes by retained heap._
 
 ### Heap Summary
 
-| Property                                      | Value                |
-| --------------------------------------------- | -------------------- |
-| HPROF format                                  | JAVA PROFILE 1.0.2   |
-| File size                                     | 70.0 MB              |
-| Identifier size                               | 64-bit               |
-| Compressed OOPs                               | yes                  |
-| Dump created                                  | 2026-07-08T12:46:06Z |
-| Total objects                                 | 562,385              |
-| Total reachable heap                          | 33.1 MB              |
-| GC roots                                      | 3,236                |
-| Classes loaded                                | 12,484               |
-| Class loaders                                 | 6                    |
-| Unreachable objects (excluded)                | 60,900 (4.3 MB)      |
-| Heap fragmentation (unreachable / heap total) | 11.6%                |
-| Top-class retained concentration              | 44.4%                |
+| Property                                      | Value                            |
+| --------------------------------------------- | -------------------------------- |
+| HPROF format                                  | JAVA PROFILE 1.0.2               |
+| File size                                     | 70.0 MB                          |
+| Identifier size                               | 64-bit                           |
+| Compressed OOPs                               | yes                              |
+| Dump created                                  | 2026-07-08T12:46:06Z             |
+| Total objects                                 | 562,385                          |
+| Total reachable heap                          | 33.1 MB                          |
+| Off-heap / on-heap                            | 134.4 MB off-heap (4.1× on-heap) |
+| GC roots                                      | 3,236                            |
+| Classes loaded                                | 12,484                           |
+| Class loaders                                 | 6                                |
+| Unreachable objects (excluded)                | 60,900 (4.3 MB)                  |
+| Heap fragmentation (unreachable / heap total) | 11.6%                            |
+| Top-class retained concentration              | 44.4%                            |
 
 - **Class loaders (labels):** java/net/URLClassLoader, jdk/internal/loader/ClassLoaders$AppClassLoader, jdk/internal/loader/ClassLoaders$PlatformClassLoader, sun/reflect/misc/MethodUtil, jdk/internal/reflect/DelegatingClassLoader
 

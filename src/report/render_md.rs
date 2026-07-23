@@ -253,7 +253,7 @@ pub fn render_markdown(r: &Report) -> String {
     render_executive_summary(r, &mut out);
     render_oom_triage(r, &mut out);
     render_waste_summary(r, &mut out);
-    render_system_overview(&r.overview, &mut out);
+    render_system_overview(&r.overview, r.leak_indicators.direct_byte_buffer_capacity_sum, &mut out);
     render_leak_suspects(&r.leaks, &mut out);
     render_top_consumers(&r.top, r.leaks.total_shallow, &mut out);
     render_dominator_analysis(&r.dominator_analysis, false, &mut out);
@@ -752,7 +752,7 @@ _Definitions for the terms used above._
 
 /// Render the "System Overview" section (plain Markdown): scalars, GC-roots and
 /// heap-composition breakdowns, and the full class histogram. Byte-exact-tested.
-fn render_system_overview(o: &SystemOverview, out: &mut String) {
+fn render_system_overview(o: &SystemOverview, off_heap_cap: u64, out: &mut String) {
     use crate::md::{Align, Table};
     out.push_str("## System Overview\n\n");
     out.push_str("_Reachable-heap totals and the largest classes by retained heap._\n\n");
@@ -778,6 +778,18 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
     }
     summary.row(["Total objects".into(), fmt_count(o.total_objects)]);
     summary.row([HEAP_SCALAR_LABEL.into(), format_bytes(o.total_shallow)]);
+    if off_heap_cap > 0 {
+        let ratio_str = if o.total_shallow > 0 {
+            format!(
+                "{} off-heap ({:.1}× on-heap)",
+                format_bytes(off_heap_cap),
+                off_heap_cap as f64 / o.total_shallow as f64,
+            )
+        } else {
+            format!("{} off-heap", format_bytes(off_heap_cap))
+        };
+        summary.row(["Off-heap / on-heap".into(), ratio_str]);
+    }
     summary.row(["GC roots".into(), fmt_count(o.gc_roots)]);
     summary.row(["Classes loaded".into(), fmt_count(o.classes_loaded)]);
     summary.row(["Class loaders".into(), fmt_count(o.classloaders_loaded)]);

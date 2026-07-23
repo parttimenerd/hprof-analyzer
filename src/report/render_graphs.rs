@@ -13,7 +13,7 @@ pub fn render_markdown_graphs(r: &Report) -> String {
     render_toc_graphs(r, &mut out);
     render_executive_summary(r, &mut out);
     render_oom_triage(r, &mut out);
-    render_system_overview_graphs(&r.overview, &mut out);
+    render_system_overview_graphs(&r.overview, r.leak_indicators.direct_byte_buffer_capacity_sum, &mut out);
     render_leak_suspects_graphs(&r.leaks, &mut out);
     render_top_consumers_graphs(&r.top, r.leaks.total_shallow, &mut out);
     render_dominator_analysis(&r.dominator_analysis, true, &mut out);
@@ -99,7 +99,7 @@ pub(crate) const GRAPH_BAR_WIDTH: usize = 16;
 
 /// System Overview with bar columns on GC Roots / Heap Composition, a sparkline
 /// for the dominator-depth distribution, and a share bar on the class histogram.
-fn render_system_overview_graphs(o: &SystemOverview, out: &mut String) {
+fn render_system_overview_graphs(o: &SystemOverview, off_heap_cap: u64, out: &mut String) {
     use crate::md::{Align, Table, bar};
     out.push_str("## System Overview\n\n");
     out.push_str("_Reachable-heap totals and the largest classes by retained heap._\n\n");
@@ -125,6 +125,18 @@ fn render_system_overview_graphs(o: &SystemOverview, out: &mut String) {
     }
     summary.row(["Total objects".into(), fmt_count(o.total_objects)]);
     summary.row([HEAP_SCALAR_LABEL.into(), format_bytes(o.total_shallow)]);
+    if off_heap_cap > 0 {
+        let ratio_str = if o.total_shallow > 0 {
+            format!(
+                "{} off-heap ({:.1}× on-heap)",
+                format_bytes(off_heap_cap),
+                off_heap_cap as f64 / o.total_shallow as f64,
+            )
+        } else {
+            format!("{} off-heap", format_bytes(off_heap_cap))
+        };
+        summary.row(["Off-heap / on-heap".into(), ratio_str]);
+    }
     summary.row(["GC roots".into(), fmt_count(o.gc_roots)]);
     summary.row(["Classes loaded".into(), fmt_count(o.classes_loaded)]);
     summary.row(["Class loaders".into(), fmt_count(o.classloaders_loaded)]);
