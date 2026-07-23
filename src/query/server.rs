@@ -3,7 +3,6 @@
 //! GET /help returns the language reference. Loopback-only, sync tiny_http.
 
 use std::io;
-use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 

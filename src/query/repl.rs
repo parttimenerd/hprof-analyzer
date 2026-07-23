@@ -49,18 +49,11 @@ enum Ctx {
 }
 
 /// Test-facing wrapper: classify from `before`+`frag` as if `before` starts at
-/// byte 0 of the line. Only used in tests; production uses `classify_at` directly.
+/// byte 0 of the line. Only used in tests; production uses
+/// `classify_at_with_full` directly.
 #[cfg(test)]
 fn classify(before: &str, frag: &str) -> Ctx {
-    classify_at(before, frag, before.len())
-}
-
-/// Inner classify: `line_offset` is the byte position of `before[0]` within the
-/// full input line, used to compute the absolute `seg_start` for `FieldName`.
-/// `full_line` (if supplied) is used to extract the receiver class from the FROM
-/// clause even when the cursor is positioned before the FROM keyword.
-fn classify_at(before: &str, frag: &str, line_offset: usize) -> Ctx {
-    classify_at_with_full(before, frag, line_offset, None)
+    classify_at_with_full(before, frag, before.len(), None)
 }
 
 /// Internal classify variant that accepts the full line for receiver-class extraction.
