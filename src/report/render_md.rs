@@ -1103,7 +1103,11 @@ fn render_leak_suspects(l: &LeakSuspects, out: &mut String) {
 
     out.push_str(
         "_Objects and class groups retaining the most heap, ranked by retained size. \
-These are the most likely accumulation points for excessive memory usage._\n\n",
+These are the most likely accumulation points for excessive memory usage. \
+To fix: follow the dominator chain to the nearest object you control, \
+and drop or null out the reference that keeps it alive. The path to GC root \
+is shown for each suspect below — the tool cannot yet name the specific field; \
+that requires field-labeled reference paths._\n\n",
     );
 
     for (rank, s) in l.suspects.iter().enumerate() {
@@ -3318,7 +3322,8 @@ fn render_merged_paths_plain(root: &MergedPathNode, out: &mut String) {
 pub(crate) fn render_alloc_sites(a: &AllocSites, graphs: bool, out: &mut String) {
     out.push_str("## Allocation Sites\n\n");
     out.push_str(
-        "_Objects grouped by the stack trace that allocated them. \
+        "_Objects grouped by the stack trace that allocated them — each site is a candidate \
+to allocate less by pooling, caching, or deferring construction. \
 Shallow heap is additive; retained heap is not shown because summing per-object retained \
 values over-counts shared subgraphs (a subtree retained by multiple sites is counted once \
 per allocator, not once total)._\n\n",
@@ -3520,8 +3525,11 @@ pub(crate) fn render_header_overhead(
     }
     out.push_str("### Object Header Overhead\n\n");
     out.push_str(
-        "_Classes where object headers consume a large share of shallow heap \
-         (candidates for value-type / record optimisation)._\n\n",
+        "_Classes where object headers consume a large share of shallow heap. \
+         The practical action is to reduce object *count*: merge small objects, \
+         use primitive arrays instead of boxed wrappers, or replace fine-grained \
+         instances with a flat array of fields. Value types (Project Valhalla) \
+         eliminate headers entirely but are not yet generally available._\n\n",
     );
     let mut t = Table::new(
         &[
