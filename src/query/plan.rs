@@ -821,6 +821,29 @@ pub(crate) fn pred_uses_tostring(p: &Predicate) -> bool {
     }
 }
 
+/// True if any comparison in the predicate tree references an N-hop `RefPath`
+/// (e.g. `s.value.@length` or `t.name.value.@length`). Such predicates cannot
+/// be evaluated during the pass2 scan: the forward-reference graph is walked
+/// only in the post-scan late window (`RefWalkResolve` → `refpath_rows`), so at
+/// scan time a `RefPath` attr projects `Null` and any comparison against it
+/// (`Null > 0`) is false — which would drop EVERY carried row before the late
+/// predicate-critical filter could run. A carry-mode scan must therefore SKIP
+/// these terms and defer them to `refpath_rows`, exactly as it defers
+/// `@retainedHeapSize` and String `toString` terms.
+pub(crate) fn pred_uses_refpath(p: &Predicate) -> bool {
+    match p {
+        Predicate::And(a, b) | Predicate::Or(a, b) => {
+            pred_uses_refpath(a) || pred_uses_refpath(b)
+        }
+        Predicate::Not(a) => pred_uses_refpath(a),
+        Predicate::Compare { lhs, rhs, .. } => {
+            expr_any_attr(lhs, |a| matches!(a, Attr::RefPath { .. }))
+                || expr_any_attr(rhs, |a| matches!(a, Attr::RefPath { .. }))
+        }
+        _ => false,
+    }
+}
+
 /// The maximum RefPath hop count across every `Attr::RefPath` reachable in a
 /// SELECT projection (following aggregate arguments). `0` if none.
 fn select_refpath_hops(it: &SelectItem) -> usize {

@@ -922,6 +922,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             // time, so it IS known here and must be evaluated (not deferred).
             if self.carry.is_some()
                 && (crate::query::plan::pred_uses_retained(&term.pred)
+                    || crate::query::plan::pred_uses_refpath(&term.pred)
                     || (self.from_is_string()
                         && crate::query::plan::pred_uses_tostring(&term.pred)))
             {
@@ -1013,6 +1014,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             // mode. A non-String toString is scan-time-known, so it is NOT skipped.
             if self.carry.is_some()
                 && (crate::query::plan::pred_uses_retained(&term.pred)
+                    || crate::query::plan::pred_uses_refpath(&term.pred)
                     || (self.from_is_string()
                         && crate::query::plan::pred_uses_tostring(&term.pred)))
             {

@@ -1235,12 +1235,92 @@ fn refpath_length_tail_filters_in_where() {
         !out.contains("error:") && !out.to_lowercase().contains("the full analysis pipeline"),
         "WHERE @length tail query should resolve:\n{out}"
     );
+    // The filter must actually match rows — an empty result would let the
+    // per-row assertion below pass vacuously (the original bug's symptom).
+    assert!(
+        parse_row_count(&out) > 0,
+        "WHERE s.value.@length > 4 must match Strings, got 0 rows:\n{out}"
+    );
     // Every numeric projected length must be > 4 (the predicate).
     for l in out.lines() {
         if let Ok(n) = l.trim().parse::<u64>() {
             assert!(n > 4, "row length {n} violates WHERE @length > 4:\n{out}");
         }
     }
+}
+
+/// Regression for the WHERE-side `@length` tail bug: a predicate-critical
+/// `@length` RefPath tail (`WHERE s.value.@length > N`) must actually filter
+/// rows, not silently match nothing. The bug was that the scan-time WHERE
+/// evaluator saw the RefPath project `Null` (the ref graph is walked only in the
+/// post-scan late window) and dropped EVERY carried row before `refpath_rows`
+/// could apply the real filter — so the query returned `(0 rows)`. The fix
+/// defers RefPath WHERE terms to the late predicate-critical filter (mirroring
+/// how `@retainedHeapSize`/`toString` terms are deferred).
+///
+/// `SELECT s` (not the length) proves the bug is in the *predicate* path, not
+/// projection: this query has no `@length` in SELECT at all.
+#[test]
+fn refpath_length_tail_in_where_filters() {
+    let Some(hprof) = philosophers() else { return };
+    // `> 0` must match many Strings (SELECT-side proves lengths of 15/20/32 exist).
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT s FROM java.lang.String s WHERE s.value.@length > 0 LIMIT 5",
+    );
+    assert!(
+        !out.contains("error:") && !out.to_lowercase().contains("the full analysis pipeline"),
+        "WHERE @length > 0 query should resolve:\n{out}"
+    );
+    let matched = parse_row_count(&out);
+    assert!(
+        matched > 0,
+        "WHERE s.value.@length > 0 must match Strings, got 0 rows:\n{out}"
+    );
+    // An unreachably high threshold must discriminate down to zero — proving the
+    // comparison is real, not a match-everything short-circuit.
+    let out_hi = run_query_stdout(
+        &hprof,
+        "SELECT s FROM java.lang.String s WHERE s.value.@length > 1000000 LIMIT 5",
+    );
+    assert_eq!(
+        parse_row_count(&out_hi),
+        0,
+        "WHERE s.value.@length > 1000000 must match nothing:\n{out_hi}"
+    );
+}
+
+/// A `@length` tail used ONLY in WHERE (never projected in SELECT) must still
+/// arm the scan-time length capture and filter correctly. Guards against a
+/// regression where capture arming depended on SELECT presence. We prove the
+/// filter discriminates by comparing the count at a low threshold against a
+/// high one: the high threshold must return strictly fewer rows.
+#[test]
+fn refpath_length_tail_where_only_arms_capture() {
+    let Some(hprof) = philosophers() else { return };
+    let low = run_query_stdout(
+        &hprof,
+        "SELECT s FROM java.lang.String s WHERE s.value.@length > 0",
+    );
+    let high = run_query_stdout(
+        &hprof,
+        "SELECT s FROM java.lang.String s WHERE s.value.@length > 20",
+    );
+    assert!(
+        !low.contains("error:") && !high.contains("error:"),
+        "WHERE-only @length queries should resolve:\nlow:\n{low}\nhigh:\n{high}"
+    );
+    let low_n = parse_row_count(&low);
+    let high_n = parse_row_count(&high);
+    assert!(
+        low_n > 0,
+        "WHERE-only @length > 0 must match (capture must arm without SELECT):\n{low}"
+    );
+    assert!(
+        high_n < low_n,
+        "a higher @length threshold must match fewer rows ({high_n} !< {low_n}); \
+         capture/filter is not discriminating:\nlow:\n{low}\nhigh:\n{high}"
+    );
 }
 
 /// A query referencing a field that does not exist on the (exact) FROM class is
