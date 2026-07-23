@@ -16,7 +16,7 @@ use reedline::{
 };
 
 use crate::query::model::{QueryResult, QueryValue};
-use crate::query::parse::{AGG_FUNCS, ATTRIBUTES, FUNCS, KEYWORDS, RESERVED};
+use crate::query::parse::{AGG_FUNCS, ATTRIBUTES, FUNCS, KEYWORDS, METHODS, RESERVED};
 
 /// Grammatical context of the cursor, driving which candidate set the completer
 /// offers. Determined by a lightweight word-scan (not the full parser) so that
@@ -34,6 +34,13 @@ enum Ctx {
     /// reconstruct the full replacement value); `seg_start` is the byte offset in
     /// the original line where the segment after the last dot begins.
     FieldName { dot_prefix: String, seg_start: usize },
+    /// After `<alias>.` when the token is a single-hop (exactly one dot, alias is
+    /// the immediate token before the dot). Offers method names first (with
+    /// class-aware priority when `receiver_class` is known), then field names, so
+    /// completion is a superset of the old FieldName case. Multi-hop paths
+    /// (`x.parent.`) keep `FieldName` because type inference through hops is out of
+    /// scope.
+    Method { dot_prefix: String, seg_start: usize, receiver_class: Option<String> },
     /// After the literal word `AS` (in the select list): offer `RETAINED`.
     AfterAs,
     /// After `AS RETAINED`: offer `SET`.
@@ -49,7 +56,19 @@ fn classify(before: &str, frag: &str) -> Ctx {
 
 /// Inner classify: `line_offset` is the byte position of `before[0]` within the
 /// full input line, used to compute the absolute `seg_start` for `FieldName`.
+/// `full_line` (if supplied) is used to extract the receiver class from the FROM
+/// clause even when the cursor is positioned before the FROM keyword.
 fn classify_at(before: &str, frag: &str, line_offset: usize) -> Ctx {
+    classify_at_with_full(before, frag, line_offset, None)
+}
+
+/// Internal classify variant that accepts the full line for receiver-class extraction.
+fn classify_at_with_full(
+    before: &str,
+    frag: &str,
+    line_offset: usize,
+    full_line: Option<&str>,
+) -> Ctx {
     // First compute the non-dot context so we can tell whether dots are field
     // separators (Attr position) or part of a class name (ClassName position).
     let base_ctx = classify_base(before, frag);
@@ -61,6 +80,27 @@ fn classify_at(before: &str, frag: &str, line_offset: usize) -> Ctx {
         if let Some(dot_pos) = frag.rfind('.') {
             let dot_prefix = frag[..=dot_pos].to_string();
             let seg_start = line_offset + dot_pos + 1;
+            // Single-hop detection: exactly one dot in frag.
+            // e.g. frag="s.foo" → single-hop; frag="x.parent.foo" → multi-hop → FieldName.
+            let dot_count = frag.chars().filter(|&c| c == '.').count();
+            if dot_count == 1 {
+                let alias = &frag[..dot_pos];
+                if !alias.is_empty() && !alias.contains('.') {
+                    let text_for_from = full_line.unwrap_or_else(|| {
+                        // Best effort: before + frag (covers FROM clauses before cursor).
+                        // NOTE: static lifetime needed; we leak a small string in tests.
+                        // In production, full_line is always provided by complete().
+                        ""
+                    });
+                    let receiver_class = if text_for_from.is_empty() {
+                        // Fallback: search before+frag only.
+                        extract_receiver_class(before, frag, alias)
+                    } else {
+                        extract_receiver_class_from_full(text_for_from, alias)
+                    };
+                    return Ctx::Method { dot_prefix, seg_start, receiver_class };
+                }
+            }
             return Ctx::FieldName { dot_prefix, seg_start };
         }
         // Dot at the end of `before` means the delimiter scan consumed it.
@@ -70,11 +110,117 @@ fn classify_at(before: &str, frag: &str, line_offset: usize) -> Ctx {
                 .map(|i| i + 1)
                 .unwrap_or(0);
             let dot_prefix = before[token_start..].to_string();
-            // seg_start is right after the dot, i.e. line_offset + before.len()
+            let seg_start = line_offset + before.len();
+            // Single-hop: dot_prefix is "alias." (no interior dot before the final one).
+            let prefix_without_dot = dot_prefix.trim_end_matches('.');
+            let inner_dot_count = prefix_without_dot.chars().filter(|&c| c == '.').count();
+            if inner_dot_count == 0 && !prefix_without_dot.is_empty() {
+                let alias = prefix_without_dot;
+                let text_for_from = full_line.unwrap_or(before);
+                let receiver_class = extract_receiver_class_from_full(text_for_from, alias);
+                return Ctx::Method { dot_prefix, seg_start, receiver_class };
+            }
             return Ctx::FieldName { dot_prefix, seg_start: line_offset + before.len() };
         }
     }
     base_ctx
+}
+
+/// Lightweight scan of the partial input text to extract the class associated with
+/// `alias` from a `FROM <class> <alias>` or `FROM OBJECTS <class> <alias>` clause.
+/// `before` is the text before the current delimiter; `frag` is the current fragment
+/// (containing the alias and dot). Returns `Some(class_name)` when found.
+///
+/// This is intentionally simple and robust to incomplete input: it does a
+/// case-insensitive word search without invoking the full parser.
+fn extract_receiver_class(before: &str, frag: &str, alias: &str) -> Option<String> {
+    // Reconstruct the full line text visible so far (before + frag).
+    let full = format!("{before}{frag}");
+    extract_receiver_class_from_full(&full, alias)
+}
+
+/// Same as `extract_receiver_class` but operates on the full line text directly.
+fn extract_receiver_class_from_full(full: &str, alias: &str) -> Option<String> {
+    // Collect all whitespace-split tokens.
+    let tokens: Vec<&str> = full.split_whitespace().collect();
+    // Find `FROM` (case-insensitive).
+    let from_pos = tokens.iter().position(|t| t.eq_ignore_ascii_case("FROM"))?;
+    // Tokens after FROM: skip optional `OBJECTS`.
+    let after_from = &tokens[from_pos + 1..];
+    let (class_token, alias_token) = if after_from.first()?.eq_ignore_ascii_case("OBJECTS") {
+        // FROM OBJECTS <class> <alias>
+        (after_from.get(1)?, after_from.get(2)?)
+    } else {
+        // FROM <class> <alias>
+        (after_from.first()?, after_from.get(1)?)
+    };
+    // The alias must match (case-sensitive, as OQL identifiers are case-sensitive).
+    if *alias_token == alias {
+        Some(class_token.replace('/', "."))
+    } else {
+        None
+    }
+}
+
+/// Given a resolved `receiver_class` (or `None`), return the ordered list of
+/// method names to offer: class-relevant methods first (a stable partition of
+/// `METHODS`), then the rest. All names are still drawn from `parse::METHODS` so
+/// the universe never drifts from the dispatcher.
+fn methods_ordered_for_class(receiver_class: Option<&str>) -> Vec<&'static str> {
+    let priority: &[&str] = match receiver_class {
+        Some(cls) => {
+            let cls_lower = cls.to_ascii_lowercase();
+            if cls_lower.ends_with("integer") {
+                &["intValue", "longValue"]
+            } else if cls_lower.ends_with("long") {
+                &["longValue", "intValue"]
+            } else if cls_lower.ends_with("short") {
+                &["shortValue", "intValue"]
+            } else if cls_lower.ends_with("byte") {
+                &["byteValue", "intValue"]
+            } else if cls_lower.ends_with("float") {
+                &["floatValue", "doubleValue"]
+            } else if cls_lower.ends_with("double") {
+                &["doubleValue", "floatValue"]
+            } else if cls_lower.ends_with("boolean") {
+                &["booleanValue"]
+            } else if cls_lower.ends_with("character") {
+                &["charValue"]
+            } else if cls_lower.ends_with("string") {
+                &["length", "contains"]
+            } else if cls_lower.contains("list")
+                || cls_lower.ends_with("arraylist")
+                || cls_lower.ends_with("vector")
+                || cls_lower.ends_with("linkedlist")
+            {
+                &["size"]
+            } else if cls_lower.contains("map")
+                || cls_lower.ends_with("hashmap")
+                || cls_lower.ends_with("hashtable")
+            {
+                &["size", "getKey", "getValue"]
+            } else if cls_lower.contains("set")
+                || cls_lower.ends_with("hashset")
+            {
+                &["size"]
+            } else {
+                &[]
+            }
+        }
+        None => &[],
+    };
+    // Stable partition: priority methods first, then the rest, all from METHODS.
+    let mut result: Vec<&'static str> = priority
+        .iter()
+        .filter(|m| METHODS.contains(m))
+        .copied()
+        .collect();
+    for m in METHODS.iter() {
+        if !result.contains(m) {
+            result.push(m);
+        }
+    }
+    result
 }
 
 /// Core classification ignoring dotted-path logic. Returns one of the simple
@@ -285,7 +431,7 @@ impl Completer for OqlCompleter {
             .unwrap_or(0);
         let frag = &upto[delim_pos..];
         let before = &upto[..delim_pos];
-        let ctx = classify_at(before, frag, delim_pos);
+        let ctx = classify_at_with_full(before, frag, delim_pos, Some(line));
         let lower = frag.to_ascii_lowercase();
 
         match ctx {
@@ -337,6 +483,39 @@ impl Completer for OqlCompleter {
                         append_whitespace: true,
                     })
                     .collect()
+            }
+            Ctx::Method { dot_prefix, seg_start, receiver_class } => {
+                // Segment after the dot is the partial method/field name being typed.
+                let seg = if seg_start <= pos { &line[seg_start..pos] } else { "" };
+                let seg_lower = seg.to_ascii_lowercase();
+                // Offer methods (class-aware ordering) then field names. Both are
+                // prefixed by dot_prefix so the full replacement value is correct.
+                let ordered_methods = methods_ordered_for_class(receiver_class.as_deref());
+                let method_suggestions: Vec<Suggestion> = ordered_methods
+                    .into_iter()
+                    .filter(|m| m.to_ascii_lowercase().starts_with(&seg_lower))
+                    .map(|m| Suggestion {
+                        value: format!("{dot_prefix}{m}"),
+                        description: None,
+                        style: None,
+                        extra: None,
+                        span: Span { start: delim_pos, end: pos },
+                        append_whitespace: true,
+                    })
+                    .collect();
+                let field_suggestions: Vec<Suggestion> = self.field_names
+                    .iter()
+                    .filter(|f| f.to_ascii_lowercase().starts_with(&seg_lower))
+                    .map(|f| Suggestion {
+                        value: format!("{dot_prefix}{f}"),
+                        description: None,
+                        style: None,
+                        extra: None,
+                        span: Span { start: delim_pos, end: pos },
+                        append_whitespace: true,
+                    })
+                    .collect();
+                method_suggestions.into_iter().chain(field_suggestions).collect()
             }
             Ctx::AfterAs => {
                 // After `AS` in the select list, only `RETAINED` is useful.
@@ -1003,21 +1182,22 @@ mod tests {
     // --- Gap 1: dotted reference-path field completion ---
 
     #[test]
-    fn classify_dot_after_alias_is_field_name() {
-        // `SELECT s.` — base context is Attr, dot triggers FieldName.
+    fn classify_dot_after_alias_is_method() {
+        // `SELECT s.` — base context is Attr, single-hop dot triggers Method
+        // (superset of old FieldName: methods + fields offered).
         let ctx = classify("SELECT ", "s.");
         assert!(
-            matches!(ctx, Ctx::FieldName { ref dot_prefix, .. } if dot_prefix == "s."),
+            matches!(ctx, Ctx::Method { ref dot_prefix, .. } if dot_prefix == "s."),
             "got {ctx:?}"
         );
     }
 
     #[test]
-    fn classify_dot_before_is_field_name_empty_frag() {
-        // `SELECT s.` with the dot at the end of `before`, frag empty.
+    fn classify_dot_before_is_method_empty_frag() {
+        // `SELECT s.` with the dot at the end of `before`, frag empty → single-hop → Method.
         let ctx = classify("SELECT s.", "");
         assert!(
-            matches!(ctx, Ctx::FieldName { ref dot_prefix, .. } if dot_prefix == "s."),
+            matches!(ctx, Ctx::Method { ref dot_prefix, .. } if dot_prefix == "s."),
             "got {ctx:?}"
         );
     }
@@ -1060,13 +1240,21 @@ mod tests {
     #[test]
     fn field_completion_span_replaces_from_token_start() {
         // Span must start at the token start (after the space), not at seg_start.
+        // Now that single-hop triggers Ctx::Method (superset), methods come before
+        // fields, so s[0] is a method suggestion. All suggestions must still have
+        // the correct span. We find `s.name` specifically and check its span.
         let mut c = completer_with_fields(&[], &["name"]);
         let s = c.complete("SELECT s.", 9);
         assert!(!s.is_empty(), "expected suggestions");
         // `SELECT ` is 7 chars; `s.` token starts at offset 7.
-        assert_eq!(s[0].span.start, 7, "span start: {:?}", s[0].span);
-        assert_eq!(s[0].span.end, 9, "span end: {:?}", s[0].span);
-        assert_eq!(s[0].value, "s.name");
+        assert!(
+            s.iter().all(|sg| sg.span.start == 7 && sg.span.end == 9),
+            "all spans must be [7,9): {:?}",
+            s.iter().map(|sg| sg.span).collect::<Vec<_>>()
+        );
+        // s.name (the field) must still be offered.
+        let v = values(&s);
+        assert!(v.contains(&"s.name".to_string()), "s.name must be offered: {v:?}");
     }
 
     #[test]
@@ -1358,5 +1546,283 @@ mod tests {
         let v = values(&c.complete(line, line.len()));
         assert!(v.contains(&"java.lang.String".to_string()), "got {v:?}");
         assert!(!v.contains(&"histogram".to_string()), "must not leak kinds: {v:?}");
+    }
+
+    // ===== Wave H: Ctx::Method completion tests =====
+
+    // --- Source-of-truth assertions for parse consts ---
+
+    #[test]
+    fn parse_methods_contains_intvalue_not_get() {
+        // Single source-of-truth: METHODS must include intValue (Integer dispatch)
+        // and must NOT include get (intentionally excluded per NOTE comment).
+        use crate::query::parse::METHODS;
+        assert!(
+            METHODS.contains(&"intValue"),
+            "parse::METHODS must contain 'intValue'"
+        );
+        assert!(
+            !METHODS.contains(&"get"),
+            "parse::METHODS must NOT contain 'get' (see NOTE comment in parse.rs)"
+        );
+    }
+
+    #[test]
+    fn parse_funcs_contains_tohex() {
+        // toHex must be in FUNCS so it auto-completes in Attr position.
+        use crate::query::parse::FUNCS;
+        assert!(
+            FUNCS.contains(&"toHex"),
+            "parse::FUNCS must contain 'toHex'"
+        );
+    }
+
+    #[test]
+    fn parse_attributes_contains_new_gc_attrs() {
+        // @GCRoots, @GCRootInfo, @info, @valueArray, @referenceArray must be in
+        // ATTRIBUTES so they auto-complete for free in Attr position.
+        use crate::query::parse::ATTRIBUTES;
+        for attr in ["@GCRoots", "@GCRootInfo", "@info", "@valueArray", "@referenceArray"] {
+            assert!(
+                ATTRIBUTES.contains(&attr),
+                "parse::ATTRIBUTES must contain '{attr}'"
+            );
+        }
+    }
+
+    // --- Free-completion regression tests for new attrs and toHex ---
+
+    #[test]
+    fn attr_completes_tohex() {
+        // toHex lives in FUNCS and must be offered in Attr position.
+        let mut c = completer(&[]);
+        let v = values(&c.complete("SELECT toH", 10));
+        assert!(v.contains(&"toHex".to_string()), "got {v:?}");
+    }
+
+    #[test]
+    fn attr_completes_gcroots() {
+        let mut c = completer(&[]);
+        let v = values(&c.complete("SELECT @GC", 10));
+        assert!(v.contains(&"@GCRoots".to_string()), "got {v:?}");
+        assert!(v.contains(&"@GCRootInfo".to_string()), "got {v:?}");
+    }
+
+    #[test]
+    fn attr_completes_valuearray_and_referencearray() {
+        let mut c = completer(&[]);
+        let v = values(&c.complete("SELECT @v", 9));
+        assert!(v.contains(&"@valueArray".to_string()), "got {v:?}");
+        let v2 = values(&c.complete("SELECT @r", 9));
+        assert!(v2.contains(&"@referenceArray".to_string()), "got {v2:?}");
+    }
+
+    #[test]
+    fn attr_completes_info() {
+        let mut c = completer(&[]);
+        let v = values(&c.complete("SELECT @inf", 11));
+        assert!(v.contains(&"@info".to_string()), "got {v:?}");
+    }
+
+    // --- Ctx::Method variant classify tests ---
+
+    #[test]
+    fn classify_single_hop_dot_with_known_alias_is_method() {
+        // When cursor is after `i.` at pos 9 in a line that has `FROM java.lang.Integer i`,
+        // `complete()` passes the full line to classify_at_with_full, which finds the FROM
+        // clause and resolves the receiver class.
+        // We verify via complete(): intValue must appear (class-aware ordering for Integer).
+        let mut c = completer_with_fields(&["java.lang.Integer"], &[]);
+        let line = "SELECT i. FROM java.lang.Integer i WHERE @size > 0";
+        let v = values(&c.complete(line, 9));
+        // intValue must be in the suggestions (proves Method ctx was used, not just Attr).
+        assert!(v.contains(&"i.intValue".to_string()), "intValue missing: {v:?}");
+        // And intValue must come before getName (class-aware priority).
+        let pos_int = v.iter().position(|x| x == "i.intValue").unwrap();
+        let pos_name = v.iter().position(|x| x == "i.getName").unwrap();
+        assert!(pos_int < pos_name, "intValue must precede getName for Integer: {v:?}");
+    }
+
+    #[test]
+    fn classify_single_hop_dot_without_from_clause_is_method_unknown_receiver() {
+        // Without a FROM clause we can't resolve the receiver → Ctx::Method { receiver_class: None }.
+        let ctx = classify("SELECT s.", "");
+        assert!(
+            matches!(ctx, Ctx::Method { receiver_class: None, .. }),
+            "expected Ctx::Method {{ receiver_class: None }}, got {ctx:?}"
+        );
+    }
+
+    #[test]
+    fn classify_multihop_dot_is_still_field_name() {
+        // Multi-hop paths keep Ctx::FieldName (no type inference through hops).
+        let ctx = classify("SELECT x.parent.", "");
+        assert!(
+            matches!(ctx, Ctx::FieldName { .. }),
+            "expected Ctx::FieldName for multi-hop, got {ctx:?}"
+        );
+    }
+
+    #[test]
+    fn classify_multihop_with_frag_is_still_field_name() {
+        let ctx = classify("SELECT ", "x.parent.na");
+        assert!(
+            matches!(ctx, Ctx::FieldName { .. }),
+            "expected Ctx::FieldName for multi-hop, got {ctx:?}"
+        );
+    }
+
+    // --- Method completer output tests ---
+
+    #[test]
+    fn method_completion_offers_all_methods_no_receiver() {
+        // Without a FROM alias, all of METHODS must be offered.
+        use crate::query::parse::METHODS;
+        let mut c = completer_with_fields(&[], &["name"]);
+        let v = values(&c.complete("SELECT s.", 9));
+        for m in METHODS.iter() {
+            assert!(v.contains(&format!("s.{m}")), "missing method s.{m} in {v:?}");
+        }
+    }
+
+    #[test]
+    fn method_completion_also_offers_field_names() {
+        // Ctx::Method must also offer field names (superset of old FieldName).
+        let mut c = completer_with_fields(&[], &["name", "parent", "value"]);
+        let v = values(&c.complete("SELECT s.", 9));
+        assert!(v.contains(&"s.name".to_string()), "field 'name' missing: {v:?}");
+        assert!(v.contains(&"s.parent".to_string()), "field 'parent' missing: {v:?}");
+        assert!(v.contains(&"s.value".to_string()), "field 'value' missing: {v:?}");
+    }
+
+    #[test]
+    fn method_completion_does_not_offer_at_attributes() {
+        // @-attributes must NOT appear in method/field completion.
+        let mut c = completer_with_fields(&[], &["name"]);
+        let v = values(&c.complete("SELECT s.", 9));
+        assert!(
+            v.iter().all(|x| !x.starts_with('@')),
+            "@-attributes must not appear after dot: {v:?}"
+        );
+    }
+
+    #[test]
+    fn method_completion_prefix_filters() {
+        // Fragment after the dot filters results.
+        let mut c = completer_with_fields(&[], &["name", "num"]);
+        let v = values(&c.complete("SELECT s.si", 11));
+        assert!(v.contains(&"s.size".to_string()), "expected s.size: {v:?}");
+        assert!(!v.contains(&"s.intValue".to_string()), "'intValue' must not match 'si': {v:?}");
+    }
+
+    #[test]
+    fn method_completion_class_aware_integer_intvalue_first() {
+        // For java.lang.Integer receiver, intValue must appear BEFORE getName.
+        let mut c = completer_with_fields(&["java.lang.Integer"], &[]);
+        let line = "SELECT i. FROM java.lang.Integer i WHERE ";
+        let v = values(&c.complete(line, 9));
+        let pos_int = v.iter().position(|x| x == "i.intValue");
+        let pos_name = v.iter().position(|x| x == "i.getName");
+        assert!(pos_int.is_some(), "intValue missing: {v:?}");
+        assert!(pos_name.is_some(), "getName missing: {v:?}");
+        assert!(
+            pos_int.unwrap() < pos_name.unwrap(),
+            "intValue ({pos_int:?}) should come before getName ({pos_name:?}) for Integer: {v:?}"
+        );
+    }
+
+    #[test]
+    fn method_completion_class_aware_arraylist_size_first_no_get() {
+        // For java.util.ArrayList receiver, size must appear early; get must be ABSENT.
+        let mut c = completer_with_fields(&["java.util.ArrayList"], &[]);
+        let line = "SELECT a. FROM java.util.ArrayList a WHERE ";
+        let v = values(&c.complete(line, 9));
+        assert!(v.contains(&"a.size".to_string()), "size missing for ArrayList: {v:?}");
+        assert!(
+            !v.contains(&"a.get".to_string()),
+            "get must NOT be offered (not in METHODS): {v:?}"
+        );
+        // size must come before, say, getName (a non-list-priority method).
+        let pos_size = v.iter().position(|x| x == "a.size").unwrap();
+        let pos_name = v.iter().position(|x| x == "a.getName");
+        if let Some(pos_name) = pos_name {
+            assert!(
+                pos_size < pos_name,
+                "size should be prioritized before getName for ArrayList: {v:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn method_completion_class_aware_hashmap_size_getkey_getvalue_first() {
+        // For java.util.HashMap, size/getKey/getValue come before other methods.
+        let mut c = completer_with_fields(&["java.util.HashMap"], &[]);
+        let line = "SELECT m. FROM java.util.HashMap m WHERE ";
+        let v = values(&c.complete(line, 9));
+        for method in ["m.size", "m.getKey", "m.getValue"] {
+            assert!(v.contains(&method.to_string()), "{method} missing for HashMap: {v:?}");
+        }
+        assert!(!v.contains(&"m.get".to_string()), "get must NOT be in results: {v:?}");
+        let pos_size = v.iter().position(|x| x == "m.size").unwrap();
+        let pos_name = v.iter().position(|x| x == "m.getName").unwrap_or(usize::MAX);
+        assert!(pos_size < pos_name, "size should be before getName for HashMap: {v:?}");
+    }
+
+    #[test]
+    fn method_completion_class_aware_double_doublevalue_first() {
+        // For java.lang.Double, doubleValue must appear before getName.
+        let mut c = completer_with_fields(&["java.lang.Double"], &[]);
+        let line = "SELECT d. FROM java.lang.Double d WHERE ";
+        let v = values(&c.complete(line, 9));
+        let pos_dv = v.iter().position(|x| x == "d.doubleValue");
+        let pos_name = v.iter().position(|x| x == "d.getName");
+        assert!(pos_dv.is_some(), "doubleValue missing: {v:?}");
+        assert!(
+            pos_dv.unwrap() < pos_name.unwrap_or(usize::MAX),
+            "doubleValue should come before getName for Double: {v:?}"
+        );
+    }
+
+    #[test]
+    fn method_completion_class_aware_string_length_contains_first() {
+        // For java.lang.String, length/contains must appear before getName.
+        let mut c = completer_with_fields(&["java.lang.String"], &[]);
+        let line = "SELECT s. FROM java.lang.String s WHERE ";
+        let v = values(&c.complete(line, 9));
+        let pos_len = v.iter().position(|x| x == "s.length");
+        let pos_cont = v.iter().position(|x| x == "s.contains");
+        let pos_name = v.iter().position(|x| x == "s.getName").unwrap_or(usize::MAX);
+        assert!(pos_len.is_some(), "length missing for String: {v:?}");
+        assert!(pos_cont.is_some(), "contains missing for String: {v:?}");
+        assert!(
+            pos_len.unwrap() < pos_name,
+            "length should be before getName for String: {v:?}"
+        );
+    }
+
+    #[test]
+    fn method_completion_unknown_receiver_offers_full_methods_and_fields() {
+        // Unknown/None receiver → full METHODS offered, all accessible.
+        use crate::query::parse::METHODS;
+        let mut c = completer_with_fields(&[], &["name"]);
+        // No FROM clause: receiver_class = None.
+        let v = values(&c.complete("SELECT s.", 9));
+        for m in METHODS.iter() {
+            assert!(v.contains(&format!("s.{m}")), "method {m} missing (unknown receiver): {v:?}");
+        }
+        // getName is in METHODS and must appear.
+        assert!(v.contains(&"s.getName".to_string()), "getName must be offered: {v:?}");
+    }
+
+    #[test]
+    fn method_completion_span_replaces_whole_token() {
+        // Span must start at the token start (after the space) to replace the full
+        // dotted token, not just the segment after the dot.
+        let mut c = completer_with_fields(&[], &[]);
+        let s = c.complete("SELECT s.", 9);
+        assert!(!s.is_empty(), "expected suggestions");
+        // "SELECT " is 7 chars; token "s." starts at offset 7.
+        assert_eq!(s[0].span.start, 7, "span start wrong: {:?}", s[0].span);
+        assert_eq!(s[0].span.end, 9, "span end wrong: {:?}", s[0].span);
     }
 }
