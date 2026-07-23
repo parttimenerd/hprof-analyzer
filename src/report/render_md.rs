@@ -399,7 +399,7 @@ pub(crate) fn render_executive_summary(r: &Report, out: &mut String) {
                 (rank + 1).to_string(),
                 what,
                 format_bytes(s.retained),
-                format!("{:.1}%", pct_of(s.retained)),
+                fmt_pct(pct_of(s.retained)),
             ]);
         }
         t.render(out);
@@ -420,7 +420,7 @@ pub(crate) fn render_executive_summary(r: &Report, out: &mut String) {
                 (rank + 1).to_string(),
                 format!("`{}`", ob.display_class),
                 format_bytes(ob.retained),
-                format!("{:.1}%", pct_of(ob.retained)),
+                fmt_pct(pct_of(ob.retained)),
             ]);
         }
         t.render(out);
@@ -545,17 +545,17 @@ pub(crate) fn render_retention_concentration(o: &SystemOverview, out: &mut Strin
     );
     t.row([
         "Top 1 object".into(),
-        format!("{:.1}%", rc.top1_bp as f64 / 100.0),
+        fmt_pct(rc.top1_bp as f64 / 100.0),
         format_bytes(bp_to_bytes(rc.top1_bp)),
     ]);
     t.row([
         "Top 10 objects".into(),
-        format!("{:.1}%", rc.top10_bp as f64 / 100.0),
+        fmt_pct(rc.top10_bp as f64 / 100.0),
         format_bytes(bp_to_bytes(rc.top10_bp)),
     ]);
     t.row([
         "Top 100 objects".into(),
-        format!("{:.1}%", rc.top100_bp as f64 / 100.0),
+        fmt_pct(rc.top100_bp as f64 / 100.0),
         format_bytes(bp_to_bytes(rc.top100_bp)),
     ]);
     t.row([
@@ -756,7 +756,7 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
     if o.top_class_concentration_bp > 0 {
         summary.row([
             "Top-class retained concentration".into(),
-            format!("{:.1}%", o.top_class_concentration_bp as f64 / 100.0),
+            fmt_pct(o.top_class_concentration_bp as f64 / 100.0),
         ]);
     }
     summary.render(out);
@@ -1064,11 +1064,11 @@ These are the most likely accumulation points for excessive memory usage._\n\n",
         let pct = pct_of_heap(s.retained, l.total_shallow);
 
         out.push_str(&format!(
-            "### {}. `{}` — retains {} ({:.1}% of {HEAP_BASIS_LABEL})\n\n",
+            "### {}. `{}` — retains {} ({} of {HEAP_BASIS_LABEL})\n\n",
             rank + 1,
             s.pretty_class,
             format_bytes(s.retained),
-            pct,
+            fmt_pct(pct),
         ));
 
         // What the suspect is: a single object vs a class group.
@@ -1230,7 +1230,7 @@ that holds each object (the primary referrer; an object may have several)._\n\n"
             format!("`{}`", row.display_class),
             format_bytes(row.shallow),
             format_bytes(row.retained),
-            format!("{:.1}%", pct),
+            fmt_pct(pct),
         ];
         if obj_has_owner {
             cells.push(match &row.owner {
@@ -1531,7 +1531,7 @@ pub(crate) fn render_top_components(tc: &TopComponents, graphs: bool, out: &mut 
         let mut row = vec![
             format!("`{}`", c.loader_label),
             format_bytes(c.retained),
-            format!("{:.1}%", c.pct),
+            fmt_pct(c.pct),
             top,
         ];
         if graphs {
@@ -3477,7 +3477,7 @@ pub(crate) fn render_header_overhead(
             fmt_count(row.instances),
             format!("{} B", row.header_bytes),
             format_bytes(row.total_header_bytes),
-            format!("{:.1}%", row.header_pct_of_shallow_bp as f64 / 100.0),
+            fmt_pct(row.header_pct_of_shallow_bp as f64 / 100.0),
             format_bytes(row.avg_shallow),
         ]);
     }

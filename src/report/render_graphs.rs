@@ -180,7 +180,7 @@ fn render_system_overview_graphs(o: &SystemOverview, out: &mut String) {
     if o.top_class_concentration_bp > 0 {
         summary.row([
             "Top-class retained concentration".into(),
-            format!("{:.1}%", o.top_class_concentration_bp as f64 / 100.0),
+            fmt_pct(o.top_class_concentration_bp as f64 / 100.0),
         ]);
     }
     summary.render(out);
@@ -482,19 +482,19 @@ fn render_retention_concentration_graphs(o: &SystemOverview, out: &mut String) {
     );
     t.row([
         "Top 1 object".into(),
-        format!("{:.1}%", rc.top1_bp as f64 / 100.0),
+        fmt_pct(rc.top1_bp as f64 / 100.0),
         format_bytes(bp_to_bytes(rc.top1_bp)),
         bar(rc.top1_bp as u64, 10_000, GRAPH_BAR_WIDTH),
     ]);
     t.row([
         "Top 10 objects".into(),
-        format!("{:.1}%", rc.top10_bp as f64 / 100.0),
+        fmt_pct(rc.top10_bp as f64 / 100.0),
         format_bytes(bp_to_bytes(rc.top10_bp)),
         bar(rc.top10_bp as u64, 10_000, GRAPH_BAR_WIDTH),
     ]);
     t.row([
         "Top 100 objects".into(),
-        format!("{:.1}%", rc.top100_bp as f64 / 100.0),
+        fmt_pct(rc.top100_bp as f64 / 100.0),
         format_bytes(bp_to_bytes(rc.top100_bp)),
         bar(rc.top100_bp as u64, 10_000, GRAPH_BAR_WIDTH),
     ]);
