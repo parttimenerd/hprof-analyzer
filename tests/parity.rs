@@ -13,7 +13,7 @@ use std::process::Command;
 /// `--detail default`. They are NOT byte-identical to MAT: our output includes
 /// ours-only sections (path-to-GC-root chains, dominator subtree, per-thread
 /// local objects, allocation sites) that MAT does not emit. Regenerate a
-/// baseline with `analyze <dump>.hprof` (md) / `--format md-graphs` when the
+/// baseline with `REGEN_FIXTURES=1 cargo test --release parity` when the
 /// output legitimately changes.
 const FIXTURES: &[(&str, &str, &str)] = &[
     (
@@ -68,9 +68,11 @@ fn strip_views_line(s: &str) -> String {
 #[test]
 fn parity_all_fixtures() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let regen = std::env::var("REGEN_FIXTURES").is_ok();
 
     let mut failures = Vec::new();
     let mut ran = 0usize;
+    let mut regenned = 0usize;
     for (hprof, baseline_md, baseline_graphs) in FIXTURES {
         let hprof_path = dir.join(hprof);
         // Some dumps are too large to keep in git history and are only present
@@ -98,9 +100,14 @@ fn parity_all_fixtures() {
             String::from_utf8_lossy(&out.stderr)
         );
         let got = strip_views_line(&String::from_utf8_lossy(&out.stdout));
-        let want = strip_views_line(&std::fs::read_to_string(dir.join(baseline_md)).unwrap());
-        if got != want {
-            failures.push(format!("{hprof} (md)"));
+        if regen {
+            std::fs::write(dir.join(baseline_md), got.as_bytes()).unwrap();
+            regenned += 1;
+        } else {
+            let want = strip_views_line(&std::fs::read_to_string(dir.join(baseline_md)).unwrap());
+            if got != want {
+                failures.push(format!("{hprof} (md)"));
+            }
         }
 
         // `md-graphs` format.
@@ -115,11 +122,20 @@ fn parity_all_fixtures() {
             String::from_utf8_lossy(&out.stderr)
         );
         let got = strip_views_line(&String::from_utf8_lossy(&out.stdout));
-        let want = strip_views_line(&std::fs::read_to_string(dir.join(baseline_graphs)).unwrap());
-        if got != want {
-            failures.push(format!("{hprof} (md-graphs)"));
+        if regen {
+            std::fs::write(dir.join(baseline_graphs), got.as_bytes()).unwrap();
+        } else {
+            let want =
+                strip_views_line(&std::fs::read_to_string(dir.join(baseline_graphs)).unwrap());
+            if got != want {
+                failures.push(format!("{hprof} (md-graphs)"));
+            }
         }
     }
-    assert!(failures.is_empty(), "parity mismatch for: {failures:?}");
-    eprintln!("parity: ran {ran} of {} fixtures", FIXTURES.len());
+    if regen {
+        eprintln!("parity: regenerated {regenned} of {ran} present fixtures ({} total)", FIXTURES.len());
+    } else {
+        assert!(failures.is_empty(), "parity mismatch for: {failures:?}\n\nRegenerate with: REGEN_FIXTURES=1 cargo test --release parity");
+        eprintln!("parity: ran {ran} of {} fixtures", FIXTURES.len());
+    }
 }
