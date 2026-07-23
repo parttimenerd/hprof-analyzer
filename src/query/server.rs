@@ -191,7 +191,15 @@ impl ServerState {
         let path = url.split('?').next().unwrap_or(url);
         match (method, path) {
             ("POST", "/") | ("POST", "/query") => {
-                let oql = extract_oql(body);
+                let oql = match extract_oql(body) {
+                    Ok(oql) => oql,
+                    Err(message) => {
+                        return (400, serde_json::json!({
+                            "ok": false,
+                            "error": { "kind": "request", "message": message }
+                        }).to_string());
+                    }
+                };
                 let mut guard = self.cache.lock().unwrap();
                 let v = run_query_json(
                     &self.path, &oql, self.path_depth, self.reachable_only, &mut guard,
@@ -201,6 +209,14 @@ impl ServerState {
             }
             ("GET", "/help") => (200, help_json(&self.path).to_string()),
             ("GET", "/") => (200, help_json(&self.path).to_string()),
+            // Known path, unsupported method -> 405 (not 404).
+            (_, "/") | (_, "/query") | (_, "/help") => (405, serde_json::json!({
+                "ok": false,
+                "error": {
+                    "kind": "method",
+                    "message": format!("method {method} not allowed on {path} (use POST for /, /query; GET for /, /help)")
+                }
+            }).to_string()),
             _ => (404, serde_json::json!({
                 "ok": false,
                 "error": { "kind": "route", "message": format!("no route {method} {path}") }
@@ -209,17 +225,29 @@ impl ServerState {
     }
 }
 
-/// Accept a raw OQL body or a {"query":"..."} JSON object.
-fn extract_oql(body: &str) -> String {
+/// Extract the OQL to run from a request body. Accepts either a raw OQL string
+/// or a `{"query":"<OQL>"}` JSON object. A body starting with `{` is treated as
+/// JSON: if it fails to parse, or lacks a string `query` field, we return a
+/// clear error rather than feeding the braces to the OQL tokenizer (which would
+/// surface a baffling "unexpected character '{'" message).
+fn extract_oql(body: &str) -> Result<String, String> {
     let trimmed = body.trim();
     if trimmed.starts_with('{') {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
-            if let Some(q) = v.get("query").and_then(|q| q.as_str()) {
-                return q.to_string();
-            }
-        }
+        let v: serde_json::Value = serde_json::from_str(trimmed).map_err(|e| {
+            format!(
+                "malformed JSON body ({e}) - send a raw OQL string, or {{\"query\":\"<OQL>\"}}"
+            )
+        })?;
+        return match v.get("query") {
+            Some(serde_json::Value::String(q)) => Ok(q.clone()),
+            Some(_) => Err("JSON body field 'query' must be a string".to_string()),
+            None => Err(
+                "JSON body missing string field 'query' - use {\"query\":\"<OQL>\"} or send a raw OQL string"
+                    .to_string(),
+            ),
+        };
     }
-    trimmed.to_string()
+    Ok(trimmed.to_string())
 }
 
 pub fn run_server(path: &str, path_depth: usize, port: u16) -> io::Result<()> {
@@ -344,6 +372,43 @@ mod tests {
     }
 
     #[test]
+    fn handle_post_malformed_json_is_clear_request_error() {
+        let state = ServerState::load(FIXTURE, 5, true).expect("load");
+        // Body starts with `{` but is not valid JSON. Must NOT be fed to the OQL
+        // tokenizer (which would emit a baffling "unexpected character '{'").
+        let (status, body) = state.route("POST", "/", r#"{"query": "#);
+        assert_eq!(status, 400, "malformed JSON -> 400, body: {body}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["ok"], serde_json::json!(false), "expected failure, got: {v}");
+        assert_eq!(v["error"]["kind"], serde_json::json!("request"), "kind=request, got: {v}");
+        let msg = v["error"]["message"].as_str().unwrap_or_default();
+        assert!(msg.contains("malformed JSON"), "clear message, got: {msg:?}");
+    }
+
+    #[test]
+    fn handle_post_json_missing_query_key_is_clear_request_error() {
+        let state = ServerState::load(FIXTURE, 5, true).expect("load");
+        let (status, body) = state.route("POST", "/", r#"{"foo":"bar"}"#);
+        assert_eq!(status, 400, "missing query key -> 400, body: {body}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["ok"], serde_json::json!(false), "expected failure, got: {v}");
+        assert_eq!(v["error"]["kind"], serde_json::json!("request"), "kind=request, got: {v}");
+        let msg = v["error"]["message"].as_str().unwrap_or_default();
+        assert!(msg.contains("'query'"), "mentions the query field, got: {msg:?}");
+    }
+
+    #[test]
+    fn handle_post_json_query_not_a_string_is_clear_request_error() {
+        let state = ServerState::load(FIXTURE, 5, true).expect("load");
+        let (status, body) = state.route("POST", "/", r#"{"query": 42}"#);
+        assert_eq!(status, 400, "non-string query -> 400, body: {body}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["error"]["kind"], serde_json::json!("request"), "kind=request, got: {v}");
+        let msg = v["error"]["message"].as_str().unwrap_or_default();
+        assert!(msg.contains("must be a string"), "clear message, got: {msg:?}");
+    }
+
+    #[test]
     fn handle_get_help_roundtrips_json() {
         let state = ServerState::load(FIXTURE, 5, true).expect("load");
         let (status, body) = state.route("GET", "/help", "");
@@ -357,6 +422,19 @@ mod tests {
         let state = ServerState::load(FIXTURE, 5, true).expect("load");
         let (status, _body) = state.route("GET", "/nope", "");
         assert_eq!(status, 404, "unknown route -> 404");
+    }
+
+    #[test]
+    fn handle_known_path_wrong_method_is_405() {
+        let state = ServerState::load(FIXTURE, 5, true).expect("load");
+        // PUT on a known path is a method error, not an unknown route.
+        let (status, body) = state.route("PUT", "/", "");
+        assert_eq!(status, 405, "known path, wrong method -> 405, body: {body}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["error"]["kind"], serde_json::json!("method"), "kind=method, got: {v}");
+        // GET on the POST-only /query path is likewise 405.
+        let (status, _) = state.route("GET", "/query", "");
+        assert_eq!(status, 405, "GET /query -> 405");
     }
 
     #[test]
