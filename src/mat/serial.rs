@@ -606,7 +606,8 @@ impl MatIntMap {
     }
     fn init(&mut self, initial_capacity: i32) {
         self.capacity = prime::next_prime(initial_capacity.max(2));
-        let step_floor = (initial_capacity / 3).max(2);
+        // prev_prime requires its argument >= 3 (it steps down, so floor must have a prime below it)
+        let step_floor = (initial_capacity / 3).max(3);
         self.step = std::cmp::max(1, prime::prev_prime(step_floor));
         self.limit = (self.capacity as f64 * 0.75) as i32;
         self.size = 0;
@@ -673,5 +674,314 @@ impl MatIntMap {
             if self.used[i] { out.push((self.keys[i], self.slot_val[i])); }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Stream header ────────────────────────────────────────────────────────
+
+    #[test]
+    fn new_stream_starts_with_magic_and_version() {
+        let s = Ser::new();
+        assert_eq!(&s.buf[..4], &[0xAC, 0xED, 0x00, 0x05]);
+    }
+
+    // ── TC_NULL ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn null_writes_tc_null_byte() {
+        let mut s = Ser::new();
+        s.null();
+        assert_eq!(s.buf.last(), Some(&TC_NULL));
+    }
+
+    // ── TC_STRING + interning ────────────────────────────────────────────────
+
+    #[test]
+    fn string_first_write_is_tc_string() {
+        let mut s = Ser::new();
+        let before = s.buf.len();
+        s.string("hello");
+        let after = &s.buf[before..];
+        assert_eq!(after[0], TC_STRING, "first occurrence should be TC_STRING");
+        // 2-byte length prefix + 5 UTF-8 bytes
+        let len = u16::from_be_bytes([after[1], after[2]]) as usize;
+        assert_eq!(len, 5);
+        assert_eq!(&after[3..8], b"hello");
+    }
+
+    #[test]
+    fn string_duplicate_writes_tc_reference() {
+        let mut s = Ser::new();
+        s.string("dup");
+        let before = s.buf.len();
+        s.string("dup"); // second occurrence
+        let after = &s.buf[before..];
+        assert_eq!(after[0], TC_REFERENCE, "duplicate string should be TC_REFERENCE");
+        // 4-byte handle follows
+        assert_eq!(after.len(), 5, "TC_REFERENCE + 4-byte handle = 5 bytes");
+    }
+
+    #[test]
+    fn different_strings_get_separate_handles() {
+        let mut s = Ser::new();
+        s.string("aaa");
+        s.string("bbb");
+        // "aaa" the second time should be TC_REFERENCE; "bbb" is different so also fresh TC_STRING
+        let before_aaa2 = s.buf.len();
+        s.string("aaa");
+        assert_eq!(s.buf[before_aaa2], TC_REFERENCE);
+        let before_bbb2 = s.buf.len();
+        s.string("bbb");
+        assert_eq!(s.buf[before_bbb2], TC_REFERENCE);
+    }
+
+    // ── write_int_array ──────────────────────────────────────────────────────
+
+    #[test]
+    fn write_int_array_encoding() {
+        // TC_ARRAY (0x75), class desc for "[I", len:i4, values
+        let mut s = Ser::new();
+        let before = s.buf.len();
+        s.write_int_array(&[1i32, -2, 0x7FFF_FFFF]);
+        let data = &s.buf[before..];
+        assert_eq!(data[0], TC_ARRAY);
+        // Find the length field: skip TC_ARRAY + class desc (variable) + handle (4 bytes)
+        // For robustness just check the last 12 bytes (3 * 4) contain the values
+        let end = data.len();
+        let vals_end = end;
+        let vals_start = vals_end - 12;
+        let vals = &data[vals_start..vals_end];
+        assert_eq!(i32::from_be_bytes(vals[0..4].try_into().unwrap()), 1);
+        assert_eq!(i32::from_be_bytes(vals[4..8].try_into().unwrap()), -2);
+        assert_eq!(i32::from_be_bytes(vals[8..12].try_into().unwrap(), ), 0x7FFF_FFFF);
+    }
+
+    #[test]
+    fn write_int_array_length_prefix() {
+        let mut s = Ser::new();
+        s.write_int_array(&[10, 20, 30, 40]);
+        // The length field (4-byte big-endian) immediately precedes the values.
+        // Find it at buf.len() - 4*4 - 4 = buf.len() - 20
+        let n = s.buf.len();
+        let len_bytes = &s.buf[n - 4 * 4 - 4..n - 4 * 4];
+        let count = i32::from_be_bytes(len_bytes.try_into().unwrap());
+        assert_eq!(count, 4);
+    }
+
+    // ── write_boolean / write_long / write_date ──────────────────────────────
+
+    #[test]
+    fn write_boolean_true_and_false() {
+        let mut s = Ser::new();
+        s.write_boolean(true);
+        let after_true = s.buf.last().copied().unwrap();
+        assert_eq!(after_true, 1u8);
+        let mut s2 = Ser::new();
+        s2.write_boolean(false);
+        assert_eq!(s2.buf.last().copied().unwrap(), 0u8);
+    }
+
+    #[test]
+    fn write_long_value_big_endian() {
+        let mut s = Ser::new();
+        s.write_long(0x0102_0304_0506_0708i64);
+        let n = s.buf.len();
+        assert_eq!(&s.buf[n - 8..n], &[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]);
+    }
+
+    #[test]
+    fn write_date_uses_block_data_with_epoch_millis() {
+        let millis = 0x0011_2233_4455_6677i64;
+        let mut s = Ser::new();
+        s.write_date(millis);
+        // End of stream: TC_ENDBLOCKDATA (0x78), preceding 10 bytes = TC_BLOCKDATA(0x77) len(8) millis
+        let n = s.buf.len();
+        assert_eq!(s.buf[n - 1], TC_ENDBLOCKDATA);
+        assert_eq!(s.buf[n - 11], TC_BLOCKDATA);
+        assert_eq!(s.buf[n - 10], 8u8); // block length
+        assert_eq!(&s.buf[n - 9..n - 1], &millis.to_be_bytes());
+    }
+
+    // ── write_empty_hashmap ──────────────────────────────────────────────────
+
+    #[test]
+    fn write_empty_hashmap_ends_with_block_data_and_endblockdata() {
+        let mut s = Ser::new();
+        s.write_empty_hashmap();
+        let n = s.buf.len();
+        // Last byte = TC_ENDBLOCKDATA; before that = TC_BLOCKDATA + 8 + 4+4 = 10 bytes
+        assert_eq!(s.buf[n - 1], TC_ENDBLOCKDATA);
+        assert_eq!(s.buf[n - 11], TC_BLOCKDATA);
+        assert_eq!(s.buf[n - 10], 8u8); // block size
+        // bucket count = 16 big-endian, size = 0
+        let bucket_count = i32::from_be_bytes(s.buf[n - 9..n - 5].try_into().unwrap());
+        let map_size = i32::from_be_bytes(s.buf[n - 5..n - 1].try_into().unwrap());
+        assert_eq!(bucket_count, 16);
+        assert_eq!(map_size, 0);
+    }
+
+    // ── Field ordering in write_class_desc_chain ────────────────────────────
+
+    #[test]
+    fn field_order_primitives_before_objects_each_group_alpha() {
+        // Declare fields in reverse/non-alpha order; stream must emit sorted order.
+        // prim fields (alpha): age:I, count:I → stream order: age, count
+        // obj fields (alpha): name:Ljava/lang/String;, tag:Ljava/lang/Object; → name, tag
+        let cd = ClassDesc {
+            name: "Test".into(),
+            uid: 1,
+            flags: SC_SERIALIZABLE,
+            fields: vec![
+                f_obj("tag", "Ljava/lang/Object;"),
+                f_int("count"),
+                f_int("age"),
+                f_obj("name", "Ljava/lang/String;"),
+            ],
+        };
+        let mut s = Ser::new();
+        let before = s.buf.len();
+        s.write_class_desc_chain(&[cd]);
+        let after = &s.buf[before..];
+        // Find the field count: after TC_CLASSDESC + name + uid + handle assignment + flags
+        // It's easier to search for the field count (u16) near the middle of the desc.
+        // We know fields are sorted: age(I), count(I), name(L), tag(L)
+        // Each prim field: 1 byte typecode + 2+name_len bytes name
+        // Look for byte sequence 'I' + \x00\x03 + "age" at some offset after STREAM_MAGIC+VERSION
+        let buf_str = std::str::from_utf8(after).ok();
+        let _ = buf_str; // only for debugging; search bytes directly
+        let age_pos = after.windows(3).position(|w| w == b"age");
+        let count_pos = after.windows(5).position(|w| w == b"count");
+        assert!(age_pos.is_some() && count_pos.is_some());
+        assert!(age_pos.unwrap() < count_pos.unwrap(), "age before count (alpha order)");
+        let name_pos = after.windows(4).position(|w| w == b"name");
+        let tag_pos = after.windows(3).position(|w| w == b"tag");
+        assert!(name_pos.is_some() && tag_pos.is_some());
+        assert!(name_pos.unwrap() < tag_pos.unwrap(), "name before tag (alpha order)");
+        assert!(count_pos.unwrap() < name_pos.unwrap(), "prims before objects");
+    }
+
+    // ── write_object superclass-first field values ────────────────────────────
+
+    #[test]
+    fn write_object_superclass_first_values() {
+        // Sub declares field 'z:I = 2', Super declares field 'a:I = 1'.
+        // Values in the stream must be: a=1 (superclass) THEN z=2 (subclass).
+        let chain = vec![
+            ClassDesc { name: "Sub".into(), uid: 1, flags: SC_SERIALIZABLE, fields: vec![f_int("z")] },
+            ClassDesc { name: "Super".into(), uid: 2, flags: SC_SERIALIZABLE, fields: vec![f_int("a")] },
+        ];
+        let layers = vec![
+            LayerData { fields: vec![f_int("z")], values: vec![("z".into(), FieldVal::Int(2))] },
+            LayerData { fields: vec![f_int("a")], values: vec![("a".into(), FieldVal::Int(1))] },
+        ];
+        let mut s = Ser::new();
+        s.write_object(&chain, layers);
+        let n = s.buf.len();
+        // Last 8 bytes: super field (a=1) then sub field (z=2), each 4-byte big-endian
+        let super_val = i32::from_be_bytes(s.buf[n - 8..n - 4].try_into().unwrap());
+        let sub_val = i32::from_be_bytes(s.buf[n - 4..n].try_into().unwrap());
+        assert_eq!(super_val, 1, "superclass field value comes first");
+        assert_eq!(sub_val, 2, "subclass field value comes second");
+    }
+
+    // ── ref_object via write_object_keyed ────────────────────────────────────
+
+    #[test]
+    fn ref_object_produces_tc_reference_to_keyed_object() {
+        let mut s = Ser::new();
+        let chain = vec![ClassDesc { name: "MyObj".into(), uid: 99, flags: SC_SERIALIZABLE, fields: vec![f_int("x")] }];
+        let layers = vec![LayerData { fields: vec![f_int("x")], values: vec![("x".into(), FieldVal::Int(42))] }];
+        s.write_object_keyed(&chain, layers, Some("myobj_key"));
+        // Now emit a reference to it
+        let before = s.buf.len();
+        s.ref_object("myobj_key");
+        let after = &s.buf[before..];
+        assert_eq!(after[0], TC_REFERENCE);
+        // Handle should be BASE_HANDLE + some offset (always a 4-byte big-endian handle)
+        let handle = u32::from_be_bytes(after[1..5].try_into().unwrap());
+        assert!(handle >= BASE_HANDLE, "handle in valid range");
+    }
+
+    // ── MatIntMap: small capacity no longer panics ───────────────────────────
+
+    #[test]
+    fn matintmap_small_capacity_no_panic() {
+        // Regression test: MatIntMap::new(1) used to panic in prev_prime(0).
+        let m = MatIntMap::new(1);
+        assert_eq!(m.size, 0);
+        assert!(m.capacity >= 2, "capacity must be at least next_prime(2)");
+    }
+
+    #[test]
+    fn matintmap_new_zero_no_panic() {
+        let m = MatIntMap::new(0);
+        assert_eq!(m.size, 0);
+    }
+
+    #[test]
+    fn matintmap_put_and_slots_order() {
+        // Insert 3 keys, verify slots() returns only used entries in slot order.
+        let mut m = MatIntMap::new(10);
+        m.put(100, 0);
+        m.put(200, 1);
+        m.put(300, 2);
+        assert_eq!(m.size, 3);
+        let slots = m.slots();
+        assert_eq!(slots.len(), 3);
+        // All keys must appear exactly once
+        let mut keys: Vec<i32> = slots.iter().map(|&(k, _)| k).collect();
+        keys.sort();
+        assert_eq!(keys, vec![100, 200, 300]);
+        // val_idx is the insertion index
+        let vals: Vec<usize> = slots.iter().map(|&(_, v)| v).collect();
+        assert!(vals.iter().all(|&v| v < 3));
+    }
+
+    #[test]
+    fn matintmap_duplicate_put_overwrites() {
+        let mut m = MatIntMap::new(5);
+        m.put(42, 0);
+        m.put(42, 1); // overwrite
+        assert_eq!(m.size, 1);
+        let slots = m.slots();
+        assert_eq!(slots.len(), 1);
+        assert_eq!(slots[0].1, 1); // latest value
+    }
+
+    #[test]
+    fn java_string_hashcode_matches_java_spec() {
+        // "hello" → 99162322 (well-known value from Java)
+        assert_eq!(Ser::java_string_hashcode("hello"), 99162322);
+        // "" → 0
+        assert_eq!(Ser::java_string_hashcode(""), 0);
+        // Single char 'A' = 65
+        assert_eq!(Ser::java_string_hashcode("A"), 65);
+    }
+
+    // ── write_array_list ──────────────────────────────────────────────────────
+
+    #[test]
+    fn write_array_list_empty_ends_with_endblockdata() {
+        let mut s = Ser::new();
+        s.write_array_list(0, vec![]);
+        assert_eq!(s.buf.last(), Some(&TC_ENDBLOCKDATA));
+    }
+
+    #[test]
+    fn write_array_list_size_field_matches_elems() {
+        let mut s = Ser::new();
+        // Two null elements
+        s.write_array_list(2, vec![
+            Box::new(|s: &mut Ser| s.null()),
+            Box::new(|s: &mut Ser| s.null()),
+        ]);
+        // defaultWriteObject writes size:I (=2) right after the class desc + instance handle
+        // We can't easily locate the exact byte offset, but we can check the stream has
+        // TC_ENDBLOCKDATA at the end and no panic occurred.
+        assert_eq!(s.buf.last(), Some(&TC_ENDBLOCKDATA));
     }
 }

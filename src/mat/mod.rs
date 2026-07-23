@@ -1064,4 +1064,220 @@ mod tests {
         assert_eq!(map.translate(1), 2);
         assert_eq!(map.translate(2), 3);
     }
+
+    #[test]
+    fn mat_id_map_empty_graph() {
+        // n=0: no objects at all; mat_count = 1 (synthetic root only)
+        let idom: Vec<u32> = vec![];
+        let map = MatIdMap::build(0, &idom, |_| 0);
+        assert_eq!(map.mat_count(), 1);
+        assert_eq!(map.sorted(), &[] as &[u32]);
+        assert_eq!(map.translate(0), -1);
+        assert_eq!(map.addr_at_mat(0), 0);
+    }
+
+    #[test]
+    fn mat_id_map_all_unreachable() {
+        // 3 objects, all unreachable (idom==MAX)
+        let idom = vec![u32::MAX; 3];
+        let map = MatIdMap::build(3, &idom, |i| i as u64);
+        assert_eq!(map.mat_count(), 1); // only synthetic root
+        assert_eq!(map.sorted(), &[] as &[u32]);
+        assert_eq!(map.translate(0), -1);
+        assert_eq!(map.translate(1), -1);
+    }
+
+    #[test]
+    fn mat_id_map_addr_at_mat_bounds() {
+        let addrs = [0xAAu64, 0xBB, 0xCC];
+        let idom = vec![3u32, 3, 3, 3];
+        let map = MatIdMap::build(3, &idom, |i| addrs[i]);
+        // mat-id 0 = synthetic root (addr 0x0)
+        assert_eq!(map.addr_at_mat(0), 0);
+        // mat-ids 1..=3 get the sorted addresses
+        assert_eq!(map.addr_at_mat(1), 0xAA);
+        assert_eq!(map.addr_at_mat(2), 0xBB);
+        assert_eq!(map.addr_at_mat(3), 0xCC);
+        // out-of-range
+        assert_eq!(map.addr_at_mat(4), 0);
+        assert_eq!(map.addr_at_mat(-1), 0);
+    }
+
+    #[test]
+    fn size_compress_at_exact_boundary() {
+        // 0x4_0000_0000 is the last value to use the /8 encoding
+        let boundary = 0x4_0000_0000i64;
+        let expected = ((boundary / 8) as i32).wrapping_add(0x7000_0000);
+        assert_eq!(size_compress(boundary), expected);
+        // one over → cap
+        assert_eq!(size_compress(boundary + 1), 0xf000_0000u32 as i32);
+        // one under i32::MAX boundary → identity
+        assert_eq!(size_compress(i32::MAX as i64), i32::MAX);
+        // one over i32::MAX → /8 encoding
+        let just_over = i32::MAX as i64 + 1;
+        assert_eq!(size_compress(just_over), ((just_over / 8) as i32).wrapping_add(0x7000_0000));
+    }
+
+    // ── emit_i2sv2 ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn emit_i2sv2_empty_produces_empty_file() {
+        let tmp = std::env::temp_dir().join("mat_i2sv2_empty");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        e.emit_i2sv2(std::iter::empty()).unwrap();
+        let path = tmp.join("dump_.i2sv2.index");
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(bytes.is_empty(), "empty iterator should produce empty file");
+    }
+
+    #[test]
+    fn emit_i2sv2_encoding() {
+        // Three entries: (class_mat_id, retained) → file = (i32_be, i64_neg_be) x 3
+        let entries = vec![(1i32, 100i64), (7i32, 200i64), (-1i32, 0i64)];
+        let tmp = std::env::temp_dir().join("mat_i2sv2_encoding");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        e.emit_i2sv2(entries.iter().copied()).unwrap();
+        let bytes = std::fs::read(tmp.join("dump_.i2sv2.index")).unwrap();
+        assert_eq!(bytes.len(), 3 * 12, "each entry is 4 + 8 bytes");
+        // First entry: class_mat_id=1, retained=100 → stored as -100
+        assert_eq!(&bytes[0..4], &1i32.to_be_bytes());
+        assert_eq!(&bytes[4..12], &(-100i64).to_be_bytes());
+        // Second entry
+        assert_eq!(&bytes[12..16], &7i32.to_be_bytes());
+        assert_eq!(&bytes[16..24], &(-200i64).to_be_bytes());
+        // Third (retained=0 → stored as 0, negated)
+        assert_eq!(&bytes[24..28], &(-1i32).to_be_bytes());
+        assert_eq!(&bytes[28..36], &0i64.to_be_bytes());
+    }
+
+    #[test]
+    fn emit_i2sv2_roundtrip_size() {
+        // File size must always be a multiple of 12.
+        let entries: Vec<(i32, i64)> = (0..50).map(|i| (i, i as i64 * 1000)).collect();
+        let tmp = std::env::temp_dir().join("mat_i2sv2_roundtrip");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        e.emit_i2sv2(entries.iter().copied()).unwrap();
+        let bytes = std::fs::read(tmp.join("dump_.i2sv2.index")).unwrap();
+        assert_eq!(bytes.len() % 12, 0);
+        assert_eq!(bytes.len() / 12, 50);
+    }
+
+    // ── emit_threads ────────────────────────────────────────────────────────
+
+    fn make_thread_stack(serial: u32, thread_obj_idx: u32, frames: &[&str]) -> crate::pass2::ThreadStack {
+        crate::pass2::ThreadStack {
+            thread_serial: serial,
+            thread_obj_idx,
+            frames: frames.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn emit_threads_empty_produces_empty_file() {
+        // No thread stacks at all → file should be empty (0 bytes, no content).
+        let idom = vec![0u32, 0];
+        let mm = MatIdMap::build(2, &idom, |i| (i as u64 + 1) * 0x10);
+        let tmp = std::env::temp_dir().join("mat_threads_empty");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        e.emit_threads(&[], &mm, &HashMap::new()).unwrap();
+        let bytes = std::fs::read(tmp.join("dump_.threads")).unwrap();
+        assert!(bytes.is_empty(), "no threads → empty file");
+    }
+
+    #[test]
+    fn emit_threads_skips_stack_with_no_frames() {
+        // A ThreadStack with empty frames vec should be silently skipped.
+        let ts = make_thread_stack(1, 0, &[]); // no frames
+        let idom = vec![0u32, 0];
+        let mm = MatIdMap::build(2, &idom, |i| (i as u64 + 1) * 0x10);
+        let tmp = std::env::temp_dir().join("mat_threads_skip_noframe");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        e.emit_threads(&[ts], &mm, &HashMap::new()).unwrap();
+        let bytes = std::fs::read(tmp.join("dump_.threads")).unwrap();
+        assert!(bytes.is_empty(), "thread with no frames should be skipped");
+    }
+
+    #[test]
+    fn emit_threads_single_thread_address_and_frames() {
+        // Thread obj_idx=0, addr=0x10 (mat-id 1). Two frames.
+        let addrs = [0x10u64, 0x20];
+        let idom = vec![2u32, 2, 2]; // vroot at idx 2
+        let mm = MatIdMap::build(2, &idom, |i| addrs[i]);
+        // dense-id 0 → mat-id 1, addr=0x10
+        assert_eq!(mm.translate(0), 1);
+
+        let ts = make_thread_stack(1, 0, &["com.example.Foo.bar(Foo.java:42)", "com.example.Main.main(Main.java:10)"]);
+        let tmp = std::env::temp_dir().join("mat_threads_single");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        e.emit_threads(&[ts], &mm, &HashMap::new()).unwrap();
+        let content = std::fs::read_to_string(tmp.join("dump_.threads")).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines[0], "Thread 0x10");
+        assert_eq!(lines[1], "  at com.example.Foo.bar(Foo.java:42)");
+        assert_eq!(lines[2], "  at com.example.Main.main(Main.java:10)");
+        // trailing blank line
+        assert!(content.ends_with('\n'));
+    }
+
+    #[test]
+    fn emit_threads_unreachable_thread_uses_addr_zero() {
+        // Thread obj_idx=99 (out of range / unreachable) → thread addr should be 0.
+        let idom = vec![0u32, 0]; // only 2 objects
+        let mm = MatIdMap::build(2, &idom, |i| (i as u64 + 1) * 0x100);
+        let ts = make_thread_stack(5, 99, &["java.lang.Thread.run(Thread.java:1)"]);
+        let tmp = std::env::temp_dir().join("mat_threads_unreachable");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        e.emit_threads(&[ts], &mm, &HashMap::new()).unwrap();
+        let content = std::fs::read_to_string(tmp.join("dump_.threads")).unwrap();
+        assert!(content.starts_with("Thread 0x0\n"), "unreachable thread obj → addr 0, got: {content:?}");
+    }
+
+    #[test]
+    fn emit_threads_with_locals() {
+        // Thread with locals section: frame_num and local object addresses.
+        let addrs = [0x100u64, 0x200, 0x300];
+        let idom = vec![3u32, 3, 3, 3];
+        let mm = MatIdMap::build(3, &idom, |i| addrs[i]);
+        // old_id 0 → mat-id 1 (addr 0x100), old_id 2 → mat-id 3 (addr 0x300)
+        let ts = make_thread_stack(1, 0, &["frame1(A.java:1)"]);
+        let mut locals: HashMap<u32, Vec<(u32, u32)>> = HashMap::new();
+        // serial=1, frame_num=0 (→ line 1), local old_idx=2
+        locals.insert(1, vec![(0u32, 2u32), (u32::MAX, 1u32)]);
+        let tmp = std::env::temp_dir().join("mat_threads_locals");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        e.emit_threads(&[ts], &mm, &locals).unwrap();
+        let content = std::fs::read_to_string(tmp.join("dump_.threads")).unwrap();
+        assert!(content.contains("locals:"), "should have locals section");
+        assert!(content.contains("objectId=0x300, line=1"), "frame_num=0 → line 1, local at 0x300");
+        assert!(content.contains("objectId=0x200, line=0"), "frame_num=MAX → line 0");
+    }
+
+    #[test]
+    fn emit_threads_multiple_threads_separated_by_blank_lines() {
+        let addrs = [0x10u64, 0x20, 0x30];
+        let idom = vec![3u32, 3, 3, 3];
+        let mm = MatIdMap::build(3, &idom, |i| addrs[i]);
+        let stacks = vec![
+            make_thread_stack(1, 0, &["a.A.run(A.java:1)"]),
+            make_thread_stack(2, 1, &["b.B.run(B.java:2)"]),
+        ];
+        let tmp = std::env::temp_dir().join("mat_threads_multi");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        e.emit_threads(&stacks, &mm, &HashMap::new()).unwrap();
+        let content = std::fs::read_to_string(tmp.join("dump_.threads")).unwrap();
+        assert!(content.contains("Thread 0x10"), "first thread");
+        assert!(content.contains("Thread 0x20"), "second thread");
+        // Each thread block ends with a blank line → content has at least 2 blank lines
+        let blank_lines = content.lines().filter(|l| l.is_empty()).count();
+        assert!(blank_lines >= 2, "expected blank lines between threads, got {blank_lines}");
+    }
 }

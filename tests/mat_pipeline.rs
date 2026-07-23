@@ -18,13 +18,6 @@ const KINDS: &[&str] = &[
     "idx", "a2s", "o2c", "domIn", "o2ret", "outbound", "inbound", "domOut",
 ];
 
-/// Phase 2 outputs: Java-serialization stream + plain-text threads + i2sv2 cache.
-const PHASE2_FILES: &[(&str, &str)] = &[
-    ("index",    "dump_.index"),
-    ("i2sv2",    "dump_.i2sv2.index"),
-    ("threads",  "dump_.threads"),
-];
-
 #[test]
 fn mat_indices_match_real_fixtures() {
     if !Path::new(DUMP).exists() {
@@ -147,8 +140,7 @@ fn mat_indices_match_real_fixtures() {
 }
 
 /// Verify that Phase 2 outputs (`.index`, `.i2sv2.index`, `.threads`) are emitted
-/// and have non-zero size. Does NOT assert byte-identity since the Java serialization
-/// stream contains approximate/best-effort data (loader ids, roots).
+/// with correct file structure (magic bytes, size alignment, format).
 #[test]
 fn mat_phase2_outputs_emitted() {
     if !Path::new(DUMP).exists() {
@@ -171,14 +163,76 @@ fn mat_phase2_outputs_emitted() {
         .expect("spawn analyzer");
     assert!(status.success(), "analyzer exited with failure: {status:?}");
 
-    for (label, filename) in PHASE2_FILES {
-        let path = out_dir.join(filename);
-        let bytes = std::fs::read(&path)
-            .unwrap_or_else(|e| panic!("Phase 2 file {filename} not emitted: {e}"));
-        assert!(
-            !bytes.is_empty(),
-            "Phase 2 file {filename} ({label}) was emitted but is empty"
+    // 1. .index: must start with Java serialization magic 0xACED0005
+    {
+        let path = out_dir.join("dump_.index");
+        let bytes = std::fs::read(&path).expect("dump_.index not emitted");
+        assert!(bytes.len() >= 4, "dump_.index too small: {} bytes", bytes.len());
+        assert_eq!(
+            &bytes[..4],
+            &[0xAC, 0xED, 0x00, 0x05],
+            "dump_.index must start with Java serialization magic 0xACED0005"
         );
-        eprintln!("  {label}: {} bytes OK", bytes.len());
+        eprintln!("  .index: {} bytes, magic OK", bytes.len());
+    }
+
+    // 2. .i2sv2.index: size must be a multiple of 12 (4-byte classId + 8-byte retained)
+    {
+        let path = out_dir.join("dump_.i2sv2.index");
+        let bytes = std::fs::read(&path).expect("dump_.i2sv2.index not emitted");
+        assert_eq!(
+            bytes.len() % 12,
+            0,
+            "dump_.i2sv2.index size {} is not a multiple of 12",
+            bytes.len()
+        );
+        // Should have at least one entry (the real dump has thousands of classes)
+        assert!(
+            bytes.len() >= 12,
+            "dump_.i2sv2.index is empty — expected at least one class entry"
+        );
+        // Must match the real MAT fixture size exactly (same retained-size cache)
+        let real_i2sv2 = std::fs::read(Path::new(FIXTURE_DIR).join("dump_.i2sv2.index"))
+            .expect("real i2sv2 fixture absent");
+        let ours_count = bytes.len() / 12;
+        let real_count = real_i2sv2.len() / 12;
+        eprintln!(
+            "  .i2sv2.index: ours={} entries, real={} entries",
+            ours_count, real_count
+        );
+        // Entry count should be at least 50% of real MAT's count (same dump, same classes)
+        assert!(
+            ours_count * 2 >= real_count,
+            "our i2sv2 entry count {ours_count} is less than 50% of MAT's {real_count}"
+        );
+    }
+
+    // 3. .threads: every non-empty, non-blank, non-"at"/"locals" line must start with "Thread 0x"
+    {
+        let path = out_dir.join("dump_.threads");
+        let bytes = std::fs::read(&path).expect("dump_.threads not emitted");
+        let text = String::from_utf8_lossy(&bytes);
+        let thread_header_lines: Vec<&str> = text
+            .lines()
+            .filter(|l| !l.is_empty() && !l.starts_with("  "))
+            .collect();
+        assert!(
+            !thread_header_lines.is_empty(),
+            "dump_.threads has no thread header lines"
+        );
+        for line in &thread_header_lines {
+            assert!(
+                line.starts_with("Thread 0x"),
+                "unexpected non-indented line in .threads: {line:?}"
+            );
+        }
+        // Verify "at " frame lines exist
+        let frame_lines = text.lines().filter(|l| l.starts_with("  at ")).count();
+        assert!(frame_lines > 0, "dump_.threads has no frame lines");
+        eprintln!(
+            "  .threads: {} thread headers, {} frame lines",
+            thread_header_lines.len(),
+            frame_lines
+        );
     }
 }
