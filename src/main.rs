@@ -219,9 +219,8 @@ enum CompareCmd {
         /// Diff output format (Markdown, JSON, or HTML); defaults to Markdown.
         #[arg(short, long, value_enum)]
         format: Option<FormatArg>,
-        /// Write the diff to this path instead of stdout. A `.gz` suffix
-        /// gzip-compresses the output; the format is inferred from the extension
-        /// when `--format` is omitted.
+        /// Write output to this path instead of stdout. Gzip-compressed when the
+        /// path ends in `.gz`.
         #[arg(short, long, value_hint = ValueHint::FilePath)]
         output: Option<String>,
     },
@@ -329,10 +328,6 @@ fn resolve_format(explicit: Option<FormatArg>, out: Option<&str>) -> OutputForma
         if lower.ends_with(".json") || lower.ends_with(".json.gz") {
             return OutputFormat::Json;
         }
-        // `.graphs.md` → md-graphs (the convention used in docs/samples/).
-        if lower.ends_with(".graphs.md") {
-            return OutputFormat::MdGraphs;
-        }
         // .md / .markdown (and anything else) → plain Markdown.
     }
     OutputFormat::Md
@@ -394,11 +389,7 @@ fn main() {
                     Err(e) => fail(e),
                 }
             }
-            CompareCmd::Reports {
-                reports,
-                format,
-                output,
-            } => {
+            CompareCmd::Reports { reports, format, output } => {
                 // Name a missing input up front for a clear error, mirroring the
                 // MAT arm. Skip "-" (stdin) — it has no filesystem path.
                 for p in &reports {
@@ -406,11 +397,26 @@ fn main() {
                         fail(format!("cannot open '{p}': no such file or directory"));
                     }
                 }
-                let fmt = resolve_format(format, output.as_deref());
-                match diff_reports::run(&reports, fmt) {
+                match diff_reports::run(&reports, resolve_format(format, None)) {
                     Ok(text) => {
-                        if let Err(e) = write_output(output.as_deref(), &text) {
-                            fail(e);
+                        if let Some(path) = output {
+                            let bytes = text.into_bytes();
+                            if path.ends_with(".gz") {
+                                use std::io::Write;
+                                match std::fs::File::create(&path) {
+                                    Ok(f) => {
+                                        let mut gz = flate2::write::GzEncoder::new(f, flate2::Compression::default());
+                                        if let Err(e) = gz.write_all(&bytes).and_then(|_| gz.finish().map(|_| ())) {
+                                            fail(format!("gzip write error: {e}"));
+                                        }
+                                    }
+                                    Err(e) => fail(format!("cannot create '{path}': {e}")),
+                                }
+                            } else if let Err(e) = std::fs::write(&path, &bytes) {
+                                fail(format!("cannot write '{path}': {e}"));
+                            }
+                        } else {
+                            print!("{text}");
                         }
                     }
                     Err(e) => fail(e),
@@ -571,16 +577,6 @@ fn analyze_error_hint(input: &str, e: &io::Error) -> String {
              hit end of file mid-record; re-copy the .hprof dump and retry)"
         );
     }
-    // A structurally valid file that fails parsing (bad id_size, unknown sub-tag,
-    // 16-EiB guard, etc.) surfaces as InvalidData. Distinguish it from random I/O
-    // errors so the user knows the file was read but the format was unrecognised.
-    if e.kind() == io::ErrorKind::InvalidData {
-        return format!(
-            "{msg}\n(hint: '{input}' was parsed as HPROF but a record was \
-             malformed or uses an unsupported variant; verify the file is a \
-             complete, unmodified heap dump)"
-        );
-    }
     msg
 }
 
@@ -734,16 +730,11 @@ fn render_report(path: &str, format: OutputFormat) -> io::Result<String> {
             format!("invalid report JSON: {e}"),
         )
     })?;
-    // Accept any report at or below the version this build understands. Every
-    // field added since v1 is `#[serde(default)]`, so an older/smaller shape
-    // deserializes cleanly (missing fields fall back to their defaults). Only a
-    // strictly-newer schema — which may carry fields this build cannot represent
-    // — is refused.
     if report.schema_version > report::SCHEMA_VERSION {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
-                "report schema_version {} is newer than supported version {}; refusing to render (upgrade hprof-analyzer)",
+                "report schema_version {} is newer than supported version {}; refusing to render",
                 report.schema_version,
                 report::SCHEMA_VERSION
             ),
