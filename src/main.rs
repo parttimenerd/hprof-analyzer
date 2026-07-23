@@ -303,6 +303,13 @@ enum Cmd {
         /// Start an interactive OQL REPL reading queries from stdin.
         #[arg(long)]
         repl: bool,
+        /// Run a loopback HTTP server so tools can POST OQL and get JSON back.
+        /// See the startup banner for usage; GET /help returns the language ref.
+        #[arg(long, conflicts_with = "repl")]
+        server: bool,
+        /// Port for --server (default 7070; binds 127.0.0.1 only).
+        #[arg(long, value_name = "N")]
+        port: Option<u16>,
         /// Restrict OQL results to GC-reachable objects (Eclipse MAT parity).
         /// This is the default for the `query` subcommand; pass `--all` to
         /// include unreachable objects (raw heap scan).
@@ -553,6 +560,8 @@ fn main() {
             query_file,
             query_path_depth,
             repl,
+            server,
+            port,
             reachable_only: _,
             all,
         }) => {
@@ -561,7 +570,15 @@ fn main() {
                     "'{input}' is not an HPROF dump; the `query` subcommand needs a .hprof[.zip] file"
                 ));
             }
-            if repl {
+            if server {
+                // Loopback HTTP server: POST OQL, get JSON back. Reads no stdin;
+                // --query/--query-file are ignored.
+                if let Err(e) =
+                    crate::query::server::run_server(&input, query_path_depth, port.unwrap_or(7070))
+                {
+                    fail(analyze_error_hint(&input, &e));
+                }
+            } else if repl {
                 // Interactive mode reads queries from stdin; --query/--query-file
                 // are ignored.
                 if let Err(e) = crate::query::repl::run_repl(&input, query_path_depth) {
