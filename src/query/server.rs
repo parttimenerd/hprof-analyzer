@@ -135,6 +135,29 @@ pub fn run_query_json(
     }
 }
 
+/// JSON Schema for the QueryResult shape, generated from the schemars derive so
+/// tools can validate responses / codegen types. Derived at request time (cheap).
+pub fn schema_json() -> serde_json::Value {
+    serde_json::to_value(schemars::schema_for!(crate::query::model::QueryResult))
+        .unwrap_or_else(|_| serde_json::json!({}))
+}
+
+/// Server + language version and a machine-readable endpoint catalog.
+pub fn version_json() -> serde_json::Value {
+    serde_json::json!({
+        "name": "hprof-analyzer OQL server",
+        "version": env!("CARGO_PKG_VERSION"),
+        "endpoints": [
+            {"method":"POST","path":"/","desc":"run OQL, JSON QueryResult back"},
+            {"method":"POST","path":"/query","desc":"alias of /"},
+            {"method":"POST","path":"/stream","desc":"run OQL, NDJSON rows (one per line)"},
+            {"method":"GET","path":"/help","desc":"language reference JSON"},
+            {"method":"GET","path":"/schema","desc":"JSON Schema for QueryResult"},
+            {"method":"GET","path":"/version","desc":"this document"}
+        ]
+    })
+}
+
 /// Build the language-reference JSON served at GET /help. Keyword/attribute/
 /// function/aggregate/method lists come from the parse.rs const slices (the
 /// single source of truth the REPL completer also uses); class/field lists are
@@ -156,7 +179,8 @@ pub fn help_json(path: &str) -> serde_json::Value {
         "usage": {
             "query": "POST / with the OQL as the raw body, or {\"query\":\"...\"}",
             "response": "JSON {\"ok\":true,\"result\":<QueryResult>} or {\"ok\":false,\"error\":{...}}",
-            "example": "SELECT @objectAddress FROM java.lang.Thread"
+            "example": "SELECT @objectAddress FROM java.lang.Thread",
+            "endpoints": version_json()["endpoints"].clone()
         }
     })
 }
@@ -218,12 +242,14 @@ impl ServerState {
             }
             ("GET", "/help") => (200, help_json(&self.path).to_string()),
             ("GET", "/") => (200, help_json(&self.path).to_string()),
+            ("GET", "/schema") => (200, schema_json().to_string()),
+            ("GET", "/version") => (200, version_json().to_string()),
             // Known path, unsupported method -> 405 (not 404).
-            (_, "/") | (_, "/query") | (_, "/help") => (405, serde_json::json!({
+            (_, "/") | (_, "/query") | (_, "/help") | (_, "/schema") | (_, "/version") => (405, serde_json::json!({
                 "ok": false,
                 "error": {
                     "kind": "method",
-                    "message": format!("method {method} not allowed on {path} (use POST for /, /query; GET for /, /help)")
+                    "message": format!("method {method} not allowed on {path} (use POST for /, /query; GET for /, /help, /schema, /version)")
                 }
             }).to_string()),
             _ => (404, serde_json::json!({
@@ -535,6 +561,24 @@ mod tests {
         // GET on the POST-only /query path is likewise 405.
         let (status, _) = state.route("GET", "/query", "");
         assert_eq!(status, 405, "GET /query -> 405");
+    }
+
+    #[test]
+    fn version_endpoint_lists_all_routes() {
+        let v = version_json();
+        let paths: Vec<&str> = v["endpoints"].as_array().unwrap().iter()
+            .map(|e| e["path"].as_str().unwrap()).collect();
+        for p in ["/", "/query", "/stream", "/help", "/schema", "/version"] {
+            assert!(paths.contains(&p), "endpoint catalog missing {p}: {v}");
+        }
+    }
+
+    #[test]
+    fn schema_json_describes_query_result_fields() {
+        let s = schema_json().to_string();
+        // The schema must mention the core result fields so codegen/validation works.
+        assert!(s.contains("rows") && s.contains("columns") && s.contains("row_count"),
+            "schema missing core fields: {}", &s[..s.len().min(300)]);
     }
 
     #[test]

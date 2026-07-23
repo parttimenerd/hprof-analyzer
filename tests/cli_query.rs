@@ -4854,4 +4854,34 @@ mod server_cli {
         assert!(first["v"]["addr"].is_u64(), "obj_ref carries a numeric addr: {first}");
         assert!(first["v"]["index"].is_u64() && first["v"]["class"].is_string(), "index+class still present");
     }
+
+    #[test]
+    fn server_schema_endpoint_returns_json_schema() {
+        let Some(hprof) = philosophers() else { return };
+        let srv = spawn(&hprof);
+        let (status, _h, body) = parse_resp(&http(srv.port, "GET", "/schema", ""));
+        assert!(status.contains("200"), "200: {body}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let s = serde_json::to_string(&v).unwrap();
+        assert!(s.contains("QueryResult"), "schema mentions QueryResult: {}", &s[..s.len().min(200)]);
+    }
+
+    #[test]
+    fn server_version_endpoint_lists_endpoints() {
+        let Some(hprof) = philosophers() else { return };
+        let srv = spawn(&hprof);
+        let (status, _h, body) = parse_resp(&http(srv.port, "GET", "/version", ""));
+        assert!(status.contains("200"), "200: {body}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!(v["version"].as_str().map_or(false, |s| !s.is_empty()), "version present: {v}");
+        assert!(v["endpoints"].is_array() && !v["endpoints"].as_array().unwrap().is_empty(), "endpoint list: {v}");
+    }
+
+    #[test]
+    fn server_wrong_method_on_schema_is_405() {
+        let Some(hprof) = philosophers() else { return };
+        let srv = spawn(&hprof);
+        let (status, _h, _body) = parse_resp(&http(srv.port, "POST", "/schema", ""));
+        assert!(status.contains("405"), "405 on POST /schema: {status}");
+    }
 }
