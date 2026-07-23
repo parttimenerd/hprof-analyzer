@@ -1185,6 +1185,20 @@ fn missing_from_hint(src: &str) -> Option<&'static str> {
     }
 }
 
+/// A hint for an `unexpected Eq` error caused by a `==` operator: OQL equality
+/// is a single `=`, so `==` lexes as two `Eq` tokens and the second one is
+/// unexpected. Given the byte offset of that second `=`, confirm a `=`
+/// immediately precedes it (ignoring nothing — they are adjacent) and return the
+/// hint. Returns `None` for a lone `=`.
+fn double_eq_hint(src: &str, eq_offset: usize) -> Option<&'static str> {
+    let before = src.get(..eq_offset)?;
+    if before.ends_with('=') {
+        Some("use `=` for equality (OQL has no `==`)")
+    } else {
+        None
+    }
+}
+
 /// A hint for an error following `ORDER` when the `BY` keyword is missing
 /// (`ORDER <key>` instead of `ORDER BY <key>`). Word-boundary, case-insensitive
 /// so `reorder` doesn't trigger it. Returns `None` when `ORDER` is absent or is
@@ -1230,6 +1244,12 @@ fn compact_error(src: &str, e: &Rich<'_, Token>) -> String {
             // after ORDER; hint the missing BY before the generic suggestion.
             if let Some(hint) = missing_by_hint(src) {
                 return format!("unexpected {found} at {line}:{col} — {hint}");
+            }
+            // `==` lexes as two `Eq`; the second is unexpected. Hint the single `=`.
+            if matches!(e.found(), Some(Token::Eq)) {
+                if let Some(hint) = double_eq_hint(src, span.start) {
+                    return format!("unexpected {found} at {line}:{col} — {hint}");
+                }
             }
             // An `unexpected LParen` usually means the preceding word was meant to
             // be a function call but names an unknown function; suggest the nearest.
@@ -1314,6 +1334,13 @@ pub fn parse_or_report(src: &str) -> Result<Query, String> {
                             }
                         } else if let Some(hint) = missing_by_hint(src) {
                             format!("unexpected {found} — {hint}")
+                        } else if matches!(e.found(), Some(Token::Eq))
+                            && double_eq_hint(src, span.start).is_some()
+                        {
+                            format!(
+                                "unexpected {found} — {}",
+                                double_eq_hint(src, span.start).unwrap()
+                            )
                         } else if matches!(e.found(), Some(Token::LParen)) {
                             match unknown_call_hint(src, span.start) {
                                 Some(callee) => {
@@ -2953,6 +2980,30 @@ mod tests {
         assert!(missing_by_hint("SELECT * FROM C").is_none());
         // Negative: `order` only as a substring must not count.
         assert!(missing_by_hint("SELECT reorder FROM C").is_none());
+    }
+
+    #[test]
+    fn double_equals_is_hinted() {
+        // `== ` is a common SQL-ism; OQL equality is a single `=`.
+        let err = parse("SELECT * FROM java.lang.Thread WHERE @objectId == 1")
+            .expect_err("== should error");
+        assert!(
+            err.0.contains('=') && err.0.to_lowercase().contains("equality"),
+            "expected a `==` -> `=` hint, got: {}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn double_eq_hint_helper_detects_adjacent_eq() {
+        // The byte offset of the SECOND `=` in `==` has a `=` immediately before.
+        let src = "a == b";
+        let second_eq = src.match_indices('=').nth(1).unwrap().0;
+        assert!(double_eq_hint(src, second_eq).is_some());
+        // A lone `=` (offset of the only `=`) has no preceding `=`.
+        let src2 = "a = b";
+        let eq = src2.find('=').unwrap();
+        assert!(double_eq_hint(src2, eq).is_none());
     }
 
     #[test]
