@@ -162,6 +162,7 @@ function Nav({ report }: { report: Report }) {
   addData("collections", "Collections");
   if (report.collection_attribution) addData("container-attribution-classfield", "Container Attribution");
   if (report.fields_by_size) addData("fields-by-retained-size-classfield", "Fields by Size");
+  if (report.top_retainers?.length) addData("top-retainers", "Top Retainers");
   if (report.biggest_collections) addData("biggest-collections", "Biggest Collections");
   if (report.collection_contents) addData("collection-contents-by-type", "Collection Contents");
   addData("references", "References");
@@ -1796,9 +1797,9 @@ function TopConsumersSection({ report }: { report: Report }) {
   const clsSort = useSortedRows<ClassRow>(t.biggest_classes, "retained");
   const objCap = useCapped(objSort.sorted);
   const clsCap = useCapped(clsSort.sorted);
-  // "Held via" names the dominant incoming Class#field referrer; the column is
-  // shown only when attribution data populated at least one owner.
-  const objHasOwner = t.biggest_objects.some((o) => !!o.owner);
+  // "Held via" shows the dominant Class#field owner OR the holding stack frame;
+  // the column is shown only when at least one row has either.
+  const objHasOwner = t.biggest_objects.some((o) => !!o.owner || !!o.held_via);
   const objCols = objHasOwner ? 6 : 5;
 
   // Column resize hooks for the two main tables.
@@ -1848,7 +1849,15 @@ function TopConsumersSection({ report }: { report: Report }) {
                 {formatBytes(o.retained)}
               </td>
               <td className="num">{fmtPct(pctOf(o.retained, total))}</td>
-              {objHasOwner && <td>{o.owner ? <code>{o.owner}</code> : "—"}</td>}
+              {objHasOwner && (
+                <td>
+                  {o.owner ? (
+                    <code>{o.owner}</code>
+                  ) : o.held_via ? (
+                    <><code>{o.held_via}</code> <span className="muted">(stack)</span></>
+                  ) : "—"}
+                </td>
+              )}
             </tr>
           ))}
           <ShowMoreRow extra={objCap.extra} cols={objCols} showAll={objCap.showAll} setShowAll={objCap.setShowAll} />
@@ -2604,6 +2613,33 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
 // Which holder Class#field points at the most container memory. Absent when
 // --collections was off (data undefined → section not rendered). Mirrors
 // render_md.rs::render_collection_attribution (HTML has no bar columns).
+function TinyCollectionTable({ rows }: { rows: import("./types").TinyCollectionRow[] }) {
+  return (
+    <table>
+      <thead>
+        <tr>
+          <th>Class#field</th>
+          <th>Kind</th>
+          <th className="num">Empty</th>
+          <th className="num">Singleton</th>
+          <th className="num">Overhead Bytes</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r, i) => (
+          <tr key={i}>
+            <td><code>{r.holder_class}#{r.field}</code></td>
+            <td>{r.container_kind}</td>
+            <td className="num">{fmtCount(r.empty_count)}</td>
+            <td className="num">{fmtCount(r.singleton_count)}</td>
+            <td className="num">{formatBytes(r.overhead_bytes)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 function CollectionAttributionSection({ data }: { data?: CollectionAttribution }) {
   if (!data) return null;
   const mostOverall = data.most_overall ?? [];
@@ -2680,6 +2716,17 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
             <ShowMoreRow extra={singleCap.extra} cols={6} showAll={singleCap.showAll} setShowAll={singleCap.setShowAll} />
           </tbody>
         </table>
+      )}
+
+      {data.tiny_overhead && data.tiny_overhead.length > 0 && (
+        <>
+          <h3>Tiny Collection Overhead</h3>
+          <p className="subtitle">
+            Empty (size-0) and singleton (size-1) collections whose wrapper objects are pure overhead.
+            Overhead bytes = object count × reference-slot width.
+          </p>
+          <TinyCollectionTable rows={data.tiny_overhead} />
+        </>
       )}
 
       {data.truncated && (
@@ -3444,6 +3491,40 @@ function LeakIndicatorsSection({ data }: { data?: LeakIndicators }) {
   );
 }
 
+// ── Top Retainers (§813) ───────────────────────────────────────────────────────
+// Merged Class#field + stack-frame retainers, sorted by retained desc.
+function TopRetainersSection({ rows }: { rows?: import("./types").RetainerRow[] }) {
+  if (!rows || rows.length === 0) return null;
+  return (
+    <section id="top-retainers">
+      <h2>Top Retainers</h2>
+      <p className="subtitle">
+        Merged ranking of <code>Class#field</code> references and stack-frame locals by total
+        retained heap. Fields come from collection attribution; stack frames from thread-local
+        analysis (<code>--thread-locals</code>).
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Kind</th>
+            <th className="num">Retained</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i}>
+              <td><code>{r.name}</code></td>
+              <td>{r.kind}</td>
+              <td className="num">{formatBytes(r.retained)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
 // ── Glossary (end section, mirrors the Markdown glossary) ─────────────────────
 function GlossarySection() {
   const entries: [string, React.ReactNode][] = [
@@ -3827,6 +3908,9 @@ export default function App({ report }: { report: Report }) {
         <CollectionAttributionSection data={report.collection_attribution} />
       )}
       {report.fields_by_size && <FieldsBySizeSection data={report.fields_by_size} />}
+      {report.top_retainers && report.top_retainers.length > 0 && (
+        <TopRetainersSection rows={report.top_retainers} />
+      )}
       {report.biggest_collections && <BiggestCollectionsSection data={report.biggest_collections} />}
       {report.collection_contents && <CollectionContentsSection data={report.collection_contents} />}
       <ReferencesSection data={report.references} />

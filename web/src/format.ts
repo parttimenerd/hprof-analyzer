@@ -1,36 +1,15 @@
-// Formatting helpers mirroring src/report/format.rs (format_bytes, fmt_count,
-// fmt_pct) so the HTML matches the Markdown/JSON views byte-for-byte.
+// Formatting helpers mirroring src/report.rs (format_bytes, fmt_count) so the
+// HTML matches the Markdown/JSON views.
 
-// Binary (1024-based) byte sizes: B/KB/MB/GB/TB/PB. Mirrors Rust format_bytes,
-// including the boundary guard so a value just under a unit threshold does not
-// round up into "1024.0 KB".
 export function formatBytes(n: number): string {
-  const KB = 1024;
-  const MB = 1024 * KB;
-  const GB = 1024 * MB;
-  const TB = 1024 * GB;
-  const PB = 1024 * TB;
-  if (n < KB) return `${n} B`;
-  const kb = n / KB;
-  if (n < MB && Math.round(kb * 10) < 1024 * 10) return `${kb.toFixed(1)} KB`;
-  const mb = n / MB;
-  if (n < GB && Math.round(mb * 10) < 1024 * 10) return `${mb.toFixed(1)} MB`;
-  const gb = n / GB;
-  if (n < TB && Math.round(gb * 100) < 1024 * 100) return `${gb.toFixed(2)} GB`;
-  const tb = n / TB;
-  if (n < PB && Math.round(tb * 100) < 1024 * 100) return `${tb.toFixed(2)} TB`;
-  return `${(n / PB).toFixed(2)} PB`;
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
 export function fmtCount(n: number): string {
   return n.toLocaleString("en-US");
-}
-
-// One-decimal percent with a "<0.1%" floor for tiny-but-nonzero shares, so a
-// nonzero contributor is never printed as exactly "0.0%". Mirrors Rust fmt_pct.
-export function fmtPct(p: number): string {
-  if (p > 0 && p < 0.05) return "<0.1%";
-  return `${p.toFixed(1)}%`;
 }
 
 // Exact byte count with thousands separators, e.g. "509,972,304". MAT's Leak
@@ -43,6 +22,15 @@ export function fmtExactBytes(n: number): string {
 // Percent of a total (retained / total * 100), matching the OOM-triage basis.
 export function pctOf(part: number, total: number): number {
   return total > 0 ? (part / total) * 100 : 0;
+}
+
+// Format a percentage with one decimal place and a `<0.1%` floor, mirroring
+// Rust's `fmt_pct`. Use this wherever a "% Heap" or "% of total" figure is
+// displayed so all formats agree on precision and the floor.
+export function fmtPct(p: number): string {
+  if (p <= 0) return "0.0%";
+  if (p < 0.1) return "<0.1%";
+  return p.toFixed(1) + "%";
 }
 
 // A dump-creation timestamp: millis since epoch -> ISO date (UTC, second res).

@@ -316,6 +316,9 @@ export interface ObjRow {
   // Dominant incoming reference (`Class#field`) that holds this object. Absent
   // when --collections was off or no attributed field points at it.
   owner?: string | null;
+  // Stack-frame holding this object (`ClassName#methodName()`). Present only
+  // when the object is a significant local and no field owner was found.
+  held_via?: string | null;
 }
 
 export interface ClassRow {
@@ -589,6 +592,17 @@ export interface CollectionAttribution {
   most_overall: FieldAttributionRow[];
   biggest_single: FieldAttributionBiggestRow[];
   truncated: boolean;
+  // Size-{0,1} collection overhead by Class#field (§46.2).
+  tiny_overhead?: TinyCollectionRow[];
+}
+
+export interface TinyCollectionRow {
+  holder_class: string;
+  field: string;
+  container_kind: string;
+  empty_count: number;
+  singleton_count: number;
+  overhead_bytes: number;
 }
 
 // Fields by Retained Size (Class#field): which holder field retains the most
@@ -711,6 +725,15 @@ export interface Report {
   waste_summary?: WasteSummary;
   // Fired OOM-triage signals, evaluated once in Rust (order = render order).
   triage?: TriageSignal[];
+  // Merged top retainers: Class#field + stack-frame, sorted by retained desc (§813).
+  top_retainers?: RetainerRow[];
+}
+
+// One row of the merged Top Retainers table (§813).
+export interface RetainerRow {
+  name: string;
+  kind: string;
+  retained: number;
 }
 
 // One quantifiable waste source: a human label, approximate reclaimable bytes,
