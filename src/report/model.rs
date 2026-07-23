@@ -592,6 +592,11 @@ pub struct ObjRow {
     /// `None` when `--collections` was off or no attributed field points at it.
     #[serde(default)]
     pub owner: Option<String>,
+    /// Stack-frame holding this object (`ClassName#methodName()`), when the
+    /// object is a significant local in a thread's stack frame and no field
+    /// owner was found. `None` otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_via: Option<String>,
 }
 
 /// One row of "Biggest Classes".
@@ -1095,7 +1100,25 @@ pub struct FieldAttributionBiggestRow {
 pub struct CollectionAttribution {
     pub most_overall: Vec<FieldAttributionRow>,
     pub biggest_single: Vec<FieldAttributionBiggestRow>,
+    /// Class#field pairs owning the most size-{0,1} collections,
+    /// ranked by wrapper-overhead bytes.
+    #[serde(default)]
+    pub tiny_overhead: Vec<TinyCollectionRow>,
     pub truncated: bool,
+}
+
+/// One row in the tiny-collection overhead ranking (§46.2).
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct TinyCollectionRow {
+    pub holder_class: String,
+    pub field: String,
+    pub container_kind: String,
+    pub empty_count: u64,
+    pub singleton_count: u64,
+    /// Estimated overhead bytes: (empty_count + singleton_count) × 80.
+    pub overhead_bytes: u64,
 }
 
 /// One holder `Class#field` (with declared field type) ranked by the total
@@ -1400,4 +1423,18 @@ pub struct Report {
     /// `#[serde(default)]` keeps pre-v4 JSON (which lacks the field) loadable.
     #[serde(default)]
     pub triage: Vec<TriageSignal>,
+    /// Merged top-retainers: `Class#field` holders + `Class#method()` stack
+    /// frames, sorted by total retained descending, capped at 20.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub top_retainers: Vec<RetainerRow>,
+}
+
+/// One row of the merged Top Retainers table (§813).
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct RetainerRow {
+    pub name: String,
+    pub kind: String,
+    pub retained: u64,
 }

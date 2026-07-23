@@ -67,7 +67,8 @@ pub fn build_model(
         opts.dominator_tree_max_depth,
     );
     crate::trace::probe("build_model: after leak_suspects aggregates");
-    let top = build_top_consumers(g, opts.top_consumers);
+    let stack_held_via = build_stack_held_via(g);
+    let top = build_top_consumers(g, opts.top_consumers, &stack_held_via);
     crate::trace::probe("build_model: after top_consumers aggregates");
     let threads = build_thread_overview(g, overview.total_shallow);
     crate::trace::probe("build_model: after thread_overview aggregates");
@@ -81,6 +82,7 @@ pub fn build_model(
     let fields_by_size = build_fields_by_size(g, &overview);
     let biggest_collections = build_biggest_collections(g);
     let collection_contents = build_collection_contents(g);
+    let top_retainers = build_top_retainers(&fields_by_size, &threads);
     let mut report = Report {
         schema_version: SCHEMA_VERSION,
         generated,
@@ -101,6 +103,7 @@ pub fn build_model(
         leak_indicators: build_leak_indicators(g),
         waste_summary: None,
         triage: Vec::new(),
+        top_retainers,
     };
     // Fold every quantifiable waste source into one headline reclaimable figure.
     report.waste_summary = build_waste_summary(&report);
@@ -250,6 +253,35 @@ fn class_display(g: &Graph, i: usize) -> String {
     } else {
         String::new()
     }
+}
+
+/// Resolve the display type string for a collection element at dense index
+/// `vi`. For plain elements, returns the class name. For Node/Entry wrapper
+/// objects whose key/value fields were recorded in `g.node_kv`, returns
+/// `"KeyClass → ValueClass"` (or a partial form when only one side is
+/// available). Falls back to the raw class name when no KV data is present.
+fn element_type_display(g: &Graph, vi: u32) -> String {
+    if let Some(kv_map) = &g.node_kv {
+        if let Some(&(key_idx, val_idx)) = kv_map.get(&vi) {
+            let key_cls = if key_idx != u32::MAX {
+                class_display(g, key_idx as usize)
+            } else {
+                String::new()
+            };
+            let val_cls = if val_idx != u32::MAX {
+                class_display(g, val_idx as usize)
+            } else {
+                String::new()
+            };
+            return match (key_cls.is_empty(), val_cls.is_empty()) {
+                (false, false) => format!("{} \u{2192} {}", key_cls, val_cls),
+                (false, true) => key_cls,
+                (true, false) => val_cls,
+                (true, true) => class_display(g, vi as usize),
+            };
+        }
+    }
+    class_display(g, vi as usize)
 }
 
 /// Build the reference-kind statistics for the report from the graph's
@@ -571,7 +603,7 @@ fn build_biggest_collections(g: &Graph) -> Option<BiggestCollections> {
             let mut counts: std::collections::HashMap<String, u64> =
                 std::collections::HashMap::new();
             for &vi in &c.value_indices {
-                *counts.entry(class_display(g, vi as usize)).or_insert(0) += 1;
+                *counts.entry(element_type_display(g, vi)).or_insert(0) += 1;
             }
             let retained = g
                 .retained
@@ -648,7 +680,7 @@ fn build_collection_contents(g: &Graph) -> Option<CollectionContents> {
         acc.total_values += c.value_indices.len() as u64;
         for &vi in &c.value_indices {
             *acc.type_counts
-                .entry(class_display(g, vi as usize))
+                .entry(element_type_display(g, vi))
                 .or_insert(0) += 1;
         }
     }
@@ -709,6 +741,13 @@ fn aggregate_collection_attribution(
 
     let mut overall: HashMap<(String, String), OverallAcc> = HashMap::new();
     let mut biggest: HashMap<(String, String), BiggestAcc> = HashMap::new();
+    // tiny: keyed by (holder_class, field, container_kind), dedup by container_idx.
+    struct TinyAcc {
+        empty_count: u64,
+        singleton_count: u64,
+        seen: std::collections::HashSet<u32>,
+    }
+    let mut tiny: HashMap<(String, String, u8), TinyAcc> = HashMap::new();
 
     for rec in raw {
         let retained_bytes = retained
@@ -753,6 +792,24 @@ fn aggregate_collection_attribution(
             b.container_class = crate::report::pretty_class_name(&rec.container_class);
             b.capacity = rec.capacity;
             b.container_kind = rec.container_kind;
+        }
+
+        // tiny: count empty/singleton containers per (holder, field, kind).
+        if rec.elements <= 1 {
+            let ta = tiny
+                .entry((rec.holder_class.clone(), rec.field.clone(), rec.container_kind))
+                .or_insert_with(|| TinyAcc {
+                    empty_count: 0,
+                    singleton_count: 0,
+                    seen: std::collections::HashSet::new(),
+                });
+            if ta.seen.insert(rec.container_idx) {
+                if rec.elements == 0 {
+                    ta.empty_count += 1;
+                } else {
+                    ta.singleton_count += 1;
+                }
+            }
         }
     }
 
@@ -809,9 +866,35 @@ fn aggregate_collection_attribution(
     });
     biggest_single.truncate(ATTRIBUTION_TOP_N);
 
+    let mut tiny_overhead: Vec<crate::report::model::TinyCollectionRow> = tiny
+        .into_iter()
+        .filter_map(|((holder_class, field, kind), ta)| {
+            let total = ta.empty_count + ta.singleton_count;
+            if total == 0 {
+                return None;
+            }
+            Some(crate::report::model::TinyCollectionRow {
+                holder_class,
+                field,
+                container_kind: kind_label(kind).to_string(),
+                empty_count: ta.empty_count,
+                singleton_count: ta.singleton_count,
+                overhead_bytes: total * 80,
+            })
+        })
+        .collect();
+    tiny_overhead.sort_by(|a, b| {
+        b.overhead_bytes
+            .cmp(&a.overhead_bytes)
+            .then_with(|| a.holder_class.cmp(&b.holder_class))
+            .then_with(|| a.field.cmp(&b.field))
+    });
+    tiny_overhead.truncate(20);
+
     CollectionAttribution {
         most_overall,
         biggest_single,
+        tiny_overhead,
         truncated,
     }
 }
@@ -2746,10 +2829,122 @@ pub(crate) fn build_size_distribution(retained_desc: &[u64]) -> TopSizeDistribut
     }
 }
 
+/// Build a dense-object-index → "ClassName#methodName()" map for every object
+/// that appears as a significant local in any thread's stack frames. Used to
+/// annotate `ObjRow::held_via` for objects held by stack frames rather than
+/// fields. Returns an empty map when `--thread-locals` was not set (the gated
+/// `thread_local_frame_samples` map is empty).
+fn build_stack_held_via(g: &Graph) -> std::collections::HashMap<u32, String> {
+    use std::collections::HashMap;
+    let mut out: HashMap<u32, String> = HashMap::new();
+    for (&_thread_serial, pairs) in &g.thread_local_frame_samples {
+        // Find the ThreadStack for this thread so we can resolve frame_number.
+        let stack = g.thread_stacks.iter().find(|ts| {
+            pairs
+                .iter()
+                .any(|_| ts.thread_serial == _thread_serial)
+        });
+        for &(frame_number, local_idx) in pairs {
+            if out.contains_key(&local_idx) {
+                continue; // first writer wins — highest-retained frame
+            }
+            let label = if let Some(ts) = stack {
+                if frame_number == u32::MAX {
+                    "<no frame>".to_string()
+                } else {
+                    ts.frames
+                        .get(frame_number as usize)
+                        .cloned()
+                        .unwrap_or_else(|| format!("<frame #{frame_number}>"))
+                }
+            } else {
+                format!("<frame #{frame_number}>")
+            };
+            // Convert the pre-rendered "class.method (source:line)" label to
+            // "ClassName#methodName()" for the held-via column.
+            out.insert(local_idx, frame_to_class_method(&label));
+        }
+    }
+    out
+}
+
+/// Convert a pre-rendered frame line `"com.example.Foo.bar (Foo.java:42)"` to
+/// `"com.example.Foo#bar()"`. Falls back to the original string on any parse
+/// failure so the column always has a non-empty value.
+fn frame_to_class_method(frame: &str) -> String {
+    // Frame format: "class.method (source:line)" — strip the " (…)" suffix first.
+    let label = if let Some(paren) = frame.find(" (") {
+        &frame[..paren]
+    } else {
+        frame
+    };
+    // Split at the LAST dot to separate class from method.
+    if let Some(dot) = label.rfind('.') {
+        let class = &label[..dot];
+        let method = &label[dot + 1..];
+        if !class.is_empty() && !method.is_empty() {
+            return format!("{}#{}()", class, method);
+        }
+    }
+    frame.to_string()
+}
+
+/// Build the merged Top Retainers table (§813): combine `fields_by_size` rows
+/// (Class#field retainers) and significant thread frames, deduplicated and
+/// sorted by retained desc. Capped at 25 rows. Returns an empty Vec when both
+/// sources are absent.
+fn build_top_retainers(
+    fields_by_size: &Option<FieldsBySize>,
+    threads: &ThreadOverview,
+) -> Vec<RetainerRow> {
+    use std::collections::HashMap;
+    let mut by_name: HashMap<String, (String, u64)> = HashMap::new(); // name -> (kind, retained)
+
+    // Source 1: Class#field attribution rows.
+    if let Some(fbs) = fields_by_size {
+        for row in &fbs.rows {
+            let name = format!("{}#{}", row.holder_class, row.field);
+            let entry = by_name.entry(name).or_insert(("field".to_string(), 0));
+            entry.1 = entry.1.saturating_add(row.total_retained);
+        }
+    }
+
+    // Source 2: significant stack frames from thread overview.
+    for thread in &threads.threads {
+        for sf in &thread.significant_frames {
+            if sf.frame.starts_with('<') {
+                continue; // skip synthetic no-frame bucket
+            }
+            let label = frame_to_class_method(&sf.frame);
+            let frame_retained: u64 = sf.locals.iter().map(|l| l.retained).sum();
+            if frame_retained == 0 {
+                continue;
+            }
+            let entry = by_name
+                .entry(label)
+                .or_insert(("stack-frame".to_string(), 0));
+            entry.1 = entry.1.saturating_add(frame_retained);
+        }
+    }
+
+    let mut rows: Vec<RetainerRow> = by_name
+        .into_iter()
+        .map(|(name, (kind, retained))| RetainerRow { name, kind, retained })
+        .collect();
+    // Retained desc; tie-break name asc for determinism.
+    rows.sort_by(|a, b| b.retained.cmp(&a.retained).then(a.name.cmp(&b.name)));
+    rows.truncate(25);
+    rows
+}
+
 /// Build the "Top Consumers" model: biggest objects (top-level dominators by
 /// retained), biggest classes, and the pruned package tree. Bounded reductions
 /// over the graph; no per-object Vec is retained.
-fn build_top_consumers(g: &Graph, top_n: usize) -> TopConsumers {
+fn build_top_consumers(
+    g: &Graph,
+    top_n: usize,
+    stack_held_via: &std::collections::HashMap<u32, String>,
+) -> TopConsumers {
     let n = g.n;
     let vroot = n as u32;
     let undef = u32::MAX;
@@ -2844,6 +3039,13 @@ fn build_top_consumers(g: &Graph, top_n: usize) -> TopConsumers {
                 0
             };
 
+            let owner = biggest_owner.get(&i).cloned();
+            // held_via: use stack frame annotation only when no field owner found.
+            let held_via = if owner.is_none() {
+                stack_held_via.get(&i).cloned()
+            } else {
+                None
+            };
             ObjRow {
                 obj_index_1based: idx + 1,
                 display_class,
@@ -2851,7 +3053,8 @@ fn build_top_consumers(g: &Graph, top_n: usize) -> TopConsumers {
                 retained: g.retained[idx],
                 pct_bp,
                 pct,
-                owner: biggest_owner.get(&i).cloned(),
+                owner,
+                held_via,
             }
         })
         .collect();

@@ -61,6 +61,10 @@ const FIELD_SIZE_POINTEES_PER_GROUP: usize = 100_000;
 const COLL_VALUES_PER_COLLECTION: usize = 4_096;
 /// Max distinct collections whose element types are tallied.
 const COLL_VALUES_GROUP_CAP: usize = 200_000;
+/// Max node/entry wrapper objects stored in the node-KV map (dense idx →
+/// (key dense idx, value dense idx)). Entries beyond this cap are silently
+/// dropped; callers fall back to showing the wrapper class name.
+const NODE_KV_CAP: usize = 5_000_000;
 
 // ── Collection descriptor table ──────────────────────────────────────────────
 
@@ -896,6 +900,7 @@ type FieldDecodeViews = (
     Option<Vec<AttributionRaw>>,
     Option<Vec<FieldSizeRaw>>,
     Option<Vec<CollValuesRaw>>,
+    Option<HashMap<u32, (u32, u32)>>, // node_kv: wrapper dense idx → (key, val)
     bool,
     u64, // direct_byte_buffer_capacity_sum
     u64, // thread_local_null_key_count
@@ -977,6 +982,15 @@ pub(crate) fn build_field_decode_views(
     // [(field_name_id, byte_offset)].  Populated unconditionally, separate from
     // `obj_field_layout` (which uses interned u32 keys, only under --collections).
     let mut light_field_layout: HashMap<u64, Vec<(u64, u32)>> = HashMap::new();
+
+    // ── Node/Entry KV unwrapping (only under --collections) ──────────────────
+    // Maps each Node/Entry wrapper's dense index to the dense indices of its
+    // `key` and `value` fields. Used in build_model to show real K/V types in
+    // Biggest Collections instead of the tautological wrapper class name.
+    // class_id → Option<(key_byte_offset, val_byte_offset)>: None = not a wrapper
+    let mut node_kv_layout: HashMap<u64, Option<(u32, u32)>> = HashMap::new();
+    // dense_idx → (key_dense_idx, val_dense_idx); u32::MAX = null/missing
+    let mut node_kv_raw: HashMap<u32, (u32, u32)> = HashMap::new();
 
     // ── DirectByteBuffer capacity sum ────────────────────────────────────────
     // Resolve once before scan 1: find the class-object address for
@@ -1260,6 +1274,98 @@ pub(crate) fn build_field_decode_views(
                     }
                     if array_owner_by_addr.len() >= ARRAY_OWNER_CAP {
                         break;
+                    }
+                }
+            }
+
+            // ── Node/Entry KV unwrapping (under --collections) ────────────────
+            // Detect Node/Entry wrapper objects and record their key/value refs
+            // so build_model can show real K/V classes instead of the wrapper.
+            if collect_attribution && node_kv_raw.len() < NODE_KV_CAP {
+                // Resolve and memoize whether this class is a wrapper + offsets.
+                let kv_offsets = node_kv_layout.entry(class_id).or_insert_with(|| {
+                    // Check class name for wrapper suffixes ($Node, $Entry,
+                    // $MapEntry).  The raw name uses '/' separators (HPROF format).
+                    let raw_name = class_map
+                        .get(&class_id)
+                        .and_then(|ci| strings.get(&ci.name_id))
+                        .map(|s| s.as_str())
+                        .unwrap_or("");
+                    let is_wrapper = raw_name.ends_with("$Node")
+                        || raw_name.ends_with("$Entry")
+                        || raw_name.ends_with("$MapEntry")
+                        || raw_name.ends_with("$HashEntry")
+                        || raw_name.ends_with("$KeyValueHolder");
+                    if !is_wrapper {
+                        return None;
+                    }
+                    // Walk the class's fields to find `key` and `value` offsets.
+                    let mut key_off: Option<u32> = None;
+                    let mut val_off: Option<u32> = None;
+                    let mut byte_offset: u32 = 0;
+                    let mut cur = class_id;
+                    'outer: loop {
+                        let ci = match class_map.get(&cur) {
+                            Some(c) => c,
+                            None => break,
+                        };
+                        for &(fname_id, ftype) in &ci.fields {
+                            let fsize = if ftype == crate::types::HprofType::Object {
+                                obj_ref_width as u32
+                            } else {
+                                ftype.byte_size() as u32
+                            };
+                            if ftype == crate::types::HprofType::Object {
+                                let fname = strings
+                                    .get(&fname_id)
+                                    .map(|s| s.as_str())
+                                    .unwrap_or("");
+                                if fname == "key" {
+                                    key_off = Some(byte_offset);
+                                } else if fname == "value" || fname == "val" {
+                                    val_off = Some(byte_offset);
+                                }
+                            }
+                            byte_offset += fsize;
+                            if key_off.is_some() && val_off.is_some() {
+                                break 'outer;
+                            }
+                        }
+                        if ci.super_id == 0 {
+                            break;
+                        }
+                        cur = ci.super_id;
+                    }
+                    match (key_off, val_off) {
+                        (Some(k), Some(v)) => Some((k, v)),
+                        _ => None,
+                    }
+                });
+                if let Some((key_off, val_off)) = *kv_offsets {
+                    if let Some(self_idx) = p1.id_map.index_of(addr) {
+                        let ko = key_off as usize;
+                        let vo = val_off as usize;
+                        let key_dense = if ko + obj_ref_width <= blob.len() {
+                            let r = read_ref(&blob[ko..], obj_ref_width);
+                            if r != 0 {
+                                p1.id_map.index_of(r).map(|i| i as u32).unwrap_or(u32::MAX)
+                            } else {
+                                u32::MAX
+                            }
+                        } else {
+                            u32::MAX
+                        };
+                        let val_dense = if vo + obj_ref_width <= blob.len() {
+                            let r = read_ref(&blob[vo..], obj_ref_width);
+                            if r != 0 {
+                                p1.id_map.index_of(r).map(|i| i as u32).unwrap_or(u32::MAX)
+                            } else {
+                                u32::MAX
+                            }
+                        } else {
+                            u32::MAX
+                        };
+                        node_kv_raw.insert(self_idx as u32, (key_dense, val_dense));
                     }
                 }
             }
@@ -1593,6 +1699,11 @@ pub(crate) fn build_field_decode_views(
         attribution_raw,
         fields_by_size_raw,
         coll_values_raw,
+        if collect_attribution {
+            Some(node_kv_raw)
+        } else {
+            None
+        },
         attribution_truncated,
         dbb_capacity_sum,
         tl_null_key_count,

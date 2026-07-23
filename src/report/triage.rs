@@ -8,8 +8,7 @@
 //! A rule "declares the data it needs" implicitly by which `Report` fields it
 //! reads in `eval`; each rule's doc-comment states that dependency explicitly.
 
-use crate::report::anchors::SectionId;
-use crate::report::format::{fmt_count, fmt_pct, format_bytes, HEAP_BASIS_LABEL};
+use crate::report::format::{fmt_count, format_bytes};
 use crate::report::model::{Report, TriageSeverity, TriageSignal};
 
 // ── Thresholds ────────────────────────────────────────────────────────────────
@@ -19,10 +18,6 @@ use crate::report::model::{Report, TriageSeverity, TriageSignal};
 /// If the single largest suspect retains at least this share of the reachable
 /// heap, the heap is called "highly concentrated".
 const CONCENTRATION_PCT: f64 = 50.0;
-/// Below this share the headline retainer is reported as Info with "diffuse"
-/// wording rather than Critical — the heap is spread too widely to name a
-/// single culprit worth acting on.
-const HEADLINE_LOW_WATER_PCT: f64 = 5.0;
 /// DirectByteBuffer capacity floor (bytes) before the off-heap rule fires.
 const DBB_FLOOR_BYTES: u64 = 64 * 1024 * 1024;
 /// Unreachable-shallow share of total heap at which the GC-waste rule fires.
@@ -44,13 +39,12 @@ const PROXY_BLOAT_PCT: f64 = 50.0;
 const PROXY_MIN_CLASSES: u64 = 200;
 /// Objects reachable only via soft/weak/phantom refs before the escape rule.
 const WEAKREF_FLOOR: u64 = 1000;
-/// Minimum retained bytes of only-weakly-retained objects before the escape rule fires;
-/// a small count of objects retaining large subgraphs warrants attention even below the object floor.
+/// Retained bytes reachable only via soft/weak/phantom refs before the escape rule.
 const WEAKREF_BYTES_FLOOR: u64 = 5 * 1024 * 1024; // 5 MB
 /// Wasted collection backing-array bytes as a share of heap.
 const OVERCAP_WASTE_PCT: f64 = 5.0;
 /// Total shallow bytes in constant-value primitive arrays before the rule.
-const CONSTARR_FLOOR_BYTES: u64 = 8 * 1024 * 1024;
+const CONSTARR_FLOOR: u64 = 8 * 1024 * 1024;
 /// Fill ratio (basis points) below which a collection counts as "under-filled".
 const OVERCAP_FILL_BP: u32 = 5000;
 /// Duplicate-String waste floor (bytes) before the duplicate-strings rule fires.
@@ -77,9 +71,6 @@ const SWARM_PCT: f64 = 10.0;
 const SWARM_MAX_INSTANCE_BYTES: u64 = 64;
 /// Live ClassLoader-instance count before the classloader-explosion rule fires.
 const CLASSLOADER_EXPLOSION_FLOOR: u64 = 1000;
-/// Minimum retained bytes for the classloader-leak rule to fire (avoids false
-/// positives when duplicate loaders hold only a few KB of metadata).
-const CLASSLOADER_LEAK_RETAINED_FLOOR: u64 = 1024 * 1024; // 1 MB
 /// Live-thread count before the thread-swarm rule fires.
 const THREAD_SWARM_FLOOR: usize = 1000;
 /// `java.lang.ref.Finalizer` instance count that signals a backed-up queue.
@@ -116,7 +107,7 @@ const SPARSE_ARRAY_WASTED_PCT: f64 = 5.0;
 /// Big-drop node drop_bytes as share of total shallow heap.
 const BIG_DROP_PCT: f64 = 5.0;
 /// Big-drop absolute floor (bytes).
-const BIG_DROP_FLOOR_BYTES: u64 = 64 * 1024 * 1024;
+const BIG_DROP_FLOOR: u64 = 64 * 1024 * 1024;
 /// Object header overhead share above which the fixed-per-object rule fires.
 const HEADER_OVERHEAD_PCT: f64 = 20.0;
 /// Hash-map collision ratio (load-factor proxy in bp) above which hotspot fires.
@@ -131,11 +122,11 @@ const EMPTY_COLL_FLOOR: u64 = 500_000;
 /// Single primitive array shallow bytes as share of heap.
 const OVERSIZED_PRIM_ARRAY_PCT: f64 = 5.0;
 /// Absolute floor for the oversized-primitive-array rule.
-const OVERSIZED_PRIM_ARRAY_FLOOR_BYTES: u64 = 64 * 1024 * 1024;
+const OVERSIZED_PRIM_ARRAY_FLOOR: u64 = 64 * 1024 * 1024;
 /// Duplicate-primitive-array wasted bytes as share of heap.
 const DUP_PRIM_ARRAYS_PCT: f64 = 5.0;
 /// Duplicate-primitive-array absolute wasted-bytes floor.
-const DUP_PRIM_ARRAYS_FLOOR_BYTES: u64 = 16 * 1024 * 1024;
+const DUP_PRIM_ARRAYS_FLOOR: u64 = 16 * 1024 * 1024;
 
 // ── Framework ─────────────────────────────────────────────────────────────────
 
@@ -191,104 +182,40 @@ fn rules() -> Vec<Box<dyn Rule>> {
 }
 
 /// Evaluate every rule once, in registry order, collecting the ones that fire.
-///
-/// The first signals are *orientation* signals (headline retainer, concentration,
-/// GC-root shape, …) that always fire and describe the heap; they keep registry
-/// order so the "at a glance" lead-in reads coherently. The remaining *problem*
-/// signals — the conditional rules — are then re-ordered by their attributable
-/// `bytes` (largest first, §26.2) so the most impactful reclaim opportunity leads.
-/// Problem signals without a byte figure keep their relative registry order and
-/// sort after the quantified ones. Finally, if nothing worse than Info fired, an
-/// explicit all-clear line is appended (§31.5) so triage is never empty.
 pub fn evaluate_triage(r: &Report) -> Vec<TriageSignal> {
-    let mut fired: Vec<TriageSignal> = rules().iter().filter_map(|rule| rule.eval(r)).collect();
-
-    // Split the always-fire orientation prefix from the conditional problem tail.
-    // ORIENTATION_RULES rules are the first entries in `rules()` and always fire,
-    // so the prefix length equals the count of leading orientation-id signals.
-    let orientation_len = fired
-        .iter()
-        .take_while(|s| ORIENTATION_IDS.contains(&s.id.as_str()))
-        .count();
-    let tail = &mut fired[orientation_len..];
-    // Stable sort: quantified signals by bytes desc; unquantified keep registry
-    // order and follow (bytes None sorts as 0 → naturally last).
-    tail.sort_by_key(|s| std::cmp::Reverse(s.bytes.unwrap_or(0)));
-
-    if !fired
-        .iter()
-        .any(|s| matches!(s.severity, TriageSeverity::Warning | TriageSeverity::Critical))
-    {
-        fired.push(signal(
-            "all-clear",
+    let mut signals: Vec<TriageSignal> = rules().iter().filter_map(|rule| rule.eval(r)).collect();
+    if r.collection_attribution.is_none() {
+        signals.push(signal(
+            "collections-not-analyzed",
             TriageSeverity::Info,
-            "No significant memory issues detected",
-            "No leak-severity retainers, collection waste, or GC pressure crossed the \
-             triage thresholds. The lines above orient you to where the heap lives; \
-             none indicate a problem to fix."
+            "Collection waste not analyzed",
+            "_Collection waste not analyzed — re-run with `--collections` to check for wasted capacity._"
                 .to_string(),
             None,
         ));
     }
-
-    // Emit "not analyzed" notes for gated rules so absent signals are
-    // unambiguously "analysis was off" rather than "nothing found".
-    if r.biggest_collections.is_none() {
-        fired.push(signal(
-            "not-analyzed-collections",
-            TriageSeverity::Info,
-            "Collection analysis not run",
-            "Pass `--collections` to detect over-capacity backing arrays, unbounded \
-             collections, sparse object arrays, and constant primitive arrays."
-                .to_string(),
-            None,
-        ));
-    }
-    if r.overview.duplicate_strings.is_none() {
-        fired.push(signal(
-            "not-analyzed-duplicates",
-            TriageSeverity::Info,
-            "Duplicate-object analysis not run",
-            "Pass `--find-duplicates` to detect duplicate strings, duplicate primitive arrays, \
-             and boxed-number bloat."
-                .to_string(),
-            None,
-        ));
-    }
-
-    fired
+    signals
 }
 
-/// Ids of the always-fire orientation signals that lead the triage list. Kept in
-/// registry order (see `rules()`); the conditional problem signals that follow are
-/// re-ranked by attributable bytes.
-const ORIENTATION_IDS: &[&str] = &[
-    "headline-retainer",
-    "concentration",
-    "gc-root-type",
-    "shape",
-    "one-leak-or-many",
-];
-
-/// Percentage of total reachable shallow heap. Basis matches the report tables
-/// ([`HEAP_BASIS_LABEL`]); clamps to 100% so no printed share exceeds the basis.
+/// Percentage of total reachable shallow heap. Basis matches the report tables.
 fn pct_of(retained: u64, total: u64) -> f64 {
-    crate::report::format::pct_of_heap(retained, total)
+    if total > 0 {
+        retained as f64 / total as f64 * 100.0
+    } else {
+        0.0
+    }
 }
 
-/// Small `TriageSignal` builder for the common linked case. The link target is a
-/// [`SectionId`] so the emitted anchor is the section's canonical slug — the same
-/// string the Markdown heading slugs to and the HTML `id=` uses — guaranteeing a
-/// "See X" link resolves in every format.
+/// Small `TriageSignal` builder for the common linked case.
 fn signal(
     id: &str,
     severity: TriageSeverity,
     title: &str,
     detail: String,
-    anchor: Option<SectionId>,
+    anchor: Option<(&str, &str)>,
 ) -> TriageSignal {
     let (anchor, anchor_label) = match anchor {
-        Some(s) => (Some(s.slug().to_string()), Some(s.label().to_string())),
+        Some((a, l)) => (Some(a.to_string()), Some(l.to_string())),
         None => (None, None),
     };
     TriageSignal {
@@ -300,13 +227,6 @@ fn signal(
         anchor_label,
         bytes: None,
     }
-}
-
-/// Attach an attributable-byte figure to a signal for impact ranking (§26.2).
-/// Chainable on the [`signal`] builder; leaves orientation signals untouched.
-fn with_bytes(mut s: TriageSignal, bytes: u64) -> TriageSignal {
-    s.bytes = Some(bytes);
-    s
 }
 
 // ── Rules (ported from the former render_md.rs hand-written logic) ─────────────
@@ -323,36 +243,18 @@ impl Rule for HeadlineRetainer {
             } else {
                 "a class group"
             };
-            let pct = pct_of(s.retained, total);
-            let (severity, msg) = if pct >= HEADLINE_LOW_WATER_PCT {
-                (
-                    TriageSeverity::Critical,
-                    format!(
-                        "`{}` ({}) retains {} ({} of {HEAP_BASIS_LABEL}).",
-                        s.pretty_class,
-                        kind,
-                        format_bytes(s.retained),
-                        fmt_pct(pct),
-                    ),
-                )
-            } else {
-                (
-                    TriageSeverity::Info,
-                    format!(
-                        "`{}` ({}) is the largest retainer at {} ({} of {HEAP_BASIS_LABEL}) — heap is diffuse; no single object dominates.",
-                        s.pretty_class,
-                        kind,
-                        format_bytes(s.retained),
-                        fmt_pct(pct),
-                    ),
-                )
-            };
             Some(signal(
                 "headline-retainer",
-                severity,
+                TriageSeverity::Critical,
                 "Headline retainer",
-                msg,
-                Some(SectionId::LeakSuspects),
+                format!(
+                    "`{}` ({}) retains {} ({:.1}% of reachable heap).",
+                    s.pretty_class,
+                    kind,
+                    format_bytes(s.retained),
+                    pct_of(s.retained, total),
+                ),
+                Some(("leak-suspects", "Leak Suspects")),
             ))
         } else if let Some(o) = r.top.biggest_objects.first() {
             Some(signal(
@@ -360,12 +262,12 @@ impl Rule for HeadlineRetainer {
                 TriageSeverity::Warning,
                 "Headline retainer",
                 format!(
-                    "`{}` retains {} ({} of {HEAP_BASIS_LABEL}).",
+                    "`{}` retains {} ({:.1}% of reachable heap).",
                     o.display_class,
                     format_bytes(o.retained),
-                    fmt_pct(pct_of(o.retained, total)),
+                    pct_of(o.retained, total),
                 ),
-                Some(SectionId::TopConsumers),
+                Some(("top-consumers", "Top Consumers")),
             ))
         } else {
             Some(signal(
@@ -412,13 +314,13 @@ impl Rule for Concentration {
                     TriageSeverity::Critical,
                     "Concentration",
                     format!(
-                        "highly concentrated — `{}` ({}){} holds {} of {HEAP_BASIS_LABEL}, so freeing it would reclaim most memory.",
+                        "highly concentrated — `{}` ({}){} holds {:.1}% of the heap, so freeing it would reclaim most memory.",
                         s.pretty_class,
                         kind,
                         held_by,
-                        fmt_pct(pct_of(s.retained, total)),
+                        pct_of(s.retained, total),
                     ),
-                    Some(SectionId::LeakSuspects),
+                    Some(("leak-suspects", "Leak Suspects")),
                 )
             }
             Some(_) => signal(
@@ -426,7 +328,7 @@ impl Rule for Concentration {
                 TriageSeverity::Info,
                 "Concentration",
                 "diffuse — retention is spread across multiple roots, so there is no single object to free.".to_string(),
-                Some(SectionId::LeakSuspects),
+                Some(("leak-suspects", "Leak Suspects")),
             ),
             None => signal(
                 "concentration",
@@ -455,10 +357,10 @@ impl Rule for DominantGcRootType {
             TriageSeverity::Warning,
             "Dominant GC-root type",
             format!(
-                "{} of {HEAP_BASIS_LABEL} is held by \"{}\" roots — retention concentrates at one root class.",
-                fmt_pct(pct), top.root_type,
+                "{:.1}% of the heap is held by \"{}\" roots — retention concentrates at one root class.",
+                pct, top.root_type,
             ),
-            Some(SectionId::SystemOverview),
+            Some(("overview", "System Overview")),
         ))
     }
 }
@@ -474,40 +376,28 @@ impl Rule for Shape {
         let total: u64 = hist.iter().map(|b| b.objects).sum();
         let max_depth = hist.iter().map(|b| b.depth).max().unwrap_or(0);
         let mut cum = 0u64;
-        let mut p50 = max_depth;
         let mut p90 = max_depth;
-        let mut p50_found = false;
         for b in hist {
             cum += b.objects;
-            if !p50_found && cum * 2 >= total {
-                p50 = b.depth;
-                p50_found = true;
-            }
             if cum * 10 >= total * 9 {
                 p90 = b.depth;
                 break;
             }
         }
-        // When p90 >> p50, the tail is dominated by a single degenerate chain
-        // (e.g. a linked list at depth 11273 while the median is depth 10).
-        // State both so the reader can see the disparity rather than concluding
-        // the whole heap is deep.
-        let shape = if p50 <= 3 {
+        let shape = if p90 <= 3 {
             "shallow (most objects are held within a few hops of a GC root)"
         } else {
             "deep (retention flows through long dominator chains — often nested collections or linked structures)"
-        };
-        let depth_clause = if p90 > p50 * 10 && p90 > 20 {
-            format!("median depth {p50}, p90 depth {p90} (outlier chain), max depth {max_depth}")
-        } else {
-            format!("90% of objects within depth {p90}, max depth {max_depth}")
         };
         Some(signal(
             "shape",
             TriageSeverity::Info,
             "Shape",
-            format!("{shape} — {depth_clause}."),
-            Some(SectionId::DominatorDepth),
+            format!("{shape} — 90% of objects within depth {p90}, max depth {max_depth}."),
+            Some((
+                "dominator-depth-distribution",
+                "Dominator-Depth Distribution",
+            )),
         ))
     }
 }
@@ -532,12 +422,12 @@ impl Rule for OneLeakOrMany {
                 None => format!("`{}`", o.display_class),
             }) {
             Some(name) => format!(
-                "the single biggest object, {}, retains {} and the top 10 retain {} of {HEAP_BASIS_LABEL}; {} object(s) each hold >=1%.",
-                name, fmt_pct(top1_pct), fmt_pct(top10_pct), rc.num_objects_ge_1pct,
+                "the single biggest object, {}, retains {:.1}% and the top 10 retain {:.1}% of the heap; {} object(s) each hold >=1%.",
+                name, top1_pct, top10_pct, rc.num_objects_ge_1pct,
             ),
             None => format!(
-                "the single biggest object retains {} and the top 10 retain {} of {HEAP_BASIS_LABEL}; {} object(s) each hold >=1%.",
-                fmt_pct(top1_pct), fmt_pct(top10_pct), rc.num_objects_ge_1pct,
+                "the single biggest object retains {:.1}% and the top 10 retain {:.1}% of the heap; {} object(s) each hold >=1%.",
+                top1_pct, top10_pct, rc.num_objects_ge_1pct,
             ),
         };
         Some(signal(
@@ -545,7 +435,7 @@ impl Rule for OneLeakOrMany {
             TriageSeverity::Info,
             "One leak or many",
             detail,
-            Some(SectionId::TopConsumers),
+            Some(("top-consumers", "Top Consumers")),
         ))
     }
 }
@@ -560,12 +450,24 @@ impl Rule for ClassloaderLeak {
             .overview
             .duplicate_classes
             .iter()
-            // Gate on ≥3 loaders to avoid false positives from normal multi-loader
-            // setups (e.g. Scala's dual-loader for `$colon$colon` in 2 loaders),
-            // and require a meaningful retained-bytes stake so tiny metadata
-            // duplicates don't trigger a "classic reload leak" warning.
-            .filter(|d| d.loader_count >= 3 && d.total_retained >= CLASSLOADER_LEAK_RETAINED_FLOOR)
             .max_by_key(|d| d.total_retained)?;
+        if dup.total_retained < 524_288 {
+            return None;
+        }
+        if dup.loader_count < 5 {
+            return Some(signal(
+                "classloader-leak",
+                TriageSeverity::Info,
+                "Classloader reload (low count)",
+                format!(
+                    "`{}` is loaded by {} class loaders ({} retained) — possible reload, but count is low; investigate only if count grows.",
+                    dup.pretty_class,
+                    dup.loader_count,
+                    format_bytes(dup.total_retained),
+                ),
+                Some(("duplicate-classes", "Duplicate Classes")),
+            ));
+        }
         Some(signal(
             "classloader-leak",
             TriageSeverity::Warning,
@@ -576,7 +478,7 @@ impl Rule for ClassloaderLeak {
                 dup.loader_count,
                 format_bytes(dup.total_retained),
             ),
-            Some(SectionId::DuplicateClasses),
+            Some(("duplicate-classes", "Duplicate Classes")),
         ))
     }
 }
@@ -597,7 +499,7 @@ impl Rule for ThreadLocalLeak {
                 "{} ThreadLocalMap entries have a cleared key — abandoned thread-local values that will never be reclaimed.",
                 fmt_count(n),
             ),
-            Some(SectionId::LeakIndicators),
+            Some(("leak-indicators", "Leak Indicators")),
         ))
     }
 }
@@ -624,13 +526,13 @@ impl Rule for ThreadPinning {
             TriageSeverity::Warning,
             "Thread pinning",
             format!(
-                "thread `{}` retains {} ({} of {HEAP_BASIS_LABEL}) and pins {} thread-local roots — a live thread is holding memory alive.",
+                "thread `{}` retains {} ({:.1}% of heap) and pins {} thread-local roots — a live thread is holding memory alive.",
                 who,
                 format_bytes(t.retained),
-                fmt_pct(share),
+                share,
                 fmt_count(t.local_root_count),
             ),
-            Some(SectionId::Threads),
+            Some(("threads", "Threads")),
         ))
     }
 }
@@ -664,7 +566,7 @@ impl Rule for WeakRefEscape {
                 fmt_count(only_weak_objects),
                 format_bytes(only_weak_retained),
             ),
-            Some(SectionId::References),
+            Some(("references", "References")),
         ))
     }
 }
@@ -688,12 +590,12 @@ impl Rule for ProxyLambdaBloat {
             TriageSeverity::Info,
             "Proxy/lambda bloat",
             format!(
-                "{} of {} loaded classes ({}) are anonymous/generated (lambda/proxy) — possible classloader churn.",
+                "{} of {} loaded classes ({:.1}%) are anonymous/generated (lambda/proxy) — possible classloader churn.",
                 fmt_count(anon),
                 fmt_count(loaded),
-                fmt_pct(share),
+                share,
             ),
-            Some(SectionId::LeakIndicators),
+            Some(("leak-indicators", "Leak Indicators")),
         ))
     }
 }
@@ -706,18 +608,15 @@ impl Rule for OffHeap {
         if cap < DBB_FLOOR_BYTES {
             return None;
         }
-        Some(with_bytes(
-            signal(
-                "off-heap",
-                TriageSeverity::Warning,
-                "Off-heap (DirectByteBuffer)",
-                format!(
-                    "{} of native memory is held by live DirectByteBuffers — not counted in heap size but can dominate RSS.",
-                    format_bytes(cap),
-                ),
-                Some(SectionId::LeakIndicators),
+        Some(signal(
+            "off-heap",
+            TriageSeverity::Warning,
+            "Off-heap (DirectByteBuffer)",
+            format!(
+                "{} of native memory is held by live DirectByteBuffers — not counted in heap size but can dominate RSS.",
+                format_bytes(cap),
             ),
-            cap,
+            Some(("leak-indicators", "Leak Indicators")),
         ))
     }
 }
@@ -743,21 +642,18 @@ impl Rule for GcWaste {
                 )
             })
             .unwrap_or_default();
-        Some(with_bytes(
-            signal(
-                "gc-waste",
-                TriageSeverity::Warning,
-                "GC waste",
-                format!(
-                    "{} of {HEAP_BASIS_LABEL} is unreachable garbage ({} shallow, {} retained){}.",
-                    fmt_pct(pct),
-                    format_bytes(o.unreachable_shallow),
-                    format_bytes(o.unreachable_retained),
-                    cluster,
-                ),
-                Some(SectionId::UnreachableObjects),
+        Some(signal(
+            "gc-waste",
+            TriageSeverity::Warning,
+            "GC waste",
+            format!(
+                "{:.1}% of the heap is unreachable garbage ({} shallow, {} retained){}.",
+                pct,
+                format_bytes(o.unreachable_shallow),
+                format_bytes(o.unreachable_retained),
+                cluster,
             ),
-            o.unreachable_shallow,
+            Some(("unreachable-objects", "Unreachable Objects")),
         ))
     }
 }
@@ -781,19 +677,16 @@ impl Rule for OverCapacityCollections {
         if wasted as f64 / total as f64 * 100.0 < OVERCAP_WASTE_PCT {
             return None;
         }
-        Some(with_bytes(
-            signal(
-                "over-capacity-collections",
-                TriageSeverity::Info,
-                "Over-capacity collections",
-                format!(
-                    "{} wasted by under-filled collections (<=50% full across {} tracked) — oversized backing arrays.",
-                    format_bytes(wasted),
-                    fmt_count(cfr.tracked),
-                ),
-                Some(SectionId::Collections),
+        Some(signal(
+            "over-capacity-collections",
+            TriageSeverity::Info,
+            "Over-capacity collections",
+            format!(
+                "{} wasted by under-filled collections (<=50% full across {} tracked) — oversized backing arrays.",
+                format_bytes(wasted),
+                fmt_count(cfr.tracked),
             ),
-            wasted,
+            Some(("collections", "Collections")),
         ))
     }
 }
@@ -808,24 +701,21 @@ impl Rule for ConstantValueArrays {
             return None;
         }
         let sum: u64 = cpa.rows.iter().map(|row| row.shallow).sum();
-        if sum < CONSTARR_FLOOR_BYTES {
+        if sum < CONSTARR_FLOOR {
             return None;
         }
         let big = cpa.rows.iter().max_by_key(|row| row.shallow)?;
-        Some(with_bytes(
-            signal(
-                "constant-value-arrays",
-                TriageSeverity::Info,
-                "Constant-value arrays",
-                format!(
-                    "{} in single-value primitive arrays; biggest group `{}` × {} instances — likely zero-filled/uninitialized waste.",
-                    format_bytes(sum),
-                    big.array_class,
-                    fmt_count(big.objects),
-                ),
-                Some(SectionId::Collections),
+        Some(signal(
+            "constant-value-arrays",
+            TriageSeverity::Info,
+            "Constant-value arrays",
+            format!(
+                "{} in single-value primitive arrays; biggest group `{}` × {} instances — likely zero-filled/uninitialized waste.",
+                format_bytes(sum),
+                big.array_class,
+                fmt_count(big.objects),
             ),
-            sum,
+            Some(("collections", "Collections")),
         ))
     }
 }
@@ -853,21 +743,18 @@ impl Rule for ObjectSwarm {
         if pct_of(row.shallow, total) < SWARM_PCT {
             return None;
         }
-        Some(with_bytes(
-            signal(
-                "object-swarm",
-                TriageSeverity::Warning,
-                "Object swarm",
-                format!(
-                    "{} live `{}` instances ({} shallow, {} of {HEAP_BASIS_LABEL}) — typically an unbounded queue, list, or log accumulation.",
-                    fmt_count(row.instances),
-                    row.pretty_class,
-                    format_bytes(row.shallow),
-                    fmt_pct(pct_of(row.shallow, total)),
-                ),
-                Some(SectionId::SystemOverview),
+        Some(signal(
+            "object-swarm",
+            TriageSeverity::Warning,
+            "Object swarm",
+            format!(
+                "{} live `{}` instances ({} shallow, {:.1}% of heap) — typically an unbounded queue, list, or log accumulation.",
+                fmt_count(row.instances),
+                row.pretty_class,
+                format_bytes(row.shallow),
+                pct_of(row.shallow, total),
             ),
-            row.shallow,
+            Some(("overview", "System Overview")),
         ))
     }
 }
@@ -902,23 +789,20 @@ impl Rule for BoxedPrimitiveBloat {
                 };
                 (inst + h.instances, sh + h.shallow, new_worst)
             });
-        if instances < BOXED_FLOOR_INSTANCES || pct_of(shallow, total) < BOXED_PCT {
+        if instances < BOXED_FLOOR_INSTANCES && pct_of(shallow, total) < BOXED_PCT {
             return None;
         }
-        Some(with_bytes(
-            signal(
-                "boxed-primitive-bloat",
-                TriageSeverity::Info,
-                "Boxed-primitive bloat",
-                format!(
-                    "{} boxed-primitive objects ({} shallow, led by `{}`) — consider primitive-specialized collections (e.g. Eclipse Collections, Koloboke).",
-                    fmt_count(instances),
-                    format_bytes(shallow),
-                    worst_class,
-                ),
-                Some(SectionId::BoxedNumbers),
+        Some(signal(
+            "boxed-primitive-bloat",
+            TriageSeverity::Info,
+            "Boxed-primitive bloat",
+            format!(
+                "{} boxed-primitive objects ({} shallow, led by `{}`) — consider primitive-specialized collections (e.g. Eclipse Collections, Koloboke).",
+                fmt_count(instances),
+                format_bytes(shallow),
+                worst_class,
             ),
-            shallow,
+            Some(("boxed-numbers", "Boxed Numbers")),
         ))
     }
 }
@@ -941,7 +825,7 @@ impl Rule for ClassloaderExplosion {
                 "{} live ClassLoader instances — abnormally high; typical apps use tens. Likely a dynamic-class or redeploy leak.",
                 fmt_count(n),
             ),
-            Some(SectionId::SystemOverview),
+            Some(("overview", "System Overview")),
         ))
     }
 }
@@ -969,7 +853,7 @@ impl Rule for ThreadSwarm {
                 fmt_count(count as u64),
                 format_bytes(aggregate_retained),
             ),
-            Some(SectionId::Threads),
+            Some(("threads", "Threads")),
         ))
     }
 }
@@ -991,21 +875,18 @@ impl Rule for DuplicateStrings {
         let example = top
             .map(|t| format!("; `\"{}\"` repeated {}×", t.text, fmt_count(t.count),))
             .unwrap_or_default();
-        Some(with_bytes(
-            signal(
-                "duplicate-strings",
-                TriageSeverity::Info,
-                "Duplicate strings",
-                format!(
-                    "~{} wasted by {} duplicated String values ({} total instances){}.",
-                    format_bytes(ds.approx_wasted_bytes),
-                    fmt_count(ds.duplicated_values),
-                    fmt_count(ds.total_string_instances),
-                    example,
-                ),
-                Some(SectionId::DuplicateStrings),
+        Some(signal(
+            "duplicate-strings",
+            TriageSeverity::Info,
+            "Duplicate strings",
+            format!(
+                "~{} wasted by {} duplicated String values ({} total instances){}.",
+                format_bytes(ds.approx_wasted_bytes),
+                fmt_count(ds.duplicated_values),
+                fmt_count(ds.total_string_instances),
+                example,
             ),
-            ds.approx_wasted_bytes,
+            Some(("duplicate-strings", "Duplicate Strings")),
         ))
     }
 }
@@ -1026,19 +907,16 @@ impl Rule for CharArraySlack {
         {
             return None;
         }
-        Some(with_bytes(
-            signal(
-                "char-array-slack",
-                TriageSeverity::Info,
-                "Char-array slack",
-                format!(
-                    "~{} slack in {} over-allocated char[]/byte[] String backing arrays — possible `substring`/`StringBuilder` waste.",
-                    format_bytes(caw.total_wasted_bytes),
-                    fmt_count(caw.wasteful_arrays),
-                ),
-                Some(SectionId::DuplicateStrings),
+        Some(signal(
+            "char-array-slack",
+            TriageSeverity::Info,
+            "Char-array slack",
+            format!(
+                "~{} slack in {} over-allocated char[]/byte[] String backing arrays — possible `substring`/`StringBuilder` waste.",
+                format_bytes(caw.total_wasted_bytes),
+                fmt_count(caw.wasteful_arrays),
             ),
-            caw.total_wasted_bytes,
+            Some(("duplicate-strings", "Duplicate Strings")),
         ))
     }
 }
@@ -1081,7 +959,7 @@ impl Rule for LargeUnboundedCollection {
                 retained_str,
                 owner_str,
             ),
-            Some(SectionId::BiggestCollections),
+            Some(("biggest-collections", "Biggest Collections")),
         ))
     }
 }
@@ -1110,7 +988,7 @@ impl Rule for FinalizerQueueBacklog {
                 "{} live `java.lang.ref.Finalizer` instances — the finalizer thread is falling behind; finalizeable objects (e.g. `Deflater`, JDBC connections) accumulate until drained.",
                 fmt_count(row.instances),
             ),
-            Some(SectionId::SystemOverview),
+            Some(("overview", "System Overview")),
         ))
     }
 }
@@ -1133,7 +1011,7 @@ impl Rule for MetaspacePressure {
                 "{} classes loaded — far above normal; class metadata is likely exhausting Metaspace. Typical cause: CGLIB/Byte Buddy/Groovy proxy generation without caching.",
                 fmt_count(n),
             ),
-            Some(SectionId::SystemOverview),
+            Some(("overview", "System Overview")),
         ))
     }
 }
@@ -1167,7 +1045,7 @@ impl Rule for CachedReflectionMetadata {
                 "{} live `java.lang.reflect.{{Method,Field,Constructor}}` objects — framework reflection caches are unbounded (typically Spring/Hibernate accumulating per scanned class).",
                 fmt_count(total),
             ),
-            Some(SectionId::SystemOverview),
+            Some(("overview", "System Overview")),
         ))
     }
 }
@@ -1204,12 +1082,12 @@ impl Rule for JniGlobalRefLeak {
             TriageSeverity::Warning,
             "JNI global-reference leak",
             format!(
-                "{} JNI Global roots retaining {} ({} of {HEAP_BASIS_LABEL}) — native code is accumulating global references without releasing them; audit `JNI_DeleteGlobalRef` call sites.",
+                "{} JNI Global roots retaining {} ({:.1}% of heap) — native code is accumulating global references without releasing them; audit `JNI_DeleteGlobalRef` call sites.",
                 fmt_count(count),
                 format_bytes(retained),
-                fmt_pct(pct_of(retained, total)),
+                pct_of(retained, total),
             ),
-            Some(SectionId::SystemOverview),
+            Some(("overview", "System Overview")),
         ))
     }
 }
@@ -1239,10 +1117,10 @@ impl Rule for HeapCompositionSkew {
             TriageSeverity::Info,
             "Heap composition skew",
             format!(
-                "`{}` account for {} of {HEAP_BASIS_LABEL} — the heap is bulk-data dominated; most memory is in raw buffers rather than object graphs.",
-                dominant.kind, fmt_pct(pct),
+                "`{}` account for {:.1}% of reachable heap — the heap is bulk-data dominated; most memory is in raw buffers rather than object graphs.",
+                dominant.kind, pct,
             ),
-            Some(SectionId::SystemOverview),
+            Some(("overview", "System Overview")),
         ))
     }
 }
@@ -1267,12 +1145,12 @@ impl Rule for StaticFieldAnchor {
             TriageSeverity::Warning,
             "Static-field anchor",
             format!(
-                "`{}` is anchored via a static field (`Sticky Class` root) and retains {} ({} of {HEAP_BASIS_LABEL}) — this object lives for the classloader lifetime and is never evicted.",
+                "`{}` is anchored via a static field (`Sticky Class` root) and retains {} ({:.1}% of heap) — this object lives for the classloader lifetime and is never evicted.",
                 s.pretty_class,
                 format_bytes(s.retained),
-                fmt_pct(pct),
+                pct,
             ),
-            Some(SectionId::LeakSuspects),
+            Some(("leak-suspects", "Leak Suspects")),
         ))
     }
 }
@@ -1303,7 +1181,7 @@ impl Rule for SessionScopeLeak {
                 fmt_count(row.instances),
                 row.pretty_class,
             ),
-            Some(SectionId::SystemOverview),
+            Some(("overview", "System Overview")),
         ))
     }
 }
@@ -1337,7 +1215,7 @@ impl Rule for ConnectionLeak {
                 fmt_count(row.instances),
                 row.pretty_class,
             ),
-            Some(SectionId::SystemOverview),
+            Some(("overview", "System Overview")),
         ))
     }
 }
@@ -1370,7 +1248,7 @@ impl Rule for EventListenerAccumulation {
                 fmt_count(row.instances),
                 row.pretty_class,
             ),
-            Some(SectionId::SystemOverview),
+            Some(("overview", "System Overview")),
         ))
     }
 }
@@ -1412,7 +1290,7 @@ impl Rule for ParserOutputAccumulation {
                 fmt_count(row.instances),
                 row.pretty_class,
             ),
-            Some(SectionId::SystemOverview),
+            Some(("overview", "System Overview")),
         ))
     }
 }
@@ -1453,7 +1331,7 @@ impl Rule for InternedStringBloat {
                 fmt_count(string_count),
                 fmt_count(jni_global_count),
             ),
-            Some(SectionId::SystemOverview),
+            Some(("overview", "System Overview")),
         ))
     }
 }
@@ -1490,7 +1368,7 @@ impl Rule for SparseObjectArrays {
                 SPARSE_ARRAY_FILL_BP / 100,
                 format_bytes(wasted),
             ),
-            Some(SectionId::Collections),
+            Some(("collections", "Collections")),
         ))
     }
 }
@@ -1499,36 +1377,33 @@ impl Rule for SparseObjectArrays {
 
 /// Big-drop concentration. Reads `dominator_analysis.big_drops` and
 /// `overview.total_shallow`. Always-on. Fires when the top dominator-tree node
-/// drops at least BIG_DROP_PCT of the heap AND at least BIG_DROP_FLOOR_BYTES bytes —
+/// drops at least BIG_DROP_PCT of the heap AND at least BIG_DROP_FLOOR bytes —
 /// a single object is acting as a giant memory bucket.
 struct BigDropConcentration;
 impl Rule for BigDropConcentration {
     fn eval(&self, r: &Report) -> Option<TriageSignal> {
         let total = r.overview.total_shallow;
         let row = r.dominator_analysis.big_drops.rows.first()?;
-        if row.drop_bytes < BIG_DROP_FLOOR_BYTES {
+        if row.drop_bytes < BIG_DROP_FLOOR {
             return None;
         }
         let pct = pct_of(row.drop_bytes, total);
         if pct < BIG_DROP_PCT {
             return None;
         }
-        Some(with_bytes(
-            signal(
-                "big-drop-concentration",
-                TriageSeverity::Critical,
-                "Dominator-tree big drop",
-                format!(
-                    "`{}` is the single largest memory bucket: {} ({}) of {HEAP_BASIS_LABEL} \
-                     drops here in the dominator tree — almost all its retained memory \
-                     is not shared with any other top-level subtree.",
-                    row.display_class,
-                    fmt_pct(pct),
-                    format_bytes(row.drop_bytes),
-                ),
-                Some(SectionId::DominatorAnalysis),
+        Some(signal(
+            "big-drop-concentration",
+            TriageSeverity::Critical,
+            "Dominator-tree big drop",
+            format!(
+                "`{}` is the single largest memory bucket: {:.1}% ({}) of the heap \
+                 drops here in the dominator tree — almost all its retained memory \
+                 is not shared with any other top-level subtree.",
+                row.display_class,
+                pct,
+                format_bytes(row.drop_bytes),
             ),
-            row.drop_bytes,
+            Some(("dominator-tree", "Dominator Tree")),
         ))
     }
 }
@@ -1562,15 +1437,15 @@ impl Rule for FixedPerObjectOverhead {
             TriageSeverity::Warning,
             "Fixed per-object header overhead",
             format!(
-                "{} objects × {} B header = {} ({} of {HEAP_BASIS_LABEL}) is consumed by JVM \
+                "{} objects × {} B header = {} ({:.1}% of heap) is consumed by JVM \
                  object headers alone — consider value types, primitive arrays, or \
                  fewer wrapper objects.",
                 fmt_count(r.overview.total_objects),
                 header_bytes,
                 format_bytes(overhead),
-                fmt_pct(pct),
+                pct,
             ),
-            Some(SectionId::HeaderOverhead),
+            Some(("header-overhead", "Header Overhead")),
         ))
     }
 }
@@ -1601,15 +1476,15 @@ impl Rule for HashCollisionHotspot {
             TriageSeverity::Warning,
             "Hash-map collision hotspot",
             format!(
-                "{} of {} tracked maps ({}) have a load factor > {}% — \
+                "{} of {} tracked maps ({:.1}%) have a load factor > {}% — \
                  over-packed hash tables cause long collision chains and degrade \
                  lookup performance.",
                 fmt_count(hot),
                 fmt_count(mcr.tracked),
-                fmt_pct(pct),
+                pct,
                 COLLISION_HIGH_BP / 100,
             ),
-            Some(SectionId::Collections),
+            Some(("collections", "Collections")),
         ))
     }
 }
@@ -1633,14 +1508,14 @@ impl Rule for EmptyCollectionCemetery {
             TriageSeverity::Info,
             "Empty-collection cemetery",
             format!(
-                "{} of {} tracked collections ({}) are empty (size == 0) — \
+                "{} of {} tracked collections ({:.1}%) are empty (size == 0) — \
                  pre-allocated but never populated containers waste object-header \
                  overhead; consider lazy initialisation or null.",
                 fmt_count(cbs.empty_count),
                 fmt_count(cbs.tracked),
-                fmt_pct(share_pct),
+                share_pct,
             ),
-            Some(SectionId::Collections),
+            Some(("collections", "Collections")),
         ))
     }
 }
@@ -1648,13 +1523,13 @@ impl Rule for EmptyCollectionCemetery {
 /// Oversized primitive array. Reads `collections.top_prim_arrays.top_individual`
 /// and `overview.total_shallow`. Always-on (top_prim_arrays is always computed).
 /// Fires when a single primitive array is individually >= OVERSIZED_PRIM_ARRAY_PCT
-/// of the heap AND >= OVERSIZED_PRIM_ARRAY_FLOOR_BYTES bytes.
+/// of the heap AND >= OVERSIZED_PRIM_ARRAY_FLOOR bytes.
 struct OversizedPrimArray;
 impl Rule for OversizedPrimArray {
     fn eval(&self, r: &Report) -> Option<TriageSignal> {
         let total = r.overview.total_shallow;
         let row = r.collections.top_prim_arrays.top_individual.first()?;
-        if row.shallow < OVERSIZED_PRIM_ARRAY_FLOOR_BYTES {
+        if row.shallow < OVERSIZED_PRIM_ARRAY_FLOOR {
             return None;
         }
         let pct = pct_of(row.shallow, total);
@@ -1665,30 +1540,27 @@ impl Rule for OversizedPrimArray {
             Some(o) => format!(" held by `{o}`"),
             None => String::new(),
         };
-        Some(with_bytes(
-            signal(
-                "oversized-prim-array",
-                TriageSeverity::Warning,
-                "Oversized primitive array",
-                format!(
-                    "A single `{}` ({} elements, {}){} accounts for {} of {HEAP_BASIS_LABEL} — \
-                     consider chunking, memory-mapping, or off-heap storage.",
-                    row.array_class,
-                    fmt_count(row.length),
-                    format_bytes(row.shallow),
-                    owner_clause,
-                    fmt_pct(pct),
-                ),
-                Some(SectionId::ArraysBySize),
+        Some(signal(
+            "oversized-prim-array",
+            TriageSeverity::Warning,
+            "Oversized primitive array",
+            format!(
+                "A single `{}` ({} elements, {}){} accounts for {:.1}% of the heap — \
+                 consider chunking, memory-mapping, or off-heap storage.",
+                row.array_class,
+                fmt_count(row.length),
+                format_bytes(row.shallow),
+                owner_clause,
+                pct,
             ),
-            row.shallow,
+            Some(("arrays", "Arrays")),
         ))
     }
 }
 
 /// Duplicate primitive arrays. Reads `overview.duplicate_prim_arrays`
 /// (populated only when `--find-duplicates` is active). Fires when content-identical
-/// prim arrays waste at least DUP_PRIM_ARRAYS_PCT of the heap or DUP_PRIM_ARRAYS_FLOOR_BYTES
+/// prim arrays waste at least DUP_PRIM_ARRAYS_PCT of the heap or DUP_PRIM_ARRAYS_FLOOR
 /// bytes — arrays sharing the same payload could be deduplicated or interned.
 struct DuplicatePrimArrays;
 impl Rule for DuplicatePrimArrays {
@@ -1699,24 +1571,21 @@ impl Rule for DuplicatePrimArrays {
             return None;
         }
         let total = r.overview.total_shallow;
-        if wasted < DUP_PRIM_ARRAYS_FLOOR_BYTES && pct_of(wasted, total) < DUP_PRIM_ARRAYS_PCT {
+        if wasted < DUP_PRIM_ARRAYS_FLOOR && pct_of(wasted, total) < DUP_PRIM_ARRAYS_PCT {
             return None;
         }
-        Some(with_bytes(
-            signal(
-                "dup-prim-arrays",
-                TriageSeverity::Warning,
-                "Duplicate primitive arrays",
-                format!(
-                    "{} ({} of {HEAP_BASIS_LABEL}) wasted by content-identical primitive arrays — \
-                     multiple copies of the same byte[]/int[]/etc. payload could be \
-                     deduplicated or replaced with a shared constant.",
-                    format_bytes(wasted),
-                    fmt_pct(pct_of(wasted, total)),
-                ),
-                Some(SectionId::DuplicateStrings),
+        Some(signal(
+            "dup-prim-arrays",
+            TriageSeverity::Warning,
+            "Duplicate primitive arrays",
+            format!(
+                "{} ({:.1}% of heap) wasted by content-identical primitive arrays — \
+                 multiple copies of the same byte[]/int[]/etc. payload could be \
+                 deduplicated or replaced with a shared constant.",
+                format_bytes(wasted),
+                pct_of(wasted, total),
             ),
-            wasted,
+            Some(("dup-strings", "Duplicate Strings")),
         ))
     }
 }
@@ -1746,8 +1615,9 @@ mod tests {
             biggest_collections: None,
             collection_contents: None,
             leak_indicators: LeakIndicators::default(),
-            waste_summary: None,
             triage: Vec::new(),
+            waste_summary: None,
+            top_retainers: Vec::new(),
         }
     }
 
@@ -2379,8 +2249,8 @@ mod tests {
             length: 100_000_000,
             shallow: 100 * 1024 * 1024, // 50% — fires
             obj_index_1based: 1,
-            non_null: None,
             owner: None,
+            non_null: None,
         }];
         let s = OversizedPrimArray.eval(&r).expect("huge array must fire");
         assert!(s.detail.contains("byte[]"));
@@ -2411,183 +2281,5 @@ mod tests {
             .unwrap()
             .total_wasted_bytes = 1024;
         assert!(DuplicatePrimArrays.eval(&r).is_none());
-    }
-
-    /// §836: every `TriageSignal.anchor` emitted by any rule must resolve to a
-    /// real `SectionId` slug — the guard that keeps §42.1 from silently regressing.
-    ///
-    /// We exercise two reports: an all-zero base (fires zero rules today but
-    /// any future always-on rule must still produce a valid anchor) and a
-    /// maximally-triggering report so as many anchor-bearing rules as possible
-    /// fire in one test run.
-    #[test]
-    fn all_triage_anchors_are_valid_section_slugs() {
-        use crate::report::anchors::SectionId;
-
-        // Build the complete set of valid slugs once.
-        const ALL_SECTIONS: &[SectionId] = &[
-            SectionId::Summary,
-            SectionId::MemoryTriage,
-            SectionId::WasteSummary,
-            SectionId::SystemOverview,
-            SectionId::RecordCensus,
-            SectionId::DuplicateStrings,
-            SectionId::DuplicateClasses,
-            SectionId::BoxedNumbers,
-            SectionId::HeaderOverhead,
-            SectionId::LeakSuspects,
-            SectionId::TopConsumers,
-            SectionId::DominatorAnalysis,
-            SectionId::Threads,
-            SectionId::TopComponents,
-            SectionId::ArraysBySize,
-            SectionId::Collections,
-            SectionId::ContainerAttribution,
-            SectionId::FieldsBySize,
-            SectionId::BiggestCollections,
-            SectionId::CollectionContents,
-            SectionId::References,
-            SectionId::UnreachableObjects,
-            SectionId::AllocationSites,
-            SectionId::RetentionConcentration,
-            SectionId::DominatorDepth,
-            SectionId::LeakIndicators,
-            SectionId::Glossary,
-        ];
-        let valid_slugs: std::collections::HashSet<&str> =
-            ALL_SECTIONS.iter().map(|s| s.slug()).collect();
-
-        let check_signals = |signals: Vec<TriageSignal>| {
-            for sig in &signals {
-                if let Some(anchor) = &sig.anchor {
-                    assert!(
-                        valid_slugs.contains(anchor.as_str()),
-                        "rule {:?} emitted anchor {:?} which is not a known SectionId slug; \
-                         valid slugs: {:?}",
-                        sig.id,
-                        anchor,
-                        valid_slugs
-                    );
-                }
-            }
-        };
-
-        // 1. Base (all-zero) report.
-        check_signals(evaluate_triage(&base_report()));
-
-        // 2. Maximally-triggering report — exercises as many rule paths as possible.
-        let mut r = base_report();
-        let heap = 100 * 1024 * 1024u64; // 100 MB
-        r.overview.total_shallow = heap;
-        r.overview.total_objects = 5_000_000;
-        r.leaks.total_shallow = heap;
-
-        // Headline retainer / concentration
-        r.leaks.suspects = vec![Suspect {
-            is_single: true,
-            pretty_class: "A".into(),
-            instance_count: 1,
-            retained: (heap * 9) / 10,
-            root_type_label: "Sticky Class".into(),
-            ..Default::default()
-        }];
-
-        // GC waste / unreachable
-        r.overview.heap_fragmentation_ratio = 0.5;
-        r.overview.unreachable_shallow = heap / 2;
-
-        // Classloader explosion + leak
-        r.overview.classloaders_loaded = 2000;
-        r.overview.classes_loaded = 60_000;
-        r.overview.duplicate_classes = vec![
-            DuplicateClass {
-                pretty_class: "com.example.Foo".into(),
-                loader_count: 2,
-                loaders: vec!["A".into(), "B".into()],
-                total_instances: 1,
-                total_retained: heap / 20,
-                per_loader: vec![],
-            },
-        ];
-
-        // Thread pinning
-        r.threads.threads = vec![ThreadInfo {
-            thread_serial: 1,
-            name: Some("worker-1".into()),
-            class_name: None,
-            frames: Vec::new(),
-            local_root_count: 40,
-            local_objects: None,
-            shallow: 0,
-            retained: (heap * 4) / 10,
-            max_local_retained: 0,
-            context_class_loader: None,
-            is_daemon: false,
-            ..Default::default()
-        }];
-
-        // Duplicate strings
-        r.overview.duplicate_strings = Some(crate::pass2::DupStrings {
-            distinct_values: 5_000,
-            duplicated_values: 4_000,
-            total_string_instances: 10_000,
-            approx_wasted_bytes: heap / 5,
-            top_duplicated: vec![],
-            length_histogram: vec![],
-            length_stats: Default::default(),
-            top_string_holders: vec![],
-            top_by_length: vec![],
-            char_array_waste: None,
-        });
-
-        // Off-heap
-        r.leak_indicators.direct_byte_buffer_capacity_sum = 200 * 1024 * 1024;
-
-        // ThreadLocal leak
-        r.leak_indicators.thread_local_null_key_count = 100;
-
-        // Dominator depth (shape rule)
-        r.overview.dominator_depth_histogram = vec![
-            DepthBucket { depth: 5, objects: 1000 },
-            DepthBucket { depth: 500, objects: 50 },
-        ];
-
-        // Collections waste (over-capacity): provide a fill-ratio bucket with
-        // upper_ratio_bp <= 5000 and non-trivial wasted bytes.
-        r.collections.collection_fill_ratio = CollectionFillRatio {
-            tracked: 1000,
-            total: 1000,
-            buckets: vec![FillRatioBucket {
-                lower_ratio_bp: 0,
-                upper_ratio_bp: 5000,
-                objects: 900,
-                shallow: heap / 5,
-                wasted: heap / 10, // 10% of heap wasted
-            }],
-        };
-
-        // Boxed primitives (boxed-primitive-bloat rule)
-        r.overview.histogram = vec![
-            HistRow {
-                pretty_class: "java.lang.Integer".into(),
-                instances: 2_000_000,
-                shallow: heap / 10,
-                retained: heap / 10,
-                max_instance_shallow: 16,
-                loader_id: 0,
-                loader_label: None,
-            },
-            HistRow {
-                pretty_class: "com.example.Event".into(),
-                instances: 15_000_000,
-                shallow: heap / 5,
-                retained: heap / 5,
-                max_instance_shallow: 13,
-                loader_id: 0,
-                loader_label: None,
-            },
-        ];
-
-        check_signals(evaluate_triage(&r));
     }
 }

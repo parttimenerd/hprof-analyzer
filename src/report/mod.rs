@@ -230,6 +230,7 @@ mod tests {
             direct_byte_buffer_capacity_sum: 0,
             thread_local_null_key_count: 0,
             unreachable_retained: None,
+            node_kv: None,
         };
         (g, dc_off, dc_tgt)
     }

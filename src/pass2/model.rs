@@ -417,6 +417,11 @@ pub struct Graph {
     /// Raw per-collection element tallies (dense value indices). `None` when
     /// `--collections` was off. Consumed by build_model, then dropped.
     pub coll_values_raw: Option<Vec<CollValuesRaw>>,
+    /// Node/Entry wrapper unwrap map: dense object index of a wrapper (e.g.
+    /// `HashMap$Node`) → (key dense idx, value dense idx), where `u32::MAX`
+    /// means null or unresolvable. `None` when `--collections` was off.
+    /// Consumed by build_model to show real K/V types in Biggest Collections.
+    pub node_kv: Option<std::collections::HashMap<u32, (u32, u32)>>,
     /// Sum of `capacity` fields across all live `java/nio/DirectByteBuffer`
     /// instances. 0 when no such instances are found or the field cannot be
     /// resolved. Computed unconditionally during the pass2 field-decode scan.
