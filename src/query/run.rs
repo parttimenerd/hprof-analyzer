@@ -763,6 +763,71 @@ pub(crate) fn resume_with_string_values(
 /// into the outer executors, run the outer pass, and finally semi-join each
 /// FROM-subquery's outer rows against its inner dense-index set. Queries without
 /// subqueries take the ordinary single-pass path (no inner scan).
+/// REPL-only: serve resident-only queries from a warm `ReplCache` WITHOUT a heap
+/// re-scan. Builds a `LiveResolver` over the cached pass1 tables and drives each
+/// query's `SingleScanExecutor` over dense indices `0..n` with an EMPTY blob
+/// (safe: resident-only queries read only the resolver, never the blob).
+/// Reachability pruning + UNION collapse mirror `run_single_dump` exactly.
+///
+/// v1 limitation: any query whose FROM targets an ARRAY class is NOT served here
+/// (array class names are only recoverable per-array by address during a real
+/// scan); the REPL router keeps those on the scan path. Only true instances
+/// (`kind == 0`) are driven through `visit_instance` with an EMPTY blob, exactly
+/// mirroring the scan path, which delivers ONLY INSTANCE_DUMP records to
+/// `visit_instance` (CLASS_DUMP class objects and array records are NOT — see
+/// pass2's 2a loop). Class objects (`kind == 3`), object arrays (`kind == 1`),
+/// and primitive arrays (`kind == 2`) are therefore skipped, so the row set
+/// matches the scan path bit-for-bit.
+pub fn run_resident_only(
+    cache: &ReplCache,
+    queries: &[(Query, QueryPlan)],
+    reachable_only: bool,
+) -> std::io::Result<Vec<QueryResult>> {
+    let (flat, groups) = expand_union_queries(queries);
+    let resolver = LiveResolver::new(
+        &cache.p1.class_map,
+        &cache.p1.strings,
+        cache.id_size,
+        &cache.p1.id_map,
+        &cache.shallow,
+    );
+    // Build row-mode executors, one per flat slot (resident-only queries are all
+    // P1 / row-mode — never carry). Mirrors pass2's scan_execs construction.
+    let mut entries: Vec<(usize, SingleScanExecutor<'_, LiveResolver<'_>>)> = Vec::new();
+    for (slot, (q, plan)) in flat.iter().enumerate() {
+        entries.push((slot, SingleScanExecutor::new(q, plan, &resolver)));
+    }
+    let mut driver = ScanDriver::new(entries).with_src_capture(reachable_only);
+
+    // Drive over cached dense indices with an EMPTY blob. ONLY true instances
+    // (kind 0) go through visit_instance — this mirrors the scan path exactly,
+    // which sends only INSTANCE_DUMP records to visit_instance. Class objects
+    // (kind 3) and arrays (kind 1/2) are skipped: array-FROM queries are routed
+    // to the scan path by the caller, and the scan never delivers class objects
+    // to visit_instance either.
+    for i in 0..cache.n {
+        if cache.p1.kind[i] == 0 {
+            let class_addr = cache.p1.class_addr_table[cache.class_ids[i] as usize];
+            driver.visit_instance(i, class_addr, &[]);
+        }
+    }
+
+    let state = driver.finish_state();
+    let dfn: Option<&[u32]> = if reachable_only {
+        cache.dfn.as_deref()
+    } else {
+        None
+    };
+    let flat_results = resume_with_string_values(
+        state,
+        &flat,
+        std::collections::HashMap::new(), // no toString(s) — excluded by is_resident_only
+        None,                             // no refwalk CSR — excluded by is_resident_only
+        dfn,
+    );
+    Ok(collapse_union_results(flat_results, &groups))
+}
+
 pub fn run_single_dump(
     path: &str,
     queries: &[(Query, QueryPlan)],
@@ -1326,6 +1391,115 @@ mod tests {
     use super::*;
     use crate::query::parse::parse;
     use crate::query::plan::plan_query;
+
+    /// Parse+plan+optimize an OQL string exactly as the REPL's `run_one` does,
+    /// so plans match the scan path bit-for-bit.
+    fn parse_plan_opt(oql: &str) -> (crate::query::ast::Query, QueryPlan) {
+        let q = crate::query::parse::parse_or_report(oql).expect("parse");
+        let plan = crate::query::plan::plan_query(&q, 0).expect("plan");
+        let plan = crate::query::optimize::optimize(
+            plan,
+            &q,
+            &crate::query::optimize::SchemaStats::default(),
+        );
+        (q, plan)
+    }
+
+    /// Collect a canonical set of row-identifying values from a set of results:
+    /// object refs by dense index, and scalars tagged distinctly so a COUNT(*)
+    /// or @objectId value never collides with an ObjRef index.
+    fn addr_set(results: &[QueryResult]) -> std::collections::BTreeSet<u64> {
+        let mut s = std::collections::BTreeSet::new();
+        for r in results {
+            for row in &r.rows {
+                for v in row {
+                    match v {
+                        QueryValue::ObjRef { index, .. } => {
+                            s.insert(*index);
+                        }
+                        QueryValue::Int(i) => {
+                            s.insert(*i as u64 | (1u64 << 62));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        s
+    }
+
+    #[test]
+    fn resident_only_matches_scan_path() {
+        let path = "tests/fixtures/dump_4_philosophers.hprof";
+        let cache = ReplCache::build(path, true).expect("cache");
+
+        for oql in [
+            "SELECT @objectAddress FROM java.lang.Thread",
+            "SELECT @objectAddress FROM INSTANCEOF java.lang.Thread",
+            "SELECT COUNT(*) FROM java.lang.String",
+        ] {
+            let (q, plan) = parse_plan_opt(oql);
+            assert!(plan.is_resident_only(), "{oql} must be resident-only");
+
+            let cache_out =
+                run_resident_only(&cache, &[(q.clone(), plan.clone())], true).expect("cache run");
+            let scan_out = run_single_dump(path, &[(q, plan)], true).expect("scan run");
+
+            assert_eq!(cache_out.len(), scan_out.len(), "result count for {oql}");
+            assert_eq!(
+                cache_out[0].row_count, scan_out[0].row_count,
+                "row_count for {oql}: cache={} scan={}",
+                cache_out[0].row_count, scan_out[0].row_count
+            );
+            assert_eq!(
+                addr_set(&cache_out),
+                addr_set(&scan_out),
+                "row-value set parity for {oql}"
+            );
+        }
+    }
+
+    #[test]
+    fn resident_only_matches_scan_path_more() {
+        let path = "tests/fixtures/dump_4_philosophers.hprof";
+        let cache = ReplCache::build(path, true).expect("cache");
+
+        for oql in [
+            "SELECT * FROM java.lang.Thread",
+            "SELECT classof(t) FROM java.lang.Thread t",
+            "SELECT @objectId FROM java.lang.String",
+            "SELECT @objectAddress FROM java.lang.Thread \
+             UNION SELECT @objectAddress FROM java.util.HashMap",
+        ] {
+            let (q, plan) = parse_plan_opt(oql);
+            assert!(
+                plan.is_resident_only(),
+                "{oql} is expected resident-only for this test"
+            );
+
+            let cache_out =
+                run_resident_only(&cache, &[(q.clone(), plan.clone())], true).expect("cache run");
+            let scan_out = run_single_dump(path, &[(q, plan)], true).expect("scan run");
+
+            assert_eq!(
+                cache_out.len(),
+                scan_out.len(),
+                "result count for {oql}: cache={} scan={}",
+                cache_out.len(),
+                scan_out.len()
+            );
+            assert_eq!(
+                cache_out[0].row_count, scan_out[0].row_count,
+                "row_count for {oql}: cache={} scan={}",
+                cache_out[0].row_count, scan_out[0].row_count
+            );
+            assert_eq!(
+                addr_set(&cache_out),
+                addr_set(&scan_out),
+                "row-value set parity for {oql}"
+            );
+        }
+    }
 
     #[test]
     fn repl_cache_builds_from_fixture() {
