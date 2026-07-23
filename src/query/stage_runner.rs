@@ -299,6 +299,10 @@ pub fn resume_without_late_ctx(state: QueryExecState) -> Vec<QueryResult> {
              full analysis pipeline; the dominator tree is not built in the \
              query-only path. Run the full report (drop --query-only) to use \
              dominator queries."
+        } else if entry.plan.needs.gc_roots {
+            "@GCRoots/@GCRootInfo/@info require the full analysis pipeline; \
+             GC-root data is not collected in the query-only path. Run the full \
+             report (drop --query-only) to use GC-root queries."
         } else {
             "@retainedHeapSize requires the full analysis pipeline; \
              it is not available in the query-only path. Run the full \

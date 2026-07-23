@@ -228,6 +228,8 @@ where
                 "outbounds" => Attr::Outbounds,
                 "valueArray" => Attr::ValueArray,
                 "referenceArray" => Attr::ReferenceArray,
+                "GCRoots" => Attr::GcRoots,
+                "GCRootInfo" | "info" => Attr::GcRootInfo,
                 other => {
                     emitter.emit(Rich::custom(
                         e.span(),
@@ -1011,6 +1013,9 @@ pub const ATTRIBUTES: &[&str] = &[
     "@outbounds",
     "@valueArray",
     "@referenceArray",
+    "@GCRoots",
+    "@GCRootInfo",
+    "@info",
 ];
 
 /// The union of every completion-candidate slice the parser exposes. The
@@ -3829,5 +3834,12 @@ mod tests {
             "getKey(1) with an arg must not lower: {:?}",
             &q.select[0]
         );
+    }
+
+    #[test]
+    fn parse_gcroot_attrs() {
+        assert!(parse("SELECT @GCRoots FROM java.lang.Thread").is_ok());
+        assert!(parse("SELECT @GCRootInfo FROM java.lang.Thread").is_ok());
+        assert!(parse("SELECT @info FROM java.lang.Thread").is_ok());
     }
 }

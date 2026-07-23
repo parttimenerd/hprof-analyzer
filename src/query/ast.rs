@@ -131,6 +131,12 @@ pub enum Attr {
     /// array-typed backing field (e.g. ArrayList.elementData) (ObjRef).
     /// Ref-hop attr: resolved in the late phase (P2); scan-time projection is Null.
     ReferenceArray,
+    /// `@GCRoots` — the object's GC-root entries (empty if not a root).
+    /// Analyze-pipeline only; Null in the query-only path.
+    GcRoots,
+    /// `@GCRootInfo` / `@info` — root descriptor detail (root type/tag) for a
+    /// root object; empty/Null for a non-root. Analyze-pipeline only.
+    GcRootInfo,
 }
 
 /// An arithmetic expression over attribute/field/literal operands. Leaves are

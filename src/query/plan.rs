@@ -32,6 +32,9 @@ pub struct QueryNeeds {
     /// Arms the string-values side table in the P2 late window, for
     /// `toString(s)` SELECT and WHERE on `java.lang.String` FROM queries.
     pub string_values: bool,
+    /// Arms GC-root descriptor resolution in the analyze late phase, for
+    /// @GCRoots/@GCRootInfo/@info. Rejected in the query-only path.
+    pub gc_roots: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -769,6 +772,14 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
         // else: non-String class FROM -> generic scan-time display, no late op.
     }
 
+    // G1: @GCRoots/@GCRootInfo require the full analyze pipeline. Force the plan
+    // into carry mode (finalize_at != P1) so the entry is deferred to
+    // `resume_without_late_ctx` where it gets an actionable error rather than
+    // silently projecting Null in the query-only path.
+    if needs.gc_roots && finalize_at == Phase::P1 {
+        finalize_at = Phase::P3;
+    }
+
     Ok(QueryPlan {
         kind,
         needs,
@@ -1270,6 +1281,8 @@ fn note_attr_need_attr(a: &Attr, needs: &mut QueryNeeds) {
         }
         // toString(s) arms the string-values side table, built post-scan.
         Attr::ToString(_) => needs.string_values = true,
+        // G1: GC-root attrs require the full analyze pipeline.
+        Attr::GcRoots | Attr::GcRootInfo => needs.gc_roots = true,
         _ => {}
     }
 }
@@ -3092,6 +3105,20 @@ mod tests {
             StageKind::SingleScan,
             "COUNT(*) FROM INSTANCEOF must route to SingleScan so subclasses are \
              resolved via the superclass walk, not the class-summary histogram"
+        );
+    }
+
+    #[test]
+    fn gcroots_attr_sets_needs_gc_roots_and_forces_carry() {
+        let plan = pq(&parse("SELECT @GCRoots FROM java.lang.Thread").unwrap()).unwrap();
+        assert!(
+            plan.needs.gc_roots,
+            "@GCRoots must set needs.gc_roots"
+        );
+        assert_ne!(
+            plan.finalize_at,
+            Phase::P1,
+            "@GCRoots must force finalize_at != P1 so the entry goes into carry mode"
         );
     }
 }

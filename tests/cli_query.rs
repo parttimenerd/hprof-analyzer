@@ -4343,3 +4343,18 @@ fn method_in_arithmetic() {
     let a = run_query_stdout(&hprof, "SELECT i.intValue() * 2 FROM java.lang.Integer i LIMIT 3");
     assert!(!a.trim().is_empty());
 }
+
+/// `@GCRoots`, `@GCRootInfo`, and `@info` require the full analysis pipeline.
+/// In the query-only path they must produce an actionable "full analysis pipeline"
+/// error, not silently return Null rows. Mirrors the @retainedHeapSize test.
+#[test]
+fn gcroot_query_only_mode_errors() {
+    let Some(hprof) = philosophers() else { return };
+    for attr in &["@GCRoots", "@GCRootInfo", "@info"] {
+        let out = run_query_stdout(&hprof, &format!("SELECT {attr} FROM java.lang.Thread"));
+        assert!(
+            out.to_lowercase().contains("the full analysis pipeline"),
+            "{attr} query must error in query-only path with 'full analysis pipeline':\n{out}"
+        );
+    }
+}
