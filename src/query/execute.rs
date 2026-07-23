@@ -781,7 +781,9 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 arith(&l, *op, &r)
             }
             Expr::Unary { op, arg } => unary(*op, &self.eval_expr(arg, src_idx, class_id, blob)),
-            Expr::Method { .. } => QueryValue::Null, // D2 fills this
+            Expr::Method { receiver, name, args } => {
+                self.dispatch_method(receiver, name, args, src_idx, class_id, blob)
+            }
         }
     }
     /// semantics as `eval_expr`; delegates attr leaves to `project_array_attr`.
@@ -795,8 +797,47 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 arith(&l, *op, &r)
             }
             Expr::Unary { op, arg } => unary(*op, &self.eval_expr_array(arg, src_idx, class_name, length)),
-            Expr::Method { .. } => QueryValue::Null, // D2 fills this
+            Expr::Method { name, .. } => match name.as_str() {
+                // Arrays expose only `length`/`size`; everything else is Null for now.
+                "length" | "size" => QueryValue::Int(length as i64),
+                _ => QueryValue::Null,
+            },
         }
+    }
+    /// Dispatch a method call on an instance object. Tier-2: fixed name → `Attr`
+    /// alias table (MAT-API names). Unknown names fall through to
+    /// `emulate_jvm_method` (stub, filled by D3/D4).
+    fn dispatch_method(
+        &self,
+        receiver: &Expr,
+        name: &str,
+        args: &[Expr],
+        src_idx: usize,
+        class_id: u64,
+        blob: &[u8],
+    ) -> QueryValue {
+        match name {
+            "getName" => self.project_attr(&Attr::DisplayName, src_idx, class_id, blob),
+            "getObjectAddress" => self.project_attr(&Attr::ObjectAddress, src_idx, class_id, blob),
+            "getObjectId" => self.project_attr(&Attr::ObjectId, src_idx, class_id, blob),
+            "getUsedHeapSize" => self.project_attr(&Attr::UsedHeapSize, src_idx, class_id, blob),
+            "getRetainedHeapSize" => self.project_attr(&Attr::RetainedHeapSize, src_idx, class_id, blob),
+            "getClazz" => self.project_attr(&Attr::ClassOf, src_idx, class_id, blob),
+            "toString" => self.project_attr(&Attr::ToString(String::new()), src_idx, class_id, blob),
+            "length" => self.project_attr(&Attr::Length, src_idx, class_id, blob),
+            _ => self.emulate_jvm_method(receiver, name, args, src_idx, class_id, blob),
+        }
+    }
+    fn emulate_jvm_method(
+        &self,
+        _receiver: &Expr,
+        _name: &str,
+        _args: &[Expr],
+        _src_idx: usize,
+        _class_id: u64,
+        _blob: &[u8],
+    ) -> QueryValue {
+        QueryValue::Null // D3/D4 fill this; D5 turns the final fallthrough into rejection
     }
     fn decode_field(&self, class_id: u64, name: &str, blob: &[u8]) -> QueryValue {
         use crate::types::HprofType;

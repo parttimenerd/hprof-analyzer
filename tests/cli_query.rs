@@ -3910,3 +3910,52 @@ fn from_objects_single_address_returns_one_row() {
         "FROM OBJECTS 0x1 (bogus) must return zero rows:\n{bogus}"
     );
 }
+
+// ── D2: method dispatch tier-2 — MAT-API name aliases ────────────────────────
+
+/// Extract data value lines from a query result, stripping the section header
+/// (`== … ==`), the echoed SELECT line, the column-name header row, and the
+/// `(N rows)` footer. What remains are the actual data cells.
+fn extract_data_rows(stdout: &str) -> Vec<&str> {
+    stdout
+        .lines()
+        .map(str::trim)
+        .filter(|l| {
+            !l.is_empty()
+                && !l.starts_with("==")
+                && !l.starts_with("SELECT")
+                && !l.starts_with('(')
+        })
+        .skip(1) // skip the column-name header row
+        .collect()
+}
+
+/// `s.getName()` must produce the same value as `@displayName` for the same
+/// FROM class (Thread). Currently stubs to Null, so the outputs differ — this
+/// test must FAIL before the implementation and PASS after.
+#[test]
+fn method_alias_getname_equals_class() {
+    let Some(hprof) = philosophers() else { return };
+    let a = run_query_stdout(&hprof, "SELECT s.getName() FROM java.lang.Thread s LIMIT 1");
+    let b = run_query_stdout(&hprof, "SELECT @displayName FROM java.lang.Thread s LIMIT 1");
+    let av = extract_data_rows(&a);
+    let bv = extract_data_rows(&b);
+    assert_eq!(
+        av, bv,
+        "getName() values must match @displayName values\na={a}\nb={b}"
+    );
+}
+
+/// `s.getObjectAddress()` must produce the same values as `@objectAddress`.
+#[test]
+fn method_alias_getobjectaddress_equals_attr() {
+    let Some(hprof) = philosophers() else { return };
+    let a = run_query_stdout(&hprof, "SELECT s.getObjectAddress() FROM java.lang.Thread s LIMIT 3");
+    let b = run_query_stdout(&hprof, "SELECT @objectAddress FROM java.lang.Thread s LIMIT 3");
+    let av = extract_data_rows(&a);
+    let bv = extract_data_rows(&b);
+    assert_eq!(
+        av, bv,
+        "getObjectAddress() values must match @objectAddress values\na={a}\nb={b}"
+    );
+}
