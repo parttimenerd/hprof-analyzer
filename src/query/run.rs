@@ -890,11 +890,29 @@ fn collect_subquery_inners(flat: &[(Query, QueryPlan)]) -> Vec<SubqueryInner> {
 /// Extract the dense object index a result row identifies: `SELECT *` yields an
 /// `ObjRef { index }`, `SELECT @objectId` an `Int(index)`. Rows that carry
 /// neither (e.g. a scalar projection) yield `None` and never join.
-fn row_dense_index(row: &[QueryValue]) -> Option<u32> {
+pub(crate) fn row_dense_index(row: &[QueryValue]) -> Option<u32> {
     match row.first()? {
         QueryValue::ObjRef { index, .. } => Some(*index as u32),
         QueryValue::Int(i) if *i >= 0 => Some(*i as u32),
         _ => None,
+    }
+}
+
+/// Prune each result's rows to GC-reachable objects: a row is kept iff its
+/// source dense index is reachable (`dfn[idx] != u32::MAX`). Rows with no dense
+/// index (scalars, aggregates) are always kept; a dense index out of `dfn`'s
+/// range is treated as unreachable. Recomputes `row_count`. Errored results are
+/// left untouched.
+pub(crate) fn filter_rows_by_reachability(results: &mut [QueryResult], dfn: &[u32]) {
+    for r in results.iter_mut() {
+        if r.error.is_some() {
+            continue;
+        }
+        r.rows.retain(|row| match row_dense_index(row) {
+            Some(idx) => dfn.get(idx as usize).is_some_and(|&d| d != u32::MAX),
+            None => true,
+        });
+        r.row_count = r.rows.len() as u64;
     }
 }
 
@@ -1830,5 +1848,32 @@ mod tests {
         assert!(!trunc);
         assert_eq!(set.len(), 1);
         assert!(in_subquery_contains(&set, 5));
+    }
+
+    #[test]
+    fn reachability_filter_drops_unreachable_rows() {
+        use crate::query::model::QueryValue;
+        // dfn: idx 0 reachable (0), idx 1 unreachable (u32::MAX), idx 2 reachable (5)
+        let dfn = vec![0u32, u32::MAX, 5];
+        let mut results = vec![QueryResult {
+            name: "t".into(),
+            oql: String::new(),
+            columns: vec![],
+            rows: vec![
+                vec![QueryValue::ObjRef { index: 0, class: "C".into() }],
+                vec![QueryValue::ObjRef { index: 1, class: "C".into() }],
+                vec![QueryValue::ObjRef { index: 2, class: "C".into() }],
+                vec![QueryValue::Int(99)], // Int(99) -> row_dense_index returns Some(99), dfn.get(99) is None -> DROPPED
+            ],
+            row_count: 4,
+            truncated: false,
+            error: None,
+            note: None,
+            viz: None,
+        }];
+        filter_rows_by_reachability(&mut results, &dfn);
+        // idx 1 dropped; idx 0,2 kept; Int(99) dropped (out-of-range)
+        assert_eq!(results[0].row_count, 2, "unreachable ObjRef + out-of-range Int dropped");
+        assert_eq!(results[0].rows.len(), 2);
     }
 }
