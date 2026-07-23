@@ -196,6 +196,12 @@ struct RefWalkState<'q, R: ClassResolver> {
     /// `dense_idx -> tail field value`, decoded at scan time (blob is gone in
     /// the late window). Keyed by the object that OWNS the tail field.
     tails: crate::query::refwalk::RefWalkTails,
+    /// Armed when a RefPath tail is `@length` (e.g. `s.value.@length`). The late
+    /// window can't derive an array's element count from its dense index alone,
+    /// so each visited array's length is captured into `tails` keyed by the
+    /// array's own dense index. Left `false` (no capture) otherwise so
+    /// non-Length runs stay byte/RSS-identical.
+    needs_length_tail: bool,
     resolver: &'q R,
 }
 
@@ -257,10 +263,13 @@ impl<'q, R: ClassResolver> ScanDriver<'q, R> {
     fn arm_refwalk(execs: &[SingleScanExecutor<'q, R>]) -> Option<RefWalkState<'q, R>> {
         let mut per_query_hops: Vec<Vec<String>> = Vec::new();
         let mut per_query_tails: Vec<Vec<String>> = Vec::new();
+        let mut needs_length_tail = false;
         for ex in execs {
             if ex.plan().needs.ref_walk {
                 per_query_hops.push(crate::query::refwalk::refwalk_field_names(ex.query()));
                 per_query_tails.push(crate::query::refwalk::refwalk_tail_field_names(ex.query()));
+                needs_length_tail |=
+                    crate::query::refwalk::refwalk_has_length_tail(ex.query());
             }
         }
         if per_query_hops.is_empty() {
@@ -278,6 +287,7 @@ impl<'q, R: ClassResolver> ScanDriver<'q, R> {
             tails: crate::query::refwalk::RefWalkTails::new(
                 crate::query::refwalk::REFWALK_EDGE_CAP,
             ),
+            needs_length_tail,
             resolver,
         })
     }
@@ -285,12 +295,20 @@ impl<'q, R: ClassResolver> ScanDriver<'q, R> {
     pub fn is_empty(&self) -> bool {
         self.execs.is_empty()
     }
-    /// True if any armed executor's FROM pattern can match an array class. Lets
-    /// the pass2 scan skip per-array class-name construction entirely when no
-    /// query targets arrays (the common case), keeping the multi-GB array path
-    /// allocation-free for instance-only query sets.
+    /// True if any armed executor's FROM pattern can match an array class, OR a
+    /// RefWalk query needs an `@length` tail (e.g. `s.value.@length`). The latter
+    /// walks from a non-array FROM (String) to an array target whose length is
+    /// only observable via `visit_array`, so the scan must deliver arrays even
+    /// though no executor's FROM is an array class. Lets the pass2 scan skip
+    /// per-array class-name construction entirely when no query targets arrays
+    /// (the common case), keeping the multi-GB array path allocation-free for
+    /// instance-only query sets.
     pub fn wants_arrays(&self) -> bool {
         self.execs.iter().any(|e| e.wants_arrays())
+            || self
+                .refwalk
+                .as_ref()
+                .is_some_and(|s| s.needs_length_tail)
     }
     /// Finalize every executor into a `QueryExecState`, each tagged with its
     /// original `slot` (the query's index in the caller's list): row-mode
@@ -420,6 +438,24 @@ impl<'q, R: ClassResolver> ScanDriver<'q, R> {
         }
     }
 
+    /// Record a visited array's element count into the tail table, keyed by the
+    /// array's own dense index, when a query has an `@length` RefPath tail (e.g.
+    /// `s.value.@length`). The late window resolves the hop to this array's dense
+    /// index, then joins it here to project the length. No-op when unarmed or no
+    /// Length tail is needed — keeping non-Length runs byte/RSS-identical.
+    fn capture_refwalk_array_length(&mut self, src_idx: usize, length: u32) {
+        let Some(state) = self.refwalk.as_mut() else {
+            return;
+        };
+        if !state.needs_length_tail {
+            return;
+        }
+        state.tails.insert(
+            src_idx as u32,
+            crate::query::model::QueryValue::Int(length as i64),
+        );
+    }
+
     /// Capture a String instance's backing array address and coder byte for the
     /// post-scan toString decode pass. No-op when not armed or this class is not
     /// a java.lang.String class (memoized per class_id for zero amortised cost on
@@ -478,6 +514,7 @@ impl<'q, R: ClassResolver> ObjectVisitor for ScanDriver<'q, R> {
         }
     }
     fn visit_array(&mut self, src_idx: usize, class_name: &str, length: u32) {
+        self.capture_refwalk_array_length(src_idx, length);
         for ex in &mut self.execs {
             ex.visit_array(src_idx, class_name, length);
         }

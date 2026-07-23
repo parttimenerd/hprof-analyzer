@@ -204,31 +204,57 @@ where
     // `@attr`, optionally alias-qualified as `alias.@attr`. The greedy ident
     // regex swallows the trailing `.`, so `s.@objectId` tokenizes as `Ident("s.")`
     // then `At("objectId")`; consume the optional trailing-dot prefix here so it
-    // is not swallowed as a `Field`. The prefix denotes the FROM object; dropped.
-    // Unknown names emit an actionable error but still yield a placeholder so the
-    // `@`-token stays committed (no backtracking into the bare-field arm, which
-    // would otherwise mask the `unknown @attribute` message).
+    // is not swallowed as a `Field`. A prefix of exactly one segment (`s.`) is the
+    // FROM alias and is dropped. A MULTI-segment prefix (`s.value.`) carries
+    // reference hops before the `@attr` tail (e.g. `s.value.@length`): the
+    // segments are kept as raw `RefPath` hops here and `normalize_attr` strips the
+    // leading alias hop once the FROM alias is known. Unknown names emit an
+    // actionable error but still yield a placeholder so the `@`-token stays
+    // committed (no backtracking into the bare-field arm, which would otherwise
+    // mask the `unknown @attribute` message).
     let at_attr = select! { Token::Ident(p) if p.ends_with('.') => p }
         .or_not()
-        .ignore_then(select! { Token::At(name) => name })
-        .validate(|name: String, e, emitter| match name.as_str() {
-            "objectId" => Attr::ObjectId,
-            "objectAddress" => Attr::ObjectAddress,
-            "usedHeapSize" => Attr::UsedHeapSize,
-            "retainedHeapSize" | "retainedHeap" => Attr::RetainedHeapSize,
-            "displayName" => Attr::DisplayName,
-            "name" => Attr::DisplayName,
-            "length" => Attr::Length,
-            "inbounds" => Attr::Inbounds,
-            "outbounds" => Attr::Outbounds,
-            "valueArray" => Attr::ValueArray,
-            "referenceArray" => Attr::ReferenceArray,
-            other => {
-                emitter.emit(Rich::custom(
-                    e.span(),
-                    format!("unknown @attribute: @{other}"),
-                ));
-                Attr::ObjectId
+        .then(select! { Token::At(name) => name })
+        .validate(|(prefix, name): (Option<String>, String), e, emitter| {
+            let base = match name.as_str() {
+                "objectId" => Attr::ObjectId,
+                "objectAddress" => Attr::ObjectAddress,
+                "usedHeapSize" => Attr::UsedHeapSize,
+                "retainedHeapSize" | "retainedHeap" => Attr::RetainedHeapSize,
+                "displayName" => Attr::DisplayName,
+                "name" => Attr::DisplayName,
+                "length" => Attr::Length,
+                "inbounds" => Attr::Inbounds,
+                "outbounds" => Attr::Outbounds,
+                "valueArray" => Attr::ValueArray,
+                "referenceArray" => Attr::ReferenceArray,
+                other => {
+                    emitter.emit(Rich::custom(
+                        e.span(),
+                        format!("unknown @attribute: @{other}"),
+                    ));
+                    Attr::ObjectId
+                }
+            };
+            // A prefix with intermediate segments (more than the leading alias)
+            // is a reference path: `s.value.@length` → hops carry `["s","value"]`
+            // (raw); `normalize_attr` strips the leading alias. A single-segment
+            // prefix (`s.`) is just the alias and carries no hops → bare attr.
+            match prefix {
+                Some(p) => {
+                    let segs: Vec<String> =
+                        p.trim_end_matches('.').split('.').map(str::to_string).collect();
+                    if segs.len() >= 2 {
+                        Attr::RefPath {
+                            hops: segs,
+                            tail: Box::new(base),
+                            role: RefRole::ProjectionOnly,
+                        }
+                    } else {
+                        base
+                    }
+                }
+                None => base,
             }
         });
     let attr = at_attr
@@ -830,6 +856,26 @@ fn normalize_expr(e: &mut Expr, alias: Option<&str>) {
 /// Rewrite a single `Attr::Field` into a `RefPath` when it is a multi-segment
 /// reference path. Non-field attrs and single-segment fields are left as-is.
 fn normalize_attr(a: &mut Attr, alias: Option<&str>) {
+    // A `RefPath` built by `at_attr` (e.g. `s.value.@length`) carries its prefix
+    // segments raw in `hops`, still including the leading FROM alias. Strip that
+    // alias here now that it is known; a bare alias-only prefix (already filtered
+    // in `at_attr`) never reaches this arm. If, after stripping, no hops remain,
+    // the whole thing was just `alias.@attr` — collapse to the bare tail attr.
+    if let Attr::RefPath { hops, tail, role } = a {
+        if let Some(al) = alias {
+            if hops.first().map(String::as_str) == Some(al) {
+                hops.remove(0);
+            }
+        }
+        if hops.is_empty() {
+            *a = (**tail).clone();
+        } else {
+            // Recurse into the tail so a nested dotted-field tail is normalized too.
+            let _ = role; // role is preserved as-is (planner may refine it).
+            normalize_attr(tail, alias);
+        }
+        return;
+    }
     let Attr::Field(name) = a else { return };
     if !name.contains('.') {
         return;
@@ -2499,11 +2545,20 @@ mod tests {
     }
 
     #[test]
-    fn parse_multi_dot_prefixed_at_attr_drops_whole_prefix() {
-        // `a.b.@objectId` lexes as `Ident("a.b.")` + `At`; the entire prefix is
-        // dropped (it denotes the FROM object, unvalidated at parse time).
+    fn parse_multi_dot_prefixed_at_attr_builds_refpath() {
+        // `a.b.@objectId` lexes as `Ident("a.b.")` + `At`; the leading alias `a`
+        // is stripped and the remaining `b` becomes a reference hop, with the
+        // `@objectId` as the RefPath tail (previously the whole prefix was
+        // dropped, silently discarding the `b` hop).
         let q = parse("SELECT a.b.@objectId FROM java.lang.Object a").expect("should parse");
-        assert_eq!(q.select, vec![attr_sel(Attr::ObjectId)]);
+        assert_eq!(
+            q.select,
+            vec![attr_sel(Attr::RefPath {
+                hops: vec!["b".to_string()],
+                tail: Box::new(Attr::ObjectId),
+                role: RefRole::ProjectionOnly,
+            })],
+        );
     }
 
     #[test]
@@ -2514,6 +2569,39 @@ mod tests {
             vec![attr_sel(Attr::ObjectId), attr_sel(field("hash"))],
             "prefix dropped from @attr; `s.hash` alias-stripped to Field(\"hash\")"
         );
+    }
+
+    #[test]
+    fn parse_value_length_builds_refpath_with_length_tail() {
+        // `s.value.@length` must resolve the `value` ref hop and project the
+        // walked-to array's @length (an identity attr tail on a RefPath). The
+        // leading alias `s` is stripped; `value` remains as the single hop.
+        let q = parse("SELECT s.value.@length FROM java.lang.String s").expect("should parse");
+        assert_eq!(
+            q.select,
+            vec![attr_sel(Attr::RefPath {
+                hops: vec!["value".to_string()],
+                tail: Box::new(Attr::Length),
+                role: RefRole::ProjectionOnly,
+            })],
+        );
+    }
+
+    #[test]
+    fn parse_at_attr_tail_in_where_builds_refpath() {
+        // A `@length` tail on a RefPath is also valid inside WHERE.
+        let q = parse("SELECT s FROM java.lang.String s WHERE s.value.@length > 3")
+            .expect("should parse");
+        match q.where_.as_ref().expect("where") {
+            Predicate::Compare {
+                lhs: Expr::Attr(Attr::RefPath { hops, tail, .. }),
+                ..
+            } => {
+                assert_eq!(hops, &vec!["value".to_string()]);
+                assert!(matches!(**tail, Attr::Length));
+            }
+            other => panic!("expected RefPath compare, got {other:?}"),
+        }
     }
 
     #[test]

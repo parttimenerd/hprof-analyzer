@@ -1176,6 +1176,99 @@ fn query_subcommand_array_length_is_non_null() {
     assert!(has_len, "no integer @length row found:\n{stdout}");
 }
 
+/// A RefPath whose tail is `@length` (e.g. `s.value.@length`) must resolve the
+/// `value` reference hop and project the walked-to backing array's element count
+/// — NOT a silent `null` (the historical behavior: the parser dropped the hop and
+/// the late resolver had no length source). The array length is captured at scan
+/// time keyed by the array's dense index and joined in the late window.
+#[test]
+fn refpath_length_tail_resolves() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT s.value.@length FROM java.lang.String s LIMIT 3",
+    );
+    assert!(
+        !out.to_lowercase().contains("the full analysis pipeline"),
+        "RefPath @length tail should resolve in the query subcommand:\n{out}"
+    );
+    assert!(
+        !out.contains("error:"),
+        "RefPath @length tail query reported an error:\n{out}"
+    );
+    // The projected column carries the tail; at least one row must be a numeric
+    // (non-null) length. String backing arrays have length >= 0 (usually > 0).
+    let has_len = out.lines().any(|l| l.trim().parse::<u64>().is_ok());
+    assert!(
+        has_len,
+        "no numeric @length row found — RefPath @length tail projected null:\n{out}"
+    );
+}
+
+/// Guard the gating: a normal count query (no RefPath, no `@length`) is
+/// unaffected by the `@length`-tail capture wiring — it must still produce a
+/// plain integer count. Mirrors `query_subcommand_count_prints_table` but as a
+/// focused regression that the Length-tail arming does not leak into non-RefWalk
+/// runs (byte-identity is separately guarded by `cli_unified`).
+#[test]
+fn plain_count_query_unaffected_by_length_tail_wiring() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(&hprof, "SELECT COUNT(*) FROM java.lang.String");
+    assert!(out.contains("COUNT(*)"), "missing COUNT header:\n{out}");
+    let count = parse_single_count(&out);
+    assert!(count > 0, "philosophers dump has some Strings:\n{out}");
+}
+
+/// A RefPath `@length` tail also works inside WHERE: `s.value.@length > N`
+/// filters String rows by their backing-array length. Every returned row's
+/// length must satisfy the predicate (proving the tail resolves during the
+/// predicate-critical walk, not just in projection).
+#[test]
+fn refpath_length_tail_filters_in_where() {
+    let Some(hprof) = philosophers() else { return };
+    // Project the length too so we can verify the filter held.
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT s.value.@length FROM java.lang.String s WHERE s.value.@length > 4 LIMIT 20",
+    );
+    assert!(
+        !out.contains("error:") && !out.to_lowercase().contains("the full analysis pipeline"),
+        "WHERE @length tail query should resolve:\n{out}"
+    );
+    // Every numeric projected length must be > 4 (the predicate).
+    for l in out.lines() {
+        if let Ok(n) = l.trim().parse::<u64>() {
+            assert!(n > 4, "row length {n} violates WHERE @length > 4:\n{out}");
+        }
+    }
+}
+
+/// A query referencing a field that does not exist on the (exact) FROM class is
+/// rejected with an actionable `unknown field` error rather than silently
+/// returning an empty result. Validation runs inside the pass2 build where the
+/// class schema is live; the `query` subcommand surfaces it as an inline
+/// A multi-hop RefPath ending in `@length` resolves across classes and hops:
+/// `t.name.value.@length` walks Thread -> name (String) -> value (char[]) and
+/// projects the char array's element count. Proves the `@length` tail is not
+/// String-specific and composes with deeper hop chains.
+#[test]
+fn refpath_length_tail_multi_hop_cross_class() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT t.name.value.@length FROM java.lang.Thread t LIMIT 5",
+    );
+    assert!(
+        !out.contains("error:") && !out.to_lowercase().contains("the full analysis pipeline"),
+        "multi-hop @length tail should resolve:\n{out}"
+    );
+    let has_len = out.lines().any(|l| l.trim().parse::<u64>().is_ok());
+    assert!(
+        has_len,
+        "no numeric @length row for multi-hop RefPath tail:\n{out}"
+    );
+}
+
 /// A query referencing a field that does not exist on the (exact) FROM class is
 /// rejected with an actionable `unknown field` error rather than silently
 /// returning an empty result. Validation runs inside the pass2 build where the

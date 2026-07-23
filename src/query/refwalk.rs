@@ -305,6 +305,45 @@ pub fn refwalk_tail_field_names(q: &crate::query::ast::Query) -> Vec<String> {
     out
 }
 
+/// True if any `Attr::RefPath` in the query has an `Attr::Length` tail (e.g.
+/// `s.value.@length`). Such a tail cannot be answered from the resolved dense
+/// index alone in the late window (`LateCtx` has no per-object length array), so
+/// the target array's length must be captured at scan time — keyed by the
+/// array's own dense index, into the same tail table as scalar field tails. This
+/// gates the `visit_array` length capture so non-Length-tail runs stay
+/// byte/RSS-identical (no lengths recorded).
+pub fn refwalk_has_length_tail(q: &crate::query::ast::Query) -> bool {
+    use crate::query::ast::{Attr, Expr, Predicate, SelectItem};
+
+    fn attr_has(a: &Attr) -> bool {
+        match a {
+            Attr::RefPath { tail, .. } => matches!(tail.as_ref(), Attr::Length) || attr_has(tail),
+            _ => false,
+        }
+    }
+    fn pred_has(p: &Predicate) -> bool {
+        match p {
+            Predicate::And(a, b) | Predicate::Or(a, b) => pred_has(a) || pred_has(b),
+            Predicate::Not(a) => pred_has(a),
+            Predicate::Compare { lhs, .. } => {
+                if let Expr::Attr(a) = lhs {
+                    attr_has(a)
+                } else {
+                    false
+                }
+            }
+            Predicate::InSubquery { .. } | Predicate::InstanceOf(_) => false,
+        }
+    }
+
+    let select_has = q.select.iter().any(|item| match item {
+        SelectItem::Attr(a) => attr_has(a),
+        SelectItem::Aggregate { arg, .. } => matches!(arg.as_ref(), SelectItem::Attr(a) if attr_has(a)),
+        _ => false,
+    });
+    select_has || q.where_.as_ref().is_some_and(pred_has)
+}
+
 /// The query-gated RefWalk artifacts carried out of pass2 into the P2 late
 /// window: the per-field forward CSR, the interned hop field-name table (the
 /// `fwd_field` column's decoder), the captured tail-scalar side table, and
@@ -428,6 +467,25 @@ mod tests {
         // hop fields are NOT tails.
         assert!(!tails.contains(&"parent".to_string()));
         assert!(!tails.contains(&"next".to_string()));
+    }
+
+    #[test]
+    fn refwalk_has_length_tail_detects_select_and_where() {
+        // SELECT tail.
+        let q =
+            crate::query::parse::parse("SELECT s.value.@length FROM java.lang.String s").unwrap();
+        assert!(refwalk_has_length_tail(&q));
+        // WHERE tail.
+        let q =
+            crate::query::parse::parse("SELECT s FROM java.lang.String s WHERE s.value.@length > 3")
+                .unwrap();
+        assert!(refwalk_has_length_tail(&q));
+        // A field tail (not @length) does NOT arm length capture.
+        let q = crate::query::parse::parse("SELECT x.parent.name FROM C x").unwrap();
+        assert!(!refwalk_has_length_tail(&q));
+        // A bare @length (no RefPath) is the array-FROM path, not a RefPath tail.
+        let q = crate::query::parse::parse("SELECT @length FROM char[]").unwrap();
+        assert!(!refwalk_has_length_tail(&q));
     }
 
     #[test]

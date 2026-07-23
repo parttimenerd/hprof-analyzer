@@ -813,6 +813,22 @@ fn project_tail(
                 None
             }
         },
+        // `@length` tail (e.g. `s.value.@length`): the resolved target is the
+        // backing array, whose element count was captured at scan time keyed by
+        // its dense index (the late window has no per-object length array). A
+        // miss means the walk landed on a non-array or an uncaptured object.
+        Attr::Length => match ctx.refwalk_tail(dense) {
+            Some(v) => Some(v.clone()),
+            None => {
+                note.get_or_insert_with(|| {
+                    "a reference-path @length tail resolved to an object whose \
+                     length was not captured during the scan (the walked-to \
+                     object is not an array); such tails project Null."
+                        .to_string()
+                });
+                None
+            }
+        },
         // Nested RefPath tails are folded into `hops` by the parser; any other
         // tail attr is not projectable on a walked-to object here.
         _ => None,
