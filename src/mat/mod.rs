@@ -262,13 +262,35 @@ pub fn size_compress(y: i64) -> i32 {
 /// `class_obj_class_idx`, sparse — only class objects appear). We invert it so
 /// that `inv[class_idx[obj]]` yields the class-object id for `o2c`.
 ///
-/// Rows with no class object (should not happen for a well-formed heap) keep
-/// the sentinel `-1`.
+/// When multiple class-objects share the same row (e.g. primitive-array or
+/// java/lang/Class duplicates across different address spaces), we prefer the
+/// reachable one (mm.translate >= 0) to avoid emitting o2c=0 for all instances
+/// of that class. Among reachable entries, lowest dense-id wins (deterministic).
+///
+/// Rows with no class object keep the sentinel `-1`.
 #[allow(dead_code)]
-pub fn build_row_to_classobj_id(coc: &HashMap<u32, u32>, num_classes: usize) -> Vec<i32> {
+pub fn build_row_to_classobj_id(
+    coc: &HashMap<u32, u32>,
+    num_classes: usize,
+    mm: &MatIdMap,
+) -> Vec<i32> {
     let mut inv = vec![-1i32; num_classes];
+    // First pass: fill with any entry (last-wins over HashMap iteration)
     for (&classobj_id, &row) in coc {
-        inv[row as usize] = classobj_id as i32;
+        let slot = &mut inv[row as usize];
+        if *slot < 0 {
+            // No entry yet: take it unconditionally.
+            *slot = classobj_id as i32;
+        } else {
+            // Prefer reachable over unreachable; among equal reachability, lower id wins.
+            let cur_reachable = mm.translate(*slot) >= 0;
+            let new_reachable = mm.translate(classobj_id as i32) >= 0;
+            if !cur_reachable && new_reachable {
+                *slot = classobj_id as i32;
+            } else if cur_reachable == new_reachable && (classobj_id as i32) < *slot {
+                *slot = classobj_id as i32;
+            }
+        }
     }
     inv
 }
@@ -291,7 +313,10 @@ mod tests {
         let mut coc = HashMap::new();
         coc.insert(100u32, 2u32);
         coc.insert(200u32, 5u32);
-        let inv = build_row_to_classobj_id(&coc, 6);
+        // All objects reachable (idom[i] != u32::MAX), addresses 0,1,...
+        let idom: Vec<u32> = vec![0u32; 201];
+        let mm = MatIdMap::build(201, &idom, |i| i as u64);
+        let inv = build_row_to_classobj_id(&coc, 6, &mm);
         assert_eq!(inv[2], 100);
         assert_eq!(inv[5], 200);
         // untouched rows keep the -1 sentinel
@@ -299,6 +324,21 @@ mod tests {
         assert_eq!(inv[1], -1);
         assert_eq!(inv[3], -1);
         assert_eq!(inv[4], -1);
+    }
+
+    #[test]
+    fn inverse_class_table_prefers_reachable_entry() {
+        // Two class-objects map to the same row: id 50 (unreachable) and id 51 (reachable).
+        // build_row_to_classobj_id should keep id 51.
+        let mut coc = HashMap::new();
+        coc.insert(50u32, 3u32);
+        coc.insert(51u32, 3u32);
+        // Mark id 50 unreachable (idom[50] = u32::MAX), id 51 reachable.
+        let mut idom = vec![0u32; 60];
+        idom[50] = u32::MAX;
+        let mm = MatIdMap::build(60, &idom, |i| i as u64);
+        let inv = build_row_to_classobj_id(&coc, 6, &mm);
+        assert_eq!(inv[3], 51, "should prefer reachable id 51 over unreachable id 50");
     }
 
     /// `emit_o2c` composes an identity `inv` (row == value) so we can drive it

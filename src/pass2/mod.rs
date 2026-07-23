@@ -393,17 +393,41 @@ impl Pass2 {
             let addr = p1.id_map.addr_at(i);
             if class_addrs.contains(&addr) {
                 let ci = p1.class_map.get(&addr);
-                let idx = get_or_insert_class(
-                    addr,
-                    &|| {
-                        ci.and_then(|c| p1.strings.get(&c.name_id).cloned())
-                            .unwrap_or_else(|| format!("unknown@{addr:#x}"))
-                    },
-                    &|| ci.map(|c| c.loader_id).unwrap_or(0),
-                );
+                // Determine the histogram row this class-object represents.
+                // Must use the SAME key that instances of the class use:
+                //   - Primitive array class-objects ([I, [B, ...): PRIM_KEY_BASE|tc
+                //   - java/lang/Class class-object: JLC_KEY
+                //   - All other class-objects: addr-based key (same as instances)
+                let name = ci.and_then(|c| p1.strings.get(&c.name_id));
+                let idx = if let Some(n) = name {
+                    if let Some(tc) = prim_array_type_code(n) {
+                        // Class-object for a primitive array: register under PRIM_KEY
+                        get_or_insert_class(
+                            PRIM_KEY_BASE | tc as u64,
+                            &|| prim_array_class_name(tc).to_string(),
+                            &|| 0,
+                        )
+                    } else if n == "java/lang/Class" {
+                        // Class-object for java.lang.Class: register under JLC_KEY
+                        get_or_insert_class(JLC_KEY, &|| "java/lang/Class".to_string(), &|| 0)
+                    } else {
+                        get_or_insert_class(
+                            addr,
+                            &|| n.to_string(),
+                            &|| ci.map(|c| c.loader_id).unwrap_or(0),
+                        )
+                    }
+                } else {
+                    get_or_insert_class(
+                        addr,
+                        &|| format!("unknown@{addr:#x}"),
+                        &|| ci.map(|c| c.loader_id).unwrap_or(0),
+                    )
+                };
                 class_obj_class_idx.insert(i as u32, idx);
             }
         }
+        let _ = jlc_idx;
         let _ = jlc_idx;
 
         // Resolve each distinct non-boot class-loader OBJECT address to the

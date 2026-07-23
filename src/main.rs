@@ -861,14 +861,14 @@ fn run(
     // address after idom is known (post compute_dominators). The snapshot is a
     // Vec<u64> of length g.n (~8 MB at 1M objects), freed as soon as the map is
     // built.
-    let (mat_inv, mat_addrs): (Option<Vec<i32>>, Option<Vec<u64>>) = if let Some(_) = mat {
+    let (mat_coc_snapshot, mat_addrs): (Option<std::collections::HashMap<u32, u32>>, Option<Vec<u64>>) = if let Some(_) = mat {
         let id_map = inbound
             .id_map
             .as_ref()
             .expect("id_map must be live before compress_id_map for MAT idx emit");
         let addrs: Vec<u64> = (0..g.n).map(|i| id_map.addr_at(i)).collect();
-        let inv = mat::build_row_to_classobj_id(&g.class_obj_class_idx, g.class_names.len());
-        (Some(inv), Some(addrs))
+        let coc_snap = g.class_obj_class_idx.clone();
+        (Some(coc_snap), Some(addrs))
     } else {
         (None, None)
     };
@@ -942,8 +942,10 @@ fn run(
     // them. We need these to assemble outbound entries in MAT id order after
     // compute_dominators builds mat_map. Holding the snapshot through the
     // dominator window is ~20-30 MB (offsets + flat targets + class rows).
+    // We snapshot fwd_off, fwd_tgt, and class_idx here (before build_from_fwd
+    // consumes fwd_targets). class_obj_ids is computed later after mat_inv is
+    // built (with reachability preference), so we store raw class-rows for now.
     let mat_fwd_snap: Option<(Vec<u32>, Vec<u32>, Vec<u32>)> = if mat.is_some() {
-        let inv = mat_inv.as_ref().expect("mat_inv built when mat present");
         let class_idx: Vec<u32> = class_idx_c.restore()?;
         let n = g.n;
         let fwd_off = g.fwd_offsets.clone();
@@ -963,16 +965,8 @@ fn run(
                 fwd_tgt.extend_from_slice(slice);
             }
         }
-        // Also translate class-object ids to their inverse row (class_obj_old per obj)
-        // = inv[class_idx[i]], stored as the first element. We keep it as old dense-id
-        // here; translation to mat-id happens after mat_map is built.
-        let class_obj_ids: Vec<u32> = (0..n).map(|i| {
-            let row = class_idx[i];
-            let coid = inv[row as usize]; // -1 if missing, else old dense class-obj id
-            if coid < 0 { u32::MAX } else { coid as u32 }
-        }).collect();
-        drop(class_idx);
-        Some((fwd_off, fwd_tgt, class_obj_ids))
+        // Store raw class-idx rows; class_obj_ids resolved after mat_inv is built.
+        Some((fwd_off, fwd_tgt, class_idx))
     } else {
         None
     };
@@ -1058,6 +1052,55 @@ fn run(
     } else {
         None
     };
+    // Build the row→class-object id inverse table now that mm is available, so
+    // we can prefer reachable class-objects when multiple map to the same row.
+    let mut mat_inv: Option<Vec<i32>> = if let (Some(ref mm), Some(ref coc)) =
+        (mat_map.as_ref(), mat_coc_snapshot.as_ref())
+    {
+        Some(mat::build_row_to_classobj_id(coc, g.class_names.len(), mm))
+    } else {
+        None
+    };
+    // Patch alias rows: some class names have two histogram rows — a canonical row
+    // (JLC_KEY or PRIM_KEY) where the class-object is registered, and an addr-based
+    // row where instances are counted. Only the canonical row has inv[row] != -1.
+    // For the MAT o2c table, alias rows (same name, inv==-1) must map to the same
+    // class-object as the canonical row.
+    if let (Some(ref mut inv), Some(ref mm)) = (mat_inv.as_mut(), mat_map.as_ref()) {
+        // Build: name → canonical class-object mat-id (first row with inv[row]!=-1)
+        let mut name_to_coid: std::collections::HashMap<&str, i32> = std::collections::HashMap::new();
+        for (row, name) in g.class_names.iter().enumerate() {
+            if inv[row] >= 0 {
+                name_to_coid.entry(name.as_str()).or_insert(inv[row]);
+            }
+        }
+        // Fill alias rows that have inv==-1 but a canonical entry for the same name exists.
+        for (row, name) in g.class_names.iter().enumerate() {
+            if inv[row] < 0 {
+                if let Some(&coid) = name_to_coid.get(name.as_str()) {
+                    inv[row] = coid;
+                }
+            }
+        }
+        let _ = mm;  // mm borrow ends here
+    };
+    // Resolve class_obj_ids from the raw class_idx rows now that mat_inv is ready.
+    // mat_fwd_snap.2 currently holds per-object class_idx rows; map each through inv.
+    let mat_class_obj_ids: Option<Vec<u32>> =
+        if let (Some(ref inv), Some(ref fwd_snap)) = (mat_inv.as_ref(), mat_fwd_snap.as_ref()) {
+            let class_idx_rows = &fwd_snap.2;
+            Some(
+                class_idx_rows
+                    .iter()
+                    .map(|&row| {
+                        let coid = inv[row as usize];
+                        if coid < 0 { u32::MAX } else { coid as u32 }
+                    })
+                    .collect(),
+            )
+        } else {
+            None
+        };
     // MAT: emit `outbound` IntArray1N in MAT id order. mat-id 0 (synthetic root)
     // gets an empty entry. For mat-ids 1..N we look up the old dense-id in
     // mat_fwd_snap (fwd offsets, flat targets, per-object class-obj old id),
@@ -1065,7 +1108,10 @@ fn run(
     // and prepend the class-object mat-id.
     if let Some(ref m) = mat {
         let mm = mat_map.as_ref().expect("mat_map built with mat");
-        if let Some((fwd_off, fwd_tgt, class_obj_ids)) = mat_fwd_snap.as_ref() {
+        if let Some((fwd_off, fwd_tgt, _class_idx_rows)) = mat_fwd_snap.as_ref() {
+            let class_obj_ids = mat_class_obj_ids
+                .as_ref()
+                .expect("mat_class_obj_ids built when mat present");
             let mc = mm.mat_count();
             let mut entries: Vec<Vec<i32>> = Vec::with_capacity(mc);
             entries.push(Vec::new()); // entry 0 = synthetic root (no outbound)

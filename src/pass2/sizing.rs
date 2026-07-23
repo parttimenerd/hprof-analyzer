@@ -279,6 +279,25 @@ pub(crate) fn prim_array_class_name(elem_type_code: u8) -> &'static str {
     }
 }
 
+/// Return the element type code for a primitive array class name, or `None`.
+/// Inverse of `prim_array_class_name`: `"[I"` → `Some(10)`, etc.
+pub(crate) fn prim_array_type_code(name: &str) -> Option<u8> {
+    if !is_primitive_array_class_name(name) {
+        return None;
+    }
+    Some(match name.as_bytes()[1] {
+        b'Z' => 4,
+        b'C' => 5,
+        b'F' => 6,
+        b'D' => 7,
+        b'B' => 8,
+        b'S' => 9,
+        b'I' => 10,
+        b'J' => 11,
+        _ => return None,
+    })
+}
+
 /// True iff `name` is a JVM primitive-array class descriptor: a single `[`
 /// followed by exactly one primitive type char (`Z C F D S I J B`), length 2.
 /// Object-array (`[Ljava/lang/String;`) and multi-dim (`[[I`) names are false.
