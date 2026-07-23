@@ -1,0 +1,129 @@
+## Cross-Dump Growth
+
+_How the reachable heap grew across a time series of dumps of the same application (first = baseline, last = current)._
+
+### Reports
+
+- `r1` = dump_1_mnemonics.hprof
+- `r2` = dump_4_philosophers.hprof
+
+**Verdict:** Heap grew 3.3% (+377.4 KB shallow); largest driver `scala.concurrent.stm.ccstm.InTxnImpl` (+3.7 MB retained). Gross retained churn: +13.2 MB grown / −33.9 MB reclaimed across steps. 2 new suspects.
+
+### Headline Totals
+
+- **Δ Objects (r1→rN):** −98,418
+- **Δ Shallow heap (r1→rN):** +377.4 KB
+- **Net Δ Retained (all classes, r1→rN):** −20.7 MB
+- **Gross Retained churn (all classes, per-step):** +13.2 MB grown / −33.9 MB reclaimed
+
+### Growth Leaders (by Δ retained)
+
+| Class                                                                 |       r1 |       r2 |  Δ(r1→rN) |
+| --------------------------------------------------------------------- | -------: | -------: | --------: |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                |      0 B |   3.7 MB |   +3.7 MB |
+| `long[]`                                                              |  14.2 KB |   1.1 MB |   +1.1 MB |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread` |      0 B |   1.0 MB |   +1.0 MB |
+| `scala.concurrent.stm.ccstm.Handle[]`                                 |      0 B |   1.0 MB |   +1.0 MB |
+| `java.util.zip.ZipFile$Source`                                        | 446.6 KB |   1.3 MB | +876.2 KB |
+| `java.lang.Object[]`                                                  |   2.9 MB |   3.7 MB | +825.1 KB |
+| `int[]`                                                               | 106.7 KB | 875.9 KB | +769.2 KB |
+| `java.lang.ref.SoftReference`                                         | 605.2 KB |   1.1 MB | +525.8 KB |
+| `java.util.jar.JarFile`                                               | 593.3 KB |   1.1 MB | +525.0 KB |
+| `java.util.jar.Manifest`                                              | 590.3 KB |   1.1 MB | +521.9 KB |
+| `scala.concurrent.stm.skel.CallbackList`                              |      0 B | 417.2 KB | +417.2 KB |
+| `scala.Function1[]`                                                   |      0 B | 399.1 KB | +399.1 KB |
+| `java.util.jar.Attributes`                                            | 238.4 KB | 448.0 KB | +209.7 KB |
+| `java.util.LinkedHashMap`                                             | 338.1 KB | 507.4 KB | +169.3 KB |
+| `java.net.URLClassLoader`                                             |  81.0 KB | 243.7 KB | +162.7 KB |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$CameraThread`      |      0 B | 157.5 KB | +157.5 KB |
+| `java.lang.Class`                                                     |   3.5 MB |   3.6 MB |  +98.6 KB |
+| `java.util.concurrent.ConcurrentHashMap`                              | 526.3 KB | 611.6 KB |  +85.3 KB |
+| `java.util.concurrent.ConcurrentHashMap$Node[]`                       | 519.6 KB | 604.7 KB |  +85.1 KB |
+| `java.util.ArrayList`                                                 |  76.0 KB | 150.9 KB |  +74.9 KB |
+| `java.util.concurrent.ConcurrentHashMap$Node`                         | 390.1 KB | 463.1 KB |  +73.0 KB |
+| `scala.concurrent.stm.skel.SimpleRandom$`                             |      0 B |  64.5 KB |  +64.5 KB |
+| `java.lang.ThreadLocal$ThreadLocalMap`                                |   4.4 KB |  54.6 KB |  +50.2 KB |
+| `java.lang.ThreadLocal$ThreadLocalMap$Entry[]`                        |   4.4 KB |  51.5 KB |  +47.1 KB |
+| `java.lang.ThreadLocal$ThreadLocalMap$Entry`                          |   4.3 KB |  41.4 KB |  +37.1 KB |
+
+### New Classes
+
+| Class                                                                 |  r1 |       r2 |  Δ(r1→rN) |
+| --------------------------------------------------------------------- | --: | -------: | --------: |
+| `scala.concurrent.stm.ccstm.InTxnImpl`                                | 0 B |   3.7 MB |   +3.7 MB |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$PhilosopherThread` | 0 B |   1.0 MB |   +1.0 MB |
+| `scala.concurrent.stm.ccstm.Handle[]`                                 | 0 B |   1.0 MB |   +1.0 MB |
+| `scala.concurrent.stm.skel.CallbackList`                              | 0 B | 417.2 KB | +417.2 KB |
+| `scala.Function1[]`                                                   | 0 B | 399.1 KB | +399.1 KB |
+| `org.renaissance.scala.stm.RealityShowPhilosophers$CameraThread`      | 0 B | 157.5 KB | +157.5 KB |
+| `scala.concurrent.stm.skel.SimpleRandom$`                             | 0 B |  64.5 KB |  +64.5 KB |
+| `scala.Console$`                                                      | 0 B |  24.6 KB |  +24.6 KB |
+| `scala.util.DynamicVariable`                                          | 0 B |  24.5 KB |  +24.5 KB |
+| `java.io.BufferedReader`                                              | 0 B |  24.4 KB |  +24.4 KB |
+| `java.util.concurrent.atomic.AtomicReferenceArray`                    | 0 B |  13.2 KB |  +13.2 KB |
+| `scala.concurrent.stm.ccstm.TxnLevelImpl`                             | 0 B |  13.1 KB |  +13.1 KB |
+| `scala.collection.GenIterable`                                        | 0 B |  11.2 KB |  +11.2 KB |
+| `scala.collection.GenTraversable`                                     | 0 B |  10.5 KB |  +10.5 KB |
+| `scala.concurrent.stm.ccstm.WakeupManager`                            | 0 B |   8.7 KB |   +8.7 KB |
+| `java.io.InputStreamReader`                                           | 0 B |   8.3 KB |   +8.3 KB |
+| `scala.concurrent.stm.ccstm.TxnSlotManager`                           | 0 B |   8.3 KB |   +8.3 KB |
+| `sun.nio.cs.StreamDecoder`                                            | 0 B |   8.3 KB |   +8.3 KB |
+| `scala.concurrent.stm.ccstm.RetrySet`                                 | 0 B |   5.4 KB |   +5.4 KB |
+| `scala.collection.immutable.StringLike`                               | 0 B |   4.3 KB |   +4.3 KB |
+| `java.util.concurrent.atomic.AtomicLongArray`                         | 0 B |   4.3 KB |   +4.3 KB |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$GenericRef`                     | 0 B |   4.0 KB |   +4.0 KB |
+| `scala.collection.mutable.ResizableArray`                             | 0 B |   3.3 KB |   +3.3 KB |
+| `scala.concurrent.stm.ccstm.CCSTMRefs$IntRef`                         | 0 B |   3.0 KB |   +3.0 KB |
+| `scala.collection.MapLike`                                            | 0 B |   2.5 KB |   +2.5 KB |
+
+### Removed Classes
+
+| Class                                                                             |     r1 |  r2 | Δ(r1→rN) |
+| --------------------------------------------------------------------------------- | -----: | --: | -------: |
+| `org.renaissance.jdk.streams.MnemonicsCoderWithStream`                            | 6.7 KB | 0 B |  −6.7 KB |
+| `scopt.OptionDef$$Lambda+0x00007ff1d40dcd20`                                      | 2.4 KB | 0 B |  −2.4 KB |
+| `org.renaissance.jdk.streams.MnemonicsCoderWithStream$$Lambda+0x00007ff1d4127800` | 1.4 KB | 0 B |  −1.4 KB |
+| `org.renaissance.jdk.streams.MnemonicsCoderWithStream$1`                          |  456 B | 0 B |   −456 B |
+| `org.renaissance.jdk.streams.Mnemonics`                                           |  312 B | 0 B |   −312 B |
+| `scala.runtime.LazyVals$$$Lambda+0x00007ff1d40c7878`                              |  288 B | 0 B |   −288 B |
+| `java.lang.invoke.BoundMethodHandle$Species_LLLLL`                                |  280 B | 0 B |   −280 B |
+| `org.renaissance.jdk.streams.MnemonicsCoderWithStream$$Lambda+0x00007ff1d4126b18` |  256 B | 0 B |   −256 B |
+| `java.util.stream.LongPipeline`                                                   |  224 B | 0 B |   −224 B |
+| `java.util.stream.IntPipeline$1$1`                                                |  152 B | 0 B |   −152 B |
+| `java.util.Comparators$NaturalOrderComparator`                                    |  136 B | 0 B |   −136 B |
+| `java.util.stream.Sink$ChainedInt`                                                |  136 B | 0 B |   −136 B |
+| `java.util.stream.IntPipeline$1`                                                  |  128 B | 0 B |   −128 B |
+| `org.renaissance.harness.Config$$Lambda+0x00007ff1d40fc678`                       |  112 B | 0 B |   −112 B |
+| `org.renaissance.harness.Config$$Lambda+0x00007ff1d4116280`                       |  112 B | 0 B |   −112 B |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007ff1d40dc778`         |  112 B | 0 B |   −112 B |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007ff1d40dd6a0`         |  112 B | 0 B |   −112 B |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007ff1d40de018`         |  112 B | 0 B |   −112 B |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007ff1d40de990`         |  112 B | 0 B |   −112 B |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007ff1d40def38`         |  112 B | 0 B |   −112 B |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007ff1d40df4e0`         |  112 B | 0 B |   −112 B |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007ff1d40e0000`         |  112 B | 0 B |   −112 B |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007ff1d40e05a8`         |  112 B | 0 B |   −112 B |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007ff1d40e0b50`         |  112 B | 0 B |   −112 B |
+| `org.renaissance.harness.ConfigParser$$anon$1$$Lambda+0x00007ff1d40e10f8`         |  112 B | 0 B |   −112 B |
+
+### New / Grown Leak Suspects
+
+| Suspect                                |  r1 |     r2 | Δ(r1→rN) | New? |
+| -------------------------------------- | --: | -----: | -------: | ---- |
+| `scala.concurrent.stm.ccstm.InTxnImpl` | 0 B | 2.7 MB |  +2.7 MB | yes  |
+| `java.util.zip.ZipFile$Source`         | 0 B | 1.3 MB |  +1.3 MB | yes  |
+
+### Shrunk Leak Suspects
+
+| Suspect                   |     r1 |     r2 | Δ(r1→rN) |
+| ------------------------- | -----: | -----: | -------: |
+| `scala.runtime.LazyVals$` | 2.5 MB | 2.5 MB |   −104 B |
+
+### Disappeared Leak Suspects (resolved)
+
+_Informational: these were flagged in an earlier dump but are gone from the current one — a fixed or transient issue, not a current problem. Listed last for that reason._
+
+| Suspect            |     r1 |  r2 | Δ(r1→rN) |
+| ------------------ | -----: | --: | -------: |
+| `java.lang.Thread` | 5.5 MB | 0 B |  −5.5 MB |
+
