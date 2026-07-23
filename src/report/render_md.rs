@@ -2294,7 +2294,8 @@ pub(crate) fn render_collection_attribution(
     out.push_str(
         "_Which holder `Class#field` points at the most container memory. Two rankings: total \
          across all containers reached through a field, and the single largest container per \
-         field._\n\n",
+         field. To reduce waste: shrink the collection's initial capacity, evict unused entries, \
+         or null out the field when the holder is done._\n\n",
     );
 
     // ── Most Overall ─────────────────────────────────────────────────────────
@@ -2401,6 +2402,40 @@ pub(crate) fn render_collection_attribution(
         out.push('\n');
     }
 
+    // ── Tiny Collection Overhead ─────────────────────────────────────────────
+    out.push_str("### Tiny Collection Overhead\n\n");
+    out.push_str(
+        "_Size-0 and size-1 collections have near-total wrapper overhead. \
+         Replace with `Map.of()`, `List.of()`, or lazy initialization._\n\n",
+    );
+    if a.tiny_overhead.is_empty() {
+        out.push_str("_None._\n\n");
+    } else {
+        let oh_max = a.tiny_overhead.iter().map(|r| r.overhead_bytes).max().unwrap_or(0);
+        let mut headers: Vec<&str> = vec!["Class#field", "Kind", "Empty", "Size-1", "Overhead"];
+        let mut aligns = vec![Align::Left, Align::Left, Align::Right, Align::Right, Align::Right];
+        if graphs {
+            headers.push("");
+            aligns.push(Align::Left);
+        }
+        let mut t = Table::new(&headers, &aligns);
+        for r in &a.tiny_overhead {
+            let mut row = vec![
+                format!("`{}#{}`", r.holder_class, r.field),
+                r.container_kind.clone(),
+                fmt_count(r.empty_count),
+                fmt_count(r.singleton_count),
+                format_bytes(r.overhead_bytes),
+            ];
+            if graphs {
+                row.push(bar(r.overhead_bytes, oh_max, render_graphs::GRAPH_BAR_WIDTH));
+            }
+            t.row(row);
+        }
+        t.render(out);
+        out.push('\n');
+    }
+
     if a.truncated {
         out.push_str(
             "_Attribution data was truncated (holder-edge or container-record cap hit); \
@@ -2423,7 +2458,9 @@ pub(crate) fn render_fields_by_size(f: &Option<FieldsBySize>, graphs: bool, out:
     out.push_str(
         "_Which holder `Class#field` retains the most memory, summed over every object the \
          field points at. Runtime pointee type is the dominant concrete class reached through \
-         the field (`varies` when no single type dominates)._\n\n",
+         the field (`varies` when no single type dominates). A field retaining unexpectedly \
+         large memory is a good candidate to null after use or replace with a lazy-initialized \
+         reference._\n\n",
     );
 
     if f.rows.is_empty() {
@@ -2529,7 +2566,8 @@ pub(crate) fn render_biggest_collections(
          `Class#field`; value type is the dominant runtime element type of the \
          backing array (the direct element, not the logical key/value — for a \
          `Map<K,V>` this is often `Entry` or `Object`, not `V`). \
-         Owner/retained/value columns require `--collections`._\n\n",
+         Owner/retained/value columns require `--collections`. Consider replacing \
+         over-allocated maps/lists with right-sized or lazy alternatives._\n\n",
     );
 
     // When per-kind breakdown is available show it directly (avoids listing every

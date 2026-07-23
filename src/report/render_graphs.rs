@@ -13,7 +13,6 @@ pub fn render_markdown_graphs(r: &Report) -> String {
     render_toc_graphs(r, &mut out);
     render_executive_summary(r, &mut out);
     render_oom_triage(r, &mut out);
-    render_waste_summary_graphs(r, &mut out);
     render_system_overview_graphs(&r.overview, &mut out);
     render_leak_suspects_graphs(&r.leaks, &mut out);
     render_top_consumers_graphs(&r.top, r.leaks.total_shallow, &mut out);
@@ -39,84 +38,52 @@ pub fn render_markdown_graphs(r: &Report) -> String {
     out
 }
 
-/// Waste Summary with a proportional bar per source (mirrors the plain-md
-/// section but adds a `bar` column scaled to the largest source).
-fn render_waste_summary_graphs(r: &Report, out: &mut String) {
-    use crate::md::{Align, Table, bar};
-    let Some(w) = r.waste_summary.as_ref() else {
-        return;
-    };
-    if w.total_bytes == 0 {
-        return;
-    }
-    out.push_str("## Waste Summary\n\n");
-    out.push_str(&format!(
-        "_Approximately **{}** looks reclaimable across the sources below. Figures are approximate and may overlap slightly._\n\n",
-        format_bytes(w.total_bytes)
-    ));
-    let max = w.sources.iter().map(|s| s.bytes).max().unwrap_or(0);
-    let mut t = Table::new(
-        &["Source", "Reclaimable", ""],
-        &[Align::Left, Align::Right, Align::Left],
-    );
-    for s in &w.sources {
-        let label = match &s.anchor {
-            Some(a) => format!("[{}](#{})", s.label, a),
-            None => s.label.clone(),
-        };
-        t.row([label, format_bytes(s.bytes), bar(s.bytes, max, 16)]);
-    }
-    t.render(out);
-    out.push('\n');
-}
-
-
+/// Linked in-document table of contents for the graphics report. The anchors
 /// use GitHub's slug convention (lowercase, spaces → hyphens) matching the
 /// `##`/`###` headings emitted by the section renderers.
 fn render_toc_graphs(r: &Report, out: &mut String) {
     out.push_str("## Contents\n\n");
-    out.push_str(&SectionId::Summary.toc_bullet());
-    out.push_str(&SectionId::MemoryTriage.toc_bullet());
-    if waste_summary_present(r) {
-        out.push_str(&SectionId::WasteSummary.toc_bullet());
-    }
-    out.push_str(&SectionId::SystemOverview.toc_bullet());
-    out.push_str(&SectionId::LeakSuspects.toc_bullet());
-    out.push_str(&SectionId::TopConsumers.toc_bullet());
-    out.push_str(&SectionId::DominatorAnalysis.toc_bullet());
-    out.push_str(&SectionId::Threads.toc_bullet());
+    out.push_str("- [Summary](#summary)\n");
+    out.push_str("- [OOM Triage](#oom-triage)\n");
+    out.push_str("- [System Overview](#system-overview)\n");
+    out.push_str("- [Leak Suspects](#leak-suspects)\n");
+    out.push_str("- [Top Consumers](#top-consumers)\n");
+    out.push_str("- [Dominator Analysis](#dominator-analysis)\n");
+    out.push_str("- [Threads](#threads)\n");
     if !r.top_components.components.is_empty() {
-        out.push_str(&SectionId::TopComponents.toc_bullet());
+        out.push_str("- [Top Components](#top-components)\n");
     }
-    out.push_str(&SectionId::ArraysBySize.toc_bullet());
-    out.push_str(&SectionId::Collections.toc_bullet());
+    out.push_str("- [Arrays by Size](#arrays-by-size)\n");
+    out.push_str("- [Collections](#collections)\n");
     if r.collection_attribution.is_some() {
-        out.push_str(&SectionId::ContainerAttribution.toc_bullet());
+        out.push_str(
+            "- [Container Attribution (Class#field)](#container-attribution-classfield)\n",
+        );
     }
-    if r.fields_by_size.as_ref().map_or(false, |f| !f.rows.is_empty()) {
-        out.push_str(&SectionId::FieldsBySize.toc_bullet());
+    if r.fields_by_size.is_some() {
+        out.push_str(
+            "- [Fields by Retained Size (Class#field)](#fields-by-retained-size-classfield)\n",
+        );
     }
-    if r.biggest_collections.as_ref().map_or(false, |b| {
-        !b.combined.is_empty() || !b.by_kind.is_empty()
-    }) {
-        out.push_str(&SectionId::BiggestCollections.toc_bullet());
+    if r.biggest_collections.is_some() {
+        out.push_str("- [Biggest Collections](#biggest-collections)\n");
     }
-    if r.collection_contents.as_ref().map_or(false, |c| !c.rows.is_empty()) {
-        out.push_str(&SectionId::CollectionContents.toc_bullet());
+    if r.collection_contents.is_some() {
+        out.push_str("- [Collection Contents by Type](#collection-contents-by-type)\n");
     }
-    out.push_str(&SectionId::References.toc_bullet());
-    out.push_str(&SectionId::UnreachableObjects.toc_bullet());
+    out.push_str("- [References](#references)\n");
+    out.push_str("- [Unreachable Objects](#unreachable-objects)\n");
     // The ToC bullet appears only when the alloc-sites section is present.
     if r.alloc_sites.is_some() {
-        out.push_str(&SectionId::AllocationSites.toc_bullet());
+        out.push_str("- [Allocation Sites](#allocation-sites)\n");
     }
     if retention_concentration_present(&r.overview) {
-        out.push_str(&SectionId::RetentionConcentration.toc_bullet());
+        out.push_str("- [Retention Concentration](#retention-concentration)\n");
     }
     if depth_stats(&r.overview.dominator_depth_histogram).is_some() {
-        out.push_str(&SectionId::DominatorDepth.toc_bullet());
+        out.push_str("- [Dominator-Depth Distribution](#dominator-depth-distribution)\n");
     }
-    out.push_str(&SectionId::Glossary.toc_bullet());
+    out.push_str("- [Glossary](#glossary)\n");
     out.push('\n');
     out.push_str("----\n\n");
 }
@@ -173,14 +140,14 @@ fn render_system_overview_graphs(o: &SystemOverview, out: &mut String) {
     }
     if o.heap_fragmentation_ratio > 0.0 {
         summary.row([
-            "Heap fragmentation (unreachable / heap total)".into(),
-            fmt_pct(o.heap_fragmentation_ratio * 100.0),
+            "Heap fragmentation".into(),
+            format!("{:.1}%", o.heap_fragmentation_ratio * 100.0),
         ]);
     }
     if o.top_class_concentration_bp > 0 {
         summary.row([
             "Top-class retained concentration".into(),
-            fmt_pct(o.top_class_concentration_bp as f64 / 100.0),
+            format!("{:.1}%", o.top_class_concentration_bp as f64 / 100.0),
         ]);
     }
     summary.render(out);
@@ -255,9 +222,16 @@ fn render_system_overview_graphs(o: &SystemOverview, out: &mut String) {
         out.push('\n');
     }
 
-    // Heap Composition — with a proportional shallow-heap bar scaled to total heap.
+    // Heap Composition — with a proportional shallow-heap bar.
     if o.heap_composition.by_kind.len() > 1 {
         out.push_str("### Heap Composition\n\n");
+        let max = o
+            .heap_composition
+            .by_kind
+            .iter()
+            .map(|k| k.shallow_heap)
+            .max()
+            .unwrap_or(0);
         let mut t = Table::new(
             &["Kind", "Objects", "Shallow Heap", ""],
             &[Align::Left, Align::Right, Align::Right, Align::Left],
@@ -267,7 +241,7 @@ fn render_system_overview_graphs(o: &SystemOverview, out: &mut String) {
                 k.kind.clone(),
                 fmt_count(k.objects),
                 format_bytes(k.shallow_heap),
-                bar(k.shallow_heap, o.total_shallow, GRAPH_BAR_WIDTH),
+                bar(k.shallow_heap, max, GRAPH_BAR_WIDTH),
             ]);
         }
         t.render(out);
@@ -276,20 +250,18 @@ fn render_system_overview_graphs(o: &SystemOverview, out: &mut String) {
 
     render_record_census(out, &o.record_census);
     render_duplicate_strings(out, &o.duplicate_strings, true);
-    render_duplicate_prim_arrays(out, &o.duplicate_prim_arrays);
-    render_boxed_numbers(
-        out,
-        &o.boxed_numbers,
-        &o.boxed_number_holders,
-        o.total_shallow,
-    );
-    render_header_overhead(out, &o.header_overhead);
 
     out.push_str("### Class Histogram (by Retained Heap)\n\n");
     out.push_str(
         "_Top 50 classes ranked by retained heap; the full list is in the JSON output._\n\n",
     );
-    let hist_max = o.total_shallow;
+    let hist_max = o
+        .histogram
+        .iter()
+        .take(50)
+        .map(|r| r.retained)
+        .max()
+        .unwrap_or(0);
     let mut hist = Table::new(
         &[
             "#",
@@ -313,6 +285,11 @@ fn render_system_overview_graphs(o: &SystemOverview, out: &mut String) {
         ],
     );
     for (rank, row) in o.histogram.iter().take(50).enumerate() {
+        let pct_heap = if o.total_shallow > 0 {
+            fmt_pct(row.retained as f64 / o.total_shallow as f64 * 100.0)
+        } else {
+            "—".to_string()
+        };
         hist.row([
             (rank + 1).to_string(),
             format!("`{}`", row.pretty_class),
@@ -320,7 +297,7 @@ fn render_system_overview_graphs(o: &SystemOverview, out: &mut String) {
             format_bytes(row.shallow),
             format_bytes(row.max_instance_shallow),
             format_bytes(row.retained),
-            fmt_pct(pct_of_heap(row.retained, o.total_shallow)),
+            pct_heap,
             bar(row.retained, hist_max, GRAPH_BAR_WIDTH),
         ]);
     }
@@ -334,7 +311,12 @@ fn render_system_overview_graphs(o: &SystemOverview, out: &mut String) {
             "_Classes grouped by the loader that defined them; many loaders each holding heap \
              can signal a class-loader leak._\n\n",
         );
-        let lmax = o.total_shallow;
+        let lmax = o
+            .loader_rollup
+            .iter()
+            .map(|r| r.retained)
+            .max()
+            .unwrap_or(0);
         let mut t = Table::new(
             &[
                 "Loader",
@@ -397,7 +379,7 @@ fn render_system_overview_graphs(o: &SystemOverview, out: &mut String) {
                 continue;
             }
             out.push_str(&format!("**`{}`** — per loader:\n\n", d.pretty_class));
-            let rmax = o.total_shallow;
+            let rmax = d.per_loader.iter().map(|pl| pl.retained).max().unwrap_or(0);
             // Disambiguate loaders that share a display label by appending id.
             let ambiguous: std::collections::HashSet<&str> = {
                 let mut seen = std::collections::HashSet::new();
@@ -457,42 +439,75 @@ fn render_retention_concentration_graphs(o: &SystemOverview, out: &mut String) {
          or collection of similar objects) and no single free helps much._\n\n",
     );
     let mut t = Table::new(
-        &["Scope", "Retained Share", "Retained", ""],
-        &[Align::Left, Align::Right, Align::Right, Align::Left],
+        &["Scope", "Retained Share", ""],
+        &[Align::Left, Align::Right, Align::Left],
     );
     t.row([
         "Top 1 object".into(),
-        fmt_pct(rc.top1_bp as f64 / 100.0),
-        format_bytes(rc.top1_retained),
+        format!("{:.1}%", rc.top1_bp as f64 / 100.0),
         bar(rc.top1_bp as u64, 10_000, GRAPH_BAR_WIDTH),
     ]);
     t.row([
         "Top 10 objects".into(),
-        fmt_pct(rc.top10_bp as f64 / 100.0),
-        format_bytes(rc.top10_retained),
+        format!("{:.1}%", rc.top10_bp as f64 / 100.0),
         bar(rc.top10_bp as u64, 10_000, GRAPH_BAR_WIDTH),
     ]);
     t.row([
         "Top 100 objects".into(),
-        fmt_pct(rc.top100_bp as f64 / 100.0),
-        format_bytes(rc.top100_retained),
+        format!("{:.1}%", rc.top100_bp as f64 / 100.0),
         bar(rc.top100_bp as u64, 10_000, GRAPH_BAR_WIDTH),
     ]);
+    t.row([
+        "Objects each >=1%".into(),
+        fmt_count(rc.num_objects_ge_1pct),
+        String::new(),
+    ]);
     t.render(out);
-    if rc.num_objects_ge_1pct > 0 {
-        out.push_str(&format!(
-            "\n_{} {} each hold ≥1% of the reachable heap._\n",
-            fmt_count(rc.num_objects_ge_1pct),
-            plural_objects(rc.num_objects_ge_1pct),
-        ));
-    }
     out.push('\n');
 }
 
 /// Dominator-Depth Distribution (md-graphs): the full per-depth table with a
-/// proportional bar column. Delegates to the shared render_md implementation.
+/// proportional bar column. Standalone section near the end of the report.
 fn render_dominator_depth_graphs(o: &SystemOverview, out: &mut String) {
-    render_md::render_dominator_depth_graphs(o, out);
+    use crate::md::{Align, Table, bar};
+    let Some(stats) = depth_stats(&o.dominator_depth_histogram) else {
+        return;
+    };
+    out.push_str("## Dominator-Depth Distribution\n\n");
+    out.push_str(DEPTH_DIST_CAPTION);
+    out.push_str(&depth_summary_line(&stats));
+    let counts: Vec<u64> = stats.rows.iter().map(|&(_, o, _, _)| o).collect();
+    const DEPTH_CAP: usize = 50;
+    let dmax = counts.iter().copied().max().unwrap_or(0);
+    let total = stats.rows.len();
+    let shown = total.min(DEPTH_CAP);
+    let mut t = Table::new(
+        &["Depth", "Objects", "% Objects", "Cumulative %", ""],
+        &[
+            Align::Right,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+            Align::Left,
+        ],
+    );
+    for &(depth, objects, pct, cum) in stats.rows.iter().take(shown) {
+        t.row([
+            depth.to_string(),
+            fmt_count(objects),
+            fmt_pct(pct),
+            fmt_pct(cum),
+            bar(objects, dmax, GRAPH_BAR_WIDTH),
+        ]);
+    }
+    t.render(out);
+    if total > shown {
+        out.push_str(&format!(
+            "\n_… (+{} deeper buckets in JSON)_\n",
+            total - shown
+        ));
+    }
+    out.push('\n');
 }
 
 /// Leak Suspects with a leading share-bar table across all suspects, then the
@@ -507,12 +522,12 @@ fn render_leak_suspects_graphs(l: &LeakSuspects, out: &mut String) {
     }
 
     out.push_str(
-        "_Objects and class groups retaining the most heap, ranked by retained size. \
-These are the most likely accumulation points for excessive memory usage._\n\n",
+        "_Objects and class groups whose retained heap is large enough to be a likely OOM cause, ranked by retained heap._\n\n",
     );
 
     // Share overview: one proportional bar per suspect, keyed to the largest
     // suspect's retained heap so the relative sizes read at a glance.
+    let max = l.suspects.iter().map(|s| s.retained).max().unwrap_or(0);
     let mut share = Table::new(
         &["#", "Suspect", "Retained", "% Heap", ""],
         &[
@@ -524,13 +539,17 @@ These are the most likely accumulation points for excessive memory usage._\n\n",
         ],
     );
     for (rank, s) in l.suspects.iter().enumerate() {
-        let pct = pct_of_heap(s.retained, l.total_shallow);
+        let pct = if l.total_shallow > 0 {
+            s.retained as f64 / l.total_shallow as f64 * 100.0
+        } else {
+            0.0
+        };
         share.row([
             (rank + 1).to_string(),
             format!("`{}`", s.pretty_class),
             format_bytes(s.retained),
-            fmt_pct(pct),
-            bar(s.retained, l.total_shallow, GRAPH_BAR_WIDTH),
+            format!("{pct:.1}%"),
+            bar(s.retained, max, GRAPH_BAR_WIDTH),
         ]);
     }
     share.render(out);
@@ -538,14 +557,18 @@ These are the most likely accumulation points for excessive memory usage._\n\n",
 
     // Per-suspect detail: identical to plain Markdown.
     for (rank, s) in l.suspects.iter().enumerate() {
-        let pct = pct_of_heap(s.retained, l.total_shallow);
+        let pct = if l.total_shallow > 0 {
+            s.retained as f64 / l.total_shallow as f64 * 100.0
+        } else {
+            0.0
+        };
 
         out.push_str(&format!(
-            "### {}. `{}` — retains {} ({} of {HEAP_BASIS_LABEL})\n\n",
+            "### {}. `{}` — retains {} ({:.1}% of reachable heap)\n\n",
             rank + 1,
             s.pretty_class,
             format_bytes(s.retained),
-            fmt_pct(pct),
+            pct,
         ));
 
         if s.is_single {
@@ -664,60 +687,55 @@ These are the most likely accumulation points for excessive memory usage._\n\n",
 /// Top Consumers with share bars on Biggest Objects / Classes and a tree-drawn
 /// package hierarchy (box-drawing connectors + a retained-heap bar per row).
 fn render_top_consumers_graphs(t: &TopConsumers, total_shallow: u64, out: &mut String) {
-    use crate::md::{Align, Table, bar, tree_prefix};
+    use crate::md::{Align, Table, bar, sparkline, tree_prefix};
     out.push_str("## Top Consumers\n\n");
     out.push_str("### Biggest Objects (Top-Level Dominators)\n\n");
     out.push_str(
         "_Individual objects retaining the most heap; `% Heap` is the share of total reachable heap._\n\n",
     );
-    // "Held via" names the dominant incoming `Class#field` referrer; present
-    // only when attribution data exists (`--collections`).
-    let obj_has_owner = t.biggest_objects.iter().any(|r| r.owner.is_some());
-    if obj_has_owner {
-        out.push_str(
-            "_The **Held via** column names the dominant incoming `Class#field` reference \
-that holds each object (the primary referrer; an object may have several)._\n\n",
-        );
-    }
-    let mut obj_headers: Vec<&str> = vec!["#", "Class", "Shallow", "Retained", "% Heap"];
-    let mut obj_aligns = vec![
-        Align::Right,
-        Align::Left,
-        Align::Right,
-        Align::Right,
-        Align::Right,
-    ];
-    if obj_has_owner {
-        obj_headers.push("Held via (Class#field)");
-        obj_aligns.push(Align::Left);
-    }
-    obj_headers.push("");
-    obj_aligns.push(Align::Left);
-    let mut objs = Table::new(&obj_headers, &obj_aligns);
+    let obj_max = t
+        .biggest_objects
+        .iter()
+        .map(|r| r.retained)
+        .max()
+        .unwrap_or(0);
+    let mut objs = Table::new(
+        &["#", "Class", "Shallow", "Retained", "% Heap", ""],
+        &[
+            Align::Right,
+            Align::Left,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+            Align::Left,
+        ],
+    );
     for (rank, row) in t.biggest_objects.iter().enumerate() {
-        let pct = pct_of_heap(row.retained, total_shallow);
-        let mut cells = vec![
+        let pct = if total_shallow > 0 {
+            row.retained as f64 / total_shallow as f64 * 100.0
+        } else {
+            0.0
+        };
+        objs.row([
             (rank + 1).to_string(),
             format!("`{}`", row.display_class),
             format_bytes(row.shallow),
             format_bytes(row.retained),
-            fmt_pct(pct),
-        ];
-        if obj_has_owner {
-            cells.push(match &row.owner {
-                Some(o) => format!("`{o}`"),
-                None => "—".to_string(),
-            });
-        }
-        cells.push(bar(row.retained, total_shallow, GRAPH_BAR_WIDTH));
-        objs.row(cells);
+            format!("{pct:.1}%"),
+            bar(row.retained, obj_max, GRAPH_BAR_WIDTH),
+        ]);
     }
     objs.render(out);
     out.push('\n');
 
     out.push_str("### Biggest Classes by Retained Heap\n\n");
     out.push_str("_Classes whose instances together retain the most heap._\n\n");
-    let cls_max = total_shallow;
+    let cls_max = t
+        .biggest_classes
+        .iter()
+        .map(|r| r.retained)
+        .max()
+        .unwrap_or(0);
     let mut classes = Table::new(
         &["#", "Class", "Instances", "Retained Heap", ""],
         &[
@@ -761,21 +779,21 @@ that holds each object (the primary referrer; an object may have several)._\n\n"
             format_bytes(d.total)
         ));
         let counts: Vec<u64> = d.buckets.iter().map(|b| b.count).collect();
+        out.push_str(&format!(
+            "`{}`  ({} – {})\n\n",
+            sparkline(&counts),
+            format_bytes(d.min),
+            format_bytes(d.max),
+        ));
         let bmax = counts.iter().copied().max().unwrap_or(0);
         let mut buckets = Table::new(
-            &["Size ≤", "Count", "% of Dom.", ""],
-            &[Align::Right, Align::Right, Align::Right, Align::Left],
+            &["Size ≤", "Count", ""],
+            &[Align::Right, Align::Right, Align::Left],
         );
         for b in &d.buckets {
-            let pct = if d.count > 0 {
-                fmt_pct(b.count as f64 / d.count as f64 * 100.0)
-            } else {
-                "—".into()
-            };
             buckets.row([
                 format_bytes(b.upper_bytes),
                 fmt_count(b.count),
-                pct,
                 bar(b.count, bmax, GRAPH_BAR_WIDTH),
             ]);
         }
@@ -792,8 +810,14 @@ that holds each object (the primary referrer; an object may have several)._\n\n"
     out.push_str(
         "_Retained heap aggregated by package prefix (rows retaining <1% of the total are pruned); the tree shows nesting._\n\n",
     );
-    // Bar is keyed to total reachable heap for cross-section comparability.
-    let pkg_max = total_shallow;
+    // Bar is keyed to the largest top-level package's retained heap.
+    let pkg_max = t
+        .biggest_packages
+        .children
+        .iter()
+        .map(|c| c.retained_heap)
+        .max()
+        .unwrap_or(0);
     let mut pkgs = Table::new(
         &["Package", "Objects", "Shallow", "Retained", ""],
         &[
