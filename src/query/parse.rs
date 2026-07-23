@@ -89,22 +89,25 @@ pub enum Token {
         let s = lex.slice();
         s[1..s.len() - 1].chars().next().map(|c| c as i64)
     })]
-    // Hex: 0x… with optional L suffix.
+    // Hex: 0x… with optional L suffix. Parsed as u64 then reinterpreted as i64
+    // (bit-preserving) so high-bit heap addresses (> i64::MAX) round-trip.
     #[regex(r"0[xX][0-9a-fA-F]+[lL]?", |lex| {
         let s = lex.slice().trim_end_matches(['l', 'L']);
-        i64::from_str_radix(&s[2..], 16).ok()
+        u64::from_str_radix(&s[2..], 16).ok().map(|v| v as i64)
     }, priority = 3)]
     // Octal: leading 0 followed by 1+ octal digits, optional L. (Lone `0` and
     // `08`/`09` fall through to the decimal arm — lenient MAT divergence.)
-    // leading 0 is a valid octal digit; from_str_radix(_, 8) handles the full slice
+    // leading 0 is a valid octal digit; from_str_radix(_, 8) handles the full slice.
+    // Parsed as u64 then bit-reinterpreted as i64 (see hex arm).
     #[regex(r"0[0-7]+[lL]?", |lex| {
         let s = lex.slice().trim_end_matches(['l', 'L']);
-        i64::from_str_radix(s, 8).ok()
+        u64::from_str_radix(s, 8).ok().map(|v| v as i64)
     }, priority = 3)]
     // Decimal int/long: digits with optional L. Also catches lone `0`, `08`, `09`.
+    // Parsed as u64 then bit-reinterpreted as i64 (see hex arm).
     #[regex(r"[0-9]+[lL]?", |lex| {
         let s = lex.slice().trim_end_matches(['l', 'L']);
-        s.parse::<i64>().ok()
+        s.parse::<u64>().ok().map(|v| v as i64)
     })]
     Int(i64),
 
@@ -135,7 +138,8 @@ pub fn tokenize_spanned(src: &str) -> Result<Vec<(Token, SimpleSpan)>, String> {
                 }
                 if slice.chars().next().is_some_and(|c| c.is_ascii_digit()) {
                     return Err(format!(
-                        "numeric literal out of range for a 64-bit signed integer: {slice:?}"
+                        "numeric literal out of range for a 64-bit integer (unsigned range, \
+                         0..=0xffffffffffffffff): {slice:?}"
                     ));
                 }
                 return Err(format!(
@@ -3447,6 +3451,45 @@ mod tests {
         assert!(super::tokenize_spanned("''").is_err()); // empty char
         assert!(super::tokenize_spanned("'ab'").is_err()); // multi-char
         assert!(super::tokenize_spanned("0xZZ").is_ok()); // 0 int + xZZ ident, not an error
+    }
+
+    #[test]
+    fn lex_high_bit_address_roundtrips() {
+        use super::Token::*;
+        let toks = |s: &str| {
+            super::tokenize_spanned(s)
+                .unwrap()
+                .into_iter()
+                .map(|(t, _)| t)
+                .collect::<Vec<_>>()
+        };
+
+        // High-bit address (> i64::MAX) lexes to one Int whose bits are the address.
+        let t = toks("0xffff800012345678");
+        assert_eq!(t.len(), 1);
+        match t[0] {
+            Int(x) => assert_eq!(x as u64, 0xffff_8000_1234_5678u64),
+            ref other => panic!("expected Int, got {other:?}"),
+        }
+
+        // u64::MAX round-trips to -1i64 and back.
+        let t = toks("0xffffffffffffffff");
+        assert_eq!(t.len(), 1);
+        match t[0] {
+            Int(x) => assert_eq!(x as u64, u64::MAX),
+            ref other => panic!("expected Int, got {other:?}"),
+        }
+
+        // Full FROM query with a high-bit address resolves to the exact address.
+        assert_eq!(
+            super::parse("SELECT * FROM OBJECTS 0xffff800012345678")
+                .unwrap()
+                .from,
+            super::FromSource::Object(0xffff_8000_1234_5678)
+        );
+
+        // A literal beyond u64::MAX still errors.
+        assert!(super::tokenize_spanned("999999999999999999999999999").is_err());
     }
 
     #[test]
