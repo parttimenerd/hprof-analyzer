@@ -85,12 +85,15 @@ fn mat_indices_match_real_fixtures() {
     // The MAT id-space remapping layer is in place: idx and domIn are now
     // byte-identical. The remaining 6 mismatches have known root causes:
     //
-    // 1. UNRECOGNIZED CLASS OBJECTS (~9 class types, ~97K objects affected):
-    //    pass2 does not add all class-object heap addresses to class_obj_class_idx.
-    //    Specifically, 9 high-address class objects (around 0xffe7fb58-0xffe80ea8)
-    //    are missing, causing their instances to get o2c=0 instead of the correct
-    //    class-obj mat-id. Affects: o2c, outbound (wrong class-ref slot), inbound
-    //    (those class objects have fewer inbound refs in ours vs real).
+    // 1. PRIMITIVE-ARRAY / CLASS SERIAL ADDRESS MISMATCH (~9 class types, ~97K objects):
+    //    pass2 uses PRIM_KEY_BASE|type_code for primitive array classes and JLC_KEY
+    //    for java/lang/Class, but class_obj_class_idx uses heap addresses as keys.
+    //    When LOAD_CLASS address ≠ CLASS_DUMP address (e.g. for [I, [B, java/lang/Class),
+    //    the class-object at the CLASS_DUMP address has name_id=0 and gets registered
+    //    under "unknown@addr" → a different row from what instances use. As a result,
+    //    inv[row_[I] == -1 and all prim-array/class-obj instances get o2c=0.
+    //    Fix requires linking LOAD_CLASS serials to CLASS_DUMP addresses in pass1.
+    //    Affects: o2c, outbound (wrong class-ref slot), inbound (fewer edges).
     //
     // 2. SYNTHETIC ROOT EDGES: MAT models GC roots as references from those root
     //    objects to the synthetic system-classloader (mat-id 0). This adds ~3421
