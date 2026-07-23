@@ -1,6 +1,6 @@
 {
   "schema_version": 9,
-  "generated": "2026-07-23T10:20:20.455697000Z",
+  "generated": "2026-07-23T10:30:16.460501000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
     "file_path": "tests/fixtures/dump_4_philosophers.hprof",
@@ -91160,7 +91160,7 @@
       "id": "one-leak-or-many",
       "severity": "info",
       "title": "One leak or many",
-      "detail": "the single biggest object, `scala.runtime.LazyVals$`, retains 21.5% and the top 10 retain 44.7% of the heap; 12 object(s) each hold >=1%.",
+      "detail": "the single biggest object, `scala.runtime.LazyVals$`, retains 21.5% and the top 10 retain 44.7% of reachable heap; 12 object(s) each hold >=1%.",
       "anchor": "top-consumers",
       "anchor_label": "Top Consumers"
     },

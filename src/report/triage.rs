@@ -412,7 +412,7 @@ impl Rule for Concentration {
                     TriageSeverity::Critical,
                     "Concentration",
                     format!(
-                        "highly concentrated — `{}` ({}){} holds {} of the heap, so freeing it would reclaim most memory.",
+                        "highly concentrated — `{}` ({}){} holds {} of {HEAP_BASIS_LABEL}, so freeing it would reclaim most memory.",
                         s.pretty_class,
                         kind,
                         held_by,
@@ -455,7 +455,7 @@ impl Rule for DominantGcRootType {
             TriageSeverity::Warning,
             "Dominant GC-root type",
             format!(
-                "{} of the heap is held by \"{}\" roots — retention concentrates at one root class.",
+                "{} of {HEAP_BASIS_LABEL} is held by \"{}\" roots — retention concentrates at one root class.",
                 fmt_pct(pct), top.root_type,
             ),
             Some(SectionId::SystemOverview),
@@ -532,11 +532,11 @@ impl Rule for OneLeakOrMany {
                 None => format!("`{}`", o.display_class),
             }) {
             Some(name) => format!(
-                "the single biggest object, {}, retains {} and the top 10 retain {} of the heap; {} object(s) each hold >=1%.",
+                "the single biggest object, {}, retains {} and the top 10 retain {} of {HEAP_BASIS_LABEL}; {} object(s) each hold >=1%.",
                 name, fmt_pct(top1_pct), fmt_pct(top10_pct), rc.num_objects_ge_1pct,
             ),
             None => format!(
-                "the single biggest object retains {} and the top 10 retain {} of the heap; {} object(s) each hold >=1%.",
+                "the single biggest object retains {} and the top 10 retain {} of {HEAP_BASIS_LABEL}; {} object(s) each hold >=1%.",
                 fmt_pct(top1_pct), fmt_pct(top10_pct), rc.num_objects_ge_1pct,
             ),
         };
@@ -749,7 +749,7 @@ impl Rule for GcWaste {
                 TriageSeverity::Warning,
                 "GC waste",
                 format!(
-                    "{} of the heap is unreachable garbage ({} shallow, {} retained){}.",
+                    "{} of {HEAP_BASIS_LABEL} is unreachable garbage ({} shallow, {} retained){}.",
                     fmt_pct(pct),
                     format_bytes(o.unreachable_shallow),
                     format_bytes(o.unreachable_retained),
@@ -1519,7 +1519,7 @@ impl Rule for BigDropConcentration {
                 TriageSeverity::Critical,
                 "Dominator-tree big drop",
                 format!(
-                    "`{}` is the single largest memory bucket: {} ({}) of the heap \
+                    "`{}` is the single largest memory bucket: {} ({}) of {HEAP_BASIS_LABEL} \
                      drops here in the dominator tree — almost all its retained memory \
                      is not shared with any other top-level subtree.",
                     row.display_class,
@@ -1671,7 +1671,7 @@ impl Rule for OversizedPrimArray {
                 TriageSeverity::Warning,
                 "Oversized primitive array",
                 format!(
-                    "A single `{}` ({} elements, {}){} accounts for {} of the heap — \
+                    "A single `{}` ({} elements, {}){} accounts for {} of {HEAP_BASIS_LABEL} — \
                      consider chunking, memory-mapping, or off-heap storage.",
                     row.array_class,
                     fmt_count(row.length),
