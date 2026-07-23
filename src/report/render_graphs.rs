@@ -255,16 +255,9 @@ fn render_system_overview_graphs(o: &SystemOverview, out: &mut String) {
         out.push('\n');
     }
 
-    // Heap Composition — with a proportional shallow-heap bar.
+    // Heap Composition — with a proportional shallow-heap bar scaled to total heap.
     if o.heap_composition.by_kind.len() > 1 {
         out.push_str("### Heap Composition\n\n");
-        let max = o
-            .heap_composition
-            .by_kind
-            .iter()
-            .map(|k| k.shallow_heap)
-            .max()
-            .unwrap_or(0);
         let mut t = Table::new(
             &["Kind", "Objects", "Shallow Heap", ""],
             &[Align::Left, Align::Right, Align::Right, Align::Left],
@@ -274,7 +267,7 @@ fn render_system_overview_graphs(o: &SystemOverview, out: &mut String) {
                 k.kind.clone(),
                 fmt_count(k.objects),
                 format_bytes(k.shallow_heap),
-                bar(k.shallow_heap, max, GRAPH_BAR_WIDTH),
+                bar(k.shallow_heap, o.total_shallow, GRAPH_BAR_WIDTH),
             ]);
         }
         t.render(out);
@@ -296,13 +289,7 @@ fn render_system_overview_graphs(o: &SystemOverview, out: &mut String) {
     out.push_str(
         "_Top 50 classes ranked by retained heap; the full list is in the JSON output._\n\n",
     );
-    let hist_max = o
-        .histogram
-        .iter()
-        .take(50)
-        .map(|r| r.retained)
-        .max()
-        .unwrap_or(0);
+    let hist_max = o.total_shallow;
     let mut hist = Table::new(
         &[
             "#",
@@ -347,12 +334,7 @@ fn render_system_overview_graphs(o: &SystemOverview, out: &mut String) {
             "_Classes grouped by the loader that defined them; many loaders each holding heap \
              can signal a class-loader leak._\n\n",
         );
-        let lmax = o
-            .loader_rollup
-            .iter()
-            .map(|r| r.retained)
-            .max()
-            .unwrap_or(0);
+        let lmax = o.total_shallow;
         let mut t = Table::new(
             &[
                 "Loader",
@@ -415,7 +397,7 @@ fn render_system_overview_graphs(o: &SystemOverview, out: &mut String) {
                 continue;
             }
             out.push_str(&format!("**`{}`** — per loader:\n\n", d.pretty_class));
-            let rmax = d.per_loader.iter().map(|pl| pl.retained).max().unwrap_or(0);
+            let rmax = o.total_shallow;
             // Disambiguate loaders that share a display label by appending id.
             let ambiguous: std::collections::HashSet<&str> = {
                 let mut seen = std::collections::HashSet::new();
@@ -531,7 +513,6 @@ These are the most likely accumulation points for excessive memory usage._\n\n",
 
     // Share overview: one proportional bar per suspect, keyed to the largest
     // suspect's retained heap so the relative sizes read at a glance.
-    let max = l.suspects.iter().map(|s| s.retained).max().unwrap_or(0);
     let mut share = Table::new(
         &["#", "Suspect", "Retained", "% Heap", ""],
         &[
@@ -549,7 +530,7 @@ These are the most likely accumulation points for excessive memory usage._\n\n",
             format!("`{}`", s.pretty_class),
             format_bytes(s.retained),
             format!("{pct:.1}%"),
-            bar(s.retained, max, GRAPH_BAR_WIDTH),
+            bar(s.retained, l.total_shallow, GRAPH_BAR_WIDTH),
         ]);
     }
     share.render(out);
@@ -689,12 +670,6 @@ fn render_top_consumers_graphs(t: &TopConsumers, total_shallow: u64, out: &mut S
     out.push_str(
         "_Individual objects retaining the most heap; `% Heap` is the share of total reachable heap._\n\n",
     );
-    let obj_max = t
-        .biggest_objects
-        .iter()
-        .map(|r| r.retained)
-        .max()
-        .unwrap_or(0);
     // "Held via" names the dominant incoming `Class#field` referrer; present
     // only when attribution data exists (`--collections`).
     let obj_has_owner = t.biggest_objects.iter().any(|r| r.owner.is_some());
@@ -734,7 +709,7 @@ that holds each object (the primary referrer; an object may have several)._\n\n"
                 None => "—".to_string(),
             });
         }
-        cells.push(bar(row.retained, obj_max, GRAPH_BAR_WIDTH));
+        cells.push(bar(row.retained, total_shallow, GRAPH_BAR_WIDTH));
         objs.row(cells);
     }
     objs.render(out);
@@ -742,12 +717,7 @@ that holds each object (the primary referrer; an object may have several)._\n\n"
 
     out.push_str("### Biggest Classes by Retained Heap\n\n");
     out.push_str("_Classes whose instances together retain the most heap._\n\n");
-    let cls_max = t
-        .biggest_classes
-        .iter()
-        .map(|r| r.retained)
-        .max()
-        .unwrap_or(0);
+    let cls_max = total_shallow;
     let mut classes = Table::new(
         &["#", "Class", "Instances", "Retained Heap", ""],
         &[
@@ -816,14 +786,8 @@ that holds each object (the primary referrer; an object may have several)._\n\n"
     out.push_str(
         "_Retained heap aggregated by package prefix (rows retaining <1% of the total are pruned); the tree shows nesting._\n\n",
     );
-    // Bar is keyed to the largest top-level package's retained heap.
-    let pkg_max = t
-        .biggest_packages
-        .children
-        .iter()
-        .map(|c| c.retained_heap)
-        .max()
-        .unwrap_or(0);
+    // Bar is keyed to total reachable heap for cross-section comparability.
+    let pkg_max = total_shallow;
     let mut pkgs = Table::new(
         &["Package", "Objects", "Shallow", "Retained", ""],
         &[
