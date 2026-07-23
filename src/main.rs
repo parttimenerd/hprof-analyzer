@@ -124,6 +124,10 @@ pub struct AnalyzeOptions {
     pub query_file: Option<String>,
     /// Max hops for OQL `path(a, b)` bounded walks (always > 0).
     pub query_path_depth: usize,
+    /// Restrict OQL result rows to GC-reachable objects (Eclipse MAT parity).
+    /// The `query` subcommand sets this by default; analyze leaves it off so the
+    /// report stays byte-identical unless `--reachable-only` is passed.
+    pub reachable_only: bool,
 }
 
 impl Default for AnalyzeOptions {
@@ -245,6 +249,17 @@ struct Cli {
     /// Max hops for OQL `path(a, b)` bounded walks (must be > 0).
     #[arg(long = "query-path-depth", value_name = "N", default_value_t = DEFAULT_QUERY_PATH_DEPTH, value_parser = parse_query_path_depth)]
     query_path_depth: usize,
+
+    /// Restrict OQL results to GC-reachable objects (Eclipse MAT parity). Off by
+    /// default for analyze so the report stays byte-identical; opt in to prune
+    /// unreachable objects from `--query` results.
+    #[arg(long, conflicts_with = "all")]
+    reachable_only: bool,
+
+    /// Include unreachable objects in OQL results (raw heap scan). The analyze
+    /// default; accepted for symmetry with the `query` subcommand.
+    #[arg(long)]
+    all: bool,
 }
 
 /// Named subcommands. The default (no subcommand) analyzes or re-renders the
@@ -288,6 +303,15 @@ enum Cmd {
         /// Start an interactive OQL REPL reading queries from stdin.
         #[arg(long)]
         repl: bool,
+        /// Restrict OQL results to GC-reachable objects (Eclipse MAT parity).
+        /// This is the default for the `query` subcommand; pass `--all` to
+        /// include unreachable objects (raw heap scan).
+        #[arg(long, conflicts_with = "all")]
+        reachable_only: bool,
+        /// Include unreachable objects in OQL results (raw heap scan), opting
+        /// out of the reachable-only default.
+        #[arg(long)]
+        all: bool,
     },
 }
 
@@ -393,6 +417,7 @@ impl DetailLevel {
             queries: Vec::new(),
             query_file: None,
             query_path_depth: DEFAULT_QUERY_PATH_DEPTH,
+            reachable_only: false,
         }
     }
 }
@@ -528,6 +553,8 @@ fn main() {
             query_file,
             query_path_depth,
             repl,
+            reachable_only: _,
+            all,
         }) => {
             if !input_is_hprof(&input) {
                 fail(format!(
@@ -545,6 +572,10 @@ fn main() {
                     queries: query,
                     query_file,
                     query_path_depth,
+                    // Query subcommand defaults to reachable-only (MAT parity);
+                    // --all opts back into a raw-heap scan. --reachable-only is
+                    // redundant-but-allowed since the default is already true.
+                    reachable_only: !all,
                     ..DetailLevel::Default.options()
                 };
                 // Reuse the analyze pipeline, printing only the query results as text.
@@ -590,6 +621,9 @@ fn run_default(cli: Cli) {
             queries: cli.query.clone(),
             query_file: cli.query_file.clone(),
             query_path_depth: cli.query_path_depth,
+            // Analyze defaults to raw (all); --reachable-only opts into pruning.
+            // --all is the no-op default and stays off here.
+            reachable_only: cli.reachable_only,
             ..opts
         };
         if let Err(e) = run(
