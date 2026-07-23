@@ -390,11 +390,11 @@ impl Rule for Concentration {
                     TriageSeverity::Critical,
                     "Concentration",
                     format!(
-                        "highly concentrated — `{}` ({}){} holds {:.1}% of the heap, so freeing it would reclaim most memory.",
+                        "highly concentrated — `{}` ({}){} holds {} of the heap, so freeing it would reclaim most memory.",
                         s.pretty_class,
                         kind,
                         held_by,
-                        pct_of(s.retained, total),
+                        fmt_pct(pct_of(s.retained, total)),
                     ),
                     Some(SectionId::LeakSuspects),
                 )
@@ -433,8 +433,8 @@ impl Rule for DominantGcRootType {
             TriageSeverity::Warning,
             "Dominant GC-root type",
             format!(
-                "{:.1}% of the heap is held by \"{}\" roots — retention concentrates at one root class.",
-                pct, top.root_type,
+                "{} of the heap is held by \"{}\" roots — retention concentrates at one root class.",
+                fmt_pct(pct), top.root_type,
             ),
             Some(SectionId::SystemOverview),
         ))
@@ -495,12 +495,12 @@ impl Rule for OneLeakOrMany {
                 None => format!("`{}`", o.display_class),
             }) {
             Some(name) => format!(
-                "the single biggest object, {}, retains {:.1}% and the top 10 retain {:.1}% of the heap; {} object(s) each hold >=1%.",
-                name, top1_pct, top10_pct, rc.num_objects_ge_1pct,
+                "the single biggest object, {}, retains {} and the top 10 retain {} of the heap; {} object(s) each hold >=1%.",
+                name, fmt_pct(top1_pct), fmt_pct(top10_pct), rc.num_objects_ge_1pct,
             ),
             None => format!(
-                "the single biggest object retains {:.1}% and the top 10 retain {:.1}% of the heap; {} object(s) each hold >=1%.",
-                top1_pct, top10_pct, rc.num_objects_ge_1pct,
+                "the single biggest object retains {} and the top 10 retain {} of the heap; {} object(s) each hold >=1%.",
+                fmt_pct(top1_pct), fmt_pct(top10_pct), rc.num_objects_ge_1pct,
             ),
         };
         Some(signal(
@@ -651,10 +651,10 @@ impl Rule for ProxyLambdaBloat {
             TriageSeverity::Info,
             "Proxy/lambda bloat",
             format!(
-                "{} of {} loaded classes ({:.1}%) are anonymous/generated (lambda/proxy) — possible classloader churn.",
+                "{} of {} loaded classes ({}) are anonymous/generated (lambda/proxy) — possible classloader churn.",
                 fmt_count(anon),
                 fmt_count(loaded),
-                share,
+                fmt_pct(share),
             ),
             Some(SectionId::LeakIndicators),
         ))
@@ -712,8 +712,8 @@ impl Rule for GcWaste {
                 TriageSeverity::Warning,
                 "GC waste",
                 format!(
-                    "{:.1}% of the heap is unreachable garbage ({} shallow, {} retained){}.",
-                    pct,
+                    "{} of the heap is unreachable garbage ({} shallow, {} retained){}.",
+                    fmt_pct(pct),
                     format_bytes(o.unreachable_shallow),
                     format_bytes(o.unreachable_retained),
                     cluster,
@@ -1482,11 +1482,11 @@ impl Rule for BigDropConcentration {
                 TriageSeverity::Critical,
                 "Dominator-tree big drop",
                 format!(
-                    "`{}` is the single largest memory bucket: {:.1}% ({}) of the heap \
+                    "`{}` is the single largest memory bucket: {} ({}) of the heap \
                      drops here in the dominator tree — almost all its retained memory \
                      is not shared with any other top-level subtree.",
                     row.display_class,
-                    pct,
+                    fmt_pct(pct),
                     format_bytes(row.drop_bytes),
                 ),
                 Some(SectionId::DominatorAnalysis),
@@ -1564,12 +1564,12 @@ impl Rule for HashCollisionHotspot {
             TriageSeverity::Warning,
             "Hash-map collision hotspot",
             format!(
-                "{} of {} tracked maps ({:.1}%) have a load factor > {}% — \
+                "{} of {} tracked maps ({}) have a load factor > {}% — \
                  over-packed hash tables cause long collision chains and degrade \
                  lookup performance.",
                 fmt_count(hot),
                 fmt_count(mcr.tracked),
-                pct,
+                fmt_pct(pct),
                 COLLISION_HIGH_BP / 100,
             ),
             Some(SectionId::Collections),
@@ -1596,12 +1596,12 @@ impl Rule for EmptyCollectionCemetery {
             TriageSeverity::Info,
             "Empty-collection cemetery",
             format!(
-                "{} of {} tracked collections ({:.1}%) are empty (size == 0) — \
+                "{} of {} tracked collections ({}) are empty (size == 0) — \
                  pre-allocated but never populated containers waste object-header \
                  overhead; consider lazy initialisation or null.",
                 fmt_count(cbs.empty_count),
                 fmt_count(cbs.tracked),
-                share_pct,
+                fmt_pct(share_pct),
             ),
             Some(SectionId::Collections),
         ))
@@ -1634,13 +1634,13 @@ impl Rule for OversizedPrimArray {
                 TriageSeverity::Warning,
                 "Oversized primitive array",
                 format!(
-                    "A single `{}` ({} elements, {}){} accounts for {:.1}% of the heap — \
+                    "A single `{}` ({} elements, {}){} accounts for {} of the heap — \
                      consider chunking, memory-mapping, or off-heap storage.",
                     row.array_class,
                     fmt_count(row.length),
                     format_bytes(row.shallow),
                     owner_clause,
-                    pct,
+                    fmt_pct(pct),
                 ),
                 Some(SectionId::ArraysBySize),
             ),
