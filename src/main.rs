@@ -1167,40 +1167,44 @@ fn run(
     crate::trace::probe("main: after build_dom_children_csr");
 
     // MAT: emit the `domOut` IntArray1N (unsorted) in MAT id order.
-    // mat_count+1 entries: entry 0 = synthetic root's children (= the objects
-    // whose MAT idom == superroot, i.e. our vroot's dom-children translated to
-    // mat-ids). Entry k+1 = dom-children of mat-id k (for k in 1..mat_count).
+    // Layout: entry[0] = vroot's dom-children (= MAT GC roots), entry[1] = dom-
+    // children of mat-id 0 (synthetic root, always empty), entries[2..mc+1] =
+    // dom-children of mat-ids 1..mc-1 (real objects). Total = mc+1 entries.
+    // Children are emitted in dc_tgt encounter order (NOT sorted): MAT's own
+    // IntArray1NWriter stores them in traversal order as the dominator tree is
+    // constructed, not in id order.
     if let Some(ref m) = mat {
         let mm = mat_map.as_ref().expect("mat_map built with mat");
         let n = g.n;
         let mc = mm.mat_count();
         let mut entries: Vec<Vec<i32>> = Vec::with_capacity(mc + 1);
 
-        // entry 0: vroot's dom-children in mat-id space (sorted)
+        // entry 0: vroot's dom-children (encounter order, no sort)
         let lo0 = dc_off[n] as usize;
         let hi0 = dc_off[n + 1] as usize;
-        let mut vroot_children: Vec<i32> = dc_tgt[lo0..hi0]
+        let vroot_children: Vec<i32> = dc_tgt[lo0..hi0]
             .iter()
             .filter_map(|&v| {
                 let mid = mm.translate(v as i32);
                 if mid >= 0 { Some(mid) } else { None }
             })
             .collect();
-        vroot_children.sort_unstable();
         entries.push(vroot_children);
 
-        // entries 1..mc: one per mat-id 1..mat_count (= sorted reachable objects)
+        // entry 1: dom-children of mat-id 0 (synthetic root) — always empty
+        entries.push(Vec::new());
+
+        // entries 2..mc+1: dom-children of mat-ids 1..mc-1 (encounter order)
         for &old_id in mm.sorted() {
             let lo = dc_off[old_id as usize] as usize;
             let hi = dc_off[old_id as usize + 1] as usize;
-            let mut children: Vec<i32> = dc_tgt[lo..hi]
+            let children: Vec<i32> = dc_tgt[lo..hi]
                 .iter()
                 .filter_map(|&v| {
                     let mid = mm.translate(v as i32);
                     if mid >= 0 { Some(mid) } else { None }
                 })
                 .collect();
-            children.sort_unstable();
             entries.push(children);
         }
         m.emit_dom_out(&entries)?;

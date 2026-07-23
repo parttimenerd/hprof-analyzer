@@ -105,10 +105,12 @@ fn mat_indices_match_real_fixtures() {
     //    (size 0 vs non-zero for those objects), and cascades into o2ret (retained
     //    size slightly different).
     //
-    // 4. DOMOUT CHILD ORDERING: MAT may store dominator children in pre-order
-    //    traversal order rather than ascending mat-id order. Our output sorts
-    //    children by ascending mat-id, causing the body stream to differ slightly.
-    //    Affects: domOut (body 2811959 vs 2811964, 5-byte diff in compressed form).
+    // 4. DOMOUT SYNTHETIC-ROOT CHILD: MAT adds the synthetic system-classloader
+    //    (mat-id 0) as a child of the virtual root in domOut entry[0]. We have no
+    //    equivalent GC-root placeholder object to contribute. This also causes the
+    //    vroot children to appear in a different traversal order (MAT's internal
+    //    GC-root traversal order vs our HPROF-encounter order). Affects: domOut
+    //    (divider 2811961 vs 2811964, 3-byte diff = 1 missing child + reordering).
     //
     // The emitters and 1N/plain framing are byte-verified (27 mat:: unit tests
     // round-trip real fixtures byte-exact). The id-space remapping is correct
