@@ -1127,6 +1127,23 @@ fn suggest_for_found(found: Option<&Token>) -> Option<String> {
     }
 }
 
+/// A hint to append to an end-of-input parse error: if the source looks like a
+/// `SELECT ...` with no `FROM` clause, the most likely mistake is a missing
+/// FROM. Word-boundary, case-insensitive so `fromage` or `selection` don't
+/// trigger it. Returns `None` when a FROM is present (or there is no SELECT).
+fn missing_from_hint(src: &str) -> Option<&'static str> {
+    let low = src.to_ascii_lowercase();
+    let has_kw = |kw: &str| {
+        low.split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .any(|w| w == kw)
+    };
+    if has_kw("select") && !has_kw("from") {
+        Some("a query needs a `FROM <class>` clause (e.g. `SELECT * FROM java.lang.String`)")
+    } else {
+        None
+    }
+}
+
 /// Compact single-line message for one chumsky error. Custom (`Rich::custom`)
 /// reasons — e.g. `dominators(x) requires ...` — are surfaced verbatim with a
 /// trailing `at <line>:<col>`; positional errors keep the `unexpected <found>`
@@ -1142,6 +1159,13 @@ fn compact_error(src: &str, e: &Rich<'_, Token>) -> String {
                 .found()
                 .map(|t| format!("{t:?}"))
                 .unwrap_or_else(|| "end of input".to_string());
+            // On end-of-input, a `SELECT` with no `FROM` is the likely cause;
+            // otherwise fall back to the nearest-keyword hint.
+            if e.found().is_none() {
+                if let Some(hint) = missing_from_hint(src) {
+                    return format!("unexpected {found} at {line}:{col} — {hint}");
+                }
+            }
             let suggestion = suggest_for_found(e.found());
             match suggestion {
                 Some(s) => format!("unexpected {found} at {line}:{col} — did you mean `{s}`?"),
@@ -1200,10 +1224,19 @@ pub fn parse_or_report(src: &str) -> Result<Query, String> {
                             .unwrap_or_else(|| "end of input".to_string());
                         // Append the nearest-keyword hint (same as the plain
                         // message path) so the CLI/REPL caret diagnostic also
-                        // suggests the intended keyword on a typo.
-                        match suggest_for_found(e.found()) {
-                            Some(s) => format!("unexpected {found} — did you mean `{s}`?"),
-                            None => format!("unexpected {found}"),
+                        // suggests the intended keyword on a typo. On end of
+                        // input, prefer the missing-FROM hint.
+                        if e.found().is_none() {
+                            if let Some(hint) = missing_from_hint(src) {
+                                format!("unexpected {found} — {hint}")
+                            } else {
+                                format!("unexpected {found}")
+                            }
+                        } else {
+                            match suggest_for_found(e.found()) {
+                                Some(s) => format!("unexpected {found} — did you mean `{s}`?"),
+                                None => format!("unexpected {found}"),
+                            }
                         }
                     }
                 };
@@ -2779,6 +2812,30 @@ mod tests {
             "expected an @objectAddress suggestion, got: {}",
             err.0
         );
+    }
+
+    #[test]
+    fn missing_from_clause_is_hinted() {
+        // `SELECT @objectId` (no FROM) hits end-of-input; hint the missing FROM.
+        let err = parse("SELECT @objectId").expect_err("missing FROM should error");
+        assert!(
+            err.0.contains("FROM"),
+            "expected a missing-FROM hint, got: {}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn missing_from_hint_helper_is_word_bounded() {
+        // Positive: SELECT without FROM.
+        assert!(missing_from_hint("SELECT @objectId").is_some());
+        // Negative: FROM present.
+        assert!(missing_from_hint("SELECT * FROM C").is_none());
+        // Negative: `from` only as a substring of another word must not count.
+        assert!(missing_from_hint("SELECT fromage FROM C").is_none());
+        assert!(missing_from_hint("SELECT selection").is_some());
+        // Negative: no SELECT at all.
+        assert!(missing_from_hint("DELETE X").is_none());
     }
 
     #[test]
