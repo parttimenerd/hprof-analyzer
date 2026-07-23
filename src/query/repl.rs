@@ -794,6 +794,10 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
     let mut max_width: usize = 0;
     let mut last_query: Option<String> = None;
     let mut last_result: Option<QueryResult> = None;
+    // Warm cache for resident-only queries, built lazily on first eligible query
+    // (see `run_one` / `cache_eligible`). Reused for the whole session while the
+    // reachability mode is unchanged.
+    let mut cache: Option<crate::query::run::ReplCache> = None;
     writeln!(
         stdout,
         "hprof-analyzer OQL REPL. Type !help for commands, !quit or Ctrl-D to exit."
@@ -838,7 +842,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                 let wrapped = wrap_count(rest);
                                 if let Some(res) = run_and_print(
                                     path, &wrapped, path_depth, reachable_only, max_width,
-                                    &mut stdout,
+                                    &mut cache, &mut stdout,
                                 )? {
                                     last_query = Some(wrapped);
                                     last_result = Some(res);
@@ -854,7 +858,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                     let q = q.clone();
                                     if let Some(res) = run_and_print(
                                         path, &q, path_depth, reachable_only, max_width,
-                                        &mut stdout,
+                                        &mut cache, &mut stdout,
                                     )? {
                                         last_result = Some(res);
                                     }
@@ -866,7 +870,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                         "save" => {
                             handle_save(
                                 rest, path, path_depth, reachable_only, max_width,
-                                &mut last_query, &mut last_result, &mut stdout,
+                                &mut last_query, &mut last_result, &mut cache, &mut stdout,
                             )?;
                             stdout.flush()?;
                             continue;
@@ -888,7 +892,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                     let query = buffer_lines.join("\n");
                     buffer_lines.clear();
                     if let Some(res) =
-                        run_and_print(path, &query, path_depth, reachable_only, max_width, &mut stdout)?
+                        run_and_print(path, &query, path_depth, reachable_only, max_width, &mut cache, &mut stdout)?
                     {
                         last_query = Some(query);
                         last_result = Some(res);
@@ -904,7 +908,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                     let query = query.trim();
                     if !query.is_empty() {
                         if let Some(res) = run_and_print(
-                            path, query, path_depth, reachable_only, max_width, &mut stdout,
+                            path, query, path_depth, reachable_only, max_width, &mut cache, &mut stdout,
                         )? {
                             last_query = Some(query.to_string());
                             last_result = Some(res);
@@ -917,7 +921,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                 // immediately so the common one-line case needs no terminator.
                 if buffer_lines.is_empty() {
                     if let Some(res) =
-                        run_and_print(path, t, path_depth, reachable_only, max_width, &mut stdout)?
+                        run_and_print(path, t, path_depth, reachable_only, max_width, &mut cache, &mut stdout)?
                     {
                         last_query = Some(t.to_string());
                         last_result = Some(res);
@@ -948,10 +952,11 @@ fn run_and_print(
     path_depth: usize,
     reachable_only: bool,
     max_width: usize,
+    cache: &mut Option<crate::query::run::ReplCache>,
     out: &mut impl Write,
 ) -> io::Result<Option<QueryResult>> {
     let start = Instant::now();
-    match run_one(path, query, path_depth, reachable_only) {
+    match run_one(path, query, path_depth, reachable_only, cache, out) {
         Ok(res) => {
             print_result(&res, start.elapsed(), max_width, out)?;
             Ok(Some(res))
@@ -1018,6 +1023,7 @@ fn handle_save(
     max_width: usize,
     last_query: &mut Option<String>,
     last_result: &mut Option<QueryResult>,
+    cache: &mut Option<crate::query::run::ReplCache>,
     out: &mut impl Write,
 ) -> io::Result<()> {
     let (file, inline_oql) = match rest.split_once(char::is_whitespace) {
@@ -1032,7 +1038,7 @@ fn handle_save(
     // last successful result.
     if !inline_oql.is_empty() {
         let start = Instant::now();
-        match run_one(path, inline_oql, path_depth, reachable_only) {
+        match run_one(path, inline_oql, path_depth, reachable_only, cache, out) {
             Ok(res) => {
                 // Echo the table so the user sees what was saved, then persist.
                 print_result(&res, start.elapsed(), max_width, out)?;
@@ -1204,10 +1210,61 @@ fn handle_meta(
     Ok(false)
 }
 
+/// A query is served from the warm ReplCache iff it is resident-only, has no
+/// subqueries, and its FROM (and every UNION branch's FROM) is a non-array class.
+/// Array-class FROM is excluded: `run_resident_only` can't reconstruct per-array
+/// class names without a real scan (v1 limitation), so those stay on the scan path.
+fn cache_eligible(q: &crate::query::ast::Query, plan: &crate::query::plan::QueryPlan) -> bool {
+    fn is_array_name(n: &str) -> bool {
+        n.starts_with('[') || n.ends_with("[]")
+    }
+    fn from_ok(q: &crate::query::ast::Query) -> bool {
+        // Must be a concrete class FROM (not a subquery, not FROM OBJECTS) and
+        // not an array class.
+        match q.from.class_spec() {
+            Some(_) => !is_array_name(q.from.class_name()),
+            None => false,
+        }
+    }
+    // Head + all union branches must be resident-only, subquery-free, class-FROM.
+    let head_ok = plan.is_resident_only()
+        && plan.from_subplan.is_none()
+        && plan.in_subplans.is_empty()
+        && from_ok(q);
+    // `optimize` preserves `plan.union_branches` positionally against
+    // `q.union_branches`, so pair them 1:1. If the counts disagree (defensive),
+    // fail closed and route to the scan path.
+    let branches_ok = plan.union_branches.len() == q.union_branches.len()
+        && plan
+            .union_branches
+            .iter()
+            .zip(q.union_branches.iter())
+            .all(|(bp, bq)| {
+                bp.is_resident_only()
+                    && bp.from_subplan.is_none()
+                    && bp.in_subplans.is_empty()
+                    && from_ok(bq)
+            });
+    head_ok && branches_ok
+}
+
 /// Parse, plan, and execute a single OQL line against the dump at `path`,
 /// returning the (single) query result. Parse/plan failures are surfaced as
 /// `io::Error` so the caller prints `error: <msg>` and stays alive.
-fn run_one(path: &str, text: &str, path_depth: usize, reachable_only: bool) -> io::Result<QueryResult> {
+///
+/// `cache` is the session's lazily-built warm `ReplCache`; resident-only,
+/// subquery-free, non-array class queries (see `cache_eligible`) are served
+/// from it without re-scanning the heap. Everything else calls
+/// `run_single_dump` exactly as before. `out` carries the one-time
+/// "warm cache built" note.
+fn run_one(
+    path: &str,
+    text: &str,
+    path_depth: usize,
+    reachable_only: bool,
+    cache: &mut Option<crate::query::run::ReplCache>,
+    out: &mut impl Write,
+) -> io::Result<QueryResult> {
     // Strip any leading `-- @viz` directive before parsing; the OQL lexer has no
     // comment rule. A malformed directive becomes a result note; a well-formed
     // one is attached after execution once the columns are known.
@@ -1229,7 +1286,32 @@ fn run_one(path: &str, text: &str, path_depth: usize, reachable_only: bool) -> i
     // subcommand; `!all` toggles it off for the session so raw-heap (unreachable)
     // objects appear, and `!reachable` turns it back on — no need to drop to the
     // subcommand for an ad-hoc raw scan.
-    let mut results = crate::query::run::run_single_dump(path, &[(q, plan)], reachable_only)?;
+    //
+    // Routing: resident-only, subquery-free, non-array class queries are served
+    // from the warm ReplCache (no heap re-scan). `cache_eligible` borrows `&q`
+    // and `&plan` here, before either is moved into a run call below.
+    let eligible = cache_eligible(&q, &plan);
+    let mut results = if eligible {
+        // Lazily build the cache in the session's current mode on first use. If a
+        // cache already exists but was built for the OTHER reachability mode
+        // (user toggled !all/!reachable), don't rebuild mid-session (v1: avoid
+        // churn) — fall back to the scan path for this one query instead.
+        if cache.is_none() {
+            *cache = Some(crate::query::run::ReplCache::build(path, reachable_only)?);
+            writeln!(
+                out,
+                "(warm cache built — resident-only queries now skip the heap scan)"
+            )?;
+        }
+        match cache {
+            Some(c) if c.reachable_only == reachable_only => {
+                crate::query::run::run_resident_only(c, &[(q, plan)], reachable_only)?
+            }
+            _ => crate::query::run::run_single_dump(path, &[(q, plan)], reachable_only)?,
+        }
+    } else {
+        crate::query::run::run_single_dump(path, &[(q, plan)], reachable_only)?
+    };
     let mut result = results.pop().unwrap_or_else(|| QueryResult {
         name: "q1".into(),
         oql: text.into(),
@@ -1424,6 +1506,29 @@ fn csv_escape(field: &str) -> String {
 mod tests {
     use super::*;
     use crate::query::model::QueryColumn;
+
+    #[test]
+    fn routes_resident_query_to_cache_and_field_query_to_scan() {
+        fn plan_of(oql: &str) -> (crate::query::ast::Query, crate::query::plan::QueryPlan) {
+            let q = crate::query::parse::parse_or_report(oql).unwrap();
+            let plan = crate::query::plan::plan_query(&q, 0).unwrap();
+            let plan = crate::query::optimize::optimize(
+                plan,
+                &q,
+                &crate::query::optimize::SchemaStats::default(),
+            );
+            (q, plan)
+        }
+        let (aq, ap) = plan_of("SELECT @objectAddress FROM java.lang.Thread");
+        assert!(cache_eligible(&aq, &ap), "address query -> cache");
+
+        let (fq, fp) = plan_of("SELECT s.value FROM java.lang.String s");
+        assert!(!cache_eligible(&fq, &fp), "field query -> scan");
+
+        // array FROM must NOT be cache-eligible (v1 limitation).
+        let (rq, rp) = plan_of("SELECT * FROM int[]");
+        assert!(!cache_eligible(&rq, &rp), "array FROM -> scan");
+    }
 
     fn meta_out(cmd: &str) -> (bool, String) {
         let (quit, out, _mode) = meta_out_mode(cmd, true);
