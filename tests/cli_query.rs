@@ -4884,4 +4884,53 @@ mod server_cli {
         let (status, _h, _body) = parse_resp(&http(srv.port, "POST", "/schema", ""));
         assert!(status.contains("405"), "405 on POST /schema: {status}");
     }
+
+    #[test]
+    fn server_stream_emits_ndjson_lines() {
+        let Some(hprof) = philosophers() else { return };
+        let srv = spawn(&hprof);
+        let (status, headers, body) = parse_resp(&http(srv.port, "POST", "/stream", "SELECT @objectAddress FROM java.lang.Thread"));
+        assert!(status.contains("200"), "200: {body}");
+        assert!(headers.contains("content-type: application/x-ndjson"), "ndjson content-type: {headers}");
+        let mut lines = body.lines().filter(|l| !l.trim().is_empty());
+        let meta: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+        assert_eq!(meta["kind"], serde_json::json!("meta"), "first line is meta: {meta}");
+        assert!(meta["row_count"].as_u64().unwrap() > 0, "row_count in meta: {meta}");
+        let row: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+        assert_eq!(row["kind"], serde_json::json!("row"), "second line is a row: {row}");
+        assert!(row["v"].is_array(), "row carries a value array: {row}");
+    }
+
+    #[test]
+    fn server_stream_parse_error_is_one_ndjson_error_line() {
+        let Some(hprof) = philosophers() else { return };
+        let srv = spawn(&hprof);
+        let (status, _h, body) = parse_resp(&http(srv.port, "POST", "/stream", "SELCT bad"));
+        assert!(status.contains("400"), "400: {body}");
+        let first: serde_json::Value = serde_json::from_str(body.lines().next().unwrap()).unwrap();
+        assert_eq!(first["kind"], serde_json::json!("error"), "error line: {first}");
+    }
+
+    #[test]
+    fn server_stream_row_count_matches_emitted_rows() {
+        let Some(hprof) = philosophers() else { return };
+        let srv = spawn(&hprof);
+        let (status, _h, body) = parse_resp(&http(srv.port, "POST", "/stream", "SELECT @objectAddress FROM java.lang.Thread"));
+        assert!(status.contains("200"), "200: {body}");
+        let mut lines = body.lines().filter(|l| !l.trim().is_empty());
+        let meta: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+        let declared = meta["row_count"].as_u64().unwrap();
+        let emitted = lines.filter(|l| {
+            serde_json::from_str::<serde_json::Value>(l).map(|v| v["kind"] == serde_json::json!("row")).unwrap_or(false)
+        }).count() as u64;
+        assert_eq!(declared, emitted, "meta row_count must equal number of row lines");
+    }
+
+    #[test]
+    fn server_stream_wrong_method_is_405() {
+        let Some(hprof) = philosophers() else { return };
+        let srv = spawn(&hprof);
+        let (status, _h, _b) = parse_resp(&http(srv.port, "GET", "/stream", ""));
+        assert!(status.contains("405"), "405 on GET /stream: {status}");
+    }
 }

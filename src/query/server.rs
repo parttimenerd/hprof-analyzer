@@ -135,6 +135,42 @@ pub fn run_query_json(
     }
 }
 
+/// Run OQL and return (http_status, ndjson_body). On success: a `meta` line then
+/// one `row` line per result row. On failure: a single `error` line. Reuses
+/// run_query_json so run semantics are identical to POST /. NDJSON is buffered
+/// (the run layer materializes rows first); this delivers the line-delimited,
+/// incrementally-parseable contract without a run-layer refactor.
+pub fn run_query_ndjson(
+    path: &str,
+    text: &str,
+    path_depth: usize,
+    reachable_only: bool,
+    cache: &mut Option<ReplCache>,
+) -> (u16, String) {
+    let v = run_query_json(path, text, path_depth, reachable_only, cache);
+    if v["ok"] != serde_json::json!(true) {
+        let line = serde_json::json!({ "kind": "error", "error": v["error"].clone() });
+        return (400, format!("{line}\n"));
+    }
+    let r = &v["result"];
+    let mut out = String::new();
+    let meta = serde_json::json!({
+        "kind": "meta",
+        "name": r["name"], "columns": r["columns"],
+        "row_count": r["row_count"], "truncated": r["truncated"],
+        "elapsed_ms": r["elapsed_ms"], "note": r.get("note"),
+    });
+    out.push_str(&meta.to_string());
+    out.push('\n');
+    if let Some(rows) = r["rows"].as_array() {
+        for row in rows {
+            out.push_str(&serde_json::json!({ "kind": "row", "v": row }).to_string());
+            out.push('\n');
+        }
+    }
+    (200, out)
+}
+
 /// JSON Schema for the QueryResult shape, generated from the schemars derive so
 /// tools can validate responses / codegen types. Derived at request time (cheap).
 pub fn schema_json() -> serde_json::Value {
@@ -213,9 +249,9 @@ impl ServerState {
         })
     }
 
-    /// Route (method, url, body) -> (http_status, json_body_string). Pure enough
+    /// Route (method, url, body) -> (http_status, body_string, content_type). Pure enough
     /// to unit-test without a socket.
-    pub fn route(&self, method: &str, url: &str, body: &str) -> (u16, String) {
+    pub fn route(&self, method: &str, url: &str, body: &str) -> (u16, String, &'static str) {
         let path = url.split('?').next().unwrap_or(url);
         match (method, path) {
             ("POST", "/") | ("POST", "/query") => {
@@ -225,7 +261,7 @@ impl ServerState {
                         return (400, serde_json::json!({
                             "ok": false,
                             "error": { "kind": "request", "message": message }
-                        }).to_string());
+                        }).to_string(), "application/json");
                     }
                 };
                 // Recover a poisoned lock rather than propagating the panic:
@@ -238,24 +274,38 @@ impl ServerState {
                     &self.path, &oql, self.path_depth, self.reachable_only, &mut guard,
                 );
                 let status = if v["ok"] == serde_json::json!(true) { 200 } else { 400 };
-                (status, v.to_string())
+                (status, v.to_string(), "application/json")
             }
-            ("GET", "/help") => (200, help_json(&self.path).to_string()),
-            ("GET", "/") => (200, help_json(&self.path).to_string()),
-            ("GET", "/schema") => (200, schema_json().to_string()),
-            ("GET", "/version") => (200, version_json().to_string()),
+            ("POST", "/stream") => {
+                let oql = match extract_oql(body) {
+                    Ok(oql) => oql,
+                    Err(message) => {
+                        let line = serde_json::json!({ "kind": "error", "error": { "kind": "request", "message": message } });
+                        return (400, format!("{line}\n"), "application/x-ndjson");
+                    }
+                };
+                let mut guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+                let (status, body) = run_query_ndjson(
+                    &self.path, &oql, self.path_depth, self.reachable_only, &mut guard,
+                );
+                (status, body, "application/x-ndjson")
+            }
+            ("GET", "/help") => (200, help_json(&self.path).to_string(), "application/json"),
+            ("GET", "/") => (200, help_json(&self.path).to_string(), "application/json"),
+            ("GET", "/schema") => (200, schema_json().to_string(), "application/json"),
+            ("GET", "/version") => (200, version_json().to_string(), "application/json"),
             // Known path, unsupported method -> 405 (not 404).
-            (_, "/") | (_, "/query") | (_, "/help") | (_, "/schema") | (_, "/version") => (405, serde_json::json!({
+            (_, "/") | (_, "/query") | (_, "/stream") | (_, "/help") | (_, "/schema") | (_, "/version") => (405, serde_json::json!({
                 "ok": false,
                 "error": {
                     "kind": "method",
-                    "message": format!("method {method} not allowed on {path} (use POST for /, /query; GET for /, /help, /schema, /version)")
+                    "message": format!("method {method} not allowed on {path} (use POST for /, /query, /stream; GET for /, /help, /schema, /version)")
                 }
-            }).to_string()),
+            }).to_string(), "application/json"),
             _ => (404, serde_json::json!({
                 "ok": false,
                 "error": { "kind": "route", "message": format!("no route {method} {path}") }
-            }).to_string()),
+            }).to_string(), "application/json"),
         }
     }
 
@@ -264,12 +314,12 @@ impl ServerState {
     /// JSON error instead of killing the worker thread — one bad request must
     /// never shrink the pool or take the server down. On success this is exactly
     /// `route`.
-    pub fn route_guarded(&self, method: &str, url: &str, body: &str) -> (u16, String) {
+    pub fn route_guarded(&self, method: &str, url: &str, body: &str) -> (u16, String, &'static str) {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.route(method, url, body)
         }));
         match result {
-            Ok(pair) => pair,
+            Ok(triple) => triple,
             Err(_) => (
                 500,
                 serde_json::json!({
@@ -280,6 +330,7 @@ impl ServerState {
                     }
                 })
                 .to_string(),
+                "application/json",
             ),
         }
     }
@@ -360,13 +411,11 @@ pub fn run_server(path: &str, path_depth: usize, port: u16) -> io::Result<()> {
                 let url = request.url().to_string();
                 let mut body = String::new();
                 let _ = request.as_reader().read_to_string(&mut body);
-                let (status, json) = state.route_guarded(&method, &url, &body);
+                let (status, json, ctype) = state.route_guarded(&method, &url, &body);
                 let resp = Response::from_string(json)
                     .with_status_code(status)
                     .with_header(
-                        "Content-Type: application/json"
-                            .parse::<tiny_http::Header>()
-                            .unwrap(),
+                        format!("Content-Type: {ctype}").parse::<tiny_http::Header>().unwrap(),
                     );
                 let _ = request.respond(resp);
             }
@@ -424,7 +473,7 @@ mod tests {
     #[test]
     fn handle_post_roundtrips_json() {
         let state = ServerState::load(FIXTURE, 5, true).expect("load");
-        let (status, body) = state.route("POST", "/", "SELECT @objectAddress FROM java.lang.Thread");
+        let (status, body, _ctype) = state.route("POST", "/", "SELECT @objectAddress FROM java.lang.Thread");
         assert_eq!(status, 200, "ok status, body: {body}");
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["ok"], serde_json::json!(true), "expected ok, got: {v}");
@@ -433,7 +482,7 @@ mod tests {
     #[test]
     fn handle_post_json_body_extracts_query() {
         let state = ServerState::load(FIXTURE, 5, true).expect("load");
-        let (status, body) = state.route("POST", "/", r#"{"query":"SELECT @objectAddress FROM java.lang.Thread"}"#);
+        let (status, body, _ctype) = state.route("POST", "/", r#"{"query":"SELECT @objectAddress FROM java.lang.Thread"}"#);
         assert_eq!(status, 200, "ok status, body: {body}");
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["ok"], serde_json::json!(true), "expected ok, got: {v}");
@@ -442,7 +491,7 @@ mod tests {
     #[test]
     fn handle_post_parse_error_is_400() {
         let state = ServerState::load(FIXTURE, 5, true).expect("load");
-        let (status, body) = state.route("POST", "/", "SELCT bad");
+        let (status, body, _ctype) = state.route("POST", "/", "SELCT bad");
         assert_eq!(status, 400, "bad query -> 400, body: {body}");
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["ok"], serde_json::json!(false), "expected failure, got: {v}");
@@ -453,7 +502,7 @@ mod tests {
         let state = ServerState::load(FIXTURE, 5, true).expect("load");
         // Body starts with `{` but is not valid JSON. Must NOT be fed to the OQL
         // tokenizer (which would emit a baffling "unexpected character '{'").
-        let (status, body) = state.route("POST", "/", r#"{"query": "#);
+        let (status, body, _ctype) = state.route("POST", "/", r#"{"query": "#);
         assert_eq!(status, 400, "malformed JSON -> 400, body: {body}");
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["ok"], serde_json::json!(false), "expected failure, got: {v}");
@@ -465,7 +514,7 @@ mod tests {
     #[test]
     fn handle_post_json_missing_query_key_is_clear_request_error() {
         let state = ServerState::load(FIXTURE, 5, true).expect("load");
-        let (status, body) = state.route("POST", "/", r#"{"foo":"bar"}"#);
+        let (status, body, _ctype) = state.route("POST", "/", r#"{"foo":"bar"}"#);
         assert_eq!(status, 400, "missing query key -> 400, body: {body}");
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["ok"], serde_json::json!(false), "expected failure, got: {v}");
@@ -477,7 +526,7 @@ mod tests {
     #[test]
     fn handle_post_json_query_not_a_string_is_clear_request_error() {
         let state = ServerState::load(FIXTURE, 5, true).expect("load");
-        let (status, body) = state.route("POST", "/", r#"{"query": 42}"#);
+        let (status, body, _ctype) = state.route("POST", "/", r#"{"query": 42}"#);
         assert_eq!(status, 400, "non-string query -> 400, body: {body}");
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["error"]["kind"], serde_json::json!("request"), "kind=request, got: {v}");
@@ -491,7 +540,7 @@ mod tests {
         // A body far over the cap must be rejected with a short error and must
         // NOT be echoed back (response stays small, no parse-error amplification).
         let big = "X".repeat(MAX_OQL_LEN + 1024);
-        let (status, body) = state.route("POST", "/", &big);
+        let (status, body, _ctype) = state.route("POST", "/", &big);
         assert_eq!(status, 400, "oversized -> 400");
         assert!(body.len() < 512, "error response stays small ({} bytes)", body.len());
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
@@ -504,8 +553,8 @@ mod tests {
     fn route_guarded_matches_route_on_normal_input() {
         let state = ServerState::load(FIXTURE, 5, true).expect("load");
         let oql = "SELECT @objectAddress FROM java.lang.Thread";
-        let (s1, b1) = state.route("POST", "/", oql);
-        let (s2, b2) = state.route_guarded("POST", "/", oql);
+        let (s1, b1, _ctype1) = state.route("POST", "/", oql);
+        let (s2, b2, _ctype2) = state.route_guarded("POST", "/", oql);
         assert_eq!(s1, s2, "guarded status matches");
         // Bodies must match modulo elapsed_ms, which is legitimately
         // non-deterministic wall-clock timing (not a guard divergence).
@@ -523,7 +572,7 @@ mod tests {
         // route() on valid input, so verify the guard mechanism itself: a
         // panicking closure run under the same catch_unwind produces the 500
         // shape. This mirrors route_guarded's body exactly.
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> (u16, String) {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> (u16, String, &'static str) {
             panic!("boom");
         }));
         assert!(result.is_err(), "catch_unwind traps the panic");
@@ -536,14 +585,14 @@ mod tests {
         }));
         assert!(state.cache.is_poisoned(), "lock is now poisoned");
         // route() recovers the poisoned guard via unwrap_or_else(into_inner).
-        let (status, body) = state.route("POST", "/", "SELECT @objectAddress FROM java.lang.Thread");
+        let (status, body, _ctype) = state.route("POST", "/", "SELECT @objectAddress FROM java.lang.Thread");
         assert_eq!(status, 200, "poisoned lock recovered, query still runs: {body}");
     }
 
     #[test]
     fn handle_get_help_roundtrips_json() {
         let state = ServerState::load(FIXTURE, 5, true).expect("load");
-        let (status, body) = state.route("GET", "/help", "");
+        let (status, body, _ctype) = state.route("GET", "/help", "");
         assert_eq!(status, 200, "help status, body: {body}");
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert!(v["keywords"].is_array(), "keywords present, got: {v}");
@@ -552,7 +601,7 @@ mod tests {
     #[test]
     fn handle_unknown_route_404() {
         let state = ServerState::load(FIXTURE, 5, true).expect("load");
-        let (status, _body) = state.route("GET", "/nope", "");
+        let (status, _body, _ctype) = state.route("GET", "/nope", "");
         assert_eq!(status, 404, "unknown route -> 404");
     }
 
@@ -560,12 +609,12 @@ mod tests {
     fn handle_known_path_wrong_method_is_405() {
         let state = ServerState::load(FIXTURE, 5, true).expect("load");
         // PUT on a known path is a method error, not an unknown route.
-        let (status, body) = state.route("PUT", "/", "");
+        let (status, body, _ctype) = state.route("PUT", "/", "");
         assert_eq!(status, 405, "known path, wrong method -> 405, body: {body}");
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["error"]["kind"], serde_json::json!("method"), "kind=method, got: {v}");
         // GET on the POST-only /query path is likewise 405.
-        let (status, _) = state.route("GET", "/query", "");
+        let (status, _, _) = state.route("GET", "/query", "");
         assert_eq!(status, 405, "GET /query -> 405");
     }
 
@@ -616,7 +665,7 @@ mod tests {
                 let url = request.url().to_string();
                 let mut body = String::new();
                 let _ = request.as_reader().read_to_string(&mut body);
-                let (status, json) = st.route(&method, &url, &body);
+                let (status, json, _ctype) = st.route(&method, &url, &body);
                 let resp = tiny_http::Response::from_string(json).with_status_code(status);
                 let _ = request.respond(resp);
             }
