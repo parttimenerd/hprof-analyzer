@@ -408,7 +408,7 @@ fn fmt_query_value(v: &crate::query::model::QueryValue) -> String {
         V::Int(i) => i.to_string(),
         V::Float(f) => format!("{f}"),
         V::Str(s) => s.replace('|', "\\|"),
-        V::ObjRef { index, class } => format!("{class}@{index}"),
+        V::ObjRef { index, class, .. } => format!("{class}@{index}"),
     }
 }
 
@@ -3404,7 +3404,8 @@ mod tests {
         assert_eq!(
             fmt_query_value(&QueryValue::ObjRef {
                 index: 7,
-                class: "java.lang.String".into()
+                class: "java.lang.String".into(),
+                addr: None,
             }),
             "java.lang.String@7"
         );
@@ -3450,6 +3451,7 @@ mod tests {
                 QueryValue::ObjRef {
                     index: 12,
                     class: "java.lang.String".into(),
+                    addr: None,
                 },
             ]],
             row_count: 1,

@@ -1128,7 +1128,7 @@ fn fmt_query_value(v: &query::model::QueryValue) -> String {
         Int(i) => i.to_string(),
         Float(f) => f.to_string(),
         Str(s) => s.clone(),
-        ObjRef { index, class } => format!("{class}@{index}"),
+        ObjRef { index, class, .. } => format!("{class}@{index}"),
     }
 }
 

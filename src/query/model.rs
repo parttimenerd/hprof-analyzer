@@ -22,6 +22,11 @@ pub enum QueryValue {
     ObjRef {
         index: u64,
         class: String,
+        /// Heap address of the object, when resolvable. Omitted from JSON when
+        /// absent so the analyze golden snapshot (no obj_ref values) stays
+        /// byte-identical and non-server callers are unaffected.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        addr: Option<u64>,
     },
 }
 
@@ -101,6 +106,7 @@ mod tests {
                 QueryValue::ObjRef {
                     index: 7,
                     class: "java.lang.String".into(),
+                    addr: None,
                 },
             ]],
             row_count: 6,

@@ -491,6 +491,7 @@ fn dominator_rows(
                 // id_map is empty, so `to_addr` would render every row as `@0`.
                 index: i as u64,
                 class: "?".to_string(),
+                addr: None,
             }]
         })
         .collect();
@@ -573,6 +574,7 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
                     // away to protect the RSS peak), so `to_addr` would yield 0.
                     index: s as u64,
                     class: "?".to_string(),
+                    addr: None,
                 },
                 _ => QueryValue::Null,
             })
@@ -601,7 +603,6 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
         elapsed_ms: None,
     }
 }
-
 
 /// Resolve toString(s) values for each carried dense index. For every String
 /// instance carried from the scan, look up its decoded text in `ctx.string_values`,
@@ -841,6 +842,7 @@ fn project_string_row_item(it: &SelectItem, dense: u32, ctx: &LateCtx) -> QueryV
             // would yield a misleading `@0` for every row.
             index: dense as u64,
             class: "java.lang.String".to_string(),
+            addr: None,
         },
         _ => QueryValue::Null,
     }
@@ -1057,6 +1059,7 @@ fn project_late_row(q: &Query, idx: u32, ret: u64, ctx: &LateCtx) -> Vec<QueryVa
             SelectItem::Star => QueryValue::ObjRef {
                 index: idx as u64,
                 class: "?".to_string(),
+                addr: None,
             },
             _ => QueryValue::Null,
         })

@@ -1472,7 +1472,7 @@ fn fmt_value(v: &QueryValue) -> String {
         QueryValue::Int(i) => i.to_string(),
         QueryValue::Float(f) => f.to_string(),
         QueryValue::Str(s) => s.clone(),
-        QueryValue::ObjRef { index, class } => format!("{class}@{index}"),
+        QueryValue::ObjRef { index, class, .. } => format!("{class}@{index}"),
     }
 }
 
@@ -1877,7 +1877,8 @@ mod tests {
         assert_eq!(
             fmt_value(&QueryValue::ObjRef {
                 index: 7,
-                class: "java.lang.String".into()
+                class: "java.lang.String".into(),
+                addr: None,
             }),
             "java.lang.String@7"
         );

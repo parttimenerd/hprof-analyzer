@@ -2250,9 +2250,9 @@ mod tests {
             oql: String::new(),
             columns: vec![],
             rows: vec![
-                vec![QueryValue::ObjRef { index: 0, class: "C".into() }],
-                vec![QueryValue::ObjRef { index: 1, class: "C".into() }],
-                vec![QueryValue::ObjRef { index: 2, class: "C".into() }],
+                vec![QueryValue::ObjRef { index: 0, class: "C".into(), addr: None }],
+                vec![QueryValue::ObjRef { index: 1, class: "C".into(), addr: None }],
+                vec![QueryValue::ObjRef { index: 2, class: "C".into(), addr: None }],
                 vec![QueryValue::Int(99)],
             ],
             row_count: 4,

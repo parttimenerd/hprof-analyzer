@@ -4840,4 +4840,18 @@ mod server_cli {
             assert!(status.contains(want), "req {i} expected {want}, got {status:?}");
         }
     }
+
+    #[test]
+    fn server_star_obj_ref_carries_address() {
+        let Some(hprof) = philosophers() else { return };
+        let srv = spawn(&hprof);
+        let resp = http(srv.port, "POST", "/", "SELECT * FROM java.lang.Thread");
+        let (status, _h, body) = parse_resp(&resp);
+        assert!(status.contains("200"), "200: {resp}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let first = &v["result"]["rows"][0][0];
+        assert_eq!(first["kind"], serde_json::json!("obj_ref"), "obj_ref value: {first}");
+        assert!(first["v"]["addr"].is_u64(), "obj_ref carries a numeric addr: {first}");
+        assert!(first["v"]["index"].is_u64() && first["v"]["class"].is_string(), "index+class still present");
+    }
 }

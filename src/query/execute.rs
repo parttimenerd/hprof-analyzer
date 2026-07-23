@@ -650,6 +650,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                     .class_name(class_id)
                     .unwrap_or("?")
                     .to_string(),
+                addr: self.resolver.addr_of(src_idx),
             },
             SelectItem::Aggregate { .. } => QueryValue::Null,
             SelectItem::Attr(a) => self.project_attr(a, src_idx, class_id, blob),
@@ -762,6 +763,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             SelectItem::Star => QueryValue::ObjRef {
                 index: src_idx as u64,
                 class: class_name.to_string(),
+                addr: self.resolver.addr_of(src_idx),
             },
             SelectItem::Aggregate { .. } => QueryValue::Null,
             SelectItem::Attr(a) => self.project_array_attr(a, src_idx, class_name, length),
@@ -2370,7 +2372,8 @@ mod tests {
             res.rows[0][0],
             QueryValue::ObjRef {
                 index: 7,
-                class: "com.acme.Foo".into()
+                class: "com.acme.Foo".into(),
+                addr: None,
             }
         );
     }

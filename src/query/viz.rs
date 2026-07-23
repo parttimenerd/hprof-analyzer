@@ -368,7 +368,7 @@ pub fn cell_as_label(v: &QueryValue) -> String {
         QueryValue::Int(i) => i.to_string(),
         QueryValue::Float(f) => f.to_string(),
         QueryValue::Str(s) => s.clone(),
-        QueryValue::ObjRef { index, class } => format!("{class}@{index}"),
+        QueryValue::ObjRef { index, class, .. } => format!("{class}@{index}"),
     }
 }
 
