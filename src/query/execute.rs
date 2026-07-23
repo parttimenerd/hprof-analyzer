@@ -835,13 +835,38 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     fn emulate_jvm_method(
         &self,
         _receiver: &Expr,
-        _name: &str,
+        name: &str,
         _args: &[Expr],
         _src_idx: usize,
-        _class_id: u64,
-        _blob: &[u8],
+        class_id: u64,
+        blob: &[u8],
     ) -> QueryValue {
-        QueryValue::Null // D3/D4 fill this; D5 turns the final fallthrough into rejection
+        let cname = self.resolver.class_name(class_id).unwrap_or("");
+        match (name, cname) {
+            ("intValue" | "longValue" | "shortValue" | "byteValue", c)
+                if is_boxed_integral(c) =>
+            {
+                self.decode_field(class_id, "value", blob)
+            }
+            ("floatValue" | "doubleValue", c) if is_boxed_fp(c) => {
+                self.decode_field(class_id, "value", blob)
+            }
+            ("booleanValue", c) if c.ends_with(".Boolean") => {
+                self.decode_field(class_id, "value", blob)
+            }
+            ("charValue", c) if c.ends_with(".Character") => {
+                self.decode_field(class_id, "value", blob)
+            }
+            ("size", c) if is_sized_collection(c) => {
+                // HashSet.size delegates to its backing `map` (one ref hop) — D4.
+                if c.ends_with(".HashSet") {
+                    QueryValue::Null
+                } else {
+                    self.decode_field(class_id, "size", blob)
+                }
+            }
+            _ => QueryValue::Null, // ref-hop (D4) or rejection (D5)
+        }
     }
     fn decode_field(&self, class_id: u64, name: &str, blob: &[u8]) -> QueryValue {
         use crate::types::HprofType;
@@ -1692,6 +1717,28 @@ pub(crate) fn query_columns(q: &Query) -> Vec<QueryColumn> {
                 .unwrap_or_else(|| column_name(it)),
         })
         .collect()
+}
+
+fn is_boxed_integral(c: &str) -> bool {
+    matches!(
+        c,
+        "java.lang.Integer" | "java.lang.Long" | "java.lang.Short" | "java.lang.Byte"
+    )
+}
+
+fn is_boxed_fp(c: &str) -> bool {
+    matches!(c, "java.lang.Float" | "java.lang.Double")
+}
+
+fn is_sized_collection(c: &str) -> bool {
+    matches!(
+        c,
+        "java.util.ArrayList"
+            | "java.util.Vector"
+            | "java.util.HashMap"
+            | "java.util.LinkedList"
+            | "java.util.HashSet"
+    )
 }
 
 fn path_operand_name(p: &crate::query::ast::PathOperand) -> String {

@@ -3959,3 +3959,38 @@ fn method_alias_getobjectaddress_equals_attr() {
         "getObjectAddress() values must match @objectAddress values\na={a}\nb={b}"
     );
 }
+
+// ── D3: method dispatch tier-3 — self-class field emulations ─────────────────
+
+/// `intValue()` on a boxed Integer must equal the `value` field.
+/// `size()` on an ArrayList must equal the `size` field.
+/// Both classes (java.lang.Integer, java.util.ArrayList) are confirmed present
+/// in the philosophers fixture.
+#[test]
+fn method_emulate_self_class_fields() {
+    let Some(hprof) = philosophers() else { return };
+    // intValue() reads the `value` field on a boxed Integer
+    let iv = run_query_stdout(&hprof, "SELECT i.intValue() FROM java.lang.Integer i LIMIT 5");
+    let vf = run_query_stdout(&hprof, "SELECT value FROM java.lang.Integer LIMIT 5");
+    assert_eq!(
+        extract_data_rows(&iv),
+        extract_data_rows(&vf),
+        "intValue() must equal the `value` field\niv={iv}\nvf={vf}"
+    );
+    // size() reads the `size` field on an ArrayList
+    let sz = run_query_stdout(&hprof, "SELECT a.size() FROM java.util.ArrayList a LIMIT 5");
+    let sf = run_query_stdout(&hprof, "SELECT size FROM java.util.ArrayList LIMIT 5");
+    assert_eq!(
+        extract_data_rows(&sz),
+        extract_data_rows(&sf),
+        "size() must equal the `size` field\nsz={sz}\nsf={sf}"
+    );
+}
+
+/// Methods composed inside arithmetic must compile and produce non-empty output.
+#[test]
+fn method_in_arithmetic() {
+    let Some(hprof) = philosophers() else { return };
+    let a = run_query_stdout(&hprof, "SELECT i.intValue() * 2 FROM java.lang.Integer i LIMIT 3");
+    assert!(!a.trim().is_empty());
+}
