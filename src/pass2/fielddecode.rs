@@ -1721,6 +1721,7 @@ fn assemble_ref_stats(
             pretty_class: name.clone(),
             objects,
             shallow,
+            retained: 0, // back-filled by build_references() after dominator pass
         })
         .collect();
     rows.sort_by(|a, b| {
@@ -1733,6 +1734,7 @@ fn assemble_ref_stats(
             pretty_class: "<other>".to_string(),
             objects: other.0,
             shallow: other.1,
+            retained: 0, // back-filled by build_references()
         });
     }
     Some(ReferenceStats {

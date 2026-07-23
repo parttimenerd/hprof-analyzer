@@ -278,28 +278,71 @@ fn build_references(g: &Graph) -> ReferencesAnalysis {
         let Some(stats) = stats.as_mut() else {
             continue;
         };
-        let mut by_class: HashMap<String, (u64, u64)> = HashMap::new();
+
+        // Accumulate retained per class for the referent histogram (capped at
+        // REFERENT_HIST_CAP classes; overflow lands in "<other>"). The
+        // HashMap is bounded to the same 200-entry cap as the histogram itself.
+        // This is a no-alloc pass: HashMap keys are borrowed from the existing
+        // histogram rows, so we build a lookup map from row index.
+        let known_classes: HashMap<&str, usize> = stats
+            .referent_histogram
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (r.pretty_class.as_str(), i))
+            .collect();
+        let mut retained_per_class = vec![0u64; stats.referent_histogram.len()];
+        let mut retained_other = 0u64;
+        for &ri in &g.reference_referent_idx[kind] {
+            let i = ri as usize;
+            let ret = if i < g.retained.len() { g.retained[i] } else { 0 };
+            let cls = class_display(g, i);
+            if let Some(&idx) = known_classes.get(cls.as_str()) {
+                retained_per_class[idx] += ret;
+            } else {
+                retained_other += ret;
+            }
+        }
+        for (row, &ret) in stats
+            .referent_histogram
+            .iter_mut()
+            .zip(retained_per_class.iter())
+        {
+            row.retained = ret;
+        }
+        // Back-fill the "<other>" row if present (always last when non-empty).
+        if let Some(other_row) = stats
+            .referent_histogram
+            .last_mut()
+            .filter(|r| r.pretty_class == "<other>")
+        {
+            other_row.retained = retained_other;
+        }
+
+        // only_weakly_retained: referents with no strong dominator (idom == undef).
+        let mut by_class: HashMap<String, (u64, u64, u64)> = HashMap::new();
         for &ri in &g.reference_referent_idx[kind] {
             let i = ri as usize;
             if g.idom[i] != undef {
                 continue; // has a strong dominator -> not only-weakly-retained
             }
-            let e = by_class.entry(class_display(g, i)).or_insert((0, 0));
+            let e = by_class.entry(class_display(g, i)).or_insert((0, 0, 0));
             e.0 += 1;
             e.1 += g.shallow[i] as u64;
+            e.2 += if i < g.retained.len() { g.retained[i] } else { 0 };
         }
         let mut rows: Vec<RefStatClassRow> = by_class
             .into_iter()
-            .map(|(pretty_class, (objects, shallow))| RefStatClassRow {
+            .map(|(pretty_class, (objects, shallow, retained))| RefStatClassRow {
                 pretty_class,
                 objects,
                 shallow,
+                retained,
             })
             .collect();
-        // Deterministic: objects desc, then pretty_class asc.
+        // Deterministic: retained desc, then pretty_class asc.
         rows.sort_unstable_by(|a, b| {
-            b.objects
-                .cmp(&a.objects)
+            b.retained
+                .cmp(&a.retained)
                 .then_with(|| a.pretty_class.cmp(&b.pretty_class))
         });
         stats.only_weakly_retained = rows;

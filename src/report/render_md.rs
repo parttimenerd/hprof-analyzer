@@ -2777,9 +2777,9 @@ pub(crate) fn render_references(rf: &ReferencesAnalysis, graphs: bool, out: &mut
         const REF_CLASS_CAP: usize = 20;
         let shown = rows.len().min(REF_CLASS_CAP);
         let displayed = &rows[..shown];
-        let obj_max = displayed.iter().map(|r| r.objects).max().unwrap_or(0);
-        let mut headers: Vec<&str> = vec!["Class", "Objects", "Shallow"];
-        let mut aligns = vec![Align::Left, Align::Right, Align::Right];
+        let ret_max = displayed.iter().map(|r| r.retained).max().unwrap_or(0);
+        let mut headers: Vec<&str> = vec!["Class", "Objects", "Shallow", "Retained"];
+        let mut aligns = vec![Align::Left, Align::Right, Align::Right, Align::Right];
         if graphs {
             headers.push("");
             aligns.push(Align::Left);
@@ -2790,9 +2790,10 @@ pub(crate) fn render_references(rf: &ReferencesAnalysis, graphs: bool, out: &mut
                 format!("`{}`", r.pretty_class),
                 fmt_count(r.objects),
                 format_bytes(r.shallow),
+                format_bytes(r.retained),
             ];
             if graphs {
-                row.push(bar(r.objects, obj_max, render_graphs::GRAPH_BAR_WIDTH));
+                row.push(bar(r.retained, ret_max, render_graphs::GRAPH_BAR_WIDTH));
             }
             t.row(row);
         }
@@ -2801,11 +2802,13 @@ pub(crate) fn render_references(rf: &ReferencesAnalysis, graphs: bool, out: &mut
             let hidden = rows.len() - REF_CLASS_CAP;
             let tail_obj: u64 = rows[REF_CLASS_CAP..].iter().map(|r| r.objects).sum();
             let tail_sh: u64 = rows[REF_CLASS_CAP..].iter().map(|r| r.shallow).sum();
+            let tail_ret: u64 = rows[REF_CLASS_CAP..].iter().map(|r| r.retained).sum();
             out.push_str(&format!(
-                "_… {} more classes ({} objects, {} shallow)._\n",
+                "_… {} more classes ({} objects, {} shallow, {} retained)._\n",
                 fmt_count(hidden as u64),
                 fmt_count(tail_obj),
                 format_bytes(tail_sh),
+                format_bytes(tail_ret),
             ));
         }
         out.push('\n');

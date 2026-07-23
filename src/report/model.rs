@@ -1225,6 +1225,8 @@ pub struct RefStatClassRow {
     pub pretty_class: String,
     pub objects: u64,
     pub shallow: u64,
+    #[serde(default)]
+    pub retained: u64,
 }
 
 /// Statistics for one reference kind (Soft/Weak/Phantom). `kind` is the

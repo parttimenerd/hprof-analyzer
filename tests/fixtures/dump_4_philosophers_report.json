@@ -1,6 +1,6 @@
 {
   "schema_version": 9,
-  "generated": "2026-07-23T10:30:16.460501000Z",
+  "generated": "2026-07-23T10:59:09.278986000Z",
   "overview": {
     "source_name": "dump_4_philosophers.hprof",
     "file_path": "tests/fixtures/dump_4_philosophers.hprof",
@@ -90860,69 +90860,82 @@
         {
           "pretty_class": "java.lang.invoke.LambdaForm",
           "objects": 122,
-          "shallow": 5856
+          "shallow": 5856,
+          "retained": 47872
         },
         {
           "pretty_class": "java.lang.Class$ReflectionData",
           "objects": 34,
-          "shallow": 2176
+          "shallow": 2176,
+          "retained": 2176
         },
         {
           "pretty_class": "sun.util.locale.BaseLocale",
           "objects": 20,
-          "shallow": 640
+          "shallow": 640,
+          "retained": 1216
         },
         {
           "pretty_class": "java.lang.invoke.DirectMethodHandle",
           "objects": 19,
-          "shallow": 760
+          "shallow": 760,
+          "retained": 760
         },
         {
           "pretty_class": "java.util.Locale",
           "objects": 10,
-          "shallow": 320
+          "shallow": 320,
+          "retained": 320
         },
         {
           "pretty_class": "java.util.jar.Manifest",
           "objects": 8,
-          "shallow": 192
+          "shallow": 192,
+          "retained": 1138784
         },
         {
           "pretty_class": "java.util.concurrent.ConcurrentHashMap",
           "objects": 4,
-          "shallow": 256
+          "shallow": 256,
+          "retained": 3072
         },
         {
           "pretty_class": "[Ljava.lang.Object;",
           "objects": 2,
-          "shallow": 64
+          "shallow": 64,
+          "retained": 0
         },
         {
           "pretty_class": "java.util.ArrayList",
           "objects": 1,
-          "shallow": 24
+          "shallow": 24,
+          "retained": 80
         },
         {
           "pretty_class": "sun.text.resources.cldr.FormatData",
           "objects": 1,
-          "shallow": 40
+          "shallow": 40,
+          "retained": 28992
         },
         {
           "pretty_class": "sun.text.resources.cldr.FormatData_en",
           "objects": 1,
-          "shallow": 40
+          "shallow": 40,
+          "retained": 20432
         },
         {
           "pretty_class": "sun.util.resources.Bundles$1",
           "objects": 1,
-          "shallow": 40
+          "shallow": 40,
+          "retained": 40
         }
       ],
       "only_weakly_retained": [
         {
           "pretty_class": "java.lang.Class$ReflectionData",
           "objects": 34,
-          "shallow": 2176
+          "shallow": 2176,
+          "retained": 2176
         }
       ]
     },
@@ -90933,137 +90946,164 @@
         {
           "pretty_class": "java.lang.invoke.MethodType",
           "objects": 666,
-          "shallow": 26640
+          "shallow": 26640,
+          "retained": 86240
         },
         {
           "pretty_class": "java.lang.ThreadLocal",
           "objects": 129,
-          "shallow": 2064
+          "shallow": 2064,
+          "retained": 2064
         },
         {
           "pretty_class": "scala.concurrent.stm.ccstm.InTxnImpl$",
           "objects": 129,
-          "shallow": 2064
+          "shallow": 2064,
+          "retained": 2064
         },
         {
           "pretty_class": "java.util.logging.Level",
           "objects": 9,
-          "shallow": 288
+          "shallow": 288,
+          "retained": 288
         },
         {
           "pretty_class": "java.util.logging.Logger",
           "objects": 8,
-          "shallow": 448
+          "shallow": 448,
+          "retained": 4432
         },
         {
           "pretty_class": "java.lang.ClassValue$Version",
           "objects": 6,
-          "shallow": 144
+          "shallow": 144,
+          "retained": 336
         },
         {
           "pretty_class": "java.lang.String",
           "objects": 5,
-          "shallow": 120
+          "shallow": 120,
+          "retained": 312
         },
         {
           "pretty_class": "scala.Symbol",
           "objects": 5,
-          "shallow": 80
+          "shallow": 80,
+          "retained": 80
         },
         {
           "pretty_class": "java.lang.ClassValue$Identity",
           "objects": 4,
-          "shallow": 64
+          "shallow": 64,
+          "retained": 64
         },
         {
           "pretty_class": "java.lang.Module",
           "objects": 4,
-          "shallow": 192
+          "shallow": 192,
+          "retained": 22288
         },
         {
           "pretty_class": "java.util.logging.LogManager$RootLogger",
           "objects": 4,
-          "shallow": 256
+          "shallow": 256,
+          "retained": 1472
         },
         {
           "pretty_class": "sun.security.provider.FileInputStreamPool$UnclosableInputStream",
           "objects": 2,
-          "shallow": 32
+          "shallow": 32,
+          "retained": 32
         },
         {
           "pretty_class": "java.lang.ClassLoader",
           "objects": 1,
-          "shallow": 16
+          "shallow": 16,
+          "retained": 0
         },
         {
           "pretty_class": "java.lang.ThreadGroup",
           "objects": 1,
-          "shallow": 48
+          "shallow": 48,
+          "retained": 48
         },
         {
           "pretty_class": "java.net.URLClassLoader",
           "objects": 1,
-          "shallow": 8
+          "shallow": 8,
+          "retained": 0
         },
         {
           "pretty_class": "java.security.Provider$Service",
           "objects": 1,
-          "shallow": 8
+          "shallow": 8,
+          "retained": 0
         },
         {
           "pretty_class": "java.security.SecureClassLoader",
           "objects": 1,
-          "shallow": 0
+          "shallow": 0,
+          "retained": 0
         },
         {
           "pretty_class": "jdk.internal.loader.BuiltinClassLoader",
           "objects": 1,
-          "shallow": 16
+          "shallow": 16,
+          "retained": 0
         },
         {
           "pretty_class": "jdk.internal.loader.ClassLoaders$AppClassLoader",
           "objects": 1,
-          "shallow": 8
+          "shallow": 8,
+          "retained": 0
         },
         {
           "pretty_class": "jdk.internal.loader.ClassLoaders$PlatformClassLoader",
           "objects": 1,
-          "shallow": 8
+          "shallow": 8,
+          "retained": 0
         },
         {
           "pretty_class": "jdk.internal.misc.TerminatingThreadLocal$1",
           "objects": 1,
-          "shallow": 16
+          "shallow": 16,
+          "retained": 16
         },
         {
           "pretty_class": "org.renaissance.core.Launcher",
           "objects": 1,
-          "shallow": 24
+          "shallow": 24,
+          "retained": 0
         },
         {
           "pretty_class": "scala.concurrent.stm.ccstm.WakeupManager$",
           "objects": 1,
-          "shallow": 8
+          "shallow": 8,
+          "retained": 0
         },
         {
           "pretty_class": "scala.concurrent.stm.impl.STMImpl$",
           "objects": 1,
-          "shallow": 8
+          "shallow": 8,
+          "retained": 0
         },
         {
           "pretty_class": "scala.reflect.ManifestFactory$ObjectManifest",
           "objects": 1,
-          "shallow": 32
+          "shallow": 32,
+          "retained": 32
         },
         {
           "pretty_class": "sun.nio.ch.Util$1",
           "objects": 1,
-          "shallow": 16
+          "shallow": 16,
+          "retained": 16
         },
         {
           "pretty_class": "sun.nio.fs.NativeBuffers$1",
           "objects": 1,
-          "shallow": 16
+          "shallow": 16,
+          "retained": 16
         }
       ],
       "only_weakly_retained": []
@@ -91075,37 +91115,44 @@
         {
           "pretty_class": "java.util.zip.Inflater",
           "objects": 22,
-          "shallow": 1408
+          "shallow": 1408,
+          "retained": 1408
         },
         {
           "pretty_class": "java.io.FileDescriptor",
           "objects": 21,
-          "shallow": 840
+          "shallow": 840,
+          "retained": 840
         },
         {
           "pretty_class": "java.util.jar.JarFile",
           "objects": 19,
-          "shallow": 1216
+          "shallow": 1216,
+          "retained": 1144560
         },
         {
           "pretty_class": "java.lang.ref.Cleaner",
           "objects": 1,
-          "shallow": 16
+          "shallow": 16,
+          "retained": 16
         },
         {
           "pretty_class": "java.nio.DirectByteBuffer",
           "objects": 1,
-          "shallow": 72
+          "shallow": 72,
+          "retained": 72
         },
         {
           "pretty_class": "sun.net.www.protocol.jar.URLJarFile",
           "objects": 1,
-          "shallow": 80
+          "shallow": 80,
+          "retained": 352
         },
         {
           "pretty_class": "sun.nio.fs.NativeBuffer",
           "objects": 1,
-          "shallow": 32
+          "shallow": 32,
+          "retained": 64
         }
       ],
       "only_weakly_retained": []

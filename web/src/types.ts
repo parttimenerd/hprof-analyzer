@@ -638,6 +638,7 @@ export interface RefStatClassRow {
   pretty_class: string;
   objects: number;
   shallow: number;
+  retained?: number;
 }
 
 export interface ReferenceStats {

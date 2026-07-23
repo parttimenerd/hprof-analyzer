@@ -2937,6 +2937,7 @@ function RefClassTable({ rows }: { rows: RefStatClassRow[] }) {
           <th>Class</th>
           <th className="num">Objects</th>
           <th className="num">Shallow</th>
+          <th className="num">Retained</th>
         </tr>
       </thead>
       <tbody>
@@ -2945,15 +2946,17 @@ function RefClassTable({ rows }: { rows: RefStatClassRow[] }) {
             <td><code>{r.pretty_class}</code></td>
             <td className="num">{fmtCount(r.objects)}</td>
             <td className="num">{formatBytes(r.shallow)}</td>
+            <td className="num">{formatBytes(r.retained ?? 0)}</td>
           </tr>
         ))}
-        <ShowMoreRow extra={extra} cols={3} showAll={showAll} setShowAll={setShowAll} />
+        <ShowMoreRow extra={extra} cols={4} showAll={showAll} setShowAll={setShowAll} />
       </tbody>
       <tfoot>
         <tr>
           <td className="num"><strong>Total</strong></td>
           <td className="num"><strong>{fmtCount(rows.reduce((s, r) => s + r.objects, 0))}</strong></td>
           <td className="num"><strong>{formatBytes(rows.reduce((s, r) => s + r.shallow, 0))}</strong></td>
+          <td className="num"><strong>{formatBytes(rows.reduce((s, r) => s + (r.retained ?? 0), 0))}</strong></td>
         </tr>
       </tfoot>
     </table>

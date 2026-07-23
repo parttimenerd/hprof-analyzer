@@ -2224,6 +2224,12 @@
         "pretty_class": {
           "type": "string"
         },
+        "retained": {
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
         "shallow": {
           "type": "integer",
           "format": "uint64",
