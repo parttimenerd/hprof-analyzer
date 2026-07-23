@@ -427,7 +427,8 @@ impl Pass2 {
                 }
             }
         }
-        let mut scan_driver = crate::query::run::ScanDriver::new(scan_execs);
+        let mut scan_driver =
+            crate::query::run::ScanDriver::new(scan_execs).with_src_capture(opts.reachable_only);
         // Computed once: does any armed query target an array class? Gates the
         // per-array name construction in the 2a scan so instance-only query sets
         // pay zero extra allocation on the array path.

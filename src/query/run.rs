@@ -184,6 +184,11 @@ pub struct ScanDriver<'q, R: ClassResolver> {
     /// `String` values post-scan via a single `scan_prim_arrays` pass.
     /// `None` on non-toString runs → zero capture cost.
     string_capture: Option<StringCaptureState<'q, R>>,
+    /// When true, each row-mode executor is armed to capture its per-row source
+    /// dense index (for GC-reachability pruning). Set ONLY on `--reachable-only`
+    /// runs; false everywhere else so the sidecar is never allocated and behavior
+    /// stays byte/RSS-identical.
+    capture_src: bool,
 }
 
 /// Sidecar edge-capture state for RefWalk queries (see `refwalk.rs`).
@@ -243,7 +248,24 @@ impl<'q, R: ClassResolver> ScanDriver<'q, R> {
             slots,
             refwalk,
             string_capture,
+            capture_src: false,
         }
+    }
+
+    /// Enable per-row source-index capture (for `--reachable-only` pruning).
+    /// Chainable after `new`. Arms each executor's sidecar NOW — before the scan
+    /// runs — so the per-row source index is captured during `visit_instance` /
+    /// `visit_array` (arming only takes effect on row-mode executors; carry /
+    /// aggregate executors ignore it). When `capture` is false (the default),
+    /// nothing is armed and every run stays byte/RSS-identical.
+    pub fn with_src_capture(mut self, capture: bool) -> Self {
+        self.capture_src = capture;
+        if capture {
+            for ex in &mut self.execs {
+                ex.arm_row_capture();
+            }
+        }
+        self
     }
 
     /// Build the string-capture sidecar if any exec has `needs.string_values`.
@@ -332,12 +354,20 @@ impl<'q, R: ClassResolver> ScanDriver<'q, R> {
     pub fn finish_state(self) -> crate::query::execute::QueryExecState {
         let mut state = crate::query::execute::QueryExecState::new();
         let slots = self.slots;
+        let capture_src = self.capture_src;
         for (i, ex) in self.execs.into_iter().enumerate() {
             let slot = slots[i];
             if ex.is_carry() {
                 let plan = ex.plan().clone();
                 let carry = ex.take_carry();
                 state.push_cross_phase(slot, String::new(), plan, carry);
+            } else if capture_src {
+                // Row-mode executor on a `--reachable-only` run: it was armed
+                // before the scan (see `with_src_capture`), so take the captured
+                // per-row source dense-index sidecar alongside the result so the
+                // caller can prune unreachable rows by EXACT source index.
+                let (r, src) = ex.finish_with_src("");
+                state.push_finished_with_src(slot, r, src);
             } else {
                 let r = ex.finish("");
                 state.push_finished(slot, r);
@@ -582,14 +612,28 @@ impl<'q, R: ClassResolver> ObjectVisitor for ScanDriver<'q, R> {
 /// The refwalk ctx is gated on the CSR being present: when `refwalk_csr` is
 /// `None` (no RefWalk query ran) the borrowed slices are empty and the shared
 /// empty tail map is used, so non-RefWalk runs stay byte/RSS-identical.
+///
+/// `dfn` carries GC-reachability for `--reachable-only`: when `Some`, each
+/// row-mode result is pruned to reachable rows using the EXACT per-row source
+/// dense index captured during the scan (`state.row_src_by_slot`), BEFORE the
+/// results leave this function and are UNION-collapsed. This is where each flat
+/// result still maps 1:1 to a slot, so the source-index sidecar can be applied
+/// without any UNION-collapse bookkeeping. `None` (the `--all` / default-off
+/// path) prunes nothing and is byte-identical to before.
 pub(crate) fn resume_with_string_values(
-    state: crate::query::execute::QueryExecState,
+    mut state: crate::query::execute::QueryExecState,
     flat: &[(Query, QueryPlan)],
     string_values: std::collections::HashMap<u32, String>,
     refwalk_csr: Option<crate::query::refwalk::RefWalkCsr>,
+    dfn: Option<&[u32]>,
 ) -> Vec<crate::query::model::QueryResult> {
     use crate::query::plan::StageOp;
     use crate::query::stage_runner::{self, EMPTY_REFWALK_TAILS, EMPTY_STRING_VALUES};
+
+    // Take the per-slot source-index sidecar out before the state is consumed by
+    // `into_parts`. Empty (allocates nothing) unless reachability capture was
+    // armed during the scan.
+    let row_src_by_slot = state.take_row_src_by_slot();
 
     let id_map = stage_runner::IdMap::new(&[]);
     let sv_ref: &std::collections::HashMap<u32, String> = if string_values.is_empty() {
@@ -690,6 +734,19 @@ pub(crate) fn resume_with_string_values(
     }
 
     slotted.sort_by_key(|(slot, _)| *slot);
+    // Reachable-only prune (query-subcommand default): drop each row-mode
+    // result's rows whose captured SOURCE dense index is not GC-reachable. Done
+    // here, per-slot and 1:1 with the sidecar, BEFORE UNION-collapse — so no
+    // collapse bookkeeping is needed and `@objectAddress` rows (whose projected
+    // value is an address, not an index) prune correctly. A slot with no captured
+    // src (aggregate/scalar/error/refwalk) keeps all its rows.
+    if let Some(dfn) = dfn {
+        for (slot, r) in slotted.iter_mut() {
+            if let Some(src) = row_src_by_slot.get(slot) {
+                filter_result_by_src(r, src, dfn);
+            }
+        }
+    }
     slotted.into_iter().map(|(_, r)| r).collect()
 }
 
@@ -709,9 +766,15 @@ pub(crate) fn resume_with_string_values(
 pub fn run_single_dump(
     path: &str,
     queries: &[(Query, QueryPlan)],
+    reachable_only: bool,
 ) -> std::io::Result<Vec<QueryResult>> {
     let (flat, groups) = expand_union_queries(queries);
-    let opts = crate::AnalyzeOptions::default();
+    // Propagate reachable-only into the scan so pass2 arms the per-row
+    // source-index capture (only when on; otherwise nothing is allocated).
+    let opts = crate::AnalyzeOptions {
+        reachable_only,
+        ..crate::AnalyzeOptions::default()
+    };
 
     // Collect the inner subqueries needing an earlier pass, tagged with their
     // outer flat-slot and role (FROM identity vs IN membership on some LHS).
@@ -721,7 +784,7 @@ pub fn run_single_dump(
         // Fast path: no subqueries — one scan, no injection.
         let p1 = crate::pass1::Pass1::run(path)?;
         let mut empty = std::collections::HashMap::new();
-        let (.., state, refwalk_csr, string_values, _sv_trunc) = crate::pass2::Pass2::build(
+        let (g, .., state, refwalk_csr, string_values, _sv_trunc) = crate::pass2::Pass2::build(
             path,
             p1,
             crate::cvec::Codec::Zstd3,
@@ -729,8 +792,21 @@ pub fn run_single_dump(
             &flat,
             &mut empty,
         )?;
-        let flat_results = resume_with_string_values(state, &flat, string_values, refwalk_csr);
-        return Ok(collapse_union_results(flat_results, &groups));
+        // Compute GC-reachability up front (only when reachable-only) and prune
+        // each flat result by its captured source index inside the resume layer,
+        // BEFORE UNION-collapse — so `@objectAddress` rows prune correctly.
+        let rpo = reachable_only.then(|| {
+            crate::rpo_dfs::rpo_dfs(g.n, &g.gc_root_indices, &g.fwd_offsets, &g.fwd_targets)
+        });
+        let flat_results = resume_with_string_values(
+            state,
+            &flat,
+            string_values,
+            refwalk_csr,
+            rpo.as_ref().map(|r| r.dfn.as_slice()),
+        );
+        let collapsed = collapse_union_results(flat_results, &groups);
+        return Ok(collapsed);
     }
 
     // ── Inner pass: scan the dump once for all inner subqueries ──────────────
@@ -789,7 +865,7 @@ pub fn run_single_dump(
 
     // ── Outer pass: scan again with IN sets injected ─────────────────────────
     let p1_outer = crate::pass1::Pass1::run(path)?;
-    let (.., outer_state, outer_refwalk_csr, outer_sv, _outer_sv_trunc) =
+    let (outer_g, .., outer_state, outer_refwalk_csr, outer_sv, _outer_sv_trunc) =
         crate::pass2::Pass2::build(
             path,
             p1_outer,
@@ -798,8 +874,25 @@ pub fn run_single_dump(
             &flat,
             &mut in_sets_by_slot,
         )?;
-    let mut flat_results =
-        resume_with_string_values(outer_state, &flat, outer_sv, outer_refwalk_csr);
+    // Reachable-only prune happens INSIDE resume (below), keyed by each flat
+    // slot's scan-captured source index, BEFORE the FROM semi-join — so the
+    // sidecar stays aligned with the rows (the semi-join then operates only on
+    // reachable rows). `None` under --all → prunes nothing.
+    let outer_rpo = reachable_only.then(|| {
+        crate::rpo_dfs::rpo_dfs(
+            outer_g.n,
+            &outer_g.gc_root_indices,
+            &outer_g.fwd_offsets,
+            &outer_g.fwd_targets,
+        )
+    });
+    let mut flat_results = resume_with_string_values(
+        outer_state,
+        &flat,
+        outer_sv,
+        outer_refwalk_csr,
+        outer_rpo.as_ref().map(|r| r.dfn.as_slice()),
+    );
 
     // ── FROM-subquery semi-join: keep only outer rows whose dense index is in
     //    the inner result set (matched by dense index). ───────────────────────
@@ -836,10 +929,10 @@ pub fn run_single_dump(
         }
     }
 
+    // Reachable-only pruning already applied inside resume above (before the
+    // FROM semi-join), keyed by scan-captured source index; nothing to do here.
     Ok(collapse_union_results(flat_results, &groups))
 }
-
-/// The role an inner subquery plays for its outer query: a FROM source (semi-
 /// joined by object identity) or an IN-predicate membership set (on some LHS).
 enum SubqueryRole {
     From,
@@ -898,22 +991,25 @@ pub(crate) fn row_dense_index(row: &[QueryValue]) -> Option<u32> {
     }
 }
 
-/// Prune each result's rows to GC-reachable objects: a row is kept iff its
-/// source dense index is reachable (`dfn[idx] != u32::MAX`). Rows with no dense
-/// index (scalars, aggregates) are always kept; a dense index out of `dfn`'s
-/// range is treated as unreachable. Recomputes `row_count`. Errored results are
-/// left untouched.
-pub(crate) fn filter_rows_by_reachability(results: &mut [QueryResult], dfn: &[u32]) {
-    for r in results.iter_mut() {
-        if r.error.is_some() {
-            continue;
-        }
-        r.rows.retain(|row| match row_dense_index(row) {
-            Some(idx) => dfn.get(idx as usize).is_some_and(|&d| d != u32::MAX),
-            None => true,
-        });
-        r.row_count = r.rows.len() as u64;
+/// Prune one result's rows to GC-reachable objects using the EXACT per-row
+/// source dense index `src` captured at scan time (parallel to `r.rows` before
+/// this call): row `i` is kept iff `dfn[src[i]] != u32::MAX`. A dense index out
+/// of `dfn`'s range is treated as unreachable. `src` shorter than `r.rows`
+/// leaves the unmatched tail rows untouched (kept) — a defensive guard; in
+/// practice they are always equal length. Recomputes `row_count`. Errored
+/// results are left untouched. This replaces the old value-sniffing prune
+/// (`row_dense_index`), which mis-read a projected `@objectAddress` (a raw heap
+/// address) as a dense index and wrongly dropped every such row.
+pub(crate) fn filter_result_by_src(r: &mut QueryResult, src: &[u32], dfn: &[u32]) {
+    if r.error.is_some() {
+        return;
     }
+    let mut keep = src.iter();
+    r.rows.retain(|_row| match keep.next() {
+        Some(&idx) => dfn.get(idx as usize).is_some_and(|&d| d != u32::MAX),
+        None => true, // no captured src for this (extra) row → keep
+    });
+    r.row_count = r.rows.len() as u64;
 }
 
 /// Extract the object address a result row identifies for IN-membership:
@@ -1855,7 +1951,7 @@ mod tests {
         use crate::query::model::QueryValue;
         // dfn: idx 0 reachable (0), idx 1 unreachable (u32::MAX), idx 2 reachable (5)
         let dfn = vec![0u32, u32::MAX, 5];
-        let mut results = vec![QueryResult {
+        let mut result = QueryResult {
             name: "t".into(),
             oql: String::new(),
             columns: vec![],
@@ -1863,17 +1959,75 @@ mod tests {
                 vec![QueryValue::ObjRef { index: 0, class: "C".into() }],
                 vec![QueryValue::ObjRef { index: 1, class: "C".into() }],
                 vec![QueryValue::ObjRef { index: 2, class: "C".into() }],
-                vec![QueryValue::Int(99)], // Int(99) -> row_dense_index returns Some(99), dfn.get(99) is None -> DROPPED
+                vec![QueryValue::Int(99)],
             ],
             row_count: 4,
             truncated: false,
             error: None,
             note: None,
             viz: None,
-        }];
-        filter_rows_by_reachability(&mut results, &dfn);
-        // idx 1 dropped; idx 0,2 kept; Int(99) dropped (out-of-range)
-        assert_eq!(results[0].row_count, 2, "unreachable ObjRef + out-of-range Int dropped");
-        assert_eq!(results[0].rows.len(), 2);
+        };
+        // Explicit per-row source dense indices captured at scan time. The row
+        // VALUES are irrelevant now — pruning is by the captured src, not by
+        // sniffing the projected value.
+        let src = vec![0u32, 1, 2, 99];
+        filter_result_by_src(&mut result, &src, &dfn);
+        // src[1]=1 dropped (unreachable); src[3]=99 dropped (out-of-range);
+        // src[0]=0 and src[2]=2 kept.
+        assert_eq!(result.row_count, 2, "unreachable + out-of-range src dropped");
+        assert_eq!(result.rows.len(), 2);
+    }
+
+    /// `@objectAddress` projects the raw heap address as `Int`, which the OLD
+    /// value-sniffing prune mis-read as a dense index and dropped. With the
+    /// scan-captured source index, the row is kept iff its SOURCE object (not the
+    /// projected address) is reachable — even for a huge address value.
+    #[test]
+    fn reachability_filter_keeps_object_address_rows_by_source() {
+        use crate::query::model::QueryValue;
+        let dfn = vec![0u32, u32::MAX]; // idx 0 reachable, idx 1 unreachable
+        let mut result = QueryResult {
+            name: "t".into(),
+            oql: String::new(),
+            columns: vec![],
+            // Projected values are big heap addresses, NOT dense indices.
+            rows: vec![
+                vec![QueryValue::Int(0x7f00_1234_5678)], // src 0 → reachable → KEPT
+                vec![QueryValue::Int(0x7f00_9abc_def0)], // src 1 → unreachable → DROPPED
+            ],
+            row_count: 2,
+            truncated: false,
+            error: None,
+            note: None,
+            viz: None,
+        };
+        let src = vec![0u32, 1];
+        filter_result_by_src(&mut result, &src, &dfn);
+        assert_eq!(result.rows.len(), 1, "reachable @objectAddress row kept");
+        assert_eq!(result.rows[0][0], QueryValue::Int(0x7f00_1234_5678));
+    }
+
+    /// A slot with NO captured src (aggregate `COUNT(*)`, scalar, error) is never
+    /// pruned: the resume layer simply skips `filter_result_by_src` for it, so
+    /// the single aggregate row survives regardless of reachability.
+    #[test]
+    fn reachability_filter_never_prunes_when_no_src_captured() {
+        use crate::query::model::QueryValue;
+        let dfn = vec![u32::MAX, u32::MAX]; // nothing reachable
+        let mut result = QueryResult {
+            name: "count".into(),
+            oql: String::new(),
+            columns: vec![],
+            rows: vec![vec![QueryValue::Int(42)]], // COUNT(*) = 42
+            row_count: 1,
+            truncated: false,
+            error: None,
+            note: None,
+            viz: None,
+        };
+        // Empty src (no captured source object) → keep all rows.
+        filter_result_by_src(&mut result, &[], &dfn);
+        assert_eq!(result.rows.len(), 1, "aggregate row is never pruned");
+        assert_eq!(result.rows[0][0], QueryValue::Int(42));
     }
 }

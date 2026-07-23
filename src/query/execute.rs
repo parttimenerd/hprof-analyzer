@@ -26,6 +26,13 @@ pub struct CrossPhaseEntry {
 pub struct QueryExecState {
     finished: Vec<(usize, QueryResult)>,
     pending: Vec<CrossPhaseEntry>,
+    /// Per-slot source dense-index sidecar for GC-reachability pruning. Populated
+    /// ONLY for row-mode executors that were armed via `arm_row_capture`
+    /// (i.e. `--reachable-only` runs); every other run leaves this empty and
+    /// allocates nothing. A slot ABSENT here means "no captured source" → the
+    /// reachability filter keeps all of that result's rows (aggregates, scalars,
+    /// validation errors, carry results).
+    row_src_by_slot: std::collections::HashMap<usize, Vec<u32>>,
 }
 
 impl QueryExecState {
@@ -34,6 +41,16 @@ impl QueryExecState {
     }
     pub fn push_finished(&mut self, slot: usize, r: QueryResult) {
         self.finished.push((slot, r));
+    }
+    /// Push a finished row-mode result together with its captured per-row source
+    /// dense-index sidecar (from `SingleScanExecutor::finish_with_src`). When
+    /// `src` is `Some`, it is recorded under `slot` for later GC-reachability
+    /// pruning; `None` records nothing (aggregate/disarmed → keep all rows).
+    pub fn push_finished_with_src(&mut self, slot: usize, r: QueryResult, src: Option<Vec<u32>>) {
+        self.finished.push((slot, r));
+        if let Some(v) = src {
+            self.row_src_by_slot.insert(slot, v);
+        }
     }
     pub fn push_cross_phase(&mut self, slot: usize, name: String, plan: QueryPlan, carry: Carry) {
         self.pending.push(CrossPhaseEntry {
@@ -58,6 +75,13 @@ impl QueryExecState {
     /// Consume into (finished slots, pending entries) for the stage runner.
     pub fn into_parts(self) -> (Vec<(usize, QueryResult)>, Vec<CrossPhaseEntry>) {
         (self.finished, self.pending)
+    }
+
+    /// Take the per-slot source-index sidecar map out of the state (leaving it
+    /// empty). Used by the resume layer to prune finished results by
+    /// GC-reachability before it consumes the state via `into_parts`.
+    pub fn take_row_src_by_slot(&mut self) -> std::collections::HashMap<usize, Vec<u32>> {
+        std::mem::take(&mut self.row_src_by_slot)
     }
 
     /// Re-add a `CrossPhaseEntry` (e.g. one taken from `into_parts` that was
@@ -173,6 +197,15 @@ pub struct SingleScanExecutor<'a, R: ClassResolver> {
     /// `visit_instance`/`visit_array` gate consults this only when FROM is Object,
     /// so all other queries pay zero cost and stay byte/RSS-identical.
     target_index: Option<usize>,
+    /// Per-row source dense-object index sidecar, captured in lockstep with
+    /// `rows` when reachability capture is armed. `None` = disarmed (the default,
+    /// and the case for carry-mode / aggregate executors), so nothing is
+    /// allocated and every non-reachable-only run stays byte/RSS-identical.
+    /// When `Some`, each `self.rows.push(row)` is paired with a push of the
+    /// object's dense index here; `finish` keeps it aligned through ORDER BY sort
+    /// + LIMIT truncate so the caller can prune rows by GC-reachability using the
+    /// EXACT source index (not a lossy re-read of the projected row value).
+    row_src: Option<Vec<u32>>,
 }
 
 /// Per-select-item running state for a scan-time aggregate accumulator.
@@ -447,6 +480,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             like_regexes: compile_like_for_query(query),
             agg_acc,
             target_index,
+            row_src: None,
         }
     }
 
@@ -474,6 +508,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             // aggregates; no accumulator needed.
             agg_acc: None,
             target_index,
+            row_src: None,
         }
     }
 
@@ -492,6 +527,19 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     /// True if this executor is carrying indices for a later phase.
     pub fn is_carry(&self) -> bool {
         self.carry.is_some()
+    }
+
+    /// Arm the per-row source-index sidecar for GC-reachability pruning. Only a
+    /// row-mode executor benefits: carry-mode executors flow their indices to the
+    /// late stage (never pruned here) and aggregate executors emit a single
+    /// scalar row with no source object. Calling this on a carry/aggregate
+    /// executor is a no-op, so the sidecar stays `None` and no allocation happens.
+    /// The caller (`ScanDriver`) only invokes this when `--reachable-only` is on,
+    /// so every default-off / `--all` / analyze run leaves `row_src == None`.
+    pub fn arm_row_capture(&mut self) {
+        if self.carry.is_none() && self.agg_acc.is_none() {
+            self.row_src = Some(Vec::new());
+        }
     }
 
     /// Whether this query's FROM pattern can match an array class, so the scan
@@ -1084,38 +1132,56 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     }
 
     pub fn finish(self, name: &str) -> QueryResult {
+        self.finish_with_src(name).0
+    }
+
+    /// Finalize like [`finish`], but also return the per-row source dense-index
+    /// sidecar when reachability capture was armed (`arm_row_capture`). The
+    /// sidecar is kept in lockstep with the output rows through ORDER BY sort +
+    /// LIMIT truncate so element `i` of the returned `Vec<u32>` is the dense
+    /// object index that produced output row `i`. `None` when capture was
+    /// disarmed (the default) or for the aggregate path (a single scalar row with
+    /// no source object) — in which case the caller keeps all rows unconditionally.
+    pub fn finish_with_src(self, name: &str) -> (QueryResult, Option<Vec<u32>>) {
         let columns = query_columns(self.query);
         if let Some(accs) = self.agg_acc {
             // Aggregate mode: finalize each accumulator and emit exactly one row.
             // LIMIT on an aggregate produces at most one output row; if
             // `limit == Some(0)` the caller wants zero rows (degenerate but valid).
             if self.plan.limit == Some(0) {
-                return QueryResult {
+                return (
+                    QueryResult {
+                        name: name.to_string(),
+                        oql: String::new(),
+                        columns,
+                        row_count: 0,
+                        rows: vec![],
+                        truncated: false,
+                        error: None,
+                        note: None,
+                        viz: None,
+                    },
+                    None,
+                );
+            }
+            let row: Vec<QueryValue> = accs.into_iter().map(finalize_agg_acc).collect();
+            (
+                QueryResult {
                     name: name.to_string(),
                     oql: String::new(),
                     columns,
-                    row_count: 0,
-                    rows: vec![],
-                    truncated: false,
+                    row_count: 1,
+                    rows: vec![row],
+                    truncated: self.truncated,
                     error: None,
                     note: None,
                     viz: None,
-                };
-            }
-            let row: Vec<QueryValue> = accs.into_iter().map(finalize_agg_acc).collect();
-            QueryResult {
-                name: name.to_string(),
-                oql: String::new(),
-                columns,
-                row_count: 1,
-                rows: vec![row],
-                truncated: self.truncated,
-                error: None,
-                note: None,
-                viz: None,
-            }
+                },
+                None,
+            )
         } else {
             let mut rows = self.rows;
+            let mut row_src = self.row_src;
             let mut note = None;
             // Apply a general ORDER BY sort for the scan-time (non-carry) path.
             // The retained-late path carries indices forward and sorts in
@@ -1129,11 +1195,14 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 if let Some(ob) = &self.query.order_by {
                     match order_by_column_index(self.query, &columns, &ob.key) {
                         Some(idx) => {
-                            sort_rows_by_column(&mut rows, idx, ob.dir);
+                            sort_rows_with_src(&mut rows, &mut row_src, idx, ob.dir);
                             if !defer_limit {
                                 if let Some(limit) = self.plan.limit {
                                     if rows.len() > limit as usize {
                                         rows.truncate(limit as usize);
+                                        if let Some(v) = &mut row_src {
+                                            v.truncate(limit as usize);
+                                        }
                                         // Truncation after an explicit sort is the intended
                                         // top-N, not a lost-data warning: leave `truncated`
                                         // reflecting only scan-cap loss (none on this path).
@@ -1154,6 +1223,9 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                                 if let Some(limit) = self.plan.limit {
                                     if rows.len() > limit as usize {
                                         rows.truncate(limit as usize);
+                                        if let Some(v) = &mut row_src {
+                                            v.truncate(limit as usize);
+                                        }
                                     }
                                 }
                             }
@@ -1161,17 +1233,20 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                     }
                 }
             }
-            QueryResult {
-                name: name.to_string(),
-                oql: String::new(),
-                columns,
-                row_count: rows.len() as u64,
-                rows,
-                truncated: self.truncated,
-                error: None,
-                note,
-                viz: None,
-            }
+            (
+                QueryResult {
+                    name: name.to_string(),
+                    oql: String::new(),
+                    columns,
+                    row_count: rows.len() as u64,
+                    rows,
+                    truncated: self.truncated,
+                    error: None,
+                    note,
+                    viz: None,
+                },
+                row_src,
+            )
         }
     }
 
@@ -1277,6 +1352,9 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
         self.matched += 1;
         let row = self.project_row(src_idx, class_id, blob);
         self.rows.push(row);
+        if let Some(v) = &mut self.row_src {
+            v.push(src_idx as u32);
+        }
     }
 
     fn visit_array(&mut self, src_idx: usize, class_name: &str, length: u32) {
@@ -1340,6 +1418,9 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
         self.matched += 1;
         let row = self.project_array_row(src_idx, class_name, length);
         self.rows.push(row);
+        if let Some(v) = &mut self.row_src {
+            v.push(src_idx as u32);
+        }
     }
 }
 
@@ -1672,6 +1753,41 @@ pub(crate) fn sort_rows_by_column(
             SortDir::Desc => ord.reverse(),
         }
     });
+}
+
+/// Sort `rows` by column `idx` (same ordering as [`sort_rows_by_column`]) while
+/// keeping the optional `row_src` source-index sidecar aligned. When `src` is
+/// `None` this defers to `sort_rows_by_column` and is byte-identical (the
+/// non-reachable-only path, so no permutation allocation happens). When `Some`,
+/// it sorts an index permutation by the same comparator and applies it to both
+/// `rows` and `src` so element `i` of each stays paired.
+pub(crate) fn sort_rows_with_src(
+    rows: &mut Vec<Vec<QueryValue>>,
+    src: &mut Option<Vec<u32>>,
+    idx: usize,
+    dir: crate::query::ast::SortDir,
+) {
+    use crate::query::ast::SortDir;
+    let Some(src_vec) = src.as_mut() else {
+        sort_rows_by_column(rows, idx, dir);
+        return;
+    };
+    // Sort a permutation so the sidecar can be reordered identically. Same
+    // comparator as `sort_rows_by_column`, so the row ordering is unchanged.
+    let mut perm: Vec<usize> = (0..rows.len()).collect();
+    perm.sort_by(|&a, &b| {
+        let av = rows[a].get(idx).unwrap_or(&QueryValue::Null);
+        let bv = rows[b].get(idx).unwrap_or(&QueryValue::Null);
+        let ord = total_cmp_query_value(av, bv);
+        match dir {
+            SortDir::Asc => ord,
+            SortDir::Desc => ord.reverse(),
+        }
+    });
+    let new_rows: Vec<Vec<QueryValue>> = perm.iter().map(|&i| std::mem::take(&mut rows[i])).collect();
+    let new_src: Vec<u32> = perm.iter().map(|&i| src_vec[i]).collect();
+    *rows = new_rows;
+    *src_vec = new_src;
 }
 
 /// A TOTAL ordering over `QueryValue` for sorting. Numeric values compare

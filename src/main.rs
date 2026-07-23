@@ -1131,7 +1131,7 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
         .iter()
         .any(|(_, p)| p.from_subplan.is_some() || !p.in_subplans.is_empty());
     let mut query_results = if uses_subqueries {
-        query::run::run_single_dump(input, &parsed)?
+        query::run::run_single_dump(input, &parsed, opts.reachable_only)?
     } else {
         let p1 = pass1::Pass1::run(input)?;
         if p1.class_ids.len() > u32::MAX as usize {
@@ -1146,20 +1146,31 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
             ));
         }
         let mut no_in_sets = std::collections::HashMap::new();
-        let (.., query_state, refwalk_csr, string_values, _sv_trunc) =
+        let (g, _inbound, _fwd_off_c, _fwd_tgt_c, _in_c, query_state, refwalk_csr, string_values, _sv_trunc) =
             pass2::Pass2::build(input, p1, cvec::Codec::Zstd3, &opts, &flat, &mut no_in_sets)?;
 
         // Query-only path: retained sizes/dominators are not computed, so cross-phase
         // (@retainedHeapSize) queries resolve to actionable errors here.
         // toString(s) queries (finalize_at=P2) use the decoded string_values map.
         // RefPath (`x.field.tail`) queries use the RefWalk CSR captured in the scan.
+        // Reachable-only (the query-subcommand default): the scan armed a per-row
+        // source-index sidecar; compute GC-reachability now (one rpo_dfs over the
+        // forward CSR pass2 already built) and prune each flat result by its
+        // captured source index INSIDE resume, before UNION-collapse, so a
+        // projected `@objectAddress` (a raw heap address) prunes by the EXACT
+        // source dense index rather than a lossy re-read. Skipped under --all.
+        let rpo = opts.reachable_only.then(|| {
+            crate::rpo_dfs::rpo_dfs(g.n, &g.gc_root_indices, &g.fwd_offsets, &g.fwd_targets)
+        });
         let flat_results = query::run::resume_with_string_values(
             query_state,
             &flat,
             string_values,
             refwalk_csr,
+            rpo.as_ref().map(|r| r.dfn.as_slice()),
         );
-        query::run::collapse_union_results(flat_results, &union_groups)
+        let collapsed = query::run::collapse_union_results(flat_results, &union_groups);
+        collapsed
     };
 
     // Fill in blank oql text and default names (from-target-derived, else

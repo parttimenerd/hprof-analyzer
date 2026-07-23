@@ -74,6 +74,24 @@ fn run_query_stdout(hprof: &str, oql: &str) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
+/// Like `run_query_stdout` but with extra CLI args (e.g. `--all`) inserted
+/// before `--query`.
+fn run_query_args(hprof: &str, extra: &[&str], oql: &str) -> String {
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(hprof)
+        .args(extra)
+        .args(["--query", oql])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "query failed ({oql} {extra:?}): {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
 /// Extract the single integer cell from a `SELECT COUNT(*)`-style result.
 fn parse_single_count(stdout: &str) -> u64 {
     stdout
@@ -150,37 +168,56 @@ fn mixed_refpath_and_retained_query_still_errors() {
 /// objects (HPROF `CLASS_DUMP` records, kind 3) are never delivered to the OQL
 /// visitor, so they must also be excluded from the histogram tally — otherwise
 /// `COUNT(*)` over-reports for any pattern matching `java.lang.Class`.
+/// Uses `--all` so both the aggregate COUNT (which has no per-object source and
+/// is never reachability-pruned) and the projecting SELECT * see the SAME raw
+/// universe; under the reachable-only default they would legitimately diverge
+/// (SELECT * is pruned to reachable objects, COUNT is not).
 #[test]
 fn query_count_matches_select_star_for_class_objects() {
     let Some(hprof) = philosophers() else { return };
     // java.lang.Class: the class-object case that exposed the over-count.
-    let count = parse_single_count(&run_query_stdout(
+    let count = parse_single_count(&run_query_args(
         &hprof,
+        &["--all"],
         "SELECT COUNT(*) FROM java.lang.Class",
     ));
-    let rows = parse_row_count(&run_query_stdout(&hprof, "SELECT * FROM java.lang.Class"));
+    let rows = parse_row_count(&run_query_args(
+        &hprof,
+        &["--all"],
+        "SELECT * FROM java.lang.Class",
+    ));
     assert_eq!(
         count, rows,
         "COUNT(*) ({count}) must equal SELECT * row count ({rows}) for java.lang.Class"
     );
 
     // A wide regex spanning many classes including java.lang.Class.
-    let count_re = parse_single_count(&run_query_stdout(
+    let count_re = parse_single_count(&run_query_args(
         &hprof,
+        &["--all"],
         "SELECT COUNT(*) FROM \"java.lang.*\"",
     ));
-    let rows_re = parse_row_count(&run_query_stdout(&hprof, "SELECT * FROM \"java.lang.*\""));
+    let rows_re = parse_row_count(&run_query_args(
+        &hprof,
+        &["--all"],
+        "SELECT * FROM \"java.lang.*\"",
+    ));
     assert_eq!(
         count_re, rows_re,
         "COUNT(*) ({count_re}) must equal SELECT * row count ({rows_re}) for java.lang.*"
     );
 
     // Sanity: an exact leaf class with no class-object rows is unaffected.
-    let s_count = parse_single_count(&run_query_stdout(
+    let s_count = parse_single_count(&run_query_args(
         &hprof,
+        &["--all"],
         "SELECT COUNT(*) FROM java.lang.String",
     ));
-    let s_rows = parse_row_count(&run_query_stdout(&hprof, "SELECT * FROM java.lang.String"));
+    let s_rows = parse_row_count(&run_query_args(
+        &hprof,
+        &["--all"],
+        "SELECT * FROM java.lang.String",
+    ));
     assert_eq!(s_count, s_rows, "java.lang.String count must match rows");
     assert!(s_count > 0, "String count must be positive");
 }
@@ -2076,10 +2113,15 @@ fn query_count_star_char_array_equals_scan_row_count() {
 #[test]
 fn query_count_star_int_array_matches_scan() {
     let Some(hprof) = philosophers() else { return };
-    let count = query_count_value(&hprof, "SELECT COUNT(*) FROM int[]")
-        .expect("COUNT(*) FROM int[] failed or printed no numeric cell");
-    let rows = query_row_count(&hprof, "SELECT * FROM int[]")
-        .expect("SELECT * FROM int[] failed or had no row-count footer");
+    // `--all` so the aggregate COUNT (never reachability-pruned) and the
+    // projecting SELECT * scan the same raw universe (see the parity note on
+    // `query_count_matches_select_star_for_class_objects`).
+    let count = parse_single_count(&run_query_args(
+        &hprof,
+        &["--all"],
+        "SELECT COUNT(*) FROM int[]",
+    ));
+    let rows = parse_row_count(&run_query_args(&hprof, &["--all"], "SELECT * FROM int[]"));
     // int[] is present in this fixture; assert positivity and exact parity.
     assert!(count > 0, "COUNT(*) FROM int[] must be > 0; got {count}");
     assert_eq!(
@@ -2606,10 +2648,19 @@ fn exact_from_excludes_subclasses() {
 #[test]
 fn instanceof_count_matches_projection_row_count() {
     let Some(hprof) = philosophers() else { return };
-    let count = query_count_value(&hprof, "SELECT COUNT(*) FROM INSTANCEOF java.lang.Thread")
-        .expect("INSTANCEOF COUNT must succeed");
-    let rows = query_row_count(&hprof, "SELECT @objectAddress FROM INSTANCEOF java.lang.Thread")
-        .expect("INSTANCEOF projection must succeed");
+    // `--all`: COUNT (aggregate, never reachability-pruned) vs the projection
+    // must scan the same raw universe (see the parity note on
+    // `query_count_matches_select_star_for_class_objects`).
+    let count = parse_single_count(&run_query_args(
+        &hprof,
+        &["--all"],
+        "SELECT COUNT(*) FROM INSTANCEOF java.lang.Thread",
+    ));
+    let rows = parse_row_count(&run_query_args(
+        &hprof,
+        &["--all"],
+        "SELECT @objectAddress FROM INSTANCEOF java.lang.Thread",
+    ));
     assert_eq!(
         count, rows,
         "COUNT(*) INSTANCEOF Thread ({count}) must equal the projection row count \
@@ -2625,12 +2676,22 @@ fn instanceof_count_matches_projection_row_count() {
 #[test]
 fn instanceof_object_spans_full_universe() {
     let Some(hprof) = philosophers() else { return };
-    let count = query_count_value(&hprof, "SELECT COUNT(*) FROM INSTANCEOF java.lang.Object")
-        .expect("INSTANCEOF Object COUNT must succeed");
-    let rows = query_row_count(&hprof, "SELECT * FROM INSTANCEOF java.lang.Object")
-        .expect("INSTANCEOF Object projection must succeed");
-    let threads = query_count_value(&hprof, "SELECT COUNT(*) FROM INSTANCEOF java.lang.Thread")
-        .expect("INSTANCEOF Thread COUNT must succeed");
+    // `--all`: COUNT vs projection parity requires the same universe.
+    let count = parse_single_count(&run_query_args(
+        &hprof,
+        &["--all"],
+        "SELECT COUNT(*) FROM INSTANCEOF java.lang.Object",
+    ));
+    let rows = parse_row_count(&run_query_args(
+        &hprof,
+        &["--all"],
+        "SELECT * FROM INSTANCEOF java.lang.Object",
+    ));
+    let threads = parse_single_count(&run_query_args(
+        &hprof,
+        &["--all"],
+        "SELECT COUNT(*) FROM INSTANCEOF java.lang.Thread",
+    ));
     assert_eq!(
         count, rows,
         "COUNT(*) INSTANCEOF Object ({count}) must equal its projection row count ({rows})"
@@ -4420,4 +4481,22 @@ fn gcroot_attrs_resolve_in_analyze_mode() {
             "non-root String rows must all be null:\n{section}"
         );
     }
+}
+
+/// The query subcommand defaults to reachable-only (Eclipse MAT parity): the
+/// default Thread count matches MAT (27) and `--all` is a strict superset (29,
+/// the raw-heap count including unreachable objects).
+#[test]
+fn query_reachable_only_is_default_and_all_is_superset() {
+    let Some(hprof) = philosophers() else { return };
+    let def = run_query_stdout(&hprof, "SELECT @objectAddress FROM java.lang.Thread");
+    let all = run_query_args(&hprof, &["--all"], "SELECT @objectAddress FROM java.lang.Thread");
+    let n_def = parse_row_count(&def);
+    let n_all = parse_row_count(&all);
+    assert!(
+        n_all > n_def,
+        "--all ({n_all}) must be a superset of reachable-only ({n_def})"
+    );
+    assert_eq!(n_def, 27, "reachable-only Thread count must match MAT (27)");
+    assert_eq!(n_all, 29, "raw-heap Thread count is 29");
 }
