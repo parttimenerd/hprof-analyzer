@@ -763,13 +763,19 @@ that holds each object (the primary referrer; an object may have several)._\n\n"
         let counts: Vec<u64> = d.buckets.iter().map(|b| b.count).collect();
         let bmax = counts.iter().copied().max().unwrap_or(0);
         let mut buckets = Table::new(
-            &["Size ≤", "Count", ""],
-            &[Align::Right, Align::Right, Align::Left],
+            &["Size ≤", "Count", "% of Dom.", ""],
+            &[Align::Right, Align::Right, Align::Right, Align::Left],
         );
         for b in &d.buckets {
+            let pct = if d.count > 0 {
+                fmt_pct(b.count as f64 / d.count as f64 * 100.0)
+            } else {
+                "—".into()
+            };
             buckets.row([
                 format_bytes(b.upper_bytes),
                 fmt_count(b.count),
+                pct,
                 bar(b.count, bmax, GRAPH_BAR_WIDTH),
             ]);
         }

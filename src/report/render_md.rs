@@ -1328,9 +1328,17 @@ that holds each object (the primary referrer; an object may have several)._\n\n"
             "- Total retained (top-level): {}\n\n",
             format_bytes(d.total)
         ));
-        let mut buckets = Table::new(&["Size ≤", "Count"], &[Align::Right, Align::Right]);
+        let mut buckets = Table::new(
+            &["Size ≤", "Count", "% of Dom."],
+            &[Align::Right, Align::Right, Align::Right],
+        );
         for b in &d.buckets {
-            buckets.row([format_bytes(b.upper_bytes), fmt_count(b.count)]);
+            let pct = if d.count > 0 {
+                fmt_pct(b.count as f64 / d.count as f64 * 100.0)
+            } else {
+                "—".into()
+            };
+            buckets.row([format_bytes(b.upper_bytes), fmt_count(b.count), pct]);
         }
         buckets.render(out);
         out.push('\n');
