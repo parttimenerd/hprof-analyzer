@@ -1214,7 +1214,7 @@ fn handle_meta(
 /// subqueries, and its FROM (and every UNION branch's FROM) is a non-array class.
 /// Array-class FROM is excluded: `run_resident_only` can't reconstruct per-array
 /// class names without a real scan (v1 limitation), so those stay on the scan path.
-fn cache_eligible(q: &crate::query::ast::Query, plan: &crate::query::plan::QueryPlan) -> bool {
+pub(crate) fn cache_eligible(q: &crate::query::ast::Query, plan: &crate::query::plan::QueryPlan) -> bool {
     fn is_array_name(n: &str) -> bool {
         n.starts_with('[') || n.ends_with("[]")
     }
