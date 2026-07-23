@@ -183,6 +183,13 @@ struct Cli {
     /// (~100–500 MB extra RSS for large dumps). Analyze-only.
     #[arg(long)]
     ref_paths: bool,
+
+    /// Emit Eclipse MAT-compatible binary index files into DIR while running
+    /// the normal analysis (the report output is unaffected). The files are
+    /// named `<dump>.<kind>.index` using the input basename as the prefix.
+    /// Analyze-only; adds some transient RSS to re-materialize compressed arrays.
+    #[arg(long, value_name = "DIR", value_hint = ValueHint::DirPath)]
+    mat: Option<std::path::PathBuf>,
 }
 
 /// Named subcommands. The default (no subcommand) analyzes or re-renders the
@@ -496,6 +503,26 @@ fn run_default(cli: Cli) {
             ref_paths: cli.ref_paths,
             ..opts
         };
+        // Build the MAT index emitter when --mat DIR is set. The prefix is the
+        // input basename with a trailing `.hprof[.gz]` stripped, matching how
+        // MAT names its cache files (`dump_.hprof` -> `dump_.<kind>.index`).
+        let mat = match cli.mat.as_deref() {
+            Some(dir) => {
+                let base = std::path::Path::new(&input)
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("dump");
+                let prefix = base
+                    .strip_suffix(".hprof.gz")
+                    .or_else(|| base.strip_suffix(".hprof"))
+                    .unwrap_or(base);
+                match mat::MatEmitter::new(dir, prefix) {
+                    Ok(e) => Some(e),
+                    Err(e) => fail(format!("cannot create MAT index dir '{}': {e}", dir.display())),
+                }
+            }
+            None => None,
+        };
         if let Err(e) = run(
             &input,
             cli.output.as_deref(),
@@ -503,6 +530,7 @@ fn run_default(cli: Cli) {
             cli.verbose,
             cvec::Codec::Zstd3,
             opts,
+            mat,
         ) {
             fail(analyze_error_hint(&input, &e));
         }
@@ -525,6 +553,12 @@ fn run_default(cli: Cli) {
             fail(
                 "--find-duplicates has no effect when re-rendering a saved report; \
                   re-run on the .hprof dump to include it",
+            );
+        }
+        if cli.mat.is_some() {
+            fail(
+                "--mat has no effect when re-rendering a saved report; \
+                  re-run on the .hprof dump to emit MAT index files",
             );
         }
         if cli.detail != DetailLevel::Default {
@@ -772,6 +806,7 @@ fn run(
     verbose: bool,
     compress: cvec::Codec,
     opts: AnalyzeOptions,
+    mat: Option<mat::MatEmitter>,
 ) -> io::Result<()> {
     let t_total = Instant::now();
 
@@ -815,6 +850,25 @@ fn run(
     // The compress-cold RSS max is during shallow's compression, so freeing
     // id_map's 4.1GB before that removes it from the binding peak. id_map is
     // delta-vbyte+deflate (sorted addrs, fast), not a slow permutation deflate.
+    //
+    // MAT: emit the `idx` LongIndex (dense id -> object address) here, while the
+    // id_map is still live inside the InboundBuilder (addresses are lost once it
+    // is compressed just below). Also precompute the histogram-row ->
+    // class-object-id inverse table once; it feeds both o2c and the outbound
+    // pseudo class element downstream.
+    let mat_inv: Option<Vec<i32>> = if let Some(ref m) = mat {
+        let id_map = inbound
+            .id_map
+            .as_ref()
+            .expect("id_map must be live before compress_id_map for MAT idx emit");
+        m.emit_idx(g.n, |i| id_map.addr_at(i))?;
+        Some(mat::build_row_to_classobj_id(
+            &g.class_obj_class_idx,
+            g.class_names.len(),
+        ))
+    } else {
+        None
+    };
     inbound.compress_id_map(compress)?;
     // shallow/class_idx were already compressed inside pass2 (before the
     // fwd_targets alloc) to keep their ~4GB dense forms off the binding peak;
@@ -881,6 +935,43 @@ fn run(
     // coexists with the large inb_flat intermediate.
     let t = Instant::now();
     progress::phase("building inbound references");
+    // MAT: emit the `outbound` IntArray1N before build_from_fwd consumes the
+    // forward CSR. Each entry = [class-object id] ++ sorted-unique(fwd targets).
+    // class_idx is transiently restored from its compressed blob (~4 MB per 1M
+    // objects) just for this pass and dropped immediately. Zero cost when --mat
+    // is absent.
+    if let Some(ref m) = mat {
+        let inv = mat_inv.as_ref().expect("mat_inv built when mat present");
+        let class_idx: Vec<u32> = class_idx_c.restore()?;
+        let n = g.n;
+        let mut entries: Vec<Vec<i32>> = Vec::with_capacity(n);
+        let mut buf: Vec<u32> = Vec::new();
+        let mut tgt: Vec<i32> = Vec::new();
+        for i in 0..n {
+            let lo = g.fwd_offsets[i] as usize;
+            let hi = g.fwd_offsets[i + 1] as usize;
+            tgt.clear();
+            if hi > lo {
+                let slice: &[u32] = if let Some(sl) = g.fwd_targets.range_slice(lo, hi) {
+                    sl
+                } else {
+                    g.fwd_targets.copy_range(lo, hi, &mut buf);
+                    &buf
+                };
+                tgt.extend(slice.iter().map(|&v| v as i32));
+                tgt.sort_unstable();
+                tgt.dedup();
+            }
+            let mut e: Vec<i32> = Vec::with_capacity(tgt.len() + 1);
+            e.push(inv[class_idx[i] as usize]);
+            e.extend_from_slice(&tgt);
+            entries.push(e);
+        }
+        drop(class_idx);
+        m.emit_outbound(&entries)?;
+        drop(entries);
+        crate::trace::trim();
+    }
     // fwd_offsets and fwd_targets are moved into build_from_fwd so they can be
     // freed INSIDE the call, before Phase 4 allocates inb_data.
     let (inb_block_off, inb_data) = inbound.build_from_fwd(
@@ -907,6 +998,39 @@ fn run(
         crate::trace::probe("main: after restore parent_pre (before dominator)");
     }
 
+    // MAT: emit the `inbound` IntArray1N before compute_dominators consumes
+    // `rpo` (we need rpo.vertex to map pre-order -> dense id). The inbound CSR
+    // stores each node's referrers as pre-order numbers (delta-vbyte, sorted by
+    // pre-order); MAT stores them as dense object ids in that same pre-order
+    // order. We decode the blocked CSR sequentially (nodes 0..n in order, no
+    // seeking) and translate each pre-order via rpo.vertex. Nodes with no
+    // referrer become MAT holes (empty entries). No pseudo class element
+    // (unlike outbound). Zero cost when --mat is absent.
+    if let Some(ref m) = mat {
+        let vertex = &rpo.vertex;
+        let n = g.n;
+        let mut entries: Vec<Vec<i32>> = Vec::with_capacity(n);
+        let mut pos = 0usize;
+        for _w in 0..n {
+            let (count, c0) = vbyte::decode_one(&inb_data[pos..]);
+            pos += c0;
+            let mut e: Vec<i32> = Vec::with_capacity(count as usize);
+            let mut prev: u32 = 0;
+            for _ in 0..count {
+                let (delta, c1) = vbyte::decode_one(&inb_data[pos..]);
+                pos += c1;
+                prev += delta;
+                // pre-order 0 = virtual root; real objects are pre-order >= 1.
+                // vertex maps pre-order -> node/dense id.
+                e.push(vertex[prev as usize] as i32);
+            }
+            entries.push(e);
+        }
+        m.emit_inbound(&entries)?;
+        drop(entries);
+        crate::trace::trim();
+    }
+
     let t = Instant::now();
     progress::phase("computing dominators");
     // rpo moved by value; vertex/parent_pre owned through translation. dfn
@@ -914,6 +1038,24 @@ fn run(
     g.idom =
         dominator::compute_dominators(g.n, rpo, &g.gc_root_indices, &inb_block_off, &inb_data)?;
     log(verbose, "dominator", t.elapsed().as_secs_f64());
+    // MAT: emit the `domIn` IntIndex now that g.idom is set. MAT stores the
+    // immediate-dominator OBJECT id + 2, where the superroot has object id -1
+    // (so a root dominated by the superroot stores 1). Our idom uses `n` (the
+    // virtual root) for that case and u32::MAX for unreachable nodes; both map
+    // to the -1 superroot -> stored value 1.
+    if let Some(ref m) = mat {
+        let n_u = g.n as u32;
+        let domin: Vec<i32> = g
+            .idom
+            .iter()
+            .take(g.n)
+            .map(|&d| {
+                let obj = if d == n_u || d == u32::MAX { -1i32 } else { d as i32 };
+                obj + 2
+            })
+            .collect();
+        m.emit_dom_in(&domin)?;
+    }
     // The inbound (referrer) CSR is consumed by the dominator and never read
     // again: root paths derive their GC-root chains from `g.idom` (the
     // dominator tree, which MAT also uses), so there is no need to preserve or
@@ -931,6 +1073,39 @@ fn run(
     crate::trace::probe("main: before build_dom_children_csr");
     let (dc_off, dc_tgt) = retained::build_dom_children_csr(g.n, &g.idom);
     crate::trace::probe("main: after build_dom_children_csr");
+
+    // MAT: emit the `domOut` IntArray1N (unsorted). It has n+1 entries: entry 0
+    // is the superroot's children (objects dominated by the virtual root, i.e.
+    // the GC roots / top-level dominators = vroot's children in our CSR), and
+    // entry k+1 is object k's dominator children. Our CSR fills children in
+    // ascending object-id order; MAT's own traversal order may differ, which
+    // can make this index diverge byte-for-byte (see the verification report).
+    if let Some(ref m) = mat {
+        let n = g.n;
+        let mut entries: Vec<Vec<i32>> = Vec::with_capacity(n + 1);
+        // entry 0 = vroot's children (dc_off[n]..dc_off[n+1]).
+        let lo = dc_off[n] as usize;
+        let hi = dc_off[n + 1] as usize;
+        entries.push(dc_tgt[lo..hi].iter().map(|&v| v as i32).collect());
+        // entry k+1 = children of object k.
+        for k in 0..n {
+            let lo = dc_off[k] as usize;
+            let hi = dc_off[k + 1] as usize;
+            entries.push(dc_tgt[lo..hi].iter().map(|&v| v as i32).collect());
+        }
+        m.emit_dom_out(&entries)?;
+        drop(entries);
+        crate::trace::trim();
+    }
+
+    // MAT: emit o2c (dense id -> class-object id) and a2s (dense id -> shallow
+    // size) from the still-compressed blobs before they are restored/dropped.
+    // These stream directly out of the compressed forms.
+    if let Some(ref m) = mat {
+        let inv = mat_inv.as_ref().expect("mat_inv built when mat present");
+        m.emit_o2c(&class_idx_c, inv)?;
+        m.emit_a2s(&shallow_c)?;
+    }
 
     // Restore shallow/class_idx now that the CSR-build transient has freed
     // child_deg (dominator already freed the inbound CSR too).
@@ -958,6 +1133,13 @@ fn run(
     g.retained = retained;
     g.has_same_class_ancestor = has_same;
     log(verbose, "retained", t.elapsed().as_secs_f64());
+
+    // MAT: emit the `o2ret` LongIndex (dense id -> retained size in bytes) now
+    // that g.retained is populated.
+    if let Some(ref m) = mat {
+        let ret_i64: Vec<i64> = g.retained.iter().map(|&r| r as i64).collect();
+        m.emit_o2ret(&ret_i64)?;
+    }
 
     // Restore + aggregate + free the alloc stack serials in a bounded window
     // right after compute_retained (needs g.shallow + g.retained, both live

@@ -27,7 +27,7 @@ impl MatEmitter {
         })
     }
     fn path(&self, name: &str) -> PathBuf {
-        self.dir.join(format!("{}{}.index", self.prefix, name))
+        self.dir.join(format!("{}.{}.index", self.prefix, name))
     }
 
     /// Emit the MAT `o2c` index: for each object id, the dense object id of its
@@ -115,6 +115,41 @@ impl MatEmitter {
             s.push(r)?;
         }
         let w = s.finish()?;
+        w.into_inner().map_err(|e| e.into_error())?.sync_all()?;
+        Ok(())
+    }
+
+    /// Emit the MAT `outbound` IntArray1N (SORTED writer). `entries[i]` must be
+    /// the fully-assembled per-object int slice: the object's class-object dense
+    /// id followed by its sorted-unique forward targets (see the module docs on
+    /// `int_index_1n` for the layout). The caller owns the assembly so the
+    /// large `Vec<Vec<i32>>` can be built streaming and dropped promptly.
+    pub fn emit_outbound(&self, entries: &[Vec<i32>]) -> io::Result<()> {
+        let w = BufWriter::new(File::create(self.path("outbound"))?);
+        let w = int_index_1n::write_sorted(w, entries)?;
+        w.into_inner().map_err(|e| e.into_error())?.sync_all()?;
+        Ok(())
+    }
+
+    /// Emit the MAT `inbound` IntArray1N (SORTED writer). `entries[i]` is the
+    /// per-object referrer list; empty lists are written as unset holes (MAT
+    /// never `set`s them). MAT's inbound has NO pseudo class-object element
+    /// (unlike outbound) — the entry is purely the referrer ids in MAT's
+    /// pre-order sort order.
+    pub fn emit_inbound(&self, entries: &[Vec<i32>]) -> io::Result<()> {
+        let w = BufWriter::new(File::create(self.path("inbound"))?);
+        let w = int_index_1n::write_sorted(w, entries)?;
+        w.into_inner().map_err(|e| e.into_error())?.sync_all()?;
+        Ok(())
+    }
+
+    /// Emit the MAT `domOut` IntArray1N (UNSORTED writer). `entries` has length
+    /// `n + 1`: `entries[0]` is the superroot's children (objects dominated by
+    /// the virtual root, i.e. the GC roots / top-level dominators) and
+    /// `entries[k + 1]` is object `k`'s dominator children.
+    pub fn emit_dom_out(&self, entries: &[Vec<i32>]) -> io::Result<()> {
+        let w = BufWriter::new(File::create(self.path("domOut"))?);
+        let w = int_index_1n::write_unsorted(w, entries)?;
         w.into_inner().map_err(|e| e.into_error())?.sync_all()?;
         Ok(())
     }
