@@ -240,6 +240,64 @@ where
     Ok(w)
 }
 
+/// Callback-driven variant of [`write_sorted_iter_streaming`] that avoids
+/// per-entry `Vec` allocations.
+///
+/// `n_entries` times, calls `f(push)` where `push` is a `&mut dyn FnMut(i32)
+/// -> io::Result<()>`. The caller pushes pre-sorted values for one entry.
+/// An entry with no values is written as a hole (header == 0).
+///
+/// This eliminates the 513M × alloc/free cycle that causes allocator RSS
+/// fragmentation on large dumps.
+pub fn write_sorted_cb<W, F>(w: W, n_entries: usize, mut f: F) -> io::Result<W>
+where
+    W: Write,
+    F: FnMut(&mut dyn FnMut(i32) -> io::Result<()>) -> io::Result<()>,
+{
+    let mut cw = CountingWriter::new(w);
+    let mut header: Vec<i32> = Vec::with_capacity(n_entries);
+    let mut body = IntIndexStreamer::new(&mut cw);
+    let mut body_size: i64 = 0;
+
+    for _ in 0..n_entries {
+        let mut had_values = false;
+        let mut header_val: i32 = 0;
+        let pos = body_size + 1;
+        if pos >= (1i64 << 32) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("header2/PosIndexStreamer path not implemented; bodyPos {pos} at entry {}", header.len()),
+            ));
+        }
+        {
+            let body_ref = &mut body;
+            let body_size_ref = &mut body_size;
+            let had_ref = &mut had_values;
+            let hv_ref = &mut header_val;
+            *hv_ref = pos as i32;
+            f(&mut |v: i32| {
+                if !*had_ref {
+                    *had_ref = true;
+                }
+                body_ref.push(v)?;
+                *body_size_ref += 1;
+                Ok(())
+            })?;
+        }
+        header.push(if had_values { header_val } else { 0 });
+    }
+    body.finish()?;
+    let divider = cw.bytes_written() as i64;
+    let mut w = cw.into_inner();
+    let mut hdr = IntIndexStreamer::with_position(&mut w, divider);
+    for &pos in &header {
+        hdr.push(pos)?;
+    }
+    hdr.finish()?;
+    w.write_all(&divider.to_be_bytes())?;
+    Ok(w)
+}
+
 /// Low-memory streaming variant of [`write_unsorted`].
 pub fn write_unsorted_iter_streaming<W, I, S>(w: W, entries: I) -> io::Result<W>
 where

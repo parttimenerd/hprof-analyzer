@@ -846,4 +846,287 @@ impl InboundBuilder {
         crate::trace::probe("inbound Phase-4: after inb_data built");
         Ok((inb_block_off, inb_data))
     }
+
+    /// Like `build()` (HPROF rescan path for inbound) but also drives a
+    /// per-object callback with the dense-id outbound edge list, so MAT outbound
+    /// can be emitted during the same HPROF scan.
+    ///
+    /// `on_outbound(dense_src, dense_dsts) -> io::Result<()>` receives each
+    /// object's outbound edges as a `Vec<u32>` (allocated per object; the callback
+    /// can drain/reuse it). Called in HPROF file order (not MAT id order).
+    ///
+    /// Memory benefit vs build_from_fwd: `fwd_targets` (6+ GB) can be dropped
+    /// BEFORE calling this, so inb_flat and fwd_targets never coexist.
+    /// `fwd_tgt_c` is also eliminated from the emit_outbound peak window.
+    ///
+    /// Cost: one extra HPROF scan (~3 min on the 34 GB dump).
+    pub fn build_mat_scan<F>(
+        self,
+        dfn: &[u32],
+        mut on_outbound: F,
+    ) -> io::Result<(Vec<u64>, Vec<u8>)>
+    where
+        F: FnMut(usize, Vec<u32>) -> io::Result<()>,
+    {
+        let InboundBuilder {
+            path,
+            id_size,
+            n,
+            id_map,
+            id_map_c,
+            id_map_codec,
+            class_addr_to_hist,
+            field_plans_dense,
+            mut in_cursors,
+            total_inb,
+            synthetic_edges,
+            ..
+        } = self;
+
+        let id_map = match id_map {
+            Some(m) => m,
+            None => {
+                let (blob, len) = id_map_c.expect("id_map neither live nor compressed");
+                crate::id_map::IdMap::from_compressed(&blob, len, id_map_codec)?
+            }
+        };
+
+        let mut inb_flat = crate::chunkvec::ChunkU32::zeroed(total_inb as usize);
+        if crate::trace::enabled() {
+            eprintln!(
+                "[trace-rss] inbound mat-scan: total_inb={} edges, inb_flat={} MB",
+                total_inb,
+                (total_inb as usize * 4) / (1024 * 1024)
+            );
+        }
+        crate::trace::probe("inbound mat-scan: after inb_flat alloc");
+
+        // Single HPROF scan: fill inb_flat (inbound) AND collect per-object
+        // forward edges for the on_outbound callback.
+        {
+            let mut r = HprofReader::open(&path)?;
+            let mut scratch: Vec<u8> = Vec::with_capacity(4096);
+            let ids = id_size as u64;
+            let mut cache = crate::id_map::IndexCache::new();
+
+            loop {
+                let tag = match r.u1() {
+                    Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+                    other => other?,
+                };
+                let _ts = r.u4()?;
+                let length = r.u4()? as u64;
+                match tag {
+                    tags::HEAP_DUMP | tags::HEAP_DUMP_SEGMENT => {
+                        Self::scan_inb_and_outbound(
+                            &mut r,
+                            id_size,
+                            ids,
+                            length,
+                            &id_map,
+                            &class_addr_to_hist,
+                            &field_plans_dense,
+                            &mut inb_flat,
+                            &mut in_cursors,
+                            &mut scratch,
+                            &mut cache,
+                            &mut on_outbound,
+                        )?;
+                    }
+                    tags::HEAP_DUMP_END => break,
+                    _ => {
+                        r.skip(length)?;
+                    }
+                }
+            }
+        }
+
+        drop(id_map);
+        drop(class_addr_to_hist);
+        drop(field_plans_dense);
+
+        for &(src, dst) in &synthetic_edges {
+            inb_flat.set(in_cursors[dst as usize] as usize, src);
+            in_cursors[dst as usize] += 1;
+        }
+
+        crate::trace::probe("inbound: before Phase-4 (after mat-scan + drops)");
+        Self::encode_phase4(n, total_inb, in_cursors, inb_flat, dfn)
+    }
+
+    /// Combined inbound-fill + outbound-collect for one HEAP_DUMP[_SEGMENT] record.
+    /// Fills inb_flat and calls on_outbound for each object with its dense targets.
+    #[allow(clippy::too_many_arguments)]
+    fn scan_inb_and_outbound(
+        r: &mut HprofReader,
+        id_size: u8,
+        ids: u64,
+        mut remaining: u64,
+        id_map: &crate::id_map::IdMap,
+        class_addr_to_hist: &HashMap<u64, u32>,
+        field_plans_dense: &[super::FieldPlan],
+        inb_flat: &mut crate::chunkvec::ChunkU32,
+        in_cursors: &mut Vec<u32>,
+        scratch: &mut Vec<u8>,
+        cache: &mut crate::id_map::IndexCache,
+        on_outbound: &mut dyn FnMut(usize, Vec<u32>) -> io::Result<()>,
+    ) -> io::Result<()> {
+        use crate::types::heap;
+
+        macro_rules! checked_sub {
+            ($rem:expr, $sz:expr) => {
+                $rem = $rem.checked_sub($sz).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "segment overrun")
+                })?;
+            };
+        }
+
+        while remaining > 0 {
+            let sub_tag = r.u1()?;
+            checked_sub!(remaining, 1u64);
+
+            match sub_tag {
+                // Root sub-records: skip (no edges to/from these for our purposes)
+                heap::ROOT_UNKNOWN | heap::ROOT_MONITOR_USED => {
+                    r.skip(ids)?;
+                    checked_sub!(remaining, ids);
+                }
+                heap::ROOT_JNI_GLOBAL => {
+                    r.skip(2 * ids)?;
+                    checked_sub!(remaining, 2 * ids);
+                }
+                heap::ROOT_JNI_LOCAL | heap::ROOT_JAVA_FRAME => {
+                    r.skip(ids + 8)?;
+                    checked_sub!(remaining, ids + 8);
+                }
+                heap::ROOT_NATIVE_STACK | heap::ROOT_THREAD_BLOCK => {
+                    r.skip(ids + 4)?;
+                    checked_sub!(remaining, ids + 4);
+                }
+                heap::ROOT_STICKY_CLASS | heap::ROOT_THREAD_OBJ => {
+                    let skip = if sub_tag == heap::ROOT_THREAD_OBJ { ids + 8 } else { ids };
+                    r.skip(skip)?;
+                    checked_sub!(remaining, skip);
+                }
+                heap::CLASS_DUMP => {
+                    // Reuse fill_class_dump_edges logic via fill_heap_2b helper.
+                    // For class objects we still need inbound edges (class→fields).
+                    // Outbound from class dumps: skip for MAT outbound (MAT doesn't
+                    // include static fields in outbound the same way).
+                    let consumed = Pass2::fill_class_dump_edges(
+                        r,
+                        id_size,
+                        id_map,
+                        false, // do_fwd — don't collect for outbound
+                        true,  // do_inb
+                        &mut crate::chunkvec::ChunkU32::zeroed(0),
+                        &mut Vec::new(),
+                        &mut None,
+                        inb_flat,
+                        in_cursors,
+                    )?;
+                    checked_sub!(remaining, consumed);
+                }
+                heap::INSTANCE_DUMP => {
+                    let addr = r.id()?;
+                    r.skip(4)?; // stack_trace_serial
+                    let class_id = r.id()?;
+                    let data_len = r.u4()? as u64;
+                    r.read_bytes_reuse(scratch, data_len as usize)?;
+                    checked_sub!(remaining, ids + 4 + ids + 4 + data_len);
+
+                    let src_idx = match id_map.index_of(addr) {
+                        Some(i) => i,
+                        None => continue,
+                    };
+
+                    let mut fwd: Vec<u32> = Vec::new();
+
+                    // Edge: instance → class object (inbound + outbound)
+                    if let Some(dst) = cache.index_of(id_map, class_id) {
+                        // inbound
+                        inb_flat.set(in_cursors[dst] as usize, src_idx as u32);
+                        in_cursors[dst] += 1;
+                        fwd.push(dst as u32);
+                    }
+
+                    // Object-type instance fields
+                    if let Some(&cidx) = class_addr_to_hist.get(&class_id) {
+                        for &(off, _excluded) in &field_plans_dense[cidx as usize] {
+                            let off = off as usize;
+                            if off + id_size as usize <= scratch.len() {
+                                let ref_val = super::read_ref(&scratch[off..], id_size as usize);
+                                if ref_val != 0 {
+                                    if let Some(dst) = cache.index_of(id_map, ref_val) {
+                                        inb_flat.set(in_cursors[dst] as usize, src_idx as u32);
+                                        in_cursors[dst] += 1;
+                                        fwd.push(dst as u32);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    on_outbound(src_idx, fwd)?;
+                }
+                heap::OBJ_ARRAY_DUMP => {
+                    let addr = r.id()?;
+                    r.skip(4)?; // stack_trace_serial
+                    let count = r.u4()? as u64;
+                    let _elem_class_id = r.id()?;
+                    let byte_len = count.saturating_mul(ids);
+                    r.read_bytes_reuse(scratch, byte_len as usize)?;
+                    checked_sub!(remaining, ids + 4 + 4 + ids + byte_len);
+
+                    let src_idx = match id_map.index_of(addr) {
+                        Some(i) => i,
+                        None => continue,
+                    };
+
+                    let mut fwd: Vec<u32> = Vec::new();
+                    for i in 0..count as usize {
+                        let off = i * id_size as usize;
+                        if off + id_size as usize <= scratch.len() {
+                            let ref_val = super::read_ref(&scratch[off..], id_size as usize);
+                            if ref_val != 0 {
+                                if let Some(dst) = cache.index_of(id_map, ref_val) {
+                                    inb_flat.set(in_cursors[dst] as usize, src_idx as u32);
+                                    in_cursors[dst] += 1;
+                                    fwd.push(dst as u32);
+                                }
+                            }
+                        }
+                    }
+                    on_outbound(src_idx, fwd)?;
+                }
+                heap::PRIM_ARRAY_DUMP => {
+                    // No reference edges in primitive arrays.
+                    let addr = r.id()?;
+                    r.skip(4)?;
+                    let count = r.u4()? as u64;
+                    let elem_type = r.u1()?;
+                    let elem_size = crate::types::HprofType::from_code(elem_type)
+                        .map(|t| t.byte_size() as u64)
+                        .unwrap_or(1);
+                    let byte_len = count.saturating_mul(elem_size);
+                    r.skip(byte_len)?;
+                    checked_sub!(remaining, ids + 4 + 4 + 1 + byte_len);
+                    if let Some(src_idx) = id_map.index_of(addr) {
+                        on_outbound(src_idx, Vec::new())?;
+                    }
+                }
+                heap::HEAP_DUMP_INFO => {
+                    r.skip(4 + ids)?;
+                    checked_sub!(remaining, 4 + ids);
+                }
+                _ => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("unknown heap sub-tag {sub_tag:#x}"),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
 }

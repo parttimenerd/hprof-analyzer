@@ -1444,7 +1444,7 @@ impl Pass2 {
     /// object's structural edges (→ superclass, → loader, → each Object-typed
     /// static field) into the forward and/or inbound CSR. Returns bytes consumed.
     #[allow(clippy::too_many_arguments)]
-    fn fill_class_dump_edges(
+    pub(crate) fn fill_class_dump_edges(
         r: &mut HprofReader,
         id_size: u8,
         id_map: &crate::id_map::IdMap,

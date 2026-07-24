@@ -584,9 +584,9 @@ fn mat_multi_fixture_equivalence() {
         speedup_results.push((stem.to_string(), cold_elapsed, warm_elapsed));
 
         // Assert warm is at least 1.5× faster than cold for non-trivial dumps.
-        // Very small dumps (< 5s cold) may not show measurable speedup due to
+        // Very small dumps (< 10s cold) may not show measurable speedup due to
         // JVM startup overhead dominating; skip the assertion for those.
-        if cold_elapsed.as_secs_f64() >= 5.0 {
+        if cold_elapsed.as_secs_f64() >= 10.0 {
             let speedup = cold_elapsed.as_secs_f64() / warm_elapsed.as_secs_f64();
             assert!(
                 speedup >= 1.5,

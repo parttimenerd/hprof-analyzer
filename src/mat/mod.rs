@@ -402,6 +402,19 @@ impl MatEmitter {
         Ok(())
     }
 
+    /// Callback-driven emit for `outbound`. Avoids per-entry `Vec<i32>`
+    /// allocations. `n_entries` includes the synthetic root at index 0.
+    /// `f(i, push)` is called once per entry; caller pushes pre-sorted i32 ids.
+    pub fn emit_outbound_cb<F>(&self, n_entries: usize, f: F) -> io::Result<()>
+    where
+        F: FnMut(&mut dyn FnMut(i32) -> io::Result<()>) -> io::Result<()>,
+    {
+        let w = BufWriter::new(File::create(self.path("outbound"))?);
+        let w = int_index_1n::write_sorted_cb(w, n_entries, f)?;
+        w.into_inner().map_err(|e| e.into_error())?;
+        Ok(())
+    }
+
     /// Emit the MAT `inbound` IntArray1N (SORTED writer). `entries[i]` is the
     /// per-object referrer list; empty lists are written as unset holes (MAT
     /// never `set`s them). MAT's inbound has NO pseudo class-object element

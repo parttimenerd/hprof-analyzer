@@ -1229,28 +1229,41 @@ fn run(
                 .restore()?;
             let fwd_off = fwd_off_c.restore()?;
             let fwd_tgt = fwd_tgt_c.restore()?;
-            m.emit_outbound_iter(
-                std::iter::once(Vec::new()) // entry 0 = synthetic root
-                    .chain(mm.sorted().iter().map(|&old_id| {
-                        let lo = fwd_off[old_id as usize] as usize;
-                        let hi = fwd_off[old_id as usize + 1] as usize;
-                        let mut tgt: Vec<i32> = fwd_tgt[lo..hi]
-                            .iter()
-                            .filter_map(|&raw| { let mid = mm.translate(raw as i32); if mid >= 0 { Some(mid) } else { None } })
-                            .collect();
-                        tgt.sort_unstable();
-                        tgt.dedup();
-                        let coid = class_obj_ids[old_id as usize];
-                        let class_mat = if coid == u32::MAX { 0 } else { mm.translate(coid as i32).max(0) };
-                        if let Ok(pos) = tgt.binary_search(&class_mat) {
-                            tgt.remove(pos);
-                        }
-                        let mut e: Vec<i32> = Vec::with_capacity(tgt.len() + 1);
-                        e.push(class_mat);
-                        e.extend_from_slice(&tgt);
-                        e
-                    }))
-            )?;
+            let n_entries = mm.mat_count(); // includes synthetic root at idx 0
+            let sorted = mm.sorted();
+            let mut idx = 0usize; // index into sorted (0 = synthetic root)
+            let mut scratch: Vec<i32> = Vec::new();
+            m.emit_outbound_cb(n_entries, |push| {
+                if idx == 0 {
+                    // synthetic root: no outbound edges
+                    idx += 1;
+                    return Ok(());
+                }
+                let old_id = sorted[idx - 1];
+                idx += 1;
+                let lo = fwd_off[old_id as usize] as usize;
+                let hi = fwd_off[old_id as usize + 1] as usize;
+                scratch.clear();
+                for &raw in &fwd_tgt[lo..hi] {
+                    let mid = mm.translate(raw as i32);
+                    if mid >= 0 {
+                        scratch.push(mid);
+                    }
+                }
+                scratch.sort_unstable();
+                scratch.dedup();
+                let coid = class_obj_ids[old_id as usize];
+                let class_mat = if coid == u32::MAX { 0 } else { mm.translate(coid as i32).max(0) };
+                if let Ok(pos) = scratch.binary_search(&class_mat) {
+                    scratch.remove(pos);
+                }
+                // push class_mat first, then remaining targets (already sorted)
+                push(class_mat)?;
+                for &v in &scratch {
+                    push(v)?;
+                }
+                Ok(())
+            })?;
             drop(fwd_tgt);
             drop(fwd_off);
             drop(class_obj_ids);
