@@ -151,12 +151,9 @@ impl ServeState {
                         "/report/leaks" => section_response(&report.leaks, want_md, |r, out| {
                             crate::report::render_leak_suspects(r, out);
                         }),
-                        "/report/top" => section_response_2(
-                            &report.top,
-                            report.leaks.total_shallow,
-                            want_md,
-                            |t, total, out| crate::report::render_top_consumers(t, total, out),
-                        ),
+                        "/report/top" => section_response(&report.top, want_md, |t, out| {
+                            crate::report::render_top_consumers(t, report.leaks.total_shallow, out);
+                        }),
                         "/report/threads" => section_response(&report.threads, want_md, |r, out| {
                             crate::report::render_threads(r, false, out);
                         }),
@@ -168,7 +165,7 @@ impl ServeState {
             // ── OQL ───────────────────────────────────────────────────────────
             ("POST", "/") | ("POST", "/query") | ("POST", "/stream")
             | ("GET", "/help") | ("GET", "/schema") => {
-                self.oql.route(method, url, body)
+                self.oql.route_guarded(method, url, body)
             }
 
             // ── Meta ──────────────────────────────────────────────────────────
@@ -223,24 +220,6 @@ fn section_response<T: serde::Serialize>(
     if want_md {
         let mut out = String::new();
         render_fn(section, &mut out);
-        (200, out, "text/markdown; charset=utf-8")
-    } else {
-        match serde_json::to_string_pretty(section) {
-            Ok(j) => (200, j, "application/json"),
-            Err(e) => (500, e.to_string(), "text/plain"),
-        }
-    }
-}
-
-fn section_response_2<T: serde::Serialize>(
-    section: &T,
-    extra: u64,
-    want_md: bool,
-    render_fn: impl FnOnce(&T, u64, &mut String),
-) -> (u16, String, &'static str) {
-    if want_md {
-        let mut out = String::new();
-        render_fn(section, extra, &mut out);
         (200, out, "text/markdown; charset=utf-8")
     } else {
         match serde_json::to_string_pretty(section) {
