@@ -989,8 +989,16 @@ fn project_string_row_item(it: &SelectItem, dense: u32, ctx: &LateCtx) -> QueryV
 /// Project a single SELECT item for an `array_index_rows` row from a dense object
 /// index. `ArrayIndex`/`ArraySlice` items are handled by the caller (they always
 /// project `Null` at this stage). All other items are resolved here using the
-/// same late-phase data available in `LateCtx`.
-fn project_array_index_item(it: &SelectItem, dense: u32, ctx: &LateCtx) -> QueryValue {
+/// same late-phase data available in `LateCtx`. `class_name` is the query's
+/// FROM class name, used to resolve `@displayName`/`@classOf` — every row in an
+/// array-index result came from the same FROM class, mirroring how `execute.rs`
+/// resolves these attrs for array rows at scan time.
+fn project_array_index_item(
+    it: &SelectItem,
+    dense: u32,
+    ctx: &LateCtx,
+    class_name: &str,
+) -> QueryValue {
     match it {
         SelectItem::Attr(Attr::ObjectId) => QueryValue::Int(dense as i64),
         SelectItem::Attr(Attr::ObjectAddress) => {
@@ -1008,9 +1016,16 @@ fn project_array_index_item(it: &SelectItem, dense: u32, ctx: &LateCtx) -> Query
                 None => QueryValue::Null,
             }
         }
+        // `@displayName` and `@classOf` both return the class name of the matched
+        // object. Every row in an array-index result came from the query's FROM
+        // class, so the FROM class name is the correct value here — consistent with
+        // how `execute.rs` resolves these attrs for array rows during the scan.
+        SelectItem::Attr(Attr::DisplayName) | SelectItem::Attr(Attr::ClassOf) => {
+            QueryValue::Str(class_name.to_string())
+        }
         SelectItem::Star => QueryValue::ObjRef {
             index: dense as u64,
-            class: "?".to_string(),
+            class: class_name.to_string(),
             addr: None,
         },
         _ => QueryValue::Null,
@@ -1026,6 +1041,7 @@ fn project_array_index_item(it: &SelectItem, dense: u32, ctx: &LateCtx) -> Query
 fn array_index_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
     let seeds: Vec<u32> = entry.carry.indices();
     let columns: Vec<QueryColumn> = crate::query::execute::query_columns(q);
+    let class_name = q.from.class_name();
     let mut rows: Vec<Vec<QueryValue>> = Vec::new();
     for &s in &seeds {
         let row: Vec<QueryValue> = q
@@ -1037,7 +1053,7 @@ fn array_index_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryR
                 | SelectItem::Attr(Attr::ArraySlice { .. }) => QueryValue::Null,
                 // All other columns: resolve normally from the dense index using
                 // the same late-phase projection as other stage entry functions.
-                _ => project_array_index_item(it, s, ctx),
+                _ => project_array_index_item(it, s, ctx, class_name),
             })
             .collect();
         rows.push(row);
