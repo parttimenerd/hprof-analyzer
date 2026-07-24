@@ -111,6 +111,12 @@ impl MatIdMap {
         &self.sorted
     }
 
+    /// Release the `addrs` vector after idx/o2hprof emission; saves ~4 GB.
+    /// After this call, `addr_at_mat` always returns 0.
+    pub fn free_addrs(&mut self) {
+        self.addrs = Vec::new();
+    }
+
     /// Address of the object with the given mat-id (1-based). Returns 0 for
     /// out-of-range or mat-id 0 (synthetic root).
     pub fn addr_at_mat(&self, mat_id: i32) -> u64 {

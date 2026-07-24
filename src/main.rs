@@ -1136,7 +1136,7 @@ fn run(
     // our dense-id space to MAT's (reachable-only, address-sorted, id-0=synthetic).
     // Restore mat_addrs_c here (just before use) so it's uncompressed for the
     // minimum possible window.
-    let mat_map: Option<mat::MatIdMap> = if let Some(addrs_c) = mat_addrs_c {
+    let mut mat_map: Option<mat::MatIdMap> = if let Some(addrs_c) = mat_addrs_c {
         let addrs = addrs_c.restore()?;
         let mm = mat::MatIdMap::build(g.n, &g.idom, |i| addrs[i]);
         // emit idx: mat-id 0 = address 0x0 (synthetic root), then sorted reachable
@@ -1170,6 +1170,9 @@ fn run(
         None
     };
     drop(mat_hprof_offsets_c);
+    // Free mm.addrs (~4 GB) now that idx/o2hprof are emitted; addr_at_mat not needed.
+    if let Some(ref mut mm) = mat_map { mm.free_addrs(); }
+    crate::trace::probe("main: after free_addrs (before mat_inv)");
     // Build the row→class-object id inverse table now that mm is available, so
     // we can prefer reachable class-objects when multiple map to the same row.
     let mut mat_inv: Option<Vec<i32>> = if let (Some(ref mm), Some(ref coc)) =
