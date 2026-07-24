@@ -114,6 +114,37 @@ because it never builds the dominator tree. But that also means it cannot report
 retained sizes, leak suspects, root paths, or Top Consumers — the analyses
 `hprof-analyzer` exists to provide.
 
+## Speeding up Eclipse MAT
+
+If you use Eclipse MAT for interactive heap exploration, hprof-analyzer can
+dramatically reduce the time and memory needed for MAT's first open of a large
+dump.
+
+MAT parses a 34 GB heap dump in ~4 s and writes 12 cache files alongside the
+`.hprof`. On the next open it reads from cache and loads in ~0.9 s — but the
+first parse peaks at **~55 GB RSS** inside the JVM. hprof-analyzer generates
+the same cache files in a single pass peaking at **~19 GB RSS**:
+
+```sh
+# Generate MAT cache files (low RSS, no JVM tuning needed)
+hprof-analyzer mat caches heap.hprof /path/to/heap-dir/
+
+# Now open heap.hprof in MAT as usual — it detects the cache and skips parsing
+```
+
+MAT auto-detects the cache: if the index files are present and newer than the
+`.hprof`, it prints "Reopening parsed heap dump file" and skips its own parser.
+
+If you also want hprof-analyzer's own report, generate both in one pass (single
+hprof read, shared pipeline):
+
+```sh
+hprof-analyzer analyze heap.hprof --mat /path/to/heap-dir/ report.html
+```
+
+See [`docs/mat-cache.md`](docs/mat-cache.md) for the full list of generated
+files, known divergences from MAT's output, and the RSS budget details.
+
 ## Install
 
 ### Prebuilt binary (recommended)
