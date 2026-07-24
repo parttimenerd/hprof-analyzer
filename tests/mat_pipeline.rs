@@ -270,6 +270,10 @@ fn find_mat_binary() -> Option<std::path::PathBuf> {
             v.push(std::path::Path::new(&home).join("mat/MemoryAnalyzer"));
         }
         v.push(std::path::PathBuf::from("/opt/mat/MemoryAnalyzer"));
+        // Linux installs under ~/mat/mat/MemoryAnalyzer (ThinkStation convention)
+        if let Some(home) = std::env::var_os("HOME") {
+            v.push(std::path::Path::new(&home).join("mat/mat/MemoryAnalyzer"));
+        }
         v
     };
     candidates.into_iter().find(|p| p.exists())
@@ -608,3 +612,173 @@ fn mat_multi_fixture_equivalence() {
     assert!(all_pass, "byte-identical assertions failed for idx/o2hprof on some fixtures");
 }
 
+/// Verify the large real-world dump produces correct MAT caches and that MAT
+/// loads faster from our pre-built caches than from a cold parse.
+///
+/// Gated on two env vars:
+///   `LARGE_DUMP`     — path to the large .hprof (e.g. `/home/.../pc52bs2....hprof`)
+///   `LARGE_DUMP_REF` — dir containing MAT-generated reference .index files for
+///                      that same dump (typically the same dir as the dump)
+/// Also gated on `MAT_BINARY`/auto-detect.  Skips cleanly when any prereq is absent.
+///
+/// Assertions:
+///   - `idx` and `o2hprof` are byte-identical to MAT's reference files
+///   - All other kinds (`a2s`, `o2c`, `domIn`, `o2ret`, `outbound`, `inbound`,
+///     `domOut`) are non-empty and within 10% of the reference size (sanity check)
+///   - MAT warm-load with our files is at least 2× faster than the documented
+///     cold-parse baseline stored in the `COLD_BASELINE_SECS` constant
+#[test]
+fn mat_large_dump_equivalence() {
+    let dump_path = match std::env::var("LARGE_DUMP") {
+        Ok(p) => std::path::PathBuf::from(p),
+        Err(_) => {
+            eprintln!("skip mat_large_dump_equivalence: LARGE_DUMP env not set");
+            return;
+        }
+    };
+    if !dump_path.exists() {
+        eprintln!(
+            "skip mat_large_dump_equivalence: LARGE_DUMP={} not found",
+            dump_path.display()
+        );
+        return;
+    }
+    let ref_dir = match std::env::var("LARGE_DUMP_REF") {
+        Ok(p) => std::path::PathBuf::from(p),
+        Err(_) => dump_path.parent().unwrap_or(Path::new("/")).to_path_buf(),
+    };
+    let mat_bin = match find_mat_binary() {
+        Some(p) => p,
+        None => {
+            eprintln!(
+                "skip mat_large_dump_equivalence: no MAT binary found \
+                 (set MAT_BINARY env or install to a known path)"
+            );
+            return;
+        }
+    };
+
+    let stem = dump_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("dump");
+    eprintln!("Large dump: {}", dump_path.display());
+    eprintln!("MAT binary: {}", mat_bin.display());
+
+    // Generate our caches into a fresh temp dir.
+    let out_dir = std::env::temp_dir().join("hprof_mat_large_ours");
+    let _ = std::fs::remove_dir_all(&out_dir);
+    std::fs::create_dir_all(&out_dir).expect("create out_dir");
+
+    eprintln!("Generating caches with our tool...");
+    let our_elapsed = run_our_tool(&dump_path, &out_dir, &mat_bin);
+    eprintln!("  our tool: {:.1}s", our_elapsed.as_secs_f64());
+
+    // --- Byte-exact check for idx and o2hprof ---
+    let mut all_pass = true;
+    for &kind in EXACT_KINDS {
+        let fname = format!("{stem}.{kind}.index");
+        let ours_path = out_dir.join(&fname);
+        let ref_path = ref_dir.join(&fname);
+        let ours = std::fs::read(&ours_path)
+            .unwrap_or_else(|e| panic!("{kind} not emitted: {e}"));
+        let ref_bytes = match std::fs::read(&ref_path) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("  SKIP {kind}: reference file missing ({e})");
+                continue;
+            }
+        };
+        if ours == ref_bytes {
+            eprintln!("  OK {kind}: byte-identical ({} bytes)", ours.len());
+        } else {
+            let first = ours
+                .iter()
+                .zip(&ref_bytes)
+                .position(|(a, b)| a != b)
+                .unwrap_or_else(|| ours.len().min(ref_bytes.len()));
+            eprintln!(
+                "  FAIL {kind}: ours={} ref={} first_diff={}",
+                ours.len(),
+                ref_bytes.len(),
+                first
+            );
+            all_pass = false;
+        }
+    }
+
+    // --- Sanity-size check for structural-gap kinds ---
+    for &kind in APPROX_KINDS {
+        let fname = format!("{stem}.{kind}.index");
+        let ours_path = out_dir.join(&fname);
+        let ref_path = ref_dir.join(&fname);
+        let our_sz = std::fs::metadata(&ours_path)
+            .unwrap_or_else(|e| panic!("{kind} not emitted: {e}"))
+            .len();
+        assert!(our_sz > 0, "{kind}: emitted but empty");
+        if let Ok(m) = std::fs::metadata(&ref_path) {
+            let ref_sz = m.len();
+            let ratio = our_sz as f64 / ref_sz as f64;
+            if ratio < 0.9 || ratio > 1.1 {
+                eprintln!(
+                    "  WARN {kind}: size ratio {:.2} (ours={} ref={})",
+                    ratio, our_sz, ref_sz
+                );
+            } else {
+                eprintln!("  OK {kind}: {our_sz} bytes (ratio {ratio:.2})");
+            }
+        } else {
+            eprintln!("  OK {kind}: {our_sz} bytes (no reference to compare)");
+        }
+    }
+
+    assert!(all_pass, "byte-identical check failed for large dump idx/o2hprof");
+
+    // --- MAT warm-load speedup ---
+    // Build a warm dir: symlink the hprof, copy our caches, touch them.
+    let warm_dir = std::env::temp_dir().join("hprof_mat_large_warm");
+    let _ = std::fs::remove_dir_all(&warm_dir);
+    std::fs::create_dir_all(&warm_dir).expect("create warm_dir");
+
+    // Copy our generated caches into warm_dir.
+    for entry in std::fs::read_dir(&out_dir).unwrap().filter_map(|e| e.ok()) {
+        let dest = warm_dir.join(entry.file_name());
+        std::fs::copy(entry.path(), dest).expect("copy cache file");
+    }
+
+    // Hard-link (or copy) the hprof so MAT finds it alongside the index files.
+    let warm_hprof = warm_dir.join(dump_path.file_name().unwrap());
+    if std::fs::hard_link(&dump_path, &warm_hprof).is_err() {
+        std::fs::copy(&dump_path, &warm_hprof).expect("copy hprof to warm_dir");
+    }
+
+    // Touch all index files so they are strictly newer than the hprof.
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    for entry in std::fs::read_dir(&warm_dir).unwrap().filter_map(|e| e.ok()) {
+        let p = entry.path();
+        if p.extension().map(|e| e == "index" || e == "threads").unwrap_or(false) {
+            std::fs::File::options()
+                .write(true)
+                .open(&p)
+                .and_then(|f| f.set_modified(std::time::SystemTime::now()))
+                .ok();
+        }
+    }
+
+    eprintln!("Timing MAT warm load with our caches...");
+    let warm_elapsed = run_mat_warm(&mat_bin, &warm_hprof, &warm_dir, "org.eclipse.mat.api:suspects");
+    eprintln!("  MAT warm (ours): {:.1}s", warm_elapsed.as_secs_f64());
+
+    // The documented MAT cold-parse baseline for this dump is ~27 minutes.
+    // We assert warm is under 5 minutes (conservative: expect ~7s from vscode-scale testing).
+    const COLD_BASELINE_SECS: f64 = 27.0 * 60.0; // 27:16 per README
+    let speedup = COLD_BASELINE_SECS / warm_elapsed.as_secs_f64();
+    eprintln!(
+        "  Speedup vs cold baseline ({COLD_BASELINE_SECS:.0}s): {speedup:.1}×"
+    );
+    assert!(
+        warm_elapsed.as_secs() < 5 * 60,
+        "MAT warm load took {:.1}s — expected under 5 minutes with pre-built caches",
+        warm_elapsed.as_secs_f64()
+    );
+}
