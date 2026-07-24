@@ -474,26 +474,122 @@ been started yet. While analysis is running the server returns `202 Accepted`.
 Use `GET /status` to poll until the status is `"ready"`, or trigger analysis
 explicitly with `POST /analyze` before issuing report requests.
 
+`POST /analyze` always returns 200 with a JSON body describing what happened:
+
+```json
+{"ok":true,"status":"started"}          // analysis kicked off now
+{"ok":true,"status":"already_running"}  // already in progress
+{"ok":true,"status":"already_done"}     // nothing to do
+```
+
+### Retained sizes and full-analysis queries
+
+At startup the server runs a **query-only parse** (fast, no dominator tree).
+This means `@retainedHeapSize`, `dominators()`, `dominatorof()`, `@inbounds`,
+and `@outbounds` are **not available** until the full analysis has been
+completed via `POST /analyze` (or an implicit trigger from a `GET /report/…`
+request).
+
+Once analysis is done the OQL engine automatically upgrades to the full
+pipeline, and retained-size queries work without restarting the server.
+
+### Limiting result rows
+
+Append `?limit=N` to any `/report/leaks`, `/report/top`, or `/report/threads`
+endpoint to cap the number of rows in the response:
+
+```console
+$ curl -s 'http://127.0.0.1:7070/report/leaks?limit=5'
+$ curl -s 'http://127.0.0.1:7070/report/leaks?limit=5&format=md'
+```
+
+### OQL body format
+
+`POST /` (and its alias `POST /query`) accept either a raw SQL string or a JSON
+object in the request body:
+
+```console
+# Plain SQL string
+$ curl -s http://127.0.0.1:7070/ -d 'SELECT COUNT(*) FROM java.lang.String'
+
+# JSON body (useful for embedding queries with special characters)
+$ curl -s http://127.0.0.1:7070/ \
+    -H 'Content-Type: application/json' \
+    -d '{"query":"SELECT COUNT(*) FROM java.lang.String","limit":10}'
+```
+
+The JSON body accepts:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `query` | string | OQL query text (required) |
+| `limit` | integer | Cap result rows (optional; overrides `LIMIT` clause) |
+
+Request bodies larger than **64 KiB** are rejected with HTTP 413.
+
+### NDJSON streaming (`POST /stream`)
+
+`POST /stream` runs an OQL query and returns results as
+[Newline-Delimited JSON](https://ndjson.org/): one JSON object per line,
+flushed as rows are produced. This is useful for large result sets or
+streaming to a pipeline.
+
+```console
+$ curl -s http://127.0.0.1:7070/stream \
+    -d 'SELECT @objectId, @usedHeapSize FROM java.lang.String' \
+    | head -5
+{"@objectId":1234,"@usedHeapSize":24}
+{"@objectId":1235,"@usedHeapSize":24}
+...
+```
+
+### Error responses
+
+All endpoints return structured JSON errors:
+
+```json
+{"ok":false,"error":{"kind":"query","message":"<reason>"}}
+{"ok":false,"error":{"kind":"analysis_failed","message":"<reason>"}}
+{"ok":false,"error":{"kind":"not_ready","message":"analysis not started — POST /analyze first"}}
+{"ok":false,"error":{"kind":"body_too_large","message":"request body exceeds 65536 bytes"}}
+```
+
+HTTP status codes: `400` for bad queries or missing `query` field, `404` for
+unknown paths, `405` for wrong method, `413` for oversized bodies, `503` if
+a `/report/…` section is requested before analysis has been triggered.
+
 ### Example workflow
 
 ```console
+# Start the server
+$ hprof-analyzer server heap.hprof --port 7070 &
+
 # Check current status
 $ curl -s http://127.0.0.1:7070/status
 {"status":"not_started"}
 
 # Trigger full analysis
 $ curl -s -X POST http://127.0.0.1:7070/analyze
+{"ok":true,"status":"started"}
 
 # Poll until ready
-$ curl -s http://127.0.0.1:7070/status
-{"status":"ready"}
+$ until curl -sf http://127.0.0.1:7070/status | grep -q '"ready"'; do sleep 1; done
 
 # Full report as Markdown
 $ curl -s 'http://127.0.0.1:7070/report?format=md'
 
-# Leak suspects as JSON
-$ curl -s http://127.0.0.1:7070/report/leaks | jq .
+# Leak suspects as JSON (top 5)
+$ curl -s 'http://127.0.0.1:7070/report/leaks?limit=5' | jq .
 
-# Run an OQL query
+# Run an OQL query (plain text)
 $ curl -s http://127.0.0.1:7070/ -d 'SELECT @displayName FROM java.lang.Thread'
+
+# Run a retained-size query (requires analysis to be done first)
+$ curl -s http://127.0.0.1:7070/ \
+    -d 'SELECT @displayName, @retainedHeapSize FROM java.lang.Thread ORDER BY @retainedHeapSize DESC LIMIT 5'
+
+# Stream a large result set
+$ curl -s http://127.0.0.1:7070/stream \
+    -d 'SELECT @objectId, @usedHeapSize FROM java.lang.String' \
+    | wc -l
 ```

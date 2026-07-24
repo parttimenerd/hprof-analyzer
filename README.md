@@ -131,11 +131,14 @@ Gzip-compressed dumps (`.hprof.gz`) are read transparently.
 
 This tool is **deliberately narrow**: it renders static replicas of the three
 views above plus threads, and nothing else. If you need to *explore* a heap —
-run OQL queries, walk the dominator tree interactively, inspect arbitrary
-objects and their fields, or use the full breadth of MAT's analyses — reach for
-**[Eclipse MAT](https://eclipse.dev/mat/)**, the complete interactive GUI. Use
-`hprof-analyzer` instead when you already know you want those reports and want
-them fast, scriptable, or on a dump too large to open comfortably.
+walk the dominator tree interactively, inspect arbitrary objects and their
+fields, or use the full breadth of MAT's analyses — reach for
+**[Eclipse MAT](https://eclipse.dev/mat/)**, the complete interactive GUI.
+
+`hprof-analyzer` now also ships an **OQL query engine** (see
+[docs/OQL.md](docs/OQL.md)) and an HTTP server (`server` subcommand) for
+programmatic access, so for scripting and LLM-assisted dump triage it is
+often a better fit than MAT. Use MAT when you need interactive GUI exploration.
 
 If all you need is a class histogram,
 [`hprof-slurp`](https://github.com/agourlay/hprof-slurp) is faster and lighter
@@ -219,6 +222,8 @@ Give it a path and it does the right thing:
 Named subcommands:
   compare      Compare reports (MAT export vs ours, or two of ours across time)
   completions  Generate a shell completion script
+  query        Run OQL queries against a heap dump (no full report needed)
+  server       Serve OQL + report sections over HTTP
   dev          Developer / diagnostic commands
 ```
 
@@ -347,6 +352,99 @@ for completions:
 hprof-analyzer completions zsh  > ~/.zsh/completions/_hprof-analyzer
 hprof-analyzer completions bash > /etc/bash_completion.d/hprof-analyzer
 ```
+
+### OQL queries (`query` subcommand)
+
+Run SQL-flavoured queries against a heap dump without building a full report.
+The `query` subcommand does a fast streaming parse and answers queries directly.
+
+```sh
+# Count all String instances
+hprof-analyzer query heap.hprof --query "SELECT COUNT(*) FROM java.lang.String"
+
+# Top 10 threads by shallow size
+hprof-analyzer query heap.hprof \
+    --query "SELECT @displayName, @usedHeapSize FROM java.lang.Thread ORDER BY @usedHeapSize DESC LIMIT 10"
+
+# Multiple queries in one pass
+hprof-analyzer query heap.hprof \
+    --query "SELECT COUNT(*) FROM java.lang.String" \
+    --query "SELECT COUNT(*) FROM java.lang.Thread"
+
+# Interactive REPL with tab-completion
+hprof-analyzer query heap.hprof --repl
+```
+
+Retained sizes (`@retainedHeapSize`), dominators, and reference-graph
+attributes (`@inbounds`, `@outbounds`) require the **full analysis pipeline**
+and are not available in the `query` subcommand. Pass `--query` /
+`--query-file` to the main command instead (see below), or use the `server`
+subcommand which unlocks retained-size queries after `POST /analyze`.
+
+To embed queries in the full report, pass `--query` / `--query-file` to the
+main analysis command:
+
+```sh
+hprof-analyzer heap.hprof report.html \
+    --query "SELECT @displayName, @retainedHeapSize FROM java.lang.Thread ORDER BY @retainedHeapSize DESC LIMIT 20"
+```
+
+The full OQL language reference — grammar, attributes, aggregates, visualization
+directives, worked examples — is in [docs/OQL.md](docs/OQL.md).
+
+### HTTP server (`server` subcommand)
+
+`server` starts a lightweight HTTP API on `127.0.0.1` (loopback only) that
+exposes OQL queries and all four report sections as JSON or Markdown endpoints.
+Designed for use with LLM tooling, `curl` pipelines, and CI scripts that need
+more than a static report.
+
+```sh
+hprof-analyzer server heap.hprof           # default port 7070
+hprof-analyzer server heap.hprof --port 8080
+```
+
+The server prints a startup banner listing all available endpoints.
+
+**Key endpoints:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/status` | `{"status":"ready"\|"analyzing"\|"not_started"}` |
+| POST | `/analyze` | Trigger full analysis (retained sizes, dominators) |
+| POST | `/` | Run OQL query → JSON |
+| POST | `/stream` | Run OQL query → NDJSON (streaming) |
+| GET | `/report` | Full report JSON (or `?format=md`) |
+| GET | `/report/overview` | System overview section |
+| GET | `/report/leaks` | Leak suspects section |
+| GET | `/report/top` | Top consumers section |
+| GET | `/report/threads` | Thread overview section |
+
+**Lazy analysis:** The first `GET /report/…` triggers analysis automatically.
+Report endpoints return `202 Accepted` while analysis is running; poll
+`GET /status` until `"ready"`.
+
+**Retained-size queries:** At startup the server runs a fast query-only parse.
+`@retainedHeapSize` and dominator attributes are available only after the full
+analysis completes (via `POST /analyze` or an implicit trigger).
+
+```sh
+# Start server, trigger analysis, wait, then query
+hprof-analyzer server heap.hprof &
+curl -s -X POST http://127.0.0.1:7070/analyze
+until curl -sf http://127.0.0.1:7070/status | grep -q '"ready"'; do sleep 1; done
+
+# Report sections
+curl -s 'http://127.0.0.1:7070/report/leaks?limit=5' | jq .
+curl -s 'http://127.0.0.1:7070/report/overview?format=md'
+
+# OQL query
+curl -s http://127.0.0.1:7070/ -d 'SELECT COUNT(*) FROM java.lang.String'
+```
+
+See [docs/OQL.md — server subcommand](docs/OQL.md#server-subcommand) for the
+full endpoint reference, body format, `?limit=N`, NDJSON streaming, and error
+response shapes.
 
 ## Performance
 
