@@ -66,7 +66,7 @@
 //! implemented here (our reference dumps have bodies < 4 GiB). If any position
 //! reaches 2^32 we return an [`io::Error`] rather than emit a wrong file.
 
-use std::io::{self, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 
 use super::int_index::IntIndexStreamer;
 #[cfg(test)]
@@ -248,25 +248,33 @@ where
 /// An entry with no values is written as a hole (header == 0).
 ///
 /// This eliminates the 513M × alloc/free cycle that causes allocator RSS
-/// fragmentation on large dumps.
+/// fragmentation on large dumps. Header entries are spooled to a temp file
+/// instead of a Vec<i32> to avoid a ~2 GB in-memory allocation on large dumps.
 pub fn write_sorted_cb<W, F>(w: W, n_entries: usize, mut f: F) -> io::Result<W>
 where
     W: Write,
     F: FnMut(&mut dyn FnMut(i32) -> io::Result<()>) -> io::Result<()>,
 {
     let mut cw = CountingWriter::new(w);
-    let mut header: Vec<i32> = Vec::with_capacity(n_entries);
+    // Spool raw header i32 BE values to a temp file instead of a Vec<i32> to
+    // avoid a ~2 GB peak allocation for large dumps (~513M entries × 4 bytes).
+    let tmp_path = format!("/tmp/hprof_idx_hdr_{}", std::process::id());
+    let mut hdr_tmp = std::fs::OpenOptions::new()
+        .read(true).write(true).create(true).truncate(true)
+        .open(&tmp_path)?;
     let mut body = IntIndexStreamer::new(&mut cw);
     let mut body_size: i64 = 0;
+    let mut entry_count: usize = 0;
 
     for _ in 0..n_entries {
         let mut had_values = false;
         let mut header_val: i32 = 0;
         let pos = body_size + 1;
         if pos >= (1i64 << 32) {
+            let _ = std::fs::remove_file(&tmp_path);
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("header2/PosIndexStreamer path not implemented; bodyPos {pos} at entry {}", header.len()),
+                format!("header2/PosIndexStreamer path not implemented; bodyPos {pos} at entry {entry_count}"),
             ));
         }
         {
@@ -284,15 +292,22 @@ where
                 Ok(())
             })?;
         }
-        header.push(if had_values { header_val } else { 0 });
+        let hval = if had_values { header_val } else { 0 };
+        hdr_tmp.write_all(&hval.to_be_bytes())?;
+        entry_count += 1;
     }
     body.finish()?;
     let divider = cw.bytes_written() as i64;
     let mut w = cw.into_inner();
+    hdr_tmp.seek(SeekFrom::Start(0))?;
     let mut hdr = IntIndexStreamer::with_position(&mut w, divider);
-    for &pos in &header {
-        hdr.push(pos)?;
+    let mut buf = [0u8; 4];
+    for _ in 0..entry_count {
+        hdr_tmp.read_exact(&mut buf)?;
+        hdr.push(i32::from_be_bytes(buf))?;
     }
+    drop(hdr_tmp);
+    let _ = std::fs::remove_file(&tmp_path);
     hdr.finish()?;
     w.write_all(&divider.to_be_bytes())?;
     Ok(w)
