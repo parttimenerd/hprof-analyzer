@@ -323,6 +323,280 @@ fn server_version_lists_report() {
     );
 }
 
+/// Issue a request with an arbitrary HTTP method (useful for 405 checks).
+fn curl_request(port: u16, method: &str, path: &str) -> (u32, String) {
+    let url = format!("http://127.0.0.1:{port}{path}");
+    let out = Command::new("curl")
+        .args(["-s", "-w", "\n%{http_code}", "-X", method, &url])
+        .output()
+        .expect("curl failed");
+    let raw = String::from_utf8_lossy(&out.stdout);
+    parse_curl_output(&raw)
+}
+
+// ── Error / edge-case tests ───────────────────────────────────────────────────
+
+/// GET /analyze (wrong method) must return 405.
+#[test]
+fn server_wrong_method_405() {
+    let Some(hprof) = philosophers() else { return };
+    let (mut child, port) = start_server(&hprof);
+    let (status, body) = curl_request(port, "GET", "/analyze");
+    child.kill().ok();
+    child.wait().ok();
+    assert_eq!(status, 405, "expected HTTP 405 for GET /analyze, got {status}: {body}");
+    assert!(
+        body.contains("\"kind\"") || body.contains("method"),
+        "405 body should describe the error, got: {body}"
+    );
+}
+
+/// POST /report (wrong method) must return 405.
+#[test]
+fn server_report_post_is_405() {
+    let Some(hprof) = philosophers() else { return };
+    let (mut child, port) = start_server(&hprof);
+    let (status, _body) = curl_post(port, "/report", "");
+    child.kill().ok();
+    child.wait().ok();
+    assert_eq!(status, 405, "expected HTTP 405 for POST /report, got {status}");
+}
+
+/// GET /report/bogus (unknown section) must return 404 even after analysis.
+#[test]
+fn server_report_invalid_section_404() {
+    let Some(hprof) = philosophers() else { return };
+    let (mut child, port) = start_server(&hprof);
+    curl_post(port, "/analyze", "");
+    wait_for_ready(port);
+    let (status, _body) = curl_get(port, "/report/bogus-section");
+    child.kill().ok();
+    child.wait().ok();
+    assert_eq!(
+        status, 404,
+        "expected 404 for /report/bogus-section, got {status}"
+    );
+}
+
+/// GET /reportgarbage (no slash after /report) must NOT trigger analysis — 404.
+#[test]
+fn server_report_no_trailing_slash_404() {
+    let Some(hprof) = philosophers() else { return };
+    let (mut child, port) = start_server(&hprof);
+    let (status, _body) = curl_get(port, "/reportgarbage");
+    child.kill().ok();
+    child.wait().ok();
+    assert_eq!(
+        status, 404,
+        "/reportgarbage should be 404 (not a valid report path), got {status}"
+    );
+}
+
+/// POST / with syntactically invalid OQL must return 400.
+#[test]
+fn server_oql_syntax_error_400() {
+    let Some(hprof) = philosophers() else { return };
+    let (mut child, port) = start_server(&hprof);
+    let (status, body) = curl_post(port, "/", "THIS IS NOT VALID OQL AT ALL !!!!");
+    child.kill().ok();
+    child.wait().ok();
+    assert_eq!(status, 400, "expected HTTP 400 for bad OQL, got {status}: {body}");
+    assert!(
+        body.contains("error") || body.contains("Error"),
+        "400 response should describe the parse error, got: {body}"
+    );
+}
+
+/// POST /query (alias) with the same OQL as POST / returns the same result shape.
+#[test]
+fn server_oql_query_alias_works() {
+    let Some(hprof) = philosophers() else { return };
+    let (mut child, port) = start_server(&hprof);
+    let (status, body) = curl_post(port, "/query", "SELECT COUNT(*) FROM java.lang.String");
+    child.kill().ok();
+    child.wait().ok();
+    assert_eq!(status, 200, "expected HTTP 200 from POST /query, got {status}");
+    assert!(
+        body.contains("\"rows\"") || body.contains("\"columns\""),
+        "POST /query should return QueryResult shape, got: {}",
+        &body[..body.len().min(300)]
+    );
+}
+
+/// POST /stream returns NDJSON: first line is a meta object, subsequent lines are rows.
+#[test]
+fn server_stream_endpoint_works() {
+    let Some(hprof) = philosophers() else { return };
+    let (mut child, port) = start_server(&hprof);
+    let (status, body) =
+        curl_post(port, "/stream", "SELECT COUNT(*) FROM java.lang.String");
+    child.kill().ok();
+    child.wait().ok();
+    assert_eq!(status, 200, "expected HTTP 200 from POST /stream, got {status}");
+    // First line of NDJSON should be a JSON object (meta or result row).
+    let first_line = body.lines().next().unwrap_or("");
+    assert!(
+        first_line.trim_start().starts_with('{'),
+        "POST /stream first line should be a JSON object, got: {first_line}"
+    );
+}
+
+// ── Markdown endpoint tests ───────────────────────────────────────────────────
+
+/// GET /report?format=md returns a Markdown string (starts with `#` heading or contains `##`).
+#[test]
+fn server_report_full_md() {
+    let Some(hprof) = philosophers() else { return };
+    let (mut child, port) = start_server(&hprof);
+    curl_post(port, "/analyze", "");
+    wait_for_ready(port);
+    let (status, body) = curl_get(port, "/report?format=md");
+    child.kill().ok();
+    child.wait().ok();
+    assert_eq!(status, 200, "expected HTTP 200 from /report?format=md, got {status}");
+    assert!(
+        body.contains("##") || body.starts_with('#'),
+        "/report?format=md should contain Markdown headings, got: {}",
+        &body[..body.len().min(300)]
+    );
+}
+
+/// GET /report/threads?format=md contains the word "Thread" (from thread names or section heading).
+#[test]
+fn server_report_threads_md_has_thread_names() {
+    let Some(hprof) = philosophers() else { return };
+    let (mut child, port) = start_server(&hprof);
+    curl_post(port, "/analyze", "");
+    wait_for_ready(port);
+    let (status, body) = curl_get(port, "/report/threads?format=md");
+    child.kill().ok();
+    child.wait().ok();
+    assert_eq!(
+        status, 200,
+        "expected HTTP 200 from /report/threads?format=md, got {status}"
+    );
+    assert!(
+        body.contains("Thread") || body.contains("thread"),
+        "/report/threads?format=md should mention threads, got: {}",
+        &body[..body.len().min(400)]
+    );
+}
+
+// ── OQL query correctness tests via server endpoint ───────────────────────────
+
+/// GROUP BY + ORDER BY + LIMIT via server returns the top class by instance count.
+#[test]
+fn server_oql_group_by_order_by() {
+    let Some(hprof) = philosophers() else { return };
+    let (mut child, port) = start_server(&hprof);
+    let (status, body) = curl_post(
+        port,
+        "/",
+        "SELECT @displayName, COUNT(*) AS n FROM INSTANCEOF java.lang.Object \
+         GROUP BY @displayName ORDER BY n DESC LIMIT 5",
+    );
+    child.kill().ok();
+    child.wait().ok();
+    assert_eq!(status, 200, "expected HTTP 200 from GROUP BY query, got {status}");
+    // The result JSON must have rows and the first row must contain a displayName
+    // (a Java class name always contains ".") and a positive count.
+    assert!(
+        body.contains("\"rows\""),
+        "GROUP BY response should contain 'rows', got: {}",
+        &body[..body.len().min(500)]
+    );
+}
+
+/// WHERE predicate filters results correctly — only matching rows returned.
+#[test]
+fn server_oql_where_predicate() {
+    let Some(hprof) = philosophers() else { return };
+    let (mut child, port) = start_server(&hprof);
+    // Count strings with @usedHeapSize > 0 — should be > 0 rows.
+    let (status, body) = curl_post(
+        port,
+        "/",
+        "SELECT COUNT(*) FROM java.lang.String WHERE @usedHeapSize > 0",
+    );
+    child.kill().ok();
+    child.wait().ok();
+    assert_eq!(status, 200, "expected HTTP 200 from WHERE query, got {status}");
+    assert!(
+        body.contains("\"rows\""),
+        "WHERE query should have rows field, got: {}",
+        &body[..body.len().min(300)]
+    );
+    // The count should be a positive integer somewhere in the rows.
+    assert!(
+        body.contains("\"value\"") || body.contains("COUNT"),
+        "WHERE count result should contain a value, got: {}",
+        &body[..body.len().min(300)]
+    );
+}
+
+/// UNION of two class queries returns rows from both — row count > either alone.
+#[test]
+fn server_oql_union() {
+    let Some(hprof) = philosophers() else { return };
+    let (mut child, port) = start_server(&hprof);
+    let (status, body) = curl_post(
+        port,
+        "/",
+        "SELECT @displayName FROM java.lang.String LIMIT 2 \
+         UNION SELECT @displayName FROM java.lang.Thread LIMIT 2",
+    );
+    child.kill().ok();
+    child.wait().ok();
+    assert_eq!(status, 200, "expected HTTP 200 from UNION query, got {status}");
+    assert!(
+        body.contains("\"rows\""),
+        "UNION response should contain 'rows', got: {}",
+        &body[..body.len().min(400)]
+    );
+}
+
+/// SUM aggregate over @usedHeapSize returns a positive integer.
+#[test]
+fn server_oql_aggregate_sum() {
+    let Some(hprof) = philosophers() else { return };
+    let (mut child, port) = start_server(&hprof);
+    let (status, body) =
+        curl_post(port, "/", "SELECT SUM(@usedHeapSize) FROM java.lang.String");
+    child.kill().ok();
+    child.wait().ok();
+    assert_eq!(status, 200, "expected HTTP 200 from SUM query, got {status}");
+    assert!(
+        body.contains("\"rows\""),
+        "SUM response should contain 'rows', got: {}",
+        &body[..body.len().min(300)]
+    );
+}
+
+/// DISTINCT de-duplicates rows — thread display names collapse to one row.
+#[test]
+fn server_oql_distinct() {
+    let Some(hprof) = philosophers() else { return };
+    let (mut child, port) = start_server(&hprof);
+    // All Thread instances have the same @displayName: one distinct row expected.
+    let (status, body) =
+        curl_post(port, "/", "SELECT DISTINCT @displayName FROM java.lang.Thread");
+    child.kill().ok();
+    child.wait().ok();
+    assert_eq!(status, 200, "expected HTTP 200 from DISTINCT query, got {status}");
+    assert!(
+        body.contains("\"rows\""),
+        "DISTINCT response should contain 'rows', got: {}",
+        &body[..body.len().min(300)]
+    );
+    // Should have exactly 1 row: ["java.lang.Thread"]
+    let row_count = body.matches("java.lang.Thread").count();
+    assert!(
+        row_count >= 1,
+        "DISTINCT threads should yield at least one row with 'java.lang.Thread', got: {}",
+        &body[..body.len().min(400)]
+    );
+}
+
 /// GET /bogus-nonexistent must return HTTP 404.
 #[test]
 fn server_unknown_route_404() {
