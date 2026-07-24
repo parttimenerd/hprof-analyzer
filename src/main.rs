@@ -1273,6 +1273,9 @@ fn run(
             crate::trace::probe("main: before outbound rescan (fwd_off+fwd_tgt allocated)");
             crate::pass2::rescan_outbound(rescan_ctx, &mut fwd_off, &mut fwd_tgt)?;
             crate::trace::probe("main: after outbound rescan");
+            // id_map was live during rescan (2 GB) and is now freed; trim to return
+            // freed pages before restoring class_obj_ids, saving ~2 GB from emit peak.
+            crate::trace::trim();
             // Restore class_obj_ids AFTER the rescan to avoid inflating the rescan peak by 2 GB.
             let class_obj_ids = mat_class_obj_ids_c
                 .as_ref()
