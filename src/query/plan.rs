@@ -554,7 +554,7 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             }
             let item_as_expr: Option<Expr> = match item {
                 SelectItem::Attr(a) => Some(Expr::Attr(a.clone())),
-                SelectItem::Expr(e) => Some(*e.clone()),
+                SelectItem::Expr(e) => Some((**e).clone()),
                 SelectItem::Star => None,
                 _ => None,
             };
@@ -576,6 +576,11 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
     if let Some(having) = &q.having {
         collect_pred_needs(having, &mut needs)?;
         flatten_and(having.clone(), &mut having_terms);
+    }
+
+    // Register needs for GROUP BY key expressions.
+    for ge in &q.group_by {
+        expr_for_each_attr(ge, &mut |a| note_attr_need_attr(a, &mut needs));
     }
 
     // True when any aggregate arg is a compound SelectItem::Expr — i.e. the arg
@@ -981,7 +986,8 @@ fn uses_retained(q: &Query) -> bool {
     let in_select = q.select.iter().any(select_uses_retained);
     let in_where = q.where_.as_ref().map(pred_uses_retained).unwrap_or(false);
     let in_order = matches!(&q.order_by, Some(ob) if ob.key == Attr::RetainedHeapSize);
-    in_select || in_where || in_order
+    let in_group_by = q.group_by.iter().any(|ge| expr_any_attr(ge, |a| matches!(a, Attr::RetainedHeapSize)));
+    in_select || in_where || in_order || in_group_by
 }
 fn select_uses_retained(it: &SelectItem) -> bool {
     match it {
@@ -3280,6 +3286,13 @@ mod tests {
         let plan = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
         assert_eq!(plan.kind, StageKind::GroupBy);
         assert_eq!(plan.group_by_exprs.len(), 1);
+        assert!(
+            matches!(
+                plan.group_by_exprs.first(),
+                Some(crate::query::ast::Expr::Attr(crate::query::ast::Attr::DisplayName))
+            ),
+            "expected DisplayName expr in group_by_exprs"
+        );
     }
 
     #[test]
