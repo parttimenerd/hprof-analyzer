@@ -166,6 +166,11 @@ pub struct QueryPlan {
     /// attribute with the inner plan+AST; the driver runs the inner first,
     /// builds an address membership set, and injects it into the outer scan.
     pub in_subplans: Vec<InSubplan>,
+    /// Pre-evaluated EXISTS/NOT EXISTS subquery results (one per Exists predicate
+    /// in the WHERE tree, in encounter order). The driver runs the inner scan
+    /// before the outer, records whether ≥1 row was produced (negated if NOT
+    /// EXISTS), and injects the Vec<bool> into the outer executor.
+    pub exists_subplans: Vec<ExistsSubplan>,
     /// SELECT-item indices whose projection is deferred past WHERE filtering
     /// because the projection is expensive (an N-hop RefPath or retained-size
     /// lookup) and evaluating it only for surviving rows is cheaper. Populated by
@@ -184,6 +189,14 @@ pub struct QueryPlan {
 #[derive(Debug, Clone, PartialEq)]
 pub struct InSubplan {
     pub lhs: Attr,
+    pub plan: QueryPlan,
+    pub inner: Query,
+}
+
+/// A planned EXISTS/NOT EXISTS subquery predicate.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExistsSubplan {
+    pub negated: bool,
     pub plan: QueryPlan,
     pub inner: Query,
 }
@@ -378,6 +391,8 @@ fn pred_for_each_attr(p: &Predicate, f: &mut impl FnMut(&Attr)) {
         }
         Predicate::InstanceOf(_) => {}
         Predicate::InSubquery { lhs, .. } => f(lhs),
+        // EXISTS inner is a standalone query; it carries no outer attrs to walk.
+        Predicate::Exists { .. } => {}
     }
 }
 
@@ -450,7 +465,8 @@ fn pred_for_each_method<'a>(p: &'a Predicate, f: &mut impl FnMut(&'a str)) {
         }
         // InSubquery's inner is validated when it is planned as its own query;
         // its `lhs` is an `Attr` (no method node).
-        Predicate::InstanceOf(_) | Predicate::InSubquery { .. } => {}
+        // EXISTS inner is planned as its own query; it carries no outer method nodes.
+        Predicate::InstanceOf(_) | Predicate::InSubquery { .. } | Predicate::Exists { .. } => {}
     }
 }
 
@@ -532,6 +548,10 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
     let mut in_subplans = Vec::new();
     if let Some(pred) = &q.where_ {
         collect_in_subplans(pred, &mut in_subplans, depth_cap)?;
+    }
+    let mut exists_subplans = Vec::new();
+    if let Some(pred) = &q.where_ {
+        collect_exists_subplans(pred, &mut exists_subplans, depth_cap)?;
     }
 
     let select_arity = q.select.len();
@@ -704,6 +724,7 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             // single graph op), so the subquery plans stay empty here.
             from_subplan: None,
             in_subplans: Vec::new(),
+            exists_subplans: Vec::new(),
             deferred_projections: Vec::new(),
             group_by_exprs: Vec::new(),
             having_terms: Vec::new(),
@@ -744,6 +765,7 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             union_limit: None,
             from_subplan: None,
             in_subplans: Vec::new(),
+            exists_subplans: Vec::new(),
             deferred_projections: Vec::new(),
             group_by_exprs: Vec::new(),
             having_terms: Vec::new(),
@@ -771,6 +793,7 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             union_limit: None,
             from_subplan: None,
             in_subplans: Vec::new(),
+            exists_subplans: Vec::new(),
             deferred_projections: Vec::new(),
             group_by_exprs: Vec::new(),
             having_terms: Vec::new(),
@@ -813,6 +836,7 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             union_limit: None,
             from_subplan: None,
             in_subplans: Vec::new(),
+            exists_subplans: Vec::new(),
             deferred_projections: Vec::new(),
             group_by_exprs: Vec::new(),
             having_terms: Vec::new(),
@@ -960,6 +984,7 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
         union_limit: None,
         from_subplan,
         in_subplans,
+        exists_subplans,
         deferred_projections: Vec::new(),
         group_by_exprs: q.group_by.clone(),
         having_terms,
@@ -1010,11 +1035,34 @@ fn collect_in_subplans(pred: &Predicate, out: &mut Vec<InSubplan>, depth_cap: us
             Ok(())
         }
         Predicate::Compare { .. } | Predicate::InstanceOf(_) => Ok(()),
+        Predicate::Exists { .. } => Ok(()),
     }
 }
 
-/// Enforce that an `IN (<subquery>)` inner projects a single address-valued
-/// column. Membership compares the OUTER row's address against the inner's
+/// Walk a WHERE tree, plan each `EXISTS (<subquery>)` / `NOT EXISTS (<subquery>)` inner,
+/// and collect the results into `out`. The inner is a full query (any SELECT) — EXISTS
+/// only needs to know if ≥1 row was produced, so no projection restriction is imposed.
+/// Evaluation order: inner scans run before the outer scan; results are passed to the
+/// executor as a `Vec<bool>` parallel to the `exists_subplans` index.
+fn collect_exists_subplans(pred: &Predicate, out: &mut Vec<ExistsSubplan>, depth_cap: usize) -> Result<(), QueryError> {
+    match pred {
+        Predicate::And(a, b) | Predicate::Or(a, b) => {
+            collect_exists_subplans(a, out, depth_cap)?;
+            collect_exists_subplans(b, out, depth_cap)
+        }
+        Predicate::Not(a) => collect_exists_subplans(a, out, depth_cap),
+        Predicate::Exists { inner, negated } => {
+            let inner_plan = plan_query(inner, depth_cap)?;
+            out.push(ExistsSubplan {
+                negated: *negated,
+                plan: inner_plan,
+                inner: (**inner).clone(),
+            });
+            Ok(())
+        }
+        Predicate::Compare { .. } | Predicate::InstanceOf(_) | Predicate::InSubquery { .. } => Ok(()),
+    }
+}
 /// addresses, so the inner must `SELECT @objectAddress` — a scalar/field or a
 /// bare `@objectId` (a dense index, not an address) is rejected.
 fn enforce_in_subquery_projection(inner: &Query) -> Result<(), QueryError> {
@@ -1348,7 +1396,8 @@ fn collect_pred_alias_heads(pred: &Predicate, heads: &mut std::collections::Hash
         }
         // A nested IN-subquery is checked on its own via reject_if_correlated;
         // its inner heads are relative to the inner query, not this one.
-        Predicate::InSubquery { .. } | Predicate::InstanceOf(_) => {}
+        // Same for EXISTS: inner is a standalone non-correlated query.
+        Predicate::InSubquery { .. } | Predicate::InstanceOf(_) | Predicate::Exists { .. } => {}
     }
 }
 
@@ -1382,10 +1431,15 @@ fn reject_in_subqueries_if_correlated(pred: &Predicate) -> Result<(), QueryError
             Ok(())
         }
         Predicate::Compare { .. } | Predicate::InstanceOf(_) => Ok(()),
+        Predicate::Exists { inner, .. } => {
+            reject_if_correlated(inner)?;
+            if let Some(p) = &inner.where_ {
+                reject_in_subqueries_if_correlated(p)?;
+            }
+            Ok(())
+        }
     }
 }
-
-/// Returns `true` iff `item` is one of the three aggregate shapes that the
 /// histogram-only path can answer without touching per-object data:
 ///
 ///   1. `COUNT(*)` — answered from the class-summary row count.
@@ -1469,6 +1523,11 @@ fn collect_pred_needs(pred: &Predicate, needs: &mut QueryNeeds) -> Result<(), Qu
             // outer LHS is an address/id attribute, needing no instance data.
             Ok(())
         }
+        Predicate::Exists { .. } => {
+            // EXISTS is evaluated once before the scan (boolean constant);
+            // the outer scan needs no additional data from the inner.
+            Ok(())
+        }
         Predicate::Compare { lhs, rhs, .. } => {
             let lhs_attr = lhs.as_attr();
             let rhs_val = rhs.as_lit();
@@ -1518,6 +1577,7 @@ fn pred_cost(pred: &Predicate) -> PredCost {
     match pred {
         Predicate::InstanceOf(_) => PredCost::Type,
         Predicate::InSubquery { .. } => PredCost::Str,
+        Predicate::Exists { .. } => PredCost::Scalar,
         Predicate::Not(a) => pred_cost(a),
         Predicate::And(a, b) | Predicate::Or(a, b) => pred_cost(a).max_cost(pred_cost(b)),
         Predicate::Compare { lhs, rhs, .. } => {

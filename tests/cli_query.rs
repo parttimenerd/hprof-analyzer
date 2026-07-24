@@ -5170,3 +5170,84 @@ fn between_filters_rows() {
     let has_count = out.lines().any(|l| l.trim().parse::<u64>().is_ok());
     assert!(has_count, "expected numeric result, got: {out}");
 }
+
+/// EXISTS subquery: `WHERE EXISTS (SELECT * FROM java.lang.Thread)` is TRUE when
+/// there are any Thread objects in the dump. The String count with EXISTS must
+/// equal the count without it (the EXISTS constant adds no filtering).
+#[test]
+fn exists_true_passes_all_rows() {
+    let Some(hprof) = philosophers() else { return };
+    let baseline = parse_single_count(&run_query_stdout(
+        &hprof,
+        "SELECT COUNT(*) FROM java.lang.String",
+    ));
+    let with_exists = parse_single_count(&run_query_stdout(
+        &hprof,
+        "SELECT COUNT(*) FROM java.lang.String WHERE EXISTS (SELECT * FROM java.lang.Thread)",
+    ));
+    assert!(
+        baseline > 0,
+        "baseline String count must be > 0, got {baseline}"
+    );
+    assert_eq!(
+        with_exists, baseline,
+        "EXISTS (true inner) must not filter any rows: baseline={baseline}, with_exists={with_exists}"
+    );
+}
+
+/// NOT EXISTS subquery: `WHERE NOT EXISTS (SELECT * FROM java.lang.Thread)` is
+/// FALSE (Threads DO exist), so the outer query must return 0 rows.
+#[test]
+fn not_exists_false_filters_all_rows() {
+    let Some(hprof) = philosophers() else { return };
+    let count = parse_single_count(&run_query_stdout(
+        &hprof,
+        "SELECT COUNT(*) FROM java.lang.String \
+         WHERE NOT EXISTS (SELECT * FROM java.lang.Thread)",
+    ));
+    assert_eq!(
+        count, 0,
+        "NOT EXISTS (Threads exist) must return 0 rows, got {count}"
+    );
+}
+
+/// EXISTS subquery whose inner query matches NOTHING: the EXISTS is FALSE, so
+/// the outer query must also return 0 rows (a non-existent class = empty result).
+#[test]
+fn exists_empty_inner_filters_all_rows() {
+    let Some(hprof) = philosophers() else { return };
+    // com.NoSuchClass does not exist in the dump → inner returns 0 rows → EXISTS is FALSE.
+    let count = parse_single_count(&run_query_stdout(
+        &hprof,
+        "SELECT COUNT(*) FROM java.lang.String \
+         WHERE EXISTS (SELECT * FROM com.NoSuchClass)",
+    ));
+    assert_eq!(
+        count, 0,
+        "EXISTS (empty inner) must return 0 rows, got {count}"
+    );
+}
+
+/// NOT EXISTS subquery whose inner query matches NOTHING: the NOT EXISTS is TRUE,
+/// so the outer query must return all String rows (no rows filtered out).
+#[test]
+fn not_exists_empty_inner_passes_all_rows() {
+    let Some(hprof) = philosophers() else { return };
+    let baseline = parse_single_count(&run_query_stdout(
+        &hprof,
+        "SELECT COUNT(*) FROM java.lang.String",
+    ));
+    let with_not_exists = parse_single_count(&run_query_stdout(
+        &hprof,
+        "SELECT COUNT(*) FROM java.lang.String \
+         WHERE NOT EXISTS (SELECT * FROM com.NoSuchClass)",
+    ));
+    assert!(
+        baseline > 0,
+        "baseline String count must be > 0, got {baseline}"
+    );
+    assert_eq!(
+        with_not_exists, baseline,
+        "NOT EXISTS (empty inner) must pass all rows: baseline={baseline}, got {with_not_exists}"
+    );
+}

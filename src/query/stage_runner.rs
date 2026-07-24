@@ -749,7 +749,7 @@ fn pred_has_attr_dyn(p: &Predicate, pred: &dyn Fn(&Attr) -> bool) -> bool {
         }
         Predicate::Not(a) => pred_has_attr_dyn(a, pred),
         Predicate::Compare { lhs, rhs, .. } => expr_has_attr_dyn(lhs, pred) || expr_has_attr_dyn(rhs, pred),
-        Predicate::InstanceOf(_) | Predicate::InSubquery { .. } => false,
+        Predicate::InstanceOf(_) | Predicate::InSubquery { .. } | Predicate::Exists { .. } => false,
     }
 }
 fn expr_find_attr<'e>(e: &'e Expr, pred: &impl Fn(&Attr) -> bool) -> Option<&'e Attr> {
@@ -803,6 +803,7 @@ fn pred_find_attr_dyn<'e>(p: &'e Predicate, pred: &dyn Fn(&Attr) -> bool) -> Opt
             expr_find_attr_dyn(lhs, pred).or_else(|| expr_find_attr_dyn(rhs, pred))
         }
         Predicate::InstanceOf(_) | Predicate::InSubquery { .. } => None,
+        Predicate::Exists { .. } => None,
     }
 }
 /// "known" (its resolved value passed as `known`), identified by `is_known`.
@@ -879,7 +880,7 @@ fn eval_late_pred(
         }
         // InstanceOf and InSubquery are not expected in CASE WHEN conditions
         // (no heap-type or subquery syntax used inside WHEN predicates).
-        Predicate::InstanceOf(_) | Predicate::InSubquery { .. } => false,
+        Predicate::InstanceOf(_) | Predicate::InSubquery { .. } | Predicate::Exists { .. } => false,
     }
 }
 

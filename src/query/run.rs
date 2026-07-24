@@ -849,6 +849,7 @@ pub fn run_single_dump(
         // Fast path: no subqueries — one scan, no injection.
         let p1 = crate::pass1::Pass1::run(path)?;
         let mut empty = std::collections::HashMap::new();
+        let mut empty_exists = std::collections::HashMap::new();
         let (g, .., state, refwalk_csr, string_values, _sv_trunc) = crate::pass2::Pass2::build(
             path,
             p1,
@@ -856,6 +857,7 @@ pub fn run_single_dump(
             &opts,
             &flat,
             &mut empty,
+            &mut empty_exists,
         )?;
         // Compute GC-reachability up front (only when reachable-only) and prune
         // each flat result by its captured source index inside the resume layer,
@@ -881,6 +883,7 @@ pub fn run_single_dump(
         .collect();
     let p1_inner = crate::pass1::Pass1::run(path)?;
     let mut empty = std::collections::HashMap::new();
+    let mut empty_exists_inner = std::collections::HashMap::new();
     // Inner subqueries feed only membership/identity sets via
     // `resume_without_late_ctx`; a RefPath *inside* an inner subquery producing
     // membership is an edge case not yet wired, so the inner CSR stays discarded.
@@ -896,6 +899,7 @@ pub fn run_single_dump(
             &opts,
             &inner_queries,
             &mut empty,
+            &mut empty_exists_inner,
         )?;
     // Take the per-inner-slot source-index sidecar (armed only under
     // reachable-only) BEFORE `resume_without_late_ctx` consumes the state, then
@@ -929,10 +933,14 @@ pub fn run_single_dump(
     // IN-subqueries → per-outer-slot address membership sets (injected into the
     // outer executors). FROM-subqueries → per-outer-slot sorted dense-index
     // sets (applied as a post-scan semi-join).
+    // EXISTS-subqueries → per-outer-slot bool (did inner produce ≥1 row?).
     let mut in_sets_by_slot: std::collections::HashMap<usize, Vec<crate::query::execute::InSet>> =
         std::collections::HashMap::new();
     // outer_slot → (sorted inner dense indices, inner truncated)
     let mut from_index_by_slot: std::collections::HashMap<usize, (Vec<u32>, bool)> =
+        std::collections::HashMap::new();
+    // outer_slot → Vec<bool> (one per ExistsSubplan, in encounter order)
+    let mut exists_bools_by_slot: std::collections::HashMap<usize, Vec<bool>> =
         std::collections::HashMap::new();
     for (inner_idx, meta) in inners.iter().enumerate() {
         let res = &inner_results[inner_idx];
@@ -955,6 +963,12 @@ pub fn run_single_dump(
                 idx.sort_unstable();
                 from_index_by_slot.insert(meta.outer_slot, (idx, res.truncated));
             }
+            SubqueryRole::Exists { negated } => {
+                // EXISTS: inner produced ≥1 row → true (before negation).
+                let had_rows = res.row_count > 0;
+                let result = if *negated { !had_rows } else { had_rows };
+                exists_bools_by_slot.entry(meta.outer_slot).or_default().push(result);
+            }
         }
     }
 
@@ -968,6 +982,7 @@ pub fn run_single_dump(
             &opts,
             &flat,
             &mut in_sets_by_slot,
+            &mut exists_bools_by_slot,
         )?;
     // Reachable-only prune happens INSIDE resume (below), keyed by each flat
     // slot's scan-captured source index, BEFORE the FROM semi-join — so the
@@ -1034,6 +1049,10 @@ pub fn run_single_dump(
 enum SubqueryRole {
     From,
     In { lhs: crate::query::ast::Attr },
+    /// EXISTS/NOT EXISTS: the bool result is computed from inner row count;
+    /// `negated` is already encoded in the planned `ExistsSubplan` but we also
+    /// carry it here so the materialization loop doesn't need to re-check.
+    Exists { negated: bool },
 }
 
 /// One inner subquery to run in the earlier pass, tagged with the outer flat-
@@ -1071,6 +1090,14 @@ fn collect_subquery_inners(flat: &[(Query, QueryPlan)]) -> Vec<SubqueryInner> {
                 },
                 inner: isp.inner.clone(),
                 plan: isp.plan.clone(),
+            });
+        }
+        for esp in &plan.exists_subplans {
+            out.push(SubqueryInner {
+                outer_slot: slot,
+                role: SubqueryRole::Exists { negated: esp.negated },
+                inner: esp.inner.clone(),
+                plan: esp.plan.clone(),
             });
         }
     }
@@ -1347,6 +1374,7 @@ impl ReplCache {
         let p1_for_pass2 = crate::pass1::Pass1::run(path)?;
         let flat: Vec<(Query, QueryPlan)> = Vec::new();
         let mut empty = std::collections::HashMap::new();
+        let mut empty_exists = std::collections::HashMap::new();
         let (g, _, shallow_c, ..) = crate::pass2::Pass2::build(
             path,
             p1_for_pass2,
@@ -1354,6 +1382,7 @@ impl ReplCache {
             &opts,
             &flat,
             &mut empty,
+            &mut empty_exists,
         )?;
         let n = g.n;
         // g.shallow is emptied during build (compressed into shallow_c, the 3rd

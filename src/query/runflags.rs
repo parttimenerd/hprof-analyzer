@@ -235,6 +235,8 @@ fn scan_predicate(pred: &Predicate, used: &mut BranchUse) {
         // we only inspect the outer `lhs` here.
         Predicate::InSubquery { lhs, .. } => scan_attr(lhs, used),
         Predicate::InstanceOf(_) => {}
+        // EXISTS inner is a standalone query; no outer edge attrs to scan.
+        Predicate::Exists { .. } => {}
     }
 }
 

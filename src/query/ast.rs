@@ -283,6 +283,9 @@ pub enum Predicate {
         lhs: Attr,
         inner: Box<Query>,
     },
+    /// `EXISTS (<subquery>)` / `NOT EXISTS (<subquery>)`.
+    /// Non-correlated: evaluated once before the outer scan.
+    Exists { inner: Box<Query>, negated: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

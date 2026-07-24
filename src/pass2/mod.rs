@@ -62,6 +62,7 @@ impl Pass2 {
         opts: &crate::AnalyzeOptions,
         queries: &[(crate::query::ast::Query, crate::query::plan::QueryPlan)],
         in_sets_by_slot: &mut std::collections::HashMap<usize, Vec<crate::query::execute::InSet>>,
+        exists_bools_by_slot: &mut std::collections::HashMap<usize, Vec<bool>>,
     ) -> io::Result<(
         Graph,
         InboundBuilder,
@@ -407,6 +408,12 @@ impl Pass2 {
                     // query without IN-subqueries.
                     if let Some(sets) = in_sets_by_slot.remove(&slot) {
                         exec.set_in_subquery_sets(sets);
+                    }
+                    // Inject pre-evaluated EXISTS/NOT EXISTS boolean results for
+                    // this slot (computed by an earlier inner scan). Absent for a
+                    // query without EXISTS subqueries.
+                    if let Some(bools) = exists_bools_by_slot.remove(&slot) {
+                        exec.set_exists_results(bools);
                     }
                     scan_execs.push((slot, exec));
                     scan_outcomes.push(Ok(slot));
@@ -1775,6 +1782,7 @@ mod tests {
             &crate::AnalyzeOptions::default(),
             &[],
             &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
         )
         .unwrap();
         assert!(!g.fwd_targets.is_empty(), "no forward edges");
@@ -1814,6 +1822,7 @@ mod tests {
             crate::cvec::Codec::None,
             &crate::AnalyzeOptions::default(),
             &[],
+            &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
         )
         .unwrap();

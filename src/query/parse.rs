@@ -584,11 +584,32 @@ where
                 });
             // `in_subquery` before `compare` so `IN` isn't consumed as a bare field.
             // `between_pred` before `compare` so `BETWEEN ... AND` is not split.
-            let primary = paren.or(instanceof).or(in_subquery).or(between_pred).or(compare);
+            // `exists_pred` (bare EXISTS) before `compare` so EXISTS is not confused with a field.
+            let exists_pred = ident_ci("EXISTS")
+                .ignore_then(just(Token::LParen))
+                .ignore_then(base_query.clone())
+                .then_ignore(just(Token::RParen))
+                .map(|inner| Predicate::Exists {
+                    inner: Box::new(inner),
+                    negated: false,
+                });
+            let primary = paren.or(instanceof).or(in_subquery).or(between_pred).or(exists_pred).or(compare);
             let not = recursive(|not| {
-                ident_ci("NOT")
-                    .ignore_then(not)
-                    .map(|p| Predicate::Not(Box::new(p)))
+                // `NOT EXISTS (...)` must be tried before the general `NOT <pred>` recursive
+                // arm so the `EXISTS` keyword is not mistakenly parsed as a predicate.
+                let not_exists = ident_ci("NOT")
+                    .ignore_then(ident_ci("EXISTS"))
+                    .ignore_then(just(Token::LParen))
+                    .ignore_then(base_query.clone())
+                    .then_ignore(just(Token::RParen))
+                    .map(|inner| Predicate::Exists {
+                        inner: Box::new(inner),
+                        negated: true,
+                    });
+                not_exists
+                    .or(ident_ci("NOT")
+                        .ignore_then(not)
+                        .map(|p| Predicate::Not(Box::new(p))))
                     .or(primary)
             });
             let and = not
@@ -961,6 +982,8 @@ fn normalize_predicate(pred: &mut Predicate, alias: Option<&str>) {
         // when it is parsed; the outer LHS attr is normalized here.
         Predicate::InSubquery { lhs, .. } => normalize_attr(lhs, alias),
         Predicate::InstanceOf(_) => {}
+        // EXISTS inner is normalized when it is parsed; the outer has no alias to normalize.
+        Predicate::Exists { .. } => {}
     }
 }
 
@@ -1122,6 +1145,8 @@ pub const RESERVED: &[&str] = &[
     // Scalar function keywords.
     "COALESCE",
     "NULLIF",
+    // Subquery existence predicate.
+    "EXISTS",
 ];
 
 /// Aggregate function names (`agg_func`'s source set), upper-cased.
@@ -4577,5 +4602,29 @@ mod tests {
             .expect_err("zero-arg COALESCE must error");
         assert!(err.0.contains("COALESCE") || err.0.to_lowercase().contains("coalesce"),
                 "error must mention COALESCE, got: {}", err.0);
+    }
+
+    #[test]
+    fn parse_exists() {
+        let q = super::parse(
+            "SELECT COUNT(*) FROM java.lang.String \
+             WHERE EXISTS (SELECT * FROM java.lang.Thread)",
+        ).unwrap();
+        assert!(
+            matches!(&q.where_, Some(crate::query::ast::Predicate::Exists { negated: false, .. })),
+            "got: {:?}", q.where_
+        );
+    }
+
+    #[test]
+    fn parse_not_exists() {
+        let q = super::parse(
+            "SELECT COUNT(*) FROM java.lang.String \
+             WHERE NOT EXISTS (SELECT * FROM java.lang.Thread)",
+        ).unwrap();
+        assert!(
+            matches!(&q.where_, Some(crate::query::ast::Predicate::Exists { negated: true, .. })),
+            "got: {:?}", q.where_
+        );
     }
 }

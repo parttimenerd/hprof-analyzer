@@ -210,6 +210,16 @@ pub struct SingleScanExecutor<'a, R: ClassResolver> {
     /// Debug string to avoid Float/Hash issues) to (original key Vec, per-column
     /// AggAcc row). `None` when StageKind != GroupBy.
     group_map: Option<std::collections::HashMap<String, (Vec<QueryValue>, Vec<AggAcc>)>>,
+    /// Pre-evaluated EXISTS/NOT EXISTS results, one `bool` per `ExistsSubplan` in
+    /// encounter order (DFS left-to-right over the WHERE tree). Populated by the
+    /// two-phase driver before the outer scan via `set_exists_results`. Each bool
+    /// is the already-negated result: `true` if the predicate passes (≥1 inner row
+    /// AND NOT EXISTS, or 0 inner rows AND NOT EXISTS). Empty until injected.
+    exists_bools: Vec<bool>,
+    /// DFS cursor used to look up the correct `exists_bools` entry when the
+    /// predicate walker hits an `Exists` node. Reset to 0 at the start of each
+    /// per-object `where_passes`/`array_where_passes` call.
+    exists_cursor: std::cell::Cell<usize>,
 }
 
 /// Per-select-item running state for a scan-time aggregate accumulator.
@@ -595,6 +605,8 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             target_index,
             row_src: None,
             group_map,
+            exists_bools: Vec::new(),
+            exists_cursor: std::cell::Cell::new(0),
         }
     }
 
@@ -624,6 +636,8 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             target_index,
             row_src: None,
             group_map: None,
+            exists_bools: Vec::new(),
+            exists_cursor: std::cell::Cell::new(0),
         }
     }
 
@@ -637,6 +651,15 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             self.truncated = true;
         }
         self.in_sets = sets;
+    }
+
+    /// Inject the pre-evaluated EXISTS/NOT EXISTS boolean results (one per plan
+    /// `ExistsSubplan`, in encounter order). Called by the two-phase driver before
+    /// the outer scan. Each `bool` is `true` when the EXISTS/NOT EXISTS condition
+    /// is satisfied (already accounts for `negated`), so `eval_pred` returns it
+    /// directly as the predicate result for every outer row.
+    pub fn set_exists_results(&mut self, bools: Vec<bool>) {
+        self.exists_bools = bools;
     }
 
     /// True if this executor is carrying indices for a later phase.
@@ -1159,6 +1182,9 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
         }
     }
     fn where_passes(&self, src_idx: usize, class_id: u64, blob: &[u8]) -> bool {
+        // Reset the EXISTS-result cursor so the DFS walk over where_terms picks
+        // up exists_bools entries in the same encounter order they were planned.
+        self.exists_cursor.set(0);
         for term in &self.plan.where_terms {
             // In carry mode, @retainedHeapSize and toString() WHERE terms can't
             // be evaluated during the scan (retained size / string value are
@@ -1221,6 +1247,15 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 self.resolver.is_instance_of(class_id, &spec, None)
             }
             P::InSubquery { lhs, .. } => self.eval_in_subquery(lhs, src_idx),
+            P::Exists { .. } => {
+                // Non-correlated: look up the pre-evaluated bool by encounter
+                // order. The cursor was reset to 0 in `where_passes` before
+                // the term loop, so this correctly maps each Exists node to
+                // its `exists_bools` entry regardless of tree shape.
+                let idx = self.exists_cursor.get();
+                self.exists_cursor.set(idx + 1);
+                self.exists_bools.get(idx).copied().unwrap_or(false)
+            }
             P::Compare { lhs, op, rhs } => {
                 // Pass the real `src_idx` so object-identity LHS attrs
                 // (@objectAddress/@objectId) compare against the actual object,
@@ -1256,6 +1291,8 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     /// `INSTANCEOF` are meaningful; named-field compares resolve to Null (and
     /// thus behave like the instance path's unknown-field handling).
     fn array_where_passes(&self, src_idx: usize, class_name: &str, length: u32) -> bool {
+        // Reset the EXISTS-result cursor (same as in where_passes).
+        self.exists_cursor.set(0);
         for term in &self.plan.where_terms {
             // See `where_passes`: skip retained/String-toString terms in carry
             // mode. A non-String toString is scan-time-known, so it is NOT skipped.
@@ -1293,6 +1330,11 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             P::Not(a) => !self.array_eval_pred(a, src_idx, class_name, length),
             P::InstanceOf(cname) => class_name_matches(class_name, cname),
             P::InSubquery { lhs, .. } => self.eval_in_subquery(lhs, src_idx),
+            P::Exists { .. } => {
+                let idx = self.exists_cursor.get();
+                self.exists_cursor.set(idx + 1);
+                self.exists_bools.get(idx).copied().unwrap_or(false)
+            }
             P::Compare { lhs, op, rhs } => {
                 let lv = self.eval_expr_array(lhs, src_idx, class_name, length);
                 let rv = self.eval_expr_array(rhs, src_idx, class_name, length);
@@ -2100,8 +2142,8 @@ fn collect_like_regexes(
                 }
             }
         }
-        // Non-LIKE compares, InstanceOf, and IN-subqueries carry no LIKE pattern.
-        P::Compare { .. } | P::InstanceOf(_) | P::InSubquery { .. } => {}
+        // Non-LIKE compares, InstanceOf, IN-subqueries, and EXISTS carry no LIKE pattern.
+        P::Compare { .. } | P::InstanceOf(_) | P::InSubquery { .. } | P::Exists { .. } => {}
     }
     Ok(())
 }
