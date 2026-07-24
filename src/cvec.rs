@@ -121,24 +121,15 @@ impl CompressedU32 {
     }
 
     /// Restore the full `Vec<u32>` (byte-identical to the original input).
+    /// Uses a streaming 64 KiB decoder to avoid materializing a full-size byte
+    /// intermediate (which would transiently double peak RSS to ~4 GB on large dumps).
     pub fn restore(&self) -> io::Result<Vec<u32>> {
         match self.codec {
             Codec::None => Ok(self.raw.clone()),
-            Codec::Deflate9 => {
-                let bytes = deflate_decompress(&self.blob, self.len * 4)?;
-                debug_assert_eq!(bytes.len(), self.len * 4);
-                Ok(bytes
-                    .chunks_exact(4)
-                    .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                    .collect())
-            }
-            Codec::Zstd3 => {
-                let bytes = zstd_decompress(&self.blob, self.len * 4)?;
-                debug_assert_eq!(bytes.len(), self.len * 4);
-                Ok(bytes
-                    .chunks_exact(4)
-                    .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                    .collect())
+            Codec::Deflate9 | Codec::Zstd3 => {
+                let mut out = Vec::with_capacity(self.len);
+                self.for_each_u32(|x| out.push(x))?;
+                Ok(out)
             }
         }
     }
