@@ -174,7 +174,111 @@ where
     Ok(w)
 }
 
-/// Streaming variant of [`write_unsorted`]: accepts an iterator of entry slices.
+/// Wraps a `Write` and counts the total bytes written through it.
+struct CountingWriter<W: Write> {
+    inner: W,
+    count: u64,
+}
+impl<W: Write> CountingWriter<W> {
+    fn new(w: W) -> Self { Self { inner: w, count: 0 } }
+    fn bytes_written(&self) -> u64 { self.count }
+    fn into_inner(self) -> W { self.inner }
+}
+impl<W: Write> Write for CountingWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let n = self.inner.write(buf)?;
+        self.count += n as u64;
+        Ok(n)
+    }
+    fn flush(&mut self) -> io::Result<()> { self.inner.flush() }
+}
+
+/// Low-memory streaming variant of [`write_sorted`]: streams body pages directly
+/// to `w` rather than buffering them in a `Vec<u8>`. Holds only the header
+/// `Vec<i32>` (~4 bytes/object) in memory instead of the full body bytes
+/// (~13 bytes/object for typical Java heap outbound/inbound files).
+pub fn write_sorted_iter_streaming<W, I, S>(w: W, entries: I) -> io::Result<W>
+where
+    W: Write,
+    I: Iterator<Item = S>,
+    S: AsRef<[i32]>,
+{
+    let mut cw = CountingWriter::new(w);
+    let mut header: Vec<i32> = Vec::new();
+    let mut body = IntIndexStreamer::new(&mut cw);
+    let mut body_size: i64 = 0;
+    for entry in entries {
+        let values = entry.as_ref();
+        if values.is_empty() {
+            header.push(0);
+            continue;
+        }
+        let pos = body_size + 1;
+        if pos >= (1i64 << 32) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("header2/PosIndexStreamer path not implemented; bodyPos {pos} at entry {}", header.len()),
+            ));
+        }
+        header.push(pos as i32);
+        for &v in values {
+            body.push(v)?;
+            body_size += 1;
+        }
+    }
+    body.finish()?; // flushes final page + body footer directly to `cw`
+    let divider = cw.bytes_written() as i64;
+    let mut w = cw.into_inner();
+
+    // Write header index opened at `divider`, then trailing divider.
+    let mut hdr = IntIndexStreamer::with_position(&mut w, divider);
+    for &pos in &header {
+        hdr.push(pos)?;
+    }
+    hdr.finish()?;
+    w.write_all(&divider.to_be_bytes())?;
+    Ok(w)
+}
+
+/// Low-memory streaming variant of [`write_unsorted`].
+pub fn write_unsorted_iter_streaming<W, I, S>(w: W, entries: I) -> io::Result<W>
+where
+    W: Write,
+    I: Iterator<Item = S>,
+    S: AsRef<[i32]>,
+{
+    let mut cw = CountingWriter::new(w);
+    let mut header: Vec<i32> = Vec::new();
+    let mut body = IntIndexStreamer::new(&mut cw);
+    let mut body_size: i64 = 0;
+    for entry in entries {
+        let values = entry.as_ref();
+        let pos = body_size;
+        if pos >= (1i64 << 32) {
+            return Err(io::Error::new(io::ErrorKind::InvalidData,
+                format!("header2 path not implemented; pos {pos} at entry {}", header.len())));
+        }
+        header.push(pos as i32);
+        body.push(values.len() as i32)?;
+        body_size += 1;
+        for &v in values.as_ref() {
+            body.push(v)?;
+            body_size += 1;
+        }
+    }
+    body.finish()?;
+    let divider = cw.bytes_written() as i64;
+    let mut w = cw.into_inner();
+
+    let mut hdr = IntIndexStreamer::with_position(&mut w, divider);
+    for &pos in &header {
+        hdr.push(pos)?;
+    }
+    hdr.finish()?;
+    w.write_all(&divider.to_be_bytes())?;
+    Ok(w)
+}
+
 pub fn write_unsorted_iter<W, I, S>(mut w: W, entries: I) -> io::Result<W>
 where
     W: Write,

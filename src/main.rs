@@ -918,10 +918,10 @@ fn run(
     } else {
         None
     };
-    // Capture hprof file offsets for o2hprof emission. Only needed when MAT
-    // caches are being generated; skip the Vec clone/move on the non-MAT path.
-    let mat_hprof_offsets: Option<Vec<u64>> = if mat.is_some() {
-        Some(p1.hprof_offsets.clone())
+    // Capture hprof file offsets for o2hprof emission. Compress immediately so
+    // the 90 MB Vec<u64> doesn't sit uncompressed through inbound + dominator.
+    let mat_hprof_offsets_c: Option<cvec::CompressedU64> = if mat.is_some() {
+        Some(cvec::CompressedU64::compress(&p1.hprof_offsets, compress)?)
     } else {
         None
     };
@@ -951,16 +951,17 @@ fn run(
     // MAT id-space remapping: addresses are only available now (before compress).
     // We snapshot all g.n addresses so MatIdMap::build can sort reachable ones by
     // address after idom is known (post compute_dominators). The snapshot is a
-    // Vec<u64> of length g.n (~8 MB at 1M objects), freed as soon as the map is
-    // built.
-    let (mat_coc_snapshot, mat_addrs): (Option<std::collections::HashMap<u32, u32>>, Option<Vec<u64>>) = if let Some(_) = mat {
+    // Vec<u64> of length g.n; compress immediately so it doesn't sit uncompressed
+    // through the inbound + dominator peak window (~90 MB for 11M objects).
+    let (mat_coc_snapshot, mat_addrs_c): (Option<std::collections::HashMap<u32, u32>>, Option<cvec::CompressedU64>) = if let Some(_) = mat {
         let id_map = inbound
             .id_map
             .as_ref()
             .expect("id_map must be live before compress_id_map for MAT idx emit");
         let addrs: Vec<u64> = (0..g.n).map(|i| id_map.addr_at(i)).collect();
         let coc_snap = g.class_obj_class_idx.clone();
-        (Some(coc_snap), Some(addrs))
+        let addrs_c = cvec::CompressedU64::compress(&addrs, compress)?;
+        (Some(coc_snap), Some(addrs_c))
     } else {
         (None, None)
     };
@@ -1032,15 +1033,14 @@ fn run(
     progress::phase("building inbound references");
     // MAT: snapshot the forward CSR and class_idx before build_from_fwd consumes
     // them. We need these to assemble outbound entries in MAT id order after
-    // compute_dominators builds mat_map. Holding the snapshot through the
-    // dominator window is ~20-30 MB (offsets + flat targets + class rows).
-    // We snapshot fwd_off, fwd_tgt, and class_idx here (before build_from_fwd
-    // consumes fwd_targets). class_obj_ids is computed later after mat_inv is
-    // built (with reachability preference), so we store raw class-rows for now.
-    let mat_fwd_snap: Option<(Vec<u32>, Vec<u32>, Vec<u32>)> = if mat.is_some() {
+    // Snapshot fwd_off, fwd_tgt, and class_idx before build_from_fwd consumes
+    // fwd_targets. Compress all three immediately; restore each transiently just
+    // before use so they don't inflate the inbound + dominator + emit_outbound
+    // peak window. class_obj_ids is computed later after mat_inv is built.
+    let mat_fwd_snap: Option<(cvec::CompressedU32, cvec::CompressedU32, cvec::CompressedU32)> = if mat.is_some() {
         let class_idx: Vec<u32> = class_idx_c.restore()?;
         let n = g.n;
-        let fwd_off = g.fwd_offsets.clone();
+        let fwd_off_c = cvec::CompressedU32::compress(&g.fwd_offsets, compress)?;
         let total_edges = g.fwd_offsets[n] as usize;
         let mut fwd_tgt: Vec<u32> = Vec::with_capacity(total_edges);
         let mut buf: Vec<u32> = Vec::new();
@@ -1057,8 +1057,11 @@ fn run(
                 fwd_tgt.extend_from_slice(slice);
             }
         }
-        // Store raw class-idx rows; class_obj_ids resolved after mat_inv is built.
-        Some((fwd_off, fwd_tgt, class_idx))
+        let fwd_tgt_c = cvec::CompressedU32::compress(&fwd_tgt, compress)?;
+        drop(fwd_tgt);
+        let class_idx_c2 = cvec::CompressedU32::compress(&class_idx, compress)?;
+        drop(class_idx);
+        Some((fwd_off_c, fwd_tgt_c, class_idx_c2))
     } else {
         None
     };
@@ -1080,9 +1083,11 @@ fn run(
     rpo.vertex = rpo_dfs::rebuild_vertex(&rpo.dfn, count);
     crate::trace::probe("main: after rebuild_vertex (post-inbound, dfn live)");
     // MAT inbound decode needs dfn (dense→pre-order) to build the per-pre-order
-    // offset table into inb_data. Save it before clearing.
-    let mat_dfn_save: Option<Vec<u32>> = if mat.is_some() {
-        Some(std::mem::take(&mut rpo.dfn))
+    // offset table into inb_data. Save it compressed before clearing; restore
+    // just before use so it doesn't inflate the emit_outbound peak (~40 MB win).
+    let mat_dfn_save_c: Option<cvec::CompressedU32> = if mat.is_some() {
+        let v = std::mem::take(&mut rpo.dfn);
+        Some(cvec::CompressedU32::compress(&v, compress)?)
     } else {
         rpo.dfn = Vec::new();
         None
@@ -1096,10 +1101,10 @@ fn run(
     }
 
     // rpo is consumed by compute_dominators. We already saved dfn above.
-    // Also save vertex (pre→dense) so we can decode inb_data referrer pre-order
-    // values back to dense-ids during emit_inbound.
-    let mat_vertex_save: Option<Vec<u32>> = if mat.is_some() {
-        Some(rpo.vertex.clone())
+    // Also save vertex (pre→dense) compressed so it doesn't inflate the
+    // emit_outbound peak (~40 MB win).
+    let mat_vertex_save_c: Option<cvec::CompressedU32> = if mat.is_some() {
+        Some(cvec::CompressedU32::compress(&rpo.vertex, compress)?)
     } else {
         None
     };
@@ -1113,10 +1118,23 @@ fn run(
     log(verbose, "dominator", t.elapsed().as_secs_f64());
 
     crate::trace::probe("main: after dominator");
+    // inb_block_off is only needed by compute_dominators; free it now.
+    drop(inb_block_off);
+    // inb_data (vbyte-encoded inbound edges, ~87 MB for vscode) is only needed
+    // after emit_outbound (for inb_pre_off build + emit_inbound). Compress it
+    // across the emit_outbound peak window to free ~80 MB.
+    let inb_data_c: cvec::CompressedBytes = if mat.is_some() {
+        cvec::CompressedBytes::compress(inb_data, compress)?
+    } else {
+        cvec::CompressedBytes::compress(inb_data, cvec::Codec::None)?
+    };
+    crate::trace::trim();
     // MAT id-space remapping: now that idom is set we can build the mapping from
     // our dense-id space to MAT's (reachable-only, address-sorted, id-0=synthetic).
-    // mat_addrs was captured before compress_id_map; drop it right after emitting idx.
-    let mat_map: Option<mat::MatIdMap> = if let Some(addrs) = mat_addrs {
+    // Restore mat_addrs_c here (just before use) so it's uncompressed for the
+    // minimum possible window.
+    let mat_map: Option<mat::MatIdMap> = if let Some(addrs_c) = mat_addrs_c {
+        let addrs = addrs_c.restore()?;
         let mm = mat::MatIdMap::build(g.n, &g.idom, |i| addrs[i]);
         // emit idx: mat-id 0 = address 0x0 (synthetic root), then sorted reachable
         if let Some(ref m) = mat {
@@ -1127,9 +1145,9 @@ fn run(
                 idx_vals.push(addrs[old_id as usize] as i64);
             }
             m.emit_long_index("idx", &idx_vals)?;
-            // o2hprof: mat-id 0 = 0 (synthetic root has no hprof record),
-            // then the hprof file offset for each reachable object in MAT id order.
-            if let Some(ref offsets) = mat_hprof_offsets {
+            // o2hprof: restore offsets here (just before use), emit, drop.
+            if let Some(ref off_c) = mat_hprof_offsets_c {
+                let offsets = off_c.restore()?;
                 let mut o2hprof_vals: Vec<i64> = Vec::with_capacity(mc + 1);
                 o2hprof_vals.push(0i64);
                 for &old_id in mm.sorted() {
@@ -1137,13 +1155,15 @@ fn run(
                 }
                 m.emit_long_index("o2hprof", &o2hprof_vals)?;
                 drop(o2hprof_vals);
+                drop(offsets);
             }
         }
+        drop(addrs);
         Some(mm)
     } else {
         None
     };
-    drop(mat_hprof_offsets); // offsets consumed above; free before retained-size peak
+    drop(mat_hprof_offsets_c);
     // Build the row→class-object id inverse table now that mm is available, so
     // we can prefer reachable class-objects when multiple map to the same row.
     let mut mat_inv: Option<Vec<i32>> = if let (Some(ref mm), Some(ref coc)) =
@@ -1177,10 +1197,11 @@ fn run(
         let _ = mm;  // mm borrow ends here
     };
     // Resolve class_obj_ids from the raw class_idx rows now that mat_inv is ready.
-    // mat_fwd_snap.2 currently holds per-object class_idx rows; map each through inv.
-    let mat_class_obj_ids: Option<Vec<u32>> =
+    // mat_fwd_snap.2 holds the compressed class_idx; restore, map through inv,
+    // then re-compress so the 45 MB array doesn't inflate the emit_outbound peak.
+    let mat_class_obj_ids_c: Option<cvec::CompressedU32> =
         if let (Some(ref inv), Some(ref fwd_snap)) = (mat_inv.as_ref(), mat_fwd_snap.as_ref()) {
-            let class_idx_rows = &fwd_snap.2;
+            let class_idx_rows = fwd_snap.2.restore()?;
             let result: Vec<u32> = class_idx_rows
                 .iter()
                 .map(|&row| {
@@ -1188,24 +1209,23 @@ fn run(
                     if coid < 0 { u32::MAX } else { coid as u32 }
                 })
                 .collect();
-            Some(result)
+            Some(cvec::CompressedU32::compress(&result, compress)?)
         } else {
             None
         };
-    crate::trace::probe("main: before emit_outbound (mat_inb_raw + mat_fwd_snap coexist)");
-    // MAT: emit `outbound` IntArray1N in MAT id order. mat-id 0 (synthetic root)
-    // gets an empty entry. For mat-ids 1..N we look up the old dense-id in
-    // mat_fwd_snap (fwd offsets, flat targets, per-object class-obj old id),
-    // sort+dedup the targets, translate each to mat-id (filtering unreachable and
-    // the synthetic mat-id-0 root), and prepend the class-object mat-id as entry[0].
-    // Streaming: emit one object at a time to avoid a Vec<Vec<i32>> the size of
-    // all outbound edges.
+    crate::trace::probe("main: before emit_outbound");
+    // MAT: emit `outbound` IntArray1N in MAT id order. Restore the compressed
+    // fwd_off, fwd_tgt, and class_obj_ids here (just before use) to minimise
+    // the window they occupy uncompressed.
     if let Some(ref m) = mat {
         let mm = mat_map.as_ref().expect("mat_map built with mat");
-        if let Some((fwd_off, fwd_tgt, _class_idx_rows)) = mat_fwd_snap.as_ref() {
-            let class_obj_ids = mat_class_obj_ids
+        if let Some((fwd_off_c, fwd_tgt_c, _class_idx_c)) = mat_fwd_snap.as_ref() {
+            let class_obj_ids = mat_class_obj_ids_c
                 .as_ref()
-                .expect("mat_class_obj_ids built when mat present");
+                .expect("mat_class_obj_ids_c built when mat present")
+                .restore()?;
+            let fwd_off = fwd_off_c.restore()?;
+            let fwd_tgt = fwd_tgt_c.restore()?;
             m.emit_outbound_iter(
                 std::iter::once(Vec::new()) // entry 0 = synthetic root
                     .chain(mm.sorted().iter().map(|&old_id| {
@@ -1228,18 +1248,25 @@ fn run(
                         e
                     }))
             )?;
+            drop(fwd_tgt);
+            drop(fwd_off);
+            drop(class_obj_ids);
             crate::trace::trim();
         }
     }
     drop(mat_fwd_snap);
-    crate::trace::probe("main: after drop(mat_fwd_snap) — build inb offset table");
+    crate::trace::probe("main: after drop(mat_fwd_snap) — restore inb_data + build inb offset table");
+    // Restore inb_data now (was compressed across emit_outbound to save ~80 MB).
+    let inb_data = inb_data_c.restore()?;
     // MAT inbound: build a per-pre-order byte-offset table into inb_data (~44 MB
     // for 11M objects) so we can decode each object's referrers on demand rather
     // than materialising the full Vec<Vec<i32>> (~550 MB).
     // dfn[dense] = pre_order; inb_pre_off[pre_order] = byte offset in inb_data;
     // vertex[pre_order] = dense_id (needed to decode referrer pre-order → dense-id).
     let mat_inb_ctx: Option<(Vec<u32>, Vec<u32>, Vec<u32>)> =
-        if let (Some(dfn), Some(vertex)) = (mat_dfn_save, mat_vertex_save) {
+        if let (Some(dfn_c), Some(vertex_c)) = (mat_dfn_save_c, mat_vertex_save_c) {
+            let dfn = dfn_c.restore()?;
+            let vertex = vertex_c.restore()?;
             let n = g.n;
             let mut off: Vec<u32> = Vec::with_capacity(n);
             let mut pos = 0usize;
@@ -1313,11 +1340,8 @@ fn run(
         }
         m.emit_dom_in(&domin)?;
     }
-    // The inbound (referrer) CSR is consumed by the dominator and never read
-    // again: root paths derive their GC-root chains from `g.idom` (the
-    // dominator tree, which MAT also uses), so there is no need to preserve or
-    // compress the ~7.5GB CSR + vertex map. Free it immediately for every run.
-    drop(inb_block_off);
+    // inb_data is consumed by emit_inbound (for MAT) and then no longer needed.
+    // inb_block_off was already freed right after compute_dominators above.
     drop(inb_data);
     crate::trace::trim();
 
@@ -1334,46 +1358,29 @@ fn run(
     // MAT: emit the `domOut` IntArray1N (unsorted) in MAT id order.
     // Layout: entry[0] = vroot's dom-children (= MAT GC roots), entry[1] = dom-
     // children of mat-id 0 (synthetic root, always empty), entries[2..mc+1] =
-    // dom-children of mat-ids 1..mc-1 (real objects). Total = mc+1 entries.
-    // Children are emitted in dc_tgt encounter order (NOT sorted): MAT's own
-    // IntArray1NWriter stores them in traversal order as the dominator tree is
-    // constructed, not in id order.
+    // dom-children of mat-ids 1..mc-1 (real objects). Streaming to avoid a
+    // large Vec<Vec<i32>> materialisation.
     if let Some(ref m) = mat {
         let mm = mat_map.as_ref().expect("mat_map built with mat");
         let n = g.n;
-        let mc = mm.mat_count();
-        let mut entries: Vec<Vec<i32>> = Vec::with_capacity(mc + 1);
-
-        // entry 0: vroot's dom-children (encounter order, no sort)
+        // entry 0: vroot's dom-children
         let lo0 = dc_off[n] as usize;
         let hi0 = dc_off[n + 1] as usize;
         let vroot_children: Vec<i32> = dc_tgt[lo0..hi0]
             .iter()
-            .filter_map(|&v| {
-                let mid = mm.translate(v as i32);
-                if mid >= 0 { Some(mid) } else { None }
-            })
+            .filter_map(|&v| { let mid = mm.translate(v as i32); if mid >= 0 { Some(mid) } else { None } })
             .collect();
-        entries.push(vroot_children);
-
-        // entry 1: dom-children of mat-id 0 (synthetic root) — always empty
-        entries.push(Vec::new());
-
-        // entries 2..mc+1: dom-children of mat-ids 1..mc-1 (encounter order)
-        for &old_id in mm.sorted() {
-            let lo = dc_off[old_id as usize] as usize;
-            let hi = dc_off[old_id as usize + 1] as usize;
-            let children: Vec<i32> = dc_tgt[lo..hi]
-                .iter()
-                .filter_map(|&v| {
-                    let mid = mm.translate(v as i32);
-                    if mid >= 0 { Some(mid) } else { None }
-                })
-                .collect();
-            entries.push(children);
-        }
-        m.emit_dom_out(&entries)?;
-        drop(entries);
+        let iter = std::iter::once(vroot_children)
+            .chain(std::iter::once(Vec::new())) // entry 1: mat-id 0 synthetic root
+            .chain(mm.sorted().iter().map(|&old_id| {
+                let lo = dc_off[old_id as usize] as usize;
+                let hi = dc_off[old_id as usize + 1] as usize;
+                dc_tgt[lo..hi]
+                    .iter()
+                    .filter_map(|&v| { let mid = mm.translate(v as i32); if mid >= 0 { Some(mid) } else { None } })
+                    .collect::<Vec<i32>>()
+            }));
+        m.emit_dom_out_iter(iter)?;
         crate::trace::trim();
     }
 
