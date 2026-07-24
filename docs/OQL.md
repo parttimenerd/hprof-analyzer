@@ -96,9 +96,124 @@ SELECT [DISTINCT] [OBJECTS] <select-list> [AS RETAINED SET]
 
 ### Not supported
 
-`GROUP BY`, array-slice (`s[1:3]`), `eval(...)`, and `${snapshot}` reflection
-are MAT features we do **not** implement. `GROUP BY` in particular parses to an
-error — aggregate over a filtered `FROM` instead.
+`eval(...)` and `${snapshot}` reflection are MAT features we do **not**
+implement.
+
+---
+
+## GROUP BY and HAVING
+
+`GROUP BY` groups rows by one or more expressions and applies aggregate
+functions per group. `HAVING` filters groups after aggregation (analogous to
+`WHERE` filtering rows before aggregation).
+
+```sql
+-- Count instances per class
+SELECT @displayName, COUNT(*) AS n
+FROM INSTANCEOF java.lang.Object
+GROUP BY @displayName
+ORDER BY n DESC
+LIMIT 10
+
+-- Only classes with many instances
+SELECT @displayName, COUNT(*) AS n
+FROM INSTANCEOF java.lang.Object
+GROUP BY @displayName
+HAVING COUNT(*) > 100
+ORDER BY n DESC
+```
+
+---
+
+## CASE WHEN
+
+`CASE WHEN … THEN … ELSE … END` returns different values based on conditions.
+It can be used in `SELECT` and `GROUP BY` expressions.
+
+```sql
+-- Bucket objects by size class
+SELECT
+  CASE
+    WHEN @usedHeapSize > 10000 THEN 'large'
+    WHEN @usedHeapSize > 1000  THEN 'medium'
+    ELSE 'small'
+  END AS size_class,
+  COUNT(*) AS n
+FROM INSTANCEOF java.lang.Object
+GROUP BY
+  CASE
+    WHEN @usedHeapSize > 10000 THEN 'large'
+    WHEN @usedHeapSize > 1000  THEN 'medium'
+    ELSE 'small'
+  END
+ORDER BY n DESC
+```
+
+---
+
+## COALESCE, NULLIF, BETWEEN
+
+`COALESCE(e1, e2, …)` returns the first non-null argument.
+`NULLIF(e1, e2)` returns `null` when `e1 = e2`, otherwise returns `e1`.
+`e BETWEEN a AND b` is equivalent to `e >= a AND e <= b`.
+
+```sql
+-- Replace null with a default
+SELECT COALESCE(toString(s), '<null>') AS val FROM java.lang.String s
+
+-- Filter to objects of moderate size
+SELECT COUNT(*) FROM java.lang.Object
+WHERE @usedHeapSize BETWEEN 100 AND 1000
+```
+
+---
+
+## EXISTS subquery
+
+`EXISTS (SELECT …)` is true when the inner query returns at least one row.
+It is non-correlated: the inner query runs once before the outer scan. If
+`EXISTS` evaluates to false, the outer query returns 0 rows immediately.
+
+```sql
+-- Run analysis only when leaked connections exist
+SELECT COUNT(*) FROM java.lang.Object
+WHERE EXISTS (SELECT * FROM com.example.Connection c WHERE c.closed = false)
+```
+
+---
+
+## INTERSECT and EXCEPT
+
+`INTERSECT` returns rows present in **both** result sets.
+`EXCEPT` returns rows present in the first set but **not** the second.
+
+```sql
+-- Class names in both cache and pool namespaces
+SELECT @displayName FROM "com\.example\.cache\..*"
+INTERSECT
+SELECT @displayName FROM "com\.example\.pool\..*"
+
+-- Strings only in the large set, not the small set
+SELECT toString(s) FROM java.lang.String s WHERE s.count > 100
+EXCEPT
+SELECT toString(s) FROM java.lang.String s WHERE s.count > 1000
+```
+
+---
+
+## Array indexing and slicing
+
+`value[i]` returns the element at index `i` (0-based). `value[i:j]` returns a
+slice of elements from index `i` up to (but not including) `j`. Out-of-bounds
+accesses return `null`.
+
+```sql
+-- First element of each array (null if empty or out of bounds)
+SELECT @objectId, value[0] AS first FROM byte[] b LIMIT 10
+
+-- Slice of elements
+SELECT @objectId, value[1:4] AS mid FROM byte[] b LIMIT 10
+```
 
 ---
 
