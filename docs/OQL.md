@@ -173,6 +173,8 @@ WHERE @usedHeapSize BETWEEN 100 AND 1000
 `EXISTS (SELECT …)` is true when the inner query returns at least one row.
 It is non-correlated: the inner query runs once before the outer scan. If
 `EXISTS` evaluates to false, the outer query returns 0 rows immediately.
+Because the subquery is not re-evaluated per outer row, `EXISTS` cannot filter
+by a per-row condition — it either admits all outer rows or none.
 
 ```sql
 -- Run analysis only when leaked connections exist
