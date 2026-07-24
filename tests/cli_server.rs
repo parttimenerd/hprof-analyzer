@@ -611,6 +611,51 @@ fn server_unknown_route_404() {
     );
 }
 
+/// GET /report/leaks?limit=2 returns at most 2 suspects.
+#[test]
+fn server_report_leaks_limit() {
+    let Some(hprof) = philosophers() else { return };
+    let (mut child, port) = start_server(&hprof);
+    curl_post(port, "/analyze", "");
+    wait_for_ready(port);
+    let (status, body) = curl_get(port, "/report/leaks?limit=2");
+    child.kill().ok();
+    child.wait().ok();
+    assert_eq!(status, 200, "expected 200 from /report/leaks?limit=2, got {status}");
+    assert!(
+        body.contains("\"suspects\""),
+        "response should have suspects field: {}",
+        &body[..body.len().min(300)]
+    );
+    // Count the number of "is_single" occurrences as a proxy for suspect entries.
+    // Each Suspect object has exactly one "is_single" field, so the count equals
+    // the number of suspects in the array.
+    let suspect_count = body.matches("\"is_single\"").count();
+    assert!(
+        suspect_count <= 2,
+        "expected at most 2 suspects with limit=2, counted {suspect_count} in: {}",
+        &body[..body.len().min(500)]
+    );
+}
+
+/// GET /report/leaks (no limit) returns the full suspects list.
+#[test]
+fn server_report_leaks_no_limit() {
+    let Some(hprof) = philosophers() else { return };
+    let (mut child, port) = start_server(&hprof);
+    curl_post(port, "/analyze", "");
+    wait_for_ready(port);
+    let (status, body) = curl_get(port, "/report/leaks");
+    child.kill().ok();
+    child.wait().ok();
+    assert_eq!(status, 200, "expected 200 from /report/leaks, got {status}");
+    assert!(
+        body.contains("\"suspects\""),
+        "response should have suspects field: {}",
+        &body[..body.len().min(300)]
+    );
+}
+
 /// After POST /analyze completes, `@retainedHeapSize` queries must succeed.
 /// Before this fix, the OQL server was permanently locked to `reachable_only=true`,
 /// which caused retained-size / dominator queries to error with

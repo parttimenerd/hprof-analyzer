@@ -157,12 +157,40 @@ impl ServeState {
                         "/report/overview" => section_response(&report.overview, want_md, |r, out| {
                             crate::report::render_system_overview(r, out);
                         }),
-                        "/report/leaks" => section_response(&report.leaks, want_md, |r, out| {
-                            crate::report::render_leak_suspects(r, out);
-                        }),
-                        "/report/top" => section_response(&report.top, want_md, |t, out| {
-                            crate::report::render_top_consumers(t, report.leaks.total_shallow, out);
-                        }),
+                        "/report/leaks" => {
+                            let limit = parse_limit(query);
+                            if let Some(n) = limit.filter(|&n| n < report.leaks.suspects.len()) {
+                                let mut trimmed = report.leaks.clone();
+                                trimmed.suspects.truncate(n);
+                                section_response(&trimmed, want_md, |r, out| {
+                                    crate::report::render_leak_suspects(r, out);
+                                })
+                            } else {
+                                section_response(&report.leaks, want_md, |r, out| {
+                                    crate::report::render_leak_suspects(r, out);
+                                })
+                            }
+                        }
+                        "/report/top" => {
+                            let limit = parse_limit(query);
+                            if let Some(n) = limit {
+                                let mut trimmed = report.top.clone();
+                                if n < trimmed.biggest_objects.len() {
+                                    trimmed.biggest_objects.truncate(n);
+                                }
+                                if n < trimmed.biggest_classes.len() {
+                                    trimmed.biggest_classes.truncate(n);
+                                }
+                                let total_shallow = report.leaks.total_shallow;
+                                section_response(&trimmed, want_md, |t, out| {
+                                    crate::report::render_top_consumers(t, total_shallow, out);
+                                })
+                            } else {
+                                section_response(&report.top, want_md, |t, out| {
+                                    crate::report::render_top_consumers(t, report.leaks.total_shallow, out);
+                                })
+                            }
+                        }
                         "/report/threads" => section_response(&report.threads, want_md, |r, out| {
                             crate::report::render_threads(r, false, out);
                         }),
@@ -243,6 +271,13 @@ fn split_path_query(url: &str) -> (&str, &str) {
         Some((p, q)) => (p, q),
         None => (url, ""),
     }
+}
+
+fn parse_limit(query: &str) -> Option<usize> {
+    query.split('&').find_map(|part| {
+        let (k, v) = part.split_once('=')?;
+        if k == "limit" { v.parse().ok() } else { None }
+    })
 }
 
 pub fn version_json() -> serde_json::Value {
