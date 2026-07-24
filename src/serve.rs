@@ -341,6 +341,8 @@ pub fn run_server(path: &str, port: u16, opts: AnalyzeOptions) -> io::Result<()>
     println!("(loopback only; Ctrl-C to stop)");
 
     let state = Arc::new(ServeState::new(path, opts)?);
+    // Prewarm the OQL ReplCache in the background so the first query is fast.
+    state.oql.prewarm();
     let server = Arc::new(server);
     let n_workers = std::thread::available_parallelism()
         .map(|n| n.get())

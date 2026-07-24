@@ -4,7 +4,7 @@
 
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 use tiny_http::{Response, Server};
@@ -254,11 +254,13 @@ fn internal_error(e: io::Error) -> serde_json::Value {
 /// pipeline completes. The warm ReplCache is behind a Mutex so worker threads
 /// can share (and lazily build) it. Field/scan-path queries rebuild pass1+pass2
 /// per request via run_single_dump — no shared mutable heap state needed.
+/// `help_cache` memoizes the GET /help payload (full Pass1 scan; expensive).
 pub struct ServerState {
     path: String,
     path_depth: usize,
     reachable_only: AtomicBool,
     cache: Mutex<Option<ReplCache>>,
+    help_cache: OnceLock<serde_json::Value>,
 }
 
 impl ServerState {
@@ -268,7 +270,32 @@ impl ServerState {
             path_depth,
             reachable_only: AtomicBool::new(reachable_only),
             cache: Mutex::new(None),
+            help_cache: OnceLock::new(),
         })
+    }
+
+    /// Build the ReplCache in a background thread so the first OQL request
+    /// doesn't pay the full Pass1+Pass2 warm-up cost. The result is stored in
+    /// `self.cache`; if warm-up races with the first request, the request's
+    /// lazy-build path wins and the background result is discarded.
+    pub fn prewarm(self: &Arc<Self>) {
+        let this = Arc::clone(self);
+        std::thread::spawn(move || {
+            let reachable_only = this.reachable_only.load(Ordering::Relaxed);
+            match ReplCache::build(&this.path, reachable_only) {
+                Ok(c) => {
+                    let mut guard = this.cache.lock().unwrap_or_else(|e| e.into_inner());
+                    // Only store if not already built (a concurrent request may
+                    // have won the race and built the cache already).
+                    if guard.is_none() {
+                        *guard = Some(c);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("server: ReplCache prewarm failed: {e}");
+                }
+            }
+        });
     }
 
     /// Called once the full analysis pipeline completes. Lowers `reachable_only`
@@ -323,8 +350,14 @@ impl ServerState {
                 );
                 (status, body, "application/x-ndjson")
             }
-            ("GET", "/help") => (200, help_json(&self.path).to_string(), "application/json"),
-            ("GET", "/") => (200, help_json(&self.path).to_string(), "application/json"),
+            ("GET", "/help") => {
+                let v = self.help_cache.get_or_init(|| help_json(&self.path));
+                (200, v.to_string(), "application/json")
+            }
+            ("GET", "/") => {
+                let v = self.help_cache.get_or_init(|| help_json(&self.path));
+                (200, v.to_string(), "application/json")
+            }
             ("GET", "/schema") => (200, schema_json().to_string(), "application/json"),
             ("GET", "/version") => (200, version_json().to_string(), "application/json"),
             // Known path, unsupported method -> 405 (not 404).
@@ -429,6 +462,8 @@ pub fn run_server(path: &str, path_depth: usize, port: u16) -> io::Result<()> {
     println!("(loopback only; Ctrl-C to stop)");
 
     let state = Arc::new(ServerState::load(path, path_depth, true)?);
+    // Kick off background ReplCache build so the first OQL request is fast.
+    state.prewarm();
     let server = Arc::new(server);
 
     let n_workers = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
