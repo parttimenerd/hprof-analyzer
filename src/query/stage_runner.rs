@@ -435,7 +435,7 @@ fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
                 return string_values_rows(entry, q, ctx);
             }
             StageOp::ResolveArrayIndex => {
-                return array_index_rows(entry, q);
+                return array_index_rows(entry, q, ctx);
             }
             // Later phases add more StageOp variants; an unhandled op must fail
             // loudly rather than silently dropping the query's late work.
@@ -986,13 +986,44 @@ fn project_string_row_item(it: &SelectItem, dense: u32, ctx: &LateCtx) -> QueryV
     }
 }
 
+/// Project a single SELECT item for an `array_index_rows` row from a dense object
+/// index. `ArrayIndex`/`ArraySlice` items are handled by the caller (they always
+/// project `Null` at this stage). All other items are resolved here using the
+/// same late-phase data available in `LateCtx`.
+fn project_array_index_item(it: &SelectItem, dense: u32, ctx: &LateCtx) -> QueryValue {
+    match it {
+        SelectItem::Attr(Attr::ObjectId) => QueryValue::Int(dense as i64),
+        SelectItem::Attr(Attr::ObjectAddress) => {
+            QueryValue::Int(ctx.id_map.to_addr(dense) as i64)
+        }
+        SelectItem::Attr(Attr::RetainedHeapSize) => QueryValue::Int(
+            ctx.retained.get(dense as usize).copied().unwrap_or(0) as i64,
+        ),
+        SelectItem::Attr(Attr::UsedHeapSize) => QueryValue::Int(
+            ctx.shallow.get(dense as usize).copied().unwrap_or(0) as i64,
+        ),
+        SelectItem::Attr(Attr::GcRootInfo) | SelectItem::Attr(Attr::GcRoots) => {
+            match ctx.gc_root_tag(dense) {
+                Some(tag) => QueryValue::Str(root_tag_name(tag).into_owned()),
+                None => QueryValue::Null,
+            }
+        }
+        SelectItem::Star => QueryValue::ObjRef {
+            index: dense as u64,
+            class: "?".to_string(),
+            addr: None,
+        },
+        _ => QueryValue::Null,
+    }
+}
+
 /// Produce result rows for a query with `needs.array_index` (contains at least one
 /// `base[index]` or `base[start:end]` expression). In this release, array element
 /// data is not captured during the scan, so all `ArrayIndex`/`ArraySlice` columns
 /// project `Null`. Other columns (`@objectId`, `*`, etc.) are projected normally
 /// from the carried dense indices. Out-of-bounds and non-resolvable bases both
 /// yield `Null` without error, matching the AST contract. Limit is applied.
-fn array_index_rows(entry: &CrossPhaseEntry, q: &Query) -> QueryResult {
+fn array_index_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
     let seeds: Vec<u32> = entry.carry.indices();
     let columns: Vec<QueryColumn> = crate::query::execute::query_columns(q);
     let mut rows: Vec<Vec<QueryValue>> = Vec::new();
@@ -1001,16 +1032,12 @@ fn array_index_rows(entry: &CrossPhaseEntry, q: &Query) -> QueryResult {
             .select
             .iter()
             .map(|it| match it {
-                SelectItem::Attr(Attr::ObjectId) => QueryValue::Int(s as i64),
-                SelectItem::Star => QueryValue::ObjRef {
-                    index: s as u64,
-                    class: "?".to_string(),
-                    addr: None,
-                },
                 // ArrayIndex and ArraySlice: element data not yet captured → Null.
                 SelectItem::Attr(Attr::ArrayIndex { .. })
                 | SelectItem::Attr(Attr::ArraySlice { .. }) => QueryValue::Null,
-                _ => QueryValue::Null,
+                // All other columns: resolve normally from the dense index using
+                // the same late-phase projection as other stage entry functions.
+                _ => project_array_index_item(it, s, ctx),
             })
             .collect();
         rows.push(row);

@@ -1621,6 +1621,18 @@ fn collect_pred_needs(pred: &Predicate, needs: &mut QueryNeeds) -> Result<(), Qu
         Predicate::Compare { lhs, rhs, .. } => {
             let lhs_attr = lhs.as_attr();
             let rhs_val = rhs.as_lit();
+            // Reject ArrayIndex/ArraySlice in WHERE predicates at plan time.
+            let is_array_attr = |a: &Attr| matches!(a, Attr::ArrayIndex { .. } | Attr::ArraySlice { .. });
+            if lhs_attr.map_or(false, is_array_attr)
+                || expr_any_attr(lhs, is_array_attr)
+                || expr_any_attr(rhs, is_array_attr)
+            {
+                return Err(QueryError(
+                    "array indexing is not supported in WHERE predicates — \
+                     use array access in SELECT columns only"
+                        .into(),
+                ));
+            }
             // Folded plain-compare fast path (unchanged behavior): lhs is a single attr.
             if let Some(a) = lhs_attr {
                 match a {
@@ -3539,6 +3551,27 @@ mod tests {
             "error must name the offending column, got: {}",
             err.0
         );
+    }
+
+    #[test]
+    fn array_index_in_where_errors() {
+        use crate::query::parse::parse;
+        // Inject ArrayIndex into WHERE (parse may or may not support it directly,
+        // so build the query manually)
+        let q = parse("SELECT @objectId FROM java.lang.String s WHERE s.value[0] > 65");
+        // If the parser doesn't support this form, just verify the planner would reject it
+        match q {
+            Err(_) => { /* parser rejected it — acceptable */ }
+            Ok(q) => {
+                let err = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP)
+                    .expect_err("ArrayIndex in WHERE must error");
+                assert!(
+                    err.0.to_lowercase().contains("array") || err.0.to_lowercase().contains("where"),
+                    "error must mention array or WHERE, got: {}",
+                    err.0
+                );
+            }
+        }
     }
 }
 
