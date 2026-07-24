@@ -138,26 +138,36 @@ pub struct MatEmitter {
 /// embeds this string in the `.index` header and rejects caches with a
 /// mismatched ID, re-parsing from scratch.
 ///
+/// If `mat_bin` is given (path to the `MemoryAnalyzer` executable), the
+/// plugins directory is derived from it: `<bin>/../Eclipse/plugins` (the macOS
+/// bundle layout where `bin` lives in `MacOS/`). That candidate is tried first.
+///
 /// Returns `None` when no MAT installation is found or the jar cannot be
 /// read; the caller falls back to the hard-coded default.
-pub fn detect_mat_parser_id() -> Option<String> {
+pub fn detect_mat_parser_id(mat_bin: Option<&Path>) -> Option<String> {
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    // If an explicit MAT binary was given, derive the plugins dir from it.
+    // macOS bundle: .../Contents/MacOS/MemoryAnalyzer → .../Contents/Eclipse/plugins
+    if let Some(bin) = mat_bin {
+        if let Some(macos_dir) = bin.parent() {
+            candidates.push(macos_dir.join("../Eclipse/plugins"));
+        }
+    }
     // Candidate plugins directories on macOS and Linux.
-    let candidates: Vec<std::path::PathBuf> = {
-        let mut v = vec![
+    {
+        candidates.push(
             // macOS standard location
             std::path::PathBuf::from("/Applications/MemoryAnalyzer.app/Contents/Eclipse/plugins"),
-            // macOS user Applications
-        ];
+        );
         if let Some(home) = std::env::var_os("HOME") {
-            v.push(std::path::Path::new(&home).join("Applications/MemoryAnalyzer.app/Contents/Eclipse/plugins"));
+            candidates.push(std::path::Path::new(&home).join("Applications/MemoryAnalyzer.app/Contents/Eclipse/plugins"));
             // Linux: ~/mat/plugins (common after unpacking the tar.gz)
-            v.push(std::path::Path::new(&home).join("mat/plugins"));
+            candidates.push(std::path::Path::new(&home).join("mat/plugins"));
         }
         // Linux system-wide paths
-        v.push(std::path::PathBuf::from("/opt/mat/plugins"));
-        v.push(std::path::PathBuf::from("/usr/local/mat/plugins"));
-        v
-    };
+        candidates.push(std::path::PathBuf::from("/opt/mat/plugins"));
+        candidates.push(std::path::PathBuf::from("/usr/local/mat/plugins"));
+    }
 
     for plugins_dir in &candidates {
         if let Some(id) = probe_mat_plugins_dir(plugins_dir) {
@@ -232,9 +242,9 @@ fn extract_parser_id_from_jar(jar: &std::path::Path) -> Option<String> {
 
 #[allow(dead_code)]
 impl MatEmitter {
-    pub fn new(dir: &Path, prefix: &str) -> io::Result<Self> {
+    pub fn new(dir: &Path, prefix: &str, mat_bin: Option<&Path>) -> io::Result<Self> {
         std::fs::create_dir_all(dir)?;
-        let parser_id = detect_mat_parser_id()
+        let parser_id = detect_mat_parser_id(mat_bin)
             .unwrap_or_else(|| "org.eclipse.mat.hprof.hprof".to_string());
         Ok(Self {
             dir: dir.to_path_buf(),
@@ -905,7 +915,7 @@ mod tests {
     fn emitter_creates_dir_and_is_noop_without_calls() {
         let tmp = std::env::temp_dir().join("mat_emit_test_0");
         let _ = std::fs::remove_dir_all(&tmp);
-        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        let e = MatEmitter::new(&tmp, "dump_", None).unwrap();
         drop(e);
         assert!(tmp.exists());
     }
@@ -956,7 +966,7 @@ mod tests {
 
         let tmp = std::env::temp_dir().join("mat_emit_o2c_test");
         let _ = std::fs::remove_dir_all(&tmp);
-        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        let e = MatEmitter::new(&tmp, "dump_", None).unwrap();
         e.emit_o2c(&c, &inv).unwrap();
 
         let bytes = std::fs::read(e.path("o2c")).unwrap();
@@ -985,7 +995,7 @@ mod tests {
 
         let tmp = std::env::temp_dir().join("mat_emit_o2c_real");
         let _ = std::fs::remove_dir_all(&tmp);
-        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        let e = MatEmitter::new(&tmp, "dump_", None).unwrap();
         e.emit_o2c(&c, &inv).unwrap();
         let ours = std::fs::read(e.path("o2c")).unwrap();
 
@@ -1073,7 +1083,7 @@ mod tests {
         let addrs: Vec<u64> = vals.iter().map(|&v| v as u64).collect();
         let tmp = std::env::temp_dir().join("mat_emit_idx_real");
         let _ = std::fs::remove_dir_all(&tmp);
-        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        let e = MatEmitter::new(&tmp, "dump_", None).unwrap();
         e.emit_idx(addrs.len(), |i| addrs[i]).unwrap();
         let ours = std::fs::read(e.path("idx")).unwrap();
         assert_files_eq("idx", &ours, &real);
@@ -1096,7 +1106,7 @@ mod tests {
         let c = CompressedU32::compress(&shallow, Codec::None).unwrap();
         let tmp = std::env::temp_dir().join("mat_emit_a2s_real");
         let _ = std::fs::remove_dir_all(&tmp);
-        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        let e = MatEmitter::new(&tmp, "dump_", None).unwrap();
         e.emit_a2s(&c).unwrap();
         let ours = std::fs::read(e.path("a2s")).unwrap();
         assert_files_eq("a2s", &ours, &real);
@@ -1112,7 +1122,7 @@ mod tests {
         let idom = decode_int_index(&real);
         let tmp = std::env::temp_dir().join("mat_emit_domin_real");
         let _ = std::fs::remove_dir_all(&tmp);
-        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        let e = MatEmitter::new(&tmp, "dump_", None).unwrap();
         e.emit_dom_in(&idom).unwrap();
         let ours = std::fs::read(e.path("domIn")).unwrap();
         assert_files_eq("domIn", &ours, &real);
@@ -1128,7 +1138,7 @@ mod tests {
         let retained = decode_long_index(&real);
         let tmp = std::env::temp_dir().join("mat_emit_o2ret_real");
         let _ = std::fs::remove_dir_all(&tmp);
-        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        let e = MatEmitter::new(&tmp, "dump_", None).unwrap();
         e.emit_o2ret(&retained).unwrap();
         let ours = std::fs::read(e.path("o2ret")).unwrap();
         assert_files_eq("o2ret", &ours, &real);
@@ -1250,7 +1260,7 @@ mod tests {
     fn emit_i2sv2_empty_produces_empty_file() {
         let tmp = std::env::temp_dir().join("mat_i2sv2_empty");
         let _ = std::fs::remove_dir_all(&tmp);
-        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        let e = MatEmitter::new(&tmp, "dump_", None).unwrap();
         e.emit_i2sv2(std::iter::empty()).unwrap();
         let path = tmp.join("dump_.i2sv2.index");
         let bytes = std::fs::read(&path).unwrap();
@@ -1263,7 +1273,7 @@ mod tests {
         let entries = vec![(1i32, 100i64), (7i32, 200i64), (-1i32, 0i64)];
         let tmp = std::env::temp_dir().join("mat_i2sv2_encoding");
         let _ = std::fs::remove_dir_all(&tmp);
-        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        let e = MatEmitter::new(&tmp, "dump_", None).unwrap();
         e.emit_i2sv2(entries.iter().copied()).unwrap();
         let bytes = std::fs::read(tmp.join("dump_.i2sv2.index")).unwrap();
         assert_eq!(bytes.len(), 3 * 12, "each entry is 4 + 8 bytes");
@@ -1284,7 +1294,7 @@ mod tests {
         let entries: Vec<(i32, i64)> = (0..50).map(|i| (i, i as i64 * 1000)).collect();
         let tmp = std::env::temp_dir().join("mat_i2sv2_roundtrip");
         let _ = std::fs::remove_dir_all(&tmp);
-        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        let e = MatEmitter::new(&tmp, "dump_", None).unwrap();
         e.emit_i2sv2(entries.iter().copied()).unwrap();
         let bytes = std::fs::read(tmp.join("dump_.i2sv2.index")).unwrap();
         assert_eq!(bytes.len() % 12, 0);
@@ -1308,7 +1318,7 @@ mod tests {
         let mm = MatIdMap::build(2, &idom, |i| (i as u64 + 1) * 0x10);
         let tmp = std::env::temp_dir().join("mat_threads_empty");
         let _ = std::fs::remove_dir_all(&tmp);
-        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        let e = MatEmitter::new(&tmp, "dump_", None).unwrap();
         e.emit_threads(&[], &mm, &HashMap::new()).unwrap();
         let bytes = std::fs::read(tmp.join("dump_.threads")).unwrap();
         assert!(bytes.is_empty(), "no threads → empty file");
@@ -1322,7 +1332,7 @@ mod tests {
         let mm = MatIdMap::build(2, &idom, |i| (i as u64 + 1) * 0x10);
         let tmp = std::env::temp_dir().join("mat_threads_skip_noframe");
         let _ = std::fs::remove_dir_all(&tmp);
-        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        let e = MatEmitter::new(&tmp, "dump_", None).unwrap();
         e.emit_threads(&[ts], &mm, &HashMap::new()).unwrap();
         let bytes = std::fs::read(tmp.join("dump_.threads")).unwrap();
         assert!(bytes.is_empty(), "thread with no frames should be skipped");
@@ -1340,7 +1350,7 @@ mod tests {
         let ts = make_thread_stack(1, 0, &["com.example.Foo.bar(Foo.java:42)", "com.example.Main.main(Main.java:10)"]);
         let tmp = std::env::temp_dir().join("mat_threads_single");
         let _ = std::fs::remove_dir_all(&tmp);
-        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        let e = MatEmitter::new(&tmp, "dump_", None).unwrap();
         e.emit_threads(&[ts], &mm, &HashMap::new()).unwrap();
         let content = std::fs::read_to_string(tmp.join("dump_.threads")).unwrap();
         let lines: Vec<&str> = content.lines().collect();
@@ -1359,7 +1369,7 @@ mod tests {
         let ts = make_thread_stack(5, 99, &["java.lang.Thread.run(Thread.java:1)"]);
         let tmp = std::env::temp_dir().join("mat_threads_unreachable");
         let _ = std::fs::remove_dir_all(&tmp);
-        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        let e = MatEmitter::new(&tmp, "dump_", None).unwrap();
         e.emit_threads(&[ts], &mm, &HashMap::new()).unwrap();
         let content = std::fs::read_to_string(tmp.join("dump_.threads")).unwrap();
         assert!(content.starts_with("Thread 0x0\n"), "unreachable thread obj → addr 0, got: {content:?}");
@@ -1378,7 +1388,7 @@ mod tests {
         locals.insert(1, vec![(0u32, 2u32), (u32::MAX, 1u32)]);
         let tmp = std::env::temp_dir().join("mat_threads_locals");
         let _ = std::fs::remove_dir_all(&tmp);
-        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        let e = MatEmitter::new(&tmp, "dump_", None).unwrap();
         e.emit_threads(&[ts], &mm, &locals).unwrap();
         let content = std::fs::read_to_string(tmp.join("dump_.threads")).unwrap();
         assert!(content.contains("locals:"), "should have locals section");
@@ -1397,7 +1407,7 @@ mod tests {
         ];
         let tmp = std::env::temp_dir().join("mat_threads_multi");
         let _ = std::fs::remove_dir_all(&tmp);
-        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        let e = MatEmitter::new(&tmp, "dump_", None).unwrap();
         e.emit_threads(&stacks, &mm, &HashMap::new()).unwrap();
         let content = std::fs::read_to_string(tmp.join("dump_.threads")).unwrap();
         assert!(content.contains("Thread 0x10"), "first thread");
@@ -1526,7 +1536,7 @@ mod tests {
         ];
         let tmp = std::env::temp_dir().join("mat_emit_outbound_rt");
         let _ = std::fs::remove_dir_all(&tmp);
-        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        let e = MatEmitter::new(&tmp, "dump_", None).unwrap();
         e.emit_outbound(&entries).unwrap();
         let path = tmp.join("dump_.outbound.index");
         let recon = read_sorted_1n(&path);
@@ -1543,7 +1553,7 @@ mod tests {
         ];
         let tmp = std::env::temp_dir().join("mat_emit_inbound_rt");
         let _ = std::fs::remove_dir_all(&tmp);
-        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        let e = MatEmitter::new(&tmp, "dump_", None).unwrap();
         e.emit_inbound(&entries).unwrap();
         let path = tmp.join("dump_.inbound.index");
         let recon = read_sorted_1n(&path);
@@ -1562,7 +1572,7 @@ mod tests {
         ];
         let tmp = std::env::temp_dir().join("mat_emit_domout_rt");
         let _ = std::fs::remove_dir_all(&tmp);
-        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        let e = MatEmitter::new(&tmp, "dump_", None).unwrap();
         e.emit_dom_out(&entries).unwrap();
         let path = tmp.join("dump_.domOut.index");
         let recon = read_unsorted_1n(&path);
@@ -1574,7 +1584,7 @@ mod tests {
         let entries: Vec<Vec<i32>> = vec![vec![], vec![], vec![]];
         let tmp = std::env::temp_dir().join("mat_emit_outbound_empty");
         let _ = std::fs::remove_dir_all(&tmp);
-        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        let e = MatEmitter::new(&tmp, "dump_", None).unwrap();
         e.emit_outbound(&entries).unwrap();
         let recon = read_sorted_1n(&tmp.join("dump_.outbound.index"));
         assert_eq!(recon, entries);
@@ -1585,7 +1595,7 @@ mod tests {
         let entries: Vec<Vec<i32>> = vec![vec![], vec![], vec![]];
         let tmp = std::env::temp_dir().join("mat_emit_inbound_empty");
         let _ = std::fs::remove_dir_all(&tmp);
-        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        let e = MatEmitter::new(&tmp, "dump_", None).unwrap();
         e.emit_inbound(&entries).unwrap();
         let recon = read_sorted_1n(&tmp.join("dump_.inbound.index"));
         assert_eq!(recon, entries);
@@ -1596,7 +1606,7 @@ mod tests {
         let entries: Vec<Vec<i32>> = vec![vec![], vec![], vec![]];
         let tmp = std::env::temp_dir().join("mat_emit_domout_empty");
         let _ = std::fs::remove_dir_all(&tmp);
-        let e = MatEmitter::new(&tmp, "dump_").unwrap();
+        let e = MatEmitter::new(&tmp, "dump_", None).unwrap();
         e.emit_dom_out(&entries).unwrap();
         let recon = read_unsorted_1n(&tmp.join("dump_.domOut.index"));
         assert_eq!(recon, entries);

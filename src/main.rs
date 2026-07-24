@@ -190,6 +190,11 @@ struct Cli {
     /// Analyze-only; adds some transient RSS to re-materialize compressed arrays.
     #[arg(long, value_name = "DIR", value_hint = ValueHint::DirPath)]
     mat: Option<std::path::PathBuf>,
+
+    /// Path to the MemoryAnalyzer executable (used with --mat to auto-detect
+    /// the MAT plugins directory and resolve the correct parser ID).
+    #[arg(long, value_hint = ValueHint::FilePath)]
+    mat_binary: Option<std::path::PathBuf>,
 }
 
 /// Named subcommands. The default (no subcommand) analyzes or re-renders the
@@ -235,6 +240,11 @@ enum MatCmd {
         /// directory containing the heap dump.
         #[arg(value_hint = ValueHint::DirPath)]
         dir: Option<String>,
+        /// Path to the MemoryAnalyzer executable. Used to auto-detect the
+        /// MAT plugins directory and resolve the correct parser ID for the
+        /// `.index` header. When omitted, common installation paths are tried.
+        #[arg(long, value_hint = ValueHint::FilePath)]
+        mat_binary: Option<String>,
         /// Emit RSS trace lines to stderr (useful for memory profiling).
         #[arg(long)]
         trace_rss: bool,
@@ -495,7 +505,7 @@ fn main() {
             }
         },
         Some(Cmd::Mat { cmd }) => match cmd {
-            MatCmd::Caches { input, dir, trace_rss } => {
+            MatCmd::Caches { input, dir, mat_binary, trace_rss } => {
                 if !input_is_hprof(&input) {
                     fail(format!("'{input}' does not look like a .hprof[.gz] file"));
                 }
@@ -517,7 +527,8 @@ fn main() {
                     .strip_suffix(".hprof.gz")
                     .or_else(|| base.strip_suffix(".hprof"))
                     .unwrap_or(base);
-                let mat_emitter = match mat::MatEmitter::new(std::path::Path::new(mat_dir), prefix) {
+                let mat_bin_path = mat_binary.as_deref().map(std::path::Path::new);
+                let mat_emitter = match mat::MatEmitter::new(std::path::Path::new(mat_dir), prefix, mat_bin_path) {
                     Ok(e) => e,
                     Err(e) => fail(format!("cannot create MAT index dir '{mat_dir}': {e}")),
                 };
@@ -584,7 +595,7 @@ fn run_default(cli: Cli) {
                     .strip_suffix(".hprof.gz")
                     .or_else(|| base.strip_suffix(".hprof"))
                     .unwrap_or(base);
-                match mat::MatEmitter::new(dir, prefix) {
+                match mat::MatEmitter::new(dir, prefix, cli.mat_binary.as_deref()) {
                     Ok(e) => Some(e),
                     Err(e) => fail(format!("cannot create MAT index dir '{}': {e}", dir.display())),
                 }
