@@ -425,3 +425,75 @@ oql = "SELECT COUNT(*) FROM INSTANCEOF java.util.Map"
 ```
 
 Point at a specific file with `--collection-config <path>`.
+
+---
+
+## server subcommand
+
+```console
+$ hprof-analyzer server heap.hprof [--port 7070]
+```
+
+Starts an HTTP server on `127.0.0.1` (loopback only, default port 7070) that
+exposes OQL query execution and report sections as JSON/Markdown endpoints.
+The server prints a startup banner listing every available endpoint.
+
+### Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/` | Welcome + endpoint catalog |
+| GET | `/version` | `{"version":…,"endpoints":[…]}` |
+| GET | `/status` | `{"status":"ready"\|"analyzing"\|"not_started"}` |
+| POST | `/analyze` | Trigger full analysis |
+| POST | `/` | Run OQL → JSON `QueryResult` |
+| POST | `/query` | Alias of `POST /` |
+| POST | `/stream` | Run OQL → NDJSON |
+| GET | `/help` | OQL language reference JSON |
+| GET | `/schema` | JSON Schema for `QueryResult` |
+| GET | `/report` | Full report JSON (or `?format=md`) |
+| GET | `/report/overview` | `SystemOverview` JSON (or `?format=md`) |
+| GET | `/report/leaks` | `LeakSuspects` JSON (or `?format=md`) |
+| GET | `/report/top` | `TopConsumers` JSON (or `?format=md`) |
+| GET | `/report/threads` | `ThreadOverview` JSON (or `?format=md`) |
+
+### Format negotiation
+
+Append `?format=md` to any `/report/…` endpoint to receive Markdown instead of
+JSON:
+
+```console
+$ curl -s 'http://127.0.0.1:7070/report?format=md'
+$ curl -s 'http://127.0.0.1:7070/report/leaks?format=md'
+```
+
+### Lazy analysis
+
+The first `GET /report/…` request automatically triggers analysis if it has not
+been started yet. While analysis is running the server returns `202 Accepted`.
+Use `GET /status` to poll until the status is `"ready"`, or trigger analysis
+explicitly with `POST /analyze` before issuing report requests.
+
+### Example workflow
+
+```console
+# Check current status
+$ curl -s http://127.0.0.1:7070/status
+{"status":"not_started"}
+
+# Trigger full analysis
+$ curl -s -X POST http://127.0.0.1:7070/analyze
+
+# Poll until ready
+$ curl -s http://127.0.0.1:7070/status
+{"status":"ready"}
+
+# Full report as Markdown
+$ curl -s 'http://127.0.0.1:7070/report?format=md'
+
+# Leak suspects as JSON
+$ curl -s http://127.0.0.1:7070/report/leaks | jq .
+
+# Run an OQL query
+$ curl -s http://127.0.0.1:7070/ -d 'SELECT @displayName FROM java.lang.Thread'
+```
