@@ -143,6 +143,64 @@ pub fn write_sorted<W: Write>(mut w: W, entries: &[Vec<i32>]) -> io::Result<W> {
     Ok(w)
 }
 
+/// Streaming variant of [`write_sorted`]: accepts an iterator of entry slices
+/// instead of a pre-built `Vec<Vec<i32>>`. Avoids materialising the full
+/// entries array so the caller can emit one object at a time and discard it.
+pub fn write_sorted_iter<W, I, S>(mut w: W, entries: I) -> io::Result<W>
+where
+    W: Write,
+    I: Iterator<Item = S>,
+    S: AsRef<[i32]>,
+{
+    let mut header: Vec<i64> = Vec::new();
+    let mut body = IntIndexStreamer::new(Vec::new());
+    let mut body_size: i64 = 0;
+    for entry in entries {
+        let values = entry.as_ref();
+        if values.is_empty() {
+            header.push(0);
+            continue;
+        }
+        let pos = body_size + 1;
+        header.push(pos);
+        for &v in values {
+            body.push(v)?;
+            body_size += 1;
+        }
+    }
+    let body_bytes = body.finish()?;
+    let divider = body_bytes.len() as i64;
+    write_1n_tail(&mut w, &body_bytes, &header, divider)?;
+    Ok(w)
+}
+
+/// Streaming variant of [`write_unsorted`]: accepts an iterator of entry slices.
+pub fn write_unsorted_iter<W, I, S>(mut w: W, entries: I) -> io::Result<W>
+where
+    W: Write,
+    I: Iterator<Item = S>,
+    S: AsRef<[i32]>,
+{
+    let mut header: Vec<i64> = Vec::new();
+    let mut body = IntIndexStreamer::new(Vec::new());
+    let mut body_size: i64 = 0;
+    for entry in entries {
+        let values = entry.as_ref();
+        let pos = body_size;
+        header.push(pos);
+        body.push(values.len() as i32)?;
+        body_size += 1;
+        for &v in values {
+            body.push(v)?;
+            body_size += 1;
+        }
+    }
+    let body_bytes = body.finish()?;
+    let divider = body_bytes.len() as i64;
+    write_1n_tail(&mut w, &body_bytes, &header, divider)?;
+    Ok(w)
+}
+
 /// Shared final flush: write body bytes, the header index (opened at `divider`),
 /// then the trailing divider i64. Only the plain-int header path is supported;
 /// see the module docs re: header2 / PosIndexStreamer.

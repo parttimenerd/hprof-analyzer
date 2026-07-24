@@ -389,6 +389,19 @@ impl MatEmitter {
         Ok(())
     }
 
+    /// Streaming variant: emit `outbound` from an iterator of entry slices,
+    /// avoiding a full `Vec<Vec<i32>>` materialisation.
+    pub fn emit_outbound_iter<I, S>(&self, entries: I) -> io::Result<()>
+    where
+        I: Iterator<Item = S>,
+        S: AsRef<[i32]>,
+    {
+        let w = BufWriter::new(File::create(self.path("outbound"))?);
+        let w = int_index_1n::write_sorted_iter(w, entries)?;
+        w.into_inner().map_err(|e| e.into_error())?.sync_all()?;
+        Ok(())
+    }
+
     /// Emit the MAT `inbound` IntArray1N (SORTED writer). `entries[i]` is the
     /// per-object referrer list; empty lists are written as unset holes (MAT
     /// never `set`s them). MAT's inbound has NO pseudo class-object element
@@ -397,6 +410,18 @@ impl MatEmitter {
     pub fn emit_inbound(&self, entries: &[Vec<i32>]) -> io::Result<()> {
         let w = BufWriter::new(File::create(self.path("inbound"))?);
         let w = int_index_1n::write_sorted(w, entries)?;
+        w.into_inner().map_err(|e| e.into_error())?.sync_all()?;
+        Ok(())
+    }
+
+    /// Streaming variant: emit `inbound` from an iterator of entry slices.
+    pub fn emit_inbound_iter<I, S>(&self, entries: I) -> io::Result<()>
+    where
+        I: Iterator<Item = S>,
+        S: AsRef<[i32]>,
+    {
+        let w = BufWriter::new(File::create(self.path("inbound"))?);
+        let w = int_index_1n::write_sorted_iter(w, entries)?;
         w.into_inner().map_err(|e| e.into_error())?.sync_all()?;
         Ok(())
     }

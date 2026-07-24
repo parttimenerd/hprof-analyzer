@@ -1079,7 +1079,14 @@ fn run(
     let count = parent_pre_count;
     rpo.vertex = rpo_dfs::rebuild_vertex(&rpo.dfn, count);
     crate::trace::probe("main: after rebuild_vertex (post-inbound, dfn live)");
-    rpo.dfn = Vec::new();
+    // MAT inbound decode needs dfn (dense→pre-order) to build the per-pre-order
+    // offset table into inb_data. Save it before clearing.
+    let mat_dfn_save: Option<Vec<u32>> = if mat.is_some() {
+        Some(std::mem::take(&mut rpo.dfn))
+    } else {
+        rpo.dfn = Vec::new();
+        None
+    };
     crate::trace::trim();
 
     // Restore parent_pre from compressed blob before the dominator stage.
@@ -1088,32 +1095,11 @@ fn run(
         crate::trace::probe("main: after restore parent_pre (before dominator)");
     }
 
-    // MAT: decode the inbound CSR into per-node referrer lists (keyed by OLD
-    // dense-id) before compute_dominators consumes rpo (we need rpo.vertex to
-    // map pre-order -> dense id). Translation to mat-ids happens after mat_map
-    // is built (post compute_dominators). Zero cost when --mat is absent.
-    let mat_inb_raw: Option<Vec<Vec<i32>>> = if mat.is_some() {
-        let vertex = &rpo.vertex;
-        let n = g.n;
-        let mut by_old: Vec<Vec<i32>> = Vec::with_capacity(n);
-        let mut pos = 0usize;
-        for _w in 0..n {
-            let (count, c0) = vbyte::decode_one(&inb_data[pos..]);
-            pos += c0;
-            let mut e: Vec<i32> = Vec::with_capacity(count as usize);
-            let mut prev: u32 = 0;
-            for _ in 0..count {
-                let (delta, c1) = vbyte::decode_one(&inb_data[pos..]);
-                pos += c1;
-                prev += delta;
-                // pre-order 0 = virtual root (skip it); real objects pre-order >= 1.
-                if prev > 0 {
-                    e.push(vertex[prev as usize] as i32); // old dense-id
-                }
-            }
-            by_old.push(e);
-        }
-        Some(by_old)
+    // rpo is consumed by compute_dominators. We already saved dfn above.
+    // Also save vertex (pre→dense) so we can decode inb_data referrer pre-order
+    // values back to dense-ids during emit_inbound.
+    let mat_vertex_save: Option<Vec<u32>> = if mat.is_some() {
+        Some(rpo.vertex.clone())
     } else {
         None
     };
@@ -1125,6 +1111,8 @@ fn run(
     g.idom =
         dominator::compute_dominators(g.n, rpo, &g.gc_root_indices, &inb_block_off, &inb_data)?;
     log(verbose, "dominator", t.elapsed().as_secs_f64());
+
+    crate::trace::probe("main: after dominator");
     // MAT id-space remapping: now that idom is set we can build the mapping from
     // our dense-id space to MAT's (reachable-only, address-sorted, id-0=synthetic).
     // mat_addrs was captured before compress_id_map; drop it right after emitting idx.
@@ -1204,74 +1192,102 @@ fn run(
         } else {
             None
         };
+    crate::trace::probe("main: before emit_outbound (mat_inb_raw + mat_fwd_snap coexist)");
     // MAT: emit `outbound` IntArray1N in MAT id order. mat-id 0 (synthetic root)
     // gets an empty entry. For mat-ids 1..N we look up the old dense-id in
     // mat_fwd_snap (fwd offsets, flat targets, per-object class-obj old id),
     // sort+dedup the targets, translate each to mat-id (filtering unreachable and
     // the synthetic mat-id-0 root), and prepend the class-object mat-id as entry[0].
+    // Streaming: emit one object at a time to avoid a Vec<Vec<i32>> the size of
+    // all outbound edges.
     if let Some(ref m) = mat {
         let mm = mat_map.as_ref().expect("mat_map built with mat");
         if let Some((fwd_off, fwd_tgt, _class_idx_rows)) = mat_fwd_snap.as_ref() {
             let class_obj_ids = mat_class_obj_ids
                 .as_ref()
                 .expect("mat_class_obj_ids built when mat present");
-            let mc = mm.mat_count();
-            let mut entries: Vec<Vec<i32>> = Vec::with_capacity(mc);
-            entries.push(Vec::new()); // entry 0 = synthetic root (no outbound)
-            let mut tgt: Vec<i32> = Vec::new();
-            for &old_id in mm.sorted() {
-                let lo = fwd_off[old_id as usize] as usize;
-                let hi = fwd_off[old_id as usize + 1] as usize;
-                tgt.clear();
-                for &raw in &fwd_tgt[lo..hi] {
-                    let mid = mm.translate(raw as i32);
-                    if mid >= 0 { tgt.push(mid); }
-                }
-                tgt.sort_unstable();
-                tgt.dedup();
-                let coid = class_obj_ids[old_id as usize];
-                let class_mat = if coid == u32::MAX { 0 } else { mm.translate(coid as i32).max(0) };
-                // Remove the class-object mat-id from the targets: MAT stores it
-                // separately as entry[0] (the pseudo class-ref) and does NOT
-                // include it in the forward-reference list.
-                if let Ok(pos) = tgt.binary_search(&class_mat) {
-                    tgt.remove(pos);
-                }
-                let mut e: Vec<i32> = Vec::with_capacity(tgt.len() + 1);
-                e.push(class_mat);
-                e.extend_from_slice(&tgt);
-                entries.push(e);
-            }
-            m.emit_outbound(&entries)?;
-            drop(entries);
+            m.emit_outbound_iter(
+                std::iter::once(Vec::new()) // entry 0 = synthetic root
+                    .chain(mm.sorted().iter().map(|&old_id| {
+                        let lo = fwd_off[old_id as usize] as usize;
+                        let hi = fwd_off[old_id as usize + 1] as usize;
+                        let mut tgt: Vec<i32> = fwd_tgt[lo..hi]
+                            .iter()
+                            .filter_map(|&raw| { let mid = mm.translate(raw as i32); if mid >= 0 { Some(mid) } else { None } })
+                            .collect();
+                        tgt.sort_unstable();
+                        tgt.dedup();
+                        let coid = class_obj_ids[old_id as usize];
+                        let class_mat = if coid == u32::MAX { 0 } else { mm.translate(coid as i32).max(0) };
+                        if let Ok(pos) = tgt.binary_search(&class_mat) {
+                            tgt.remove(pos);
+                        }
+                        let mut e: Vec<i32> = Vec::with_capacity(tgt.len() + 1);
+                        e.push(class_mat);
+                        e.extend_from_slice(&tgt);
+                        e
+                    }))
+            )?;
             crate::trace::trim();
         }
     }
     drop(mat_fwd_snap);
-    // MAT: emit `inbound` IntArray1N in MAT id order. mat-id 0 gets an empty entry.
-    // For mat-ids 1..N look up the old dense-id in mat_inb_raw, translate each
-    // referrer old-id to a mat-id (filtering unreachable).
+    crate::trace::probe("main: after drop(mat_fwd_snap) — build inb offset table");
+    // MAT inbound: build a per-pre-order byte-offset table into inb_data (~44 MB
+    // for 11M objects) so we can decode each object's referrers on demand rather
+    // than materialising the full Vec<Vec<i32>> (~550 MB).
+    // dfn[dense] = pre_order; inb_pre_off[pre_order] = byte offset in inb_data;
+    // vertex[pre_order] = dense_id (needed to decode referrer pre-order → dense-id).
+    let mat_inb_ctx: Option<(Vec<u32>, Vec<u32>, Vec<u32>)> =
+        if let (Some(dfn), Some(vertex)) = (mat_dfn_save, mat_vertex_save) {
+            let n = g.n;
+            let mut off: Vec<u32> = Vec::with_capacity(n);
+            let mut pos = 0usize;
+            for _pre in 0..n {
+                off.push(pos as u32);
+                let (count, c0) = vbyte::decode_one(&inb_data[pos..]);
+                pos += c0;
+                for _ in 0..count {
+                    let (_, c1) = vbyte::decode_one(&inb_data[pos..]);
+                    pos += c1;
+                }
+            }
+            crate::trace::probe("main: after inb_pre_off build");
+            Some((dfn, off, vertex))
+        } else {
+            None
+        };
+    // MAT: emit `inbound` IntArray1N in MAT id order. Decode each object's
+    // referrers on demand from inb_data using the offset table.
     if let Some(ref m) = mat {
         let mm = mat_map.as_ref().expect("mat_map built with mat");
-        if let Some(by_old) = mat_inb_raw.as_ref() {
-            let mc = mm.mat_count();
-            let mut entries: Vec<Vec<i32>> = Vec::with_capacity(mc);
-            entries.push(Vec::new()); // entry 0 = synthetic root (no inbound)
-            for &old_id in mm.sorted() {
-                let raw = &by_old[old_id as usize];
-                let mut e: Vec<i32> = raw
-                    .iter()
-                    .filter_map(|&v| { let mid = mm.translate(v); if mid >= 0 { Some(mid) } else { None } })
-                    .collect();
-                e.sort_unstable();
-                entries.push(e);
-            }
-            m.emit_inbound(&entries)?;
-            drop(entries);
+        if let Some((dfn, inb_pre_off, vertex)) = mat_inb_ctx.as_ref() {
+            let iter = std::iter::once(Vec::new()) // entry 0 = synthetic root
+                .chain(mm.sorted().iter().map(|&old_id| {
+                    let pre = dfn[old_id as usize] as usize;
+                    let mut pos = inb_pre_off[pre] as usize;
+                    let (count, c0) = vbyte::decode_one(&inb_data[pos..]);
+                    pos += c0;
+                    let mut e: Vec<i32> = Vec::with_capacity(count as usize);
+                    let mut prev: u32 = 0;
+                    for _ in 0..count {
+                        let (delta, c1) = vbyte::decode_one(&inb_data[pos..]);
+                        pos += c1;
+                        prev += delta;
+                        if prev > 0 {
+                            let dense = vertex[prev as usize] as i32;
+                            let mid = mm.translate(dense);
+                            if mid >= 0 { e.push(mid); }
+                        }
+                    }
+                    e.sort_unstable();
+                    e
+                }));
+            m.emit_inbound_iter(iter)?;
             crate::trace::trim();
         }
     }
-    drop(mat_inb_raw);
+    drop(mat_inb_ctx);
     // MAT: emit the `domIn` IntIndex in MAT id order. mat-id 0 (synthetic root)
     // has no dominator (superroot = -1, stored as 1). For mat-ids 1..N look up
     // the old dense-id, translate idom[old] to a mat-id, then add 2 per MAT's
