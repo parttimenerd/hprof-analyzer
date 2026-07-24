@@ -263,13 +263,22 @@ where
     let mut body = IntIndexStreamer::new(&mut cw);
     let mut body_size: i64 = 0;
 
-    // Stream header positions into a zstd encoder backed by a Vec<u8>.
-    // A single streaming context compresses much better than per-chunk encoding
-    // because it can reference patterns across the full sequence.
+    // Compress header values via a zstd streaming encoder. Rather than storing
+    // raw body positions (which span 0..1.65B and compress poorly as LE i32s),
+    // we delta-encode: for filled entries we store the delta from the previous
+    // filled entry's position (= the number of values pushed for that entry,
+    // typically 3-10); for holes we store 0 with a negative marker (-1 sentinel).
+    // Deltas are small integers → zstd achieves ~10x+ compression → blob ~100 MB
+    // instead of ~1.2 GB for raw positions.
+    //
+    // Wire format per entry: i32 LE
+    //   0        = hole (header[i] == 0)
+    //   delta+1  = filled entry, delta = header_val - prev_header_val (delta ≥ 1)
     let hdr_out: Vec<u8> = Vec::new();
     let mut hdr_enc = zstd::stream::write::Encoder::new(hdr_out, 3)
         .map_err(io::Error::other)?;
     let mut total_entries: usize = 0;
+    let mut prev_pos: i64 = 0; // last non-zero header position emitted
 
     for _ in 0..n_entries {
         let mut had_values = false;
@@ -280,7 +289,6 @@ where
                 format!("header2/PosIndexStreamer path not implemented; bodyPos {pos} at entry {total_entries}"),
             ));
         }
-        let mut header_val: i32 = pos as i32;
         {
             let body_ref = &mut body;
             let body_size_ref = &mut body_size;
@@ -292,8 +300,14 @@ where
                 Ok(())
             })?;
         }
-        if !had_values { header_val = 0; }
-        hdr_enc.write_all(&header_val.to_le_bytes()).map_err(io::Error::other)?;
+        let encoded: i32 = if had_values {
+            let delta = pos - prev_pos; // ≥ 1
+            prev_pos = pos;
+            (delta + 1) as i32 // stored as delta+1 so 0 is unambiguously a hole
+        } else {
+            0
+        };
+        hdr_enc.write_all(&encoded.to_le_bytes()).map_err(io::Error::other)?;
         total_entries += 1;
     }
     let hdr_blob = hdr_enc.finish().map_err(io::Error::other)?;
@@ -303,25 +317,37 @@ where
     let mut w = cw.into_inner();
     let mut hdr = IntIndexStreamer::with_position(&mut w, divider);
 
-    // Decompress the header blob and stream each i32 into the header IntIndexStreamer.
+    // Decompress and reconstruct original header positions from deltas.
     let mut decoder = zstd::stream::Decoder::new(BufReader::new(&hdr_blob[..]))?;
     let mut buf = [0u8; 64 * 1024];
     let mut carry = [0u8; 4];
     let mut carry_len = 0usize;
     let mut written = 0usize;
+    let mut running_pos: i64 = 0;
     loop {
         let n = decoder.read(&mut buf).map_err(io::Error::other)?;
         if n == 0 { break; }
         let mut i = 0usize;
+        // Complete any partial i32 from the previous read.
         while carry_len > 0 && i < n {
             carry[carry_len] = buf[i]; carry_len += 1; i += 1;
             if carry_len == 4 {
-                hdr.push(i32::from_le_bytes(carry))?;
+                let encoded = i32::from_le_bytes(carry);
+                let hval = if encoded == 0 { 0 } else {
+                    running_pos += (encoded - 1) as i64;
+                    running_pos as i32
+                };
+                hdr.push(hval)?;
                 written += 1; carry_len = 0;
             }
         }
         while i + 4 <= n {
-            hdr.push(i32::from_le_bytes([buf[i], buf[i+1], buf[i+2], buf[i+3]]))?;
+            let encoded = i32::from_le_bytes([buf[i], buf[i+1], buf[i+2], buf[i+3]]);
+            let hval = if encoded == 0 { 0 } else {
+                running_pos += (encoded - 1) as i64;
+                running_pos as i32
+            };
+            hdr.push(hval)?;
             written += 1; i += 4;
         }
         while i < n { carry[carry_len] = buf[i]; carry_len += 1; i += 1; }
