@@ -505,6 +505,7 @@ fn eval_having_expr(
                 None => QueryValue::Null,
             }
         }
+        Expr::Coalesce(_) | Expr::NullIf { .. } => QueryValue::Null,
     }
 }
 
@@ -959,6 +960,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                     None => QueryValue::Null,
                 }
             }
+            Expr::Coalesce(_) | Expr::NullIf { .. } => QueryValue::Null,
         }
     }
     /// semantics as `eval_expr`; delegates attr leaves to `project_array_attr`.
@@ -989,6 +991,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                     None => QueryValue::Null,
                 }
             }
+            Expr::Coalesce(_) | Expr::NullIf { .. } => QueryValue::Null,
         }
     }
     /// Dispatch a method call on an instance object. Tier-2: fixed name → `Attr`
@@ -2019,6 +2022,13 @@ fn collect_like_in_expr(
                 collect_like_in_expr(e, out)?;
             }
         }
+        Expr::Coalesce(args) => {
+            for arg in args { collect_like_in_expr(arg, out)?; }
+        }
+        Expr::NullIf { lhs, rhs } => {
+            collect_like_in_expr(lhs, out)?;
+            collect_like_in_expr(rhs, out)?;
+        }
     }
     Ok(())
 }
@@ -2328,6 +2338,8 @@ pub fn expr_name(e: &Expr) -> String {
             format!("{func_name}({arg_str})")
         }
         Expr::Case { .. } => "CASE".to_string(),
+        Expr::Coalesce(_) => "COALESCE".to_string(),
+        Expr::NullIf { .. } => "NULLIF".to_string(),
     }
 }
 

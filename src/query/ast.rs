@@ -170,6 +170,10 @@ pub enum Expr {
         branches: Vec<(Predicate, Expr)>,
         else_: Option<Box<Expr>>,
     },
+    /// `COALESCE(expr, expr, ...)` — first non-Null value, or Null if all Null.
+    Coalesce(Vec<Expr>),
+    /// `NULLIF(a, b)` — Null if a == b, else a.
+    NullIf { lhs: Box<Expr>, rhs: Box<Expr> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

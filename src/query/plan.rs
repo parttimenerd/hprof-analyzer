@@ -308,6 +308,8 @@ fn expr_display_name(e: &Expr) -> String {
         Expr::Method { name, .. } => format!("{name}(...)"),
         Expr::Aggregate { func, .. } => format!("{func:?}(...)"),
         Expr::Case { .. } => "CASE".to_string(),
+        Expr::Coalesce(_) => "COALESCE".to_string(),
+        Expr::NullIf { .. } => "NULLIF".to_string(),
     }
 }
 
@@ -340,6 +342,13 @@ fn expr_for_each_attr(e: &Expr, f: &mut impl FnMut(&Attr)) {
                 expr_for_each_attr(then_expr, f);
             }
             if let Some(e) = else_ { expr_for_each_attr(e, f); }
+        }
+        Expr::Coalesce(args) => {
+            for arg in args { expr_for_each_attr(arg, f); }
+        }
+        Expr::NullIf { lhs, rhs } => {
+            expr_for_each_attr(lhs, f);
+            expr_for_each_attr(rhs, f);
         }
     }
 }
@@ -399,6 +408,13 @@ fn expr_for_each_method<'a>(e: &'a Expr, f: &mut impl FnMut(&'a str)) {
         Expr::Case { branches, else_ } => {
             for (_, then_expr) in branches { expr_for_each_method(then_expr, f); }
             if let Some(e) = else_ { expr_for_each_method(e, f); }
+        }
+        Expr::Coalesce(args) => {
+            for arg in args { expr_for_each_method(arg, f); }
+        }
+        Expr::NullIf { lhs, rhs } => {
+            expr_for_each_method(lhs, f);
+            expr_for_each_method(rhs, f);
         }
     }
 }

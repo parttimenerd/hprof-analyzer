@@ -317,6 +317,29 @@ where
             .then_ignore(just(Token::RParen))
             .map(|arg| Expr::Attr(Attr::ToHex(Box::new(arg))));
 
+        let coalesce_expr = ident_ci("COALESCE")
+            .ignore_then(just(Token::LParen))
+            .ignore_then(
+                expr.clone()
+                    .separated_by(just(Token::Comma))
+                    .collect::<Vec<_>>(),
+            )
+            .then_ignore(just(Token::RParen))
+            .validate(|args, e, emitter| {
+                if args.is_empty() {
+                    emitter.emit(Rich::custom(e.span(), "COALESCE requires at least one argument"));
+                }
+                Expr::Coalesce(args)
+            });
+
+        let nullif_expr = ident_ci("NULLIF")
+            .ignore_then(just(Token::LParen))
+            .ignore_then(expr.clone())
+            .then_ignore(just(Token::Comma))
+            .then(expr.clone())
+            .then_ignore(just(Token::RParen))
+            .map(|(lhs, rhs)| Expr::NullIf { lhs: Box::new(lhs), rhs: Box::new(rhs) });
+
         // `receiver.name(args)` — the greedy Ident regex swallows `s.getName` as a
         // single token. We match any dotted ident (contains `.`, does NOT end with
         // `.`) immediately followed by `(…)`, splitting on the last `.` to separate
@@ -358,6 +381,8 @@ where
 
         let primary = agg_expr_arm
             .or(method_call)
+            .or(coalesce_expr)
+            .or(nullif_expr)
             .or(tohex)
             .or(lit)
             .or(just(Token::LParen)
@@ -542,8 +567,24 @@ where
                     }
                     Predicate::Compare { lhs, op, rhs }
                 });
+            // `expr BETWEEN a AND b` desugars to `expr >= a AND expr <= b`.
+            // Must be tried before `compare` so `AND` is not consumed as a
+            // boolean AND continuation.
+            let between_pred = expr
+                .clone()
+                .then_ignore(ident_ci("BETWEEN"))
+                .then(expr.clone())
+                .then_ignore(ident_ci("AND"))
+                .then(expr.clone())
+                .map(|((subject, lo), hi)| {
+                    Predicate::And(
+                        Box::new(Predicate::Compare { lhs: subject.clone(), op: CompareOp::Ge, rhs: lo }),
+                        Box::new(Predicate::Compare { lhs: subject, op: CompareOp::Le, rhs: hi }),
+                    )
+                });
             // `in_subquery` before `compare` so `IN` isn't consumed as a bare field.
-            let primary = paren.or(instanceof).or(in_subquery).or(compare);
+            // `between_pred` before `compare` so `BETWEEN ... AND` is not split.
+            let primary = paren.or(instanceof).or(in_subquery).or(between_pred).or(compare);
             let not = recursive(|not| {
                 ident_ci("NOT")
                     .ignore_then(not)
@@ -975,6 +1016,13 @@ fn normalize_expr(e: &mut Expr, alias: Option<&str>) {
                 normalize_expr(e, alias);
             }
         }
+        Expr::Coalesce(args) => {
+            for arg in args { normalize_expr(arg, alias); }
+        }
+        Expr::NullIf { lhs, rhs } => {
+            normalize_expr(lhs, alias);
+            normalize_expr(rhs, alias);
+        }
     }
 }
 
@@ -1069,6 +1117,11 @@ pub const RESERVED: &[&str] = &[
     "THEN",
     "ELSE",
     "END",
+    // BETWEEN predicate keyword.
+    "BETWEEN",
+    // Scalar function keywords.
+    "COALESCE",
+    "NULLIF",
 ];
 
 /// Aggregate function names (`agg_func`'s source set), upper-cased.
@@ -4480,5 +4533,49 @@ mod tests {
                 if matches!(e.as_ref(), crate::query::ast::Expr::Case { branches, .. } if branches.len() == 2)),
             "expected 2 branches, got: {item:?}"
         );
+    }
+
+    #[test]
+    fn parse_coalesce() {
+        let q = super::parse(
+            "SELECT COALESCE(@usedHeapSize, 0) FROM java.lang.String",
+        ).unwrap();
+        assert!(
+            matches!(&q.select[0], crate::query::ast::SelectItem::Expr(e)
+                if matches!(e.as_ref(), crate::query::ast::Expr::Coalesce(args) if args.len() == 2)),
+            "got: {:?}", q.select[0]
+        );
+    }
+
+    #[test]
+    fn parse_nullif() {
+        let q = super::parse(
+            "SELECT NULLIF(@usedHeapSize, 0) FROM java.lang.String",
+        ).unwrap();
+        assert!(
+            matches!(&q.select[0], crate::query::ast::SelectItem::Expr(e)
+                if matches!(e.as_ref(), crate::query::ast::Expr::NullIf { .. })),
+            "got: {:?}", q.select[0]
+        );
+    }
+
+    #[test]
+    fn parse_between() {
+        let q = super::parse(
+            "SELECT * FROM java.lang.String WHERE @usedHeapSize BETWEEN 10 AND 100",
+        ).unwrap();
+        assert!(q.where_.is_some());
+        assert!(
+            matches!(&q.where_, Some(crate::query::ast::Predicate::And(_, _))),
+            "BETWEEN should desugar to And, got: {:?}", q.where_
+        );
+    }
+
+    #[test]
+    fn coalesce_zero_args_errors() {
+        let err = super::parse("SELECT COALESCE() FROM java.lang.String")
+            .expect_err("zero-arg COALESCE must error");
+        assert!(err.0.contains("COALESCE") || err.0.to_lowercase().contains("coalesce"),
+                "error must mention COALESCE, got: {}", err.0);
     }
 }

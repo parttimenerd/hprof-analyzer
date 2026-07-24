@@ -720,6 +720,8 @@ fn expr_has_attr(e: &Expr, pred: &impl Fn(&Attr) -> bool) -> bool {
                 pred_has_attr_dyn(cond, pred) || expr_has_attr_dyn(then_e, pred)
             }) || else_.as_ref().map_or(false, |e| expr_has_attr_dyn(e, pred))
         }
+        Expr::Coalesce(args) => args.iter().any(|a| expr_has_attr(a, pred)),
+        Expr::NullIf { lhs, rhs } => expr_has_attr(lhs, pred) || expr_has_attr(rhs, pred),
     }
 }
 fn expr_has_attr_dyn(e: &Expr, pred: &dyn Fn(&Attr) -> bool) -> bool {
@@ -736,6 +738,8 @@ fn expr_has_attr_dyn(e: &Expr, pred: &dyn Fn(&Attr) -> bool) -> bool {
                 pred_has_attr_dyn(cond, pred) || expr_has_attr_dyn(then_e, pred)
             }) || else_.as_ref().map_or(false, |e| expr_has_attr_dyn(e, pred))
         }
+        Expr::Coalesce(args) => args.iter().any(|a| expr_has_attr_dyn(a, pred)),
+        Expr::NullIf { lhs, rhs } => expr_has_attr_dyn(lhs, pred) || expr_has_attr_dyn(rhs, pred),
     }
 }
 fn pred_has_attr_dyn(p: &Predicate, pred: &dyn Fn(&Attr) -> bool) -> bool {
@@ -765,6 +769,8 @@ fn expr_find_attr<'e>(e: &'e Expr, pred: &impl Fn(&Attr) -> bool) -> Option<&'e 
                 pred_find_attr_dyn(cond, pred).or_else(|| expr_find_attr_dyn(then_e, pred))
             }).or_else(|| else_.as_ref().and_then(|e| expr_find_attr_dyn(e, pred)))
         }
+        Expr::Coalesce(args) => args.iter().find_map(|a| expr_find_attr(a, pred)),
+        Expr::NullIf { lhs, rhs } => expr_find_attr(lhs, pred).or_else(|| expr_find_attr(rhs, pred)),
     }
 }
 fn expr_find_attr_dyn<'e>(e: &'e Expr, pred: &dyn Fn(&Attr) -> bool) -> Option<&'e Attr> {
@@ -783,6 +789,8 @@ fn expr_find_attr_dyn<'e>(e: &'e Expr, pred: &dyn Fn(&Attr) -> bool) -> Option<&
                 pred_find_attr_dyn(cond, pred).or_else(|| expr_find_attr_dyn(then_e, pred))
             }).or_else(|| else_.as_ref().and_then(|e| expr_find_attr_dyn(e, pred)))
         }
+        Expr::Coalesce(args) => args.iter().find_map(|a| expr_find_attr_dyn(a, pred)),
+        Expr::NullIf { lhs, rhs } => expr_find_attr_dyn(lhs, pred).or_else(|| expr_find_attr_dyn(rhs, pred)),
     }
 }
 fn pred_find_attr_dyn<'e>(p: &'e Predicate, pred: &dyn Fn(&Attr) -> bool) -> Option<&'e Attr> {
@@ -828,6 +836,7 @@ fn eval_late_expr(
                 None => QueryValue::Null,
             }
         }
+        Expr::Coalesce(_) | Expr::NullIf { .. } => QueryValue::Null,
     }
 }
 

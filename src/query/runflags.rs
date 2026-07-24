@@ -208,6 +208,13 @@ fn scan_expr(e: &Expr, used: &mut BranchUse) {
             }
             if let Some(e) = else_ { scan_expr(e, used); }
         }
+        Expr::Coalesce(args) => {
+            for arg in args { scan_expr(arg, used); }
+        }
+        Expr::NullIf { lhs, rhs } => {
+            scan_expr(lhs, used);
+            scan_expr(rhs, used);
+        }
     }
 }
 
