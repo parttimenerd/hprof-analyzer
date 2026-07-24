@@ -750,7 +750,7 @@ _Definitions for the terms used above._
 
 /// Render the "System Overview" section (plain Markdown): scalars, GC-roots and
 /// heap-composition breakdowns, and the full class histogram. Byte-exact-tested.
-fn render_system_overview(o: &SystemOverview, out: &mut String) {
+pub(crate) fn render_system_overview(o: &SystemOverview, out: &mut String) {
     use crate::md::{Align, Table};
     out.push_str("## System Overview\n\n");
     out.push_str("_Reachable-heap totals and the largest classes by retained heap._\n\n");
@@ -1041,7 +1041,7 @@ fn render_system_overview(o: &SystemOverview, out: &mut String) {
 /// dominator-subtree sub-sections are emitted when their fields are present
 /// (root path only for single suspects; subtree only when an accumulation point
 /// exists). Byte-exact-tested.
-fn render_leak_suspects(l: &LeakSuspects, out: &mut String) {
+pub(crate) fn render_leak_suspects(l: &LeakSuspects, out: &mut String) {
     out.push_str("## Leak Suspects\n\n");
 
     if l.suspects.is_empty() {
@@ -1189,7 +1189,7 @@ fn render_leak_suspects(l: &LeakSuspects, out: &mut String) {
 
 /// Render the "Top Consumers" section (plain Markdown): biggest objects,
 /// biggest classes, and the pruned package tree. Byte-exact-tested.
-fn render_top_consumers(t: &TopConsumers, total_shallow: u64, out: &mut String) {
+pub(crate) fn render_top_consumers(t: &TopConsumers, total_shallow: u64, out: &mut String) {
     use crate::md::{Align, Table};
     out.push_str("## Top Consumers\n\n");
     out.push_str("### Biggest Objects (Top-Level Dominators)\n\n");
