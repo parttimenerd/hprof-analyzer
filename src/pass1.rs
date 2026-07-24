@@ -134,6 +134,10 @@ pub struct Pass1 {
     /// (ROOT_JNI_LOCAL/JAVA_FRAME/NATIVE_STACK/THREAD_BLOCK) that become
     /// synthetic edges rather than direct GC roots.
     pub gc_root_tag_counts: std::collections::HashMap<u8, u64>,
+    /// Per-object byte offset of the object's record in the HPROF file
+    /// (decompressed stream position), in the same dense-id order as `id_map`.
+    /// Used to emit the MAT `o2hprof` index. Empty when MAT emission is off.
+    pub hprof_offsets: Vec<u64>,
 }
 
 impl Pass1 {
@@ -166,6 +170,7 @@ impl Pass1 {
         // Per-object alloc stack-trace serial. Only grown when capturing; stays
         // empty (zero RSS) on the default path.
         let mut tmp_alloc_serial: Vec<u32> = Vec::new();
+        let mut tmp_hprof_offsets: Vec<u64> = Vec::new();
         let mut gc_root_addrs: Vec<u64> = Vec::new();
         let mut gc_root_types: Vec<u8> = Vec::new();
         let mut thread_serial_to_obj_id: HashMap<u32, u64> = HashMap::default();
@@ -269,6 +274,7 @@ impl Pass1 {
                         &mut class_addr_to_idx,
                         &mut tmp_elem_count,
                         &mut tmp_alloc_serial,
+                        &mut tmp_hprof_offsets,
                         &mut gc_root_addrs,
                         &mut gc_root_types,
                         &mut thread_serial_to_obj_id,
@@ -328,6 +334,7 @@ impl Pass1 {
             if !tmp_alloc_serial.is_empty() {
                 tmp_alloc_serial.swap(x, y);
             }
+            tmp_hprof_offsets.swap(x, y);
         });
         drop(order);
         crate::trace::probe("pass1: after drop(order) (arrays sorted in place)");
@@ -352,6 +359,7 @@ impl Pass1 {
                     if !tmp_alloc_serial.is_empty() {
                         tmp_alloc_serial[write] = tmp_alloc_serial[rank];
                     }
+                    tmp_hprof_offsets[write] = tmp_hprof_offsets[rank];
                 }
                 write += 1;
                 prev_addr = a;
@@ -373,6 +381,7 @@ impl Pass1 {
         if !tmp_alloc_serial.is_empty() {
             tmp_alloc_serial.truncate(m);
         }
+        tmp_hprof_offsets.truncate(m);
         // Unpack kind (bits 30-31) from tmp_class_ids and strip to clean class index.
         // Done after dedup/truncate so the extraction is over the final m unique objects.
         const CLASS_MASK: u32 = 0x3FFF_FFFF;
@@ -418,6 +427,7 @@ impl Pass1 {
             stack_trace_records,
             heap_dump_segments,
             gc_root_tag_counts,
+            hprof_offsets: tmp_hprof_offsets,
         })
     }
 }
@@ -436,6 +446,7 @@ fn scan_heap_segment(
     class_addr_to_idx: &mut HashMap<u64, u32>,
     tmp_elem_count: &mut Vec<u32>,
     tmp_alloc_serial: &mut Vec<u32>,
+    tmp_hprof_offsets: &mut Vec<u64>,
     gc_root_addrs: &mut Vec<u64>,
     gc_root_types: &mut Vec<u8>,
     thread_serial_to_obj_id: &mut HashMap<u32, u64>,
@@ -503,6 +514,7 @@ fn scan_heap_segment(
                 thread_serial_to_obj_id.insert(thread_serial, obj_id);
             }
             heap::CLASS_DUMP => {
+                let record_off = r.bytes_consumed() - 1; // sub-tag byte position
                 let (class_addr, consumed) = read_class_dump(r, id_size, class_map)?;
                 sub_remaining(&mut remaining, consumed)?;
                 *class_dump_count += 1;
@@ -521,8 +533,10 @@ fn scan_heap_segment(
                 // CLASS_DUMP has no per-object alloc serial; push 0 so the array
                 // stays 1:1 with the object ordering.
                 tmp_alloc_serial.push(0);
+                tmp_hprof_offsets.push(record_off);
             }
             heap::INSTANCE_DUMP => {
+                let record_off = r.bytes_consumed() - 1; // sub-tag byte position
                 let addr = r.id()?;
                 let stack_serial = r.u4()?; // stack_trace_serial(u4)
                 tmp_alloc_serial.push(stack_serial);
@@ -539,10 +553,12 @@ fn scan_heap_segment(
                     tmp_class_ids.push(idx); // kind=0, bits 30-31 = 0
                 }
                 tmp_elem_count.push(0);
+                tmp_hprof_offsets.push(record_off);
                 sub_remaining(&mut remaining, ids + 4 + ids + 4 + data_len)?;
                 *instance_count += 1;
             }
             heap::OBJ_ARRAY_DUMP => {
+                let record_off = r.bytes_consumed() - 1; // sub-tag byte position
                 // addr(id) + stack_serial(u4) + count(u4) + elem_class(id)
                 // + count element ids.
                 let addr = r.id()?;
@@ -562,10 +578,12 @@ fn scan_heap_segment(
                     tmp_class_ids.push(idx | (1u32 << 30)); // kind=1 object array
                 }
                 tmp_elem_count.push(count as u32);
+                tmp_hprof_offsets.push(record_off);
                 sub_remaining(&mut remaining, ids + 4 + 4 + ids + byte_len)?;
                 *obj_array_count += 1;
             }
             heap::PRIM_ARRAY_DUMP => {
+                let record_off = r.bytes_consumed() - 1; // sub-tag byte position
                 // addr(id) + stack_serial(u4) + count(u4) + elem_type(u1)
                 // + count*elem_size raw element bytes.
                 let addr = r.id()?;
@@ -583,6 +601,7 @@ fn scan_heap_segment(
                 // with kind=2 packed into bits 30-31.
                 tmp_class_ids.push((2u32 << 30) | elem_type_code as u32);
                 tmp_elem_count.push(count as u32);
+                tmp_hprof_offsets.push(record_off);
                 sub_remaining(&mut remaining, ids + 4 + 4 + 1 + byte_len)?;
                 *prim_array_count += 1;
             }
