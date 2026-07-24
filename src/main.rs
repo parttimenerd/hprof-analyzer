@@ -734,6 +734,24 @@ pub(crate) fn analyze_to_report(
     path: &str,
     opts: &AnalyzeOptions,
 ) -> std::io::Result<crate::report::Report> {
+    let (report, _retained) = analyze_to_report_inner(path, opts)?;
+    Ok(report)
+}
+
+/// Like `analyze_to_report`, but also returns the per-object retained-size array
+/// so callers (e.g. the HTTP server) can reuse it for OQL queries without a
+/// full re-scan of the dump.
+pub(crate) fn analyze_to_report_with_retained(
+    path: &str,
+    opts: &AnalyzeOptions,
+) -> std::io::Result<(crate::report::Report, Vec<u64>)> {
+    analyze_to_report_inner(path, opts)
+}
+
+fn analyze_to_report_inner(
+    path: &str,
+    opts: &AnalyzeOptions,
+) -> std::io::Result<(crate::report::Report, Vec<u64>)> {
     let p1 = pass1::Pass1::run(path)?;
 
     if p1.class_ids.len() > u32::MAX as usize {
@@ -861,7 +879,11 @@ pub(crate) fn analyze_to_report(
     drop(dc_off);
     drop(dc_tgt);
 
-    Ok(report)
+    // Extract the per-object retained-size array before g is dropped.
+    // The caller (analyze_to_report_with_retained) stores this for OQL reuse.
+    let retained = std::mem::take(&mut g.retained);
+
+    Ok((report, retained))
 }
 
 /// Decide whether `input` should run the analyze pipeline. True when the path

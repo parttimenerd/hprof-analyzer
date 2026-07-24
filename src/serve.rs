@@ -26,6 +26,10 @@ pub struct ServeState {
     opts: AnalyzeOptions,
     oql: Arc<OqlState>,
     pub state: Arc<Mutex<AnalysisState>>,
+    /// Per-object retained-size array from the full analysis pipeline.
+    /// Populated once `AnalysisState::Done` is reached; shared with the OQL
+    /// engine so `@retainedHeapSize` queries skip the full re-scan.
+    retained: Arc<Mutex<Option<Arc<Vec<u64>>>>>,
 }
 
 impl ServeState {
@@ -36,6 +40,7 @@ impl ServeState {
             opts,
             oql,
             state: Arc::new(Mutex::new(AnalysisState::NotStarted)),
+            retained: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -49,20 +54,32 @@ impl ServeState {
 
             let state_arc = Arc::clone(&self.state);
             let oql_arc = Arc::clone(&self.oql);
+            let retained_arc = Arc::clone(&self.retained);
             let path = self.path.clone();
             let opts = self.opts.clone();
             std::thread::spawn(move || {
-                let result = crate::analyze_to_report(&path, &opts);
+                let result = crate::analyze_to_report_with_retained(&path, &opts);
                 let mut g = state_arc.lock().unwrap_or_else(|e| e.into_inner());
-                *g = match result {
-                    Ok(r) => AnalysisState::Done(Arc::new(r)),
-                    Err(e) => AnalysisState::Failed(e.to_string()),
-                };
-                drop(g);
-                // Unlock OQL's reachable_only restriction now that the full
-                // analysis pipeline has run. Also invalidates the stale cache
-                // (built with reachable_only=true) so the next query rebuilds.
-                oql_arc.set_full_analysis();
+                match result {
+                    Ok((r, retained_vec)) => {
+                        *g = AnalysisState::Done(Arc::new(r));
+                        drop(g);
+                        // Store the retained-size array so OQL queries can use
+                        // @retainedHeapSize without re-scanning the dump.
+                        let retained_shared = Arc::new(retained_vec);
+                        {
+                            let mut rg = retained_arc.lock().unwrap_or_else(|e| e.into_inner());
+                            *rg = Some(Arc::clone(&retained_shared));
+                        }
+                        oql_arc.set_full_analysis_with_retained(retained_shared);
+                    }
+                    Err(e) => {
+                        *g = AnalysisState::Failed(e.to_string());
+                        drop(g);
+                        // Still unlock OQL (analysis failed but partial pipeline ran).
+                        oql_arc.set_full_analysis_with_retained(Arc::new(Vec::new()));
+                    }
+                }
             });
             true
         } else {

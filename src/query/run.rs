@@ -839,6 +839,126 @@ pub fn run_resident_only(
     Ok(collapse_union_results(flat_results, &groups))
 }
 
+/// Like `run_resident_only` but with retained-size data available from a
+/// previously-run full analysis pipeline. Queries using `@retainedHeapSize`
+/// (plan.needs.retained) are served from `retained` instead of re-running
+/// the full dominator+retained pipeline from disk.
+pub fn run_resident_with_retained(
+    cache: &ReplCache,
+    queries: &[(Query, QueryPlan)],
+    reachable_only: bool,
+    retained: &[u64],
+) -> std::io::Result<Vec<QueryResult>> {
+    let (flat, groups) = expand_union_queries(queries);
+    let resolver = LiveResolver::new(
+        &cache.p1.class_map,
+        &cache.p1.strings,
+        cache.id_size,
+        &cache.p1.id_map,
+        &cache.shallow,
+    );
+    let mut entries: Vec<(usize, SingleScanExecutor<'_, LiveResolver<'_>>)> = Vec::new();
+    for (slot, (q, plan)) in flat.iter().enumerate() {
+        entries.push((slot, SingleScanExecutor::new(q, plan, &resolver)));
+    }
+    let mut driver = ScanDriver::new(entries).with_src_capture(reachable_only);
+    for i in 0..cache.n {
+        if cache.p1.kind[i] == 0 {
+            let class_addr = cache.p1.class_addr_table[cache.class_ids[i] as usize];
+            driver.visit_instance(i, class_addr, &[]);
+        }
+    }
+    let state = driver.finish_state();
+    let dfn: Option<&[u32]> = if reachable_only { cache.dfn.as_deref() } else { None };
+    let flat_results = resume_with_retained(state, &flat, retained, &cache.shallow, dfn);
+    Ok(collapse_union_results(flat_results, &groups))
+}
+
+/// Like `resume_with_string_values` but with per-object retained sizes available.
+/// Routes entries that ONLY need retained sizes (no dominators, edges) through a
+/// `LateCtx` that has the retained array populated. All other pending entries
+/// (needing dominators/edges) fall to `resume_without_late_ctx` for actionable
+/// error messages.
+fn resume_with_retained(
+    mut state: crate::query::execute::QueryExecState,
+    flat: &[(Query, QueryPlan)],
+    retained: &[u64],
+    shallow: &[u32],
+    dfn: Option<&[u32]>,
+) -> Vec<crate::query::model::QueryResult> {
+    use crate::query::plan::StageOp;
+    use crate::query::stage_runner::{
+        self, IdMap, LateCtx, EMPTY_GC_ROOT_TAGS, EMPTY_REFWALK_TAILS, EMPTY_STRING_VALUES,
+    };
+
+    let row_src_by_slot = state.take_row_src_by_slot();
+    let (finished, pending) = state.into_parts();
+    let id_map = IdMap::new(&[]);
+    let ctx = LateCtx {
+        retained,
+        idom: &[],
+        dc_off: &[],
+        dc_tgt: &[],
+        shallow,
+        id_map: &id_map,
+        fwd_off: &[],
+        fwd_tgt: &[],
+        fwd_field: &[],
+        field_names: &[],
+        refwalk_tails: &EMPTY_REFWALK_TAILS,
+        refwalk_truncated: false,
+        in_off: &[],
+        in_tgt: &[],
+        retained_edges: None,
+        string_values: &EMPTY_STRING_VALUES,
+        string_values_truncated: false,
+        gc_root_tags: &EMPTY_GC_ROOT_TAGS,
+    };
+
+    let mut slotted: Vec<(usize, QueryResult)> = finished;
+    let mut other_state = crate::query::execute::QueryExecState::new();
+    let mut other_slots: Vec<usize> = Vec::new();
+
+    for entry in pending {
+        let is_retained_only = entry.plan.needs.retained
+            && !entry.plan.needs.dominator_children
+            && !entry.plan.needs.ref_walk
+            && !entry.plan.late_ops.iter().any(|op| {
+                matches!(op, StageOp::EdgeLookup { .. } | StageOp::BoundedPath { .. })
+            });
+        let is_string_only = !entry.plan.late_ops.is_empty()
+            && entry.plan.late_ops.iter().all(|op| matches!(op, StageOp::ResolveStringValues));
+        if is_retained_only || is_string_only {
+            let q = &flat[entry.slot].0;
+            let r = stage_runner::run_entry_pub(&entry, q, &ctx);
+            slotted.push((entry.slot, r));
+        } else {
+            other_slots.push(entry.slot);
+            other_state.push_cross_phase_entry(entry);
+        }
+    }
+
+    if other_state.has_pending() {
+        other_slots.sort_unstable();
+        let error_results = crate::query::stage_runner::resume_without_late_ctx(other_state);
+        debug_assert_eq!(other_slots.len(), error_results.len());
+        for (slot, r) in other_slots.into_iter().zip(error_results) {
+            slotted.push((slot, r));
+        }
+    }
+
+    slotted.sort_by_key(|(slot, _)| *slot);
+
+    if let Some(dfn) = dfn {
+        for (slot, r) in slotted.iter_mut() {
+            if let Some(src) = row_src_by_slot.get(slot) {
+                filter_result_by_src(r, src, dfn);
+            }
+        }
+    }
+    slotted.into_iter().map(|(_, r)| r).collect()
+}
+
 pub fn run_single_dump(
     path: &str,
     queries: &[(Query, QueryPlan)],

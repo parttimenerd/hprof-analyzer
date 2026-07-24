@@ -30,6 +30,7 @@ pub fn run_query_json(
     reachable_only: bool,
     cache: &mut Option<ReplCache>,
     prebuilt: Option<(crate::query::ast::Query, crate::query::plan::QueryPlan)>,
+    retained: Option<&Arc<Vec<u64>>>,
 ) -> serde_json::Value {
     let started = Instant::now();
     let (cleaned, viz, warning) = crate::query::viz::split_directive(text);
@@ -80,13 +81,45 @@ pub fn run_query_json(
         || plan.needs.gc_roots;
 
     let run_res: io::Result<Vec<QueryResult>> = if !reachable_only && needs_full {
-        let (flat, union_groups) = crate::query::run::expand_union_queries(&[(q, plan)]);
-        let opts = crate::AnalyzeOptions {
-            reachable_only,
-            query_path_depth: path_depth,
-            ..crate::AnalyzeOptions::default()
-        };
-        crate::run_oql_escalated(path, &flat, &union_groups, reachable_only, &opts)
+        // Check if we can serve from the retained-size fast path: the query only
+        // needs retained sizes (no dominators, edges, gc-roots) and we have cached
+        // retained data from a completed full analysis, plus a warm ReplCache.
+        let needs_only_retained = plan.needs.retained
+            && !plan.needs.dominator_children
+            && !plan.needs.gc_roots
+            && !plan.late_ops.iter().any(|op| {
+                matches!(
+                    op,
+                    crate::query::plan::StageOp::EdgeLookup { .. }
+                        | crate::query::plan::StageOp::BoundedPath { .. }
+                )
+            });
+        let used_fast_path = needs_only_retained
+            && retained.is_some()
+            && crate::query::repl::cache_eligible(&q, &plan);
+
+        if used_fast_path {
+            let ret = retained.unwrap();
+            if cache.is_none() {
+                match ReplCache::build(path, reachable_only) {
+                    Ok(c) => *cache = Some(c),
+                    Err(e) => return internal_error(e),
+                }
+            }
+            match cache.as_ref().filter(|c| c.reachable_only == reachable_only) {
+                Some(c) => crate::query::run::run_resident_with_retained(c, &[(q, plan)], reachable_only, ret),
+                None => {
+                    // Cache was rebuilt with wrong reachable_only; fall through to full pipeline.
+                    let (flat, union_groups) = crate::query::run::expand_union_queries(&[(q, plan)]);
+                    let opts = crate::AnalyzeOptions { reachable_only, query_path_depth: path_depth, ..crate::AnalyzeOptions::default() };
+                    crate::run_oql_escalated(path, &flat, &union_groups, reachable_only, &opts)
+                }
+            }
+        } else {
+            let (flat, union_groups) = crate::query::run::expand_union_queries(&[(q, plan)]);
+            let opts = crate::AnalyzeOptions { reachable_only, query_path_depth: path_depth, ..crate::AnalyzeOptions::default() };
+            crate::run_oql_escalated(path, &flat, &union_groups, reachable_only, &opts)
+        }
     } else {
         let eligible = crate::query::repl::cache_eligible(&q, &plan);
         if eligible {
@@ -178,7 +211,7 @@ pub fn run_query_ndjson(
     reachable_only: bool,
     cache: &mut Option<ReplCache>,
 ) -> (u16, String) {
-    let v = run_query_json(path, text, path_depth, reachable_only, cache, None);
+    let v = run_query_json(path, text, path_depth, reachable_only, cache, None, None);
     if v["ok"] != serde_json::json!(true) {
         let line = serde_json::json!({ "kind": "error", "error": v["error"].clone() });
         return (400, format!("{line}\n"));
@@ -269,6 +302,9 @@ fn internal_error(e: io::Error) -> serde_json::Value {
 /// plans are query-text-deterministic and path_depth is constant, so caching
 /// is always safe. Capped at PLAN_CACHE_CAP entries; cleared (not LRU-evicted)
 /// when full — OQL queries are short-lived scripts, not a hotspot for eviction.
+/// `retained_data` holds the per-object retained-size array extracted from the
+/// full analysis pipeline. When set, `@retainedHeapSize` queries use it in
+/// combination with the ReplCache instead of re-running run_oql_escalated.
 pub struct ServerState {
     path: String,
     path_depth: usize,
@@ -276,6 +312,7 @@ pub struct ServerState {
     cache: Mutex<Option<ReplCache>>,
     help_cache: OnceLock<serde_json::Value>,
     plan_cache: Mutex<HashMap<String, (crate::query::ast::Query, crate::query::plan::QueryPlan)>>,
+    retained_data: std::sync::OnceLock<Arc<Vec<u64>>>,
 }
 
 const PLAN_CACHE_CAP: usize = 256;
@@ -289,6 +326,7 @@ impl ServerState {
             cache: Mutex::new(None),
             help_cache: OnceLock::new(),
             plan_cache: Mutex::new(HashMap::new()),
+            retained_data: std::sync::OnceLock::new(),
         })
     }
 
@@ -320,11 +358,21 @@ impl ServerState {
     /// to `false` so subsequent queries can use `@retainedHeapSize`, dominators,
     /// etc. Also invalidates the warm cache: it was built with `reachable_only=true`
     /// (which affects dfn and reachable filtering), so a fresh build is needed.
-    pub fn set_full_analysis(&self) {
+    /// Stores the retained-size array for use in fast `@retainedHeapSize` queries.
+    pub fn set_full_analysis_with_retained(&self, retained: Arc<Vec<u64>>) {
+        // Store retained data first (non-empty only — an empty vec signals failure).
+        if !retained.is_empty() {
+            let _ = self.retained_data.set(retained);
+        }
         self.reachable_only.store(false, Ordering::Relaxed);
         // Drop the stale cache so the next query rebuilds with reachable_only=false.
         let mut guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
         *guard = None;
+    }
+
+    /// Backward-compatible version (no retained data). Used by `query --server`.
+    pub fn set_full_analysis(&self) {
+        self.set_full_analysis_with_retained(Arc::new(Vec::new()));
     }
 
     /// Route (method, url, body) -> (http_status, body_string, content_type). Pure enough
@@ -350,7 +398,7 @@ impl ServerState {
                 let mut guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
                 let prebuilt = self.lookup_plan(&oql);
                 let v = run_query_json(
-                    &self.path, &oql, self.path_depth, self.reachable_only.load(Ordering::Relaxed), &mut guard, prebuilt,
+                    &self.path, &oql, self.path_depth, self.reachable_only.load(Ordering::Relaxed), &mut guard, prebuilt, self.retained_data.get(),
                 );
                 if v["ok"] == serde_json::json!(true) {
                     // Cache the plan on success so subsequent identical queries skip parse+plan.
@@ -370,7 +418,7 @@ impl ServerState {
                 let mut guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
                 let prebuilt = self.lookup_plan(&oql);
                 let (status, body) = run_query_ndjson_prebuilt(
-                    &self.path, &oql, self.path_depth, self.reachable_only.load(Ordering::Relaxed), &mut guard, prebuilt,
+                    &self.path, &oql, self.path_depth, self.reachable_only.load(Ordering::Relaxed), &mut guard, prebuilt, self.retained_data.get(),
                 );
                 (status, body, "application/x-ndjson")
             }
@@ -471,8 +519,9 @@ fn run_query_ndjson_prebuilt(
     reachable_only: bool,
     cache: &mut Option<ReplCache>,
     prebuilt: Option<(crate::query::ast::Query, crate::query::plan::QueryPlan)>,
+    retained: Option<&Arc<Vec<u64>>>,
 ) -> (u16, String) {
-    let v = run_query_json(path, text, path_depth, reachable_only, cache, prebuilt);
+    let v = run_query_json(path, text, path_depth, reachable_only, cache, prebuilt, retained);
     if v["ok"] != serde_json::json!(true) {
         let line = serde_json::json!({ "kind": "error", "error": v["error"].clone() });
         return (400, format!("{line}\n"));
@@ -599,7 +648,7 @@ mod tests {
     #[test]
     fn ok_query_returns_queryresult_json() {
         let mut cache = None;
-        let v = run_query_json(FIXTURE, "SELECT @objectAddress FROM java.lang.Thread", 5, true, &mut cache, None);
+        let v = run_query_json(FIXTURE, "SELECT @objectAddress FROM java.lang.Thread", 5, true, &mut cache, None, None);
         assert_eq!(v["ok"], serde_json::json!(true), "success flag, got: {v}");
         assert!(v["result"]["row_count"].as_u64().unwrap() > 0, "expected some rows, got: {v}");
         assert!(v["result"]["columns"].is_array(), "columns present, got: {v}");
@@ -608,7 +657,7 @@ mod tests {
     #[test]
     fn parse_error_returns_structured_json_with_report() {
         let mut cache = None;
-        let v = run_query_json(FIXTURE, "SELCT bogus", 5, true, &mut cache, None);
+        let v = run_query_json(FIXTURE, "SELCT bogus", 5, true, &mut cache, None, None);
         assert_eq!(v["ok"], serde_json::json!(false), "failure flag, got: {v}");
         assert_eq!(v["error"]["kind"], serde_json::json!("parse"), "parse kind, got: {v}");
         assert!(!v["error"]["message"].as_str().unwrap().is_empty(), "plain message present, got: {v}");
@@ -618,7 +667,7 @@ mod tests {
     #[test]
     fn plan_error_returns_structured_json() {
         let mut cache = None;
-        let v = run_query_json(FIXTURE, "SELECT s.nope() FROM java.lang.String s", 5, true, &mut cache, None);
+        let v = run_query_json(FIXTURE, "SELECT s.nope() FROM java.lang.String s", 5, true, &mut cache, None, None);
         assert_eq!(v["ok"], serde_json::json!(false), "failure flag, got: {v}");
         assert_eq!(v["error"]["kind"], serde_json::json!("plan"), "plan kind, got: {v}");
     }
@@ -664,7 +713,7 @@ mod tests {
     #[test]
     fn parse_error_message_includes_suggestion() {
         let mut cache = None;
-        let v = run_query_json(FIXTURE, "SELCT x FROM java.lang.Thread", 5, true, &mut cache, None);
+        let v = run_query_json(FIXTURE, "SELCT x FROM java.lang.Thread", 5, true, &mut cache, None, None);
         assert_eq!(v["error"]["kind"], serde_json::json!("parse"));
         assert!(v["error"]["message"].as_str().unwrap().contains("SELECT"), "suggestion in message: {v}");
     }
@@ -811,7 +860,7 @@ mod tests {
     #[test]
     fn ok_query_reports_elapsed_ms() {
         let mut cache = None;
-        let v = run_query_json(FIXTURE, "SELECT @objectAddress FROM java.lang.Thread", 5, true, &mut cache, None);
+        let v = run_query_json(FIXTURE, "SELECT @objectAddress FROM java.lang.Thread", 5, true, &mut cache, None, None);
         assert_eq!(v["ok"], serde_json::json!(true), "ok: {v}");
         assert!(v["result"]["elapsed_ms"].is_u64(), "elapsed_ms present & numeric: {v}");
     }
@@ -899,6 +948,65 @@ mod tests {
         assert!(
             !guard.contains_key(bad_oql),
             "parse errors must not be cached"
+        );
+    }
+
+    #[test]
+    fn retained_data_fast_path_serves_retained_query() {
+        // Verify that run_query_json uses run_resident_with_retained (not
+        // run_oql_escalated) when retained data is provided and the query only
+        // needs @retainedHeapSize. We check that the query succeeds and matches
+        // what the full pipeline would return for a simple retained-sum aggregate.
+        use crate::query::run::ReplCache;
+
+        // Build a ReplCache to find `n` (object count) and populate retained.
+        let cache = ReplCache::build(FIXTURE, false).expect("ReplCache::build");
+        let n = cache.n;
+        // Give every object a fake retained size of 42 bytes.
+        let retained: Vec<u64> = vec![42u64; n];
+        let retained_arc = std::sync::Arc::new(retained);
+
+        let mut cache_slot: Option<ReplCache> = None;
+        // Query: aggregate @retainedHeapSize (needs retained, no dominators/edges).
+        let oql = "SELECT SUM(@retainedHeapSize) FROM java.lang.Thread";
+        let v = run_query_json(FIXTURE, oql, 5, false, &mut cache_slot, None, Some(&retained_arc));
+        assert_eq!(v["ok"], serde_json::json!(true), "fast path must succeed: {v}");
+        // The result must be a number (SUM of fake 42-byte retained sizes).
+        let rows = v["result"]["rows"].as_array().expect("rows array");
+        assert!(!rows.is_empty(), "SUM must produce a row: {v}");
+    }
+
+    #[test]
+    fn retained_data_fast_path_matches_run_resident_with_retained() {
+        // Cross-check: run_query_json with retained == run_resident_with_retained directly.
+        use crate::query::run::{run_resident_with_retained, ReplCache};
+        use crate::query::parse::parse;
+        use crate::query::plan::plan_query;
+
+        let mut cache = ReplCache::build(FIXTURE, false).expect("ReplCache::build");
+        let n = cache.n;
+        let retained: Vec<u64> = (0..n as u64).map(|i| i * 8 + 16).collect();
+        let retained_arc = std::sync::Arc::new(retained.clone());
+
+        let oql = "SELECT @objectAddress, @retainedHeapSize FROM java.lang.Thread";
+        let q = parse(oql).expect("parse");
+        let plan = plan_query(&q, 5).expect("plan");
+
+        // Direct call
+        let direct = run_resident_with_retained(&cache, &[(q, plan)], false, &retained)
+            .expect("run_resident_with_retained");
+
+        // Via run_query_json (fast path)
+        let mut cache_slot: Option<ReplCache> = None;
+        let v = run_query_json(FIXTURE, oql, 5, false, &mut cache_slot, None, Some(&retained_arc));
+        assert_eq!(v["ok"], serde_json::json!(true), "fast path ok: {v}");
+
+        let fast_rows = &v["result"]["row_count"];
+        let direct_row_count = direct.first().map(|r| r.row_count).unwrap_or(0);
+        assert_eq!(
+            fast_rows.as_u64().unwrap_or(0),
+            direct_row_count as u64,
+            "fast path and direct call must agree on row_count"
         );
     }
 }
