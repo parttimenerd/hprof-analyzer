@@ -1288,13 +1288,11 @@ mod tests {
         let addrs = [0xAAu64, 0xBB, 0xCC];
         let idom = vec![3u32, 3, 3, 3];
         let map = MatIdMap::build(3, &idom, |i| addrs[i]);
-        // mat-id 0 = synthetic root (addr 0x0)
+        // addr_at_mat always returns 0 (addresses not stored to save 4 GB RAM)
         assert_eq!(map.addr_at_mat(0), 0);
-        // mat-ids 1..=3 get the sorted addresses
-        assert_eq!(map.addr_at_mat(1), 0xAA);
-        assert_eq!(map.addr_at_mat(2), 0xBB);
-        assert_eq!(map.addr_at_mat(3), 0xCC);
-        // out-of-range
+        assert_eq!(map.addr_at_mat(1), 0);
+        assert_eq!(map.addr_at_mat(2), 0);
+        assert_eq!(map.addr_at_mat(3), 0);
         assert_eq!(map.addr_at_mat(4), 0);
         assert_eq!(map.addr_at_mat(-1), 0);
     }
@@ -1400,11 +1398,12 @@ mod tests {
 
     #[test]
     fn emit_threads_single_thread_address_and_frames() {
-        // Thread obj_idx=0, addr=0x10 (mat-id 1). Two frames.
+        // Thread obj_idx=0 (mat-id 1). Two frames.
+        // addr_at_mat always returns 0 (addresses not stored to save 4 GB RAM).
         let addrs = [0x10u64, 0x20];
         let idom = vec![2u32, 2, 2]; // vroot at idx 2
         let mm = MatIdMap::build(2, &idom, |i| addrs[i]);
-        // dense-id 0 → mat-id 1, addr=0x10
+        // dense-id 0 → mat-id 1
         assert_eq!(mm.translate(0), 1);
 
         let ts = make_thread_stack(1, 0, &["com.example.Foo.bar(Foo.java:42)", "com.example.Main.main(Main.java:10)"]);
@@ -1414,7 +1413,7 @@ mod tests {
         e.emit_threads(&[ts], &mm, &HashMap::new()).unwrap();
         let content = std::fs::read_to_string(tmp.join("dump_.threads")).unwrap();
         let lines: Vec<&str> = content.lines().collect();
-        assert_eq!(lines[0], "Thread 0x10");
+        assert_eq!(lines[0], "Thread 0x0"); // addr_at_mat always 0
         assert_eq!(lines[1], "  at com.example.Foo.bar(Foo.java:42)");
         assert_eq!(lines[2], "  at com.example.Main.main(Main.java:10)");
         // trailing blank line
@@ -1438,10 +1437,11 @@ mod tests {
     #[test]
     fn emit_threads_with_locals() {
         // Thread with locals section: frame_num and local object addresses.
+        // addr_at_mat always returns 0 — objectId fields are always 0x0.
         let addrs = [0x100u64, 0x200, 0x300];
         let idom = vec![3u32, 3, 3, 3];
         let mm = MatIdMap::build(3, &idom, |i| addrs[i]);
-        // old_id 0 → mat-id 1 (addr 0x100), old_id 2 → mat-id 3 (addr 0x300)
+        // old_id 0 → mat-id 1, old_id 2 → mat-id 3
         let ts = make_thread_stack(1, 0, &["frame1(A.java:1)"]);
         let mut locals: HashMap<u32, Vec<(u32, u32)>> = HashMap::new();
         // serial=1, frame_num=0 (→ line 1), local old_idx=2
@@ -1452,8 +1452,8 @@ mod tests {
         e.emit_threads(&[ts], &mm, &locals).unwrap();
         let content = std::fs::read_to_string(tmp.join("dump_.threads")).unwrap();
         assert!(content.contains("locals:"), "should have locals section");
-        assert!(content.contains("objectId=0x300, line=1"), "frame_num=0 → line 1, local at 0x300");
-        assert!(content.contains("objectId=0x200, line=0"), "frame_num=MAX → line 0");
+        assert!(content.contains("objectId=0x0, line=1"), "frame_num=0 → line 1, local at 0x0 (addr not stored)");
+        assert!(content.contains("objectId=0x0, line=0"), "frame_num=MAX → line 0");
     }
 
     #[test]
@@ -1470,8 +1470,9 @@ mod tests {
         let e = MatEmitter::new(&tmp, "dump_", None).unwrap();
         e.emit_threads(&stacks, &mm, &HashMap::new()).unwrap();
         let content = std::fs::read_to_string(tmp.join("dump_.threads")).unwrap();
-        assert!(content.contains("Thread 0x10"), "first thread");
-        assert!(content.contains("Thread 0x20"), "second thread");
+        // addr_at_mat always returns 0; both threads show as Thread 0x0
+        let thread_count = content.lines().filter(|l| *l == "Thread 0x0").count();
+        assert_eq!(thread_count, 2, "expected 2 Thread 0x0 lines, got:\n{content}");
         // Each thread block ends with a blank line → content has at least 2 blank lines
         let blank_lines = content.lines().filter(|l| l.is_empty()).count();
         assert!(blank_lines >= 2, "expected blank lines between threads, got {blank_lines}");

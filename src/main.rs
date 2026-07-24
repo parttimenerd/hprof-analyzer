@@ -921,10 +921,19 @@ fn run(
     } else {
         None
     };
-    // Capture hprof file offsets for o2hprof emission. Compress immediately so
-    // the 90 MB Vec<u64> doesn't sit uncompressed through inbound + dominator.
-    let mat_hprof_offsets_c: Option<cvec::CompressedU64> = if mat.is_some() {
-        Some(cvec::CompressedU64::compress(&p1.hprof_offsets, compress)?)
+    // Capture hprof file offsets for o2hprof emission. Store as raw LE bytes
+    // (CompressedBytes) to avoid a 2x peak during restoration — iterating as
+    // u64 chunks avoids the bytes→Vec<u64> copy at emit time.
+    let mat_hprof_offsets_c: Option<cvec::CompressedBytes> = if mat.is_some() {
+        let bytes: Vec<u8> = {
+            let v = &p1.hprof_offsets;
+            let mut b = Vec::with_capacity(v.len() * 8);
+            for &off in v {
+                b.extend_from_slice(&off.to_le_bytes());
+            }
+            b
+        };
+        Some(cvec::CompressedBytes::compress(bytes, compress)?)
     } else {
         None
     };
@@ -1163,17 +1172,6 @@ fn run(
             )?;
             drop(addrs); // free ~4 GB after idx emission
             crate::trace::probe("main: after emit idx + drop(addrs) (before o2hprof)");
-            // o2hprof: restore offsets here (just before use), emit streaming, drop.
-            if let Some(ref off_c) = mat_hprof_offsets_c {
-                let offsets = off_c.restore()?;
-                m.emit_long_index_iter(
-                    "o2hprof",
-                    std::iter::once(0i64)
-                        .chain(mm.sorted().iter().map(|&old_id| offsets[old_id as usize] as i64)),
-                )?;
-                drop(offsets);
-            }
-            crate::trace::probe("main: after emit o2hprof");
         } else {
             drop(addrs);
         }
@@ -1181,7 +1179,28 @@ fn run(
     } else {
         None
     };
-    drop(mat_hprof_offsets_c);
+    // o2hprof: emit after mat_map block so we can move mat_hprof_offsets_c out
+    // (freeing the compressed blob before decompressing, avoiding coexistence of
+    // the ~2 GB blob and the ~4 GB decompressed bytes).
+    if let (Some(ref m), Some(ref mm)) = (mat.as_ref(), mat_map.as_ref()) {
+        if let Some(off_c) = mat_hprof_offsets_c {
+            // offsets_bytes: flat LE u64 bytes (8 bytes per object). CompressedBytes
+            // restore() consumes self — the compressed blob is freed when the method
+            // takes ownership, before the output Vec<u8> is fully allocated.
+            let offsets_bytes = off_c.restore()?;
+            m.emit_long_index_iter(
+                "o2hprof",
+                std::iter::once(0i64).chain(mm.sorted().iter().map(|&old_id| {
+                    let lo = old_id as usize * 8;
+                    i64::from_le_bytes(offsets_bytes[lo..lo + 8].try_into().unwrap())
+                })),
+            )?;
+            drop(offsets_bytes);
+        }
+    } else {
+        drop(mat_hprof_offsets_c);
+    }
+    crate::trace::probe("main: after emit o2hprof");
     crate::trace::probe("main: before mat_inv (free_addrs done at idx emission)");
     // Build the row→class-object id inverse table now that mm is available, so
     // we can prefer reachable class-objects when multiple map to the same row.
@@ -1232,6 +1251,7 @@ fn run(
         } else {
             None
         };
+    crate::trace::trim();
     crate::trace::probe("main: before emit_outbound");
     // g.idom was compressed earlier (after dominator) and dropped during MatIdMap::build.
     // It remains compressed in mat_idom_c; no re-compression needed here.
@@ -1245,10 +1265,6 @@ fn run(
         if let (Some((fwd_off_c, _class_idx_c)), Some(rescan_ctx)) =
             (mat_fwd_snap.as_ref(), mat_outbound_rescan_ctx.as_ref())
         {
-            let class_obj_ids = mat_class_obj_ids_c
-                .as_ref()
-                .expect("mat_class_obj_ids_c built when mat present")
-                .restore()?;
             // Restore fwd_off (prefix-sum offsets), drop compressed blob.
             let mut fwd_off = fwd_off_c.restore()?;
             let total_edges = if fwd_off.len() > 0 { fwd_off[fwd_off.len() - 1] as usize } else { 0 };
@@ -1257,6 +1273,11 @@ fn run(
             crate::trace::probe("main: before outbound rescan (fwd_off+fwd_tgt allocated)");
             crate::pass2::rescan_outbound(rescan_ctx, &mut fwd_off, &mut fwd_tgt)?;
             crate::trace::probe("main: after outbound rescan");
+            // Restore class_obj_ids AFTER the rescan to avoid inflating the rescan peak by 2 GB.
+            let class_obj_ids = mat_class_obj_ids_c
+                .as_ref()
+                .expect("mat_class_obj_ids_c built when mat present")
+                .restore()?;
             // Emit outbound in MAT id order. After scatter, fwd_off[d] = end pos;
             // start[d] = fwd_off[d-1] (or 0 for d==0).
             let n_entries = mm.mat_count();

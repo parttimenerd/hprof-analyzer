@@ -348,10 +348,10 @@ impl IdMap {
     ///
     /// Streams addresses directly into the two-level structure via
     /// `push_sorted_addr` — the 4.1GB (@514M) u64 `addrs`/`staging` Vec is
-    /// NEVER materialized, only the 2.05GB u32 `offsets` grow. This was the
-    /// binding global RSS peak: the old path decoded a full u64 Vec AND then
-    /// held it as `staging` while `build_from_sorted` grew `offsets`, a
-    /// ~6.2GB transient on top of the live rpo arrays at inbound-start.
+    /// NEVER materialized, only the 2.05GB u32 `offsets` grow. The vbyte-delta
+    /// stream is also NOT buffered as a whole Vec — it is decoded byte-by-byte
+    /// from the streaming decompressor, keeping the transient at ~0 above the
+    /// steady 2.05GB IdMap.
     pub fn from_compressed(blob: &[u8], len: usize, codec: Codec) -> io::Result<Self> {
         let mut m = IdMap::new();
         m.reserve_offsets(len);
@@ -364,26 +364,35 @@ impl IdMap {
                 }
             }
             Codec::Deflate9 | Codec::Zstd3 => {
-                // The compressed output is the vbyte-delta stream (small relative
-                // to the 4.1GB decoded addresses). Walk it delta-by-delta and
-                // accumulate the running absolute address.
-                let vb = if codec == Codec::Zstd3 {
-                    zstd::decode_all(blob).map_err(io::Error::other)?
-                } else {
-                    let mut d = flate2::read::DeflateDecoder::new(blob);
-                    let mut vb = Vec::new();
-                    d.read_to_end(&mut vb)?;
-                    vb
-                };
+                // Stream-decode the compressed vbyte-delta sequence without
+                // materializing the full decompressed buffer. A carry array
+                // handles vbytes that span decompressor read() boundaries.
                 let mut prev = 0u64;
-                let mut i = 0usize;
+                let mut carry = [0u8; 16]; // vbyte u64 is ≤ 10 bytes
+                let mut carry_len = 0usize;
+                let mut buf = vec![0u8; 65536];
                 let mut pushed = 0usize;
-                while i < vb.len() && pushed < len {
-                    let (delta, consumed) = vbyte::decode_one_u64(&vb[i..]);
-                    prev += delta;
-                    m.push_sorted_addr(prev);
-                    i += consumed;
-                    pushed += 1;
+                let mut decoder: Box<dyn io::Read> = if codec == Codec::Zstd3 {
+                    Box::new(zstd::stream::Decoder::new(blob).map_err(io::Error::other)?)
+                } else {
+                    Box::new(flate2::read::DeflateDecoder::new(blob))
+                };
+                loop {
+                    let n = decoder.read(&mut buf)?;
+                    if n == 0 { break; }
+                    let mut i = 0usize;
+                    while i < n && pushed < len {
+                        carry[carry_len] = buf[i];
+                        carry_len += 1;
+                        i += 1;
+                        if carry[carry_len - 1] & 0x80 == 0 {
+                            let (delta, _) = vbyte::decode_one_u64(&carry[..carry_len]);
+                            prev += delta;
+                            m.push_sorted_addr(prev);
+                            pushed += 1;
+                            carry_len = 0;
+                        }
+                    }
                 }
                 debug_assert_eq!(pushed, len);
             }
