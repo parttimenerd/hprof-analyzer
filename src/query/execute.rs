@@ -938,7 +938,17 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             // Aggregate expressions are only valid in HAVING; calling eval_expr
             // on one during per-row scan means the planner allowed it incorrectly.
             Expr::Aggregate { .. } => QueryValue::Null,
-            Expr::Case { .. } => QueryValue::Null,
+            Expr::Case { branches, else_ } => {
+                for (cond, then_expr) in branches {
+                    if self.eval_pred(cond, src_idx, class_id, blob) {
+                        return self.eval_expr(then_expr, src_idx, class_id, blob);
+                    }
+                }
+                match else_ {
+                    Some(e) => self.eval_expr(e, src_idx, class_id, blob),
+                    None => QueryValue::Null,
+                }
+            }
         }
     }
     /// semantics as `eval_expr`; delegates attr leaves to `project_array_attr`.
@@ -958,7 +968,17 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 _ => QueryValue::Null,
             },
             Expr::Aggregate { .. } => QueryValue::Null,
-            Expr::Case { .. } => QueryValue::Null,
+            Expr::Case { branches, else_ } => {
+                for (cond, then_expr) in branches {
+                    if self.array_eval_pred(cond, src_idx, class_name, length) {
+                        return self.eval_expr_array(then_expr, src_idx, class_name, length);
+                    }
+                }
+                match else_ {
+                    Some(e) => self.eval_expr_array(e, src_idx, class_name, length),
+                    None => QueryValue::Null,
+                }
+            }
         }
     }
     /// Dispatch a method call on an instance object. Tier-2: fixed name → `Attr`

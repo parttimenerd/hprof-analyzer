@@ -5089,3 +5089,48 @@ fn group_by_null_key_is_valid_group() {
     );
     assert!(!out.contains("error"), "got: {out}");
 }
+
+// ── CASE WHEN tests ───────────────────────────────────────────────────────────
+
+#[test]
+fn case_when_in_select() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(
+        &hprof,
+        r#"SELECT CASE WHEN @usedHeapSize > 1000 THEN "large" ELSE "small" END AS sz FROM java.lang.String LIMIT 3"#,
+    );
+    assert!(out.contains("sz"), "column alias not found: {out}");
+    // With real evaluation either "large" or "small" must appear in data cells.
+    // Strings in output are unquoted; "null" indicates the stub (failure).
+    assert!(
+        out.contains("large") || out.contains("small"),
+        "expected 'large' or 'small' in output (got null?): {out}"
+    );
+    assert!(!out.contains("null"), "got null — CASE stub not replaced: {out}");
+}
+
+#[test]
+fn case_when_no_match_no_else_is_null() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(
+        &hprof,
+        r#"SELECT CASE WHEN @usedHeapSize < 0 THEN "neg" END AS x FROM java.lang.String LIMIT 1"#,
+    );
+    assert!(out.contains("x"), "got: {out}");
+    assert!(!out.contains("error"), "got: {out}");
+    // No branch matches (size >= 0 always), no ELSE → null is the correct result.
+    assert!(out.contains("null"), "expected null for no-match CASE: {out}");
+}
+
+#[test]
+fn case_when_in_group_by_key() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(
+        &hprof,
+        r#"SELECT CASE WHEN @usedHeapSize > 1000 THEN "large" ELSE "small" END AS sz, COUNT(*) AS n FROM java.lang.String GROUP BY CASE WHEN @usedHeapSize > 1000 THEN "large" ELSE "small" END"#,
+    );
+    // The query should produce results (column headers at minimum).
+    assert!(out.contains("sz") && out.contains("n"), "got: {out}");
+    // CASE evaluation must classify objects as "large" or "small".
+    assert!(out.contains("large") || out.contains("small"), "got: {out}");
+}

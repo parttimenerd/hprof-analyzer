@@ -708,7 +708,8 @@ where
                 ident_ci("GROUP")
                     .ignore_then(ident_ci("BY"))
                     .ignore_then(
-                        expr.clone()
+                        case_expr.clone()
+                            .or(expr.clone())
                             .separated_by(just(Token::Comma))
                             .at_least(1)
                             .collect::<Vec<_>>(),

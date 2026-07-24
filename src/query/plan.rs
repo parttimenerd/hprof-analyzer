@@ -334,7 +334,13 @@ fn expr_for_each_attr(e: &Expr, f: &mut impl FnMut(&Attr)) {
             for a in args { expr_for_each_attr(a, f); }
         }
         Expr::Aggregate { .. } => {} // no Attr leaves in aggregate position
-        Expr::Case { .. } => {} // stub; real impl added in Task 7
+        Expr::Case { branches, else_ } => {
+            for (pred, then_expr) in branches {
+                pred_for_each_attr(pred, f);
+                expr_for_each_attr(then_expr, f);
+            }
+            if let Some(e) = else_ { expr_for_each_attr(e, f); }
+        }
     }
 }
 fn expr_any_attr(e: &Expr, pred: impl Fn(&Attr) -> bool) -> bool {
@@ -345,6 +351,25 @@ fn expr_any_attr(e: &Expr, pred: impl Fn(&Attr) -> bool) -> bool {
         }
     });
     found
+}
+
+/// Visit every `Attr` leaf reachable from a `Predicate` tree, calling `f` on
+/// each. Used by `expr_for_each_attr`'s `Expr::Case` arm to recurse into WHEN
+/// conditions.
+fn pred_for_each_attr(p: &Predicate, f: &mut impl FnMut(&Attr)) {
+    match p {
+        Predicate::And(a, b) | Predicate::Or(a, b) => {
+            pred_for_each_attr(a, f);
+            pred_for_each_attr(b, f);
+        }
+        Predicate::Not(a) => pred_for_each_attr(a, f),
+        Predicate::Compare { lhs, rhs, .. } => {
+            expr_for_each_attr(lhs, f);
+            expr_for_each_attr(rhs, f);
+        }
+        Predicate::InstanceOf(_) => {}
+        Predicate::InSubquery { lhs, .. } => f(lhs),
+    }
 }
 
 /// Visit every `Expr::Method` name reachable from an `Expr` tree (including the
@@ -371,7 +396,10 @@ fn expr_for_each_method<'a>(e: &'a Expr, f: &mut impl FnMut(&'a str)) {
             }
         }
         Expr::Aggregate { .. } => {} // no Method nodes in aggregate position
-        Expr::Case { .. } => {} // stub; real impl added in Task 7
+        Expr::Case { branches, else_ } => {
+            for (_, then_expr) in branches { expr_for_each_method(then_expr, f); }
+            if let Some(e) = else_ { expr_for_each_method(e, f); }
+        }
     }
 }
 

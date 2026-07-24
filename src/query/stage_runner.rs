@@ -757,7 +757,49 @@ fn eval_late_expr(
         Expr::Unary { op, arg } => unary(*op, &eval_late_expr(arg, is_known, known)),
         Expr::Method { .. } => QueryValue::Null, // D2 fills this
         Expr::Aggregate { .. } => QueryValue::Null, // evaluated in GROUP BY finalization, not late-phase
-        Expr::Case { .. } => QueryValue::Null, // stub; real impl added in Task 7
+        Expr::Case { branches, else_ } => {
+            for (cond, then_expr) in branches {
+                if eval_late_pred(cond, is_known, known) {
+                    return eval_late_expr(then_expr, is_known, known);
+                }
+            }
+            match else_ {
+                Some(e) => eval_late_expr(e, is_known, known),
+                None => QueryValue::Null,
+            }
+        }
+    }
+}
+
+/// Evaluate a predicate using the same late-window "known attr" semantics as
+/// `eval_late_expr`. Used by `eval_late_expr`'s `Expr::Case` arm.
+fn eval_late_pred(
+    p: &Predicate,
+    is_known: &impl Fn(&Attr) -> bool,
+    known: &QueryValue,
+) -> bool {
+    use crate::query::ast::CompareOp;
+    match p {
+        Predicate::And(a, b) => eval_late_pred(a, is_known, known) && eval_late_pred(b, is_known, known),
+        Predicate::Or(a, b) => eval_late_pred(a, is_known, known) || eval_late_pred(b, is_known, known),
+        Predicate::Not(a) => !eval_late_pred(a, is_known, known),
+        Predicate::Compare { lhs, op, rhs } => {
+            let lv = eval_late_expr(lhs, is_known, known);
+            let rv = eval_late_expr(rhs, is_known, known);
+            // Build a simple like_regexes map on the fly for LIKE predicates.
+            let mut like_re_map = std::collections::HashMap::new();
+            if matches!(op, CompareOp::Like | CompareOp::NotLike) {
+                if let QueryValue::Str(pattern) = &rv {
+                    if let Ok(re) = regex::Regex::new(pattern) {
+                        like_re_map.insert(pattern.clone(), re);
+                    }
+                }
+            }
+            cmp_late_qv(&lv, *op, &rv, &like_re_map)
+        }
+        // InstanceOf and InSubquery are not expected in CASE WHEN conditions
+        // (no heap-type or subquery syntax used inside WHEN predicates).
+        Predicate::InstanceOf(_) | Predicate::InSubquery { .. } => false,
     }
 }
 
