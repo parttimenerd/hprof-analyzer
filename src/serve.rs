@@ -118,7 +118,7 @@ impl ServeState {
             }
 
             // ── Report sections ───────────────────────────────────────────────
-            ("GET", p) if p.starts_with("/report") => {
+            ("GET", p) if p == "/report" || p.starts_with("/report/") => {
                 self.ensure_analysis();
 
                 match self.report() {
@@ -294,7 +294,6 @@ pub fn run_server(path: &str, port: u16, opts: AnalyzeOptions) -> io::Result<()>
         let server = Arc::clone(&server);
         let state = Arc::clone(&state);
         handles.push(std::thread::spawn(move || {
-            use std::io::Read as _;
             loop {
                 let mut request = match server.recv() {
                     Ok(r) => r,
