@@ -125,16 +125,128 @@ impl MatIdMap {
 pub struct MatEmitter {
     dir: PathBuf,
     prefix: String,
+    /// Parser ID written into the `.index` header so MAT recognises the cache.
+    /// Detected from the installed MAT at construction time; falls back to the
+    /// known default `org.eclipse.mat.hprof.hprof`.
+    parser_id: String,
+}
+
+/// Detect the Eclipse MAT installation and return its hprof parser ID.
+///
+/// The parser ID is `{Bundle-SymbolicName}.{extension-id}` as read from
+/// `org.eclipse.mat.hprof_*.jar` inside the MAT plugins directory.  MAT
+/// embeds this string in the `.index` header and rejects caches with a
+/// mismatched ID, re-parsing from scratch.
+///
+/// Returns `None` when no MAT installation is found or the jar cannot be
+/// read; the caller falls back to the hard-coded default.
+pub fn detect_mat_parser_id() -> Option<String> {
+    // Candidate plugins directories on macOS and Linux.
+    let candidates: Vec<std::path::PathBuf> = {
+        let mut v = vec![
+            // macOS standard location
+            std::path::PathBuf::from("/Applications/MemoryAnalyzer.app/Contents/Eclipse/plugins"),
+            // macOS user Applications
+        ];
+        if let Some(home) = std::env::var_os("HOME") {
+            v.push(std::path::Path::new(&home).join("Applications/MemoryAnalyzer.app/Contents/Eclipse/plugins"));
+            // Linux: ~/mat/plugins (common after unpacking the tar.gz)
+            v.push(std::path::Path::new(&home).join("mat/plugins"));
+        }
+        // Linux system-wide paths
+        v.push(std::path::PathBuf::from("/opt/mat/plugins"));
+        v.push(std::path::PathBuf::from("/usr/local/mat/plugins"));
+        v
+    };
+
+    for plugins_dir in &candidates {
+        if let Some(id) = probe_mat_plugins_dir(plugins_dir) {
+            return Some(id);
+        }
+    }
+    None
+}
+
+/// Scan one plugins directory for an `org.eclipse.mat.hprof_*.jar` and
+/// extract `{Bundle-SymbolicName}.{parser-extension-id}` from it.
+fn probe_mat_plugins_dir(plugins_dir: &std::path::Path) -> Option<String> {
+    let entries = std::fs::read_dir(plugins_dir).ok()?;
+    // Collect all matching jars; pick the one with the highest version.
+    let mut best: Option<(String, std::path::PathBuf)> = None;
+    for entry in entries.filter_map(|e| e.ok()) {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with("org.eclipse.mat.hprof_") && name.ends_with(".jar") {
+            let ver = name
+                .strip_prefix("org.eclipse.mat.hprof_")
+                .and_then(|s| s.strip_suffix(".jar"))
+                .unwrap_or("")
+                .to_string();
+            if best.as_ref().map(|(v, _)| &ver > v).unwrap_or(true) {
+                best = Some((ver, entry.path()));
+            }
+        }
+    }
+    let (_, jar_path) = best?;
+    extract_parser_id_from_jar(&jar_path)
+}
+
+/// Open the hprof jar and read `Bundle-SymbolicName` from `META-INF/MANIFEST.MF`
+/// and the parser extension `id` from `plugin.xml`, then combine them.
+fn extract_parser_id_from_jar(jar: &std::path::Path) -> Option<String> {
+    let file = std::fs::File::open(jar).ok()?;
+    let mut archive = zip::ZipArchive::new(file).ok()?;
+
+    // Read Bundle-SymbolicName from MANIFEST.MF
+    let bundle = {
+        let mut mf = archive.by_name("META-INF/MANIFEST.MF").ok()?;
+        let mut s = String::new();
+        std::io::Read::read_to_string(&mut mf, &mut s).ok()?;
+        s.lines()
+            .find_map(|l| l.strip_prefix("Bundle-SymbolicName:"))?
+            .split(';') // strip ;singleton:=true etc.
+            .next()?
+            .trim()
+            .to_string()
+    };
+
+    // Read parser extension id from plugin.xml: the <extension> with
+    // point="org.eclipse.mat.parser.parser" carries id="<ext-id>".
+    let ext_id = {
+        let mut px = archive.by_name("plugin.xml").ok()?;
+        let mut s = String::new();
+        std::io::Read::read_to_string(&mut px, &mut s).ok()?;
+        // Find `point="org.eclipse.mat.parser.parser"` then look backwards
+        // for the nearest `id="..."` attribute.
+        let parser_point = "org.eclipse.mat.parser.parser";
+        let pos = s.find(parser_point)?;
+        // Search backwards from pos for id="
+        let before = &s[..pos];
+        let id_pos = before.rfind("id=\"")?;
+        let after_quote = &before[id_pos + 4..];
+        after_quote.split('"').next()?.to_string()
+    };
+
+    Some(format!("{bundle}.{ext_id}"))
 }
 
 #[allow(dead_code)]
 impl MatEmitter {
     pub fn new(dir: &Path, prefix: &str) -> io::Result<Self> {
         std::fs::create_dir_all(dir)?;
+        let parser_id = detect_mat_parser_id()
+            .unwrap_or_else(|| "org.eclipse.mat.hprof.hprof".to_string());
         Ok(Self {
             dir: dir.to_path_buf(),
             prefix: prefix.to_string(),
+            parser_id,
         })
+    }
+
+    /// Return the detected (or default) MAT parser ID that will be written
+    /// into the `.index` header.
+    pub fn parser_id(&self) -> &str {
+        &self.parser_id
     }
     fn path(&self, name: &str) -> PathBuf {
         self.dir.join(format!("{}.{}.index", self.prefix, name))
@@ -414,10 +526,24 @@ impl MatEmitter {
 
         let mut ser = Ser::new();
 
-        // --- MAT block-data header: "MAT_01" + parser id string ---
-        ser.block_data(b"MAT_01");
-        // The parser-id string: a TC_STRING "org.eclipse.mat.hprof.HprofHeapObjectReader"
-        ser.string("org.eclipse.mat.hprof.HprofHeapObjectReader");
+        // --- MAT block-data header: two separate TC_BLOCKDATA records, each
+        // holding one UTF string (u16-length-prefixed), read by two successive
+        // ObjectInputStream.readUTF() calls in SnapshotImpl.readFromFile:
+        //   readUTF() → "MAT_01"     (version check)
+        //   readUTF() → parser-id    (parser lookup)
+        // Both strings are encoded as Java DataOutputStream.writeUTF: u16 len + bytes.
+        // The parser-id is detected from the installed MAT at MatEmitter::new;
+        // mismatched IDs cause MAT to reject the cache and re-parse from scratch.
+        {
+            let write_utf_block = |ser: &mut Ser, s: &[u8]| {
+                let mut blk = Vec::with_capacity(2 + s.len());
+                blk.extend_from_slice(&(s.len() as u16).to_be_bytes());
+                blk.extend_from_slice(s);
+                ser.block_data(&blk);
+            };
+            write_utf_block(&mut ser, b"MAT_01");
+            write_utf_block(&mut ser, self.parser_id.as_bytes());
+        }
 
         // --- 1. XSnapshotInfo ---
         // XSnapshotInfo extends SnapshotInfo (uid=4) which extends nothing.
