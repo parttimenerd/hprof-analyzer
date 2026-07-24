@@ -42,6 +42,9 @@ pub enum StageKind {
     HistogramOnly,
     #[default]
     SingleScan,
+    /// GROUP BY aggregation: rows are bucketed by the group-by key expressions
+    /// during the scan and finalized after the full scan completes.
+    GroupBy,
 }
 
 /// Which pipeline phase finalizes a query's rows. See canonical vocabulary.
@@ -168,6 +171,10 @@ pub struct QueryPlan {
     /// lookup) and evaluating it only for surviving rows is cheaper. Populated by
     /// `optimize::defer_projections`; empty for a freshly-planned query.
     pub deferred_projections: Vec<DeferredProj>,
+    /// GROUP BY expressions (copied from AST when kind == GroupBy; empty otherwise).
+    pub group_by_exprs: Vec<Expr>,
+    /// Post-aggregate filter terms (HAVING), empty when no HAVING clause.
+    pub having_terms: Vec<Conjunct>,
 }
 
 /// A planned `WHERE <lhs> IN (<subquery>)` predicate. `lhs` is the outer
@@ -550,6 +557,8 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             from_subplan: None,
             in_subplans: Vec::new(),
             deferred_projections: Vec::new(),
+            group_by_exprs: Vec::new(),
+            having_terms: Vec::new(),
         });
     }
 
@@ -588,6 +597,8 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             from_subplan: None,
             in_subplans: Vec::new(),
             deferred_projections: Vec::new(),
+            group_by_exprs: Vec::new(),
+            having_terms: Vec::new(),
         });
     }
 
@@ -613,6 +624,8 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             from_subplan: None,
             in_subplans: Vec::new(),
             deferred_projections: Vec::new(),
+            group_by_exprs: Vec::new(),
+            having_terms: Vec::new(),
         });
     }
     // A mixed select containing path(a, b) alongside other items is not supported:
@@ -653,6 +666,8 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             from_subplan: None,
             in_subplans: Vec::new(),
             deferred_projections: Vec::new(),
+            group_by_exprs: Vec::new(),
+            having_terms: Vec::new(),
         });
     }
 
@@ -798,6 +813,8 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
         from_subplan,
         in_subplans,
         deferred_projections: Vec::new(),
+        group_by_exprs: Vec::new(),
+        having_terms: Vec::new(),
     })
 }
 

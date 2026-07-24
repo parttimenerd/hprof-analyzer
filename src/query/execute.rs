@@ -3372,6 +3372,8 @@ mod tests {
             limit: None,
             union_branches: Vec::new(),
             union_limit: None,
+            group_by: Vec::new(),
+            having: None,
         };
         let cols = query_columns(&q);
         assert_eq!(cols.len(), 2);

@@ -25,6 +25,10 @@ pub struct Query {
     /// when no trailing union LIMIT is present. Distinct from `limit`, which is
     /// the per-branch/per-query LIMIT.
     pub union_limit: Option<u64>,
+    /// GROUP BY expression list (empty = no GROUP BY).
+    pub group_by: Vec<Expr>,
+    /// HAVING predicate, evaluated post-aggregation (None = no HAVING).
+    pub having: Option<Predicate>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

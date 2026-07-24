@@ -719,6 +719,8 @@ where
                         limit,
                         union_branches: Vec::new(),
                         union_limit: None,
+                        group_by: Vec::new(),
+                        having: None,
                     };
                     // Now the alias is known, rewrite dotted `Field`s into N-hop
                     // `RefPath`s (a single segment after alias-strip stays a Field).
@@ -1490,6 +1492,8 @@ mod tests {
             limit,
             union_branches: Vec::new(),
             union_limit: None,
+            group_by: Vec::new(),
+            having: None,
         }
     }
     fn star() -> Vec<SelectItem> {
