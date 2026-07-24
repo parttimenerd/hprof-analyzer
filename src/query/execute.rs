@@ -3828,6 +3828,8 @@ mod tests {
             union_limit: None,
             group_by: Vec::new(),
             having: None,
+            intersect_branches: Vec::new(),
+            except_branches: Vec::new(),
         };
         let cols = query_columns(&q);
         assert_eq!(cols.len(), 2);

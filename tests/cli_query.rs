@@ -5251,3 +5251,52 @@ fn not_exists_empty_inner_passes_all_rows() {
         "NOT EXISTS (empty inner) must pass all rows: baseline={baseline}, got {with_not_exists}"
     );
 }
+
+// ---------- INTERSECT / EXCEPT set operations ----------
+
+#[test]
+fn intersect_keeps_common_rows() {
+    // Both branches select from Thread — INTERSECT of same set = same set (deduped).
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT @displayName FROM java.lang.Thread \
+         INTERSECT \
+         SELECT @displayName FROM java.lang.Thread",
+    );
+    assert!(!out.to_lowercase().contains("error"), "got: {out}");
+    assert!(out.contains("Thread"), "expected Thread rows, got: {out}");
+}
+
+#[test]
+fn intersect_empty_when_disjoint() {
+    // Thread and String have different display names — intersection is empty.
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT @displayName FROM java.lang.Thread \
+         INTERSECT \
+         SELECT @displayName FROM java.lang.String",
+    );
+    // The intersection should be empty (0 rows) since @displayName values differ.
+    assert!(
+        out.contains("(0 rows)") || out.contains("0 rows"),
+        "Thread INTERSECT String display names should be empty, got: {out}"
+    );
+}
+
+#[test]
+fn except_removes_right_rows() {
+    // A EXCEPT A = empty set.
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT @displayName FROM java.lang.Thread \
+         EXCEPT \
+         SELECT @displayName FROM java.lang.Thread",
+    );
+    assert!(
+        out.contains("(0 rows)") || out.contains("0 rows"),
+        "A EXCEPT A should be empty, got: {out}"
+    );
+}

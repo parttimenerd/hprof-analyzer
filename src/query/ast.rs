@@ -29,6 +29,10 @@ pub struct Query {
     pub group_by: Vec<Expr>,
     /// HAVING predicate, evaluated post-aggregation (None = no HAVING).
     pub having: Option<Predicate>,
+    /// INTERSECT branches (deduplicated intersection with each branch's result set).
+    pub intersect_branches: Vec<Query>,
+    /// EXCEPT branches (rows in left set not present in any except branch's result set).
+    pub except_branches: Vec<Query>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

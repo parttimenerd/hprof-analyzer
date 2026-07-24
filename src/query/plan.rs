@@ -180,6 +180,12 @@ pub struct QueryPlan {
     pub group_by_exprs: Vec<Expr>,
     /// Post-aggregate filter terms (HAVING), empty when no HAVING clause.
     pub having_terms: Vec<Conjunct>,
+    /// Planned INTERSECT branches (empty for a non-INTERSECT query). Each branch
+    /// plan itself has empty intersect/except branches.
+    pub intersect_branch_plans: Vec<QueryPlan>,
+    /// Planned EXCEPT branches (empty for a non-EXCEPT query). Each branch plan
+    /// itself has empty intersect/except branches.
+    pub except_branch_plans: Vec<QueryPlan>,
 }
 
 /// A planned `WHERE <lhs> IN (<subquery>)` predicate. `lhs` is the outer
@@ -212,57 +218,91 @@ pub struct ExistsSubplan {
 /// value so the flag actually controls path() BFS depth end-to-end.
 pub fn plan_query(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
     let mut head = plan_single(q, depth_cap)?;
-    if q.union_branches.is_empty() {
-        return Ok(head);
-    }
-    if head.select_arity == 0 {
-        // unreachable: select_list requires >= 1 item, but guard defensively.
-        return Err(QueryError("UNION head has no projected columns".into()));
-    }
     let head_arity = head.select_arity;
-    let mut planned = Vec::with_capacity(q.union_branches.len());
-    // Guard the head first: a UNION head may not use RETAINED SET or aggregates.
-    if q.retained_set {
-        return Err(QueryError(
-            "RETAINED SET is not allowed in a UNION branch".into(),
-        ));
-    }
-    if select_has_aggregate(&q.select) {
-        return Err(QueryError(
-            "aggregates are not allowed in a UNION branch".into(),
-        ));
-    }
-    for (i, branch) in q.union_branches.iter().enumerate() {
-        // Branches parse flat, but clear defensively so plan_single never
-        // recurses into a branch's own (empty) union tail.
-        let mut b = branch.clone();
-        b.union_branches.clear();
-        if b.retained_set {
+
+    // Plan UNION branches (if any).
+    if !q.union_branches.is_empty() {
+        if head.select_arity == 0 {
+            // unreachable: select_list requires >= 1 item, but guard defensively.
+            return Err(QueryError("UNION head has no projected columns".into()));
+        }
+        let mut planned = Vec::with_capacity(q.union_branches.len());
+        // Guard the head first: a UNION head may not use RETAINED SET or aggregates.
+        if q.retained_set {
             return Err(QueryError(
                 "RETAINED SET is not allowed in a UNION branch".into(),
             ));
         }
-        if select_has_aggregate(&b.select) {
+        if select_has_aggregate(&q.select) {
             return Err(QueryError(
                 "aggregates are not allowed in a UNION branch".into(),
             ));
         }
-        let bp = plan_single(&b, depth_cap)?;
+        for (i, branch) in q.union_branches.iter().enumerate() {
+            // Branches parse flat, but clear defensively so plan_single never
+            // recurses into a branch's own (empty) union tail.
+            let mut b = branch.clone();
+            b.union_branches.clear();
+            if b.retained_set {
+                return Err(QueryError(
+                    "RETAINED SET is not allowed in a UNION branch".into(),
+                ));
+            }
+            if select_has_aggregate(&b.select) {
+                return Err(QueryError(
+                    "aggregates are not allowed in a UNION branch".into(),
+                ));
+            }
+            let bp = plan_single(&b, depth_cap)?;
+            if bp.select_arity != head_arity {
+                return Err(QueryError(format!(
+                    "UNION branches must project the same number of columns \
+                     (branch 0 has {head_arity}, branch {} has {})",
+                    i + 1,
+                    bp.select_arity
+                )));
+            }
+            planned.push(bp);
+        }
+        head.union_branches = planned;
+        // Propagate the union-wide trailing LIMIT (MAT gap #6) onto the head plan so
+        // the executor can cap the concatenated union result. `None` for unions with
+        // no trailing LIMIT (the executor then applies only the safety cap).
+        head.union_limit = q.union_limit;
+    }
+
+    // Plan INTERSECT branches with arity validation.
+    let mut intersect_branch_plans = Vec::new();
+    for (i, branch) in q.intersect_branches.iter().enumerate() {
+        let bp = plan_single(branch, depth_cap)?;
         if bp.select_arity != head_arity {
             return Err(QueryError(format!(
-                "UNION branches must project the same number of columns \
-                 (branch 0 has {head_arity}, branch {} has {})",
+                "INTERSECT branches must have the same column count \
+                 (left has {head_arity}, INTERSECT branch {} has {})",
                 i + 1,
                 bp.select_arity
             )));
         }
-        planned.push(bp);
+        intersect_branch_plans.push(bp);
     }
-    head.union_branches = planned;
-    // Propagate the union-wide trailing LIMIT (MAT gap #6) onto the head plan so
-    // the executor can cap the concatenated union result. `None` for unions with
-    // no trailing LIMIT (the executor then applies only the safety cap).
-    head.union_limit = q.union_limit;
+    head.intersect_branch_plans = intersect_branch_plans;
+
+    // Plan EXCEPT branches with arity validation.
+    let mut except_branch_plans = Vec::new();
+    for (i, branch) in q.except_branches.iter().enumerate() {
+        let bp = plan_single(branch, depth_cap)?;
+        if bp.select_arity != head_arity {
+            return Err(QueryError(format!(
+                "EXCEPT branches must have the same column count \
+                 (left has {head_arity}, EXCEPT branch {} has {})",
+                i + 1,
+                bp.select_arity
+            )));
+        }
+        except_branch_plans.push(bp);
+    }
+    head.except_branch_plans = except_branch_plans;
+
     Ok(head)
 }
 
@@ -728,6 +768,8 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             deferred_projections: Vec::new(),
             group_by_exprs: Vec::new(),
             having_terms: Vec::new(),
+            intersect_branch_plans: Vec::new(),
+            except_branch_plans: Vec::new(),
         });
     }
 
@@ -769,6 +811,8 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             deferred_projections: Vec::new(),
             group_by_exprs: Vec::new(),
             having_terms: Vec::new(),
+            intersect_branch_plans: Vec::new(),
+            except_branch_plans: Vec::new(),
         });
     }
 
@@ -797,6 +841,8 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             deferred_projections: Vec::new(),
             group_by_exprs: Vec::new(),
             having_terms: Vec::new(),
+            intersect_branch_plans: Vec::new(),
+            except_branch_plans: Vec::new(),
         });
     }
     // A mixed select containing path(a, b) alongside other items is not supported:
@@ -840,6 +886,8 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             deferred_projections: Vec::new(),
             group_by_exprs: Vec::new(),
             having_terms: Vec::new(),
+            intersect_branch_plans: Vec::new(),
+            except_branch_plans: Vec::new(),
         });
     }
 
@@ -988,6 +1036,8 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
         deferred_projections: Vec::new(),
         group_by_exprs: q.group_by.clone(),
         having_terms,
+        intersect_branch_plans: Vec::new(),
+        except_branch_plans: Vec::new(),
     })
 }
 

@@ -825,6 +825,8 @@ where
                         union_limit: None,
                         group_by,
                         having,
+                        intersect_branches: Vec::new(),
+                        except_branches: Vec::new(),
                     };
                     // Now the alias is known, rewrite dotted `Field`s into N-hop
                     // `RefPath`s (a single segment after alias-strip stays a Field).
@@ -857,6 +859,16 @@ where
     let trailing_limit = ident_ci("LIMIT")
         .ignore_then(select! { Token::Int(n) if n >= 0 => n as u64 }.labelled("LIMIT count"))
         .or_not();
+    // INTERSECT and EXCEPT tails: a bare `SELECT ...` branch (no parenthesized
+    // form needed — unlike UNION, INTERSECT/EXCEPT do not have a trailing LIMIT).
+    let intersect_tail = ident_ci("INTERSECT")
+        .ignore_then(base_query.clone())
+        .repeated()
+        .collect::<Vec<Query>>();
+    let except_tail = ident_ci("EXCEPT")
+        .ignore_then(base_query.clone())
+        .repeated()
+        .collect::<Vec<Query>>();
     base_query
         .clone()
         .then(
@@ -865,10 +877,12 @@ where
                 .repeated()
                 .collect::<Vec<_>>(),
         )
+        .then(intersect_tail)
+        .then(except_tail)
         .then(trailing_limit)
         .then_ignore(end())
-        .map(
-            |((mut head, tail), trailing): ((Query, Vec<(Query, bool)>), Option<u64>)| {
+        .validate(
+            |(((( mut head, union_tail), intersects), excepts), trailing): ((((Query, Vec<(Query, bool)>), Vec<Query>), Vec<Query>), Option<u64>), e, emitter| {
                 // DECISION (MAT gap #6): a trailing `LIMIT n` after a UNION binds
                 // UNION-WIDE (applied to the whole concatenated result), matching
                 // Eclipse MAT — NOT to a single branch. Two forms reach here:
@@ -882,8 +896,8 @@ where
                 //     form matches MAT too. A LIMIT written INSIDE a branch's own
                 //     parens is a genuine per-branch limit and is left untouched
                 //     (we only lift when the last branch was NOT parenthesized).
-                let last_was_paren = tail.last().map(|(_, p)| *p).unwrap_or(false);
-                head.union_branches = tail.into_iter().map(|(q, _)| q).collect();
+                let last_was_paren = union_tail.last().map(|(_, p)| *p).unwrap_or(false);
+                head.union_branches = union_tail.into_iter().map(|(q, _)| q).collect();
                 if !head.union_branches.is_empty() {
                     if let Some(n) = trailing {
                         head.union_limit = Some(n);
@@ -896,6 +910,18 @@ where
                         }
                     }
                 }
+                // INTERSECT and EXCEPT: validate that they are not mixed in the
+                // same chain (without subquery parentheses).
+                if !intersects.is_empty() && !excepts.is_empty() {
+                    emitter.emit(Rich::custom(
+                        e.span(),
+                        "cannot mix INTERSECT and EXCEPT in one chain without subquery \
+                         parentheses — wrap one side in a subquery: \
+                         (SELECT ... INTERSECT ...) EXCEPT ...",
+                    ));
+                }
+                head.intersect_branches = intersects;
+                head.except_branches = excepts;
                 head
             },
         )
@@ -1147,6 +1173,9 @@ pub const RESERVED: &[&str] = &[
     "NULLIF",
     // Subquery existence predicate.
     "EXISTS",
+    // Set operation keywords.
+    "INTERSECT",
+    "EXCEPT",
 ];
 
 /// Aggregate function names (`agg_func`'s source set), upper-cased.
@@ -1611,6 +1640,8 @@ mod tests {
             union_limit: None,
             group_by: Vec::new(),
             having: None,
+            intersect_branches: Vec::new(),
+            except_branches: Vec::new(),
         }
     }
     fn star() -> Vec<SelectItem> {
@@ -4625,6 +4656,43 @@ mod tests {
         assert!(
             matches!(&q.where_, Some(crate::query::ast::Predicate::Exists { negated: true, .. })),
             "got: {:?}", q.where_
+        );
+    }
+
+    #[test]
+    fn parse_intersect() {
+        let q = super::parse(
+            "SELECT @displayName FROM java.lang.Thread \
+             INTERSECT \
+             SELECT @displayName FROM java.lang.String",
+        ).unwrap();
+        assert_eq!(q.intersect_branches.len(), 1);
+        assert!(q.except_branches.is_empty());
+        assert!(q.union_branches.is_empty());
+    }
+
+    #[test]
+    fn parse_except() {
+        let q = super::parse(
+            "SELECT @displayName FROM java.lang.Thread \
+             EXCEPT \
+             SELECT @displayName FROM java.lang.String",
+        ).unwrap();
+        assert_eq!(q.except_branches.len(), 1);
+        assert!(q.intersect_branches.is_empty());
+        assert!(q.union_branches.is_empty());
+    }
+
+    #[test]
+    fn intersect_and_except_mixed_errors() {
+        let err = super::parse(
+            "SELECT @displayName FROM java.lang.Thread \
+             INTERSECT SELECT @displayName FROM java.lang.String \
+             EXCEPT SELECT @displayName FROM java.lang.Object",
+        ).expect_err("mixing INTERSECT and EXCEPT must error");
+        assert!(
+            err.0.to_lowercase().contains("intersect") || err.0.to_lowercase().contains("except"),
+            "error must mention INTERSECT or EXCEPT, got: {}", err.0
         );
     }
 }

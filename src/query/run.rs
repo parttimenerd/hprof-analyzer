@@ -1243,6 +1243,10 @@ pub struct UnionGroup {
     pub union_limit: Option<u64>,
     pub distinct: bool,
     pub limit: Option<u64>,
+    /// Number of INTERSECT branch slots immediately following the UNION slots.
+    pub intersect_count: usize,
+    /// Number of EXCEPT branch slots immediately following the INTERSECT slots.
+    pub except_count: usize,
 }
 
 /// Flatten a caller's query list so every `UNION` branch becomes its own scan
@@ -1262,13 +1266,35 @@ pub fn expand_union_queries(
         // as their own slots below).
         let mut head_q = q.clone();
         head_q.union_branches.clear();
+        head_q.intersect_branches.clear();
+        head_q.except_branches.clear();
         let mut head_plan = plan.clone();
         let branch_plans = std::mem::take(&mut head_plan.union_branches);
+        let intersect_plans = std::mem::take(&mut head_plan.intersect_branch_plans);
+        let except_plans = std::mem::take(&mut head_plan.except_branch_plans);
         flat.push((head_q, head_plan));
-        // One slot per branch, AST paired with its pre-planned counterpart.
+        // One slot per UNION branch, AST paired with its pre-planned counterpart.
         for (bq, bplan) in q.union_branches.iter().zip(branch_plans.into_iter()) {
             let mut bq = bq.clone();
             bq.union_branches.clear();
+            flat.push((bq, bplan));
+        }
+        // One slot per INTERSECT branch.
+        let intersect_count = q.intersect_branches.len();
+        for (bq, bplan) in q.intersect_branches.iter().zip(intersect_plans.into_iter()) {
+            let mut bq = bq.clone();
+            bq.union_branches.clear();
+            bq.intersect_branches.clear();
+            bq.except_branches.clear();
+            flat.push((bq, bplan));
+        }
+        // One slot per EXCEPT branch.
+        let except_count = q.except_branches.len();
+        for (bq, bplan) in q.except_branches.iter().zip(except_plans.into_iter()) {
+            let mut bq = bq.clone();
+            bq.union_branches.clear();
+            bq.intersect_branches.clear();
+            bq.except_branches.clear();
             flat.push((bq, bplan));
         }
         groups.push(UnionGroup {
@@ -1281,6 +1307,8 @@ pub fn expand_union_queries(
             // The per-query LIMIT was cleared from the scan plan for DISTINCT queries;
             // capture it here from the AST so collapse can apply it post-dedup.
             limit: q.limit,
+            intersect_count,
+            except_count,
         });
     }
     (flat, groups)
@@ -1294,6 +1322,7 @@ pub fn collapse_union_results(
     mut results: Vec<QueryResult>,
     groups: &[UnionGroup],
 ) -> Vec<QueryResult> {
+    use std::collections::HashSet;
     // Drain by group so slot indices stay valid regardless of per-group counts.
     let mut it = results.drain(..);
     let mut out: Vec<QueryResult> = Vec::with_capacity(groups.len());
@@ -1331,6 +1360,42 @@ pub fn collapse_union_results(
                 }
             }
         }
+
+        // INTERSECT: drain each INTERSECT branch result and intersect row-sets.
+        // Uses the same Debug-key dedup strategy as stable_dedup for row equality.
+        for _ in 0..g.intersect_count {
+            let right = it.next().expect("flat results shorter than groups describe (intersect)");
+            // Build a set of right-side row keys.
+            let right_set: HashSet<String> = right.rows.iter()
+                .map(|row| format!("{row:?}"))
+                .collect();
+            result.rows.retain(|row| right_set.contains(&format!("{row:?}")));
+            result.truncated |= right.truncated;
+        }
+        // Dedup the intersect result (INTERSECT has DISTINCT semantics).
+        if g.intersect_count > 0 {
+            result = stable_dedup(result);
+        }
+
+        // EXCEPT: drain each EXCEPT branch result and subtract row-sets.
+        for _ in 0..g.except_count {
+            let right = it.next().expect("flat results shorter than groups describe (except)");
+            let right_set: HashSet<String> = right.rows.iter()
+                .map(|row| format!("{row:?}"))
+                .collect();
+            result.rows.retain(|row| !right_set.contains(&format!("{row:?}")));
+            result.truncated |= right.truncated;
+        }
+        // Dedup the except result (EXCEPT has DISTINCT semantics).
+        if g.except_count > 0 {
+            result = stable_dedup(result);
+        }
+
+        // Recompute row_count after any set operations.
+        if g.intersect_count > 0 || g.except_count > 0 {
+            result.row_count = result.rows.len() as u64;
+        }
+
         out.push(result);
     }
     out
@@ -1857,6 +1922,8 @@ mod tests {
                     union_limit: None,
                     distinct: false,
                     limit: None,
+                intersect_count: 0,
+                except_count: 0,
                 },
                 UnionGroup {
                     head: 1,
@@ -1864,6 +1931,8 @@ mod tests {
                     union_limit: None,
                     distinct: false,
                     limit: None,
+                intersect_count: 0,
+                except_count: 0,
                 },
             ]
         );
@@ -1887,6 +1956,8 @@ mod tests {
                 union_limit: None,
                 distinct: false,
                 limit: None,
+            intersect_count: 0,
+            except_count: 0,
             },
             UnionGroup {
                 head: 1,
@@ -1894,6 +1965,8 @@ mod tests {
                 union_limit: None,
                 distinct: false,
                 limit: None,
+            intersect_count: 0,
+            except_count: 0,
             },
         ];
         let out = collapse_union_results(flat, &groups);
@@ -1916,6 +1989,8 @@ mod tests {
             union_limit: Some(3),
             distinct: false,
             limit: None,
+        intersect_count: 0,
+        except_count: 0,
         }];
         let out = collapse_union_results(flat, &groups);
         assert_eq!(out.len(), 1);
@@ -1937,6 +2012,8 @@ mod tests {
             union_limit: Some(99),
             distinct: false,
             limit: None,
+        intersect_count: 0,
+        except_count: 0,
         }];
         let out = collapse_union_results(flat, &groups);
         assert_eq!(out[0].rows.len(), 3, "all rows returned");
@@ -1953,6 +2030,8 @@ mod tests {
             union_limit: Some(0),
             distinct: false,
             limit: None,
+        intersect_count: 0,
+        except_count: 0,
         }];
         let out = collapse_union_results(flat, &groups);
         assert!(out[0].rows.is_empty(), "LIMIT 0 → no rows");
@@ -1970,6 +2049,8 @@ mod tests {
             union_limit: None,
             distinct: false,
             limit: None,
+        intersect_count: 0,
+        except_count: 0,
         }];
         let out = collapse_union_results(flat, &groups);
         assert_eq!(out[0].rows.len(), 5);
@@ -1987,6 +2068,8 @@ mod tests {
             union_limit: Some(3),
             distinct: false,
             limit: None,
+        intersect_count: 0,
+        except_count: 0,
         }];
         let out = collapse_union_results(flat, &groups);
         assert_eq!(out[0].rows.len(), 3);
@@ -2035,6 +2118,8 @@ mod tests {
                 union_limit: None,
                 distinct: false,
                 limit: None,
+            intersect_count: 0,
+            except_count: 0,
             },
             UnionGroup {
                 head: 1,
@@ -2042,6 +2127,8 @@ mod tests {
                 union_limit: None,
                 distinct: false,
                 limit: None,
+            intersect_count: 0,
+            except_count: 0,
             },
         ];
         let out = collapse_union_results(flat, &groups);
@@ -2061,6 +2148,8 @@ mod tests {
                 union_limit: None,
                 distinct: true,
                 limit: None,
+                intersect_count: 0,
+                except_count: 0,
             }],
         )
     }
@@ -2119,6 +2208,8 @@ mod tests {
             union_limit: None,
             distinct: true,
             limit: None,
+        intersect_count: 0,
+        except_count: 0,
         }];
         let out = collapse_union_results(flat, &groups);
         assert_eq!(out[0].row_count, 4, "cross-branch dupes removed: 1,2,3,4");
@@ -2157,6 +2248,8 @@ mod tests {
             union_limit: None,
             distinct: true,
             limit: None,
+        intersect_count: 0,
+        except_count: 0,
         }];
         let out = collapse_union_results(flat, &groups);
         // Two NaN rows should also dedup (Debug format is total: "Float(NaN)" == "Float(NaN)").
