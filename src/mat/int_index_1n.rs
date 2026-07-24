@@ -66,7 +66,7 @@
 //! implemented here (our reference dumps have bodies < 4 GiB). If any position
 //! reaches 2^32 we return an [`io::Error`] rather than emit a wrong file.
 
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 
 use super::int_index::IntIndexStreamer;
 #[cfg(test)]
@@ -259,9 +259,10 @@ where
     // Spool raw header i32 BE values to a temp file instead of a Vec<i32> to
     // avoid a ~2 GB peak allocation for large dumps (~513M entries × 4 bytes).
     let tmp_path = format!("/tmp/hprof_idx_hdr_{}", std::process::id());
-    let mut hdr_tmp = std::fs::OpenOptions::new()
+    let hdr_tmp_file = std::fs::OpenOptions::new()
         .read(true).write(true).create(true).truncate(true)
         .open(&tmp_path)?;
+    let mut hdr_tmp = BufWriter::new(hdr_tmp_file);
     let mut body = IntIndexStreamer::new(&mut cw);
     let mut body_size: i64 = 0;
     let mut entry_count: usize = 0;
@@ -299,14 +300,16 @@ where
     body.finish()?;
     let divider = cw.bytes_written() as i64;
     let mut w = cw.into_inner();
-    hdr_tmp.seek(SeekFrom::Start(0))?;
+    let mut hdr_tmp_file = hdr_tmp.into_inner().map_err(|e| e.into_error())?;
+    hdr_tmp_file.seek(SeekFrom::Start(0))?;
+    let mut hdr_reader = BufReader::new(hdr_tmp_file);
     let mut hdr = IntIndexStreamer::with_position(&mut w, divider);
     let mut buf = [0u8; 4];
     for _ in 0..entry_count {
-        hdr_tmp.read_exact(&mut buf)?;
+        hdr_reader.read_exact(&mut buf)?;
         hdr.push(i32::from_be_bytes(buf))?;
     }
-    drop(hdr_tmp);
+    drop(hdr_reader);
     let _ = std::fs::remove_file(&tmp_path);
     hdr.finish()?;
     w.write_all(&divider.to_be_bytes())?;
