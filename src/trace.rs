@@ -16,35 +16,54 @@ pub fn enabled() -> bool {
     TRACE.load(Ordering::Relaxed)
 }
 
-/// Resident set size in MB from /proc/self/statm (field 2 = resident pages).
+/// Resident set size in MB. Linux reads /proc/self/statm; macOS uses getrusage.
 fn rss_mb() -> u64 {
-    match std::fs::read_to_string("/proc/self/statm") {
-        Ok(s) => {
-            let resident_pages: u64 = s
-                .split_whitespace()
-                .nth(1)
-                .and_then(|f| f.parse().ok())
-                .unwrap_or(0);
-            resident_pages * 4096 / (1024 * 1024)
+    #[cfg(target_os = "linux")]
+    {
+        match std::fs::read_to_string("/proc/self/statm") {
+            Ok(s) => {
+                let resident_pages: u64 = s
+                    .split_whitespace()
+                    .nth(1)
+                    .and_then(|f| f.parse().ok())
+                    .unwrap_or(0);
+                resident_pages * 4096 / (1024 * 1024)
+            }
+            Err(_) => 0,
         }
-        Err(_) => 0,
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        // getrusage RUSAGE_SELF: ru_maxrss is bytes on macOS, KB on Linux.
+        let mut ru = unsafe { std::mem::zeroed::<libc::rusage>() };
+        if unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut ru) } == 0 {
+            // macOS ru_maxrss is bytes
+            ru.ru_maxrss as u64 / (1024 * 1024)
+        } else {
+            0
+        }
     }
 }
 
-/// Peak resident set (VmHWM) in MB from /proc/self/status. Monotonic kernel
-/// high-water mark — matches `/usr/bin/time -v` "Maximum resident set size".
-/// Its INCREASE between two probes attributes the true peak to a phase, which
-/// the current-RSS probe and a coarse /proc sampler both miss for short spikes.
+/// Peak resident set in MB. On Linux uses VmHWM from /proc/self/status.
+/// On macOS getrusage already returns the high-water mark (ru_maxrss).
 fn peak_mb() -> u64 {
-    match std::fs::read_to_string("/proc/self/status") {
-        Ok(s) => s
-            .lines()
-            .find_map(|l| l.strip_prefix("VmHWM:"))
-            .and_then(|v| v.split_whitespace().next())
-            .and_then(|kb| kb.parse::<u64>().ok())
-            .map(|kb| kb / 1024)
-            .unwrap_or(0),
-        Err(_) => 0,
+    #[cfg(target_os = "linux")]
+    {
+        match std::fs::read_to_string("/proc/self/status") {
+            Ok(s) => s
+                .lines()
+                .find_map(|l| l.strip_prefix("VmHWM:"))
+                .and_then(|v| v.split_whitespace().next())
+                .and_then(|kb| kb.parse::<u64>().ok())
+                .map(|kb| kb / 1024)
+                .unwrap_or(0),
+            Err(_) => 0,
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        rss_mb() // on macOS ru_maxrss is already the peak HWM
     }
 }
 

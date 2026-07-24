@@ -523,6 +523,11 @@ impl Pass2 {
                 *s = min_obj;
             }
         }
+        // kind is now dead (last user was the zero-shallow loop above and the
+        // loader-label loop earlier). Free before the GC-root and fielddecode
+        // phases to lower peak RSS on large dumps.
+        p1.kind = Vec::new();
+        crate::trace::trim();
 
         // ── Phase 2: Build GC root indices ───────────────────────────────
         let mut gc_root_set: std::collections::HashSet<u32> = std::collections::HashSet::new();

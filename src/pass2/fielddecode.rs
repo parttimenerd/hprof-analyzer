@@ -1038,14 +1038,16 @@ pub(crate) fn build_field_decode_views(
     // heaps with huge constant-array groups.
     let mut const_owner_samples: HashMap<(u8, u64, i64), Vec<u64>> = HashMap::new();
     let mut array_fill = FillAcc::default();
-    // Raw per-obj-array (addr, non_null, count) collected during the pass; the
+    // Raw per-obj-array data collected during the pass; the
     // `wanted_arrays` collection-fill/map-collision fold runs AFTER the pass, in
     // memory, because an OBJ_ARRAY_DUMP may precede its owning collection's
     // INSTANCE_DUMP (HPROF has no record-ordering guarantee), so `wanted_arrays`
-    // is not fully populated until the single scan completes. Sums are
-    // order-independent, so folding post-pass is byte-identical to the old
-    // scan-1-then-scan-3 ordering.
+    // is not fully populated until the single scan completes.
+    // When collect_attribution is off, slot_targets are never populated so we
+    // use a compact (addr, non_null, count) triple to halve per-entry cost and
+    // eliminate all Vec heap allocations for the entries.
     let mut obj_array_raw: Vec<(u64, u64, u64, Vec<u32>)> = Vec::new();
+    let mut obj_array_raw_compact: Vec<(u64, u32, u32)> = Vec::new();
 
     // ── Single fused full-file scan (instances + prim arrays + obj arrays) ─────
     // Replaces three separate full-file scans with ONE pass. Each record kind
@@ -1505,7 +1507,12 @@ pub(crate) fn build_field_decode_views(
             // `wanted_arrays` may not yet contain this array's owning collection
             // (its INSTANCE_DUMP can appear later in the file). Collect the raw
             // per-array data now; fold after the single scan completes.
-            obj_array_raw.push((addr, non_null, count, slot_targets));
+            if collect_attribution {
+                obj_array_raw.push((addr, non_null, count, slot_targets));
+            } else {
+                // Compact path: slot_targets is always empty, avoid Vec overhead.
+                obj_array_raw_compact.push((addr, non_null as u32, count as u32));
+            }
         }
     })?;
 
@@ -1518,43 +1525,48 @@ pub(crate) fn build_field_decode_views(
     let mut map_collision_tracked: u64 = 0;
     let mut coll_values: Vec<CollValuesRaw> = Vec::new();
     let mut coll_values_truncated = false;
-    for (addr, non_null, count, slot_targets) in obj_array_raw.drain(..) {
+
+    // Compact path (default): drain the compact vec without slot_targets.
+    for (addr, non_null_u32, count_u32) in obj_array_raw_compact.drain(..) {
+        let non_null = non_null_u32 as u64;
+        let count = count_u32 as u64;
         if let Some(want) = wanted_arrays.get(&addr) {
-            // ConcurrentHashMap has no plain size: approximate size as non-null
-            // slot count (want.size stays 0 in that case).
             let used = if want.size > 0 { want.size } else { non_null };
-            // #9 collection fill ratio: used / capacity(=count). wasted = the
-            // unused slots' worth of refs (capacity - used) clamped >=0. shallow
-            // attributes the COLLECTION instance (backing-array bytes already
-            // counted under array_fill).
             let wasted = count
                 .saturating_sub(used.min(count))
                 .saturating_mul(obj_ref_width as u64);
             coll_fill.add(used, count, want.coll_shallow, wasted);
             coll_fill_tracked += 1;
-            // Update the collection's ContainerRecord capacity to the real
-            // backing-array length (not available when the record was inserted).
-            if collect_attribution {
-                if let Some(rec) = container_records.get_mut(&want.coll_addr) {
-                    rec.elements = used;
-                    rec.capacity = count;
-                }
-            }
             if want.is_map {
-                // #13 map-collision proxy = occupied slots / capacity. A high
-                // occupancy vs. size disparity hints at collisions/chaining.
                 map_collision.add(non_null, count, want.coll_shallow, 0);
                 map_collision_tracked += 1;
             }
-            // Value-type tally: record the backing array's non-null slot targets
-            // against the OWNING collection instance (only under --collections).
-            if collect_attribution && !slot_targets.is_empty() {
+        }
+    }
+
+    // Attribution path (--collections): drain the full vec with slot_targets.
+    for (addr, non_null, count, slot_targets) in obj_array_raw.drain(..) {
+        if let Some(want) = wanted_arrays.get(&addr) {
+            let used = if want.size > 0 { want.size } else { non_null };
+            let wasted = count
+                .saturating_sub(used.min(count))
+                .saturating_mul(obj_ref_width as u64);
+            coll_fill.add(used, count, want.coll_shallow, wasted);
+            coll_fill_tracked += 1;
+            if let Some(rec) = container_records.get_mut(&want.coll_addr) {
+                rec.elements = used;
+                rec.capacity = count;
+            }
+            if want.is_map {
+                map_collision.add(non_null, count, want.coll_shallow, 0);
+                map_collision_tracked += 1;
+            }
+            if !slot_targets.is_empty() {
                 if coll_values.len() < COLL_VALUES_GROUP_CAP {
                     coll_values.push(CollValuesRaw {
                         container_idx: want.coll_idx,
                         kind: want.coll_kind,
                         container_class: want.coll_class.clone(),
-                        // Owner is joined below, once owner_by_addr is built.
                         owner: None,
                         value_indices: slot_targets,
                     });
