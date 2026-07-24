@@ -5,6 +5,10 @@
 //! to a variable-length `int[]` of related object ids (e.g. the outbound
 //! references of an object, or the objects dominated by a dominator).
 //!
+//! See `docs/mat-cache.md` for the overall design and RSS budget discussion.
+//! The memory strategy for [`write_sorted_cb`] (zstd-compressed header spool)
+//! is documented in that file under "zstd-compressed header spool".
+//!
 //! File layout (all big-endian):
 //! ```text
 //!   [body pages] ++ [body footer]              // an IntIndexStreamer @ offset 0
@@ -247,10 +251,9 @@ where
 /// -> io::Result<()>`. The caller pushes pre-sorted values for one entry.
 /// An entry with no values is written as a hole (header == 0).
 ///
-/// Header positions (one i32 per entry) are accumulated via a zstd streaming
-/// encoder into a compact blob. For 513M entries the raw header is ~2 GB but
-/// the non-zero values increase monotonically (deltas ~3-4) so the compressed
-/// size is much smaller, keeping peak RSS well below the raw Vec approach.
+/// Header positions are accumulated via a zstd streaming encoder rather than
+/// a plain `Vec<i32>` to avoid a ~2 GB peak allocation on large dumps. See
+/// `docs/mat-cache.md` for the full RSS strategy.
 pub fn write_sorted_cb<W, F>(w: W, n_entries: usize, mut f: F) -> io::Result<W>
 where
     W: Write,
