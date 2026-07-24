@@ -202,7 +202,10 @@ fn scan_expr(e: &Expr, used: &mut BranchUse) {
         }
         Expr::Aggregate { .. } => {} // no edge-feature attrs in aggregate
         Expr::Case { branches, else_ } => {
-            for (_, then_e) in branches { scan_expr(then_e, used); }
+            for (pred, then_e) in branches {
+                scan_predicate(pred, used);
+                scan_expr(then_e, used);
+            }
             if let Some(e) = else_ { scan_expr(e, used); }
         }
     }

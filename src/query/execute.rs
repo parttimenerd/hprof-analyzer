@@ -494,7 +494,17 @@ fn eval_having_expr(
         }
         Expr::Unary { op, arg } => unary(*op, &eval_having_expr(arg, row, query, columns)),
         Expr::Method { .. } => QueryValue::Null,
-        Expr::Case { .. } => QueryValue::Null,
+        Expr::Case { branches, else_ } => {
+            for (pred, then_expr) in branches {
+                if eval_having_term(pred, row, query, columns) {
+                    return eval_having_expr(then_expr, row, query, columns);
+                }
+            }
+            match else_ {
+                Some(e) => eval_having_expr(e, row, query, columns),
+                None => QueryValue::Null,
+            }
+        }
     }
 }
 
@@ -1944,6 +1954,9 @@ pub(crate) fn compare_values(
 /// anchored `^(?:<pat>)$` to get Java `Pattern.matches` FULL-match semantics
 /// (mirroring [`compile_from_regex`]). A bad pattern is an ACTIONABLE error here,
 /// surfaced at plan time (see `plan_single`), not a per-row panic or silent false.
+///
+/// Also walks CASE WHEN predicates in SELECT expressions, GROUP BY, and HAVING
+/// so that LIKE patterns inside CASE conditions are also pre-compiled.
 pub fn compile_like_regexes(
     query: &Query,
 ) -> Result<std::collections::HashMap<String, regex::Regex>, crate::query::QueryError> {
@@ -1951,7 +1964,63 @@ pub fn compile_like_regexes(
     if let Some(pred) = &query.where_ {
         collect_like_regexes(pred, &mut out)?;
     }
+    // Walk CASE WHEN predicates in SELECT items (LIKE inside CASE conditions).
+    for item in &query.select {
+        collect_like_in_select_item(item, &mut out)?;
+    }
+    // Walk GROUP BY expressions for CASE WHEN LIKE.
+    for expr in &query.group_by {
+        collect_like_in_expr(expr, &mut out)?;
+    }
+    // Walk HAVING predicate.
+    if let Some(pred) = &query.having {
+        collect_like_regexes(pred, &mut out)?;
+    }
     Ok(out)
+}
+
+fn collect_like_in_select_item(
+    item: &crate::query::ast::SelectItem,
+    out: &mut std::collections::HashMap<String, regex::Regex>,
+) -> Result<(), crate::query::QueryError> {
+    use crate::query::ast::SelectItem;
+    match item {
+        SelectItem::Expr(e) => collect_like_in_expr(e, out)?,
+        SelectItem::Aggregate { arg, .. } => collect_like_in_select_item(arg, out)?,
+        _ => {}
+    }
+    Ok(())
+}
+
+fn collect_like_in_expr(
+    e: &crate::query::ast::Expr,
+    out: &mut std::collections::HashMap<String, regex::Regex>,
+) -> Result<(), crate::query::QueryError> {
+    use crate::query::ast::Expr;
+    match e {
+        Expr::Attr(_) | Expr::Lit(_) | Expr::Aggregate { .. } => {}
+        Expr::Binary { lhs, rhs, .. } => {
+            collect_like_in_expr(lhs, out)?;
+            collect_like_in_expr(rhs, out)?;
+        }
+        Expr::Unary { arg, .. } => collect_like_in_expr(arg, out)?,
+        Expr::Method { receiver, args, .. } => {
+            collect_like_in_expr(receiver, out)?;
+            for a in args {
+                collect_like_in_expr(a, out)?;
+            }
+        }
+        Expr::Case { branches, else_ } => {
+            for (cond, then_e) in branches {
+                collect_like_regexes(cond, out)?;
+                collect_like_in_expr(then_e, out)?;
+            }
+            if let Some(e) = else_ {
+                collect_like_in_expr(e, out)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn collect_like_regexes(

@@ -338,7 +338,7 @@ pub fn refwalk_has_length_tail(q: &crate::query::ast::Query) -> bool {
             }
             Expr::Aggregate { .. } => false,
             Expr::Case { branches, else_ } => {
-                branches.iter().any(|(_, then_e)| expr_has(then_e))
+                branches.iter().any(|(pred, then_e)| pred_has(pred) || expr_has(then_e))
                     || else_.as_ref().map_or(false, |e| expr_has(e))
             }
         }
@@ -394,7 +394,7 @@ pub fn refwalk_has_address_tail(q: &crate::query::ast::Query) -> bool {
             }
             Expr::Aggregate { .. } => false,
             Expr::Case { branches, else_ } => {
-                branches.iter().any(|(_, then_e)| expr_has(then_e))
+                branches.iter().any(|(pred, then_e)| pred_has(pred) || expr_has(then_e))
                     || else_.as_ref().map_or(false, |e| expr_has(e))
             }
         }

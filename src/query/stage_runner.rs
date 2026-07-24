@@ -715,9 +715,37 @@ fn expr_has_attr(e: &Expr, pred: &impl Fn(&Attr) -> bool) -> bool {
             expr_has_attr(receiver, pred) || args.iter().any(|a| expr_has_attr(a, pred)),
         Expr::Aggregate { .. } => false,
         Expr::Case { branches, else_ } => {
-            branches.iter().any(|(_, then_e)| expr_has_attr(then_e, pred))
-                || else_.as_ref().map_or(false, |e| expr_has_attr(e, pred))
+            let pred: &dyn Fn(&Attr) -> bool = pred;
+            branches.iter().any(|(cond, then_e)| {
+                pred_has_attr_dyn(cond, pred) || expr_has_attr_dyn(then_e, pred)
+            }) || else_.as_ref().map_or(false, |e| expr_has_attr_dyn(e, pred))
         }
+    }
+}
+fn expr_has_attr_dyn(e: &Expr, pred: &dyn Fn(&Attr) -> bool) -> bool {
+    match e {
+        Expr::Attr(a) => pred(a),
+        Expr::Lit(_) => false,
+        Expr::Binary { lhs, rhs, .. } => expr_has_attr_dyn(lhs, pred) || expr_has_attr_dyn(rhs, pred),
+        Expr::Unary { arg, .. } => expr_has_attr_dyn(arg, pred),
+        Expr::Method { receiver, args, .. } =>
+            expr_has_attr_dyn(receiver, pred) || args.iter().any(|a| expr_has_attr_dyn(a, pred)),
+        Expr::Aggregate { .. } => false,
+        Expr::Case { branches, else_ } => {
+            branches.iter().any(|(cond, then_e)| {
+                pred_has_attr_dyn(cond, pred) || expr_has_attr_dyn(then_e, pred)
+            }) || else_.as_ref().map_or(false, |e| expr_has_attr_dyn(e, pred))
+        }
+    }
+}
+fn pred_has_attr_dyn(p: &Predicate, pred: &dyn Fn(&Attr) -> bool) -> bool {
+    match p {
+        Predicate::And(a, b) | Predicate::Or(a, b) => {
+            pred_has_attr_dyn(a, pred) || pred_has_attr_dyn(b, pred)
+        }
+        Predicate::Not(a) => pred_has_attr_dyn(a, pred),
+        Predicate::Compare { lhs, rhs, .. } => expr_has_attr_dyn(lhs, pred) || expr_has_attr_dyn(rhs, pred),
+        Predicate::InstanceOf(_) | Predicate::InSubquery { .. } => false,
     }
 }
 fn expr_find_attr<'e>(e: &'e Expr, pred: &impl Fn(&Attr) -> bool) -> Option<&'e Attr> {
@@ -732,9 +760,41 @@ fn expr_find_attr<'e>(e: &'e Expr, pred: &impl Fn(&Attr) -> bool) -> Option<&'e 
             expr_find_attr(receiver, pred).or_else(|| args.iter().find_map(|a| expr_find_attr(a, pred))),
         Expr::Aggregate { .. } => None,
         Expr::Case { branches, else_ } => {
-            branches.iter().find_map(|(_, then_e)| expr_find_attr(then_e, pred))
-                .or_else(|| else_.as_ref().and_then(|e| expr_find_attr(e, pred)))
+            let pred: &dyn Fn(&Attr) -> bool = pred;
+            branches.iter().find_map(|(cond, then_e)| {
+                pred_find_attr_dyn(cond, pred).or_else(|| expr_find_attr_dyn(then_e, pred))
+            }).or_else(|| else_.as_ref().and_then(|e| expr_find_attr_dyn(e, pred)))
         }
+    }
+}
+fn expr_find_attr_dyn<'e>(e: &'e Expr, pred: &dyn Fn(&Attr) -> bool) -> Option<&'e Attr> {
+    match e {
+        Expr::Attr(a) if pred(a) => Some(a),
+        Expr::Attr(_) | Expr::Lit(_) => None,
+        Expr::Binary { lhs, rhs, .. } => {
+            expr_find_attr_dyn(lhs, pred).or_else(|| expr_find_attr_dyn(rhs, pred))
+        }
+        Expr::Unary { arg, .. } => expr_find_attr_dyn(arg, pred),
+        Expr::Method { receiver, args, .. } =>
+            expr_find_attr_dyn(receiver, pred).or_else(|| args.iter().find_map(|a| expr_find_attr_dyn(a, pred))),
+        Expr::Aggregate { .. } => None,
+        Expr::Case { branches, else_ } => {
+            branches.iter().find_map(|(cond, then_e)| {
+                pred_find_attr_dyn(cond, pred).or_else(|| expr_find_attr_dyn(then_e, pred))
+            }).or_else(|| else_.as_ref().and_then(|e| expr_find_attr_dyn(e, pred)))
+        }
+    }
+}
+fn pred_find_attr_dyn<'e>(p: &'e Predicate, pred: &dyn Fn(&Attr) -> bool) -> Option<&'e Attr> {
+    match p {
+        Predicate::And(a, b) | Predicate::Or(a, b) => {
+            pred_find_attr_dyn(a, pred).or_else(|| pred_find_attr_dyn(b, pred))
+        }
+        Predicate::Not(a) => pred_find_attr_dyn(a, pred),
+        Predicate::Compare { lhs, rhs, .. } => {
+            expr_find_attr_dyn(lhs, pred).or_else(|| expr_find_attr_dyn(rhs, pred))
+        }
+        Predicate::InstanceOf(_) | Predicate::InSubquery { .. } => None,
     }
 }
 /// "known" (its resolved value passed as `known`), identified by `is_known`.
