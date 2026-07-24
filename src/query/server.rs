@@ -2,6 +2,7 @@
 //! POST OQL to `/` (raw body or {"query":"..."}), get a JSON QueryResult back;
 //! GET /help returns the language reference. Loopback-only, sync tiny_http.
 
+use std::collections::HashMap;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -19,43 +20,52 @@ use crate::query::run::ReplCache;
 /// ariadne caret/underline rendering for tools that want to display it. Never
 /// panics on a bad query — it keeps the server alive and hands structured
 /// errors back.
+///
+/// `prebuilt` carries an already-parsed `(Query, QueryPlan)` from the plan
+/// cache, skipping the parse+plan+optimize work on repeat queries.
 pub fn run_query_json(
     path: &str,
     text: &str,
     path_depth: usize,
     reachable_only: bool,
     cache: &mut Option<ReplCache>,
+    prebuilt: Option<(crate::query::ast::Query, crate::query::plan::QueryPlan)>,
 ) -> serde_json::Value {
     let started = Instant::now();
     let (cleaned, viz, warning) = crate::query::viz::split_directive(text);
 
-    let q = match crate::query::parse::parse(&cleaned) {
-        Ok(q) => q,
-        Err(e) => {
-            let report = crate::query::parse::parse_or_report(&cleaned)
-                .err()
-                .unwrap_or_default();
-            return serde_json::json!({
-                "ok": false,
-                "error": { "kind": "parse", "message": e.0, "report": report }
-            });
-        }
-    };
+    let (q, plan) = if let Some(pair) = prebuilt {
+        pair
+    } else {
+        let q = match crate::query::parse::parse(&cleaned) {
+            Ok(q) => q,
+            Err(e) => {
+                let report = crate::query::parse::parse_or_report(&cleaned)
+                    .err()
+                    .unwrap_or_default();
+                return serde_json::json!({
+                    "ok": false,
+                    "error": { "kind": "parse", "message": e.0, "report": report }
+                });
+            }
+        };
 
-    let plan = match crate::query::plan::plan_query(&q, path_depth) {
-        Ok(p) => p,
-        Err(e) => {
-            return serde_json::json!({
-                "ok": false,
-                "error": { "kind": "plan", "message": e.0 }
-            });
-        }
+        let plan = match crate::query::plan::plan_query(&q, path_depth) {
+            Ok(p) => p,
+            Err(e) => {
+                return serde_json::json!({
+                    "ok": false,
+                    "error": { "kind": "plan", "message": e.0 }
+                });
+            }
+        };
+        let plan = crate::query::optimize::optimize(
+            plan,
+            &q,
+            &crate::query::optimize::SchemaStats::default(),
+        );
+        (q, plan)
     };
-    let plan = crate::query::optimize::optimize(
-        plan,
-        &q,
-        &crate::query::optimize::SchemaStats::default(),
-    );
     let default_name = crate::query::viz::default_view_name(&q);
 
     // When the full analysis pipeline is available (!reachable_only) and the
@@ -168,7 +178,7 @@ pub fn run_query_ndjson(
     reachable_only: bool,
     cache: &mut Option<ReplCache>,
 ) -> (u16, String) {
-    let v = run_query_json(path, text, path_depth, reachable_only, cache);
+    let v = run_query_json(path, text, path_depth, reachable_only, cache, None);
     if v["ok"] != serde_json::json!(true) {
         let line = serde_json::json!({ "kind": "error", "error": v["error"].clone() });
         return (400, format!("{line}\n"));
@@ -255,13 +265,20 @@ fn internal_error(e: io::Error) -> serde_json::Value {
 /// can share (and lazily build) it. Field/scan-path queries rebuild pass1+pass2
 /// per request via run_single_dump — no shared mutable heap state needed.
 /// `help_cache` memoizes the GET /help payload (full Pass1 scan; expensive).
+/// `plan_cache` memoizes parse+plan+optimize results keyed by OQL text; the
+/// plans are query-text-deterministic and path_depth is constant, so caching
+/// is always safe. Capped at PLAN_CACHE_CAP entries; cleared (not LRU-evicted)
+/// when full — OQL queries are short-lived scripts, not a hotspot for eviction.
 pub struct ServerState {
     path: String,
     path_depth: usize,
     reachable_only: AtomicBool,
     cache: Mutex<Option<ReplCache>>,
     help_cache: OnceLock<serde_json::Value>,
+    plan_cache: Mutex<HashMap<String, (crate::query::ast::Query, crate::query::plan::QueryPlan)>>,
 }
+
+const PLAN_CACHE_CAP: usize = 256;
 
 impl ServerState {
     pub fn load(path: &str, path_depth: usize, reachable_only: bool) -> io::Result<Self> {
@@ -271,6 +288,7 @@ impl ServerState {
             reachable_only: AtomicBool::new(reachable_only),
             cache: Mutex::new(None),
             help_cache: OnceLock::new(),
+            plan_cache: Mutex::new(HashMap::new()),
         })
     }
 
@@ -330,9 +348,14 @@ impl ServerState {
                 // guard against. Propagating would cascade — one panicked request
                 // would kill every worker that later touches the cache.
                 let mut guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+                let prebuilt = self.lookup_plan(&oql);
                 let v = run_query_json(
-                    &self.path, &oql, self.path_depth, self.reachable_only.load(Ordering::Relaxed), &mut guard,
+                    &self.path, &oql, self.path_depth, self.reachable_only.load(Ordering::Relaxed), &mut guard, prebuilt,
                 );
+                if v["ok"] == serde_json::json!(true) {
+                    // Cache the plan on success so subsequent identical queries skip parse+plan.
+                    self.store_plan(&oql);
+                }
                 let status = if v["ok"] == serde_json::json!(true) { 200 } else { 400 };
                 (status, v.to_string(), "application/json")
             }
@@ -345,8 +368,9 @@ impl ServerState {
                     }
                 };
                 let mut guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
-                let (status, body) = run_query_ndjson(
-                    &self.path, &oql, self.path_depth, self.reachable_only.load(Ordering::Relaxed), &mut guard,
+                let prebuilt = self.lookup_plan(&oql);
+                let (status, body) = run_query_ndjson_prebuilt(
+                    &self.path, &oql, self.path_depth, self.reachable_only.load(Ordering::Relaxed), &mut guard, prebuilt,
                 );
                 (status, body, "application/x-ndjson")
             }
@@ -400,9 +424,77 @@ impl ServerState {
             ),
         }
     }
+
+    /// Return a cached `(Query, QueryPlan)` clone for `oql_text`, if one exists.
+    /// Returns `None` when the cache is empty or does not contain this text.
+    fn lookup_plan(
+        &self,
+        oql_text: &str,
+    ) -> Option<(crate::query::ast::Query, crate::query::plan::QueryPlan)> {
+        let guard = self.plan_cache.lock().unwrap_or_else(|e| e.into_inner());
+        guard.get(oql_text).cloned()
+    }
+
+    /// Build the plan for `oql_text` and insert it into the plan cache.
+    /// If the cache is at PLAN_CACHE_CAP, it is cleared first (simple global
+    /// eviction — OQL servers serve a bounded set of repeated queries). Errors
+    /// (unparseable OQL) are silently ignored: parse failure surfaces naturally
+    /// through `run_query_json`, not here.
+    fn store_plan(&self, oql_text: &str) {
+        let (cleaned, _, _) = crate::query::viz::split_directive(oql_text);
+        let q = match crate::query::parse::parse(&cleaned) {
+            Ok(q) => q,
+            Err(_) => return,
+        };
+        let plan = match crate::query::plan::plan_query(&q, self.path_depth) {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        let plan = crate::query::optimize::optimize(
+            plan,
+            &q,
+            &crate::query::optimize::SchemaStats::default(),
+        );
+        let mut guard = self.plan_cache.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.len() >= PLAN_CACHE_CAP {
+            guard.clear();
+        }
+        guard.insert(oql_text.to_string(), (q, plan));
+    }
 }
 
-/// Upper bound on the OQL text the server will attempt to run. Real queries are
+/// NDJSON variant of `run_query_json` that accepts a pre-built plan.
+fn run_query_ndjson_prebuilt(
+    path: &str,
+    text: &str,
+    path_depth: usize,
+    reachable_only: bool,
+    cache: &mut Option<ReplCache>,
+    prebuilt: Option<(crate::query::ast::Query, crate::query::plan::QueryPlan)>,
+) -> (u16, String) {
+    let v = run_query_json(path, text, path_depth, reachable_only, cache, prebuilt);
+    if v["ok"] != serde_json::json!(true) {
+        let line = serde_json::json!({ "kind": "error", "error": v["error"].clone() });
+        return (400, format!("{line}\n"));
+    }
+    let r = &v["result"];
+    let mut out = String::new();
+    let meta = serde_json::json!({
+        "kind": "meta",
+        "name": r["name"], "columns": r["columns"],
+        "row_count": r["row_count"], "truncated": r["truncated"],
+        "elapsed_ms": r["elapsed_ms"], "note": r.get("note"),
+    });
+    out.push_str(&meta.to_string());
+    out.push('\n');
+    if let Some(rows) = r["rows"].as_array() {
+        for row in rows {
+            out.push_str(&serde_json::json!({ "kind": "row", "v": row }).to_string());
+            out.push('\n');
+        }
+    }
+    (200, out)
+}
 /// well under a kilobyte; this guards against a client posting a multi-megabyte
 /// body, which the parser would otherwise echo back verbatim in its error
 /// message (a response-size amplification). 64 KiB is generous headroom.
@@ -507,7 +599,7 @@ mod tests {
     #[test]
     fn ok_query_returns_queryresult_json() {
         let mut cache = None;
-        let v = run_query_json(FIXTURE, "SELECT @objectAddress FROM java.lang.Thread", 5, true, &mut cache);
+        let v = run_query_json(FIXTURE, "SELECT @objectAddress FROM java.lang.Thread", 5, true, &mut cache, None);
         assert_eq!(v["ok"], serde_json::json!(true), "success flag, got: {v}");
         assert!(v["result"]["row_count"].as_u64().unwrap() > 0, "expected some rows, got: {v}");
         assert!(v["result"]["columns"].is_array(), "columns present, got: {v}");
@@ -516,7 +608,7 @@ mod tests {
     #[test]
     fn parse_error_returns_structured_json_with_report() {
         let mut cache = None;
-        let v = run_query_json(FIXTURE, "SELCT bogus", 5, true, &mut cache);
+        let v = run_query_json(FIXTURE, "SELCT bogus", 5, true, &mut cache, None);
         assert_eq!(v["ok"], serde_json::json!(false), "failure flag, got: {v}");
         assert_eq!(v["error"]["kind"], serde_json::json!("parse"), "parse kind, got: {v}");
         assert!(!v["error"]["message"].as_str().unwrap().is_empty(), "plain message present, got: {v}");
@@ -526,7 +618,7 @@ mod tests {
     #[test]
     fn plan_error_returns_structured_json() {
         let mut cache = None;
-        let v = run_query_json(FIXTURE, "SELECT s.nope() FROM java.lang.String s", 5, true, &mut cache);
+        let v = run_query_json(FIXTURE, "SELECT s.nope() FROM java.lang.String s", 5, true, &mut cache, None);
         assert_eq!(v["ok"], serde_json::json!(false), "failure flag, got: {v}");
         assert_eq!(v["error"]["kind"], serde_json::json!("plan"), "plan kind, got: {v}");
     }
@@ -572,7 +664,7 @@ mod tests {
     #[test]
     fn parse_error_message_includes_suggestion() {
         let mut cache = None;
-        let v = run_query_json(FIXTURE, "SELCT x FROM java.lang.Thread", 5, true, &mut cache);
+        let v = run_query_json(FIXTURE, "SELCT x FROM java.lang.Thread", 5, true, &mut cache, None);
         assert_eq!(v["error"]["kind"], serde_json::json!("parse"));
         assert!(v["error"]["message"].as_str().unwrap().contains("SELECT"), "suggestion in message: {v}");
     }
@@ -719,7 +811,7 @@ mod tests {
     #[test]
     fn ok_query_reports_elapsed_ms() {
         let mut cache = None;
-        let v = run_query_json(FIXTURE, "SELECT @objectAddress FROM java.lang.Thread", 5, true, &mut cache);
+        let v = run_query_json(FIXTURE, "SELECT @objectAddress FROM java.lang.Thread", 5, true, &mut cache, None);
         assert_eq!(v["ok"], serde_json::json!(true), "ok: {v}");
         assert!(v["result"]["elapsed_ms"].is_u64(), "elapsed_ms present & numeric: {v}");
     }
@@ -766,5 +858,47 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(body)
             .unwrap_or_else(|e| panic!("resp body not JSON ({e}); full response:\n{resp}"));
         assert_eq!(v["ok"], serde_json::json!(true), "socket round-trip ok, got: {v}");
+    }
+
+    #[test]
+    fn plan_cache_hit_produces_same_result() {
+        let state = ServerState::load(FIXTURE, 5, true).expect("load");
+        let oql = "SELECT @objectAddress FROM java.lang.Thread";
+
+        // First call: populates plan cache
+        let (s1, b1, _) = state.route("POST", "/", oql);
+        assert_eq!(s1, 200, "first call: {b1}");
+
+        // Verify plan was stored
+        assert!(
+            state.plan_cache.lock().unwrap().contains_key(oql),
+            "plan should be cached after successful query"
+        );
+
+        // Second call: should use cached plan
+        let (s2, b2, _) = state.route("POST", "/", oql);
+        assert_eq!(s2, 200, "second call: {b2}");
+
+        // Both results should have same row_count (modulo elapsed_ms)
+        let mut v1: serde_json::Value = serde_json::from_str(&b1).unwrap();
+        let mut v2: serde_json::Value = serde_json::from_str(&b2).unwrap();
+        v1["result"]["elapsed_ms"] = serde_json::Value::Null;
+        v2["result"]["elapsed_ms"] = serde_json::Value::Null;
+        assert_eq!(v1["result"]["row_count"], v2["result"]["row_count"],
+            "cached plan must produce same row count");
+    }
+
+    #[test]
+    fn plan_cache_does_not_cache_parse_errors() {
+        let state = ServerState::load(FIXTURE, 5, true).expect("load");
+        let bad_oql = "SELCT bogus FROM nowhere";
+        let (status, _, _) = state.route("POST", "/", bad_oql);
+        assert_eq!(status, 400, "bad query -> 400");
+        // A failed parse must not pollute the plan cache
+        let guard = state.plan_cache.lock().unwrap();
+        assert!(
+            !guard.contains_key(bad_oql),
+            "parse errors must not be cached"
+        );
     }
 }
