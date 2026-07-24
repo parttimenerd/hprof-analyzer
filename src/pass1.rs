@@ -514,7 +514,6 @@ fn scan_heap_segment(
                 thread_serial_to_obj_id.insert(thread_serial, obj_id);
             }
             heap::CLASS_DUMP => {
-                let record_off = r.bytes_consumed() - 1; // sub-tag byte position
                 let (class_addr, consumed) = read_class_dump(r, id_size, class_map)?;
                 sub_remaining(&mut remaining, consumed)?;
                 *class_dump_count += 1;
@@ -533,7 +532,9 @@ fn scan_heap_segment(
                 // CLASS_DUMP has no per-object alloc serial; push 0 so the array
                 // stays 1:1 with the object ordering.
                 tmp_alloc_serial.push(0);
-                tmp_hprof_offsets.push(record_off);
+                // MAT sets o2hprof=0 for class objects (they are represented via
+                // ClassImpl, not raw HPROF bytes). Match that convention.
+                tmp_hprof_offsets.push(0);
             }
             heap::INSTANCE_DUMP => {
                 let record_off = r.bytes_consumed() - 1; // sub-tag byte position

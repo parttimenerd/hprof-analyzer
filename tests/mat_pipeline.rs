@@ -6,6 +6,12 @@
 //! when they are absent so CI without the dump stays green. Point the test at
 //! the built binary via `CARGO_BIN_EXE_hprof-analyzer`; run under `--release`
 //! to keep the ~78 MB dump analysis under a minute.
+//!
+//! Also contains `mat_multi_fixture_equivalence` which runs our tool AND Eclipse
+//! MAT itself on all 5 embedded test fixtures in `tests/fixtures/`, then does a
+//! byte-by-byte comparison and verifies MAT warm-load speedup.  Gated on
+//! `MAT_BINARY` env var or auto-detected from known install paths; skips when
+//! MAT is absent.
 
 use std::path::Path;
 use std::process::Command;
@@ -236,3 +242,369 @@ fn mat_phase2_outputs_emitted() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Multi-fixture equivalence + MAT warm-load speedup test
+// ---------------------------------------------------------------------------
+
+/// Detect the Eclipse MAT binary from `MAT_BINARY` env var or known paths.
+fn find_mat_binary() -> Option<std::path::PathBuf> {
+    if let Ok(p) = std::env::var("MAT_BINARY") {
+        let path = std::path::PathBuf::from(&p);
+        if path.exists() {
+            return Some(path);
+        }
+        eprintln!("MAT_BINARY={p} not found, trying auto-detect");
+    }
+    let candidates: Vec<std::path::PathBuf> = {
+        let mut v = vec![
+            std::path::PathBuf::from(
+                "/Applications/MemoryAnalyzer.app/Contents/MacOS/MemoryAnalyzer",
+            ),
+        ];
+        if let Some(home) = std::env::var_os("HOME") {
+            v.push(
+                std::path::Path::new(&home)
+                    .join("Applications/MemoryAnalyzer.app/Contents/MacOS/MemoryAnalyzer"),
+            );
+            v.push(std::path::Path::new(&home).join("mat/MemoryAnalyzer"));
+        }
+        v.push(std::path::PathBuf::from("/opt/mat/MemoryAnalyzer"));
+        v
+    };
+    candidates.into_iter().find(|p| p.exists())
+}
+
+/// Run our `mat caches` subcommand on `hprof` writing into `out_dir`.
+fn run_our_tool(hprof: &Path, out_dir: &Path, mat_bin: &Path) -> std::time::Duration {
+    let bin = env!("CARGO_BIN_EXE_hprof-analyzer");
+    let t = std::time::Instant::now();
+    let status = Command::new(bin)
+        .arg("mat")
+        .arg("caches")
+        .arg(hprof)
+        .arg(out_dir)
+        .arg("--mat-binary")
+        .arg(mat_bin)
+        .status()
+        .expect("spawn hprof-analyzer mat caches");
+    let elapsed = t.elapsed();
+    assert!(
+        status.success(),
+        "hprof-analyzer mat caches failed: {status:?}"
+    );
+    elapsed
+}
+
+/// Run Eclipse MAT cold-parse on `hprof` (which must be the only file in its dir,
+/// so MAT starts with no pre-existing index). Returns elapsed wall time.
+fn run_mat_cold(mat_bin: &Path, hprof: &Path, report_spec: &str) -> std::time::Duration {
+    let t = std::time::Instant::now();
+    let status = Command::new(mat_bin)
+        .args(["-consolelog", "-nosplash", "-application"])
+        .arg("org.eclipse.mat.api.parse")
+        .arg(hprof)
+        .arg(report_spec)
+        .status()
+        .expect("spawn MAT cold");
+    let elapsed = t.elapsed();
+    assert!(
+        status.success(),
+        "MAT cold parse exited non-zero: {status:?}"
+    );
+    elapsed
+}
+
+/// Run Eclipse MAT with pre-built index files (warm load). Touches all index
+/// files so they are newer than the hprof before invoking MAT.
+fn run_mat_warm(mat_bin: &Path, hprof: &Path, out_dir: &Path, report_spec: &str) -> std::time::Duration {
+    // Touch all index files so MAT's freshness check passes.
+    for entry in std::fs::read_dir(out_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+    {
+        let _ = std::fs::File::options()
+            .write(true)
+            .open(entry.path())
+            .and_then(|f| f.set_modified(std::time::SystemTime::now()));
+    }
+    let t = std::time::Instant::now();
+    let status = Command::new(mat_bin)
+        .args(["-consolelog", "-nosplash", "-application"])
+        .arg("org.eclipse.mat.api.parse")
+        .arg(hprof)
+        .arg(report_spec)
+        .status()
+        .expect("spawn MAT warm");
+    let elapsed = t.elapsed();
+    assert!(
+        status.success(),
+        "MAT warm load exited non-zero: {status:?}"
+    );
+    elapsed
+}
+
+/// Kinds that must be byte-identical to MAT's own output.
+const EXACT_KINDS: &[&str] = &["idx", "o2hprof"];
+
+/// Kinds where we know there are structural differences (documented, not regressions).
+/// We verify these are emitted and have non-zero size, but don't assert byte-equality.
+const APPROX_KINDS: &[&str] = &[
+    "a2s", "o2c", "domIn", "o2ret", "outbound", "inbound", "domOut", "i2sv2",
+];
+
+/// Compare our output in `our_dir` against MAT's output in `mat_dir` for one fixture.
+/// Returns `(exact_match_count, total_checked, diff_summary)`.
+fn compare_for_fixture(
+    prefix: &str,
+    our_dir: &Path,
+    mat_dir: &Path,
+) -> (usize, usize, Vec<String>) {
+    let mut exact = 0usize;
+    let mut total = 0usize;
+    let mut diffs: Vec<String> = Vec::new();
+
+    for &kind in EXACT_KINDS {
+        let fname = format!("{prefix}.{kind}.index");
+        let ours_path = our_dir.join(&fname);
+        let mat_path = mat_dir.join(&fname);
+        total += 1;
+        let ours = match std::fs::read(&ours_path) {
+            Ok(b) => b,
+            Err(e) => {
+                diffs.push(format!("{kind}: MISSING ours ({e})"));
+                continue;
+            }
+        };
+        let mat = match std::fs::read(&mat_path) {
+            Ok(b) => b,
+            Err(e) => {
+                diffs.push(format!("{kind}: MISSING mat ({e})"));
+                continue;
+            }
+        };
+        if ours == mat {
+            exact += 1;
+        } else {
+            let first = ours
+                .iter()
+                .zip(&mat)
+                .position(|(a, b)| a != b)
+                .unwrap_or_else(|| ours.len().min(mat.len()));
+            diffs.push(format!(
+                "{kind}: DIFFER ours.len={} mat.len={} first_diff={}",
+                ours.len(),
+                mat.len(),
+                first
+            ));
+        }
+    }
+
+    for &kind in APPROX_KINDS {
+        let fname = format!("{prefix}.{kind}.index");
+        let ours_path = our_dir.join(&fname);
+        total += 1;
+        match std::fs::metadata(&ours_path) {
+            Ok(m) if m.len() > 0 => {
+                exact += 1;
+            }
+            Ok(_) => {
+                diffs.push(format!("{kind}: EMITTED but empty"));
+            }
+            Err(e) => {
+                diffs.push(format!("{kind}: MISSING ({e})"));
+            }
+        }
+    }
+
+    // .index (Java serialization): just check it starts with magic bytes.
+    {
+        let fname = format!("{prefix}.index");
+        let ours_path = our_dir.join(&fname);
+        total += 1;
+        match std::fs::read(&ours_path) {
+            Ok(b) if b.starts_with(&[0xAC, 0xED, 0x00, 0x05]) => {
+                exact += 1;
+            }
+            Ok(b) => {
+                diffs.push(format!("index: bad magic {:?}", &b[..4.min(b.len())]));
+            }
+            Err(e) => {
+                diffs.push(format!("index: MISSING ({e})"));
+            }
+        }
+    }
+
+    // .threads: check it is non-empty.
+    {
+        let fname = format!("{prefix}.threads");
+        let ours_path = our_dir.join(&fname);
+        total += 1;
+        match std::fs::metadata(&ours_path) {
+            Ok(m) if m.len() > 0 => {
+                exact += 1;
+            }
+            Ok(_) => {
+                diffs.push("threads: EMITTED but empty".to_string());
+            }
+            Err(e) => {
+                diffs.push(format!("threads: MISSING ({e})"));
+            }
+        }
+    }
+
+    (exact, total, diffs)
+}
+
+/// Multi-fixture equivalence + MAT warm-load speedup test.
+///
+/// For every `.hprof` in `tests/fixtures/`:
+///   1. Run our `mat caches` subcommand to generate all 12 cache files.
+///   2. Copy the hprof to a fresh temp dir and run MAT cold (full parse).
+///   3. Compare our files against MAT's: assert byte-identical for `idx` and
+///      `o2hprof`; assert non-empty for the rest.
+///   4. Run MAT warm (using our files); assert it is at least 1.5× faster than
+///      the cold parse.
+///
+/// Gated on MAT being present (`MAT_BINARY` env or auto-detect); skips cleanly
+/// when absent.
+#[test]
+fn mat_multi_fixture_equivalence() {
+    let mat_bin = match find_mat_binary() {
+        Some(p) => p,
+        None => {
+            eprintln!(
+                "skip mat_multi_fixture_equivalence: no MAT binary found \
+                 (set MAT_BINARY env or install to /Applications)"
+            );
+            return;
+        }
+    };
+    eprintln!("MAT binary: {}", mat_bin.display());
+
+    let fixture_dir = Path::new("tests/fixtures");
+    let hprof_files: Vec<_> = std::fs::read_dir(fixture_dir)
+        .expect("read tests/fixtures")
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.path()
+                .extension()
+                .map(|x| x == "hprof")
+                .unwrap_or(false)
+        })
+        .map(|e| e.path())
+        .collect();
+
+    assert!(
+        !hprof_files.is_empty(),
+        "no .hprof files found in tests/fixtures/"
+    );
+
+    let report_spec = "org.eclipse.mat.api:suspects";
+    let base_tmp = std::env::temp_dir().join("hprof_mat_multi");
+    let _ = std::fs::remove_dir_all(&base_tmp);
+    std::fs::create_dir_all(&base_tmp).expect("create base_tmp");
+
+    let mut all_pass = true;
+    let mut speedup_results: Vec<(String, std::time::Duration, std::time::Duration)> = Vec::new();
+
+    for hprof_path in &hprof_files {
+        let stem = hprof_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("dump");
+        eprintln!("\n=== {stem} ===");
+
+        // Directories for this fixture.
+        let our_dir = base_tmp.join(format!("{stem}_ours"));
+        let mat_dir = base_tmp.join(format!("{stem}_mat"));
+        let _ = std::fs::remove_dir_all(&our_dir);
+        let _ = std::fs::remove_dir_all(&mat_dir);
+        std::fs::create_dir_all(&our_dir).expect("create our_dir");
+        std::fs::create_dir_all(&mat_dir).expect("create mat_dir");
+
+        // Step 1: run our tool.
+        let our_elapsed = run_our_tool(hprof_path, &our_dir, &mat_bin);
+        eprintln!("  our tool: {:.2}s", our_elapsed.as_secs_f64());
+
+        // Step 2: copy hprof to mat_dir and run MAT cold.
+        let hprof_in_mat = mat_dir.join(hprof_path.file_name().unwrap());
+        std::fs::copy(hprof_path, &hprof_in_mat).expect("copy hprof to mat_dir");
+        // Sleep 1s so index files will be strictly newer than the hprof copy.
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        let cold_elapsed = run_mat_cold(&mat_bin, &hprof_in_mat, report_spec);
+        eprintln!("  MAT cold: {:.2}s", cold_elapsed.as_secs_f64());
+
+        // Step 3: compare ours vs MAT for the index kinds we care about.
+        let (exact, total, diffs) = compare_for_fixture(stem, &our_dir, &mat_dir);
+        eprintln!("  parity: {exact}/{total} OK");
+        for d in &diffs {
+            eprintln!("    DIFF: {d}");
+        }
+
+        // idx and o2hprof must be byte-identical (these have no structural gaps).
+        for &kind in EXACT_KINDS {
+            let fname = format!("{stem}.{kind}.index");
+            let ours_bytes = std::fs::read(our_dir.join(&fname))
+                .unwrap_or_else(|_| panic!("{kind} not emitted for {stem}"));
+            let mat_bytes = std::fs::read(mat_dir.join(&fname))
+                .unwrap_or_else(|_| panic!("{kind} not in MAT output for {stem}"));
+            if ours_bytes != mat_bytes {
+                let first = ours_bytes
+                    .iter()
+                    .zip(&mat_bytes)
+                    .position(|(a, b)| a != b)
+                    .unwrap_or_else(|| ours_bytes.len().min(mat_bytes.len()));
+                eprintln!(
+                    "  FAIL {kind}: ours={} mat={} first_diff={}",
+                    ours_bytes.len(),
+                    mat_bytes.len(),
+                    first
+                );
+                all_pass = false;
+            } else {
+                eprintln!("  OK {kind}: byte-identical ({} bytes)", ours_bytes.len());
+            }
+        }
+
+        // Step 4: warm load with our files (copy ours into mat_dir, touch).
+        // Copy each file we generated into mat_dir to replace or supplement MAT's.
+        for entry in std::fs::read_dir(&our_dir).unwrap().filter_map(|e| e.ok()) {
+            let dest = mat_dir.join(entry.file_name());
+            std::fs::copy(entry.path(), &dest).ok();
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        let warm_elapsed = run_mat_warm(&mat_bin, &hprof_in_mat, &mat_dir, report_spec);
+        eprintln!("  MAT warm (ours): {:.2}s", warm_elapsed.as_secs_f64());
+
+        speedup_results.push((stem.to_string(), cold_elapsed, warm_elapsed));
+
+        // Assert warm is at least 1.5× faster than cold for non-trivial dumps.
+        // Very small dumps (< 5s cold) may not show measurable speedup due to
+        // JVM startup overhead dominating; skip the assertion for those.
+        if cold_elapsed.as_secs_f64() >= 5.0 {
+            let speedup = cold_elapsed.as_secs_f64() / warm_elapsed.as_secs_f64();
+            assert!(
+                speedup >= 1.5,
+                "{stem}: warm ({:.2}s) was not ≥1.5× faster than cold ({:.2}s); speedup={:.2}×",
+                warm_elapsed.as_secs_f64(),
+                cold_elapsed.as_secs_f64(),
+                speedup
+            );
+        }
+    }
+
+    eprintln!("\n=== Speedup summary ===");
+    for (name, cold, warm) in &speedup_results {
+        let speedup = cold.as_secs_f64() / warm.as_secs_f64();
+        eprintln!(
+            "  {name}: cold={:.2}s warm={:.2}s speedup={:.2}×",
+            cold.as_secs_f64(),
+            warm.as_secs_f64(),
+            speedup
+        );
+    }
+
+    assert!(all_pass, "byte-identical assertions failed for idx/o2hprof on some fixtures");
+}
+
