@@ -5311,3 +5311,25 @@ fn array_index_out_of_bounds_is_null() {
     assert!(out.contains("elem"), "expected 'elem' column header, got: {out}");
     assert!(!out.to_lowercase().contains("error"), "unexpected error in output, got: {out}");
 }
+
+#[test]
+fn array_slice_returns_subarray_string() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT s.value[0:3] AS slc FROM java.lang.String s LIMIT 5",
+    );
+    assert!(out.contains("slc"), "expected 'slc' column header, got: {out}");
+    assert!(!out.to_lowercase().contains("error"), "unexpected error in output, got: {out}");
+}
+
+#[test]
+fn array_slice_oob_end_clamps_gracefully() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT s.value[0:999999] AS slc FROM java.lang.String s LIMIT 3",
+    );
+    assert!(out.contains("slc"), "expected 'slc' column header, got: {out}");
+    assert!(!out.to_lowercase().contains("error"), "unexpected error in output, got: {out}");
+}
