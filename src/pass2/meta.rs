@@ -468,19 +468,17 @@ pub(crate) type SystemProps = (Vec<(String, String)>, Option<String>);
 /// Capture java.lang.System's static `props` object and decode it into a sorted
 /// (key, value) list of system properties plus a derived JVM version.
 ///
-/// Strategy (all passes bounded — see `MAX_PROP_ENTRIES`):
-///   P0: scan CLASS_DUMP records for the class named `java/lang/System`; read
-///       its static object field `props` → the props object address.
-///   Round 1 (collect_blobs): props instance → its Hashtable `table` Object[]
-///       array address (one instance + one obj-array collected together).
-///   Round 2 (collect_blobs): ALL Hashtable$Entry instances (from table slots)
-///       + all key/value String instances + all backing PRIM_ARRAYs, collected
-///       in ONE pass. Entry chain traversal happens in-memory after this pass,
-///       so no iterative file scans for chains are needed.
+/// `prefetched_props_addr`: the address of the `props` object, captured during
+/// the 2a CLASS_DUMP scan. When non-zero, the P0 `scan_class_dumps` file pass
+/// is skipped entirely. Falls back to `scan_class_dumps` when zero.
 ///
 /// Returns `(sorted (key,value) pairs, jvm_version)`. Falls back to empty on
 /// any layout mismatch rather than emitting garbage.
-pub(crate) fn resolve_system_properties(path: &str, p1: &Pass1) -> io::Result<SystemProps> {
+pub(crate) fn resolve_system_properties(
+    path: &str,
+    p1: &Pass1,
+    prefetched_props_addr: u64,
+) -> io::Result<SystemProps> {
     let empty = (Vec::new(), None);
     let id_size = p1.id_size;
     let obj_ref_width = id_size as usize;
@@ -488,29 +486,36 @@ pub(crate) fn resolve_system_properties(path: &str, p1: &Pass1) -> io::Result<Sy
     let strings = &p1.strings;
 
     // ── P0: locate java/lang/System's static `props` object address ──────────
-    let mut props_addr: u64 = 0;
-    scan_class_dumps(path, id_size, |class_obj_id, statics| {
-        if props_addr != 0 {
-            return;
-        }
-        let cname = class_map
-            .get(&class_obj_id)
-            .and_then(|ci| strings.get(&ci.name_id))
-            .map(|s| s.as_str())
-            .unwrap_or("");
-        if cname != "java/lang/System" {
-            return;
-        }
-        for &(name_id, type_code, value) in statics {
-            if HprofType::from_code(type_code) != Some(HprofType::Object) {
-                continue;
+    // Use the prefetched value when available (captured during 2a scan), falling
+    // back to a full scan_class_dumps pass only when not captured.
+    let props_addr = if prefetched_props_addr != 0 {
+        prefetched_props_addr
+    } else {
+        let mut found: u64 = 0;
+        scan_class_dumps(path, id_size, |class_obj_id, statics| {
+            if found != 0 {
+                return;
             }
-            let fname = strings.get(&name_id).map(|s| s.as_str()).unwrap_or("");
-            if fname == "props" && value != 0 {
-                props_addr = value;
+            let cname = class_map
+                .get(&class_obj_id)
+                .and_then(|ci| strings.get(&ci.name_id))
+                .map(|s| s.as_str())
+                .unwrap_or("");
+            if cname != "java/lang/System" {
+                return;
             }
-        }
-    })?;
+            for &(name_id, type_code, value) in statics {
+                if HprofType::from_code(type_code) != Some(HprofType::Object) {
+                    continue;
+                }
+                let fname = strings.get(&name_id).map(|s| s.as_str()).unwrap_or("");
+                if fname == "props" && value != 0 {
+                    found = value;
+                }
+            }
+        })?;
+        found
+    };
     if props_addr == 0 {
         return Ok(empty);
     }

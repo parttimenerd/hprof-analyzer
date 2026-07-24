@@ -359,6 +359,30 @@ impl Pass2 {
             p1.thread_serial_to_obj_id.values().copied().collect();
         let mut captured_thread_blobs: HashMap<u64, (u64, Vec<u8>)> = HashMap::new();
 
+        // Pre-locate java/lang/System class addr and "props" name_id so we can
+        // capture the props static field address during the 2a CLASS_DUMP scan.
+        let (system_class_addr, props_name_id) = {
+            let props_nid = p1
+                .strings
+                .iter()
+                .find(|(_, v)| v.as_str() == "props")
+                .map(|(&k, _)| k)
+                .unwrap_or(0);
+            let system_caddr = p1
+                .class_map
+                .iter()
+                .find(|(_, ci)| {
+                    p1.strings
+                        .get(&ci.name_id)
+                        .map(|s| s.as_str() == "java/lang/System")
+                        .unwrap_or(false)
+                })
+                .map(|(&a, _)| a)
+                .unwrap_or(0);
+            (system_caddr, props_nid)
+        };
+        let mut captured_props_addr: u64 = 0;
+
         // ── Sub-pass 2a scan ─────────────────────────────────────────────
         {
             let mut r = HprofReader::open(path)?;
@@ -389,6 +413,9 @@ impl Pass2 {
                             &mut captured_thread_blobs,
                             &std::collections::HashSet::new(),
                             &mut HashMap::new(),
+                            system_class_addr,
+                            props_name_id,
+                            &mut captured_props_addr,
                         )?;
                     }
                     tags::HEAP_DUMP_END => break,
@@ -627,7 +654,8 @@ impl Pass2 {
         // stays off the per-object RSS budget on multi-GB dumps. Derives a JVM
         // version from the decoded properties. Falls back to empty/None (never
         // garbage) if the layout does not match the Hashtable form.
-        let (system_properties, jvm_version) = resolve_system_properties(path, &p1)?;
+        let (system_properties, jvm_version) =
+            resolve_system_properties(path, &p1, captured_props_addr)?;
         t_phase!("system_props done");
 
         // Always-on field-decode views (collections, arrays, references). One
@@ -1013,6 +1041,9 @@ impl Pass2 {
         captured_inst: &mut HashMap<u64, (u64, Vec<u8>)>,
         capture_obj: &std::collections::HashSet<u64>,
         captured_obj: &mut HashMap<u64, Vec<u8>>,
+        system_class_addr: u64,
+        props_name_id: u64,
+        captured_props_addr: &mut u64,
     ) -> io::Result<()> {
         let ids = id_size as u64;
         let mut cache = crate::id_map::IndexCache::new();
@@ -1067,8 +1098,16 @@ impl Pass2 {
                     checked_sub!(remaining, ids + 8);
                 }
                 heap::CLASS_DUMP => {
-                    let consumed =
-                        Self::count_class_dump_edges(r, id_size, id_map, out_degree, in_degree)?;
+                    let consumed = Self::count_class_dump_edges(
+                        r,
+                        id_size,
+                        id_map,
+                        out_degree,
+                        in_degree,
+                        system_class_addr,
+                        props_name_id,
+                        captured_props_addr,
+                    )?;
                     checked_sub!(remaining, consumed);
                 }
                 heap::INSTANCE_DUMP => {
@@ -1506,12 +1545,18 @@ impl Pass2 {
     /// COUNT-phase counterpart to `fill_class_dump_edges`: counts a class
     /// object's structural edges (→ superclass, → loader, → each Object-typed
     /// static field) into the degree arrays. Returns bytes consumed.
+    /// If `system_class_addr != 0` and this CLASS_DUMP is for that class, also
+    /// captures the static Object field with name_id `props_name_id` into
+    /// `captured_props_addr` (used to locate java/lang/System.props).
     fn count_class_dump_edges(
         r: &mut HprofReader,
         id_size: u8,
         id_map: &crate::id_map::IdMap,
         out_degree: &mut Vec<u32>,
         in_degree: &mut Vec<u32>,
+        system_class_addr: u64,
+        props_name_id: u64,
+        captured_props_addr: &mut u64,
     ) -> io::Result<u64> {
         let ids = id_size as u64;
         let mut consumed = 0u64;
@@ -1561,8 +1606,11 @@ impl Pass2 {
 
         let sc = r.u2()? as u64;
         consumed += 2;
+        let capture_props = system_class_addr != 0
+            && class_addr == system_class_addr
+            && props_name_id != 0;
         for _ in 0..sc {
-            r.skip(ids)?;
+            let name_id = r.id()?;
             consumed += ids;
             let tp = r.u1()?;
             consumed += 1;
@@ -1571,6 +1619,9 @@ impl Pass2 {
                 let ref_val = read_id_from_reader(r, id_size)?;
                 consumed += vs;
                 count_edge!(ref_val);
+                if capture_props && name_id == props_name_id && ref_val != 0 {
+                    *captured_props_addr = ref_val;
+                }
             } else {
                 r.skip(vs)?;
                 consumed += vs;
