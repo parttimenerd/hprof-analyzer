@@ -76,6 +76,8 @@ pub struct AnalyzeOptions {
     /// `ParentClass.fieldName → ChildClass`. Gated: adds ~2 bytes per edge
     /// (~100–500 MB extra RSS on multi-GB dumps).
     pub ref_paths: bool,
+    /// Skip build_model + render. Used by `mat caches` which discards the report.
+    pub skip_report: bool,
 }
 
 #[cfg(test)]
@@ -355,6 +357,7 @@ impl DetailLevel {
             collection_config: None,
             coll_descs: Vec::new(),
             ref_paths: false,
+            skip_report: false,
         }
     }
 }
@@ -538,7 +541,7 @@ fn main() {
                     OutputFormat::Md,
                     false,
                     cvec::Codec::Zstd3,
-                    DetailLevel::Default.options(),
+                    AnalyzeOptions { skip_report: true, ..DetailLevel::Default.options() },
                     Some(mat_emitter),
                 ) {
                     fail(e);
@@ -1508,14 +1511,10 @@ fn run(
 
     // Restore + aggregate + free the alloc stack serials in a bounded window
     // right after compute_retained (needs g.shallow + g.retained, both live
-    // now). RSS here is well below the rpo/inbound/dominator binding peak, so
-    // the transient decode buffer stays under it. We decompress to the raw
-    // u32-byte buffer and aggregate by STREAMING over it (no second ~2GB
-    // Vec<u32>): restore() would hold both the decompressed bytes AND the
-    // collected Vec (~4GB transient — the spike that defeated the naive
-    // placement). Only the KB-scale AllocSites summary is carried into
-    // build_model, so the report phase never holds the per-object array.
-    let alloc_sites = if let Some(c) = alloc_serial_c {
+    // now). Skipped entirely when skip_report is set (mat caches mode).
+    let alloc_sites = if opts.skip_report {
+        None
+    } else if let Some(c) = alloc_serial_c {
         // Stream the deflate blob through a 64 KiB scratch buffer, feeding each
         // serial into the accumulator in index order. Never materialises the
         // ~2GB decompressed byte buffer OR a collected Vec<u32> — the transient
@@ -1533,6 +1532,14 @@ fn run(
         g.alloc_frames_by_serial = None;
         Some(a)
     };
+
+    if opts.skip_report {
+        // mat caches mode: no report needed, skip build_model + render entirely.
+        drop(dc_off);
+        drop(dc_tgt);
+        log(verbose, "total", t_total.elapsed().as_secs_f64());
+        return Ok(());
+    }
 
     let t = Instant::now();
     progress::phase("building report");
