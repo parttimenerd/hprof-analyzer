@@ -66,7 +66,7 @@
 //! implemented here (our reference dumps have bodies < 4 GiB). If any position
 //! reaches 2^32 we return an [`io::Error`] rather than emit a wrong file.
 
-use std::io::{self, Write};
+use std::io::{self, BufReader, Read, Write};
 
 use super::int_index::IntIndexStreamer;
 #[cfg(test)]
@@ -247,40 +247,26 @@ where
 /// -> io::Result<()>`. The caller pushes pre-sorted values for one entry.
 /// An entry with no values is written as a hole (header == 0).
 ///
-/// Header positions (one i32 per entry) are accumulated in a staging buffer
-/// and periodically compressed with zstd into a growing blob. For 513M entries
-/// the raw header is ~2 GB but compresses to ~100 MB (entries are nearly
-/// monotone, deltas ≈ 3-4), keeping peak RSS below the 2 GB Vec approach.
+/// Header positions (one i32 per entry) are accumulated via a zstd streaming
+/// encoder into a compact blob. For 513M entries the raw header is ~2 GB but
+/// the non-zero values increase monotonically (deltas ~3-4) so the compressed
+/// size is much smaller, keeping peak RSS well below the raw Vec approach.
 pub fn write_sorted_cb<W, F>(w: W, n_entries: usize, mut f: F) -> io::Result<W>
 where
     W: Write,
     F: FnMut(&mut dyn FnMut(i32) -> io::Result<()>) -> io::Result<()>,
 {
-    // Staging chunk: compress header values in 1M-entry batches.
-    const CHUNK: usize = 1_000_000;
     let mut cw = CountingWriter::new(w);
     let mut body = IntIndexStreamer::new(&mut cw);
     let mut body_size: i64 = 0;
 
-    // Stage + compressed blob for the header.
-    let mut stage: Vec<i32> = Vec::with_capacity(CHUNK);
-    // Each compressed chunk is prefixed with its u32 BE byte length.
-    let mut hdr_blob: Vec<u8> = Vec::new();
+    // Stream header positions into a zstd encoder backed by a Vec<u8>.
+    // A single streaming context compresses much better than per-chunk encoding
+    // because it can reference patterns across the full sequence.
+    let hdr_out: Vec<u8> = Vec::new();
+    let mut hdr_enc = zstd::stream::write::Encoder::new(hdr_out, 3)
+        .map_err(io::Error::other)?;
     let mut total_entries: usize = 0;
-
-    let flush_stage = |stage: &mut Vec<i32>, hdr_blob: &mut Vec<u8>| -> io::Result<()> {
-        if stage.is_empty() { return Ok(()); }
-        // Reinterpret as bytes (little-endian on x86_64/aarch64).
-        let bytes = unsafe {
-            std::slice::from_raw_parts(stage.as_ptr() as *const u8, stage.len() * 4)
-        };
-        let compressed = zstd::encode_all(bytes, 3).map_err(io::Error::other)?;
-        let len = compressed.len() as u32;
-        hdr_blob.extend_from_slice(&len.to_be_bytes());
-        hdr_blob.extend_from_slice(&compressed);
-        stage.clear();
-        Ok(())
-    };
 
     for _ in 0..n_entries {
         let mut had_values = false;
@@ -304,33 +290,40 @@ where
             })?;
         }
         if !had_values { header_val = 0; }
-        stage.push(header_val);
+        hdr_enc.write_all(&header_val.to_le_bytes()).map_err(io::Error::other)?;
         total_entries += 1;
-        if stage.len() == CHUNK {
-            flush_stage(&mut stage, &mut hdr_blob)?;
-        }
     }
-    flush_stage(&mut stage, &mut hdr_blob)?;
-    drop(stage);
+    let hdr_blob = hdr_enc.finish().map_err(io::Error::other)?;
 
     body.finish()?;
     let divider = cw.bytes_written() as i64;
     let mut w = cw.into_inner();
     let mut hdr = IntIndexStreamer::with_position(&mut w, divider);
 
-    // Decompress and stream each chunk into the header IntIndexStreamer.
-    let mut cursor = &hdr_blob[..];
+    // Decompress the header blob and stream each i32 into the header IntIndexStreamer.
+    let mut decoder = zstd::stream::Decoder::new(BufReader::new(&hdr_blob[..]))?;
+    let mut buf = [0u8; 64 * 1024];
+    let mut carry = [0u8; 4];
+    let mut carry_len = 0usize;
     let mut written = 0usize;
-    while !cursor.is_empty() {
-        let len = u32::from_be_bytes(cursor[..4].try_into().unwrap()) as usize;
-        cursor = &cursor[4..];
-        let chunk_bytes = zstd::decode_all(&cursor[..len]).map_err(io::Error::other)?;
-        cursor = &cursor[len..];
-        for ch in chunk_bytes.chunks_exact(4) {
-            hdr.push(i32::from_le_bytes(ch.try_into().unwrap()))?;
-            written += 1;
+    loop {
+        let n = decoder.read(&mut buf).map_err(io::Error::other)?;
+        if n == 0 { break; }
+        let mut i = 0usize;
+        while carry_len > 0 && i < n {
+            carry[carry_len] = buf[i]; carry_len += 1; i += 1;
+            if carry_len == 4 {
+                hdr.push(i32::from_le_bytes(carry))?;
+                written += 1; carry_len = 0;
+            }
         }
+        while i + 4 <= n {
+            hdr.push(i32::from_le_bytes([buf[i], buf[i+1], buf[i+2], buf[i+3]]))?;
+            written += 1; i += 4;
+        }
+        while i < n { carry[carry_len] = buf[i]; carry_len += 1; i += 1; }
     }
+    debug_assert_eq!(carry_len, 0);
     debug_assert_eq!(written, total_entries);
     drop(hdr_blob);
 
