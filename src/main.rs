@@ -894,7 +894,7 @@ fn run(
 
     let t = Instant::now();
     progress::phase("scanning dump (pass 1)");
-    let p1 = pass1::Pass1::run(input)?;
+    let p1 = pass1::Pass1::run(input, mat.is_some())?;
     log(verbose, "pass1", t.elapsed().as_secs_f64());
 
     // The entire analysis works in u32 pre-order / node-index space (dfn,
@@ -1607,7 +1607,7 @@ fn run(
 
 /// Emit pass-1 parse stats (counts + class histogram) as JSON to stdout.
 fn dump_pass1_json(path: &str) -> io::Result<()> {
-    let p = Pass1::run(path)?;
+    let p = Pass1::run(path, false)?;
 
     let mut class_hist: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
     for (i, &cidx) in p.class_ids.iter().enumerate() {

@@ -1691,7 +1691,7 @@ mod tests {
         if !std::path::Path::new(DUMP).exists() {
             return;
         }
-        let p1 = Pass1::run(DUMP).unwrap();
+        let p1 = Pass1::run(DUMP, false).unwrap();
         let (g, inbound, _sc, _ci, _as) = Pass2::build(
             DUMP,
             p1,
@@ -1729,7 +1729,7 @@ mod tests {
         if !std::path::Path::new(DUMP).exists() {
             return;
         }
-        let p1 = Pass1::run(DUMP).unwrap();
+        let p1 = Pass1::run(DUMP, false).unwrap();
         let (g, _inbound, _sc, _ci, _as) = Pass2::build(
             DUMP,
             p1,
@@ -1760,7 +1760,7 @@ mod tests {
         if !std::path::Path::new(DUMP).exists() {
             return;
         }
-        let p1 = Pass1::run(DUMP).unwrap();
+        let p1 = Pass1::run(DUMP, false).unwrap();
         let class_addrs: std::collections::HashSet<u64> = p1.class_map.keys().cloned().collect();
         assert!(!class_addrs.is_empty(), "expected some class objects");
         let mut class_count = 0usize;
