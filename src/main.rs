@@ -1138,7 +1138,7 @@ fn run(
     // minimum possible window.
     let mut mat_map: Option<mat::MatIdMap> = if let Some(addrs_c) = mat_addrs_c {
         let addrs = addrs_c.restore()?;
-        let mm = mat::MatIdMap::build(g.n, &g.idom, |i| addrs[i]);
+        let mut mm = mat::MatIdMap::build(g.n, &g.idom, |i| addrs[i]);
         // emit idx: mat-id 0 = address 0x0 (synthetic root), then sorted reachable
         if let Some(ref m) = mat {
             let mc = mm.mat_count();
@@ -1149,7 +1149,8 @@ fn run(
             }
             m.emit_long_index("idx", &idx_vals)?;
             drop(idx_vals); // free ~4 GB before o2hprof_vals alloc
-            crate::trace::probe("main: after emit idx (before o2hprof)");
+            mm.free_addrs(); // free mm.addrs (~4 GB) — no longer needed after idx
+            crate::trace::probe("main: after emit idx + free_addrs (before o2hprof)");
             // o2hprof: restore offsets here (just before use), emit, drop.
             if let Some(ref off_c) = mat_hprof_offsets_c {
                 let offsets = off_c.restore()?;
@@ -1170,9 +1171,7 @@ fn run(
         None
     };
     drop(mat_hprof_offsets_c);
-    // Free mm.addrs (~4 GB) now that idx/o2hprof are emitted; addr_at_mat not needed.
-    if let Some(ref mut mm) = mat_map { mm.free_addrs(); }
-    crate::trace::probe("main: after free_addrs (before mat_inv)");
+    crate::trace::probe("main: before mat_inv (free_addrs done at idx emission)");
     // Build the row→class-object id inverse table now that mm is available, so
     // we can prefer reachable class-objects when multiple map to the same row.
     let mut mat_inv: Option<Vec<i32>> = if let (Some(ref mm), Some(ref coc)) =
