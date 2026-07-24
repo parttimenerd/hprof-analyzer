@@ -66,7 +66,7 @@
 //! implemented here (our reference dumps have bodies < 4 GiB). If any position
 //! reaches 2^32 we return an [`io::Error`] rather than emit a wrong file.
 
-use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::{self, Write};
 
 use super::int_index::IntIndexStreamer;
 #[cfg(test)]
@@ -247,70 +247,93 @@ where
 /// -> io::Result<()>`. The caller pushes pre-sorted values for one entry.
 /// An entry with no values is written as a hole (header == 0).
 ///
-/// This eliminates the 513M × alloc/free cycle that causes allocator RSS
-/// fragmentation on large dumps. Header entries are spooled to a temp file
-/// instead of a Vec<i32> to avoid a ~2 GB in-memory allocation on large dumps.
+/// Header positions (one i32 per entry) are accumulated in a staging buffer
+/// and periodically compressed with zstd into a growing blob. For 513M entries
+/// the raw header is ~2 GB but compresses to ~100 MB (entries are nearly
+/// monotone, deltas ≈ 3-4), keeping peak RSS below the 2 GB Vec approach.
 pub fn write_sorted_cb<W, F>(w: W, n_entries: usize, mut f: F) -> io::Result<W>
 where
     W: Write,
     F: FnMut(&mut dyn FnMut(i32) -> io::Result<()>) -> io::Result<()>,
 {
+    // Staging chunk: compress header values in 1M-entry batches.
+    const CHUNK: usize = 1_000_000;
     let mut cw = CountingWriter::new(w);
-    // Spool raw header i32 BE values to a temp file instead of a Vec<i32> to
-    // avoid a ~2 GB peak allocation for large dumps (~513M entries × 4 bytes).
-    let tmp_path = format!("/tmp/hprof_idx_hdr_{}", std::process::id());
-    let hdr_tmp_file = std::fs::OpenOptions::new()
-        .read(true).write(true).create(true).truncate(true)
-        .open(&tmp_path)?;
-    let mut hdr_tmp = BufWriter::new(hdr_tmp_file);
     let mut body = IntIndexStreamer::new(&mut cw);
     let mut body_size: i64 = 0;
-    let mut entry_count: usize = 0;
+
+    // Stage + compressed blob for the header.
+    let mut stage: Vec<i32> = Vec::with_capacity(CHUNK);
+    // Each compressed chunk is prefixed with its u32 BE byte length.
+    let mut hdr_blob: Vec<u8> = Vec::new();
+    let mut total_entries: usize = 0;
+
+    let flush_stage = |stage: &mut Vec<i32>, hdr_blob: &mut Vec<u8>| -> io::Result<()> {
+        if stage.is_empty() { return Ok(()); }
+        // Reinterpret as bytes (little-endian on x86_64/aarch64).
+        let bytes = unsafe {
+            std::slice::from_raw_parts(stage.as_ptr() as *const u8, stage.len() * 4)
+        };
+        let compressed = zstd::encode_all(bytes, 3).map_err(io::Error::other)?;
+        let len = compressed.len() as u32;
+        hdr_blob.extend_from_slice(&len.to_be_bytes());
+        hdr_blob.extend_from_slice(&compressed);
+        stage.clear();
+        Ok(())
+    };
 
     for _ in 0..n_entries {
         let mut had_values = false;
-        let mut header_val: i32 = 0;
         let pos = body_size + 1;
         if pos >= (1i64 << 32) {
-            let _ = std::fs::remove_file(&tmp_path);
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("header2/PosIndexStreamer path not implemented; bodyPos {pos} at entry {entry_count}"),
+                format!("header2/PosIndexStreamer path not implemented; bodyPos {pos} at entry {total_entries}"),
             ));
         }
+        let mut header_val: i32 = pos as i32;
         {
             let body_ref = &mut body;
             let body_size_ref = &mut body_size;
             let had_ref = &mut had_values;
-            let hv_ref = &mut header_val;
-            *hv_ref = pos as i32;
             f(&mut |v: i32| {
-                if !*had_ref {
-                    *had_ref = true;
-                }
+                if !*had_ref { *had_ref = true; }
                 body_ref.push(v)?;
                 *body_size_ref += 1;
                 Ok(())
             })?;
         }
-        let hval = if had_values { header_val } else { 0 };
-        hdr_tmp.write_all(&hval.to_be_bytes())?;
-        entry_count += 1;
+        if !had_values { header_val = 0; }
+        stage.push(header_val);
+        total_entries += 1;
+        if stage.len() == CHUNK {
+            flush_stage(&mut stage, &mut hdr_blob)?;
+        }
     }
+    flush_stage(&mut stage, &mut hdr_blob)?;
+    drop(stage);
+
     body.finish()?;
     let divider = cw.bytes_written() as i64;
     let mut w = cw.into_inner();
-    let mut hdr_tmp_file = hdr_tmp.into_inner().map_err(|e| e.into_error())?;
-    hdr_tmp_file.seek(SeekFrom::Start(0))?;
-    let mut hdr_reader = BufReader::new(hdr_tmp_file);
     let mut hdr = IntIndexStreamer::with_position(&mut w, divider);
-    let mut buf = [0u8; 4];
-    for _ in 0..entry_count {
-        hdr_reader.read_exact(&mut buf)?;
-        hdr.push(i32::from_be_bytes(buf))?;
+
+    // Decompress and stream each chunk into the header IntIndexStreamer.
+    let mut cursor = &hdr_blob[..];
+    let mut written = 0usize;
+    while !cursor.is_empty() {
+        let len = u32::from_be_bytes(cursor[..4].try_into().unwrap()) as usize;
+        cursor = &cursor[4..];
+        let chunk_bytes = zstd::decode_all(&cursor[..len]).map_err(io::Error::other)?;
+        cursor = &cursor[len..];
+        for ch in chunk_bytes.chunks_exact(4) {
+            hdr.push(i32::from_le_bytes(ch.try_into().unwrap()))?;
+            written += 1;
+        }
     }
-    drop(hdr_reader);
-    let _ = std::fs::remove_file(&tmp_path);
+    debug_assert_eq!(written, total_entries);
+    drop(hdr_blob);
+
     hdr.finish()?;
     w.write_all(&divider.to_be_bytes())?;
     Ok(w)
