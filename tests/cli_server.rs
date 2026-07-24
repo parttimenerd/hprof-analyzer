@@ -181,6 +181,11 @@ fn server_report_json_has_fields() {
         "/report should return a JSON object, got: {}",
         &body[..body.len().min(200)]
     );
+    assert!(
+        body.contains("\"schema_version\""),
+        "/report JSON missing 'schema_version' field: {}",
+        &body[..body.len().min(300)]
+    );
     // The full report JSON must not carry a top-level "error" indicating failure.
     assert!(
         !body.contains("\"error\":{\"kind\":"),
@@ -242,6 +247,11 @@ fn server_report_leaks_json() {
         body.trim().starts_with('{'),
         "/report/leaks should return a JSON object, got: {}",
         &body[..body.len().min(200)]
+    );
+    assert!(
+        body.contains("\"suspects\"") && body.contains("\"total_shallow\""),
+        "/report/leaks JSON missing expected keys 'suspects'/'total_shallow': {}",
+        &body[..body.len().min(300)]
     );
 }
 
