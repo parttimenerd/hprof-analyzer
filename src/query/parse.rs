@@ -398,126 +398,6 @@ where
         )
     });
 
-    // select item: AGG(item) | path(a, b) | toString(s) | * | expr (with single-leaf fold)
-    // Each item may be followed by an optional `AS <name>` alias.
-    // Guard: `AS RETAINED` is NOT consumed here — it belongs to the retained_set
-    // modifier parsed at the SELECT level.
-    let select_item = recursive(|item| {
-        let agg = select! {
-            Token::Ident(s) if agg_func(&s).is_some() => agg_func(&s).unwrap(),
-        }
-        .then_ignore(just(Token::LParen))
-        .then(item.clone())
-        .then_ignore(just(Token::RParen))
-        .map(|(func, (arg, _alias)): (AggFunc, (SelectItem, Option<String>))| {
-            (
-                SelectItem::Aggregate {
-                    func,
-                    arg: Box::new(arg),
-                },
-                None::<String>,
-            )
-        });
-
-        // `PERCENTILE(<arg>, <p>)` — two-arg aggregate. `p` is an integer literal
-        // in 1..=100 (nearest-rank). Placed before `agg`; `PERCENTILE` is NOT in
-        // `agg_func`, so the generic `agg` never matches it and a missing/extra arg
-        // or an out-of-range `p` produces an actionable error instead of a generic
-        // "unexpected token".
-        let percentile_item = ident_ci("PERCENTILE")
-            .ignore_then(just(Token::LParen))
-            .ignore_then(item.clone())
-            .then_ignore(just(Token::Comma))
-            .then(select! { Token::Int(n) => n })
-            .then_ignore(just(Token::RParen))
-            .validate(|((arg, _alias), p): ((SelectItem, Option<String>), i64), e, emitter| {
-                if !(1..=100).contains(&p) {
-                    emitter.emit(Rich::custom(
-                        e.span(),
-                        format!(
-                            "PERCENTILE(<arg>, p): p must be an integer between 1 and 100, got {p}"
-                        ),
-                    ));
-                }
-                let clamped = p.clamp(1, 100) as u8;
-                (
-                    SelectItem::Aggregate {
-                        func: AggFunc::Percentile(clamped),
-                        arg: Box::new(arg),
-                    },
-                    None::<String>,
-                )
-            });
-
-        // `path(a, b)`. Contextual: only a path function when `path` is immediately
-        // followed by `(`; otherwise `path` falls through to the bare-field attr arm.
-        // Heuristic: an operand containing `.` or `*` (a dotted/globbed class name)
-        // is a `Class`; any other bare ident is treated as an `Alias`.
-        let path_operand = any_ident().map(|s: String| {
-            if s.contains('.') || s.contains('*') {
-                PathOperand::Class(s)
-            } else {
-                PathOperand::Alias(s)
-            }
-        });
-        let path_item = ident_ci("path")
-            .ignore_then(just(Token::LParen))
-            .ignore_then(path_operand.clone())
-            .then_ignore(just(Token::Comma))
-            .then(path_operand)
-            .then_ignore(just(Token::RParen))
-            .map(|(from, to)| (SelectItem::Path { from, to }, None::<String>));
-
-        let star = just(Token::Star).map(|_| (SelectItem::Star, None::<String>));
-
-        // `toString(s)` as a SELECT item: `toString(alias)` → `SelectItem::ToString(alias)`.
-        // Placed before the bare-attr fallback so `toString(` is consumed as ToString
-        // rather than as a field named `toString`. The `dom_fn` helper enforces the
-        // single-arg requirement with an actionable error.
-        let tostring_item =
-            dom_fn("toString").map(|a| (SelectItem::ToString(a), None::<String>));
-
-        // `path_item` before the bare-attr fallback so `path(` is consumed as Path
-        // rather than swallowed as a field named `path`.
-        // `expr_item` covers all arithmetic expressions AND bare attrs (folded back).
-        let expr_item = expr.clone().map(|e| {
-            let item = match e {
-                Expr::Attr(a) => SelectItem::Attr(a),
-                other => SelectItem::Expr(Box::new(other)),
-            };
-            (item, None::<String>)
-        });
-        // IMPORTANT: `star` must come before `expr_item` so a lone `*` stays
-        // `SelectItem::Star` (Star token is also ArithOp::Mul in expr; ordering wins).
-        let base_item = percentile_item
-            .or(agg)
-            .or(path_item)
-            .or(tostring_item)
-            .or(star)
-            .or(expr_item);
-
-        // Optional `AS <alias>` suffix on any select item.
-        // Safe-guard: do NOT match `AS RETAINED` (that belongs to the retained_set
-        // modifier at the SELECT level). Use `.and_is(ident_ci("RETAINED").not())`
-        // on the token immediately following `AS`.
-        let alias_name = ident_ci("AS").ignore_then(
-            select! { Token::Str(s) => s }
-                .or(any_ident().and_is(ident_ci("RETAINED").not())),
-        );
-
-        base_item.then(alias_name.or_not()).map(|((item, _), alias)| (item, alias))
-    });
-
-    // Collect aliased items, then unzip into parallel vecs.
-    let select_list = select_item
-        .separated_by(just(Token::Comma))
-        .at_least(1)
-        .collect::<Vec<_>>()
-        .map(|pairs: Vec<(SelectItem, Option<String>)>| {
-            let (items, aliases): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
-            (items, aliases)
-        });
-
     // Symbolic comparison operators tokenized by logos.
     let sym_op = select! {
         Token::Eq => CompareOp::Eq,
@@ -681,13 +561,140 @@ where
                 })
         });
 
+        // CASE WHEN <pred> THEN <expr> [WHEN <pred> THEN <expr>]* [ELSE <expr>] END
+        // Defined here (inside base_query) so it can reuse `predicate`.
+        let case_expr = ident_ci("CASE")
+            .ignore_then(
+                ident_ci("WHEN")
+                    .ignore_then(predicate.clone())
+                    .then_ignore(ident_ci("THEN"))
+                    .then(expr.clone())
+                    .repeated()
+                    .at_least(1)
+                    .collect::<Vec<_>>(),
+            )
+            .then(ident_ci("ELSE").ignore_then(expr.clone()).or_not())
+            .then_ignore(ident_ci("END"))
+            .map(|(branches, else_)| Expr::Case {
+                branches,
+                else_: else_.map(Box::new),
+            });
+
+        // select item: AGG(item) | path(a, b) | toString(s) | * | case_expr | expr
+        // Each item may be followed by an optional `AS <name>` alias.
+        // Guard: `AS RETAINED` is NOT consumed here — it belongs to the retained_set
+        // modifier parsed at the SELECT level.
+        let select_item = recursive(|item| {
+            let agg = select! {
+                Token::Ident(s) if agg_func(&s).is_some() => agg_func(&s).unwrap(),
+            }
+            .then_ignore(just(Token::LParen))
+            .then(item.clone())
+            .then_ignore(just(Token::RParen))
+            .map(|(func, (arg, _alias)): (AggFunc, (SelectItem, Option<String>))| {
+                (
+                    SelectItem::Aggregate {
+                        func,
+                        arg: Box::new(arg),
+                    },
+                    None::<String>,
+                )
+            });
+
+            // `PERCENTILE(<arg>, <p>)` — two-arg aggregate.
+            let percentile_item = ident_ci("PERCENTILE")
+                .ignore_then(just(Token::LParen))
+                .ignore_then(item.clone())
+                .then_ignore(just(Token::Comma))
+                .then(select! { Token::Int(n) => n })
+                .then_ignore(just(Token::RParen))
+                .validate(|((arg, _alias), p): ((SelectItem, Option<String>), i64), e, emitter| {
+                    if !(1..=100).contains(&p) {
+                        emitter.emit(Rich::custom(
+                            e.span(),
+                            format!(
+                                "PERCENTILE(<arg>, p): p must be an integer between 1 and 100, got {p}"
+                            ),
+                        ));
+                    }
+                    let clamped = p.clamp(1, 100) as u8;
+                    (
+                        SelectItem::Aggregate {
+                            func: AggFunc::Percentile(clamped),
+                            arg: Box::new(arg),
+                        },
+                        None::<String>,
+                    )
+                });
+
+            let path_operand = any_ident().map(|s: String| {
+                if s.contains('.') || s.contains('*') {
+                    PathOperand::Class(s)
+                } else {
+                    PathOperand::Alias(s)
+                }
+            });
+            let path_item = ident_ci("path")
+                .ignore_then(just(Token::LParen))
+                .ignore_then(path_operand.clone())
+                .then_ignore(just(Token::Comma))
+                .then(path_operand)
+                .then_ignore(just(Token::RParen))
+                .map(|(from, to)| (SelectItem::Path { from, to }, None::<String>));
+
+            let star = just(Token::Star).map(|_| (SelectItem::Star, None::<String>));
+
+            let tostring_item =
+                dom_fn("toString").map(|a| (SelectItem::ToString(a), None::<String>));
+
+            // CASE WHEN … THEN … ELSE … END as a select item.
+            let case_item = case_expr.clone().map(|e| {
+                (SelectItem::Expr(Box::new(e)), None::<String>)
+            });
+
+            // `expr_item` covers all arithmetic expressions AND bare attrs (folded back).
+            let expr_item = expr.clone().map(|e| {
+                let item = match e {
+                    Expr::Attr(a) => SelectItem::Attr(a),
+                    other => SelectItem::Expr(Box::new(other)),
+                };
+                (item, None::<String>)
+            });
+            // IMPORTANT: `star` must come before `expr_item`.
+            // `case_item` before `expr_item` so CASE is not swallowed as a bare field.
+            let base_item = percentile_item
+                .or(agg)
+                .or(path_item)
+                .or(tostring_item)
+                .or(star)
+                .or(case_item)
+                .or(expr_item);
+
+            let alias_name = ident_ci("AS").ignore_then(
+                select! { Token::Str(s) => s }
+                    .or(any_ident().and_is(ident_ci("RETAINED").not())),
+            );
+
+            base_item.then(alias_name.or_not()).map(|((item, _), alias)| (item, alias))
+        });
+
+        // Collect aliased items, then unzip into parallel vecs.
+        let select_list = select_item
+            .separated_by(just(Token::Comma))
+            .at_least(1)
+            .collect::<Vec<_>>()
+            .map(|pairs: Vec<(SelectItem, Option<String>)>| {
+                let (items, aliases): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
+                (items, aliases)
+            });
+
         ident_ci("SELECT")
             .ignore_then(ident_ci("DISTINCT").or_not().map(|d| d.is_some()))
             // Leading `AS RETAINED SET` (MAT also accepts this before the select list).
             .then(retained_set.clone())
             // `OBJECTS` between SELECT head and select list is a no-op projection marker.
             .then_ignore(ident_ci("OBJECTS").or_not())
-            .then(select_list.clone())
+            .then(select_list)
             // Trailing `AS RETAINED SET` (existing MAT form, kept for compatibility).
             .then(retained_set.clone())
             .then_ignore(ident_ci("FROM"))
@@ -958,7 +965,15 @@ fn normalize_expr(e: &mut Expr, alias: Option<&str>) {
             for a in args { normalize_expr(a, alias); }
         }
         Expr::Aggregate { .. } => {} // no Attr leaves to normalize in aggregate args
-        Expr::Case { .. } => {} // stub; real impl added in Task 6
+        Expr::Case { branches, else_ } => {
+            for (pred, then_expr) in branches {
+                normalize_predicate(pred, alias);
+                normalize_expr(then_expr, alias);
+            }
+            if let Some(e) = else_ {
+                normalize_expr(e, alias);
+            }
+        }
     }
 }
 
@@ -1047,6 +1062,12 @@ pub const RESERVED: &[&str] = &[
     // Grouping keywords.
     "GROUP",
     "HAVING",
+    // CASE WHEN expression keywords.
+    "CASE",
+    "WHEN",
+    "THEN",
+    "ELSE",
+    "END",
 ];
 
 /// Aggregate function names (`agg_func`'s source set), upper-cased.
@@ -4414,5 +4435,49 @@ mod tests {
         .unwrap();
         assert_eq!(q.group_by.len(), 1);
         assert!(q.where_.is_some());
+    }
+
+    #[test]
+    fn parse_case_when_else() {
+        let q = super::parse(
+            r#"SELECT CASE WHEN @usedHeapSize > 1000 THEN "large" ELSE "small" END FROM java.lang.String"#,
+        )
+        .unwrap();
+        assert_eq!(q.select.len(), 1);
+        let item = &q.select[0];
+        assert!(
+            matches!(item, crate::query::ast::SelectItem::Expr(e)
+                if matches!(e.as_ref(), crate::query::ast::Expr::Case { branches, else_, .. }
+                    if branches.len() == 1 && else_.is_some())),
+            "expected Case expr, got: {item:?}"
+        );
+    }
+
+    #[test]
+    fn parse_case_when_no_else() {
+        let q = super::parse(
+            r#"SELECT CASE WHEN @usedHeapSize > 100 THEN "big" END FROM java.lang.String"#,
+        )
+        .unwrap();
+        let item = &q.select[0];
+        assert!(
+            matches!(item, crate::query::ast::SelectItem::Expr(e)
+                if matches!(e.as_ref(), crate::query::ast::Expr::Case { else_, .. } if else_.is_none())),
+            "expected Case with no else, got: {item:?}"
+        );
+    }
+
+    #[test]
+    fn parse_case_multi_when() {
+        let q = super::parse(
+            r#"SELECT CASE WHEN @usedHeapSize > 10000 THEN "xl" WHEN @usedHeapSize > 1000 THEN "lg" ELSE "sm" END FROM java.lang.String"#,
+        )
+        .unwrap();
+        let item = &q.select[0];
+        assert!(
+            matches!(item, crate::query::ast::SelectItem::Expr(e)
+                if matches!(e.as_ref(), crate::query::ast::Expr::Case { branches, .. } if branches.len() == 2)),
+            "expected 2 branches, got: {item:?}"
+        );
     }
 }
