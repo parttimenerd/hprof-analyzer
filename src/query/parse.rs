@@ -342,7 +342,22 @@ where
             }
         });
 
-        let primary = method_call
+        // `COUNT(*)`, `SUM(@field)`, etc. used in HAVING position.
+        // Parses the same syntax as the select-item `agg` arm but produces
+        // `Expr::Aggregate` so it can appear on either side of a comparison.
+        let agg_star = just(Token::Star).to(SelectItem::Star);
+        let agg_attr_arg = attr.clone().map(SelectItem::Attr);
+        let agg_arg = agg_star.or(agg_attr_arg);
+        let agg_expr_arm = select! {
+            Token::Ident(s) if agg_func(&s).is_some() => agg_func(&s).unwrap(),
+        }
+        .then_ignore(just(Token::LParen))
+        .then(agg_arg)
+        .then_ignore(just(Token::RParen))
+        .map(|(func, arg)| Expr::Aggregate { func, arg: Box::new(arg) });
+
+        let primary = agg_expr_arm
+            .or(method_call)
             .or(tohex)
             .or(lit)
             .or(just(Token::LParen)
@@ -681,6 +696,25 @@ where
             .then(from_source)
             .then(any_ident().and_is(reserved_ident().not()).or_not())
             .then(ident_ci("WHERE").ignore_then(predicate.clone()).or_not())
+            // GROUP BY <expr> [, <expr>]*
+            .then(
+                ident_ci("GROUP")
+                    .ignore_then(ident_ci("BY"))
+                    .ignore_then(
+                        expr.clone()
+                            .separated_by(just(Token::Comma))
+                            .at_least(1)
+                            .collect::<Vec<_>>(),
+                    )
+                    .or_not()
+                    .map(|v| v.unwrap_or_default()),
+            )
+            // HAVING <predicate>
+            .then(
+                ident_ci("HAVING")
+                    .ignore_then(predicate.clone())
+                    .or_not(),
+            )
             .then(
                 ident_ci("ORDER")
                     .ignore_then(ident_ci("BY"))
@@ -704,7 +738,7 @@ where
             )
             .map(
                 |(
-                    (((((((distinct, leading_retained), (select, select_aliases)), trailing_retained), from), alias), where_), order_by),
+                    (((((((((distinct, leading_retained), (select, select_aliases)), trailing_retained), from), alias), where_), group_by), having), order_by),
                     limit,
                 )| {
                     let mut q = Query {
@@ -719,8 +753,8 @@ where
                         limit,
                         union_branches: Vec::new(),
                         union_limit: None,
-                        group_by: Vec::new(),
-                        having: None,
+                        group_by,
+                        having,
                     };
                     // Now the alias is known, rewrite dotted `Field`s into N-hop
                     // `RefPath`s (a single segment after alias-strip stays a Field).
@@ -917,6 +951,7 @@ fn normalize_expr(e: &mut Expr, alias: Option<&str>) {
             normalize_expr(receiver, alias);
             for a in args { normalize_expr(a, alias); }
         }
+        Expr::Aggregate { .. } => {} // no Attr leaves to normalize in aggregate args
     }
 }
 
@@ -1002,6 +1037,9 @@ pub const RESERVED: &[&str] = &[
     "AS",
     "RETAINED",
     "SET",
+    // Grouping keywords.
+    "GROUP",
+    "HAVING",
 ];
 
 /// Aggregate function names (`agg_func`'s source set), upper-cased.
@@ -1215,27 +1253,9 @@ fn missing_from_hint(src: &str) -> Option<&'static str> {
     }
 }
 
-/// A hint for a query containing `GROUP BY`: OQL (like Eclipse MAT) has no
-/// grouping — aggregates span the whole matched set. Word-boundary, case-
-/// insensitive; fires only when `group` is immediately followed by `by`.
-fn group_by_hint(src: &str) -> Option<&'static str> {
-    let words: Vec<String> = src
-        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
-        .filter(|w| !w.is_empty())
-        .map(|w| w.to_ascii_lowercase())
-        .collect();
-    let has_group_by = words
-        .iter()
-        .enumerate()
-        .any(|(i, w)| w == "group" && words.get(i + 1).map(String::as_str) == Some("by"));
-    if has_group_by {
-        Some(
-            "GROUP BY is not supported — OQL aggregates (COUNT/SUM/AVG/…) span the \
-             whole matched set; run one query per group instead",
-        )
-    } else {
-        None
-    }
+/// GROUP BY is now supported; this hint is no longer needed.
+fn group_by_hint(_src: &str) -> Option<&'static str> {
+    None
 }
 
 /// A hint for an `unexpected Eq` error caused by a `==` operator: OQL equality
@@ -3056,15 +3076,13 @@ mod tests {
     }
 
     #[test]
-    fn group_by_is_reported_unsupported() {
-        // OQL (and MAT) has no GROUP BY; aggregates span the whole matched set.
-        let err = parse("SELECT COUNT(*) FROM java.lang.Thread GROUP BY @objectId")
-            .expect_err("GROUP BY should error");
-        assert!(
-            err.0.contains("GROUP BY") && err.0.to_lowercase().contains("not supported"),
-            "expected an unsupported-GROUP-BY hint, got: {}",
-            err.0
-        );
+    fn group_by_is_now_supported() {
+        // Previously rejected; now parses successfully (planner validates semantics).
+        let q = super::parse(
+            "SELECT @displayName, COUNT(*) FROM java.lang.Thread GROUP BY @displayName",
+        )
+        .expect("GROUP BY should parse successfully");
+        assert_eq!(q.group_by.len(), 1);
     }
 
     #[test]
@@ -4333,5 +4351,71 @@ mod tests {
         let e = parse("SELECT x FROM").unwrap_err();
         // "FROM" with nothing after -> unexpected end of input; found is None, no suggestion.
         assert!(!e.0.contains("did you mean"), "no spurious suggestion: {:?}", e.0);
+    }
+
+    // ============================================================
+    // Group: GROUP BY and HAVING parsing
+    // ============================================================
+
+    #[test]
+    fn parse_group_by_simple() {
+        let q = super::parse(
+            "SELECT @displayName, COUNT(*) FROM java.lang.Thread GROUP BY @displayName",
+        )
+        .unwrap();
+        assert_eq!(q.group_by.len(), 1);
+        assert!(matches!(
+            &q.group_by[0],
+            crate::query::ast::Expr::Attr(crate::query::ast::Attr::DisplayName)
+        ));
+        assert!(q.having.is_none());
+    }
+
+    #[test]
+    fn parse_group_by_multi_key() {
+        let q = super::parse(
+            "SELECT @displayName, @usedHeapSize, COUNT(*) FROM java.lang.Thread \
+             GROUP BY @displayName, @usedHeapSize",
+        )
+        .unwrap();
+        assert_eq!(q.group_by.len(), 2);
+    }
+
+    #[test]
+    fn parse_having() {
+        let q = super::parse(
+            "SELECT @displayName, COUNT(*) FROM java.lang.Thread \
+             GROUP BY @displayName HAVING COUNT(*) > 5",
+        )
+        .unwrap();
+        assert!(q.having.is_some());
+    }
+
+    #[test]
+    fn parse_having_without_group_by_is_parsed() {
+        // Parser accepts HAVING alone — plan_single validates it (Task 3).
+        // So this must parse without error; the planner will reject it.
+        // (If you prefer to reject in the parser, that's fine too, but then
+        //  update the test accordingly and make sure the error message mentions HAVING.)
+        // For now: assert it at least doesn't panic.
+        let result = super::parse(
+            "SELECT COUNT(*) FROM java.lang.Thread HAVING COUNT(*) > 5",
+        );
+        // Either Ok (parser accepts, planner validates) or Err with "HAVING" in message
+        match result {
+            Ok(q) => assert!(q.having.is_some()),
+            Err(e) => assert!(e.0.to_lowercase().contains("having"), "got: {}", e.0),
+        }
+    }
+
+    #[test]
+    fn group_by_after_where() {
+        let q = super::parse(
+            "SELECT @displayName, COUNT(*) FROM java.lang.Thread \
+             WHERE @usedHeapSize > 100 GROUP BY @displayName",
+        )
+        .unwrap();
+        assert_eq!(q.group_by.len(), 1);
+        assert!(q.where_.is_some());
     }
 }

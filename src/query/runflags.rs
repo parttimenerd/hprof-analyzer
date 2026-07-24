@@ -200,6 +200,7 @@ fn scan_expr(e: &Expr, used: &mut BranchUse) {
                 scan_expr(a, used);
             }
         }
+        Expr::Aggregate { .. } => {} // no edge-feature attrs in aggregate
     }
 }
 

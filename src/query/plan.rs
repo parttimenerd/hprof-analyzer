@@ -284,6 +284,7 @@ fn expr_for_each_attr(e: &Expr, f: &mut impl FnMut(&Attr)) {
             expr_for_each_attr(receiver, f);
             for a in args { expr_for_each_attr(a, f); }
         }
+        Expr::Aggregate { .. } => {} // no Attr leaves in aggregate position
     }
 }
 fn expr_any_attr(e: &Expr, pred: impl Fn(&Attr) -> bool) -> bool {
@@ -319,6 +320,7 @@ fn expr_for_each_method<'a>(e: &'a Expr, f: &mut impl FnMut(&'a str)) {
                 expr_for_each_method(a, f);
             }
         }
+        Expr::Aggregate { .. } => {} // no Method nodes in aggregate position
     }
 }
 

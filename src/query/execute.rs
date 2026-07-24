@@ -842,6 +842,9 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             Expr::Method { receiver, name, args } => {
                 self.dispatch_method(receiver, name, args, src_idx, class_id, blob)
             }
+            // Aggregate expressions are only valid in HAVING; calling eval_expr
+            // on one during per-row scan means the planner allowed it incorrectly.
+            Expr::Aggregate { .. } => QueryValue::Null,
         }
     }
     /// semantics as `eval_expr`; delegates attr leaves to `project_array_attr`.
@@ -860,6 +863,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 "length" | "size" => QueryValue::Int(length as i64),
                 _ => QueryValue::Null,
             },
+            Expr::Aggregate { .. } => QueryValue::Null,
         }
     }
     /// Dispatch a method call on an instance object. Tier-2: fixed name → `Attr`
@@ -1965,6 +1969,23 @@ pub fn expr_name(e: &Expr) -> String {
             UnaryOp::Pos => expr_name(arg),
         },
         Expr::Method { name, args, .. } => format!("{name}({})", args.iter().map(expr_name).collect::<Vec<_>>().join(", ")), // D2 fills this
+        Expr::Aggregate { func, arg } => {
+            let func_name = match func {
+                AggFunc::Count => "COUNT",
+                AggFunc::Sum => "SUM",
+                AggFunc::Min => "MIN",
+                AggFunc::Max => "MAX",
+                AggFunc::Avg => "AVG",
+                AggFunc::Percentile(p) => return format!("PERCENTILE(_, {p})"),
+                AggFunc::Median => "MEDIAN",
+            };
+            let arg_str = match arg.as_ref() {
+                SelectItem::Star => "*".to_string(),
+                SelectItem::Attr(a) => attr_name(a),
+                other => format!("{other:?}"),
+            };
+            format!("{func_name}({arg_str})")
+        }
     }
 }
 

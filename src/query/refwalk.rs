@@ -336,6 +336,7 @@ pub fn refwalk_has_length_tail(q: &crate::query::ast::Query) -> bool {
             Expr::Method { receiver, args, .. } => {
                 expr_has(receiver) || args.iter().any(expr_has)
             }
+            Expr::Aggregate { .. } => false,
         }
     }
     fn pred_has(p: &Predicate) -> bool {
@@ -387,6 +388,7 @@ pub fn refwalk_has_address_tail(q: &crate::query::ast::Query) -> bool {
             Expr::Method { receiver, args, .. } => {
                 expr_has(receiver) || args.iter().any(expr_has)
             }
+            Expr::Aggregate { .. } => false,
         }
     }
     fn pred_has(p: &Predicate) -> bool {

@@ -159,6 +159,10 @@ pub enum Expr {
     /// emulated JDK methods) keyed on name + receiver class — NOT reflection.
     /// Unknown methods are rejected at plan time (D5).
     Method { receiver: Box<Expr>, name: String, args: Vec<Expr> },
+    /// An aggregate function call used in HAVING position, e.g. `COUNT(*)`,
+    /// `SUM(@usedHeapSize)`. Valid only inside a HAVING clause (the planner
+    /// rejects aggregate expressions in WHERE or GROUP BY keys).
+    Aggregate { func: AggFunc, arg: Box<SelectItem> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
