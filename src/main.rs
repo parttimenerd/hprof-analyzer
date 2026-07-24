@@ -1148,6 +1148,8 @@ fn run(
                 idx_vals.push(addrs[old_id as usize] as i64);
             }
             m.emit_long_index("idx", &idx_vals)?;
+            drop(idx_vals); // free ~4 GB before o2hprof_vals alloc
+            crate::trace::probe("main: after emit idx (before o2hprof)");
             // o2hprof: restore offsets here (just before use), emit, drop.
             if let Some(ref off_c) = mat_hprof_offsets_c {
                 let offsets = off_c.restore()?;
@@ -1160,6 +1162,7 @@ fn run(
                 drop(o2hprof_vals);
                 drop(offsets);
             }
+            crate::trace::probe("main: after emit o2hprof");
         }
         drop(addrs);
         Some(mm)
@@ -1264,6 +1267,7 @@ fn run(
                 }
                 Ok(())
             })?;
+            crate::trace::probe("main: after emit_outbound_cb (before drops)");
             drop(fwd_tgt);
             drop(fwd_off);
             drop(class_obj_ids);
@@ -1274,20 +1278,22 @@ fn run(
     crate::trace::probe("main: after drop(mat_fwd_snap) — restore inb_data + build inb offset table");
     // Restore inb_data now (was compressed across emit_outbound to save ~80 MB).
     let inb_data = inb_data_c.restore()?;
-    // MAT inbound: build a per-pre-order byte-offset table into inb_data (~44 MB
-    // for 11M objects) so we can decode each object's referrers on demand rather
-    // than materialising the full Vec<Vec<i32>> (~550 MB).
-    // dfn[dense] = pre_order; inb_pre_off[pre_order] = byte offset in inb_data;
-    // vertex[pre_order] = dense_id (needed to decode referrer pre-order → dense-id).
-    let mat_inb_ctx: Option<(Vec<u32>, Vec<u32>, Vec<u32>)> =
+    // MAT inbound: build a block-sampled byte-offset table into inb_data.
+    // Stores one u64 offset per INB_BLOCK_MAT pre-orders (~256 MB for 513M nodes).
+    // Using u64 avoids overflow when inb_data exceeds 4 GB on large dumps.
+    // dfn[dense] = pre_order; vertex[pre_order] = dense_id.
+    const INB_BLOCK_MAT: usize = 16;
+    let mat_inb_ctx: Option<(Vec<u32>, Vec<u64>, Vec<u32>)> =
         if let (Some(dfn_c), Some(vertex_c)) = (mat_dfn_save_c, mat_vertex_save_c) {
             let dfn = dfn_c.restore()?;
             let vertex = vertex_c.restore()?;
             let n = g.n;
-            let mut off: Vec<u32> = Vec::with_capacity(n);
+            let mut off: Vec<u64> = Vec::with_capacity(n / INB_BLOCK_MAT + 2);
             let mut pos = 0usize;
-            for _pre in 0..n {
-                off.push(pos as u32);
+            for pre in 0..n {
+                if pre % INB_BLOCK_MAT == 0 {
+                    off.push(pos as u64);
+                }
                 let (count, c0) = vbyte::decode_one(&inb_data[pos..]);
                 pos += c0;
                 for _ in 0..count {
@@ -1301,14 +1307,24 @@ fn run(
             None
         };
     // MAT: emit `inbound` IntArray1N in MAT id order. Decode each object's
-    // referrers on demand from inb_data using the offset table.
+    // referrers on demand from inb_data using the block-offset table.
     if let Some(ref m) = mat {
         let mm = mat_map.as_ref().expect("mat_map built with mat");
         if let Some((dfn, inb_pre_off, vertex)) = mat_inb_ctx.as_ref() {
             let iter = std::iter::once(Vec::new()) // entry 0 = synthetic root
                 .chain(mm.sorted().iter().map(|&old_id| {
                     let pre = dfn[old_id as usize] as usize;
-                    let mut pos = inb_pre_off[pre] as usize;
+                    // Seek to block start, then skip (pre % INB_BLOCK_MAT) entries.
+                    let block_start = pre - (pre % INB_BLOCK_MAT);
+                    let mut pos = inb_pre_off[block_start / INB_BLOCK_MAT] as usize;
+                    for _skip in block_start..pre {
+                        let (skip_count, c0) = vbyte::decode_one(&inb_data[pos..]);
+                        pos += c0;
+                        for _ in 0..skip_count {
+                            let (_, c1) = vbyte::decode_one(&inb_data[pos..]);
+                            pos += c1;
+                        }
+                    }
                     let (count, c0) = vbyte::decode_one(&inb_data[pos..]);
                     pos += c0;
                     let mut e: Vec<i32> = Vec::with_capacity(count as usize);
