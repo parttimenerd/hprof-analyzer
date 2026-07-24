@@ -262,6 +262,54 @@ fn item_is_aggregate(it: &SelectItem) -> bool {
     matches!(it, SelectItem::Aggregate { .. })
 }
 
+/// Returns a human-readable display name for a SELECT item, used in GROUP BY
+/// validation error messages to identify the offending column.
+fn select_item_display_name(it: &SelectItem) -> String {
+    match it {
+        SelectItem::Attr(a) => attr_display_name(a),
+        SelectItem::Expr(e) => expr_display_name(e),
+        SelectItem::Star => "*".into(),
+        SelectItem::Aggregate { func, .. } => format!("{func:?}(...)"),
+        SelectItem::Path { .. } => "path(...)".into(),
+        SelectItem::ToString(_) => "toString(...)".into(),
+    }
+}
+
+fn attr_display_name(a: &Attr) -> String {
+    match a {
+        Attr::ObjectId => "@objectId".into(),
+        Attr::ObjectAddress => "@objectAddress".into(),
+        Attr::UsedHeapSize => "@usedHeapSize".into(),
+        Attr::RetainedHeapSize => "@retainedHeapSize".into(),
+        Attr::DisplayName => "@displayName".into(),
+        Attr::Length => "@length".into(),
+        Attr::Inbounds => "@inbounds".into(),
+        Attr::Outbounds => "@outbounds".into(),
+        Attr::ClassOf => "classof(...)".into(),
+        Attr::Field(name) => name.clone(),
+        Attr::RefPath { hops, tail, .. } => {
+            let mut s = hops.join(".");
+            s.push('.');
+            s.push_str(&attr_display_name(tail));
+            s
+        }
+        _ => format!("{a:?}"),
+    }
+}
+
+fn expr_display_name(e: &Expr) -> String {
+    match e {
+        Expr::Attr(a) => attr_display_name(a),
+        Expr::Lit(v) => format!("{v:?}"),
+        Expr::Binary { op, lhs, rhs } => {
+            format!("({} {:?} {})", expr_display_name(lhs), op, expr_display_name(rhs))
+        }
+        Expr::Unary { op, arg } => format!("{op:?}({})", expr_display_name(arg)),
+        Expr::Method { name, .. } => format!("{name}(...)"),
+        Expr::Aggregate { func, .. } => format!("{func:?}(...)"),
+    }
+}
+
 /// Visit every `Attr` leaf in an `Expr` tree (in-order), calling `f` on each.
 fn expr_for_each_attr(e: &Expr, f: &mut impl FnMut(&Attr)) {
     match e {
@@ -486,6 +534,50 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
         flatten_and(pred.clone(), &mut where_terms);
     }
 
+    // --- GROUP BY / HAVING validation ---
+    let has_group_by = !q.group_by.is_empty();
+
+    // HAVING without GROUP BY is invalid.
+    if q.having.is_some() && !has_group_by {
+        return Err(QueryError(
+            "HAVING requires a GROUP BY clause — use WHERE to filter before aggregation, \
+             or add a GROUP BY key"
+                .into(),
+        ));
+    }
+
+    // Validate: every non-aggregate SELECT item must appear in GROUP BY.
+    if has_group_by {
+        for item in q.select.iter() {
+            if item_is_aggregate(item) {
+                continue;
+            }
+            let item_as_expr: Option<Expr> = match item {
+                SelectItem::Attr(a) => Some(Expr::Attr(a.clone())),
+                SelectItem::Expr(e) => Some(*e.clone()),
+                SelectItem::Star => None,
+                _ => None,
+            };
+            if let Some(item_expr) = item_as_expr {
+                let in_group_by = q.group_by.iter().any(|ge| ge == &item_expr);
+                if !in_group_by {
+                    let col_name = select_item_display_name(item);
+                    return Err(QueryError(format!(
+                        "non-aggregate column '{col_name}' must appear in GROUP BY \
+                         (add it to the GROUP BY list or wrap it in an aggregate like COUNT(*))"
+                    )));
+                }
+            }
+        }
+    }
+
+    // Collect HAVING needs and terms.
+    let mut having_terms = Vec::new();
+    if let Some(having) = &q.having {
+        collect_pred_needs(having, &mut needs)?;
+        flatten_and(having.clone(), &mut having_terms);
+    }
+
     // True when any aggregate arg is a compound SelectItem::Expr — i.e. the arg
     // is not a bare @attr or COUNT(*) and cannot be answered from class-summary
     // scalars. A bare @usedHeapSize arg folds to SelectItem::Attr (not Expr), so
@@ -511,7 +603,9 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
     // SingleScan `visit_*` path. Route it to SingleScan so the aggregate folds
     // over at most the one matched object (COUNT(*) ≤ 1).
     let is_object_from = matches!(q.from, crate::query::ast::FromSource::Object(_));
-    let kind = if is_aggregate
+    let kind = if has_group_by {
+        StageKind::GroupBy
+    } else if is_aggregate
         && !needs.instance_scalar
         && !needs.instance_string
         && where_terms.is_empty()
@@ -815,8 +909,8 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
         from_subplan,
         in_subplans,
         deferred_projections: Vec::new(),
-        group_by_exprs: Vec::new(),
-        having_terms: Vec::new(),
+        group_by_exprs: q.group_by.clone(),
+        having_terms,
     })
 }
 
@@ -3174,6 +3268,48 @@ mod tests {
             plan.finalize_at,
             Phase::P1,
             "@GCRoots must force finalize_at != P1 so the entry goes into carry mode"
+        );
+    }
+
+    #[test]
+    fn group_by_plans_as_group_by_stage() {
+        let q = parse(
+            "SELECT @displayName, COUNT(*) FROM java.lang.Thread GROUP BY @displayName",
+        )
+        .unwrap();
+        let plan = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        assert_eq!(plan.kind, StageKind::GroupBy);
+        assert_eq!(plan.group_by_exprs.len(), 1);
+    }
+
+    #[test]
+    fn having_without_group_by_errors_at_plan_time() {
+        use crate::query::ast::{Attr, CompareOp, Expr, Predicate, Value};
+        let q = parse("SELECT COUNT(*) FROM java.lang.Thread").unwrap();
+        // Inject having manually to test planner path
+        let mut q2 = q.clone();
+        q2.having = Some(Predicate::Compare {
+            lhs: Expr::Attr(Attr::UsedHeapSize),
+            op: CompareOp::Gt,
+            rhs: Expr::Lit(Value::Int(0)),
+        });
+        let err = plan_query(&q2, crate::query::DEFAULT_PATH_DEPTH_CAP)
+            .expect_err("HAVING without GROUP BY must error");
+        assert!(err.0.to_lowercase().contains("having"), "got: {}", err.0);
+    }
+
+    #[test]
+    fn group_by_non_aggregate_not_in_group_by_errors() {
+        let q = parse(
+            "SELECT @displayName, @usedHeapSize, COUNT(*) FROM java.lang.Thread GROUP BY @displayName",
+        )
+        .unwrap();
+        let err = plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP)
+            .expect_err("@usedHeapSize not in GROUP BY must error");
+        assert!(
+            err.0.contains("@usedHeapSize") || err.0.contains("usedHeapSize") || err.0.to_lowercase().contains("non-aggregate"),
+            "error must name the offending column, got: {}",
+            err.0
         );
     }
 }
