@@ -907,6 +907,13 @@ fn run(
     } else {
         None
     };
+    // Capture hprof file offsets for o2hprof emission. Only needed when MAT
+    // caches are being generated; skip the Vec clone/move on the non-MAT path.
+    let mat_hprof_offsets: Option<Vec<u64>> = if mat.is_some() {
+        Some(p1.hprof_offsets.clone())
+    } else {
+        None
+    };
     let (mut g, mut inbound, shallow_c, class_idx_c, alloc_serial_c) =
         pass2::Pass2::build(input, p1, compress, &opts)?;
     log(
@@ -1121,11 +1128,23 @@ fn run(
                 idx_vals.push(addrs[old_id as usize] as i64);
             }
             m.emit_long_index("idx", &idx_vals)?;
+            // o2hprof: mat-id 0 = 0 (synthetic root has no hprof record),
+            // then the hprof file offset for each reachable object in MAT id order.
+            if let Some(ref offsets) = mat_hprof_offsets {
+                let mut o2hprof_vals: Vec<i64> = Vec::with_capacity(mc + 1);
+                o2hprof_vals.push(0i64);
+                for &old_id in mm.sorted() {
+                    o2hprof_vals.push(offsets[old_id as usize] as i64);
+                }
+                m.emit_long_index("o2hprof", &o2hprof_vals)?;
+                drop(o2hprof_vals);
+            }
         }
         Some(mm)
     } else {
         None
     };
+    drop(mat_hprof_offsets); // offsets consumed above; free before retained-size peak
     // Build the row→class-object id inverse table now that mm is available, so
     // we can prefer reachable class-objects when multiple map to the same row.
     let mut mat_inv: Option<Vec<i32>> = if let (Some(ref mm), Some(ref coc)) =
