@@ -61,8 +61,6 @@ pub struct MatIdMap {
     old_to_mat: Vec<i32>,
     /// reachable old-ids in address-ascending order (mat-id = index+1)
     sorted: Vec<u32>,
-    /// object address per mat-id position: `addrs[i]` = address of mat-id `i+1`
-    addrs: Vec<u64>,
 }
 
 impl MatIdMap {
@@ -80,14 +78,12 @@ impl MatIdMap {
         sorted.sort_by_key(|&i| addr_at(i as usize));
 
         let mut old_to_mat = vec![-1i32; n];
-        let mut addrs = Vec::with_capacity(sorted.len());
         for (mat_pos, &old_id) in sorted.iter().enumerate() {
             // mat-id 0 = synthetic root; real objects start at 1
             old_to_mat[old_id as usize] = (mat_pos + 1) as i32;
-            addrs.push(addr_at(old_id as usize));
         }
 
-        Self { old_to_mat, sorted, addrs }
+        Self { old_to_mat, sorted }
     }
 
     /// Translate an old dense-id to a mat-id. Returns -1 for unreachable
@@ -111,19 +107,10 @@ impl MatIdMap {
         &self.sorted
     }
 
-    /// Release the `addrs` vector after idx/o2hprof emission; saves ~4 GB.
-    /// After this call, `addr_at_mat` always returns 0.
-    pub fn free_addrs(&mut self) {
-        self.addrs = Vec::new();
-    }
-
-    /// Address of the object with the given mat-id (1-based). Returns 0 for
-    /// out-of-range or mat-id 0 (synthetic root).
-    pub fn addr_at_mat(&self, mat_id: i32) -> u64 {
-        if mat_id <= 0 || mat_id as usize > self.addrs.len() {
-            return 0;
-        }
-        self.addrs[(mat_id - 1) as usize]
+    /// Address of the object with the given mat-id (1-based). Returns 0 since
+    /// address data is no longer stored in MatIdMap (was freed to save ~4 GB RSS).
+    pub fn addr_at_mat(&self, _mat_id: i32) -> u64 {
+        0
     }
 }
 
@@ -363,6 +350,22 @@ impl MatEmitter {
         let w = BufWriter::new(File::create(self.path(name))?);
         let mut s = LongIndexStreamer::new(w);
         for &v in vals {
+            s.push(v)?;
+        }
+        let w = s.finish()?;
+        w.into_inner().map_err(|e| e.into_error())?;
+        Ok(())
+    }
+
+    /// Streaming variant: emit a LongIndex from an iterator, avoiding a full
+    /// `Vec<i64>` materialisation.
+    pub fn emit_long_index_iter<I>(&self, name: &str, iter: I) -> io::Result<()>
+    where
+        I: IntoIterator<Item = i64>,
+    {
+        let w = BufWriter::new(File::create(self.path(name))?);
+        let mut s = LongIndexStreamer::new(w);
+        for v in iter {
             s.push(v)?;
         }
         let w = s.finish()?;
