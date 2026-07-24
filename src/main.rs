@@ -31,6 +31,7 @@ mod reader;
 mod report;
 mod retained;
 mod rpo_dfs;
+mod serve;
 mod sweep;
 mod trace;
 mod types;
