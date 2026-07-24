@@ -377,6 +377,18 @@ fn expr_for_each_attr(e: &Expr, f: &mut impl FnMut(&Attr)) {
             if let Attr::ToHex(inner) = a {
                 expr_for_each_attr(inner, f);
             }
+            // `ArrayIndex`/`ArraySlice` carry index/start/end expressions that
+            // may themselves reference attrs; recurse into them.
+            if let Attr::ArrayIndex { base, index } = a {
+                expr_for_each_attr(index, f);
+                // Also visit the base attr itself.
+                f(base);
+            }
+            if let Attr::ArraySlice { base, start, end } = a {
+                if let Some(s) = start { expr_for_each_attr(s, f); }
+                if let Some(e) = end { expr_for_each_attr(e, f); }
+                f(base);
+            }
         }
         Expr::Lit(_) => {}
         Expr::Binary { lhs, rhs, .. } => {
@@ -947,6 +959,13 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
         if finalize_at == Phase::P1 {
             finalize_at = Phase::P2;
         }
+    }
+
+    // Array index/slice: if `ref_walk` was set by ArrayIndex/ArraySlice but no
+    // actual RefPath hops were found (select_hops == 0 && where_hops == 0), still
+    // advance to P2 so the late window is available for resolution.
+    if needs.ref_walk && finalize_at == Phase::P1 {
+        finalize_at = Phase::P2;
     }
 
     // `toString(s)`: for FROM java.lang.String, decode each instance to its text
@@ -1553,6 +1572,8 @@ fn note_attr_need_attr(a: &Attr, needs: &mut QueryNeeds) {
         Attr::ToString(_) => needs.string_values = true,
         // G1: GC-root attrs require the full analyze pipeline.
         Attr::GcRoots | Attr::GcRootInfo => needs.gc_roots = true,
+        // Array index/slice: resolved in P2 late window, needs ref_walk.
+        Attr::ArrayIndex { .. } | Attr::ArraySlice { .. } => needs.ref_walk = true,
         _ => {}
     }
 }

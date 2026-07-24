@@ -866,6 +866,8 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             Attr::ValueArray | Attr::ReferenceArray => QueryValue::Null,
             // G1: GC-root attrs; resolved in analyze-mode late phase only.
             Attr::GcRoots | Attr::GcRootInfo => QueryValue::Null,
+            // Array index/slice: resolved in P2 late window; scan-time projects Null.
+            Attr::ArrayIndex { .. } | Attr::ArraySlice { .. } => QueryValue::Null,
             Attr::ToString(_) => {
                 // String FROM is decoded late (ResolveStringValues). A non-String
                 // object has no decodable text, so we mirror MAT's fallback display
@@ -948,6 +950,8 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             Attr::ValueArray | Attr::ReferenceArray => QueryValue::Null,
             // G1: GC-root attrs; resolved in analyze-mode late phase only.
             Attr::GcRoots | Attr::GcRootInfo => QueryValue::Null,
+            // Array index/slice: resolved in P2 late window; scan-time projects Null.
+            Attr::ArrayIndex { .. } | Attr::ArraySlice { .. } => QueryValue::Null,
             Attr::ToString(_) => {
                 // Arrays are never String-decoded (from_is_string() is false here),
                 // so this always renders the MAT fallback display form
@@ -2450,6 +2454,9 @@ fn attr_name(a: &Attr) -> String {
         // G1: GC-root attrs.
         Attr::GcRoots => "@GCRoots".into(),
         Attr::GcRootInfo => "@GCRootInfo".into(),
+        // Array index/slice postfix notation.
+        Attr::ArrayIndex { base, .. } => format!("{}[...]", attr_name(base)),
+        Attr::ArraySlice { base, .. } => format!("{}[...]", attr_name(base)),
     }
 }
 

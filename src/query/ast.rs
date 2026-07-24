@@ -145,6 +145,14 @@ pub enum Attr {
     /// `@GCRootInfo` / `@info` — root descriptor detail (root type/tag) for a
     /// root object; empty/Null for a non-root. Analyze-pipeline only.
     GcRootInfo,
+    /// `base[index]` — single 0-based element of an array-valued attr.
+    /// Out-of-bounds or non-array base → Null (not an error).
+    /// Resolved in P2 (late window).
+    ArrayIndex { base: Box<Attr>, index: Box<Expr> },
+    /// `base[start:end]` — slice of an array-valued attr.
+    /// start/end are optional (None = beginning/end).
+    /// Resolved in P2 (late window). Result: JSON-encoded string.
+    ArraySlice { base: Box<Attr>, start: Option<Box<Expr>>, end: Option<Box<Expr>> },
 }
 
 /// An arithmetic expression over attribute/field/literal operands. Leaves are

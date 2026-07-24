@@ -37,6 +37,12 @@ pub enum Token {
     RParen,
     #[token(",")]
     Comma,
+    #[token("[")]
+    LBracket,
+    #[token("]")]
+    RBracket,
+    #[token(":")]
+    Colon,
     #[token("=")]
     Eq,
     #[token("!=")]
@@ -388,7 +394,49 @@ where
             .or(just(Token::LParen)
                 .ignore_then(expr.clone())
                 .then_ignore(just(Token::RParen)))
-            .or(attr.clone().map(Expr::Attr));
+            .or(
+                // `attr[expr]` (index) or `attr[start:end]` (slice), or bare `attr`.
+                attr.clone()
+                    .then(
+                        just(Token::LBracket)
+                            .ignore_then(
+                                // Optional start expression (None for `[:end]`).
+                                expr.clone().or_not()
+                                    .then(
+                                        just(Token::Colon)
+                                            .ignore_then(expr.clone().or_not())
+                                            .or_not()
+                                    )
+                            )
+                            .then_ignore(just(Token::RBracket))
+                            .or_not()
+                    )
+                    .map(|(base, postfix)| {
+                        let attr_val = match postfix {
+                            None => base,
+                            Some((Some(idx_expr), None)) => {
+                                // `base[idx]` — single index (no colon)
+                                Attr::ArrayIndex {
+                                    base: Box::new(base),
+                                    index: Box::new(idx_expr),
+                                }
+                            }
+                            Some((start, Some(end))) => {
+                                // `base[start:end]` / `base[:end]` / `base[start:]`
+                                Attr::ArraySlice {
+                                    base: Box::new(base),
+                                    start: start.map(Box::new),
+                                    end: end.map(Box::new),
+                                }
+                            }
+                            Some((None, None)) => {
+                                // bare `[]` without colon — treat as identity (unusual)
+                                base
+                            }
+                        };
+                        Expr::Attr(attr_val)
+                    })
+            );
 
         let unary = just(Token::Minus)
             .to(UnaryOp::Neg)
@@ -1096,6 +1144,19 @@ fn normalize_attr(a: &mut Attr, alias: Option<&str>) {
             let _ = role; // role is preserved as-is (planner may refine it).
             normalize_attr(tail, alias);
         }
+        return;
+    }
+    // ArrayIndex: normalize the base attr and the index expression.
+    if let Attr::ArrayIndex { base, index } = a {
+        normalize_attr(base, alias);
+        normalize_expr(index, alias);
+        return;
+    }
+    // ArraySlice: normalize the base attr and optional start/end expressions.
+    if let Attr::ArraySlice { base, start, end } = a {
+        normalize_attr(base, alias);
+        if let Some(s) = start { normalize_expr(s, alias); }
+        if let Some(e) = end { normalize_expr(e, alias); }
         return;
     }
     let Attr::Field(name) = a else { return };
@@ -4693,6 +4754,54 @@ mod tests {
         assert!(
             err.0.to_lowercase().contains("intersect") || err.0.to_lowercase().contains("except"),
             "error must mention INTERSECT or EXCEPT, got: {}", err.0
+        );
+    }
+
+    #[test]
+    fn parse_array_index() {
+        let q = super::parse("SELECT s.value[0] FROM java.lang.String s").unwrap();
+        let item = &q.select[0];
+        assert!(
+            matches!(item, crate::query::ast::SelectItem::Attr(
+                crate::query::ast::Attr::ArrayIndex { .. }
+            )),
+            "expected ArrayIndex, got: {item:?}"
+        );
+    }
+
+    #[test]
+    fn parse_array_slice() {
+        let q = super::parse("SELECT s.value[1:3] FROM java.lang.String s").unwrap();
+        let item = &q.select[0];
+        assert!(
+            matches!(item, crate::query::ast::SelectItem::Attr(
+                crate::query::ast::Attr::ArraySlice { .. }
+            )),
+            "expected ArraySlice, got: {item:?}"
+        );
+    }
+
+    #[test]
+    fn parse_array_slice_open_start() {
+        let q = super::parse("SELECT s.value[:3] FROM java.lang.String s").unwrap();
+        let item = &q.select[0];
+        assert!(
+            matches!(item, crate::query::ast::SelectItem::Attr(
+                crate::query::ast::Attr::ArraySlice { start: None, .. }
+            )),
+            "expected open-start slice, got: {item:?}"
+        );
+    }
+
+    #[test]
+    fn parse_array_slice_open_end() {
+        let q = super::parse("SELECT s.value[2:] FROM java.lang.String s").unwrap();
+        let item = &q.select[0];
+        assert!(
+            matches!(item, crate::query::ast::SelectItem::Attr(
+                crate::query::ast::Attr::ArraySlice { end: None, .. }
+            )),
+            "expected open-end slice, got: {item:?}"
         );
     }
 }
