@@ -282,6 +282,15 @@ enum Cmd {
         #[command(subcommand)]
         cmd: DevCmd,
     },
+    /// Start a loopback HTTP server exposing OQL and report-section endpoints.
+    Server {
+        /// Path to the .hprof dump.
+        #[arg(value_hint = ValueHint::FilePath)]
+        input: String,
+        /// Port to bind (default 7070; loopback only).
+        #[arg(long, value_name = "N")]
+        port: Option<u16>,
+    },
     /// Run one or more OQL queries against a heap dump and print the results.
     /// Fast query-only path (no full report): retained-size, dominator, and
     /// reference-graph attributes (@retainedHeapSize, dominators(x), @inbounds,
@@ -555,6 +564,20 @@ fn main() {
                 }
             }
         },
+        Some(Cmd::Server { input, port }) => {
+            if !input_is_hprof(&input) {
+                fail(format!(
+                    "'{input}' is not an HPROF dump; the `server` subcommand needs a .hprof[.zip] file"
+                ));
+            }
+            let opts = AnalyzeOptions {
+                reachable_only: true,
+                ..DetailLevel::Default.options()
+            };
+            if let Err(e) = serve::run_server(&input, port.unwrap_or(7070), opts) {
+                fail(analyze_error_hint(&input, &e));
+            }
+        }
         Some(Cmd::Query {
             input,
             query,
