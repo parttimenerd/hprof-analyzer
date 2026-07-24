@@ -2,6 +2,8 @@
 //! Extends the OQL server with lazy full-analysis and per-section endpoints.
 //! Loopback only, sync tiny_http.
 
+pub const DEFAULT_PORT: u16 = 7070;
+
 use std::io;
 use std::sync::{Arc, Mutex};
 
@@ -73,6 +75,7 @@ impl ServeState {
     }
 
     /// Returns true when analysis is Done.
+    #[cfg(test)]
     pub fn report_ready(&self) -> bool {
         let guard = self.state.lock().unwrap_or_else(|e| e.into_inner());
         matches!(*guard, AnalysisState::Done(_))

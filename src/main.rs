@@ -574,7 +574,7 @@ fn main() {
                 reachable_only: true,
                 ..DetailLevel::Default.options()
             };
-            if let Err(e) = serve::run_server(&input, port.unwrap_or(7070), opts) {
+            if let Err(e) = serve::run_server(&input, port.unwrap_or(serve::DEFAULT_PORT), opts) {
                 fail(analyze_error_hint(&input, &e));
             }
         }
@@ -606,7 +606,7 @@ fn main() {
                 // Loopback HTTP server: POST OQL, get JSON back. Reads no stdin;
                 // --query/--query-file are ignored.
                 if let Err(e) =
-                    crate::query::server::run_server(&input, query_path_depth, port.unwrap_or(7070))
+                    crate::query::server::run_server(&input, query_path_depth, port.unwrap_or(serve::DEFAULT_PORT))
                 {
                     fail(analyze_error_hint(&input, &e));
                 }
