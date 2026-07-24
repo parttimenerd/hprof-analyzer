@@ -48,6 +48,7 @@ impl ServeState {
             drop(guard); // release lock before spawning
 
             let state_arc = Arc::clone(&self.state);
+            let oql_arc = Arc::clone(&self.oql);
             let path = self.path.clone();
             let opts = self.opts.clone();
             std::thread::spawn(move || {
@@ -57,6 +58,11 @@ impl ServeState {
                     Ok(r) => AnalysisState::Done(Arc::new(r)),
                     Err(e) => AnalysisState::Failed(e.to_string()),
                 };
+                drop(g);
+                // Unlock OQL's reachable_only restriction now that the full
+                // analysis pipeline has run. Also invalidates the stale cache
+                // (built with reachable_only=true) so the next query rebuilds.
+                oql_arc.set_full_analysis();
             });
             true
         } else {

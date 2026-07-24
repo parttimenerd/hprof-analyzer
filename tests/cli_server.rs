@@ -610,3 +610,37 @@ fn server_unknown_route_404() {
         "expected HTTP 404 for unknown route, got {status}"
     );
 }
+
+/// After POST /analyze completes, `@retainedHeapSize` queries must succeed.
+/// Before this fix, the OQL server was permanently locked to `reachable_only=true`,
+/// which caused retained-size / dominator queries to error with
+/// "requires the full analysis pipeline".
+#[test]
+fn server_oql_retained_size_after_analysis() {
+    let Some(hprof) = philosophers() else { return };
+    let (mut child, port) = start_server(&hprof);
+    curl_post(port, "/analyze", "");
+    wait_for_ready(port);
+    let (status, body) = curl_post(
+        port,
+        "/",
+        "SELECT @displayName, @retainedHeapSize FROM java.lang.Thread \
+         ORDER BY @retainedHeapSize DESC LIMIT 3",
+    );
+    child.kill().ok();
+    child.wait().ok();
+    assert_eq!(
+        status, 200,
+        "expected HTTP 200 for @retainedHeapSize query after analysis, got {status}: {body}"
+    );
+    assert!(
+        body.contains("\"rows\""),
+        "@retainedHeapSize query should contain 'rows', got: {}",
+        &body[..body.len().min(500)]
+    );
+    assert!(
+        !body.contains("requires the full analysis pipeline"),
+        "@retainedHeapSize query must not error with 'requires the full analysis pipeline', got: {}",
+        &body[..body.len().min(500)]
+    );
+}

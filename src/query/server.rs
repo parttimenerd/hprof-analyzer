@@ -3,6 +3,7 @@
 //! GET /help returns the language reference. Loopback-only, sync tiny_http.
 
 use std::io;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -57,22 +58,43 @@ pub fn run_query_json(
     );
     let default_name = crate::query::viz::default_view_name(&q);
 
-    let eligible = crate::query::repl::cache_eligible(&q, &plan);
-    let run_res: io::Result<Vec<QueryResult>> = if eligible {
-        if cache.is_none() {
-            match ReplCache::build(path, reachable_only) {
-                Ok(c) => *cache = Some(c),
-                Err(e) => return internal_error(e),
-            }
-        }
-        match cache {
-            Some(c) if c.reachable_only == reachable_only => {
-                crate::query::run::run_resident_only(c, &[(q, plan)], reachable_only)
-            }
-            _ => crate::query::run::run_single_dump(path, &[(q, plan)], reachable_only),
-        }
+    // When the full analysis pipeline is available (!reachable_only) and the
+    // query needs cross-phase data (retained sizes, dominators, edges, gc-roots,
+    // refwalk), escalate to run_oql_escalated which builds the dominator tree and
+    // retained-size arrays on-the-fly. This makes @retainedHeapSize, dominators(),
+    // @inbounds, etc. work after the server's full analysis completes.
+    let needs_full = !plan.late_ops.is_empty()
+        || plan.needs.retained
+        || plan.needs.dominator_children
+        || plan.needs.ref_walk
+        || plan.needs.gc_roots;
+
+    let run_res: io::Result<Vec<QueryResult>> = if !reachable_only && needs_full {
+        let (flat, union_groups) = crate::query::run::expand_union_queries(&[(q, plan)]);
+        let opts = crate::AnalyzeOptions {
+            reachable_only,
+            query_path_depth: path_depth,
+            ..crate::AnalyzeOptions::default()
+        };
+        crate::run_oql_escalated(path, &flat, &union_groups, reachable_only, &opts)
     } else {
-        crate::query::run::run_single_dump(path, &[(q, plan)], reachable_only)
+        let eligible = crate::query::repl::cache_eligible(&q, &plan);
+        if eligible {
+            if cache.is_none() {
+                match ReplCache::build(path, reachable_only) {
+                    Ok(c) => *cache = Some(c),
+                    Err(e) => return internal_error(e),
+                }
+            }
+            match cache {
+                Some(c) if c.reachable_only == reachable_only => {
+                    crate::query::run::run_resident_only(c, &[(q, plan)], reachable_only)
+                }
+                _ => crate::query::run::run_single_dump(path, &[(q, plan)], reachable_only),
+            }
+        } else {
+            crate::query::run::run_single_dump(path, &[(q, plan)], reachable_only)
+        }
     };
     let mut results = match run_res {
         Ok(r) => r,
@@ -227,14 +249,15 @@ fn internal_error(e: io::Error) -> serde_json::Value {
     })
 }
 
-/// Shared server state. `path`/`path_depth`/`reachable_only` are immutable; the
-/// warm ReplCache is behind a Mutex so worker threads can share (and lazily
-/// build) it. Field/scan-path queries rebuild pass1+pass2 per request via
-/// run_single_dump — no shared mutable heap state needed.
+/// Shared server state. `path`/`path_depth` are immutable; `reachable_only`
+/// starts `true` and is atomically lowered to `false` once the full analysis
+/// pipeline completes. The warm ReplCache is behind a Mutex so worker threads
+/// can share (and lazily build) it. Field/scan-path queries rebuild pass1+pass2
+/// per request via run_single_dump — no shared mutable heap state needed.
 pub struct ServerState {
     path: String,
     path_depth: usize,
-    reachable_only: bool,
+    reachable_only: AtomicBool,
     cache: Mutex<Option<ReplCache>>,
 }
 
@@ -243,9 +266,20 @@ impl ServerState {
         Ok(ServerState {
             path: path.to_string(),
             path_depth,
-            reachable_only,
+            reachable_only: AtomicBool::new(reachable_only),
             cache: Mutex::new(None),
         })
+    }
+
+    /// Called once the full analysis pipeline completes. Lowers `reachable_only`
+    /// to `false` so subsequent queries can use `@retainedHeapSize`, dominators,
+    /// etc. Also invalidates the warm cache: it was built with `reachable_only=true`
+    /// (which affects dfn and reachable filtering), so a fresh build is needed.
+    pub fn set_full_analysis(&self) {
+        self.reachable_only.store(false, Ordering::Relaxed);
+        // Drop the stale cache so the next query rebuilds with reachable_only=false.
+        let mut guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = None;
     }
 
     /// Route (method, url, body) -> (http_status, body_string, content_type). Pure enough
@@ -270,7 +304,7 @@ impl ServerState {
                 // would kill every worker that later touches the cache.
                 let mut guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
                 let v = run_query_json(
-                    &self.path, &oql, self.path_depth, self.reachable_only, &mut guard,
+                    &self.path, &oql, self.path_depth, self.reachable_only.load(Ordering::Relaxed), &mut guard,
                 );
                 let status = if v["ok"] == serde_json::json!(true) { 200 } else { 400 };
                 (status, v.to_string(), "application/json")
@@ -285,7 +319,7 @@ impl ServerState {
                 };
                 let mut guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
                 let (status, body) = run_query_ndjson(
-                    &self.path, &oql, self.path_depth, self.reachable_only, &mut guard,
+                    &self.path, &oql, self.path_depth, self.reachable_only.load(Ordering::Relaxed), &mut guard,
                 );
                 (status, body, "application/x-ndjson")
             }

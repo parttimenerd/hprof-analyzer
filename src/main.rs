@@ -1501,7 +1501,7 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
 /// over peak memory (the query subcommand has no RSS contract). Returns the same
 /// `Vec<QueryResult>` the fast path produces, so the caller's finalize/print loop
 /// is unchanged. `reachable_only` governs final row pruning (skipped under `--all`).
-fn run_oql_escalated(
+pub(crate) fn run_oql_escalated(
     input: &str,
     flat: &[(query::ast::Query, query::plan::QueryPlan)],
     union_groups: &[query::run::UnionGroup],
