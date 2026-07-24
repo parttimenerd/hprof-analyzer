@@ -144,7 +144,7 @@ impl ServeState {
                             } else {
                                 match serde_json::to_string_pretty(&*report) {
                                     Ok(j) => (200, j, "application/json"),
-                                    Err(e) => (500, e.to_string(), "text/plain"),
+                                    Err(e) => (500, serde_json::json!({"ok":false,"error":{"kind":"serialization","message":e.to_string()}}).to_string(), "application/json"),
                                 }
                             }
                         }
@@ -227,7 +227,7 @@ fn section_response<T: serde::Serialize>(
     } else {
         match serde_json::to_string_pretty(section) {
             Ok(j) => (200, j, "application/json"),
-            Err(e) => (500, e.to_string(), "text/plain"),
+            Err(e) => (500, serde_json::json!({"ok":false,"error":{"kind":"serialization","message":e.to_string()}}).to_string(), "application/json"),
         }
     }
 }
