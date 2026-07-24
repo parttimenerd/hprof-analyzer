@@ -1283,10 +1283,12 @@ fn run(
                 .restore()?;
             // Emit outbound in MAT id order. After scatter, fwd_off[d] = end pos;
             // start[d] = fwd_off[d-1] (or 0 for d==0).
+            // Translate fwd_tgt entries (dense ids) to MAT ids in-place to avoid
+            // a large per-object scratch Vec that can inflate peak RSS by 1-2 GB
+            // for objects with high out-degree (large arrays, class objects).
             let n_entries = mm.mat_count();
             let sorted = mm.sorted();
             let mut idx = 0usize;
-            let mut scratch: Vec<i32> = Vec::new();
             m.emit_outbound_cb(n_entries, |push| {
                 if idx == 0 {
                     idx += 1;
@@ -1296,23 +1298,27 @@ fn run(
                 idx += 1;
                 let lo = if old_id == 0 { 0 } else { fwd_off[old_id as usize - 1] as usize };
                 let hi = fwd_off[old_id as usize] as usize;
-                scratch.clear();
-                for &raw in &fwd_tgt[lo..hi] {
-                    let mid = mm.translate(raw as i32);
+                let coid = class_obj_ids[old_id as usize];
+                let class_mat = if coid == u32::MAX { 0i32 } else { mm.translate(coid as i32).max(0) };
+                // Translate dense ids to MAT ids in-place; compact reachable ones to front.
+                let mut count = 0usize;
+                for i in lo..hi {
+                    let mid = mm.translate(fwd_tgt[i] as i32);
                     if mid >= 0 {
-                        scratch.push(mid);
+                        fwd_tgt[lo + count] = mid as u32;
+                        count += 1;
                     }
                 }
-                scratch.sort_unstable();
-                scratch.dedup();
-                let coid = class_obj_ids[old_id as usize];
-                let class_mat = if coid == u32::MAX { 0 } else { mm.translate(coid as i32).max(0) };
-                if let Ok(pos) = scratch.binary_search(&class_mat) {
-                    scratch.remove(pos);
-                }
+                fwd_tgt[lo..lo + count].sort_unstable();
+                // Emit class_mat first, then remaining edges (dedup, skip class_mat).
+                let class_u = class_mat as u32;
                 push(class_mat)?;
-                for &v in &scratch {
-                    push(v)?;
+                let mut prev = u32::MAX;
+                for &v in &fwd_tgt[lo..lo + count] {
+                    if v != class_u && v != prev {
+                        push(v as i32)?;
+                        prev = v;
+                    }
                 }
                 Ok(())
             })?;
