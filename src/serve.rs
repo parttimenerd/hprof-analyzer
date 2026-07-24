@@ -4,7 +4,7 @@
 
 pub const DEFAULT_PORT: u16 = 7070;
 
-use std::io;
+use std::io::{self, Read as _};
 use std::sync::{Arc, Mutex};
 
 use tiny_http::{Response, Server};
@@ -357,8 +357,19 @@ pub fn run_server(path: &str, port: u16, opts: AnalyzeOptions) -> io::Result<()>
                 };
                 let method = request.method().as_str().to_string();
                 let url = request.url().to_string();
+                const MAX_BODY: usize = 64 * 1024; // 64 KB
                 let mut body = String::new();
-                let _ = request.as_reader().read_to_string(&mut body);
+                let mut limited = request.as_reader().take(MAX_BODY as u64 + 1);
+                let _ = limited.read_to_string(&mut body);
+                if body.len() > MAX_BODY {
+                    let resp = Response::from_string(
+                        serde_json::json!({"ok":false,"error":{"kind":"body_too_large","message":"request body exceeds 64 KB limit"}}).to_string()
+                    )
+                    .with_status_code(413)
+                    .with_header(tiny_http::Header::from_bytes("Content-Type", "application/json").unwrap());
+                    let _ = request.respond(resp);
+                    continue;
+                }
                 let (status, resp_body, ctype) = state.route(&method, &url, &body);
                 let resp = Response::from_string(resp_body)
                     .with_status_code(status)

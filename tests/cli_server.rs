@@ -689,3 +689,33 @@ fn server_oql_retained_size_after_analysis() {
         &body[..body.len().min(500)]
     );
 }
+
+/// POST / with a JSON body {"query":"SELECT ..."} works the same as a raw body.
+#[test]
+fn server_oql_json_body() {
+    let Some(hprof) = philosophers() else { return };
+    let (mut child, port) = start_server(&hprof);
+    let url = format!("http://127.0.0.1:{port}/");
+    let out = std::process::Command::new("curl")
+        .args([
+            "-s", "-w", "\n%{http_code}",
+            "-X", "POST",
+            "-H", "Content-Type: application/json",
+            "-d", r#"{"query":"SELECT COUNT(*) FROM java.lang.String"}"#,
+            &url,
+        ])
+        .output()
+        .expect("curl failed");
+    let raw = String::from_utf8_lossy(&out.stdout);
+    let mut lines: Vec<&str> = raw.lines().collect();
+    let status: u32 = lines.pop().and_then(|l| l.trim().parse().ok()).unwrap_or(0);
+    let body = lines.join("\n");
+    child.kill().ok();
+    child.wait().ok();
+    assert_eq!(status, 200, "JSON body POST / should return 200, got {status}: {body}");
+    assert!(
+        body.contains("\"rows\"") || body.contains("\"columns\""),
+        "JSON body OQL response should contain QueryResult fields, got: {}",
+        &body[..body.len().min(400)]
+    );
+}
