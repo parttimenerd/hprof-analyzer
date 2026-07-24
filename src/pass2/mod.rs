@@ -382,7 +382,9 @@ impl Pass2 {
         let mut scan_outcomes: Vec<Result<usize, (usize, crate::query::model::QueryResult)>> =
             Vec::new();
         for (slot, (q, plan)) in queries.iter().enumerate() {
-            if plan.kind != crate::query::plan::StageKind::SingleScan {
+            if plan.kind != crate::query::plan::StageKind::SingleScan
+                && plan.kind != crate::query::plan::StageKind::GroupBy
+            {
                 continue;
             }
             match crate::query::plan::validate_fields(q, &query_resolver) {

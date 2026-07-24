@@ -206,6 +206,10 @@ pub struct SingleScanExecutor<'a, R: ClassResolver> {
     /// + LIMIT truncate so the caller can prune rows by GC-reachability using the
     /// EXACT source index (not a lossy re-read of the projected row value).
     row_src: Option<Vec<u32>>,
+    /// GROUP BY accumulator: maps each unique key vector (encoded as a canonical
+    /// Debug string to avoid Float/Hash issues) to (original key Vec, per-column
+    /// AggAcc row). `None` when StageKind != GroupBy.
+    group_map: Option<std::collections::HashMap<String, (Vec<QueryValue>, Vec<AggAcc>)>>,
 }
 
 /// Per-select-item running state for a scan-time aggregate accumulator.
@@ -415,6 +419,89 @@ pub(crate) fn finalize_agg_acc(acc: AggAcc) -> QueryValue {
     }
 }
 
+/// Evaluate a HAVING predicate against a finalized GROUP BY output row.
+/// `row` is parallel to `columns`; `query` is needed for alias resolution.
+fn eval_having_term(
+    pred: &crate::query::ast::Predicate,
+    row: &[QueryValue],
+    query: &Query,
+    columns: &[QueryColumn],
+) -> bool {
+    use crate::query::ast::Predicate as P;
+    match pred {
+        P::And(a, b) => {
+            eval_having_term(a, row, query, columns)
+                && eval_having_term(b, row, query, columns)
+        }
+        P::Or(a, b) => {
+            eval_having_term(a, row, query, columns)
+                || eval_having_term(b, row, query, columns)
+        }
+        P::Not(inner) => !eval_having_term(inner, row, query, columns),
+        P::Compare { lhs, op, rhs } => {
+            let lv = eval_having_expr(lhs, row, query, columns);
+            let rv = eval_having_expr(rhs, row, query, columns);
+            compare_values(&lv, *op, &rv, None)
+        }
+        _ => true,
+    }
+}
+
+/// Evaluate a HAVING expression against a finalized GROUP BY output row.
+/// Aggregate expressions (COUNT(*), SUM(...)) look up their result column by name.
+/// Attribute expressions look up by column name.
+/// Literals convert directly.
+fn eval_having_expr(
+    e: &Expr,
+    row: &[QueryValue],
+    _query: &Query,
+    columns: &[QueryColumn],
+) -> QueryValue {
+    match e {
+        Expr::Lit(v) => match v {
+            Value::Int(n) => QueryValue::Int(*n),
+            Value::Float(f) => QueryValue::Float(*f),
+            Value::Str(s) => QueryValue::Str(s.clone()),
+            Value::Bool(b) => QueryValue::Bool(*b),
+            Value::Null => QueryValue::Null,
+        },
+        Expr::Aggregate { func, arg } => {
+            // Match aggregate column by its display name.
+            let func_upper = format!("{func:?}").to_uppercase();
+            let arg_name = match arg.as_ref() {
+                SelectItem::Star => "*".to_string(),
+                SelectItem::Attr(a) => attr_name(a),
+                SelectItem::Expr(e) => expr_name(e),
+                _ => "?".to_string(),
+            };
+            let needle = format!("{func_upper}({arg_name})");
+            columns
+                .iter()
+                .position(|c| c.name.to_uppercase() == needle.to_uppercase())
+                .and_then(|i| row.get(i))
+                .cloned()
+                .unwrap_or(QueryValue::Null)
+        }
+        Expr::Attr(attr) => {
+            // Non-aggregate column in HAVING — match by column name.
+            let name = attr_name(attr);
+            columns
+                .iter()
+                .position(|c| c.name == name)
+                .and_then(|i| row.get(i))
+                .cloned()
+                .unwrap_or(QueryValue::Null)
+        }
+        Expr::Binary { op, lhs, rhs } => {
+            let l = eval_having_expr(lhs, row, _query, columns);
+            let r = eval_having_expr(rhs, row, _query, columns);
+            arith(&l, *op, &r)
+        }
+        Expr::Unary { op, arg } => unary(*op, &eval_having_expr(arg, row, _query, columns)),
+        Expr::Method { .. } => QueryValue::Null,
+    }
+}
+
 /// A resolved `IN (<subquery>)` membership set injected before the outer scan.
 /// `lhs` is the outer attribute compared for membership (must be
 /// `@objectAddress`); `set` is the inner subquery's projected addresses; and
@@ -454,8 +541,16 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
         // aggregates). The histogram path routes aggregate-only queries that need
         // no per-object data (see plan.rs); anything routed to SingleScan with an
         // aggregate gets its own accumulator here.
-        let agg_acc = if query.select.iter().any(|it| matches!(it, SelectItem::Aggregate { .. })) {
+        let agg_acc = if plan.kind != crate::query::plan::StageKind::GroupBy
+            && query.select.iter().any(|it| matches!(it, SelectItem::Aggregate { .. }))
+        {
             Some(query.select.iter().map(init_agg_acc).collect())
+        } else {
+            None
+        };
+        // Initialize GROUP BY accumulator when this is a GroupBy plan.
+        let group_map = if plan.kind == crate::query::plan::StageKind::GroupBy {
+            Some(std::collections::HashMap::new())
         } else {
             None
         };
@@ -481,6 +576,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             agg_acc,
             target_index,
             row_src: None,
+            group_map,
         }
     }
 
@@ -509,6 +605,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             agg_acc: None,
             target_index,
             row_src: None,
+            group_map: None,
         }
     }
 
@@ -1150,6 +1247,91 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
     /// no source object) — in which case the caller keeps all rows unconditionally.
     pub fn finish_with_src(self, name: &str) -> (QueryResult, Option<Vec<u32>>) {
         let columns = query_columns(self.query);
+        // GROUP BY mode: finalize all per-group accumulators into result rows.
+        if let Some(group_map) = self.group_map {
+            let mut rows: Vec<Vec<QueryValue>> = Vec::with_capacity(group_map.len());
+            for (_key_str, (key, accs)) in group_map {
+                // Finalize all accumulators first (consuming them).
+                let finalized: Vec<QueryValue> = accs.into_iter().map(finalize_agg_acc).collect();
+                // Build one output row: aggregates from finalized acc, non-aggregates
+                // from the GROUP BY key vector matched by position in group_by_exprs.
+                let row: Vec<QueryValue> = self
+                    .query
+                    .select
+                    .iter()
+                    .enumerate()
+                    .map(|(i, item)| match item {
+                        SelectItem::Aggregate { .. } => {
+                            finalized.get(i).cloned().unwrap_or(QueryValue::Null)
+                        }
+                        _ => {
+                            // Non-aggregate: find the matching GROUP BY key by position.
+                            // group_by_exprs[j] corresponds to key[j]; find the first
+                            // group_by_expr that structurally matches this select item.
+                            let col_name = column_name(item);
+                            let gb_match = self
+                                .plan
+                                .group_by_exprs
+                                .iter()
+                                .enumerate()
+                                .find(|(_, ge)| {
+                                    // Match by column name equality: the select item's
+                                    // display name should match the group-by expr's name.
+                                    let ge_name = expr_name(ge);
+                                    ge_name == col_name
+                                        || match (ge, item) {
+                                            (Expr::Attr(ga), SelectItem::Attr(a)) => ga == a,
+                                            (Expr::Attr(ga), SelectItem::Expr(e)) => {
+                                                matches!(e.as_ref(), Expr::Attr(ea) if ea == ga)
+                                            }
+                                            _ => false,
+                                        }
+                                });
+                            match gb_match {
+                                Some((j, _)) => key.get(j).cloned().unwrap_or(QueryValue::Null),
+                                // Fallback: take the first key value if available.
+                                None => key.first().cloned().unwrap_or(QueryValue::Null),
+                            }
+                        }
+                    })
+                    .collect();
+                // Apply HAVING filter.
+                let having_ok = self.plan.having_terms.iter().all(|term| {
+                    eval_having_term(&term.pred, &row, self.query, &columns)
+                });
+                if having_ok {
+                    rows.push(row);
+                }
+            }
+            // Apply ORDER BY.
+            if let Some(ob) = &self.query.order_by {
+                if let Some(idx) = order_by_column_index(self.query, &columns, &ob.key) {
+                    sort_rows_by_column(&mut rows, idx, ob.dir);
+                }
+            }
+            // Apply LIMIT.
+            if let Some(limit) = self.plan.limit {
+                if rows.len() > limit as usize {
+                    rows.truncate(limit as usize);
+                }
+            }
+            let row_count = rows.len() as u64;
+            return (
+                QueryResult {
+                    name: name.to_string(),
+                    oql: String::new(),
+                    columns,
+                    row_count,
+                    rows,
+                    truncated: self.truncated,
+                    error: None,
+                    note: None,
+                    viz: None,
+                    elapsed_ms: None,
+                },
+                None,
+            );
+        }
         if let Some(accs) = self.agg_acc {
             // Aggregate mode: finalize each accumulator and emit exactly one row.
             // LIMIT on an aggregate produces at most one output row; if
@@ -1316,6 +1498,39 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
             carry.push_index(src_idx as u32);
             return;
         }
+        // GROUP BY mode: fold this object into the per-group accumulators.
+        if self.group_map.is_some() {
+            let key: Vec<QueryValue> = self
+                .plan
+                .group_by_exprs
+                .iter()
+                .map(|e| self.eval_expr(e, src_idx, class_id, blob))
+                .collect();
+            let key_str = format!("{key:?}");
+            let values: Vec<QueryValue> = self
+                .query
+                .select
+                .iter()
+                .map(|item| match item {
+                    SelectItem::Aggregate { arg, .. } => {
+                        self.eval_agg_arg_instance(arg, src_idx, class_id, blob)
+                    }
+                    _ => QueryValue::Null,
+                })
+                .collect();
+            let init_accs: Vec<AggAcc> = self.query.select.iter().map(init_agg_acc).collect();
+            let entry = self
+                .group_map
+                .as_mut()
+                .unwrap()
+                .entry(key_str)
+                .or_insert_with(|| (key, init_accs));
+            for (i, acc) in entry.1.iter_mut().enumerate() {
+                fold_agg_acc(acc, values[i].clone());
+            }
+            self.matched += 1;
+            return;
+        }
         // Aggregate mode: fold this object into the accumulators. LIMIT is not
         // applied per-object — the aggregate produces exactly one output row.
         // (If limit==0 that is handled in finish().)
@@ -1390,6 +1605,39 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
         }
         if let Some(carry) = &mut self.carry {
             carry.push_index(src_idx as u32);
+            return;
+        }
+        // GROUP BY mode: fold this array object into the per-group accumulators.
+        if self.group_map.is_some() {
+            let key: Vec<QueryValue> = self
+                .plan
+                .group_by_exprs
+                .iter()
+                .map(|e| self.eval_expr_array(e, src_idx, class_name, length))
+                .collect();
+            let key_str = format!("{key:?}");
+            let values: Vec<QueryValue> = self
+                .query
+                .select
+                .iter()
+                .map(|item| match item {
+                    SelectItem::Aggregate { arg, .. } => {
+                        self.eval_agg_arg_array(arg, src_idx, class_name, length)
+                    }
+                    _ => QueryValue::Null,
+                })
+                .collect();
+            let init_accs: Vec<AggAcc> = self.query.select.iter().map(init_agg_acc).collect();
+            let entry = self
+                .group_map
+                .as_mut()
+                .unwrap()
+                .entry(key_str)
+                .or_insert_with(|| (key, init_accs));
+            for (i, acc) in entry.1.iter_mut().enumerate() {
+                fold_agg_acc(acc, values[i].clone());
+            }
+            self.matched += 1;
             return;
         }
         // Aggregate mode: fold this array object into the accumulators.

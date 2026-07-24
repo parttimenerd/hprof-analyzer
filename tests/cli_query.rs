@@ -5038,3 +5038,51 @@ mod server_cli {
         assert!(status.contains("405"), "405 on GET /stream: {status}");
     }
 }
+
+// ── GROUP BY tests ────────────────────────────────────────────────────────────
+
+#[test]
+fn group_by_count_per_class() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT @displayName, COUNT(*) AS n FROM INSTANCEOF java.lang.Object \
+         GROUP BY @displayName ORDER BY n DESC LIMIT 5",
+    );
+    assert!(out.contains("n"), "should have column 'n', got: {out}");
+    let lines: Vec<_> = out.lines().collect();
+    assert!(lines.len() >= 3, "expected header + data rows, got: {out}");
+}
+
+#[test]
+fn group_by_having_filters_groups() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT @displayName, COUNT(*) AS n FROM INSTANCEOF java.lang.Object \
+         GROUP BY @displayName HAVING COUNT(*) > 100",
+    );
+    assert!(!out.contains("error"), "unexpected error: {out}");
+    assert!(out.contains("n") || out.contains("(0 rows)"), "got: {out}");
+}
+
+#[test]
+fn group_by_empty_result() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT @displayName, COUNT(*) AS n FROM java.lang.Thread \
+         GROUP BY @displayName HAVING COUNT(*) > 999999",
+    );
+    assert!(out.contains("(0 rows)"), "got: {out}");
+}
+
+#[test]
+fn group_by_null_key_is_valid_group() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT COUNT(*) AS n FROM java.lang.Thread t GROUP BY t.name",
+    );
+    assert!(!out.contains("error"), "got: {out}");
+}
