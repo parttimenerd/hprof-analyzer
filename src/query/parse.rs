@@ -131,6 +131,22 @@ pub fn tokenize_spanned(src: &str) -> Result<Vec<(Token, SimpleSpan)>, String> {
             Err(()) => {
                 let slice = &src[span.clone()];
                 if slice.starts_with('\'') {
+                    // logos stops at the first byte that breaks the char-literal
+                    // rule, so `slice` is just the opening `'` plus one char (e.g.
+                    // "'f" for 'foo'). Recover the full single-quoted run from the
+                    // source to tell an attempted string (SQL habit) from a genuine
+                    // bad char literal. OQL strings use double quotes.
+                    let rest = &src[span.start + 1..];
+                    if let Some(close) = rest.find('\'') {
+                        let inner = &rest[..close];
+                        if inner.chars().count() != 1 {
+                            return Err(format!(
+                                "OQL strings use double quotes, not single: write {:?} \
+                                 (single quotes are only a one-character literal, e.g. 'a')",
+                                inner
+                            ));
+                        }
+                    }
                     return Err(format!(
                         "character literal must contain exactly one character: {slice:?} \
                          (single-quoted, no escapes)"
@@ -1122,8 +1138,20 @@ fn suggest_for_found(found: Option<&Token>) -> Option<String> {
                 .chain(AGG_FUNCS.iter())
                 .chain(FUNCS.iter())
                 .copied(),
-        ),
+        )
+        // A suggestion that just echoes the token back (it already IS a keyword,
+        // e.g. `BY` after a swallowed `GROUP`) is noise, not help — drop it.
+        .filter(|s| !s.eq_ignore_ascii_case(found_ident_or_empty(found))),
         _ => None,
+    }
+}
+
+/// The identifier text of `found` if it is `Token::Ident`, else `""`. Helper for
+/// suppressing self-echoing suggestions in [`suggest_for_found`].
+fn found_ident_or_empty(found: Option<&Token>) -> &str {
+    match found {
+        Some(Token::Ident(s)) => s,
+        _ => "",
     }
 }
 
@@ -1185,6 +1213,29 @@ fn missing_from_hint(src: &str) -> Option<&'static str> {
     }
 }
 
+/// A hint for a query containing `GROUP BY`: OQL (like Eclipse MAT) has no
+/// grouping — aggregates span the whole matched set. Word-boundary, case-
+/// insensitive; fires only when `group` is immediately followed by `by`.
+fn group_by_hint(src: &str) -> Option<&'static str> {
+    let words: Vec<String> = src
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .filter(|w| !w.is_empty())
+        .map(|w| w.to_ascii_lowercase())
+        .collect();
+    let has_group_by = words
+        .iter()
+        .enumerate()
+        .any(|(i, w)| w == "group" && words.get(i + 1).map(String::as_str) == Some("by"));
+    if has_group_by {
+        Some(
+            "GROUP BY is not supported — OQL aggregates (COUNT/SUM/AVG/…) span the \
+             whole matched set; run one query per group instead",
+        )
+    } else {
+        None
+    }
+}
+
 /// A hint for an `unexpected Eq` error caused by a `==` operator: OQL equality
 /// is a single `=`, so `==` lexes as two `Eq` tokens and the second one is
 /// unexpected. Given the byte offset of that second `=`, confirm a `=`
@@ -1239,6 +1290,10 @@ fn compact_error(src: &str, e: &Rich<'_, Token>) -> String {
                 if let Some(hint) = missing_from_hint(src) {
                     return format!("unexpected {found} at {line}:{col} — {hint}");
                 }
+            }
+            // `GROUP BY` is unsupported; check before missing-BY (it contains BY).
+            if let Some(hint) = group_by_hint(src) {
+                return format!("unexpected {found} at {line}:{col} — {hint}");
             }
             // `ORDER <key>` with no `BY` surfaces as an unexpected token right
             // after ORDER; hint the missing BY before the generic suggestion.
@@ -1332,6 +1387,8 @@ pub fn parse_or_report(src: &str) -> Result<Query, String> {
                             } else {
                                 format!("unexpected {found}")
                             }
+                        } else if let Some(hint) = group_by_hint(src) {
+                            format!("unexpected {found} — {hint}")
                         } else if let Some(hint) = missing_by_hint(src) {
                             format!("unexpected {found} — {hint}")
                         } else if matches!(e.found(), Some(Token::Eq))
@@ -1979,6 +2036,18 @@ mod tests {
         // Unterminated string: the lone `"` cannot start a valid string token.
         let err = tokenize_spanned("name = \"foo").unwrap_err();
         assert!(err.contains("offset"), "got: {err}");
+    }
+
+    #[test]
+    fn single_quoted_string_hints_double_quotes() {
+        // SQL users reach for single quotes; OQL strings use double quotes.
+        let err = tokenize_spanned("@displayName = 'foo'").unwrap_err();
+        assert!(
+            err.contains("double quotes") && err.contains("\"foo\""),
+            "expected a double-quote hint for 'foo', got: {err}"
+        );
+        // The single-char case is still a valid char literal (no error).
+        assert!(tokenize_spanned("x = 'a'").is_ok(), "'a' is a valid char literal");
     }
 
     // ---------- targeted unit tests ----------
@@ -2980,6 +3049,30 @@ mod tests {
         assert!(missing_by_hint("SELECT * FROM C").is_none());
         // Negative: `order` only as a substring must not count.
         assert!(missing_by_hint("SELECT reorder FROM C").is_none());
+    }
+
+    #[test]
+    fn group_by_is_reported_unsupported() {
+        // OQL (and MAT) has no GROUP BY; aggregates span the whole matched set.
+        let err = parse("SELECT COUNT(*) FROM java.lang.Thread GROUP BY @objectId")
+            .expect_err("GROUP BY should error");
+        assert!(
+            err.0.contains("GROUP BY") && err.0.to_lowercase().contains("not supported"),
+            "expected an unsupported-GROUP-BY hint, got: {}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn suggestion_never_echoes_the_found_token() {
+        // A found token that already equals its nearest candidate must NOT
+        // produce "did you mean `BY`?" when the token IS `BY`.
+        assert_eq!(suggest_for_found(Some(&Token::Ident("BY".into()))), None);
+        // But a genuine typo still suggests.
+        assert_eq!(
+            suggest_for_found(Some(&Token::Ident("SELCT".into()))).as_deref(),
+            Some("SELECT")
+        );
     }
 
     #[test]
