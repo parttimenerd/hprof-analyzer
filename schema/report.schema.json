@@ -2118,6 +2118,15 @@
             "$ref": "#/$defs/QueryColumn"
           }
         },
+        "elapsed_ms": {
+          "description": "Wall-clock milliseconds this query took (parse+plan+run), set by the\nserver pipeline. Omitted from JSON when absent so the analyze report and\nits golden snapshot stay byte-identical.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
         "error": {
           "description": "Set (with rows empty) when the query failed to parse/plan/execute.",
           "type": [
@@ -2270,6 +2279,15 @@
             "v": {
               "type": "object",
               "properties": {
+                "addr": {
+                  "description": "Heap address of the object, when resolvable. Omitted from JSON when\nabsent so the analyze golden snapshot (no obj_ref values) stays\nbyte-identical and non-server callers are unaffected.",
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "uint64",
+                  "minimum": 0
+                },
                 "class": {
                   "type": "string"
                 },
