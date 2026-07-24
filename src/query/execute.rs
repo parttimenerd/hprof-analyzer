@@ -494,6 +494,7 @@ fn eval_having_expr(
         }
         Expr::Unary { op, arg } => unary(*op, &eval_having_expr(arg, row, query, columns)),
         Expr::Method { .. } => QueryValue::Null,
+        Expr::Case { .. } => QueryValue::Null,
     }
 }
 
@@ -937,6 +938,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             // Aggregate expressions are only valid in HAVING; calling eval_expr
             // on one during per-row scan means the planner allowed it incorrectly.
             Expr::Aggregate { .. } => QueryValue::Null,
+            Expr::Case { .. } => QueryValue::Null,
         }
     }
     /// semantics as `eval_expr`; delegates attr leaves to `project_array_attr`.
@@ -956,6 +958,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 _ => QueryValue::Null,
             },
             Expr::Aggregate { .. } => QueryValue::Null,
+            Expr::Case { .. } => QueryValue::Null,
         }
     }
     /// Dispatch a method call on an instance object. Tier-2: fixed name → `Attr`
@@ -2235,6 +2238,7 @@ pub fn expr_name(e: &Expr) -> String {
             };
             format!("{func_name}({arg_str})")
         }
+        Expr::Case { .. } => "CASE".to_string(),
     }
 }
 

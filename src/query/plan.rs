@@ -307,6 +307,7 @@ fn expr_display_name(e: &Expr) -> String {
         Expr::Unary { op, arg } => format!("{op:?}({})", expr_display_name(arg)),
         Expr::Method { name, .. } => format!("{name}(...)"),
         Expr::Aggregate { func, .. } => format!("{func:?}(...)"),
+        Expr::Case { .. } => "CASE".to_string(),
     }
 }
 
@@ -333,6 +334,7 @@ fn expr_for_each_attr(e: &Expr, f: &mut impl FnMut(&Attr)) {
             for a in args { expr_for_each_attr(a, f); }
         }
         Expr::Aggregate { .. } => {} // no Attr leaves in aggregate position
+        Expr::Case { .. } => {} // stub; real impl added in Task 7
     }
 }
 fn expr_any_attr(e: &Expr, pred: impl Fn(&Attr) -> bool) -> bool {
@@ -369,6 +371,7 @@ fn expr_for_each_method<'a>(e: &'a Expr, f: &mut impl FnMut(&'a str)) {
             }
         }
         Expr::Aggregate { .. } => {} // no Method nodes in aggregate position
+        Expr::Case { .. } => {} // stub; real impl added in Task 7
     }
 }
 

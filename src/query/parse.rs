@@ -958,6 +958,7 @@ fn normalize_expr(e: &mut Expr, alias: Option<&str>) {
             for a in args { normalize_expr(a, alias); }
         }
         Expr::Aggregate { .. } => {} // no Attr leaves to normalize in aggregate args
+        Expr::Case { .. } => {} // stub; real impl added in Task 6
     }
 }
 

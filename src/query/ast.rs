@@ -163,6 +163,13 @@ pub enum Expr {
     /// `SUM(@usedHeapSize)`. Valid only inside a HAVING clause (the planner
     /// rejects aggregate expressions in WHERE or GROUP BY keys).
     Aggregate { func: AggFunc, arg: Box<SelectItem> },
+    /// `CASE WHEN <pred> THEN <expr> [WHEN <pred> THEN <expr>]* [ELSE <expr>] END`
+    /// Branches evaluated left-to-right; first match wins.
+    /// If no branch matches and `else_` is None, result is Null.
+    Case {
+        branches: Vec<(Predicate, Expr)>,
+        else_: Option<Box<Expr>>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -714,6 +714,10 @@ fn expr_has_attr(e: &Expr, pred: &impl Fn(&Attr) -> bool) -> bool {
         Expr::Method { receiver, args, .. } => // D2 fills this
             expr_has_attr(receiver, pred) || args.iter().any(|a| expr_has_attr(a, pred)),
         Expr::Aggregate { .. } => false,
+        Expr::Case { branches, else_ } => {
+            branches.iter().any(|(_, then_e)| expr_has_attr(then_e, pred))
+                || else_.as_ref().map_or(false, |e| expr_has_attr(e, pred))
+        }
     }
 }
 fn expr_find_attr<'e>(e: &'e Expr, pred: &impl Fn(&Attr) -> bool) -> Option<&'e Attr> {
@@ -727,6 +731,10 @@ fn expr_find_attr<'e>(e: &'e Expr, pred: &impl Fn(&Attr) -> bool) -> Option<&'e 
         Expr::Method { receiver, args, .. } => // D2 fills this
             expr_find_attr(receiver, pred).or_else(|| args.iter().find_map(|a| expr_find_attr(a, pred))),
         Expr::Aggregate { .. } => None,
+        Expr::Case { branches, else_ } => {
+            branches.iter().find_map(|(_, then_e)| expr_find_attr(then_e, pred))
+                .or_else(|| else_.as_ref().and_then(|e| expr_find_attr(e, pred)))
+        }
     }
 }
 /// "known" (its resolved value passed as `known`), identified by `is_known`.
@@ -749,6 +757,7 @@ fn eval_late_expr(
         Expr::Unary { op, arg } => unary(*op, &eval_late_expr(arg, is_known, known)),
         Expr::Method { .. } => QueryValue::Null, // D2 fills this
         Expr::Aggregate { .. } => QueryValue::Null, // evaluated in GROUP BY finalization, not late-phase
+        Expr::Case { .. } => QueryValue::Null, // stub; real impl added in Task 7
     }
 }
 
