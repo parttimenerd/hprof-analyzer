@@ -5060,10 +5060,13 @@ fn group_by_having_filters_groups() {
     let out = run_query_stdout(
         &hprof,
         "SELECT @displayName, COUNT(*) AS n FROM INSTANCEOF java.lang.Object \
-         GROUP BY @displayName HAVING COUNT(*) > 100",
+         GROUP BY @displayName HAVING COUNT(*) > 0",
     );
     assert!(!out.contains("error"), "unexpected error: {out}");
-    assert!(out.contains("n") || out.contains("(0 rows)"), "got: {out}");
+    // With HAVING COUNT(*) > 0, all groups should appear (every class has >= 1 instance).
+    // Must have at least header + 1 data row.
+    let lines: Vec<_> = out.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert!(lines.len() >= 2, "expected rows with HAVING COUNT(*) > 0, got: {out}");
 }
 
 #[test]

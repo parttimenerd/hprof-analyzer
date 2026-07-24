@@ -454,7 +454,7 @@ fn eval_having_term(
 fn eval_having_expr(
     e: &Expr,
     row: &[QueryValue],
-    _query: &Query,
+    query: &Query,
     columns: &[QueryColumn],
 ) -> QueryValue {
     match e {
@@ -466,21 +466,16 @@ fn eval_having_expr(
             Value::Null => QueryValue::Null,
         },
         Expr::Aggregate { func, arg } => {
-            // Match aggregate column by its display name.
-            let func_upper = format!("{func:?}").to_uppercase();
-            let arg_name = match arg.as_ref() {
-                SelectItem::Star => "*".to_string(),
-                SelectItem::Attr(a) => attr_name(a),
-                SelectItem::Expr(e) => expr_name(e),
-                _ => "?".to_string(),
-            };
-            let needle = format!("{func_upper}({arg_name})");
-            columns
-                .iter()
-                .position(|c| c.name.to_uppercase() == needle.to_uppercase())
-                .and_then(|i| row.get(i))
-                .cloned()
-                .unwrap_or(QueryValue::Null)
+            // Find this aggregate by structural match in query.select, bypassing
+            // any AS alias — the alias changes the column name but not the
+            // SelectItem variant. This is alias-transparent.
+            let pos = query.select.iter().position(|it| {
+                match it {
+                    SelectItem::Aggregate { func: f, arg: a } => f == func && a == arg,
+                    _ => false,
+                }
+            });
+            pos.and_then(|i| row.get(i)).cloned().unwrap_or(QueryValue::Null)
         }
         Expr::Attr(attr) => {
             // Non-aggregate column in HAVING — match by column name.
@@ -493,11 +488,11 @@ fn eval_having_expr(
                 .unwrap_or(QueryValue::Null)
         }
         Expr::Binary { op, lhs, rhs } => {
-            let l = eval_having_expr(lhs, row, _query, columns);
-            let r = eval_having_expr(rhs, row, _query, columns);
+            let l = eval_having_expr(lhs, row, query, columns);
+            let r = eval_having_expr(rhs, row, query, columns);
             arith(&l, *op, &r)
         }
-        Expr::Unary { op, arg } => unary(*op, &eval_having_expr(arg, row, _query, columns)),
+        Expr::Unary { op, arg } => unary(*op, &eval_having_expr(arg, row, query, columns)),
         Expr::Method { .. } => QueryValue::Null,
     }
 }
@@ -1518,13 +1513,16 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
                     _ => QueryValue::Null,
                 })
                 .collect();
-            let init_accs: Vec<AggAcc> = self.query.select.iter().map(init_agg_acc).collect();
+            let query_select = self.query.select.as_slice();
             let entry = self
                 .group_map
                 .as_mut()
                 .unwrap()
                 .entry(key_str)
-                .or_insert_with(|| (key, init_accs));
+                .or_insert_with(|| {
+                    let init_accs: Vec<AggAcc> = query_select.iter().map(init_agg_acc).collect();
+                    (key.clone(), init_accs)
+                });
             for (i, acc) in entry.1.iter_mut().enumerate() {
                 fold_agg_acc(acc, values[i].clone());
             }
@@ -1627,13 +1625,16 @@ impl<'a, R: ClassResolver> ObjectVisitor for SingleScanExecutor<'a, R> {
                     _ => QueryValue::Null,
                 })
                 .collect();
-            let init_accs: Vec<AggAcc> = self.query.select.iter().map(init_agg_acc).collect();
+            let query_select = self.query.select.as_slice();
             let entry = self
                 .group_map
                 .as_mut()
                 .unwrap()
                 .entry(key_str)
-                .or_insert_with(|| (key, init_accs));
+                .or_insert_with(|| {
+                    let init_accs: Vec<AggAcc> = query_select.iter().map(init_agg_acc).collect();
+                    (key.clone(), init_accs)
+                });
             for (i, acc) in entry.1.iter_mut().enumerate() {
                 fold_agg_acc(acc, values[i].clone());
             }
