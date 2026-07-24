@@ -283,7 +283,7 @@ impl MatEmitter {
             return Err(e);
         }
         let w = s.finish()?;
-        w.into_inner().map_err(|e| e.into_error())?.sync_all()?;
+        w.into_inner().map_err(|e| e.into_error())?;
         Ok(())
     }
 
@@ -297,7 +297,7 @@ impl MatEmitter {
             s.push(addr_at(i) as i64)?;
         }
         let w = s.finish()?;
-        w.into_inner().map_err(|e| e.into_error())?.sync_all()?;
+        w.into_inner().map_err(|e| e.into_error())?;
         Ok(())
     }
 
@@ -321,7 +321,7 @@ impl MatEmitter {
             return Err(e);
         }
         let w = s.finish()?;
-        w.into_inner().map_err(|e| e.into_error())?.sync_all()?;
+        w.into_inner().map_err(|e| e.into_error())?;
         Ok(())
     }
 
@@ -334,7 +334,7 @@ impl MatEmitter {
             s.push(d)?;
         }
         let w = s.finish()?;
-        w.into_inner().map_err(|e| e.into_error())?.sync_all()?;
+        w.into_inner().map_err(|e| e.into_error())?;
         Ok(())
     }
 
@@ -347,7 +347,7 @@ impl MatEmitter {
             s.push(v)?;
         }
         let w = s.finish()?;
-        w.into_inner().map_err(|e| e.into_error())?.sync_all()?;
+        w.into_inner().map_err(|e| e.into_error())?;
         Ok(())
     }
 
@@ -360,7 +360,7 @@ impl MatEmitter {
             s.push(v)?;
         }
         let w = s.finish()?;
-        w.into_inner().map_err(|e| e.into_error())?.sync_all()?;
+        w.into_inner().map_err(|e| e.into_error())?;
         Ok(())
     }
 
@@ -373,7 +373,7 @@ impl MatEmitter {
             s.push(r)?;
         }
         let w = s.finish()?;
-        w.into_inner().map_err(|e| e.into_error())?.sync_all()?;
+        w.into_inner().map_err(|e| e.into_error())?;
         Ok(())
     }
 
@@ -385,20 +385,20 @@ impl MatEmitter {
     pub fn emit_outbound(&self, entries: &[Vec<i32>]) -> io::Result<()> {
         let w = BufWriter::new(File::create(self.path("outbound"))?);
         let w = int_index_1n::write_sorted(w, entries)?;
-        w.into_inner().map_err(|e| e.into_error())?.sync_all()?;
+        w.into_inner().map_err(|e| e.into_error())?;
         Ok(())
     }
 
     /// Streaming variant: emit `outbound` from an iterator of entry slices,
-    /// avoiding a full `Vec<Vec<i32>>` materialisation.
+    /// avoiding both a full `Vec<Vec<i32>>` and an in-memory body buffer.
     pub fn emit_outbound_iter<I, S>(&self, entries: I) -> io::Result<()>
     where
         I: Iterator<Item = S>,
         S: AsRef<[i32]>,
     {
         let w = BufWriter::new(File::create(self.path("outbound"))?);
-        let w = int_index_1n::write_sorted_iter(w, entries)?;
-        w.into_inner().map_err(|e| e.into_error())?.sync_all()?;
+        let w = int_index_1n::write_sorted_iter_streaming(w, entries)?;
+        w.into_inner().map_err(|e| e.into_error())?;
         Ok(())
     }
 
@@ -410,19 +410,20 @@ impl MatEmitter {
     pub fn emit_inbound(&self, entries: &[Vec<i32>]) -> io::Result<()> {
         let w = BufWriter::new(File::create(self.path("inbound"))?);
         let w = int_index_1n::write_sorted(w, entries)?;
-        w.into_inner().map_err(|e| e.into_error())?.sync_all()?;
+        w.into_inner().map_err(|e| e.into_error())?;
         Ok(())
     }
 
-    /// Streaming variant: emit `inbound` from an iterator of entry slices.
+    /// Streaming variant: emit `inbound` from an iterator of entry slices,
+    /// streaming body pages directly to disk to avoid an in-memory body buffer.
     pub fn emit_inbound_iter<I, S>(&self, entries: I) -> io::Result<()>
     where
         I: Iterator<Item = S>,
         S: AsRef<[i32]>,
     {
         let w = BufWriter::new(File::create(self.path("inbound"))?);
-        let w = int_index_1n::write_sorted_iter(w, entries)?;
-        w.into_inner().map_err(|e| e.into_error())?.sync_all()?;
+        let w = int_index_1n::write_sorted_iter_streaming(w, entries)?;
+        w.into_inner().map_err(|e| e.into_error())?;
         Ok(())
     }
 
@@ -433,7 +434,19 @@ impl MatEmitter {
     pub fn emit_dom_out(&self, entries: &[Vec<i32>]) -> io::Result<()> {
         let w = BufWriter::new(File::create(self.path("domOut"))?);
         let w = int_index_1n::write_unsorted(w, entries)?;
-        w.into_inner().map_err(|e| e.into_error())?.sync_all()?;
+        w.into_inner().map_err(|e| e.into_error())?;
+        Ok(())
+    }
+
+    /// Streaming variant: emit `domOut` from an iterator of entry slices.
+    pub fn emit_dom_out_iter<I, S>(&self, entries: I) -> io::Result<()>
+    where
+        I: Iterator<Item = S>,
+        S: AsRef<[i32]>,
+    {
+        let w = BufWriter::new(File::create(self.path("domOut"))?);
+        let w = int_index_1n::write_unsorted_iter_streaming(w, entries)?;
+        w.into_inner().map_err(|e| e.into_error())?;
         Ok(())
     }
 
