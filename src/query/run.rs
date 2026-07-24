@@ -709,8 +709,19 @@ pub(crate) fn resume_with_string_values(
             && !entry.plan.late_ops.iter().any(|op| {
                 matches!(op, StageOp::EdgeLookup { .. } | StageOp::BoundedPath { .. })
             });
+        // An array-index/slice entry needs P2 resolution (returning Null for all
+        // ArrayIndex/ArraySlice columns in this release). Route through run_entry_pub
+        // when array_index is the entry's sole late need (no retained/dominator/edge).
+        let needs_only_array_index = entry.plan.needs.array_index
+            && !entry.plan.needs.ref_walk
+            && !entry.plan.needs.retained
+            && !entry.plan.needs.dominator_children
+            && !entry.plan.late_ops.iter().any(|op| {
+                matches!(op, StageOp::EdgeLookup { .. } | StageOp::BoundedPath { .. })
+            });
         let is_refwalk = needs_only_refwalk;
-        if is_string_only || is_refwalk {
+        let is_array_index = needs_only_array_index;
+        if is_string_only || is_refwalk || is_array_index {
             let q = &flat[entry.slot].0;
             let r = stage_runner::run_entry_pub(&entry, q, &ctx);
             slotted.push((entry.slot, r));

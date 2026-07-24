@@ -89,13 +89,14 @@ pub fn defer_projections(plan: &mut QueryPlan, query: &Query) {
 
 /// Clear late-phase `QueryNeeds` flags that no surviving `late_ops` op
 /// requires. Only the late-armed needs (`retained`, `dominator_children`,
-/// `ref_walk`) are recomputed from `late_ops`; scan-time needs (histogram,
-/// instance_*, runtime_type) are left untouched because they derive from the
-/// SELECT/WHERE that this plan-only view cannot re-inspect. Idempotent.
+/// `ref_walk`, `array_index`) are recomputed from `late_ops`; scan-time needs
+/// (histogram, instance_*, runtime_type) are left untouched because they derive
+/// from the SELECT/WHERE that this plan-only view cannot re-inspect. Idempotent.
 pub fn eliminate_dead_needs(plan: &mut QueryPlan) {
     let mut retained = false;
     let mut dominator_children = false;
     let mut ref_walk = false;
+    let mut array_index = false;
     for op in &plan.late_ops {
         match op {
             StageOp::JoinRetained => retained = true,
@@ -107,6 +108,7 @@ pub fn eliminate_dead_needs(plan: &mut QueryPlan) {
                 dominator_children = true;
             }
             StageOp::RefWalkResolve { .. } => ref_walk = true,
+            StageOp::ResolveArrayIndex => array_index = true,
             // Edge-retention ops (`@inbounds`/`@outbounds`/`path`) are gated by
             // per-run RunFlags, not by a QueryNeeds field, so there is no
             // late-armed need to recompute for them here.
@@ -122,6 +124,7 @@ pub fn eliminate_dead_needs(plan: &mut QueryPlan) {
     plan.needs.retained &= retained;
     plan.needs.dominator_children &= dominator_children;
     plan.needs.ref_walk &= ref_walk;
+    plan.needs.array_index &= array_index;
 }
 
 /// Narrow the scan-time carry layout to the minimum needed downstream. An

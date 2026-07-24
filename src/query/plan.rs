@@ -35,6 +35,12 @@ pub struct QueryNeeds {
     /// Arms GC-root descriptor resolution in the analyze late phase, for
     /// @GCRoots/@GCRootInfo/@info. Rejected in the query-only path.
     pub gc_roots: bool,
+    /// Arms the P2 late-window `ResolveArrayIndex` op for `base[i]` /
+    /// `base[start:end]` array index/slice expressions. Out-of-bounds or
+    /// non-resolvable base → Null (not an error). Does NOT require the refwalk
+    /// CSR; the P2 window resolves these as Null until a scan-capture pass is
+    /// added for array element data.
+    pub array_index: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -97,6 +103,13 @@ pub enum StageOp {
     /// pre-built string-values map (dense_idx → String). Applied in the P2 window
     /// after the backing-array decode pass.
     ResolveStringValues,
+    /// Gate for `base[index]` / `base[start:end]` array index/slice expressions.
+    /// The presence of this op in `late_ops` tells `eliminate_dead_needs` to
+    /// preserve `needs.array_index`. The actual resolution in `stage_runner`
+    /// returns Null for all ArrayIndex/ArraySlice columns (array element data is
+    /// not yet captured during the scan); out-of-bounds and non-resolvable bases
+    /// are Null rather than errors, matching the AST contract.
+    ResolveArrayIndex,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -961,11 +974,15 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
         }
     }
 
-    // Array index/slice: if `ref_walk` was set by ArrayIndex/ArraySlice but no
-    // actual RefPath hops were found (select_hops == 0 && where_hops == 0), still
-    // advance to P2 so the late window is available for resolution.
-    if needs.ref_walk && finalize_at == Phase::P1 {
-        finalize_at = Phase::P2;
+    // Array index/slice: if `array_index` was set by ArrayIndex/ArraySlice, emit a
+    // `ResolveArrayIndex` late op and advance finalize_at to P2 so the late window
+    // runs. The op is a gate that keeps `eliminate_dead_needs` from clearing
+    // `needs.array_index`; actual resolution happens in `stage_runner::array_index_rows`.
+    if needs.array_index {
+        late_ops.push(StageOp::ResolveArrayIndex);
+        if finalize_at == Phase::P1 {
+            finalize_at = Phase::P2;
+        }
     }
 
     // `toString(s)`: for FROM java.lang.String, decode each instance to its text
@@ -1572,8 +1589,10 @@ fn note_attr_need_attr(a: &Attr, needs: &mut QueryNeeds) {
         Attr::ToString(_) => needs.string_values = true,
         // G1: GC-root attrs require the full analyze pipeline.
         Attr::GcRoots | Attr::GcRootInfo => needs.gc_roots = true,
-        // Array index/slice: resolved in P2 late window, needs ref_walk.
-        Attr::ArrayIndex { .. } | Attr::ArraySlice { .. } => needs.ref_walk = true,
+        // Array index/slice: resolved in P2 late window via ResolveArrayIndex op.
+        Attr::ArrayIndex { .. } | Attr::ArraySlice { .. } => {
+            needs.array_index = true;
+        }
         _ => {}
     }
 }
@@ -1980,6 +1999,24 @@ mod tests {
         assert!(!plan.needs.retained);
         assert_eq!(plan.finalize_at, Phase::P1);
         assert!(plan.late_ops.is_empty());
+    }
+
+    #[test]
+    fn array_index_sets_array_index_need_and_p2() {
+        // `s.value[999999]` should set needs.array_index = true and finalize_at = P2.
+        let q = parse("SELECT s.value[999999] AS elem FROM java.lang.String s LIMIT 3").unwrap();
+        // Inspect the parsed select item
+        println!("select[0] = {:?}", q.select[0]);
+        let plan = pq(&q).unwrap();
+        println!("finalize_at = {:?}", plan.finalize_at);
+        println!("needs.array_index = {}", plan.needs.array_index);
+        assert!(plan.needs.array_index, "array index must set needs.array_index");
+        assert_eq!(plan.finalize_at, Phase::P2, "array index must finalize at P2");
+        // late_ops must contain ResolveArrayIndex
+        assert!(
+            plan.late_ops.iter().any(|op| matches!(op, StageOp::ResolveArrayIndex)),
+            "array index must emit ResolveArrayIndex late op, got: {:?}", plan.late_ops
+        );
     }
 
     #[test]

@@ -434,6 +434,9 @@ fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
             StageOp::ResolveStringValues => {
                 return string_values_rows(entry, q, ctx);
             }
+            StageOp::ResolveArrayIndex => {
+                return array_index_rows(entry, q);
+            }
             // Later phases add more StageOp variants; an unhandled op must fail
             // loudly rather than silently dropping the query's late work.
             #[allow(unreachable_patterns)]
@@ -980,6 +983,60 @@ fn project_string_row_item(it: &SelectItem, dense: u32, ctx: &LateCtx) -> QueryV
             addr: None,
         },
         _ => QueryValue::Null,
+    }
+}
+
+/// Produce result rows for a query with `needs.array_index` (contains at least one
+/// `base[index]` or `base[start:end]` expression). In this release, array element
+/// data is not captured during the scan, so all `ArrayIndex`/`ArraySlice` columns
+/// project `Null`. Other columns (`@objectId`, `*`, etc.) are projected normally
+/// from the carried dense indices. Out-of-bounds and non-resolvable bases both
+/// yield `Null` without error, matching the AST contract. Limit is applied.
+fn array_index_rows(entry: &CrossPhaseEntry, q: &Query) -> QueryResult {
+    let seeds: Vec<u32> = entry.carry.indices();
+    let columns: Vec<QueryColumn> = crate::query::execute::query_columns(q);
+    let mut rows: Vec<Vec<QueryValue>> = Vec::new();
+    for &s in &seeds {
+        let row: Vec<QueryValue> = q
+            .select
+            .iter()
+            .map(|it| match it {
+                SelectItem::Attr(Attr::ObjectId) => QueryValue::Int(s as i64),
+                SelectItem::Star => QueryValue::ObjRef {
+                    index: s as u64,
+                    class: "?".to_string(),
+                    addr: None,
+                },
+                // ArrayIndex and ArraySlice: element data not yet captured → Null.
+                SelectItem::Attr(Attr::ArrayIndex { .. })
+                | SelectItem::Attr(Attr::ArraySlice { .. }) => QueryValue::Null,
+                _ => QueryValue::Null,
+            })
+            .collect();
+        rows.push(row);
+    }
+    let mut truncated = entry.carry.truncated();
+    if let Some(limit) = q.limit {
+        if rows.len() as u64 > limit {
+            rows.truncate(limit as usize);
+            truncated = true;
+        }
+    }
+    QueryResult {
+        name: entry.name.clone(),
+        oql: String::new(),
+        columns,
+        row_count: rows.len() as u64,
+        rows,
+        truncated,
+        error: None,
+        note: Some(
+            "array element data is not yet captured during the scan; \
+             ArrayIndex/ArraySlice columns project Null in this release."
+                .to_string(),
+        ),
+        viz: None,
+        elapsed_ms: None,
     }
 }
 

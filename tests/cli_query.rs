@@ -5300,3 +5300,14 @@ fn except_removes_right_rows() {
         "A EXCEPT A should be empty, got: {out}"
     );
 }
+
+#[test]
+fn array_index_out_of_bounds_is_null() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT s.value[999999] AS elem FROM java.lang.String s LIMIT 3",
+    );
+    assert!(out.contains("elem"), "expected 'elem' column header, got: {out}");
+    assert!(!out.to_lowercase().contains("error"), "unexpected error in output, got: {out}");
+}
