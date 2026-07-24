@@ -1982,7 +1982,7 @@ pub fn expr_name(e: &Expr) -> String {
             let arg_str = match arg.as_ref() {
                 SelectItem::Star => "*".to_string(),
                 SelectItem::Attr(a) => attr_name(a),
-                other => format!("{other:?}"),
+                _ => unreachable!("Expr::Aggregate arg is always Star or Attr"),
             };
             format!("{func_name}({arg_str})")
         }

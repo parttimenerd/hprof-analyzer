@@ -851,6 +851,12 @@ fn normalize_query_ref_paths(q: &mut Query) {
     if let Some(ob) = &mut q.order_by {
         normalize_attr(&mut ob.key, alias.as_deref());
     }
+    for e in &mut q.group_by {
+        normalize_expr(e, alias.as_deref());
+    }
+    if let Some(pred) = &mut q.having {
+        normalize_predicate(pred, alias.as_deref());
+    }
 }
 
 fn normalize_select_item(item: &mut SelectItem, alias: Option<&str>) {
@@ -1253,10 +1259,6 @@ fn missing_from_hint(src: &str) -> Option<&'static str> {
     }
 }
 
-/// GROUP BY is now supported; this hint is no longer needed.
-fn group_by_hint(_src: &str) -> Option<&'static str> {
-    None
-}
 
 /// A hint for an `unexpected Eq` error caused by a `==` operator: OQL equality
 /// is a single `=`, so `==` lexes as two `Eq` tokens and the second one is
@@ -1312,10 +1314,6 @@ fn compact_error(src: &str, e: &Rich<'_, Token>) -> String {
                 if let Some(hint) = missing_from_hint(src) {
                     return format!("unexpected {found} at {line}:{col} — {hint}");
                 }
-            }
-            // `GROUP BY` is unsupported; check before missing-BY (it contains BY).
-            if let Some(hint) = group_by_hint(src) {
-                return format!("unexpected {found} at {line}:{col} — {hint}");
             }
             // `ORDER <key>` with no `BY` surfaces as an unexpected token right
             // after ORDER; hint the missing BY before the generic suggestion.
@@ -1409,8 +1407,6 @@ pub fn parse_or_report(src: &str) -> Result<Query, String> {
                             } else {
                                 format!("unexpected {found}")
                             }
-                        } else if let Some(hint) = group_by_hint(src) {
-                            format!("unexpected {found} — {hint}")
                         } else if let Some(hint) = missing_by_hint(src) {
                             format!("unexpected {found} — {hint}")
                         } else if matches!(e.found(), Some(Token::Eq))
