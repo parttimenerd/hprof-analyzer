@@ -505,7 +505,18 @@ fn eval_having_expr(
                 None => QueryValue::Null,
             }
         }
-        Expr::Coalesce(_) | Expr::NullIf { .. } => QueryValue::Null,
+        Expr::Coalesce(args) => {
+            for arg in args {
+                let v = eval_having_expr(arg, row, query, columns);
+                if !matches!(v, QueryValue::Null) { return v; }
+            }
+            QueryValue::Null
+        }
+        Expr::NullIf { lhs, rhs } => {
+            let lv = eval_having_expr(lhs, row, query, columns);
+            let rv = eval_having_expr(rhs, row, query, columns);
+            if lv == rv { QueryValue::Null } else { lv }
+        }
     }
 }
 
@@ -960,7 +971,20 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                     None => QueryValue::Null,
                 }
             }
-            Expr::Coalesce(_) | Expr::NullIf { .. } => QueryValue::Null,
+            Expr::Coalesce(args) => {
+                for arg in args {
+                    let v = self.eval_expr(arg, src_idx, class_id, blob);
+                    if !matches!(v, QueryValue::Null) {
+                        return v;
+                    }
+                }
+                QueryValue::Null
+            }
+            Expr::NullIf { lhs, rhs } => {
+                let lv = self.eval_expr(lhs, src_idx, class_id, blob);
+                let rv = self.eval_expr(rhs, src_idx, class_id, blob);
+                if lv == rv { QueryValue::Null } else { lv }
+            }
         }
     }
     /// semantics as `eval_expr`; delegates attr leaves to `project_array_attr`.
@@ -991,7 +1015,20 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                     None => QueryValue::Null,
                 }
             }
-            Expr::Coalesce(_) | Expr::NullIf { .. } => QueryValue::Null,
+            Expr::Coalesce(args) => {
+                for arg in args {
+                    let v = self.eval_expr_array(arg, src_idx, class_name, length);
+                    if !matches!(v, QueryValue::Null) {
+                        return v;
+                    }
+                }
+                QueryValue::Null
+            }
+            Expr::NullIf { lhs, rhs } => {
+                let lv = self.eval_expr_array(lhs, src_idx, class_name, length);
+                let rv = self.eval_expr_array(rhs, src_idx, class_name, length);
+                if lv == rv { QueryValue::Null } else { lv }
+            }
         }
     }
     /// Dispatch a method call on an instance object. Tier-2: fixed name → `Attr`

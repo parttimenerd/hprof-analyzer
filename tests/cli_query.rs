@@ -5134,3 +5134,39 @@ fn case_when_in_group_by_key() {
     // CASE evaluation must classify objects as "large" or "small".
     assert!(out.contains("large") || out.contains("small"), "got: {out}");
 }
+
+#[test]
+fn coalesce_returns_first_nonnull() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT COALESCE(@usedHeapSize, 0) AS sz FROM java.lang.String LIMIT 3",
+    );
+    assert!(out.contains("sz"), "got: {out}");
+    assert!(!out.contains("error"), "got: {out}");
+}
+
+#[test]
+fn nullif_returns_null_on_equal() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT NULLIF(@usedHeapSize, 0) AS sz FROM java.lang.String LIMIT 3",
+    );
+    assert!(out.contains("sz"), "got: {out}");
+    assert!(!out.contains("error"), "got: {out}");
+}
+
+#[test]
+fn between_filters_rows() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_stdout(
+        &hprof,
+        "SELECT COUNT(*) FROM java.lang.String WHERE @usedHeapSize BETWEEN 20 AND 30",
+    );
+    assert!(!out.contains("error"), "got: {out}");
+    // COUNT(*) header must appear and a numeric result must be present
+    assert!(out.contains("COUNT(*)"), "missing COUNT(*) header: {out}");
+    let has_count = out.lines().any(|l| l.trim().parse::<u64>().is_ok());
+    assert!(has_count, "expected numeric result, got: {out}");
+}

@@ -836,7 +836,18 @@ fn eval_late_expr(
                 None => QueryValue::Null,
             }
         }
-        Expr::Coalesce(_) | Expr::NullIf { .. } => QueryValue::Null,
+        Expr::Coalesce(args) => {
+            for arg in args {
+                let v = eval_late_expr(arg, is_known, known);
+                if !matches!(v, QueryValue::Null) { return v; }
+            }
+            QueryValue::Null
+        }
+        Expr::NullIf { lhs, rhs } => {
+            let lv = eval_late_expr(lhs, is_known, known);
+            let rv = eval_late_expr(rhs, is_known, known);
+            if lv == rv { QueryValue::Null } else { lv }
+        }
     }
 }
 
