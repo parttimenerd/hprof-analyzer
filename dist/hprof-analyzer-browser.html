@@ -1449,12 +1449,12 @@ function startTerminal() {
       }
       return;
     }
-    // Complete /export csv|tsv
+    // Complete /export csv|tsv|json
     if (line.startsWith('/export ')) {
       const partial = line.slice(8).toLowerCase();
-      const fmts = ['tsv', 'csv'].filter(f => f.startsWith(partial));
+      const fmts = ['tsv', 'csv', 'json'].filter(f => f.startsWith(partial));
       if (fmts.length === 1) { setLine('/export ' + fmts[0]); }
-      else if (fmts.length > 1) { term.writeln(''); term.writeln('  tsv  csv'); redrawLine(); }
+      else if (fmts.length > 1) { term.writeln(''); term.writeln('  ' + fmts.join('  ')); redrawLine(); }
       return;
     }
     // Complete /set <key> and /set <key> <value>
@@ -1492,15 +1492,31 @@ function startTerminal() {
       }
       return;
     }
-    // Complete /sort <col> from lastResult columns
-    if (line.startsWith('/sort ') || line.startsWith('/filter ') || line.startsWith('/grep ') ||
-        line.startsWith('/unique ') || line.startsWith('/stats ')) {
-      if (lastResult && lastResult.columns.length > 0) {
-        const pfxLen = line.startsWith('/sort ') ? 6 : line.startsWith('/stats ') ? 7
-                     : line.startsWith('/grep ') ? 6 : 8;
-        const partial = line.slice(pfxLen).toLowerCase();
+    // Complete column names from lastResult for result-manipulation commands
+    if (lastResult && lastResult.columns.length > 0) {
+      // /sort supports comma-separated multi-column: complete the last segment
+      if (line.startsWith('/sort ')) {
+        const afterCmd = line.slice(6);
+        const lastComma = afterCmd.lastIndexOf(',');
+        const prefix = lastComma >= 0 ? line.slice(0, 6 + lastComma + 1).trimEnd() + ' ' : '/sort ';
+        const partial = (lastComma >= 0 ? afterCmd.slice(lastComma + 1) : afterCmd).trim().toLowerCase();
         const cols = lastResult.columns.filter(c => c.toLowerCase().startsWith(partial));
-        if (cols.length === 1) { setLine(line.slice(0, pfxLen) + cols[0]); }
+        if (cols.length === 1) { setLine(prefix + cols[0]); }
+        else if (cols.length > 1 && cols.length <= 20) {
+          term.writeln('');
+          term.writeln('  ' + cols.map(c => `\x1b[36m${c}\x1b[0m`).join('  '));
+          redrawLine();
+        }
+        return;
+      }
+      // Single-column commands: /filter /grep /unique /stats /select /not /exclude /rename /sample
+      const singleColCmds = ['/filter ', '/grep ', '/unique ', '/stats ', '/select ',
+                              '/not ', '/exclude ', '/rename ', '/sample '];
+      const matched = singleColCmds.find(p => line.startsWith(p));
+      if (matched) {
+        const partial = line.slice(matched.length).toLowerCase();
+        const cols = lastResult.columns.filter(c => c.toLowerCase().startsWith(partial));
+        if (cols.length === 1) { setLine(matched + cols[0]); }
         else if (cols.length > 1 && cols.length <= 20) {
           term.writeln('');
           term.writeln('  ' + cols.map(c => `\x1b[36m${c}\x1b[0m`).join('  '));

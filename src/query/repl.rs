@@ -8,6 +8,7 @@
 //! foundation slice).
 
 use std::io::{self, BufRead, IsTerminal, Write};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use reedline::{
@@ -347,6 +348,9 @@ struct OqlCompleter {
     field_names: Vec<String>,
     /// `field_names[i]` lowercased, same index.
     field_lower: Vec<String>,
+    /// Column names of the most recent query result, shared with run_repl so the
+    /// completer can offer column-name completions for !sort, !filter, etc.
+    last_cols: Arc<Mutex<Vec<String>>>,
 }
 
 /// Build the parallel lowercased vector for a sorted name list. Kept as a free
@@ -384,7 +388,23 @@ impl OqlCompleter {
         field_names.dedup();
         let class_lower = lowered(&class_names);
         let field_lower = lowered(&field_names);
-        OqlCompleter { class_names, class_lower, field_names, field_lower }
+        OqlCompleter {
+            class_names,
+            class_lower,
+            field_names,
+            field_lower,
+            last_cols: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn new_with_cols(
+        class_names: Vec<String>,
+        field_names: Vec<String>,
+        last_cols: Arc<Mutex<Vec<String>>>,
+    ) -> Self {
+        let mut c = Self::new(class_names, field_names);
+        c.last_cols = last_cols;
+        c
     }
 
     /// Prefix-filter `cands` (case-insensitive) and wrap each in a `Suggestion`
@@ -595,6 +615,47 @@ impl Completer for OqlCompleter {
                     .collect();
             }
         }
+        // `!<cmd> <arg>` — complete column names from last result for manipulation commands.
+        if upto.starts_with('!') && upto.contains(char::is_whitespace) {
+            let (verb, rest) = upto[1..].split_once(char::is_whitespace).unwrap_or(("", ""));
+            let rest = rest.trim_start();
+            let needs_col = matches!(
+                verb,
+                "sort" | "filter" | "grep" | "not" | "exclude" | "stats" | "unique"
+                | "select" | "rename" | "sample" | "top" | "head" | "tail"
+            );
+            if needs_col {
+                if let Ok(cols) = self.last_cols.lock() {
+                    if !cols.is_empty() {
+                        // For multi-value commands like !sort, complete after the last comma.
+                        let (before_comma, partial) = match rest.rfind(',') {
+                            Some(i) => (&rest[..=i], rest[i + 1..].trim_start()),
+                            None => ("", rest),
+                        };
+                        let lower = partial.to_ascii_lowercase();
+                        let prefix_end = upto.len() - partial.len();
+                        let matches: Vec<_> = cols
+                            .iter()
+                            .filter(|c| c.to_ascii_lowercase().starts_with(&lower))
+                            .collect();
+                        if !matches.is_empty() {
+                            return matches
+                                .iter()
+                                .map(|c| Suggestion {
+                                    value: format!("!{verb} {before_comma}{c}"),
+                                    description: None,
+                                    style: None,
+                                    extra: None,
+                                    span: Span { start: 0, end: pos },
+                                    append_whitespace: false,
+                                })
+                                .collect();
+                        }
+                        let _ = prefix_end; // suppress unused warning
+                    }
+                }
+            }
+        }
         // Delegate /run completion to the WASM-safe free function.
         if upto.starts_with("/run ") {
             return crate::query::complete::complete(upto, pos, &self.class_names, &self.field_names)
@@ -734,8 +795,12 @@ impl Completer for OqlCompleter {
 /// persistent history at `~/.hprof_oql_history` (falling back to in-memory history
 /// if the file cannot be opened). Returned rather than run so a smoke test can
 /// construct it without needing a live TTY.
-pub fn build_editor(class_names: Vec<String>, field_names: Vec<String>) -> Reedline {
-    let completer = Box::new(OqlCompleter::new(class_names, field_names));
+pub fn build_editor(
+    class_names: Vec<String>,
+    field_names: Vec<String>,
+    last_cols: Arc<Mutex<Vec<String>>>,
+) -> Reedline {
+    let completer = Box::new(OqlCompleter::new_with_cols(class_names, field_names, last_cols));
     let completion_menu = Box::new(ColumnarMenu::default().with_name("completion_menu"));
 
     let mut keybindings = default_emacs_keybindings();
@@ -871,9 +936,17 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
         return Ok(());
     }
 
-    let mut line_editor = build_editor(class_names, field_names);
+    let last_cols: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let mut line_editor = build_editor(class_names, field_names, Arc::clone(&last_cols));
     let prompt = DefaultPrompt::default();
     loop {
+        // Sync column names into the shared Arc so the completer can offer them.
+        if let Ok(mut lc) = last_cols.lock() {
+            *lc = last_result
+                .as_ref()
+                .map(|r| r.columns.iter().map(|c| c.name.clone()).collect())
+                .unwrap_or_default();
+        }
         match line_editor.read_line(&prompt) {
             Ok(Signal::Success(line)) => {
                 let t = line.trim();
@@ -3665,7 +3738,11 @@ mod tests {
     /// The editor builds without a live TTY (construction smoke test).
     #[test]
     fn editor_builds() {
-        let _ = build_editor(vec!["java.lang.String".to_string()], vec!["value".to_string()]);
+        let _ = build_editor(
+            vec!["java.lang.String".to_string()],
+            vec!["value".to_string()],
+            Arc::new(Mutex::new(Vec::new())),
+        );
     }
 
     /// Completer behavior: `SELECT * FROM<Tab>` (FROM being typed as the fragment)
