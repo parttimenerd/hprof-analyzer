@@ -3709,7 +3709,8 @@ fn print_result(
     if color {
         let elapsed_ms = elapsed.as_millis();
         let time_color = if elapsed_ms > 1000 { "\x1b[31m" } else if elapsed_ms > 300 { "\x1b[33m" } else { "\x1b[2m" };
-        writeln!(out, "{time_color}{} row{}, {}\x1b[0m", res.row_count, if res.row_count == 1 { "" } else { "s" }, fmt_elapsed(elapsed))?;
+        let ts = fmt_time_hms();
+        writeln!(out, "{time_color}{} row{}, {}\x1b[0m\x1b[2m  [{ts}]\x1b[0m", res.row_count, if res.row_count == 1 { "" } else { "s" }, fmt_elapsed(elapsed))?;
     } else {
         writeln!(out, "({} row{}, {})", res.row_count, if res.row_count == 1 { "" } else { "s" }, fmt_elapsed(elapsed))?;
     }
@@ -3836,6 +3837,28 @@ fn fmt_elapsed(d: std::time::Duration) -> String {
         format!("{:.1}ms", us as f64 / 1_000.0)
     } else {
         format!("{:.2}s", us as f64 / 1_000_000.0)
+    }
+}
+
+/// Return the current local time as HH:MM:SS (best-effort; falls back to UTC seconds since epoch).
+fn fmt_time_hms() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // libc localtime_r for timezone-aware formatting; fallback to UTC mod arithmetic.
+    #[cfg(unix)]
+    {
+        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+        let t = secs as libc::time_t;
+        unsafe { libc::localtime_r(&t, &mut tm); }
+        return format!("{:02}:{:02}:{:02}", tm.tm_hour, tm.tm_min, tm.tm_sec);
+    }
+    #[cfg(not(unix))]
+    {
+        let s = secs % 86400;
+        format!("{:02}:{:02}:{:02}", s / 3600, (s % 3600) / 60, s % 60)
     }
 }
 
