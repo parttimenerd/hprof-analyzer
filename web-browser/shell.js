@@ -814,7 +814,7 @@ function startTerminal() {
     if (cmd.startsWith('/describe ') || cmd === '/describe') {
       const cls = cmd.slice(9).trim();
       if (!cls) {
-        term.writeln('\x1b[33mUsage: /describe <ClassName>  — show fields and instance count\x1b[0m');
+        term.writeln('\x1b[2mUsage: /describe <ClassName>  — show fields and instance count\x1b[0m');
         term.write(PROMPT);
         return;
       }
@@ -883,14 +883,14 @@ function startTerminal() {
       // /obj <ClassName>#<idx>  or  /obj <ClassName> <idx>
       const arg = cmd.slice(4).trim();
       if (!arg) {
-        term.writeln('\x1b[33mUsage: /obj <ClassName>#<idx>  — inspect a specific object by class + dense index\x1b[0m');
+        term.writeln('\x1b[2mUsage: /obj <ClassName>#<idx>  — inspect a specific object by class + dense index\x1b[0m');
         term.write(PROMPT);
         return;
       }
       // Parse "<Class>#<n>" or "<Class> <n>" formats
       const m = arg.match(/^(.+?)#(\d+)$/) || arg.match(/^(.+?)\s+(\d+)$/);
       if (!m) {
-        term.writeln('\x1b[33mUsage: /obj <ClassName>#<idx>  e.g. /obj java.lang.String#42\x1b[0m');
+        term.writeln('\x1b[2mUsage: /obj <ClassName>#<idx>  e.g. /obj java.lang.String#42\x1b[0m');
         term.write(PROMPT);
         return;
       }
@@ -942,7 +942,7 @@ function startTerminal() {
       const isPlan = cmd.startsWith('/plan') || cmd === '/plan';
       const oql = cmd.slice(isPlan ? 5 : 8).trim();
       if (!oql) {
-        term.writeln(`\x1b[33mUsage: /plan <oql>  — show query execution plan (no scan)\x1b[0m`);
+        term.writeln(`\x1b[2mUsage: /plan <oql>  — show query execution plan (no scan)\x1b[0m`);
         term.write(PROMPT);
         return;
       }
@@ -982,7 +982,7 @@ function startTerminal() {
           watchTimer = null;
           term.writeln('\x1b[33mWatch stopped.\x1b[0m');
         } else if (args === '') {
-          term.writeln('\x1b[33mUsage: /watch <seconds> <oql>  — refresh query every N seconds; /watch stop\x1b[0m');
+          term.writeln('\x1b[2mUsage: /watch <seconds> <oql>  — refresh query every N seconds; /watch stop\x1b[0m');
         } else {
           term.writeln('\x1b[2mNo active watch.\x1b[0m');
         }
@@ -991,7 +991,7 @@ function startTerminal() {
       }
       const m = args.match(/^(\d+(?:\.\d+)?)\s+(.+)$/s);
       if (!m) {
-        term.writeln('\x1b[33mUsage: /watch <seconds> <oql>\x1b[0m');
+        term.writeln('\x1b[2mUsage: /watch <seconds> <oql>\x1b[0m');
         term.write(PROMPT);
         return;
       }
@@ -1023,7 +1023,7 @@ function startTerminal() {
           term.writeln(`\x1b[32m${n.toLocaleString()}\x1b[0m row${n !== 1 ? 's' : ''} × \x1b[32m${m}\x1b[0m col${m !== 1 ? 's' : ''}`);
           term.write(PROMPT); return;
         }
-        term.writeln('\x1b[33mUsage: /count <ClassName|oql>  — count instances or rows\x1b[0m');
+        term.writeln('\x1b[2mUsage: /count <ClassName|oql>  — count instances or rows\x1b[0m');
         term.write(PROMPT);
         return;
       }
@@ -1133,8 +1133,12 @@ function startTerminal() {
         n = currentRowIdx + 1;
       } else {
         n = parseInt(arg, 10);
-        if (isNaN(n) || n < 1 || n > lastResult.rows.length) {
-          term.writeln(`\x1b[33mUsage: /row [N|first|last|next|prev]  — show row as key=value pairs\x1b[0m`);
+        if (!isNaN(n) && (n < 1 || n > lastResult.rows.length)) {
+          term.writeln(`\x1b[31mrow ${n} out of range\x1b[0m  \x1b[2mresult has ${lastResult.rows.length} rows\x1b[0m`);
+          term.write(PROMPT);
+          return;
+        } else if (isNaN(n)) {
+          term.writeln(`\x1b[2mUsage: /row [N|first|last|next|prev]  — show row as key=value pairs\x1b[0m`);
           term.write(PROMPT);
           return;
         }
@@ -1166,7 +1170,7 @@ function startTerminal() {
       } else {
         const n = parseInt(arg, 10);
         if (isNaN(n) || n <= 0) {
-          term.writeln('\x1b[33musage: /limit <N>  (0 or "unlimited" removes limit)\x1b[0m');
+          term.writeln('\x1b[2musage: /limit <N>  (0 or "unlimited" removes limit)\x1b[0m');
           term.write(PROMPT);
           return;
         }
@@ -1219,9 +1223,9 @@ function startTerminal() {
         if (args.length === 0) {
           const fields = lastResult.columns;
           if (fields && fields.length > 0) {
-            term.writeln(`\x1b[33musage: /select <col1> [col2] …  — available: ${fields.join(', ')}\x1b[0m`);
+            term.writeln(`\x1b[2musage: /select <col1> [col2] …  — available: ${fields.join(', ')}\x1b[0m`);
           } else {
-            term.writeln('\x1b[33musage: /select <col1> [col2] …  (names, 1-based numbers, or ranges like 1-3)\x1b[0m');
+            term.writeln('\x1b[2musage: /select <col1> [col2] …  (names, 1-based numbers, or ranges like 1-3)\x1b[0m');
           }
         } else {
           const fields = lastResult.columns;
@@ -1261,7 +1265,7 @@ function startTerminal() {
       } else {
         const args = cmd.slice(5).trim().split(/\s+/).filter(Boolean);
         if (args.length === 0) {
-          term.writeln(`\x1b[33musage: /drop <col1> [col2] …  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
+          term.writeln(`\x1b[2musage: /drop <col1> [col2] …  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
         } else {
           const fields = lastResult.columns;
           const dropSet = new Set();
@@ -1303,7 +1307,7 @@ function startTerminal() {
       } else {
         const parts = cmd.slice(7).trim().split(/\s+/);
         if (parts.length < 2 || !parts[0] || !parts[1]) {
-          term.writeln(`\x1b[33musage: /rename <col> <newname>  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
+          term.writeln(`\x1b[2musage: /rename <col> <newname>  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
         } else {
           const [oldArg, newName] = parts;
           const i = resolveCol(oldArg, lastResult.columns);
@@ -1373,7 +1377,7 @@ function startTerminal() {
       }
       const rawArg = cmd.slice(7).trim();
       if (!rawArg) {
-        term.writeln(`\x1b[33mUsage: /unique <col> [N]  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
+        term.writeln(`\x1b[2mUsage: /unique <col> [N]  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
         term.write(PROMPT);
         return;
       }
@@ -1433,7 +1437,7 @@ function startTerminal() {
       }
       const rawArg = cmd.slice(6).trim();
       if (!rawArg) {
-        term.writeln(`\x1b[33mUsage: /pivot <col> [N]  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
+        term.writeln(`\x1b[2mUsage: /pivot <col> [N]  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
         term.write(PROMPT);
         return;
       }
@@ -1531,7 +1535,7 @@ function startTerminal() {
           term.write(PROMPT);
           return;
         } else {
-          term.writeln(`\x1b[33mUsage: /stats <col>  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
+          term.writeln(`\x1b[2mUsage: /stats <col>  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
           term.write(PROMPT);
           return;
         }
@@ -1609,7 +1613,7 @@ function startTerminal() {
       if (!lastResult) {
         term.writeln('\x1b[33mNo result to slice — run a query first.\x1b[0m');
       } else if (!n || n < 1) {
-        term.writeln('\x1b[33mUsage: /top [N]  (or /head [N]) — show first N rows of last result (default 10)\x1b[0m');
+        term.writeln('\x1b[2mUsage: /top [N]  (or /head [N]) — show first N rows of last result (default 10)\x1b[0m');
       } else {
         const total = lastResult.rows.length;
         const sliced = lastResult.rows.slice(0, n);
@@ -1629,7 +1633,7 @@ function startTerminal() {
       if (!lastResult) {
         term.writeln('\x1b[33mNo result to slice — run a query first.\x1b[0m');
       } else if (!n || n < 1) {
-        term.writeln('\x1b[33mUsage: /tail [N]  — show last N rows of last result (default 10)\x1b[0m');
+        term.writeln('\x1b[2mUsage: /tail [N]  — show last N rows of last result (default 10)\x1b[0m');
       } else {
         const total = lastResult.rows.length;
         const sliced = lastResult.rows.slice(-n);
@@ -1647,7 +1651,7 @@ function startTerminal() {
       const args = cmd.slice(5).trim();
       if (!lastResult || !args) {
         if (!lastResult) term.writeln('\x1b[33mNo result to sort — run a query first.\x1b[0m');
-        else term.writeln(`\x1b[33mUsage: /sort <col> [desc] [,-col2…]  (-col for desc)  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
+        else term.writeln(`\x1b[2mUsage: /sort <col> [desc] [,-col2…]  (-col for desc)  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
         term.write(PROMPT);
         return;
       }
@@ -1702,13 +1706,13 @@ function startTerminal() {
       if (!lastResult) {
         term.writeln('\x1b[33mNo result to filter — run a query first.\x1b[0m');
       } else if (!rawPattern) {
-        term.writeln('\x1b[33mUsage: /filter <text>  or  /filter /regex/[flags]  or  /filter @<col> <text>\x1b[0m');
+        term.writeln('\x1b[2mUsage: /filter <text>  or  /filter /regex/[flags]  or  /filter @<col> <text>\x1b[0m');
       } else {
         const { columns, rows } = lastResult;
         let colIdx = null, pattern = rawPattern;
         if (rawPattern.startsWith('@')) {
           const sp = rawPattern.slice(1).match(/^(\S+)\s+(.+)$/);
-          if (!sp) { term.writeln('\x1b[33mUsage: /filter @<col> <pattern>\x1b[0m'); term.write(PROMPT); return; }
+          if (!sp) { term.writeln('\x1b[2mUsage: /filter @<col> <pattern>\x1b[0m'); term.write(PROMPT); return; }
           colIdx = resolveCol(sp[1], columns);
           if (colIdx < 0) {
             term.writeln(`\x1b[31mcolumn "${sp[1]}" not found\x1b[0m  \x1b[2mavailable: ${columns.join(', ')}\x1b[0m`);
@@ -1750,13 +1754,13 @@ function startTerminal() {
       if (!lastResult) {
         term.writeln('\x1b[33mNo result to filter — run a query first.\x1b[0m');
       } else if (!rawPattern) {
-        term.writeln('\x1b[33mUsage: /not <text>  or  /not /regex/[flags]  or  /not @<col> <text>  — exclude matching rows\x1b[0m');
+        term.writeln('\x1b[2mUsage: /not <text>  or  /not /regex/[flags]  or  /not @<col> <text>  — exclude matching rows\x1b[0m');
       } else {
         const { columns, rows } = lastResult;
         let colIdx = null, pattern = rawPattern;
         if (rawPattern.startsWith('@')) {
           const sp = rawPattern.slice(1).match(/^(\S+)\s+(.+)$/);
-          if (!sp) { term.writeln('\x1b[33mUsage: /not @<col> <pattern>\x1b[0m'); term.write(PROMPT); return; }
+          if (!sp) { term.writeln('\x1b[2mUsage: /not @<col> <pattern>\x1b[0m'); term.write(PROMPT); return; }
           colIdx = resolveCol(sp[1], columns);
           if (colIdx < 0) {
             term.writeln(`\x1b[31mcolumn "${sp[1]}" not found\x1b[0m  \x1b[2mavailable: ${columns.join(', ')}\x1b[0m`);
@@ -1794,7 +1798,7 @@ function startTerminal() {
         const nStr = cmd.slice(7).trim();
         const n = nStr ? parseInt(nStr, 10) : 10;
         if (isNaN(n) || n <= 0) {
-          term.writeln('\x1b[33musage: /sample [N]  — show N random rows (default 10)\x1b[0m');
+          term.writeln('\x1b[2musage: /sample [N]  — show N random rows (default 10)\x1b[0m');
         } else {
           const rows = lastResult.rows;
           const k = Math.min(n, rows.length);
@@ -1925,7 +1929,7 @@ function startTerminal() {
         localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
         term.writeln(`\x1b[32mcell color: ${settings.color ? 'on' : 'off'}\x1b[0m`);
       } else {
-        term.writeln(`\x1b[31mUnknown setting: ${args[0]}. Options: limit, bytes, null, color\x1b[0m`);
+        term.writeln(`\x1b[31munknown setting: ${args[0]}\x1b[0m  \x1b[2moptions: limit, bytes, null, color\x1b[0m`);
       }
       term.write(PROMPT);
       return;
