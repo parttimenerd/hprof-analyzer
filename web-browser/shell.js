@@ -1417,13 +1417,24 @@ function startTerminal() {
     if (cmd.startsWith('/filter ') || cmd === '/filter' ||
         cmd.startsWith('/grep ')   || cmd === '/grep') {
       const isGrep = cmd.startsWith('/grep');
-      const pattern = cmd.slice(isGrep ? 5 : 7).trim();
+      const rawPattern = cmd.slice(isGrep ? 5 : 7).trim();
       if (!lastResult) {
         term.writeln('\x1b[33mNo result to filter — run a query first.\x1b[0m');
-      } else if (!pattern) {
-        term.writeln('\x1b[33mUsage: /filter <text>  or  /filter /regex/[flags]  (/grep is an alias)\x1b[0m');
+      } else if (!rawPattern) {
+        term.writeln('\x1b[33mUsage: /filter <text>  or  /filter /regex/[flags]  or  /filter @<col> <text>\x1b[0m');
       } else {
         const { columns, rows } = lastResult;
+        let colIdx = null, pattern = rawPattern;
+        if (rawPattern.startsWith('@')) {
+          const sp = rawPattern.slice(1).match(/^(\S+)\s+(.+)$/);
+          if (!sp) { term.writeln('\x1b[33mUsage: /filter @<col> <pattern>\x1b[0m'); term.write(PROMPT); return; }
+          colIdx = resolveCol(sp[1], columns);
+          if (colIdx < 0) {
+            term.writeln(`\x1b[31mColumn "${sp[1]}" not found — available: ${columns.join(', ')}\x1b[0m`);
+            term.write(PROMPT); return;
+          }
+          pattern = sp[2];
+        }
         let re;
         const reMatch = pattern.match(/^\/(.+)\/([gimsvy]*)$/);
         if (reMatch) {
@@ -1434,7 +1445,9 @@ function startTerminal() {
           ? (s) => re.test(s)
           : (s) => s.toLowerCase().includes(pattern.toLowerCase());
         const filtered = rows.filter(row =>
-          row.some((cell, i) => test(fmtCell(cell, columns[i])))
+          colIdx !== null
+            ? test(fmtCell(row[colIdx], columns[colIdx]))
+            : row.some((cell, i) => test(fmtCell(cell, columns[i])))
         );
         if (filtered.length === 0) {
           term.writeln(`\x1b[33mNo rows match "${pattern}"\x1b[0m`);
@@ -1451,13 +1464,24 @@ function startTerminal() {
     if (cmd.startsWith('/not ') || cmd === '/not' ||
         cmd.startsWith('/exclude ') || cmd === '/exclude') {
       const isExclude = cmd.startsWith('/exclude');
-      const pattern = cmd.slice(isExclude ? 8 : 4).trim();
+      const rawPattern = cmd.slice(isExclude ? 8 : 4).trim();
       if (!lastResult) {
         term.writeln('\x1b[33mNo result to filter — run a query first.\x1b[0m');
-      } else if (!pattern) {
-        term.writeln('\x1b[33mUsage: /not <text>  or  /not /regex/[flags]  — exclude matching rows\x1b[0m');
+      } else if (!rawPattern) {
+        term.writeln('\x1b[33mUsage: /not <text>  or  /not /regex/[flags]  or  /not @<col> <text>  — exclude matching rows\x1b[0m');
       } else {
         const { columns, rows } = lastResult;
+        let colIdx = null, pattern = rawPattern;
+        if (rawPattern.startsWith('@')) {
+          const sp = rawPattern.slice(1).match(/^(\S+)\s+(.+)$/);
+          if (!sp) { term.writeln('\x1b[33mUsage: /not @<col> <pattern>\x1b[0m'); term.write(PROMPT); return; }
+          colIdx = resolveCol(sp[1], columns);
+          if (colIdx < 0) {
+            term.writeln(`\x1b[31mColumn "${sp[1]}" not found — available: ${columns.join(', ')}\x1b[0m`);
+            term.write(PROMPT); return;
+          }
+          pattern = sp[2];
+        }
         let re;
         const reMatch = pattern.match(/^\/(.+)\/([gimsvy]*)$/);
         if (reMatch) {
@@ -1468,7 +1492,9 @@ function startTerminal() {
           ? (s) => re.test(s)
           : (s) => s.toLowerCase().includes(pattern.toLowerCase());
         const kept = rows.filter(row =>
-          !row.some((cell, i) => test(fmtCell(cell, columns[i])))
+          colIdx !== null
+            ? !test(fmtCell(row[colIdx], columns[colIdx]))
+            : !row.some((cell, i) => test(fmtCell(cell, columns[i])))
         );
         renderResult({ columns, rows: kept, row_count: kept.length });
         term.writeln(`\x1b[2m${rows.length - kept.length} of ${rows.length} rows excluded by "${pattern}"\x1b[0m`);
@@ -1941,8 +1967,8 @@ function startTerminal() {
     c('/cols',                   '— list column names with index numbers');
     c('/select <col> …',         '— project (keep) specific columns (names or numbers)');
     c('/rename <old> <new>',     '— rename a column in last result');
-    c('/filter <text|/re/>',     '— filter rows by substring or regex  (/grep is an alias)');
-    c('/not <text|/re/>',        '— exclude rows matching pattern (inverse of /filter)');
+    c('/filter <text|/re/>',     '— filter rows; /filter @<col> <text> to target one column  (/grep alias)');
+    c('/not <text|/re/>',        '— exclude matching rows; /not @<col> <text> to target one column');
     c('/distinct',               '— remove duplicate rows (/dedup is an alias)');
     c('/sort <col> [desc] [,col2…]', '— sort rows by one or more columns (comma-separated)');
     c('/top [N]  /head [N]',     '— first N rows, default 10 (updates lastResult for chaining)');

@@ -1959,17 +1959,40 @@ fn handle_filter(
 ) -> io::Result<()> {
     if pattern.is_empty() {
         writeln!(out, "usage: !filter <pattern>  — case-insensitive substring; /regex/ for regex")?;
+        writeln!(out, "       !filter @<col> <pattern>  — filter by specific column")?;
         return Ok(());
     }
     match last_result {
         None => writeln!(out, "(no previous result — run a query first)")?,
         Some(res) => {
+            // @col pattern — column-specific filter
+            let (col_filter_idx, actual_pattern) = if pattern.starts_with('@') {
+                let rest = &pattern[1..];
+                match rest.split_once(char::is_whitespace) {
+                    Some((col, pat)) if !pat.trim().is_empty() => {
+                        match resolve_col(col, &res.columns) {
+                            Some(ci) => (Some(ci), pat.trim()),
+                            None => {
+                                let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
+                                writeln!(out, "column {:?} not found — available: {}", col, names.join(", "))?;
+                                return Ok(());
+                            }
+                        }
+                    }
+                    _ => {
+                        writeln!(out, "usage: !filter @<col> <pattern>  — e.g. !filter @className String")?;
+                        return Ok(());
+                    }
+                }
+            } else {
+                (None, pattern)
+            };
             // Check for /regex/ syntax
-            let re_opt = if pattern.starts_with('/') && pattern.len() > 2 {
-                let end = pattern.rfind('/').unwrap_or(0);
+            let re_opt = if actual_pattern.starts_with('/') && actual_pattern.len() > 2 {
+                let end = actual_pattern.rfind('/').unwrap_or(0);
                 if end > 0 {
-                    let inner = &pattern[1..end];
-                    let flags = &pattern[end + 1..];
+                    let inner = &actual_pattern[1..end];
+                    let flags = &actual_pattern[end + 1..];
                     let flagged = if flags.contains('i') {
                         format!("(?i){inner}")
                     } else {
@@ -1988,18 +2011,22 @@ fn handle_filter(
             } else {
                 None
             };
-            let pat_lower = if re_opt.is_none() { pattern.to_ascii_lowercase() } else { String::new() };
+            let pat_lower = if re_opt.is_none() { actual_pattern.to_ascii_lowercase() } else { String::new() };
             let filtered_rows: Vec<Vec<QueryValue>> = res
                 .rows
                 .iter()
                 .filter(|row| {
-                    row.iter().any(|v| {
+                    let check = |v: &QueryValue| {
                         let s = fmt_value(v);
                         match &re_opt {
                             Some(re) => re.is_match(&s),
                             None => s.to_ascii_lowercase().contains(&pat_lower),
                         }
-                    })
+                    };
+                    match col_filter_idx {
+                        Some(ci) => row.get(ci).map(check).unwrap_or(false),
+                        None => row.iter().any(check),
+                    }
                 })
                 .cloned()
                 .collect();
@@ -2035,16 +2062,39 @@ fn handle_filter_not(
 ) -> io::Result<()> {
     if pattern.is_empty() {
         writeln!(out, "usage: !not <pattern>  — exclude rows matching pattern/regex (inverse of !filter)")?;
+        writeln!(out, "       !not @<col> <pattern>  — exclude by specific column")?;
         return Ok(());
     }
     match last_result {
         None => writeln!(out, "(no previous result — run a query first)")?,
         Some(res) => {
-            let re_opt = if pattern.starts_with('/') && pattern.len() > 2 {
-                let end = pattern.rfind('/').unwrap_or(0);
+            // @col pattern — column-specific filter
+            let (col_filter_idx, actual_pattern) = if pattern.starts_with('@') {
+                let rest = &pattern[1..];
+                match rest.split_once(char::is_whitespace) {
+                    Some((col, pat)) if !pat.trim().is_empty() => {
+                        match resolve_col(col, &res.columns) {
+                            Some(ci) => (Some(ci), pat.trim()),
+                            None => {
+                                let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
+                                writeln!(out, "column {:?} not found — available: {}", col, names.join(", "))?;
+                                return Ok(());
+                            }
+                        }
+                    }
+                    _ => {
+                        writeln!(out, "usage: !not @<col> <pattern>")?;
+                        return Ok(());
+                    }
+                }
+            } else {
+                (None, pattern)
+            };
+            let re_opt = if actual_pattern.starts_with('/') && actual_pattern.len() > 2 {
+                let end = actual_pattern.rfind('/').unwrap_or(0);
                 if end > 0 {
-                    let inner = &pattern[1..end];
-                    let flags = &pattern[end + 1..];
+                    let inner = &actual_pattern[1..end];
+                    let flags = &actual_pattern[end + 1..];
                     let flagged = if flags.contains('i') { format!("(?i){inner}") } else { inner.to_string() };
                     match regex::Regex::new(&flagged) {
                         Ok(re) => Some(re),
@@ -2052,15 +2102,19 @@ fn handle_filter_not(
                     }
                 } else { None }
             } else { None };
-            let pat_lower = if re_opt.is_none() { pattern.to_ascii_lowercase() } else { String::new() };
+            let pat_lower = if re_opt.is_none() { actual_pattern.to_ascii_lowercase() } else { String::new() };
+            let check = |v: &QueryValue| {
+                let s = fmt_value(v);
+                match &re_opt {
+                    Some(re) => re.is_match(&s),
+                    None => s.to_ascii_lowercase().contains(&pat_lower),
+                }
+            };
             let filtered_rows: Vec<Vec<QueryValue>> = res.rows.iter()
-                .filter(|row| !row.iter().any(|v| {
-                    let s = fmt_value(v);
-                    match &re_opt {
-                        Some(re) => re.is_match(&s),
-                        None => s.to_ascii_lowercase().contains(&pat_lower),
-                    }
-                }))
+                .filter(|row| match col_filter_idx {
+                    Some(ci) => !row.get(ci).map(check).unwrap_or(false),
+                    None => !row.iter().any(check),
+                })
                 .cloned()
                 .collect();
             let total = res.rows.len();
@@ -2078,7 +2132,7 @@ fn handle_filter_not(
                 elapsed_ms: None,
             };
             print_result(&filtered_res, std::time::Duration::ZERO, max_width, out)?;
-            writeln!(out, "-- {} of {} rows excluded {:?}", total - kept, total, pattern)?;
+            writeln!(out, "-- {} of {} rows excluded {:?}", total - kept, total, actual_pattern)?;
             *last_result = Some(filtered_res);
         }
     }
@@ -2616,6 +2670,7 @@ fn handle_meta(
                 "  !save <file> [oql]    write CSV/TSV/JSON to <file> (format by extension; of <oql>, else last result)"
             )?;
             writeln!(out, "  !filter <pattern>     filter rows: substring or /regex/ (/i for case-insensitive)")?;
+            writeln!(out, "  !filter @<col> <pat>  filter by specific column (also works with !not)")?;
             writeln!(out, "  !not <pattern>        exclude rows matching pattern (inverse of !filter)")?;
             writeln!(out, "  !grep <pattern>       alias for !filter")?;
             writeln!(out, "  !sample [N]           show N randomly sampled rows from last result (default 10)")?;
