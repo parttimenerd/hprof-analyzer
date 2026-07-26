@@ -2572,9 +2572,8 @@ function startTerminal() {
             [pool[i], pool[j]] = [pool[j], pool[i]];
           }
           const sampled = pool.slice(0, k).sort((a, b) => a - b).map(i => rows[i]);
-          const sampledResult = { columns: lastResult.columns, rows: sampled, row_count: sampled.length };
+          const sampledResult = { columns: lastResult.columns, rows: sampled, row_count: sampled.length, note: `random sample of ${k}/${rows.length}` };
           renderResult(sampledResult);
-          term.writeln(`\x1b[2m${k} of ${rows.length} rows (random sample)\x1b[0m`);
           prevResult = lastResult;
           lastResult = sampledResult;
         }
@@ -2594,10 +2593,11 @@ function startTerminal() {
           return true;
         });
         const removed = lastResult.rows.length - kept.length;
-        renderResult({ columns: lastResult.columns, rows: kept, row_count: kept.length });
-        term.writeln(`\x1b[2m${kept.length} unique rows (${removed} duplicate${removed !== 1 ? 's' : ''} removed)\x1b[0m`);
+        const note = `${kept.length} unique rows (${removed} duplicate${removed !== 1 ? 's' : ''} removed)`;
+        const newResult = { columns: lastResult.columns, rows: kept, row_count: kept.length, note };
+        renderResult(newResult);
         prevResult = lastResult;
-        lastResult = { columns: lastResult.columns, rows: kept };
+        lastResult = newResult;
       }
       term.write(PROMPT);
       return;
