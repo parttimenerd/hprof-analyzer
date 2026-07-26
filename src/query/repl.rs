@@ -1253,7 +1253,13 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                         "rename" => {
                             let parts: Vec<&str> = rest.splitn(2, char::is_whitespace).collect();
                             if parts.len() < 2 || parts[0].is_empty() || parts[1].trim().is_empty() {
-                                writeln!(stdout, "usage: !rename <oldcol> <newcol>")?;
+                                match &last_result {
+                                    Some(res) if !res.columns.is_empty() => {
+                                        let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
+                                        writeln!(stdout, "usage: !rename <oldcol> <newcol>  — available: {}", names.join(", "))?;
+                                    }
+                                    _ => writeln!(stdout, "usage: !rename <oldcol> <newcol>")?,
+                                }
                             } else {
                                 let old = parts[0];
                                 let new = parts[1].trim();
@@ -1609,7 +1615,13 @@ fn run_repl_line(
             "rename" => {
                 let parts: Vec<&str> = rest.splitn(2, char::is_whitespace).collect();
                 if parts.len() < 2 || parts[0].is_empty() || parts[1].trim().is_empty() {
-                    writeln!(out, "usage: !rename <oldcol> <newcol>")?;
+                    match last_result.as_ref() {
+                        Some(res) if !res.columns.is_empty() => {
+                            let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
+                            writeln!(out, "usage: !rename <oldcol> <newcol>  — available: {}", names.join(", "))?;
+                        }
+                        _ => writeln!(out, "usage: !rename <oldcol> <newcol>")?,
+                    }
                 } else {
                     let old = parts[0];
                     let new = parts[1].trim();

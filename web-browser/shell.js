@@ -1116,7 +1116,7 @@ function startTerminal() {
       } else {
         const parts = cmd.slice(7).trim().split(/\s+/);
         if (parts.length < 2 || !parts[0] || !parts[1]) {
-          term.writeln('\x1b[33musage: /rename <oldcol> <newcol>\x1b[0m');
+          term.writeln(`\x1b[33musage: /rename <oldcol> <newcol>  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
         } else {
           const [oldName, newName] = parts;
           const lower = lastResult.columns.map(f => f.toLowerCase());
