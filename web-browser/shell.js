@@ -547,7 +547,7 @@ function startTerminal() {
     if (line.startsWith('/') && !line.includes(' ')) {
       const partial = line.slice(1).toLowerCase();
       const cmds = ['help','clear','status','analyze','history','export','set','classes','filter','grep',
-                    'sort','unique','stats','top','head','tail','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
+                    'sort','unique','stats','top','head','tail','obj','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
       const matches = cmds.filter(c => c.startsWith(partial));
       if (matches.length === 1) {
         setLine('/' + matches[0] + ' ');
@@ -806,6 +806,25 @@ function startTerminal() {
         term.writeln(`\x1b[31merror: ${e.message}\x1b[0m`);
       }
       term.write(PROMPT);
+      return;
+    }
+    if (cmd.startsWith('/obj ') || cmd === '/obj') {
+      // /obj <ClassName>#<idx>  or  /obj <ClassName> <idx>
+      const arg = cmd.slice(4).trim();
+      if (!arg) {
+        term.writeln('\x1b[33mUsage: /obj <ClassName>#<idx>  — inspect a specific object by class + dense index\x1b[0m');
+        term.write(PROMPT);
+        return;
+      }
+      // Parse "<Class>#<n>" or "<Class> <n>" formats
+      const m = arg.match(/^(.+?)#(\d+)$/) || arg.match(/^(.+?)\s+(\d+)$/);
+      if (!m) {
+        term.writeln('\x1b[33mUsage: /obj <ClassName>#<idx>  e.g. /obj java.lang.String#42\x1b[0m');
+        term.write(PROMPT);
+        return;
+      }
+      const [, cls, idx] = m;
+      await runQuery(`SELECT * FROM ${cls.trim()} s WHERE s.@objectId = ${idx}`);
       return;
     }
     if (cmd === '/watch' || cmd.startsWith('/watch ')) {
@@ -1513,6 +1532,7 @@ function startTerminal() {
     c('/classes [pat]',          '— list class names filtered by pattern');
     c('/describe <cls>',         '— show fields of a class');
     c('/count <cls>',            '— count live instances of a class');
+    c('/obj <cls>#<idx>',        '— inspect a specific object by class + dense index');
     h('Result post-processing');
     c('/last',                   '— re-display last result');
     c('/filter <text|/re/>',     '— filter rows by substring or regex  (/grep is an alias)');
