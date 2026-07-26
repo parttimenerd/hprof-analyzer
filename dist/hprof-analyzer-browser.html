@@ -1819,6 +1819,10 @@ function startTerminal() {
   }
 
   async function runQuery(oql) {
+    // Soft warning: if query references retained-size attributes but analysis hasn't run
+    if (!hasRetained && /@retainedHeapSize|@dominatorClass|dominators\s*\(|retained\s*\(/i.test(oql)) {
+      term.writeln('\x1b[33m[hint] Query uses retained-size data — click "Run Analysis" first for accurate results\x1b[0m');
+    }
     const t0 = performance.now();
     const abortCtrl = new AbortController();
     currentAbort = abortCtrl;
