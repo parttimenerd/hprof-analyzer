@@ -1084,10 +1084,12 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             match &last_result {
                                 None => writeln!(stdout, "(no result — run a query first)")?,
                                 Some(res) => {
+                                    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+                                    let (cg, cr) = if color { ("\x1b[32m", "\x1b[0m") } else { ("", "") };
                                     if rest.is_empty() {
                                         let rows = res.rows.len();
                                         let cols = res.columns.len();
-                                        writeln!(stdout, "{} row{} × {} col{}", rows, if rows == 1 { "" } else { "s" }, cols, if cols == 1 { "" } else { "s" })?;
+                                        writeln!(stdout, "{cg}{}{cr} row{} × {cg}{}{cr} col{}", rows, if rows == 1 { "" } else { "s" }, cols, if cols == 1 { "" } else { "s" })?;
                                     } else {
                                         match resolve_col(rest, &res.columns) {
                                             None => {
@@ -1099,7 +1101,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                                 let non_null = res.rows.iter()
                                                     .filter(|row| !matches!(row.get(ci), Some(QueryValue::Null) | None))
                                                     .count();
-                                                writeln!(stdout, "{} non-null / {} total in {:?}", non_null, total, res.columns[ci].name)?;
+                                                writeln!(stdout, "{cg}{}{cr} non-null / {cg}{}{cr} total in {:?}", non_null, total, res.columns[ci].name)?;
                                             }
                                         }
                                     }
@@ -1624,10 +1626,12 @@ fn run_repl_line(
                 match last_result.as_ref() {
                     None => writeln!(out, "(no result — run a query first)")?,
                     Some(res) => {
+                        let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+                        let (cg, cr) = if color { ("\x1b[32m", "\x1b[0m") } else { ("", "") };
                         if rest.is_empty() {
                             let rows = res.rows.len();
                             let cols = res.columns.len();
-                            writeln!(out, "{} row{} × {} col{}", rows, if rows == 1 { "" } else { "s" }, cols, if cols == 1 { "" } else { "s" })?;
+                            writeln!(out, "{cg}{}{cr} row{} × {cg}{}{cr} col{}", rows, if rows == 1 { "" } else { "s" }, cols, if cols == 1 { "" } else { "s" })?;
                         } else {
                             match resolve_col(rest, &res.columns) {
                                 None => {
@@ -1639,7 +1643,7 @@ fn run_repl_line(
                                     let non_null = res.rows.iter()
                                         .filter(|row| !matches!(row.get(ci), Some(QueryValue::Null) | None))
                                         .count();
-                                    writeln!(out, "{} non-null / {} total in {:?}", non_null, total, res.columns[ci].name)?;
+                                    writeln!(out, "{cg}{}{cr} non-null / {cg}{}{cr} total in {:?}", non_null, total, res.columns[ci].name)?;
                                 }
                             }
                         }
