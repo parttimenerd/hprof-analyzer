@@ -1859,7 +1859,7 @@ function startTerminal() {
       const secs = parseFloat(m[1]);
       const watchOql = m[2].trim();
       if (secs < 1) {
-        term.writeln('\x1b[31mMinimum interval is 1 second.\x1b[0m');
+        term.writeln('\x1b[31mminimum interval is 1 second\x1b[0m');
         term.write(PROMPT);
         return;
       }
@@ -2225,7 +2225,7 @@ function startTerminal() {
         localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
         term.writeln(`\x1b[32m✓ Removed bookmark "${name}"\x1b[0m`);
       } else {
-        term.writeln(`\x1b[31mNo bookmark named "${name}"\x1b[0m`);
+        term.writeln(`\x1b[31mno bookmark named "${name}"\x1b[0m`);
       }
       term.write(PROMPT);
       return;
@@ -2585,7 +2585,7 @@ function startTerminal() {
         const reMatch = pattern.match(/^\/(.+)\/([gimsvy]*)$/);
         if (reMatch) {
           try { re = new RegExp(reMatch[1], reMatch[2]); }
-          catch (e) { term.writeln(`\x1b[31mInvalid regex: ${e.message}\x1b[0m`); term.write(PROMPT); return; }
+          catch (e) { term.writeln(`\x1b[31minvalid regex: ${e.message}\x1b[0m`); term.write(PROMPT); return; }
         }
         const test = re
           ? (s) => re.test(s)
@@ -2633,7 +2633,7 @@ function startTerminal() {
         const reMatch = pattern.match(/^\/(.+)\/([gimsvy]*)$/);
         if (reMatch) {
           try { re = new RegExp(reMatch[1], reMatch[2]); }
-          catch (e) { term.writeln(`\x1b[31mInvalid regex: ${e.message}\x1b[0m`); term.write(PROMPT); return; }
+          catch (e) { term.writeln(`\x1b[31minvalid regex: ${e.message}\x1b[0m`); term.write(PROMPT); return; }
         }
         const test = re
           ? (s) => re.test(s)
@@ -2763,7 +2763,7 @@ function startTerminal() {
       } else if (args[0] === 'limit') {
         const n = args[1] === '0' || args[1] === 'unlimited' || args[1] === 'none' ? 0 : parseInt(args[1], 10);
         if (isNaN(n) || n < 0 || n > 100000) {
-          term.writeln('\x1b[31mUsage: /set limit <N>  (0 or "unlimited" = no cap)\x1b[0m');
+          term.writeln('\x1b[2mUsage: /set limit <N>  (0 or "unlimited" = no cap)\x1b[0m');
         } else if (n === 0) {
           settings.rowLimit = Infinity;
           localStorage.setItem(SETTINGS_KEY, JSON.stringify({ ...settings, rowLimit: 0 }));
@@ -2776,7 +2776,7 @@ function startTerminal() {
       } else if (args[0] === 'bytes') {
         if (args[1] === 'raw') { settings.bytesRaw = true; }
         else if (args[1] === 'human') { settings.bytesRaw = false; }
-        else { term.writeln('\x1b[31mUsage: /set bytes raw|human\x1b[0m'); term.write(PROMPT); return; }
+        else { term.writeln('\x1b[2mUsage: /set bytes raw|human\x1b[0m'); term.write(PROMPT); return; }
         localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
         term.writeln(`\x1b[32mbytes display: ${settings.bytesRaw ? 'raw numbers' : 'human-readable'}\x1b[0m`);
       } else if (args[0] === 'null') {
@@ -2786,7 +2786,7 @@ function startTerminal() {
       } else if (args[0] === 'color') {
         if (args[1] === 'off' || args[1] === 'false') { settings.color = false; }
         else if (args[1] === 'on' || args[1] === 'true' || !args[1]) { settings.color = true; }
-        else { term.writeln('\x1b[31mUsage: /set color on|off\x1b[0m'); term.write(PROMPT); return; }
+        else { term.writeln('\x1b[2mUsage: /set color on|off\x1b[0m'); term.write(PROMPT); return; }
         localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
         term.writeln(`\x1b[32mcell color: ${settings.color ? 'on' : 'off'}\x1b[0m`);
       } else {
@@ -2903,7 +2903,7 @@ function startTerminal() {
           term.writeln(`\x1b[2m↳ [${name}] ${echo}\x1b[0m`);
           await runQuery(oql);
         } else {
-          term.writeln(`\x1b[31mNo bookmark "!${name}" — use /bookmark to list\x1b[0m`);
+          term.writeln(`\x1b[31mno bookmark "!${name}" — use /bookmark to list\x1b[0m`);
           term.write(PROMPT);
         }
       }
