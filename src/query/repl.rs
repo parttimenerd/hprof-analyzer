@@ -8,6 +8,7 @@
 //! foundation slice).
 
 use std::io::{self, BufRead, IsTerminal, Write};
+use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -594,7 +595,7 @@ impl Completer for OqlCompleter {
                     "plan", "explain",
                     "classes", "fields",
                     "reachable", "all", "mode",
-                    "width", "count", "last", "save", "export",
+                    "width", "set", "count", "last", "save", "export",
                     "filter", "grep", "not", "exclude", "sample", "distinct", "dedup", "sort", "stats", "unique", "pivot",
                     "top", "head", "tail", "select", "drop", "rename", "wc", "row", "undo", "cols", "columns",
                     "describe", "obj", "history",
@@ -877,6 +878,29 @@ pub(crate) fn harvest_names(path: &str) -> (Vec<String>, Vec<String>) {
     }
 }
 
+/// Display settings shared across the REPL session (mirrors the web `/set` command).
+#[derive(Clone)]
+struct ReplSettings {
+    /// Cap displayed rows; 0 = unlimited.
+    row_limit: usize,
+    /// When true, byte-size columns show raw integers instead of "4.3 KiB".
+    bytes_raw: bool,
+    /// String shown for null values (default: "null").
+    null_str: String,
+    /// When false, suppress ANSI colour codes in table hints and column listings.
+    color: bool,
+}
+
+impl Default for ReplSettings {
+    fn default() -> Self {
+        Self { row_limit: 0, bytes_raw: false, null_str: "null".to_string(), color: true }
+    }
+}
+
+thread_local! {
+    static SESSION_SETTINGS: RefCell<ReplSettings> = RefCell::new(ReplSettings::default());
+}
+
 /// The interactive OQL REPL: reedline read-line with history + Tab-completion.
 /// `!`-prefixed lines are meta-commands; everything else is run against the dump
 /// at `path`. Exits on Ctrl-D/Ctrl-C.
@@ -974,6 +998,11 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                         None => (cmd, ""),
                     };
                     match verb {
+                        "set" => {
+                            handle_set(rest, &mut stdout)?;
+                            stdout.flush()?;
+                            continue;
+                        }
                         "width" => {
                             handle_width(rest, &mut max_width, &mut stdout)?;
                             stdout.flush()?;
@@ -1498,6 +1527,11 @@ fn run_repl_line(
             None => (cmd, ""),
         };
         match verb {
+            "set" => {
+                handle_set(rest, out)?;
+                out.flush()?;
+                return Ok(false);
+            }
             "width" => {
                 handle_width(rest, max_width, out)?;
                 out.flush()?;
@@ -2029,6 +2063,81 @@ fn handle_width(rest: &str, max_width: &mut usize, out: &mut impl Write) -> io::
             }
         }
         Err(_) => writeln!(out, "usage: !width <N>  (N is a non-negative integer; 0 = unlimited)")?,
+    }
+    Ok(())
+}
+
+/// `!set [key [value]]` — view or change display settings stored in SESSION_SETTINGS.
+///
+/// With no args: print all settings.
+/// `!set limit <N>` — cap rows displayed (0 = unlimited).
+/// `!set bytes raw|human` — show byte-size columns as raw integers or human-readable.
+/// `!set color on|off` — toggle ANSI colour in table hints.
+/// `!set null <str>` — string shown for null values.
+fn handle_set(rest: &str, out: &mut impl Write) -> io::Result<()> {
+    if rest.is_empty() {
+        let (limit, bytes_raw, null_str, color) = SESSION_SETTINGS.with(|s| {
+            let s = s.borrow();
+            (s.row_limit, s.bytes_raw, s.null_str.clone(), s.color)
+        });
+        let limit_str = if limit == 0 { "unlimited".to_string() } else { limit.to_string() };
+        writeln!(out, "  limit  {limit_str}  (rows displayed; 0 = no cap)")?;
+        writeln!(out, "  bytes  {}  (raw = show numbers, human = 4.3 KiB)", if bytes_raw { "raw" } else { "human" })?;
+        writeln!(out, "  color  {}  (ANSI colours in table hints)", if color { "on" } else { "off" })?;
+        writeln!(out, "  null   \"{null_str}\"  (null display string)")?;
+        writeln!(out, "Usage: !set limit N | !set bytes raw|human | !set color on|off | !set null <str>")?;
+        return Ok(());
+    }
+    let (key, val) = match rest.split_once(char::is_whitespace) {
+        Some((k, v)) => (k, v.trim()),
+        None => (rest, ""),
+    };
+    match key {
+        "limit" => {
+            if val.is_empty() || val == "?" {
+                let cur = SESSION_SETTINGS.with(|s| s.borrow().row_limit);
+                writeln!(out, "limit: {}  (use `!set limit N`, or `!set limit 0` for unlimited)", if cur == 0 { "unlimited".to_string() } else { cur.to_string() })?;
+            } else if val == "0" || val == "unlimited" || val == "none" {
+                SESSION_SETTINGS.with(|s| s.borrow_mut().row_limit = 0);
+                writeln!(out, "row limit: unlimited")?;
+            } else {
+                match val.parse::<usize>() {
+                    Ok(n) if n > 0 => {
+                        SESSION_SETTINGS.with(|s| s.borrow_mut().row_limit = n);
+                        writeln!(out, "row limit: {n}")?;
+                    }
+                    _ => writeln!(out, "usage: !set limit <N>  (positive integer, or 0/unlimited for no cap)")?,
+                }
+            }
+        }
+        "bytes" => match val {
+            "raw" => {
+                SESSION_SETTINGS.with(|s| s.borrow_mut().bytes_raw = true);
+                writeln!(out, "bytes: raw (numbers)")?;
+            }
+            "human" => {
+                SESSION_SETTINGS.with(|s| s.borrow_mut().bytes_raw = false);
+                writeln!(out, "bytes: human (e.g. 4.3 KiB)")?;
+            }
+            _ => writeln!(out, "usage: !set bytes raw|human")?,
+        },
+        "color" | "colour" => match val {
+            "on" | "true" | "1" | "" => {
+                SESSION_SETTINGS.with(|s| s.borrow_mut().color = true);
+                writeln!(out, "color: on")?;
+            }
+            "off" | "false" | "0" => {
+                SESSION_SETTINGS.with(|s| s.borrow_mut().color = false);
+                writeln!(out, "color: off")?;
+            }
+            _ => writeln!(out, "usage: !set color on|off")?,
+        },
+        "null" => {
+            let s = if val.is_empty() { "null".to_string() } else { val.to_string() };
+            writeln!(out, "null: \"{s}\"")?;
+            SESSION_SETTINGS.with(|ss| ss.borrow_mut().null_str = s);
+        }
+        _ => writeln!(out, "unknown setting: {key}  (options: limit, bytes, color, null)")?,
     }
     Ok(())
 }
@@ -3058,72 +3167,66 @@ fn handle_meta(
     match verb {
         "quit" | "q" | "exit" => return Ok(true),
         "help" | "h" => {
-            writeln!(out, "commands:")?;
-            writeln!(out, "  !help                 show this help")?;
-            writeln!(
-                out,
-                "  !plan [--raw] <oql>   show the query plan (no scan); --raw shows unoptimized plan"
-            )?;
-            writeln!(out, "  !explain [--raw] <oql> alias for !plan")?;
-            writeln!(
-                out,
-                "  !classes [pat]        list class names (substring-filtered)"
-            )?;
-            writeln!(
-                out,
-                "  !fields [pat]         list instance field names (substring-filtered)"
-            )?;
-            writeln!(
-                out,
-                "  !reachable            filter results to GC-reachable objects (MAT parity; default)"
-            )?;
-            writeln!(
-                out,
-                "  !all                  include unreachable objects (raw-heap scan)"
-            )?;
-            writeln!(out, "  !mode                 show the current reachability mode")?;
-            writeln!(
-                out,
-                "  !width [N]            cap each printed cell to N chars (0/absent = unlimited)"
-            )?;
-            writeln!(out, "  !count [<oql>]        print row count of last result, or run <oql> and show count")?;
-            writeln!(out, "  !last                 re-run the previous query")?;
-            writeln!(out, "  !wc [col]             shape (rows × cols); with col: count non-null values")?;
-            writeln!(
-                out,
-                "  !save <file> [oql]    write CSV/TSV/JSON to <file> (format by extension; of <oql>, else last result)"
-            )?;
-            writeln!(out, "  !export [csv|tsv|json] [file]  print or save last result (default csv to stdout)")?;
-            writeln!(out, "  !filter <pattern>     filter rows: substring or /regex/ (/i for case-insensitive)")?;
-            writeln!(out, "  !filter @<col> <pat>  filter by specific column (also works with !not)")?;
-            writeln!(out, "  !not <pattern>        exclude rows matching pattern (inverse of !filter)")?;
-            writeln!(out, "  !grep <pattern>       alias for !filter")?;
-            writeln!(out, "  !sample [N]           show N randomly sampled rows from last result (default 10)")?;
-            writeln!(out, "  !distinct             remove duplicate rows (!dedup is an alias)")?;
-            writeln!(out, "  !sort <col> [desc] [,col2 [desc]…]  sort; prefix - for desc (e.g. !sort -size,name)")?;
-            writeln!(out, "  !stats <col>          numeric summary: min/max/mean/stddev/p50/p90/p99/sum")?;
-            writeln!(out, "  !unique <col> [N]     distinct value counts, sorted by frequency (top N)")?;
-            writeln!(out, "  !pivot <col> [N]      group by column → (value, count) table, optional top N (chainable)")?;
-            writeln!(out, "  !top [N]  /  !head [N]  show first N rows of last result (default 10)")?;
-            writeln!(out, "  !tail [N]             show last N rows of last result (default 10)")?;
-            writeln!(out, "  !row [N|first|last|next|prev]  show a row as key=value pairs; next/prev to navigate")?;
-            writeln!(out, "  !undo                 restore last result before last manipulation")?;
-            writeln!(out, "  !history [N]          show last N queries (1=most recent); use !N to re-run")?;
-            writeln!(out, "  !select <cols...>     project columns from last result")?;
-            writeln!(out, "  !drop <cols...>       remove columns from last result (inverse of !select)")?;
-            writeln!(out, "  !rename <old> <new>   rename a column in last result")?;
-            writeln!(out, "  !describe <class>     show all field names of a class")?;
-            writeln!(out, "  !cols                 list column names, types, and fill rate of last result")?;
-            writeln!(out, "  !obj <class>#<idx>    inspect a specific object (by dense index)")?;
-            writeln!(out, "  !run [<name>]         run a named query (no arg = list all)")?;
-            writeln!(out, "  !quit                 exit")?;
-            writeln!(out, "  <oql>                 run a query and print results")?;
-            writeln!(
-                out,
-                "  (queries may span multiple lines; end with `;` or a blank line)"
-            )?;
-            writeln!(out, "  /run <name>           run a named query (see /help for list)")?;
-            writeln!(out, "  /help                 list all named queries")?;
+            writeln!(out, "OQL REPL commands  (prefix: !, e.g. !help)")?;
+            writeln!(out)?;
+            writeln!(out, "  Heap exploration")?;
+            writeln!(out, "    !classes [pat]        list class names (substring-filtered)")?;
+            writeln!(out, "    !fields [pat]         list instance field names")?;
+            writeln!(out, "    !describe <class>     show fields and types of a class")?;
+            writeln!(out, "    !obj <class>#<idx>    inspect a specific object (by dense index)")?;
+            writeln!(out, "    !reachable            show only GC-reachable objects (default; MAT parity)")?;
+            writeln!(out, "    !all                  include unreachable objects (raw heap scan)")?;
+            writeln!(out, "    !mode                 show current reachability mode")?;
+            writeln!(out)?;
+            writeln!(out, "  Running queries")?;
+            writeln!(out, "    <oql>                 run a query (end with `;` or a blank line)")?;
+            writeln!(out, "    !last                 re-run the previous query")?;
+            writeln!(out, "    !count [<oql>]        row count of last result, or count <oql>")?;
+            writeln!(out, "    !plan [--raw] <oql>   show execution plan without scanning")?;
+            writeln!(out, "    !explain [--raw] <oql> alias for !plan")?;
+            writeln!(out, "    !run [<name>]         run a named query (no arg = list all)")?;
+            writeln!(out, "    /run <name>           named query (server-side)")?;
+            writeln!(out, "    /help                 list all named queries")?;
+            writeln!(out)?;
+            writeln!(out, "  Inspecting results")?;
+            writeln!(out, "    !wc [col]             shape (rows × cols); col arg = non-null count")?;
+            writeln!(out, "    !row [N|first|last|next|prev]  show a row as key=value pairs")?;
+            writeln!(out, "    !cols                 list columns with type and fill rate")?;
+            writeln!(out, "    !stats [col]          numeric summary: min/max/mean/stddev/p50/p90/p99; all cols if no arg")?;
+            writeln!(out, "    !history [N]          show last N queries; !N to re-run")?;
+            writeln!(out)?;
+            writeln!(out, "  Shaping results")?;
+            writeln!(out, "    !filter <pat>         keep rows matching substring or /regex/ (/i = case-insensitive)")?;
+            writeln!(out, "    !filter @<col> <pat>  filter on a specific column (alias: !grep)")?;
+            writeln!(out, "    !not <pat>            exclude matching rows (inverse of !filter)")?;
+            writeln!(out, "    !sort <col> [desc]    sort by column; - prefix for desc (e.g. !sort -size,name)")?;
+            writeln!(out, "    !select <col>…        keep only named columns")?;
+            writeln!(out, "    !drop <col>…          remove columns (inverse of !select)")?;
+            writeln!(out, "    !rename <old> <new>   rename a column")?;
+            writeln!(out, "    !distinct             remove duplicate rows (alias: !dedup)")?;
+            writeln!(out, "    !sample [N]           N randomly sampled rows (default 10)")?;
+            writeln!(out, "    !top [N] / !head [N]  first N rows (default 10)")?;
+            writeln!(out, "    !tail [N]             last N rows (default 10)")?;
+            writeln!(out, "    !unique <col> [N]     distinct value counts, top N by frequency")?;
+            writeln!(out, "    !pivot <col> [N]      group by column → (value, count) table")?;
+            writeln!(out, "    !undo                 restore result before last shaping command")?;
+            writeln!(out)?;
+            writeln!(out, "  Exporting")?;
+            writeln!(out, "    !save <file> [oql]    write CSV/TSV/JSON to file (format by extension)")?;
+            writeln!(out, "    !export [csv|tsv|json] [file]  print or save result (default: csv to stdout)")?;
+            writeln!(out)?;
+            writeln!(out, "  Display settings  (!set with no args shows current values)")?;
+            writeln!(out, "    !set limit <N>        cap rows displayed (0 = unlimited, default unlimited)")?;
+            writeln!(out, "    !set bytes raw|human  byte-size columns: numbers or 4.3 KiB (default human)")?;
+            writeln!(out, "    !set color on|off     ANSI colours in table hints (default on)")?;
+            writeln!(out, "    !set null <str>       null display string (default \"null\")")?;
+            writeln!(out, "    !width [N]            cap cell display width (0 = unlimited)")?;
+            writeln!(out)?;
+            writeln!(out, "  Session")?;
+            writeln!(out, "    !help                 show this help")?;
+            writeln!(out, "    !quit                 exit")?;
+            writeln!(out)?;
+            writeln!(out, "  OQL queries may span multiple lines; end with `;` or a blank line.")?;
         }
         "classes" | "fields" => {
             let (list, kind, kind_plural) = if verb == "classes" {
@@ -3378,14 +3481,24 @@ fn print_result(
         writeln!(out, "error: {err}")?;
         return Ok(());
     }
+    let (row_limit, color) = SESSION_SETTINGS.with(|s| {
+        let s = s.borrow();
+        (s.row_limit, s.color)
+    });
+    // Apply display row cap (0 = unlimited).
+    let display_rows: &[Vec<QueryValue>] = if row_limit > 0 && res.rows.len() > row_limit {
+        &res.rows[..row_limit]
+    } else {
+        &res.rows
+    };
+    let capped = row_limit > 0 && res.rows.len() > row_limit;
     // Materialize headers + truncated cells so widths can be measured once.
     let headers: Vec<String> = res
         .columns
         .iter()
         .map(|c| truncate_cell(&c.name, max_width))
         .collect();
-    let body: Vec<Vec<String>> = res
-        .rows
+    let body: Vec<Vec<String>> = display_rows
         .iter()
         .map(|row| {
             row.iter().enumerate().map(|(i, v)| {
@@ -3417,6 +3530,9 @@ fn print_result(
         }
         write_row(row, &widths, out)?;
     }
+    if capped {
+        writeln!(out, "-- showing {row_limit} of {} rows (use `!set limit 0` or `!set limit N` to change) --", res.rows.len())?;
+    }
     if let Some(note) = &res.note {
         writeln!(out, "-- {note}")?;
     }
@@ -3435,7 +3551,11 @@ fn print_result(
             matches!(infer_col_type(i, &res.rows), "int" | "float")
         });
         let stat_hint = if has_numeric { "  !stats <col>" } else { "" };
-        writeln!(out, "\x1b[2m  !filter <pat>  !sort [-]<col>  !select <col>…  !pivot <col>  !row [N]{stat_hint}  !export [csv|tsv|json]\x1b[0m")?;
+        if color {
+            writeln!(out, "\x1b[2m  !filter <pat>  !sort [-]<col>  !select <col>…  !pivot <col>  !row [N]{stat_hint}  !export [csv|tsv|json]\x1b[0m")?;
+        } else {
+            writeln!(out, "  !filter <pat>  !sort [-]<col>  !select <col>…  !pivot <col>  !row [N]{stat_hint}  !export [csv|tsv|json]")?;
+        }
     }
     Ok(())
 }
@@ -3489,7 +3609,7 @@ fn fmt_elapsed(d: std::time::Duration) -> String {
 /// Render a single `QueryValue` cell for the text table.
 fn fmt_value(v: &QueryValue) -> String {
     match v {
-        QueryValue::Null => "null".into(),
+        QueryValue::Null => SESSION_SETTINGS.with(|s| s.borrow().null_str.clone()),
         QueryValue::Bool(b) => b.to_string(),
         QueryValue::Int(i) => fmt_int(*i),
         QueryValue::Float(f) => {
@@ -3506,15 +3626,19 @@ fn fmt_value(v: &QueryValue) -> String {
 
 /// Format a value with column-name-aware heuristics:
 /// - address/addr/ptr columns → hex (0xDEADBEEF)
-/// - *bytes / *_size / *heap_size columns → human-readable (4.3 KiB)
+/// - *bytes / *_size / *heap_size columns → human-readable (4.3 KiB) unless bytes_raw
 fn fmt_value_for_col(v: &QueryValue, col_name: &str) -> String {
     if let QueryValue::Int(i) = v {
         let lower = col_name.to_ascii_lowercase();
         if lower.contains("address") || lower.contains("addr") || lower.contains("ptr") {
             return format!("0x{:016X}", *i as u64);
         }
-        if lower.ends_with("bytes") || lower.ends_with("_size") || lower.ends_with("heap_size") {
-            return fmt_bytes(*i as u64);
+        let is_bytes_col = lower.ends_with("bytes") || lower.ends_with("_size") || lower.ends_with("heap_size");
+        if is_bytes_col {
+            let raw = SESSION_SETTINGS.with(|s| s.borrow().bytes_raw);
+            if !raw {
+                return fmt_bytes(*i as u64);
+            }
         }
     }
     fmt_value(v)
