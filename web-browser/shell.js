@@ -547,7 +547,7 @@ function startTerminal() {
     if (line.startsWith('/') && !line.includes(' ')) {
       const partial = line.slice(1).toLowerCase();
       const cmds = ['help','clear','status','analyze','history','export','set','classes','plan','explain','filter','grep',
-                    'sort','unique','stats','top','head','tail','sample','cols','columns','select','rename','wc','not','exclude','obj','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
+                    'sort','unique','stats','top','head','tail','sample','cols','columns','select','rename','wc','limit','not','exclude','obj','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
       const matches = cmds.filter(c => c.startsWith(partial));
       if (matches.length === 1) {
         setLine('/' + matches[0] + ' ');
@@ -952,6 +952,30 @@ function startTerminal() {
       } else {
         const n = lastResult.rows.length;
         term.writeln(`\x1b[32m${n.toLocaleString()}\x1b[0m row${n !== 1 ? 's' : ''}`);
+      }
+      term.write(PROMPT);
+      return;
+    }
+    if (cmd.startsWith('/limit ') || cmd === '/limit') {
+      const arg = cmd.slice(6).trim();
+      if (!arg || arg === '0' || arg === 'unlimited') {
+        settings.rowLimit = Infinity;
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify({ ...settings, rowLimit: 0 }));
+        term.writeln('\x1b[32mrow limit disabled\x1b[0m');
+      } else {
+        const n = parseInt(arg, 10);
+        if (isNaN(n) || n <= 0) {
+          term.writeln('\x1b[33musage: /limit <N>  (0 or "unlimited" removes limit)\x1b[0m');
+          term.write(PROMPT);
+          return;
+        }
+        settings.rowLimit = n;
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+        term.writeln(`\x1b[32mrow limit set to ${n}\x1b[0m`);
+      }
+      if (lastResult) {
+        renderResult(lastResult);
+        term.writeln(`\x1b[2m${lastResult.rows.length} rows\x1b[0m`);
       }
       term.write(PROMPT);
       return;
@@ -1749,6 +1773,7 @@ function startTerminal() {
     h('Result post-processing');
     c('/last',                   '— re-display last result');
     c('/wc',                     '— show row count of last result');
+    c('/limit <N>',              '— set display row limit and re-display (alias for /set limit N)');
     c('/cols',                   '— list column names of last result');
     c('/select <col> …',         '— project (keep) specific columns from last result');
     c('/rename <old> <new>',     '— rename a column in last result');
