@@ -971,6 +971,26 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             stdout.flush()?;
                             continue;
                         }
+                        "obj" => {
+                            let arg = rest.trim();
+                            let parsed = arg.split_once('#')
+                                .map(|(c, n)| (c.trim(), n.trim()))
+                                .or_else(|| arg.split_once(char::is_whitespace).map(|(c, n)| (c.trim(), n.trim())));
+                            match parsed {
+                                None | Some(("", _)) | Some((_, "")) => {
+                                    writeln!(stdout, "usage: !obj <ClassName>#<idx>  e.g. !obj java.lang.String#42")?;
+                                }
+                                Some((cls, idx)) => {
+                                    let q = format!("SELECT * FROM {cls} s WHERE s.@objectId = {idx}");
+                                    if let Some(res) = run_and_print(path, &q, path_depth, reachable_only,
+                                        max_width, &mut cache, &mut stdout)? {
+                                        last_result = Some(res);
+                                    }
+                                }
+                            }
+                            stdout.flush()?;
+                            continue;
+                        }
                         _ => {}
                     }
                     if handle_meta(cmd, path_depth, &mut reachable_only, &names_for_meta, &mut stdout)?
@@ -1183,6 +1203,26 @@ fn run_repl_line(
                         }
                         Ok(None) => {} // error already printed
                         Err(e) => writeln!(out, "error: {e}")?,
+                    }
+                }
+                out.flush()?;
+                return Ok(false);
+            }
+            "obj" => {
+                // !obj <Class>#<idx>  or  !obj <Class> <idx>
+                let arg = rest.trim();
+                let parsed = arg.split_once('#')
+                    .map(|(c, n)| (c.trim(), n.trim()))
+                    .or_else(|| arg.split_once(char::is_whitespace).map(|(c, n)| (c.trim(), n.trim())));
+                match parsed {
+                    None | Some(("", _)) | Some((_, "")) => {
+                        writeln!(out, "usage: !obj <ClassName>#<idx>  e.g. !obj java.lang.String#42")?;
+                    }
+                    Some((cls, idx)) => {
+                        let q = format!("SELECT * FROM {cls} s WHERE s.@objectId = {idx}");
+                        if let Some(res) = run_and_print(path, &q, path_depth, *reachable_only, *max_width, cache, out)? {
+                            *last_result = Some(res);
+                        }
                     }
                 }
                 out.flush()?;
@@ -1738,6 +1778,7 @@ fn handle_meta(
             writeln!(out, "  !top <N>  /  !head <N>  show first N rows of last result")?;
             writeln!(out, "  !tail <N>             show last N rows of last result")?;
             writeln!(out, "  !describe <class>     show all field names of a class")?;
+            writeln!(out, "  !obj <class>#<idx>    inspect a specific object (by dense index)")?;
             writeln!(out, "  !quit                 exit")?;
             writeln!(out, "  <oql>                 run a query and print results")?;
             writeln!(
