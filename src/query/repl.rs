@@ -3480,12 +3480,12 @@ fn handle_meta(
         "reachable" | "reachable-only" => {
             *reachable_only = true;
             let cg = if color { "\x1b[32m" } else { "" };
-            writeln!(out, "mode: {cg}reachable-only{cr}  {cd}(GC-reachable objects, MAT parity){cr}")?;
+            writeln!(out, "{cg}\u{2713}{cr} mode: {cg}reachable-only{cr}  {cd}(GC-reachable objects, MAT parity){cr}")?;
         }
         "all" => {
             *reachable_only = false;
             let cg = if color { "\x1b[32m" } else { "" };
-            writeln!(out, "mode: {cg}all{cr}  {cd}(raw-heap scan, includes unreachable objects){cr}")?;
+            writeln!(out, "{cg}\u{2713}{cr} mode: {cg}all{cr}  {cd}(raw-heap scan, includes unreachable objects){cr}")?;
         }
         "mode" => {
             let (mode_val, hint) = if *reachable_only {
