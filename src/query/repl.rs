@@ -1756,11 +1756,20 @@ fn handle_save(
         writeln!(out, "(nothing to save — run a query first, or use `!save <file> <oql>`)")?;
         return Ok(());
     };
-    let csv = result_to_csv(res);
-    match std::fs::write(file, csv.as_bytes()) {
+    let use_json = file.ends_with(".json");
+    let use_tsv  = file.ends_with(".tsv");
+    let content: String = if use_json {
+        result_to_json(res)
+    } else if use_tsv {
+        result_to_tsv(res)
+    } else {
+        result_to_csv(res)
+    };
+    let fmt = if use_json { "JSON" } else if use_tsv { "TSV" } else { "CSV" };
+    match std::fs::write(file, content.as_bytes()) {
         Ok(()) => writeln!(
             out,
-            "saved {} row{} to {file}",
+            "saved {} row{} ({fmt}) to {file}",
             res.row_count,
             if res.row_count == 1 { "" } else { "s" },
         )?,
@@ -2224,7 +2233,7 @@ fn handle_meta(
             writeln!(out, "  !wc                   show row count of last result")?;
             writeln!(
                 out,
-                "  !save <file> [oql]    write CSV to <file> (of <oql>, else the last result)"
+                "  !save <file> [oql]    write CSV/TSV/JSON to <file> (format by extension; of <oql>, else last result)"
             )?;
             writeln!(out, "  !filter <pattern>     filter rows: substring or /regex/ (/i for case-insensitive)")?;
             writeln!(out, "  !not <pattern>        exclude rows matching pattern (inverse of !filter)")?;
@@ -2644,6 +2653,48 @@ fn result_to_csv(res: &QueryResult) -> String {
         s.push('\n');
     }
     s
+}
+
+fn result_to_tsv(res: &QueryResult) -> String {
+    let mut s = String::new();
+    let header: Vec<String> = res.columns.iter().map(|c| c.name.replace('\t', " ")).collect();
+    s.push_str(&header.join("\t"));
+    s.push('\n');
+    for row in &res.rows {
+        let cells: Vec<String> = row.iter().map(|v| fmt_value(v).replace('\t', " ")).collect();
+        s.push_str(&cells.join("\t"));
+        s.push('\n');
+    }
+    s
+}
+
+fn result_to_json(res: &QueryResult) -> String {
+    let cols: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
+    let mut out = String::from("[\n");
+    for (ri, row) in res.rows.iter().enumerate() {
+        out.push_str("  {");
+        for (i, val) in row.iter().enumerate() {
+            if i > 0 { out.push(','); }
+            out.push('"');
+            out.push_str(&cols[i].replace('"', "\\\""));
+            out.push_str("\":");
+            let s = fmt_value(val);
+            // Emit as JSON number if it looks numeric, else as string
+            if s.replace(',', "").parse::<f64>().is_ok() && !s.is_empty() {
+                out.push_str(&s.replace(',', ""));
+            } else {
+                out.push('"');
+                out.push_str(&s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n"));
+                out.push('"');
+            }
+        }
+        out.push('}');
+        if ri + 1 < res.rows.len() { out.push(','); }
+        out.push('\n');
+    }
+    out.push(']');
+    out.push('\n');
+    out
 }
 
 /// Quote a CSV field iff it contains a delimiter, quote, CR, or LF; doubling any
