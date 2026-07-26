@@ -1203,13 +1203,15 @@ function startTerminal() {
 
   async function runQueryFromSidebar(oql) {
     term.focus();
-    setLine(oql);
-    const text = line;
+    // Show a truncated echo so long queries don't wrap across lines
+    const maxEcho = term.cols - PROMPT.length - 1;
+    const echo = oql.length > maxEcho ? oql.slice(0, maxEcho - 1) + '…' : oql;
+    term.write('\r\x1b[K' + PROMPT + echo);
     line = '';
     cursorPos = 0;
     histIdx = -1;
     term.writeln('');
-    await handleEnter(text);
+    await handleEnter(oql);
   }
   window._hprofRunQuery = runQueryFromSidebar;
 
@@ -1296,6 +1298,20 @@ function startTerminal() {
         }
       } catch (e) {
         term.writeln(`\x1b[31merror: ${e.message}\x1b[0m`);
+      }
+      term.write(PROMPT);
+      return;
+    }
+    if (cmd === '/history') {
+      const recent = history.slice(0, 20);
+      if (recent.length === 0) {
+        term.writeln('\x1b[2m(no history yet)\x1b[0m');
+      } else {
+        recent.forEach((h, i) => {
+          const num = String(recent.length - i).padStart(3);
+          const truncated = h.length > term.cols - 6 ? h.slice(0, term.cols - 7) + '…' : h;
+          term.writeln(`\x1b[2m${num}\x1b[0m  ${truncated}`);
+        });
       }
       term.write(PROMPT);
       return;
@@ -1429,6 +1445,7 @@ function startTerminal() {
     term.writeln('  \x1b[36m/clear\x1b[0m             — clear terminal');
     term.writeln('  \x1b[36m/status\x1b[0m            — show analysis status');
     term.writeln('  \x1b[36m/analyze\x1b[0m           — trigger full heap analysis (enables @retainedHeapSize)');
+    term.writeln('  \x1b[36m/history\x1b[0m           — show recent query history');
     term.writeln('  \x1b[36m/run <name>\x1b[0m        — run a named query');
     term.writeln('');
     term.writeln('\x1b[1mKeyboard shortcuts:\x1b[0m');
