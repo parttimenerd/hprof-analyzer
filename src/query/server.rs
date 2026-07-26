@@ -4,8 +4,8 @@
 
 use std::collections::HashMap;
 use std::io;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Instant;
 
 use tiny_http::{Response, Server};
@@ -315,6 +315,10 @@ pub struct ServerState {
     help_cache: OnceLock<serde_json::Value>,
     plan_cache: Mutex<HashMap<String, (crate::query::ast::Query, crate::query::plan::QueryPlan)>>,
     retained_data: std::sync::OnceLock<Arc<Vec<u64>>>,
+    /// 0 = not_started, 1 = analyzing, 2 = ready, 3 = failed
+    analysis_state: AtomicU8,
+    analysis_error: RwLock<Option<String>>,
+    self_weak: OnceLock<std::sync::Weak<ServerState>>,
 }
 
 const PLAN_CACHE_CAP: usize = 256;
@@ -329,6 +333,9 @@ impl ServerState {
             help_cache: OnceLock::new(),
             plan_cache: Mutex::new(HashMap::new()),
             retained_data: std::sync::OnceLock::new(),
+            analysis_state: AtomicU8::new(0),
+            analysis_error: RwLock::new(None),
+            self_weak: OnceLock::new(),
         })
     }
 
@@ -337,6 +344,8 @@ impl ServerState {
     /// `self.cache`; if warm-up races with the first request, the request's
     /// lazy-build path wins and the background result is discarded.
     pub fn prewarm(self: &Arc<Self>) {
+        // Store weak ref so route() can spawn analysis without needing Arc.
+        let _ = self.self_weak.set(Arc::downgrade(self));
         let this = Arc::clone(self);
         std::thread::spawn(move || {
             let reachable_only = this.reachable_only.load(Ordering::Relaxed);
@@ -370,6 +379,53 @@ impl ServerState {
         // Drop the stale cache so the next query rebuilds with reachable_only=false.
         let mut guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
         *guard = None;
+        self.analysis_state.store(2, Ordering::Relaxed);
+    }
+
+    /// Spawn the full analysis in a background thread. Returns immediately.
+    /// The browser shell polls /status to detect completion.
+    pub fn start_analysis(&self) {
+        if self.analysis_state.load(Ordering::Relaxed) != 0 {
+            return; // already started or complete
+        }
+        self.analysis_state.store(1, Ordering::Relaxed);
+        let weak = match self.self_weak.get() {
+            Some(w) => w.clone(),
+            None => return, // prewarm() wasn't called; can't spawn safely
+        };
+        std::thread::spawn(move || {
+            let this = match weak.upgrade() {
+                Some(arc) => arc,
+                None => return,
+            };
+            let opts = crate::opts::AnalyzeOptions::default();
+            match crate::analyze_to_report_with_retained(&this.path, &opts) {
+                Ok((_report, retained)) => {
+                    this.set_full_analysis_with_retained(Arc::new(retained));
+                }
+                Err(e) => {
+                    this.analysis_state.store(3, Ordering::Relaxed);
+                    if let Ok(mut guard) = this.analysis_error.write() {
+                        *guard = Some(e.to_string());
+                    }
+                }
+            }
+        });
+    }
+
+    fn status_json(&self) -> serde_json::Value {
+        match self.analysis_state.load(Ordering::Relaxed) {
+            0 => serde_json::json!({ "status": "not_started" }),
+            1 => serde_json::json!({ "status": "analyzing" }),
+            2 => serde_json::json!({ "status": "ready" }),
+            3 => {
+                let err = self.analysis_error.read().ok()
+                    .and_then(|g| g.clone())
+                    .unwrap_or_default();
+                serde_json::json!({ "status": "failed", "error": err })
+            }
+            _ => serde_json::json!({ "status": "not_started" }),
+        }
     }
 
     /// Backward-compatible version (no retained data). Used by `query --server`.
@@ -448,12 +504,17 @@ impl ServerState {
                     .collect();
                 (200, arr.to_string(), "application/json")
             }
+            ("GET", "/status") => (200, self.status_json().to_string(), "application/json"),
+            ("POST", "/analyze") => {
+                self.start_analysis();
+                (202, self.status_json().to_string(), "application/json")
+            }
             // Known path, unsupported method -> 405 (not 404).
-            (_, "/") | (_, "/query") | (_, "/stream") | (_, "/help") | (_, "/schema") | (_, "/version") | (_, "/named-queries") => (405, serde_json::json!({
+            (_, "/") | (_, "/query") | (_, "/stream") | (_, "/help") | (_, "/schema") | (_, "/version") | (_, "/named-queries") | (_, "/status") | (_, "/analyze") => (405, serde_json::json!({
                 "ok": false,
                 "error": {
                     "kind": "method",
-                    "message": format!("method {method} not allowed on {path} (use POST for /, /query, /stream; GET for /, /help, /schema, /version, /named-queries)")
+                    "message": format!("method {method} not allowed on {path}")
                 }
             }).to_string(), "application/json"),
             _ => (404, serde_json::json!({
