@@ -2073,6 +2073,14 @@ function startTerminal() {
       await runQuery(q.oql);
       return;
     }
+    // If the input looks like an unrecognized /command (starts with /) warn the user
+    // rather than sending it to the server as OQL (which would just fail with a parse error).
+    if (full.trim().startsWith('/')) {
+      const cmdWord = full.trim().split(/\s+/)[0].toLowerCase();
+      term.writeln(`\x1b[33mUnknown command: ${cmdWord}  (type /help to see all commands)\x1b[0m`);
+      term.write(PROMPT);
+      return;
+    }
     await runQuery(full.trim());
   }
 
