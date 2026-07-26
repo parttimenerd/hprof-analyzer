@@ -1399,7 +1399,7 @@ function startTerminal() {
     if (line.startsWith('/') && !line.includes(' ')) {
       const partial = line.slice(1).toLowerCase();
       const cmds = ['help','clear','status','analyze','history','export','set','classes','filter',
-                    'sort','unique','top','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
+                    'sort','unique','stats','top','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
       const matches = cmds.filter(c => c.startsWith(partial));
       if (matches.length === 1) {
         setLine('/' + matches[0] + ' ');
@@ -1470,9 +1470,9 @@ function startTerminal() {
       return;
     }
     // Complete /sort <col> from lastResult columns
-    if (line.startsWith('/sort ') || line.startsWith('/filter ') || line.startsWith('/unique ')) {
+    if (line.startsWith('/sort ') || line.startsWith('/filter ') || line.startsWith('/unique ') || line.startsWith('/stats ')) {
       if (lastResult && lastResult.columns.length > 0) {
-        const pfxLen = line.startsWith('/sort ') ? 6 : line.startsWith('/unique ') ? 8 : 8;
+        const pfxLen = line.startsWith('/sort ') ? 6 : line.startsWith('/stats ') ? 7 : 8;
         const partial = line.slice(pfxLen).toLowerCase();
         const cols = lastResult.columns.filter(c => c.toLowerCase().startsWith(partial));
         if (cols.length === 1) { setLine(line.slice(0, pfxLen) + cols[0]); }
@@ -1804,6 +1804,57 @@ function startTerminal() {
         term.writeln(`${val.padEnd(colW)}  \x1b[32m${String(cnt).padStart(5)}\x1b[0m`);
       });
       term.writeln(`\x1b[2m${seen.size} distinct value${seen.size !== 1 ? 's' : ''} in ${lastResult.rows.length} rows\x1b[0m`);
+      term.write(PROMPT);
+      return;
+    }
+    if (cmd.startsWith('/stats ') || cmd === '/stats') {
+      if (!lastResult) {
+        term.writeln('\x1b[33mNo result — run a query first.\x1b[0m');
+        term.write(PROMPT);
+        return;
+      }
+      const colArg = cmd.slice(6).trim();
+      if (!colArg) {
+        term.writeln('\x1b[33mUsage: /stats <col>  — numeric summary of a column\x1b[0m');
+        term.write(PROMPT);
+        return;
+      }
+      const ci = lastResult.columns.findIndex(c => c.toLowerCase() === colArg.toLowerCase()
+        || c.toLowerCase().includes(colArg.toLowerCase()));
+      if (ci < 0) {
+        term.writeln(`\x1b[31mColumn "${colArg}" not found. Available: ${lastResult.columns.join(', ')}\x1b[0m`);
+        term.write(PROMPT);
+        return;
+      }
+      const colName = lastResult.columns[ci];
+      const vals = lastResult.rows.map(row => {
+        const cell = row[ci];
+        if (cell === null || cell === undefined) return null;
+        const v = typeof cell === 'object' ? cell.v : cell;
+        return typeof v === 'number' ? v : null;
+      }).filter(v => v !== null).sort((a, b) => a - b);
+      if (vals.length === 0) {
+        term.writeln(`\x1b[33mNo numeric values in column "${colName}"\x1b[0m`);
+        term.write(PROMPT);
+        return;
+      }
+      const sum = vals.reduce((s, v) => s + v, 0);
+      const mean = sum / vals.length;
+      const p50 = vals[Math.floor(vals.length * 0.5)];
+      const p90 = vals[Math.floor(vals.length * 0.9)];
+      const p99 = vals[Math.floor(vals.length * 0.99)];
+      const fmtV = v => {
+        if (!settings.bytesRaw && colName && /bytes$|_size$|heap_size$/i.test(colName)) return fmtBytes(v);
+        return v.toLocaleString('en-US');
+      };
+      term.writeln(`\x1b[1m${colName}\x1b[0m  \x1b[2m(${vals.length} non-null values)\x1b[0m`);
+      term.writeln(`  min    \x1b[32m${fmtV(vals[0])}\x1b[0m`);
+      term.writeln(`  max    \x1b[32m${fmtV(vals[vals.length - 1])}\x1b[0m`);
+      term.writeln(`  mean   \x1b[32m${fmtV(mean)}\x1b[0m`);
+      term.writeln(`  p50    \x1b[32m${fmtV(p50)}\x1b[0m`);
+      term.writeln(`  p90    \x1b[32m${fmtV(p90)}\x1b[0m`);
+      term.writeln(`  p99    \x1b[32m${fmtV(p99)}\x1b[0m`);
+      term.writeln(`  sum    \x1b[33m${fmtV(sum)}\x1b[0m`);
       term.write(PROMPT);
       return;
     }
@@ -2253,6 +2304,7 @@ function startTerminal() {
     term.writeln('  \x1b[36m/filter <text|/re/>\x1b[0m — filter last result rows by substring or regex');
     term.writeln('  \x1b[36m/sort <col> [desc]\x1b[0m — sort last result by column');
     term.writeln('  \x1b[36m/unique <col>\x1b[0m      — count distinct values in a column');
+    term.writeln('  \x1b[36m/stats <col>\x1b[0m       — min/max/mean/p50/p90/p99/sum of a numeric column');
     term.writeln('  \x1b[36m/top <N>\x1b[0m           — show top N rows of last result');
     term.writeln('  \x1b[36m/run <name>\x1b[0m        — run a named query');
     term.writeln('');
