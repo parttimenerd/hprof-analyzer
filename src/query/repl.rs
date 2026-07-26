@@ -1583,6 +1583,8 @@ fn handle_filter(
             };
             print_result(&filtered_res, std::time::Duration::ZERO, max_width, out)?;
             writeln!(out, "-- {} of {} rows match {:?}", filtered_count, total, pattern)?;
+            // Update last_result so chained !sort/!stats/!unique work on filtered data
+            *last_result = Some(filtered_res);
         }
     }
     Ok(())
