@@ -49,8 +49,6 @@ impl HprofSession {
     /// in a bare browser environment. Task 7's build script configures the
     /// correct WASM target (wasmer/wasm-pack bundler) with filesystem support.
     pub fn load(data: &[u8]) -> Result<HprofSession, JsValue> {
-        let path = "/tmp/hprof_wasm_session.hprof";
-
         #[cfg(target_arch = "wasm32")]
         {
             // wasm32-unknown-unknown has no std::fs. Return a descriptive error
@@ -64,6 +62,8 @@ impl HprofSession {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
+            let path = "/tmp/hprof_wasm_session.hprof";
+
             std::fs::write(path, data)
                 .map_err(|e| JsValue::from_str(&format!("fs::write failed: {e}")))?;
 
@@ -306,11 +306,14 @@ pub fn complete(line: &str, cursor_pos: usize, class_names: Vec<String>) -> Stri
     let arr: Vec<serde_json::Value> = cs
         .iter()
         .map(|c| {
-            serde_json::json!({
+            let mut obj = serde_json::json!({
                 "value": c.value,
                 "display": c.display,
-                "group": c.group,
-            })
+            });
+            if let Some(ref g) = c.group {
+                obj["group"] = serde_json::json!(g);
+            }
+            obj
         })
         .collect();
     serde_json::Value::Array(arr).to_string()
