@@ -2161,6 +2161,10 @@ function startTerminal() {
   function renderResult(r) {
     const colNames = r.columns.map(c => c.name || String(c));
     const rows = r.rows || [];
+    if (rows.length === 0) {
+      term.writeln('\x1b[2m(no rows)\x1b[0m');
+      return { colNames, adjW: [], isNumeric: [] };
+    }
     const isNumeric = colNames.map((_, i) => {
       const sample = rows.find(row => row[i] !== null && row[i] !== undefined);
       return sample ? isNumericKind(sample[i]) : false;
