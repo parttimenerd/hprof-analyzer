@@ -518,11 +518,25 @@ function startTerminal() {
   window._hprofRunQuery = runQueryFromSidebar;
 
   function handleTab() {
+    // Complete !<bookmark>
+    if (line.startsWith('!') && !line.includes(' ')) {
+      const bookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '{}');
+      const partial = line.slice(1).toLowerCase();
+      const bNames = Object.keys(bookmarks);
+      const bMatches = bNames.filter(n => n.toLowerCase().startsWith(partial));
+      if (bMatches.length === 1) { setLine('!' + bMatches[0]); }
+      else if (bMatches.length > 1) {
+        term.writeln('');
+        term.writeln('  ' + bMatches.map(n => `\x1b[35m!${n}\x1b[0m`).join('  '));
+        redrawLine();
+      }
+      return;
+    }
     // Complete / commands
     if (line.startsWith('/') && !line.includes(' ')) {
       const partial = line.slice(1).toLowerCase();
       const cmds = ['help','clear','status','analyze','history','export','set','classes','filter',
-                    'sort','top','run','bookmark','forget','last','describe','count','watch','q','quit','disconnect'];
+                    'sort','top','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
       const matches = cmds.filter(c => c.startsWith(partial));
       if (matches.length === 1) {
         setLine('/' + matches[0] + ' ');
@@ -576,6 +590,20 @@ function startTerminal() {
       const keys = ['limit', 'bytes', 'null', 'color'].filter(k => k.startsWith(partial));
       if (keys.length === 1) { setLine('/set ' + keys[0] + ' '); }
       else if (keys.length > 1) { term.writeln(''); term.writeln('  ' + keys.join('  ')); redrawLine(); }
+      return;
+    }
+    // Complete /forget <bookmark> and /bookmark <bookmark>
+    if (line.startsWith('/forget ') || line.startsWith('/bookmark ') || line.startsWith('/save ')) {
+      const bookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '{}');
+      const pfxLen = line.startsWith('/forget ') ? 8 : line.startsWith('/save ') ? 6 : 10;
+      const partial = line.slice(pfxLen).toLowerCase();
+      const bNames = Object.keys(bookmarks).filter(n => n.toLowerCase().startsWith(partial));
+      if (bNames.length === 1) { setLine(line.slice(0, pfxLen) + bNames[0]); }
+      else if (bNames.length > 1) {
+        term.writeln('');
+        term.writeln('  ' + bNames.map(n => `\x1b[35m${n}\x1b[0m`).join('  '));
+        redrawLine();
+      }
       return;
     }
     if (!wasmReady) return;
@@ -820,9 +848,10 @@ function startTerminal() {
       term.write(PROMPT);
       return;
     }
-    if (cmd.startsWith('/bookmark ') || cmd === '/bookmark') {
+    if (cmd.startsWith('/bookmark ') || cmd === '/bookmark' ||
+        cmd.startsWith('/save ') || cmd === '/save') {
       const bookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '{}');
-      const rest = cmd.slice(9).trim();
+      const rest = cmd.startsWith('/save') ? cmd.slice(5).trim() : cmd.slice(9).trim();
       if (!rest) {
         // Show all bookmarks
         const entries = Object.entries(bookmarks);
@@ -1290,7 +1319,7 @@ function startTerminal() {
     term.writeln('  \x1b[36m/count <cls>\x1b[0m       — count live instances of a class');
     term.writeln('  \x1b[36m/watch <s> <oql>\x1b[0m   — repeat query every N seconds; /watch stop to cancel');
     term.writeln('  \x1b[36m/last\x1b[0m              — re-display last query result');
-    term.writeln('  \x1b[36m/bookmark [name]\x1b[0m   — save last query as a named bookmark');
+    term.writeln('  \x1b[36m/bookmark [name]\x1b[0m   — save last query as a named bookmark  (alias: /save)');
     term.writeln('  \x1b[36m/forget <name>\x1b[0m     — delete a bookmark');
     term.writeln('  \x1b[36m/filter <text|/re/>\x1b[0m — filter last result rows by substring or regex');
     term.writeln('  \x1b[36m/sort <col> [desc]\x1b[0m — sort last result by column');
