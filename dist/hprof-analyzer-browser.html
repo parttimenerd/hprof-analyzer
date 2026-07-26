@@ -2076,12 +2076,16 @@ function startTerminal() {
         term.write(PROMPT);
         return;
       }
-      const colArg = cmd.slice(7).trim();
-      if (!colArg) {
-        term.writeln(`\x1b[33mUsage: /unique <col>  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
+      const rawArg = cmd.slice(7).trim();
+      if (!rawArg) {
+        term.writeln(`\x1b[33mUsage: /unique <col> [N]  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
         term.write(PROMPT);
         return;
       }
+      // Parse optional top-N: "classname 10" or "classname top 10"
+      let colArg = rawArg, topN = null;
+      const topMatch = rawArg.match(/^(\S+)\s+(?:top\s+)?(\d+)$/i);
+      if (topMatch) { colArg = topMatch[1]; topN = parseInt(topMatch[2], 10); }
       const ci = resolveCol(colArg, lastResult.columns);
       if (ci < 0) {
         term.writeln(`\x1b[31mColumn "${colArg}" not found. Available: ${lastResult.columns.join(', ')}\x1b[0m`);
@@ -2094,7 +2098,11 @@ function startTerminal() {
         const key = fmtCell(row[ci], colName);
         seen.set(key, (seen.get(key) || 0) + 1);
       });
-      const entries = [...seen.entries()].sort((a, b) => b[1] - a[1]);
+      const totalDistinct = seen.size;
+      let entries = [...seen.entries()].sort((a, b) => b[1] - a[1]);
+      const showN = topN !== null ? topN : entries.length;
+      const shown = Math.min(entries.length, showN);
+      entries = entries.slice(0, shown);
       const total = lastResult.rows.length;
       const maxCnt = entries.length > 0 ? entries[0][1] : 0;
       const cntW = Math.max(5, String(maxCnt).length);
@@ -2105,7 +2113,7 @@ function startTerminal() {
       const hdr = `${colName.padEnd(colW)}  ${'count'.padStart(cntW)}  ${'%'.padStart(pctW)}${showBar ? '  bar' : ''}`;
       term.writeln(`\x1b[1m${hdr}\x1b[0m`);
       term.writeln('\x1b[2m' + '─'.repeat(Math.min(hdr.length, term.cols - 2)) + '\x1b[0m');
-      entries.slice(0, settings.rowLimit).forEach(([val, cnt]) => {
+      entries.forEach(([val, cnt]) => {
         const pct = total > 0 ? (cnt / total * 100).toFixed(1) + '%' : '—';
         let bar = '';
         if (showBar && maxCnt > 0) {
@@ -2114,7 +2122,11 @@ function startTerminal() {
         }
         term.writeln(`${val.padEnd(colW)}  \x1b[32m${String(cnt).padStart(cntW)}\x1b[0m  \x1b[2m${pct.padStart(pctW)}\x1b[0m${bar}`);
       });
-      term.writeln(`\x1b[2m${seen.size} distinct value${seen.size !== 1 ? 's' : ''} in ${lastResult.rows.length} rows\x1b[0m`);
+      if (shown < totalDistinct) {
+        term.writeln(`\x1b[2m${shown} of ${totalDistinct} distinct values shown (top ${showN})\x1b[0m`);
+      } else {
+        term.writeln(`\x1b[2m${totalDistinct} distinct value${totalDistinct !== 1 ? 's' : ''} in ${lastResult.rows.length} rows\x1b[0m`);
+      }
       term.write(PROMPT);
       return;
     }
@@ -2890,7 +2902,7 @@ function startTerminal() {
     c('/top [N]  /head [N]',     '— first N rows, default 10 (updates lastResult for chaining)');
     c('/tail [N]',               '— last N rows, default 10');
     c('/sample [N]',             '— N randomly sampled rows from last result (default 10)');
-    c('/unique <col>',           '— distinct value counts');
+    c('/unique <col> [N]',       '— distinct value counts, optional top N');
     c('/pivot <col>',            '— group by column → (value, count) table (chainable)');
     c('/stats <col>',            '— min/max/mean/percentiles/sum');
     c('/export [csv|json]',     '— copy to clipboard as TSV, CSV, or JSON');

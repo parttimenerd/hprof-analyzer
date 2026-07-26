@@ -2503,20 +2503,32 @@ fn handle_unique(
         match last_result {
             Some(res) if !res.columns.is_empty() => {
                 let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                writeln!(out, "usage: !unique <col>  — available: {}", names.join(", "))?;
+                writeln!(out, "usage: !unique <col> [N]  — available: {}", names.join(", "))?;
             }
-            _ => writeln!(out, "usage: !unique <col>  — distinct value counts")?,
+            _ => writeln!(out, "usage: !unique <col> [N]  — distinct value counts, optional top N")?,
         }
         return Ok(());
     }
+    // Parse optional top-N suffix: "classname 10" or "classname top 10"
+    let (col_spec, top_n): (&str, Option<usize>) = {
+        let parts: Vec<&str> = col_arg.splitn(3, char::is_whitespace).collect();
+        match parts.as_slice() {
+            [col] => (col, None),
+            [col, n] if n.parse::<usize>().is_ok() => (col, n.parse().ok()),
+            [col, kw, n] if kw.eq_ignore_ascii_case("top") && n.parse::<usize>().is_ok() => {
+                (col, n.parse().ok())
+            }
+            _ => (parts[0], None),
+        }
+    };
     match last_result {
         None => writeln!(out, "(no previous result — run a query first)")?,
         Some(res) => {
-            let col_idx = resolve_col(col_arg, &res.columns);
+            let col_idx = resolve_col(col_spec, &res.columns);
             match col_idx {
                 None => {
                     let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                    writeln!(out, "column {:?} not found — available: {}", col_arg, names.join(", "))?;
+                    writeln!(out, "column {:?} not found — available: {}", col_spec, names.join(", "))?;
                 }
                 Some(ci) => {
                     use std::collections::HashMap;
@@ -2525,8 +2537,12 @@ fn handle_unique(
                     for row in &res.rows {
                         *counts.entry(fmt_value(&row[ci])).or_insert(0) += 1;
                     }
+                    let total_distinct = counts.len();
                     let mut entries: Vec<(String, usize)> = counts.into_iter().collect();
                     entries.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                    let show_n = top_n.unwrap_or(entries.len());
+                    let shown = entries.len().min(show_n);
+                    let entries = &entries[..shown];
                     let total = res.rows.len();
                     let max_cnt = entries.first().map(|(_, c)| *c).unwrap_or(1);
                     let cnt_w = fmt_int(max_cnt as i64).len().max(5);
@@ -2535,7 +2551,7 @@ fn handle_unique(
                     const BAR_W: usize = 20;
                     writeln!(out, "{:<val_w$}  {:>cnt_w$}  {:>pct_w$}  bar", col_name, "count", "%")?;
                     writeln!(out, "{}", "─".repeat(val_w + cnt_w + pct_w + BAR_W + 6))?;
-                    for (val, cnt) in &entries {
+                    for (val, cnt) in entries {
                         let filled = if max_cnt > 0 { (cnt * BAR_W) / max_cnt } else { 0 };
                         let bar: String = "█".repeat(filled) + &"░".repeat(BAR_W - filled);
                         let pct = if total > 0 {
@@ -2545,7 +2561,11 @@ fn handle_unique(
                         };
                         writeln!(out, "{:<val_w$}  {:>cnt_w$}  {:>pct_w$}  {}", val, fmt_int(*cnt as i64), pct, bar)?;
                     }
-                    writeln!(out, "({} distinct)", entries.len())?;
+                    if shown < total_distinct {
+                        writeln!(out, "({} of {} distinct, showing top {})", shown, total_distinct, show_n)?;
+                    } else {
+                        writeln!(out, "({} distinct)", total_distinct)?;
+                    }
                 }
             }
         }
@@ -2762,7 +2782,7 @@ fn handle_meta(
             writeln!(out, "  !distinct             remove duplicate rows (!dedup is an alias)")?;
             writeln!(out, "  !sort <col> [desc] [,col2 [desc]…]  sort; prefix - for desc (e.g. !sort -size,name)")?;
             writeln!(out, "  !stats <col>          numeric summary: min/max/mean/p50/p90/p99/sum")?;
-            writeln!(out, "  !unique <col>         distinct value counts, sorted by frequency")?;
+            writeln!(out, "  !unique <col> [N]     distinct value counts, sorted by frequency (top N)")?;
             writeln!(out, "  !pivot <col>          group by column → (value, count) table (chainable)")?;
             writeln!(out, "  !top [N]  /  !head [N]  show first N rows of last result (default 10)")?;
             writeln!(out, "  !tail [N]             show last N rows of last result (default 10)")?;
