@@ -481,6 +481,37 @@ impl ServerState {
                 );
                 (status, body, "application/x-ndjson")
             }
+            ("POST", "/plan") | ("POST", "/explain") => {
+                let oql = match extract_oql(body) {
+                    Ok(oql) => oql,
+                    Err(message) => {
+                        return (400, serde_json::json!({
+                            "ok": false,
+                            "error": { "kind": "request", "message": message }
+                        }).to_string(), "application/json");
+                    }
+                };
+                match crate::query::parse::parse_or_report(&oql) {
+                    Ok(q) => match crate::query::plan::plan_query(&q, self.path_depth) {
+                        Ok(plan) => {
+                            let plan = crate::query::optimize::optimize(
+                                plan,
+                                &q,
+                                &crate::query::optimize::SchemaStats::default(),
+                            );
+                            (200, serde_json::json!({ "ok": true, "plan": plan.explain() }).to_string(), "application/json")
+                        }
+                        Err(e) => (400, serde_json::json!({
+                            "ok": false,
+                            "error": { "kind": "plan", "message": e.0 }
+                        }).to_string(), "application/json"),
+                    },
+                    Err(report) => (400, serde_json::json!({
+                        "ok": false,
+                        "error": { "kind": "parse", "message": report }
+                    }).to_string(), "application/json"),
+                }
+            }
             ("GET", "/help") => {
                 let v = self.help_cache.get_or_init(|| help_json(&self.path));
                 (200, v.to_string(), "application/json")
@@ -510,7 +541,7 @@ impl ServerState {
                 (202, self.status_json().to_string(), "application/json")
             }
             // Known path, unsupported method -> 405 (not 404).
-            (_, "/") | (_, "/query") | (_, "/stream") | (_, "/help") | (_, "/schema") | (_, "/version") | (_, "/named-queries") | (_, "/status") | (_, "/analyze") => (405, serde_json::json!({
+            (_, "/") | (_, "/query") | (_, "/stream") | (_, "/help") | (_, "/schema") | (_, "/version") | (_, "/named-queries") | (_, "/status") | (_, "/analyze") | (_, "/plan") | (_, "/explain") => (405, serde_json::json!({
                 "ok": false,
                 "error": {
                     "kind": "method",

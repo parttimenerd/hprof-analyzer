@@ -1407,7 +1407,7 @@ function startTerminal() {
     // Complete / commands
     if (line.startsWith('/') && !line.includes(' ')) {
       const partial = line.slice(1).toLowerCase();
-      const cmds = ['help','clear','status','analyze','history','export','set','classes','filter','grep',
+      const cmds = ['help','clear','status','analyze','history','export','set','classes','plan','explain','filter','grep',
                     'sort','unique','stats','top','head','tail','cols','columns','obj','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
       const matches = cmds.filter(c => c.startsWith(partial));
       if (matches.length === 1) {
@@ -1687,6 +1687,42 @@ function startTerminal() {
       }
       const [, cls, idx] = m;
       await runQuery(`SELECT * FROM ${cls.trim()} s WHERE s.@objectId = ${idx}`);
+      return;
+    }
+    if (cmd.startsWith('/plan ') || cmd === '/plan' ||
+        cmd.startsWith('/explain ') || cmd === '/explain') {
+      const isPlan = cmd.startsWith('/plan') || cmd === '/plan';
+      const oql = cmd.slice(isPlan ? 5 : 8).trim();
+      if (!oql) {
+        term.writeln(`\x1b[33mUsage: /plan <oql>  — show query execution plan (no scan)\x1b[0m`);
+        term.write(PROMPT);
+        return;
+      }
+      try {
+        const res = await fetch(serverUrl + '/plan', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: oql }),
+          signal: AbortSignal.timeout(5000),
+        });
+        const data = await res.json();
+        if (data.ok && data.plan) {
+          data.plan.split('\n').forEach(l => term.writeln(l));
+        } else if (data.error) {
+          const msg = data.error?.message || JSON.stringify(data.error);
+          const report = data.error?.report;
+          if (report) {
+            report.split('\n').forEach(l => term.writeln(l));
+          } else {
+            term.writeln(`\x1b[31merror: ${msg}\x1b[0m`);
+          }
+        } else {
+          term.writeln('\x1b[2m(server did not return a plan)\x1b[0m');
+        }
+      } catch (e) {
+        term.writeln(`\x1b[31merror: ${e.message}\x1b[0m`);
+      }
+      term.write(PROMPT);
       return;
     }
     if (cmd === '/watch' || cmd.startsWith('/watch ')) {
@@ -2432,6 +2468,7 @@ function startTerminal() {
     h('Query');
     c('/run [name]',             '— run named query; list all if no name');
     c('/watch <s> <oql>',        '— repeat query every N seconds; /watch stop to cancel');
+    c('/plan <oql>',             '— show query execution plan without scanning (/explain is an alias)');
     c('/classes [pat]',          '— list class names filtered by pattern');
     c('/describe <cls>',         '— show fields of a class');
     c('/count <cls>',            '— count live instances of a class');
