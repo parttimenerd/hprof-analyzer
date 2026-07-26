@@ -2259,6 +2259,39 @@ function startTerminal() {
         }).filter(i => i >= 0);
         if (numericCols.length === 1) {
           colArg = lastResult.columns[numericCols[0]];
+        } else if (numericCols.length > 1) {
+          for (const colIdx of numericCols) {
+            const cName = lastResult.columns[colIdx];
+            const allVals2 = lastResult.rows.map(row => {
+              const cell = row[colIdx];
+              if (cell === null || cell === undefined) return null;
+              const v = typeof cell === 'object' ? cell.v : cell;
+              return typeof v === 'number' ? v : null;
+            });
+            const vals2 = allVals2.filter(v => v !== null).sort((a, b) => a - b);
+            if (vals2.length === 0) continue;
+            const nullCount2 = allVals2.length - vals2.length;
+            const sum2 = vals2.reduce((s, v) => s + v, 0);
+            const mean2 = sum2 / vals2.length;
+            const variance2 = vals2.reduce((s, v) => s + (v - mean2) ** 2, 0) / vals2.length;
+            const stddev2 = Math.sqrt(variance2);
+            const p50_2 = vals2[Math.floor(vals2.length * 0.5)];
+            const p90_2 = vals2[Math.floor(vals2.length * 0.9)];
+            const p99_2 = vals2[Math.floor(vals2.length * 0.99)];
+            const fmtV2 = v => Number.isInteger(v) ? v.toLocaleString('en-US') : parseFloat(v.toPrecision(6)).toLocaleString('en-US');
+            const nullNote2 = nullCount2 > 0 ? `  \x1b[2m(${nullCount2} null)\x1b[0m` : '';
+            term.writeln(`\x1b[36m${cName}\x1b[0m  (${vals2.length} values)${nullNote2}`);
+            term.writeln(`  min    \x1b[32m${fmtV2(vals2[0])}\x1b[0m`);
+            term.writeln(`  max    \x1b[32m${fmtV2(vals2[vals2.length - 1])}\x1b[0m`);
+            term.writeln(`  mean   \x1b[32m${fmtV2(mean2)}\x1b[0m`);
+            term.writeln(`  stddev \x1b[32m${fmtV2(stddev2)}\x1b[0m`);
+            term.writeln(`  p50    \x1b[32m${fmtV2(p50_2)}\x1b[0m`);
+            term.writeln(`  p90    \x1b[32m${fmtV2(p90_2)}\x1b[0m`);
+            term.writeln(`  p99    \x1b[32m${fmtV2(p99_2)}\x1b[0m`);
+            term.writeln(`  sum    \x1b[33m${fmtV2(sum2)}\x1b[0m`);
+          }
+          term.write(PROMPT);
+          return;
         } else {
           term.writeln(`\x1b[33mUsage: /stats <col>  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
           term.write(PROMPT);

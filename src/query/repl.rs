@@ -2462,7 +2462,7 @@ fn handle_stats(
         match last_result {
             None => { writeln!(out, "usage: !stats <col>  — numeric summary (min/max/mean/stddev/p50/p90/p99/sum)")?; return Ok(()); }
             Some(res) if !res.columns.is_empty() => {
-                // Auto-select if exactly one numeric column
+                // Auto-select if exactly one numeric column; if multiple, show all
                 let numeric_cols: Vec<usize> = (0..res.columns.len())
                     .filter(|&i| matches!(infer_col_type(i, &res.rows), "int" | "float"))
                     .collect();
@@ -2470,11 +2470,21 @@ fn handle_stats(
                     let ci = numeric_cols[0];
                     let auto_name = res.columns[ci].name.clone();
                     drop(numeric_cols);
-                    // Recursive call with the inferred column
                     return handle_stats(&auto_name, last_result, out);
                 }
+                if numeric_cols.len() > 1 {
+                    // Show stats for every numeric column
+                    let names: Vec<String> = numeric_cols.iter()
+                        .map(|&i| res.columns[i].name.clone())
+                        .collect();
+                    drop(numeric_cols);
+                    for name in &names {
+                        handle_stats(name, last_result, out)?;
+                    }
+                    return Ok(());
+                }
                 let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                writeln!(out, "usage: !stats <col>  — available: {}", names.join(", "))?;
+                writeln!(out, "usage: !stats <col>  — no numeric columns found (available: {})", names.join(", "))?;
             }
             _ => writeln!(out, "usage: !stats <col>  — numeric summary (min/max/mean/stddev/p50/p90/p99/sum)")?,
         }
