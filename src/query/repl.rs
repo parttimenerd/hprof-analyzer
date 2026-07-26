@@ -2163,6 +2163,20 @@ fn handle_distinct(
     Ok(())
 }
 
+/// Resolve a column specifier (name substring OR 1-based index) to a column index.
+/// Returns `Some(idx)` on success, `None` if not found (caller should print an error).
+fn resolve_col(spec: &str, columns: &[crate::query::model::QueryColumn]) -> Option<usize> {
+    if let Ok(n) = spec.parse::<usize>() {
+        if n >= 1 && n <= columns.len() {
+            return Some(n - 1);
+        }
+    }
+    let lower = spec.to_ascii_lowercase();
+    columns.iter().position(|c| {
+        c.name.to_ascii_lowercase() == lower || c.name.to_ascii_lowercase().contains(&lower)
+    })
+}
+
 /// Sort the last result by a column name (case-insensitive prefix match).
 /// `!sort <col> [desc]`
 fn handle_sort(
@@ -2188,10 +2202,7 @@ fn handle_sort(
                     let parts: Vec<&str> = spec.splitn(2, char::is_whitespace).collect();
                     let col_lower = parts[0].to_ascii_lowercase();
                     let desc = parts.get(1).map(|s| s.trim().eq_ignore_ascii_case("desc")).unwrap_or(false);
-                    match res.columns.iter().position(|c| {
-                        c.name.to_ascii_lowercase() == col_lower
-                            || c.name.to_ascii_lowercase().contains(&col_lower)
-                    }) {
+                    match resolve_col(parts[0], &res.columns) {
                         None => {
                             let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
                             writeln!(out, "column {:?} not found — available: {}", parts[0], names.join(", "))?;
@@ -2260,11 +2271,7 @@ fn handle_stats(
     match last_result {
         None => writeln!(out, "(no previous result — run a query first)")?,
         Some(res) => {
-            let col_lower = col_arg.to_ascii_lowercase();
-            let col_idx = res.columns.iter().position(|c| {
-                c.name.to_ascii_lowercase() == col_lower
-                    || c.name.to_ascii_lowercase().contains(&col_lower)
-            });
+            let col_idx = resolve_col(col_arg, &res.columns);
             match col_idx {
                 None => {
                     let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
@@ -2352,11 +2359,7 @@ fn handle_unique(
     match last_result {
         None => writeln!(out, "(no previous result — run a query first)")?,
         Some(res) => {
-            let col_lower = col_arg.to_ascii_lowercase();
-            let col_idx = res.columns.iter().position(|c| {
-                c.name.to_ascii_lowercase() == col_lower
-                    || c.name.to_ascii_lowercase().contains(&col_lower)
-            });
+            let col_idx = resolve_col(col_arg, &res.columns);
             match col_idx {
                 None => {
                     let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
@@ -2413,11 +2416,7 @@ fn handle_pivot(
     match last_result {
         None => writeln!(out, "(no previous result — run a query first)")?,
         Some(res) => {
-            let col_lower = col_arg.to_ascii_lowercase();
-            let col_idx = res.columns.iter().position(|c| {
-                c.name.to_ascii_lowercase() == col_lower
-                    || c.name.to_ascii_lowercase().contains(&col_lower)
-            });
+            let col_idx = resolve_col(col_arg, &res.columns);
             match col_idx {
                 None => {
                     let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
@@ -4647,5 +4646,40 @@ mod tests {
         assert!(result.is_ok());
         let output = String::from_utf8_lossy(&out);
         assert!(output.contains("unknown query"), "expected error for unknown name:\n{output}");
+    }
+
+    // ---------- resolve_col ----------
+
+    fn make_columns(names: &[&str]) -> Vec<crate::query::model::QueryColumn> {
+        names.iter().map(|&n| crate::query::model::QueryColumn { name: n.into() }).collect()
+    }
+
+    #[test]
+    fn resolve_col_by_name() {
+        let cols = make_columns(&["alpha", "beta", "gamma"]);
+        assert_eq!(resolve_col("beta", &cols), Some(1));
+        assert_eq!(resolve_col("BETA", &cols), Some(1)); // case-insensitive
+    }
+
+    #[test]
+    fn resolve_col_by_number() {
+        let cols = make_columns(&["alpha", "beta", "gamma"]);
+        assert_eq!(resolve_col("1", &cols), Some(0));
+        assert_eq!(resolve_col("3", &cols), Some(2));
+        assert_eq!(resolve_col("0", &cols), None); // 0 is out of range (1-based)
+        assert_eq!(resolve_col("4", &cols), None); // exceeds column count
+    }
+
+    #[test]
+    fn resolve_col_substring() {
+        let cols = make_columns(&["retainedHeapSize", "className"]);
+        assert_eq!(resolve_col("retained", &cols), Some(0));
+        assert_eq!(resolve_col("class", &cols), Some(1));
+    }
+
+    #[test]
+    fn resolve_col_not_found() {
+        let cols = make_columns(&["alpha"]);
+        assert_eq!(resolve_col("missing", &cols), None);
     }
 }
