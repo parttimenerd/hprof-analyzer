@@ -547,7 +547,7 @@ function startTerminal() {
     if (line.startsWith('/') && !line.includes(' ')) {
       const partial = line.slice(1).toLowerCase();
       const cmds = ['help','clear','status','analyze','history','export','set','classes','plan','explain','filter','grep',
-                    'sort','unique','stats','top','head','tail','cols','columns','obj','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
+                    'sort','unique','stats','top','head','tail','cols','columns','select','obj','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
       const matches = cmds.filter(c => c.startsWith(partial));
       if (matches.length === 1) {
         setLine('/' + matches[0] + ' ');
@@ -957,6 +957,39 @@ function startTerminal() {
           term.writeln('  ' + fields.slice(i, i + cols).map(f => f.padEnd(colW)).join('').trimEnd());
         }
         term.writeln(`\x1b[2m${fields.length} column${fields.length !== 1 ? 's' : ''}\x1b[0m`);
+      }
+      term.write(PROMPT);
+      return;
+    }
+    if (cmd.startsWith('/select ') || cmd === '/select') {
+      if (!lastResult) {
+        term.writeln('\x1b[33mNo result — run a query first.\x1b[0m');
+      } else {
+        const args = cmd.slice(7).trim().split(/\s+/).filter(Boolean);
+        if (args.length === 0) {
+          term.writeln('\x1b[33musage: /select <col1> [col2] …\x1b[0m');
+        } else {
+          const fields = lastResult.columns;
+          const lower = fields.map(f => f.toLowerCase());
+          const indices = [];
+          let ok = true;
+          for (const arg of args) {
+            const larg = arg.toLowerCase();
+            const i = lower.findIndex(f => f === larg || f.includes(larg));
+            if (i === -1) {
+              term.writeln(`\x1b[31mcolumn ${JSON.stringify(arg)} not found — available: ${fields.join(', ')}\x1b[0m`);
+              ok = false;
+              break;
+            }
+            indices.push(i);
+          }
+          if (ok) {
+            const newCols = indices.map(i => fields[i]);
+            const newRows = lastResult.rows.map(r => indices.map(i => r[i]));
+            lastResult = { columns: newCols, rows: newRows };
+            renderTable(lastResult.columns, lastResult.rows);
+          }
+        }
       }
       term.write(PROMPT);
       return;
@@ -1582,7 +1615,7 @@ function startTerminal() {
           const ts = new Date().toLocaleTimeString('en-GB', { hour12: false });
           term.writeln(`${elapsedColor}${r.row_count} row${r.row_count !== 1 ? 's' : ''}, ${elapsedFmt}\x1b[0m\x1b[2m  [${ts}]\x1b[0m${trunc}${note}`);
           if (rows.length > 20) {
-            term.writeln(`\x1b[2m  /filter <text|/re/>  /sort <col>  /stats <col>  /unique <col>  /export [csv]\x1b[0m`);
+            term.writeln(`\x1b[2m  /filter <text|/re/>  /sort <col>  /select <col>…  /stats <col>  /unique <col>  /export [csv]\x1b[0m`);
           }
         } else {
           // No columns — just show the raw result
@@ -1623,6 +1656,7 @@ function startTerminal() {
     h('Result post-processing');
     c('/last',                   '— re-display last result');
     c('/cols',                   '— list column names of last result');
+    c('/select <col> …',         '— project (keep) specific columns from last result');
     c('/filter <text|/re/>',     '— filter rows by substring or regex  (/grep is an alias)');
     c('/sort <col> [desc]',      '— sort rows by column');
     c('/top <N>  /head <N>',      '— first N rows (updates lastResult for chaining)');
