@@ -1958,7 +1958,7 @@ fn run_repl_line(
                             };
                             writeln!(out, "  {:>idx_w$}  {name_color}{f:<col_w$}{cr}  {cd}{:<8}{}{cr}{suffix}", i + 1, type_tag, fill)?;
                         }
-                        writeln!(out, "({} column{})", fields.len(), if fields.len() == 1 { "" } else { "s" })?;
+                        writeln!(out, "{cd}({} column{}){cr}", fields.len(), if fields.len() == 1 { "" } else { "s" })?;
                     }
                 }
                 out.flush()?;
@@ -1997,7 +1997,7 @@ fn run_repl_line(
                                         writeln!(out, "  {cd}{:>idx_w$}{cr}  {cc}{:<key_w$}{cr}  {vp}{val_str}{vs}", i + 1, col.name)?;
                                     }
                                 } else if res.rows.is_empty() {
-                                    writeln!(out, "(no object {cls}#{idx} found)")?;
+                                    warn_out(&format!("(no object {cls}#{idx} found)"), out)?;
                                 } else {
                                     print_result(&res, std::time::Duration::ZERO, *max_width, out)?;
                                 }
@@ -2317,7 +2317,7 @@ fn handle_save(
         }
     }
     let Some(res) = last_result.as_ref() else {
-        writeln!(out, "(nothing to save — run a query first, or use `!save <file> <oql>`)")?;
+        warn_out("(nothing to save \u{2014} run a query first, or use `!save <file> <oql>`)", out)?;
         return Ok(());
     };
     let use_json = file.ends_with(".json");
@@ -3096,9 +3096,9 @@ fn handle_unique(
                         writeln!(out, "{:<val_w$}  {:>cnt_w$}  {:>pct_w$}  {cd}{}{cr}", val, fmt_int(*cnt as i64), pct, bar)?;
                     }
                     if shown < total_distinct {
-                        writeln!(out, "({} of {} distinct, showing top {})", shown, total_distinct, show_n)?;
+                        writeln!(out, "{cd}({} of {} distinct, showing top {}){cr}", shown, total_distinct, show_n)?;
                     } else {
-                        writeln!(out, "({} distinct)", total_distinct)?;
+                        writeln!(out, "{cd}({} distinct){cr}", total_distinct)?;
                     }
                 }
             }
@@ -3251,11 +3251,11 @@ fn handle_row(
     out: &mut impl Write,
 ) -> io::Result<()> {
     let Some(res) = last_result else {
-        writeln!(out, "(no previous result — run a query first)")?;
+        warn_out("(no previous result \u{2014} run a query first)", out)?;
         return Ok(());
     };
     if res.rows.is_empty() {
-        writeln!(out, "(result has no rows)")?;
+        warn_out("(result has no rows)", out)?;
         return Ok(());
     }
     let n_rows = res.rows.len();
@@ -3426,9 +3426,9 @@ fn handle_meta(
                 .collect();
             if matches.is_empty() {
                 if rest.is_empty() {
-                    writeln!(out, "(no {kind} names loaded)")?;
+                    warn_out(&format!("(no {kind} names loaded)"), out)?;
                 } else {
-                    writeln!(out, "(no {kind} names matching {rest:?})")?;
+                    warn_out(&format!("(no {kind} names matching {rest:?})"), out)?;
                 }
             } else {
                 // Cap the dump so an unfiltered `!classes` on a huge heap doesn't
