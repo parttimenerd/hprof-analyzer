@@ -1464,7 +1464,6 @@ function startTerminal() {
         ? `top ${pivotRows.length} of ${totalGroups} groups` : null;
       const pivotResult = { columns: [colName, 'count'], rows: pivotRows, row_count: pivotRows.length, note };
       renderResult(pivotResult);
-      if (note) term.writeln(`\x1b[2m${note}\x1b[0m`);
       prevResult = lastResult;
       lastResult = pivotResult;
       term.write(PROMPT);
