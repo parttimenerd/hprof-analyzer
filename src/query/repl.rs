@@ -3470,19 +3470,22 @@ fn handle_meta(
         }
         "reachable" | "reachable-only" => {
             *reachable_only = true;
-            writeln!(out, "mode: reachable-only (GC-reachable objects, MAT parity)")?;
+            let cg = if color { "\x1b[32m" } else { "" };
+            writeln!(out, "mode: {cg}reachable-only{cr}  {cd}(GC-reachable objects, MAT parity){cr}")?;
         }
         "all" => {
             *reachable_only = false;
-            writeln!(out, "mode: all (raw-heap scan, includes unreachable objects)")?;
+            let cg = if color { "\x1b[32m" } else { "" };
+            writeln!(out, "mode: {cg}all{cr}  {cd}(raw-heap scan, includes unreachable objects){cr}")?;
         }
         "mode" => {
-            let m = if *reachable_only {
-                "reachable-only (GC-reachable objects, MAT parity)"
+            let (mode_val, hint) = if *reachable_only {
+                ("reachable-only", "(GC-reachable objects, MAT parity)")
             } else {
-                "all (raw-heap scan, includes unreachable objects)"
+                ("all", "(raw-heap scan, includes unreachable objects)")
             };
-            writeln!(out, "mode: {m}")?;
+            let cg = if color { "\x1b[32m" } else { "" };
+            writeln!(out, "mode: {cg}{mode_val}{cr}  {cd}{hint}{cr}")?;
         }
         "plan" | "explain" => {
             // Detect optional --raw flag.
@@ -3765,26 +3768,17 @@ fn print_result(
             write_row(row, &widths, &numeric, out)?;
         }
     }
+    let cy = if color { "\x1b[33m" } else { "" };
+    let cd2 = if color { "\x1b[2m" } else { "" };
+    let cr2 = if color { "\x1b[0m" } else { "" };
     if capped {
-        if color {
-            writeln!(out, "\x1b[33m-- showing {row_limit} of {} rows (use `!set limit 0` or `!set limit N` to change) --\x1b[0m", res.rows.len())?;
-        } else {
-            writeln!(out, "-- showing {row_limit} of {} rows (use `!set limit 0` or `!set limit N` to change) --", res.rows.len())?;
-        }
+        writeln!(out, "{cy}-- showing {row_limit} of {} rows (use `!set limit 0` or `!set limit N` to change) --{cr2}", res.rows.len())?;
     }
     if let Some(note) = &res.note {
-        if color {
-            writeln!(out, "\x1b[33m-- {note} --\x1b[0m")?;
-        } else {
-            writeln!(out, "-- {note}")?;
-        }
+        writeln!(out, "{cy}-- {note} --{cr2}")?;
     }
     if res.truncated {
-        if color {
-            writeln!(out, "\x1b[33m-- result capped at {} rows (add LIMIT N or increase with LIMIT 0 for all) --\x1b[0m", res.row_count)?;
-        } else {
-            writeln!(out, "-- result capped at {} rows (add LIMIT N or increase with LIMIT 0 for all) --", res.row_count)?;
-        }
+        writeln!(out, "{cy}-- result capped at {} rows (add LIMIT N or increase with LIMIT 0 for all) --{cr2}", res.row_count)?;
     }
     if color {
         let elapsed_ms = elapsed.as_millis();
@@ -3799,11 +3793,7 @@ fn print_result(
             matches!(infer_col_type(i, &res.rows), "int" | "float")
         });
         let stat_hint = if has_numeric { "  !stats <col>" } else { "" };
-        if color {
-            writeln!(out, "\x1b[2m  !filter <pat>  !sort [-]<col>  !select <col>…  !pivot <col>  !row [N]{stat_hint}  !export [csv|tsv|json]\x1b[0m")?;
-        } else {
-            writeln!(out, "  !filter <pat>  !sort [-]<col>  !select <col>…  !pivot <col>  !row [N]{stat_hint}  !export [csv|tsv|json]")?;
-        }
+        writeln!(out, "{cd2}  !filter <pat>  !sort [-]<col>  !select <col>…  !pivot <col>  !row [N]{stat_hint}  !export [csv|tsv|json]{cr2}")?;
     }
     Ok(())
 }
@@ -4130,6 +4120,7 @@ mod tests {
     ) -> (bool, String, bool) {
         let mut buf = Vec::new();
         let mut reachable_only = initial;
+        SESSION_SETTINGS.with(|s| s.borrow_mut().color = false);
         let quit = handle_meta(
             cmd,
             crate::query::DEFAULT_PATH_DEPTH_CAP,
@@ -4138,6 +4129,7 @@ mod tests {
             &mut buf,
         )
         .unwrap();
+        SESSION_SETTINGS.with(|s| s.borrow_mut().color = true);
         (quit, String::from_utf8(buf).unwrap(), reachable_only)
     }
 
