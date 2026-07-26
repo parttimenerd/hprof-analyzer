@@ -42,22 +42,24 @@ _At-a-glance digest; see the sections below for full detail._
 
 **Top suspects by retained heap**
 
-|  # | Suspect                                                       | Retained | % Heap |
-| -: | ------------------------------------------------------------- | -------: | -----: |
-|  1 | `cafesat.sat.Vector` (36,614 instances)                       |   4.2 MB |  14.1% |
-|  2 | `scala.collection.immutable.$colon$colon` (146,148 instances) |   3.4 MB |  11.3% |
+|  # | Suspect                             | Retained | % Heap |
+| -: | ----------------------------------- | -------: | -----: |
+|  1 | `java.lang.Thread` (single object)  |  22.9 MB |  76.7% |
+|  2 | `java.lang.Class` (1,669 instances) |   3.5 MB |  11.7% |
 
-**Likely problem:** retention is spread across several roots; no single object dominates.
+**Likely problem:** `java.lang.Thread` retains 76.7% of the reachable heap — investigate this first.
 
 ## Memory Triage
 
 _Where the reachable heap is concentrated, at a glance._
 
-- **Headline retainer:** `cafesat.sat.Vector` (a class group) retains 4.2 MB (14.1% of reachable heap). See [Leak Suspects](#leak-suspects).
-- **Concentration:** diffuse — retention is spread across multiple roots, so there is no single object to free. See [Leak Suspects](#leak-suspects).
-- **Shape:** deep (retention flows through long dominator chains — often nested collections or linked structures) — 90% of objects within depth 6, max depth 16. See [Dominator-Depth Distribution](#dominator-depth-distribution).
-- **One leak or many:** the single biggest object, `java.net.URLClassLoader`, retains 8.8% and the top 10 retain 13.1% of the heap; 1 object(s) each hold >=1%. See [Top Consumers](#top-consumers).
-- **Classloader reload (low count):** `scala.collection.immutable.$colon$colon` is loaded by 2 class loaders (3.4 MB retained) — possible reload, but count is low; investigate only if count grows. See [Duplicate Classes](#duplicate-classes).
+- **Headline retainer:** `java.lang.Thread` (a single object) retains 22.9 MB (76.7% of reachable heap). See [Leak Suspects](#leak-suspects).
+- **Concentration:** highly concentrated — `java.lang.Thread` (a single object) holds 76.7% of the heap, so freeing it would reclaim most memory. See [Leak Suspects](#leak-suspects).
+- **Dominant GC-root type:** 76.7% of the heap is held by "Thread" roots — retention concentrates at one root class. See [System Overview](#overview).
+- **Shape:** deep (retention flows through long dominator chains — often nested collections or linked structures) — 90% of objects within depth 11273, max depth 41355. See [Dominator-Depth Distribution](#dominator-depth-distribution).
+- **One leak or many:** the single biggest object, `java.lang.Thread`, retains 76.7% and the top 10 retain 92.6% of the heap; 4 object(s) each hold >=1%. See [Top Consumers](#top-consumers).
+- **Classloader reload (low count):** `scala.collection.immutable.$colon$colon` is loaded by 2 class loaders (8.6 MB retained) — possible reload, but count is low; investigate only if count grows. See [Duplicate Classes](#duplicate-classes).
+- **Thread pinning:** thread `main` retains 22.9 MB (76.7% of heap) and pins 124 thread-local roots — a live thread is holding memory alive. See [Threads](#threads).
 - **Off-heap (DirectByteBuffer):** 134.3 MB of native memory is held by live DirectByteBuffers — not counted in heap size but can dominate RSS. See [Leak Indicators](#leak-indicators).
 - **Sparse object arrays:** 38,119 object arrays are <=20% full (5.9 MB wasted on null slots) — sparse or multi-dimensional array structures consuming excess memory. See [Collections](#collections).
 - **Fixed per-object header overhead:** 952,666 objects × 12 B header = 10.9 MB (36.6% of heap) is consumed by JVM object headers alone — consider value types, primitive arrays, or fewer wrapper objects. See [Header Overhead](#header-overhead).
@@ -94,7 +96,7 @@ _Reachable-heap totals and the largest classes by retained heap._
 | Class loaders                                 | 5                                |
 | Unreachable objects (excluded)                | 4,266 (673.0 KB)                 |
 | Heap fragmentation (unreachable / heap total) | 2.2%                             |
-| Top-class retained concentration              | 16.0%                            |
+| Top-class retained concentration              | 76.7%                            |
 
 - **Class loaders (labels):** java/net/URLClassLoader, jdk/internal/loader/ClassLoaders$AppClassLoader, jdk/internal/loader/ClassLoaders$PlatformClassLoader
 
@@ -207,57 +209,57 @@ _Top 50 classes ranked by retained heap; the full list is in the JSON output._
 
 |  # | Class                                             | Instances | Shallow Heap |  Largest | Retained Heap | % Heap |
 | -: | ------------------------------------------------- | --------: | -----------: | -------: | ------------: | -----: |
-|  1 | `cafesat.sat.Literal`                             |   125,219 |       4.8 MB |     40 B |        4.8 MB |  16.0% |
-|  2 | `java.lang.Object[]`                              |    25,579 |       1.5 MB | 512.0 KB |        4.5 MB |  15.0% |
-|  3 | `cafesat.sat.Vector`                              |    36,614 |     858.1 KB |     24 B |        4.2 MB |  14.1% |
-|  4 | `cafesat.sat.Solver$Clause[]`                     |    36,615 |       3.4 MB |  71.5 KB |        3.4 MB |  11.5% |
-|  5 | `scala.collection.immutable.$colon$colon`         |   146,151 |       3.3 MB |     24 B |        3.4 MB |  11.3% |
-|  6 | `java.lang.Class`                                 |     2,860 |      35.5 KB |   1.1 KB |        2.8 MB |   9.3% |
-|  7 | `java.net.URLClassLoader`                         |         2 |        176 B |     88 B |        2.7 MB |   9.2% |
-|  8 | `scala.collection.immutable.Set$Set2`             |    44,628 |       1.0 MB |     24 B |        2.7 MB |   9.1% |
-|  9 | `int[]`                                           |    89,265 |       2.6 MB |  71.5 KB |        2.6 MB |   8.8% |
-| 10 | `java.util.ArrayList`                             |       102 |       2.4 KB |     24 B |        2.6 MB |   8.7% |
-| 11 | `scala.runtime.LazyVals$`                         |         1 |         16 B |     16 B |        2.5 MB |   8.4% |
-| 12 | `java.lang.Object`                                |   133,780 |       2.0 MB |     16 B |        2.0 MB |   6.8% |
-| 13 | `byte[]`                                          |    24,721 |       2.0 MB | 255.1 KB |        2.0 MB |   6.7% |
-| 14 | `cafesat.sat.Solver$Clause`                       |    65,565 |       2.0 MB |     32 B |        2.0 MB |   6.7% |
-| 15 | `scala.collection.immutable.BitmapIndexedSetNode` |    22,791 |     890.3 KB |     40 B |        1.5 MB |   4.9% |
-| 16 | `cafesat.asts.core.Trees$ConnectiveApplication`   |    43,982 |       1.0 MB |     24 B |        1.0 MB |   3.4% |
-| 17 | `java.lang.String`                                |    23,997 |     562.4 KB |     24 B |      847.8 KB |   2.8% |
-| 18 | `cafesat.asts.core.Trees$ConnectiveSymbol`        |    35,234 |     825.8 KB |     24 B |      825.9 KB |   2.7% |
-| 19 | `scala.collection.immutable.Set$Set3`             |     8,748 |     205.0 KB |     24 B |      546.7 KB |   1.8% |
-| 20 | `cafesat.asts.core.Trees$PredicateApplication`    |    19,761 |     463.1 KB |     24 B |      463.2 KB |   1.5% |
-| 21 | `java.util.HashMap$Node`                          |    10,167 |     317.7 KB |     32 B |      429.7 KB |   1.4% |
-| 22 | `java.util.concurrent.ConcurrentHashMap$Node`     |     7,007 |     219.0 KB |     32 B |      375.1 KB |   1.2% |
-| 23 | `java.util.LinkedHashMap`                         |     5,826 |     364.1 KB |     64 B |      364.2 KB |   1.2% |
-| 24 | `cafesat.api.Formulas$Formula`                    |     8,908 |     139.2 KB |     16 B |      347.9 KB |   1.1% |
-| 25 | `java.util.zip.ZipFile$Source`                    |        10 |        800 B |     80 B |      263.5 KB |   0.9% |
-| 26 | `java.util.concurrent.ConcurrentHashMap$Node[]`   |        93 |      61.9 KB |   8.0 KB |      239.4 KB |   0.8% |
-| 27 | `java.util.HashMap$Node[]`                        |       395 |      96.5 KB |  16.0 KB |      174.8 KB |   0.6% |
-| 28 | `java.lang.Integer`                               |     9,789 |     153.0 KB |     16 B |      153.4 KB |   0.5% |
-| 29 | `cafesat.sat.Vector[]`                            |         1 |     143.0 KB | 143.0 KB |      143.0 KB |   0.5% |
-| 30 | `java.util.concurrent.ConcurrentHashMap`          |       117 |       7.3 KB |     64 B |      135.8 KB |   0.4% |
-| 31 | `byte[][]`                                        |         1 |       1.4 KB |   1.4 KB |       94.1 KB |   0.3% |
-| 32 | `java.util.jar.Attributes`                        |     5,786 |      90.4 KB |     16 B |       90.5 KB |   0.3% |
-| 33 | `scala.collection.immutable.HashSet`              |        85 |       1.3 KB |     16 B |       82.9 KB |   0.3% |
-| 34 | `java.util.HashMap`                               |       361 |      16.9 KB |     48 B |       80.5 KB |   0.3% |
-| 35 | `cafesat.sat.Solver`                              |         1 |        168 B |    168 B |       72.4 KB |   0.2% |
-| 36 | `char[]`                                          |       224 |      55.8 KB |  16.0 KB |       55.8 KB |   0.2% |
-| 37 | `java.util.LinkedHashMap$Entry`                   |     1,200 |      46.9 KB |     40 B |       46.9 KB |   0.2% |
-| 38 | `java.lang.invoke.MemberName`                     |     1,040 |      40.6 KB |     40 B |       44.7 KB |   0.1% |
-| 39 | `java.lang.Thread`                                |        27 |       2.7 KB |    104 B |       38.4 KB |   0.1% |
-| 40 | `java.lang.invoke.MethodType`                     |       894 |      34.9 KB |     40 B |       38.4 KB |   0.1% |
-| 41 | `cafesat.api.Formulas$Formula[]`                  |         2 |      35.1 KB |  34.8 KB |       35.1 KB |   0.1% |
-| 42 | `jdk.internal.math.FDBigInteger`                  |       341 |      10.7 KB |     32 B |       35.0 KB |   0.1% |
-| 43 | `java.lang.ref.SoftReference[]`                   |       434 |      32.2 KB |    120 B |       32.6 KB |   0.1% |
-| 44 | `java.lang.CharacterData00`                       |         1 |         16 B |     16 B |       29.8 KB |   0.1% |
-| 45 | `jdk.internal.util.WeakReferenceKey`              |       900 |      28.1 KB |     32 B |       29.4 KB |   0.1% |
-| 46 | `java.lang.Object[][]`                            |        13 |       1.3 KB |    144 B |       28.8 KB |   0.1% |
-| 47 | `org.renaissance.core.BenchmarkDescriptor`        |        31 |        744 B |     24 B |       28.2 KB |   0.1% |
-| 48 | `java.lang.String[]`                              |       449 |      17.0 KB |   2.4 KB |       27.8 KB |   0.1% |
-| 49 | `java.lang.Module`                                |        70 |       3.3 KB |     48 B |       25.7 KB |   0.1% |
-| 50 | `java.lang.invoke.LambdaForm$Name`                |       503 |      15.7 KB |     32 B |       25.4 KB |   0.1% |
-_… 2,917 more classes, 422.6 KB shallow / 774.9 KB retained (full list in JSON)._
+|  1 | `java.lang.Thread`                                |        27 |       2.7 KB |    104 B |       22.9 MB |  76.7% |
+|  2 | `java.lang.Object[]`                              |    25,579 |       1.5 MB | 512.0 KB |       11.4 MB |  38.4% |
+|  3 | `scala.collection.immutable.$colon$colon`         |   146,151 |       3.3 MB |     24 B |        8.6 MB |  28.8% |
+|  4 | `scala.collection.immutable.BitmapIndexedSetNode` |    22,791 |     890.3 KB |     40 B |        8.4 MB |  28.1% |
+|  5 | `scala.collection.immutable.HashSet`              |        85 |       1.3 KB |     16 B |        8.0 MB |  26.9% |
+|  6 | `cafesat.sat.Literal`                             |   125,219 |       4.8 MB |     40 B |        4.8 MB |  16.0% |
+|  7 | `cafesat.sat.Solver`                              |         1 |        168 B |    168 B |        4.6 MB |  15.6% |
+|  8 | `scala.collection.immutable.Set$Set2`             |    44,628 |       1.0 MB |     24 B |        4.4 MB |  14.9% |
+|  9 | `cafesat.sat.Vector[]`                            |         1 |     143.0 KB | 143.0 KB |        4.3 MB |  14.5% |
+| 10 | `cafesat.sat.Vector`                              |    36,614 |     858.1 KB |     24 B |        4.2 MB |  14.1% |
+| 11 | `cafesat.asts.core.Trees$ConnectiveApplication`   |    43,982 |       1.0 MB |     24 B |        3.9 MB |  13.0% |
+| 12 | `cafesat.sat.Solver$Clause`                       |    65,565 |       2.0 MB |     32 B |        3.6 MB |  12.1% |
+| 13 | `java.lang.Class`                                 |     2,860 |      35.5 KB |   1.1 KB |        3.5 MB |  11.9% |
+| 14 | `cafesat.sat.Solver$Clause[]`                     |    36,615 |       3.4 MB |  71.5 KB |        3.4 MB |  11.5% |
+| 15 | `int[]`                                           |    89,265 |       2.6 MB |  71.5 KB |        2.6 MB |   8.8% |
+| 16 | `scala.runtime.LazyVals$`                         |         1 |         16 B |     16 B |        2.5 MB |   8.4% |
+| 17 | `java.lang.Object`                                |   133,780 |       2.0 MB |     16 B |        2.0 MB |   6.8% |
+| 18 | `byte[]`                                          |    24,721 |       2.0 MB | 255.1 KB |        2.0 MB |   6.7% |
+| 19 | `java.lang.String`                                |    23,997 |     562.4 KB |     24 B |        1.7 MB |   5.6% |
+| 20 | `java.util.HashMap`                               |       361 |      16.9 KB |     48 B |        1.6 MB |   5.4% |
+| 21 | `java.util.HashMap$Node[]`                        |       395 |      96.5 KB |  16.0 KB |        1.6 MB |   5.3% |
+| 22 | `java.util.HashMap$Node`                          |    10,167 |     317.7 KB |     32 B |        1.5 MB |   5.1% |
+| 23 | `scala.collection.immutable.Set$Set3`             |     8,748 |     205.0 KB |     24 B |        1.2 MB |   4.0% |
+| 24 | `java.lang.ref.SoftReference`                     |       210 |       8.2 KB |     40 B |        1.2 MB |   3.9% |
+| 25 | `java.util.jar.JarFile`                           |        10 |        640 B |     64 B |        1.2 MB |   3.9% |
+| 26 | `java.util.jar.Manifest`                          |         8 |        192 B |     24 B |        1.1 MB |   3.8% |
+| 27 | `scala.runtime.ObjectRef`                         |         1 |         16 B |     16 B |      962.2 KB |   3.2% |
+| 28 | `java.util.zip.ZipFile$Source`                    |        10 |        800 B |     80 B |      828.1 KB |   2.7% |
+| 29 | `cafesat.asts.core.Trees$ConnectiveSymbol`        |    35,234 |     825.8 KB |     24 B |      825.9 KB |   2.7% |
+| 30 | `java.util.concurrent.ConcurrentHashMap`          |       117 |       7.3 KB |     64 B |      616.4 KB |   2.0% |
+| 31 | `java.util.concurrent.ConcurrentHashMap$Node[]`   |        93 |      61.9 KB |   8.0 KB |      609.7 KB |   2.0% |
+| 32 | `java.util.LinkedHashMap`                         |     5,826 |     364.1 KB |     64 B |      525.8 KB |   1.7% |
+| 33 | `java.util.concurrent.ConcurrentHashMap$Node`     |     7,007 |     219.0 KB |     32 B |      472.3 KB |   1.5% |
+| 34 | `java.util.jar.Attributes`                        |     5,786 |      90.4 KB |     16 B |      471.2 KB |   1.5% |
+| 35 | `cafesat.asts.core.Trees$PredicateApplication`    |    19,761 |     463.1 KB |     24 B |      463.3 KB |   1.5% |
+| 36 | `java.time.zone.ZoneRulesProvider`                |         0 |          0 B |      0 B |      198.4 KB |   0.6% |
+| 37 | `java.net.URLClassLoader`                         |         2 |        176 B |     88 B |      184.3 KB |   0.6% |
+| 38 | `java.lang.invoke.MethodType`                     |       894 |      34.9 KB |     40 B |      183.4 KB |   0.6% |
+| 39 | `java.lang.Integer`                               |     9,789 |     153.0 KB |     16 B |      153.4 KB |   0.5% |
+| 40 | `java.util.LinkedHashMap$Entry`                   |     1,200 |      46.9 KB |     40 B |      151.7 KB |   0.5% |
+| 41 | `org.renaissance.core.ModuleLoader`               |         2 |         48 B |     24 B |      149.8 KB |   0.5% |
+| 42 | `sun.util.calendar.ZoneInfoFile`                  |         0 |          0 B |      0 B |      145.4 KB |   0.5% |
+| 43 | `java.util.LinkedHashSet`                         |        38 |        608 B |     16 B |      144.6 KB |   0.5% |
+| 44 | `cafesat.api.Formulas$Formula`                    |     8,908 |     139.2 KB |     16 B |      139.2 KB |   0.5% |
+| 45 | `java.time.zone.TzdbZoneRulesProvider`            |         1 |         24 B |     24 B |      118.2 KB |   0.4% |
+| 46 | `byte[][]`                                        |         1 |       1.4 KB |   1.4 KB |       94.1 KB |   0.3% |
+| 47 | `java.util.ImmutableCollections$SetN`             |       149 |       3.5 KB |     24 B |       91.5 KB |   0.3% |
+| 48 | `sun.security.util.KnownOIDs`                     |       264 |      10.3 KB |     40 B |       88.5 KB |   0.3% |
+| 49 | `java.util.ArrayList`                             |       102 |       2.4 KB |     24 B |       83.6 KB |   0.3% |
+| 50 | `org.renaissance.core.BenchmarkSuite`             |         1 |         32 B |     32 B |       77.0 KB |   0.3% |
+_… 2,917 more classes, 639.6 KB shallow / 2.9 MB retained (full list in JSON)._
 
 ### Class Loaders
 
@@ -265,45 +267,66 @@ _Classes grouped by the loader that defined them. The **Loader** column shows th
 
 | Loader                                               | Address    | Classes | Instances | Shallow Heap | Retained Heap |
 | ---------------------------------------------------- | ---------- | ------: | --------: | -----------: | ------------: |
-| java/net/URLClassLoader                              | 0xc0412288 |     606 |   596,452 |      19.1 MB |       25.5 MB |
-| <boot>                                               | <boot>     |   1,703 |   355,819 |      10.7 MB |       23.4 MB |
+| java/net/URLClassLoader                              | 0xc0412288 |     606 |   596,452 |      19.1 MB |       62.3 MB |
+| <boot>                                               | <boot>     |   1,703 |   355,819 |      10.7 MB |       61.7 MB |
 | java/net/URLClassLoader                              | 0xce800048 |     575 |       330 |      18.0 KB |        2.6 MB |
-| jdk/internal/loader/ClassLoaders$AppClassLoader      | 0xffeecf48 |      82 |        64 |       1.3 KB |       30.0 KB |
-| jdk/internal/loader/ClassLoaders$PlatformClassLoader | 0xffeec828 |       1 |         1 |         16 B |          24 B |
+| jdk/internal/loader/ClassLoaders$AppClassLoader      | 0xffeecf48 |      82 |        64 |       1.3 KB |      235.6 KB |
+| jdk/internal/loader/ClassLoaders$PlatformClassLoader | 0xffeec828 |       1 |         1 |         16 B |        7.4 KB |
 
 ### Duplicate Classes
 
 _Class names loaded by more than one class loader. The same class loaded N times means N separate copies of its static state and N times the metaspace cost — a typical symptom of classloader leaks (e.g. each web-app reload or plugin load creates a new loader that never gets GC'd). Check the per-loader breakdown: if one loader holds almost all the instances the others are likely leaked copies._
 
-| Class                                      | #Loaders | Instances | Retained Heap |
-| ------------------------------------------ | -------: | --------: | ------------: |
-| `scala.collection.immutable.$colon$colon`  |        2 |   146,181 |        3.4 MB |
-| `scala.math.BigInt[]`                      |        2 |         2 |       16.0 KB |
-| `scala.math.BigInt$`                       |        2 |         2 |        8.2 KB |
-| `scala.Option[]`                           |        2 |        18 |        3.5 KB |
-| `scala.Some`                               |        2 |       176 |        2.8 KB |
-| `scala.collection.immutable.LazyList`      |        2 |         2 |        1.5 KB |
-| `scala.collection.mutable.HashMap`         |        2 |         4 |         752 B |
-| `scala.collection.immutable.LazyList$`     |        2 |         2 |         688 B |
-| `scala.collection.IterableOps`             |        2 |         0 |         608 B |
-| `scala.collection.mutable.HashMap$Node`    |        2 |        11 |         576 B |
-| `scala.Array$`                             |        2 |         2 |         480 B |
-| `scala.collection.ArrayOps$`               |        2 |         2 |         464 B |
-| `scala.collection.IterableOnceOps`         |        2 |         0 |         448 B |
-| `scala.collection.mutable.Buffer`          |        2 |         0 |         384 B |
-| `scala.collection.Iterator`                |        2 |         0 |         368 B |
-| `scala.collection.SeqOps`                  |        2 |         0 |         352 B |
-| `scala.collection.ClassTagIterableFactory` |        2 |         0 |         336 B |
-| `scala.collection.IterableFactory`         |        2 |         0 |         336 B |
-| `scala.runtime.ScalaRunTime$`              |        2 |         2 |         336 B |
-| `scala.collection.LinearSeq`               |        2 |         0 |         320 B |
+| Class                                          | #Loaders | Instances | Retained Heap |
+| ---------------------------------------------- | -------: | --------: | ------------: |
+| `scala.collection.immutable.$colon$colon`      |        2 |   146,181 |        8.6 MB |
+| `scala.runtime.ObjectRef`                      |        2 |         1 |      962.2 KB |
+| `scala.collection.immutable.HashMap`           |        2 |         2 |       51.7 KB |
+| `scala.math.BigInt$`                           |        2 |         2 |       16.3 KB |
+| `scala.math.BigInt[]`                          |        2 |         2 |       16.0 KB |
+| `scala.collection.mutable.ListBuffer`          |        2 |         1 |        7.4 KB |
+| `scala.Option[]`                               |        2 |        18 |        3.5 KB |
+| `scala.Some`                                   |        2 |       176 |        3.1 KB |
+| `scala.collection.immutable.LazyList$`         |        2 |         2 |        2.0 KB |
+| `scala.collection.StrictOptimizedLinearSeqOps` |        2 |         0 |        2.0 KB |
+| `scala.collection.mutable.AbstractBuffer`      |        2 |         0 |        1.9 KB |
+| `scala.collection.ArrayOps$`                   |        2 |         2 |        1.6 KB |
+| `scala.collection.mutable.HashMap`             |        2 |         4 |        1.5 KB |
+| `scala.collection.immutable.LazyList`          |        2 |         2 |        1.5 KB |
+| `scala.collection.LinearSeqOps`                |        2 |         0 |        1.4 KB |
+| `scala.collection.StrictOptimizedIterableOps`  |        2 |         0 |        1.1 KB |
+| `scala.collection.immutable.Range`             |        2 |         0 |         952 B |
+| `scala.collection.IterableOnceOps`             |        2 |         0 |         888 B |
+| `scala.collection.mutable.HashMap$Node[]`      |        2 |         4 |         768 B |
+| `scala.collection.immutable.Map`               |        2 |         0 |         736 B |
 
 **`scala.collection.immutable.$colon$colon`** — per loader:
 
 | Loader                                | Instances | Shallow | Retained Heap |
 | ------------------------------------- | --------: | ------: | ------------: |
-| `java/net/URLClassLoader` @0xc0412288 |   146,151 |  3.3 MB |        3.4 MB |
-| `java/net/URLClassLoader` @0xce800048 |        30 |   720 B |         856 B |
+| `java/net/URLClassLoader` @0xc0412288 |   146,151 |  3.3 MB |        8.6 MB |
+| `java/net/URLClassLoader` @0xce800048 |        30 |   720 B |        5.8 KB |
+
+**`scala.runtime.ObjectRef`** — per loader:
+
+| Loader                                | Instances | Shallow | Retained Heap |
+| ------------------------------------- | --------: | ------: | ------------: |
+| `java/net/URLClassLoader` @0xc0412288 |         1 |    16 B |      962.2 KB |
+| `java/net/URLClassLoader` @0xce800048 |         0 |     0 B |           8 B |
+
+**`scala.collection.immutable.HashMap`** — per loader:
+
+| Loader                                | Instances | Shallow | Retained Heap |
+| ------------------------------------- | --------: | ------: | ------------: |
+| `java/net/URLClassLoader` @0xc0412288 |         2 |    32 B |       51.6 KB |
+| `java/net/URLClassLoader` @0xce800048 |         0 |     0 B |          24 B |
+
+**`scala.math.BigInt$`** — per loader:
+
+| Loader                                | Instances | Shallow | Retained Heap |
+| ------------------------------------- | --------: | ------: | ------------: |
+| `java/net/URLClassLoader` @0xc0412288 |         1 |    16 B |        8.2 KB |
+| `java/net/URLClassLoader` @0xce800048 |         1 |    16 B |        8.2 KB |
 
 **`scala.math.BigInt[]`** — per loader:
 
@@ -312,12 +335,12 @@ _Class names loaded by more than one class loader. The same class loaded N times
 | `java/net/URLClassLoader` @0xc0412288 |         1 |  8.0 KB |        8.0 KB |
 | `java/net/URLClassLoader` @0xce800048 |         1 |  8.0 KB |        8.0 KB |
 
-**`scala.math.BigInt$`** — per loader:
+**`scala.collection.mutable.ListBuffer`** — per loader:
 
 | Loader                                | Instances | Shallow | Retained Heap |
 | ------------------------------------- | --------: | ------: | ------------: |
-| `java/net/URLClassLoader` @0xce800048 |         1 |    16 B |        8.1 KB |
-| `java/net/URLClassLoader` @0xc0412288 |         1 |    16 B |         112 B |
+| `java/net/URLClassLoader` @0xce800048 |         1 |    32 B |        6.3 KB |
+| `java/net/URLClassLoader` @0xc0412288 |         0 |     0 B |        1.0 KB |
 
 **`scala.Option[]`** — per loader:
 
@@ -330,8 +353,43 @@ _Class names loaded by more than one class loader. The same class loaded N times
 
 | Loader                                | Instances | Shallow | Retained Heap |
 | ------------------------------------- | --------: | ------: | ------------: |
-| `java/net/URLClassLoader` @0xc0412288 |       158 |  2.5 KB |        2.5 KB |
-| `java/net/URLClassLoader` @0xce800048 |        18 |   288 B |         328 B |
+| `java/net/URLClassLoader` @0xc0412288 |       158 |  2.5 KB |        2.6 KB |
+| `java/net/URLClassLoader` @0xce800048 |        18 |   288 B |         568 B |
+
+**`scala.collection.immutable.LazyList$`** — per loader:
+
+| Loader                                | Instances | Shallow | Retained Heap |
+| ------------------------------------- | --------: | ------: | ------------: |
+| `java/net/URLClassLoader` @0xc0412288 |         1 |    16 B |        1.0 KB |
+| `java/net/URLClassLoader` @0xce800048 |         1 |    16 B |        1.0 KB |
+
+**`scala.collection.StrictOptimizedLinearSeqOps`** — per loader:
+
+| Loader                                | Instances | Shallow | Retained Heap |
+| ------------------------------------- | --------: | ------: | ------------: |
+| `java/net/URLClassLoader` @0xc0412288 |         0 |     0 B |        1.9 KB |
+| `java/net/URLClassLoader` @0xce800048 |         0 |     0 B |          72 B |
+
+**`scala.collection.mutable.AbstractBuffer`** — per loader:
+
+| Loader                                | Instances | Shallow | Retained Heap |
+| ------------------------------------- | --------: | ------: | ------------: |
+| `java/net/URLClassLoader` @0xc0412288 |         0 |     0 B |        1.8 KB |
+| `java/net/URLClassLoader` @0xce800048 |         0 |     0 B |          80 B |
+
+**`scala.collection.ArrayOps$`** — per loader:
+
+| Loader                                | Instances | Shallow | Retained Heap |
+| ------------------------------------- | --------: | ------: | ------------: |
+| `java/net/URLClassLoader` @0xc0412288 |         1 |    16 B |         936 B |
+| `java/net/URLClassLoader` @0xce800048 |         1 |    16 B |         680 B |
+
+**`scala.collection.mutable.HashMap`** — per loader:
+
+| Loader                                | Instances | Shallow | Retained Heap |
+| ------------------------------------- | --------: | ------: | ------------: |
+| `java/net/URLClassLoader` @0xc0412288 |         1 |    32 B |         848 B |
+| `java/net/URLClassLoader` @0xce800048 |         3 |    96 B |         712 B |
 
 **`scala.collection.immutable.LazyList`** — per loader:
 
@@ -340,125 +398,204 @@ _Class names loaded by more than one class loader. The same class loaded N times
 | `java/net/URLClassLoader` @0xc0412288 |         1 |    24 B |         744 B |
 | `java/net/URLClassLoader` @0xce800048 |         1 |    24 B |         744 B |
 
-**`scala.collection.mutable.HashMap`** — per loader:
+**`scala.collection.LinearSeqOps`** — per loader:
 
 | Loader                                | Instances | Shallow | Retained Heap |
 | ------------------------------------- | --------: | ------: | ------------: |
-| `java/net/URLClassLoader` @0xc0412288 |         1 |    32 B |         408 B |
-| `java/net/URLClassLoader` @0xce800048 |         3 |    96 B |         344 B |
+| `java/net/URLClassLoader` @0xc0412288 |         0 |     0 B |        1.3 KB |
+| `java/net/URLClassLoader` @0xce800048 |         0 |     0 B |         120 B |
 
-**`scala.collection.immutable.LazyList$`** — per loader:
-
-| Loader                                | Instances | Shallow | Retained Heap |
-| ------------------------------------- | --------: | ------: | ------------: |
-| `java/net/URLClassLoader` @0xce800048 |         1 |    16 B |         360 B |
-| `java/net/URLClassLoader` @0xc0412288 |         1 |    16 B |         328 B |
-
-**`scala.collection.IterableOps`** — per loader:
+**`scala.collection.StrictOptimizedIterableOps`** — per loader:
 
 | Loader                                | Instances | Shallow | Retained Heap |
 | ------------------------------------- | --------: | ------: | ------------: |
-| `java/net/URLClassLoader` @0xc0412288 |         0 |     0 B |         304 B |
-| `java/net/URLClassLoader` @0xce800048 |         0 |     0 B |         304 B |
+| `java/net/URLClassLoader` @0xc0412288 |         0 |     0 B |        1016 B |
+| `java/net/URLClassLoader` @0xce800048 |         0 |     0 B |         112 B |
 
-**`scala.collection.mutable.HashMap$Node`** — per loader:
-
-| Loader                                | Instances | Shallow | Retained Heap |
-| ------------------------------------- | --------: | ------: | ------------: |
-| `java/net/URLClassLoader` @0xc0412288 |         7 |   224 B |         408 B |
-| `java/net/URLClassLoader` @0xce800048 |         4 |   128 B |         168 B |
-
-**`scala.Array$`** — per loader:
+**`scala.collection.immutable.Range`** — per loader:
 
 | Loader                                | Instances | Shallow | Retained Heap |
 | ------------------------------------- | --------: | ------: | ------------: |
-| `java/net/URLClassLoader` @0xce800048 |         1 |    16 B |         248 B |
-| `java/net/URLClassLoader` @0xc0412288 |         1 |    16 B |         232 B |
-
-**`scala.collection.ArrayOps$`** — per loader:
-
-| Loader                                | Instances | Shallow | Retained Heap |
-| ------------------------------------- | --------: | ------: | ------------: |
-| `java/net/URLClassLoader` @0xc0412288 |         1 |    16 B |         232 B |
-| `java/net/URLClassLoader` @0xce800048 |         1 |    16 B |         232 B |
+| `java/net/URLClassLoader` @0xc0412288 |         0 |     0 B |         920 B |
+| `java/net/URLClassLoader` @0xce800048 |         0 |     0 B |          32 B |
 
 **`scala.collection.IterableOnceOps`** — per loader:
 
 | Loader                                | Instances | Shallow | Retained Heap |
 | ------------------------------------- | --------: | ------: | ------------: |
-| `java/net/URLClassLoader` @0xc0412288 |         0 |     0 B |         224 B |
+| `java/net/URLClassLoader` @0xc0412288 |         0 |     0 B |         664 B |
 | `java/net/URLClassLoader` @0xce800048 |         0 |     0 B |         224 B |
 
-**`scala.collection.mutable.Buffer`** — per loader:
+**`scala.collection.mutable.HashMap$Node[]`** — per loader:
 
 | Loader                                | Instances | Shallow | Retained Heap |
 | ------------------------------------- | --------: | ------: | ------------: |
-| `java/net/URLClassLoader` @0xc0412288 |         0 |     0 B |         192 B |
-| `java/net/URLClassLoader` @0xce800048 |         0 |     0 B |         192 B |
+| `java/net/URLClassLoader` @0xc0412288 |         1 |    80 B |         400 B |
+| `java/net/URLClassLoader` @0xce800048 |         3 |   240 B |         368 B |
 
-**`scala.collection.Iterator`** — per loader:
-
-| Loader                                | Instances | Shallow | Retained Heap |
-| ------------------------------------- | --------: | ------: | ------------: |
-| `java/net/URLClassLoader` @0xc0412288 |         0 |     0 B |         184 B |
-| `java/net/URLClassLoader` @0xce800048 |         0 |     0 B |         184 B |
-
-**`scala.collection.SeqOps`** — per loader:
+**`scala.collection.immutable.Map`** — per loader:
 
 | Loader                                | Instances | Shallow | Retained Heap |
 | ------------------------------------- | --------: | ------: | ------------: |
-| `java/net/URLClassLoader` @0xc0412288 |         0 |     0 B |         176 B |
-| `java/net/URLClassLoader` @0xce800048 |         0 |     0 B |         176 B |
-
-**`scala.collection.ClassTagIterableFactory`** — per loader:
-
-| Loader                                | Instances | Shallow | Retained Heap |
-| ------------------------------------- | --------: | ------: | ------------: |
-| `java/net/URLClassLoader` @0xc0412288 |         0 |     0 B |         168 B |
-| `java/net/URLClassLoader` @0xce800048 |         0 |     0 B |         168 B |
-
-**`scala.collection.IterableFactory`** — per loader:
-
-| Loader                                | Instances | Shallow | Retained Heap |
-| ------------------------------------- | --------: | ------: | ------------: |
-| `java/net/URLClassLoader` @0xc0412288 |         0 |     0 B |         168 B |
-| `java/net/URLClassLoader` @0xce800048 |         0 |     0 B |         168 B |
-
-**`scala.runtime.ScalaRunTime$`** — per loader:
-
-| Loader                                | Instances | Shallow | Retained Heap |
-| ------------------------------------- | --------: | ------: | ------------: |
-| `java/net/URLClassLoader` @0xc0412288 |         1 |    16 B |         168 B |
-| `java/net/URLClassLoader` @0xce800048 |         1 |    16 B |         168 B |
-
-**`scala.collection.LinearSeq`** — per loader:
-
-| Loader                                | Instances | Shallow | Retained Heap |
-| ------------------------------------- | --------: | ------: | ------------: |
-| `java/net/URLClassLoader` @0xc0412288 |         0 |     0 B |         160 B |
-| `java/net/URLClassLoader` @0xce800048 |         0 |     0 B |         160 B |
+| `java/net/URLClassLoader` @0xce800048 |         0 |     0 B |         640 B |
+| `java/net/URLClassLoader` @0xc0412288 |         0 |     0 B |          96 B |
 
 ## Leak Suspects
 
 _Objects and class groups retaining the most heap, ranked by retained size. These are the most likely accumulation points for excessive memory usage. To fix: follow the dominator chain to the nearest object you control, and drop or null out the reference that keeps it alive. The path to GC root is shown for each suspect below — the tool cannot yet name the specific field; that requires field-labeled reference paths._
 
-### 1. `cafesat.sat.Vector` — retains 4.2 MB (14.1% of reachable heap)
+### 1. `java.lang.Thread` — retains 22.9 MB (76.7% of reachable heap)
 
-36,614 instances of `cafesat.sat.Vector` together retain this heap (combined shallow 858.1 KB).
+One `java.lang.Thread` object (shallow 104 B) dominates this retained heap.
+
+Held by a **Thread** GC root.
+
+This object is itself the accumulation point (retained 22.9 MB).
+
+_Directly dominates 28,147 objects (showing top 50 classes by retained heap)._
+
+**Accumulated objects by class:**
+
+| Class                                                                  | Objects |  Shallow | Retained | % of suspect |
+| ---------------------------------------------------------------------- | ------: | -------: | -------: | -----------: |
+| `scala.collection.immutable.HashSet`                                   |       2 |     32 B |   8.0 MB |        35.1% |
+| `cafesat.sat.Solver`                                                   |       1 |    168 B |   4.6 MB |        20.2% |
+| `scala.collection.immutable.$colon$colon`                              |       2 |     48 B |   4.2 MB |        18.3% |
+| `cafesat.asts.core.Trees$ConnectiveApplication`                        |   8,909 | 208.8 KB |   3.9 MB |        17.0% |
+| `scala.runtime.ObjectRef`                                              |       1 |     16 B | 962.1 KB |         4.1% |
+| `scala.collection.immutable.BitmapIndexedSetNode`                      |       7 |    280 B | 365.5 KB |         1.6% |
+| `cafesat.asts.core.Trees$ConnectiveSymbol`                             |   8,748 | 205.0 KB | 205.0 KB |         0.9% |
+| `cafesat.api.Formulas$Formula`                                         |   8,908 | 139.2 KB | 139.2 KB |         0.6% |
+| `java.util.HashMap`                                                    |       1 |     48 B | 137.1 KB |         0.6% |
+| `org.renaissance.core.BenchmarkSuite`                                  |       1 |     32 B |  75.3 KB |         0.3% |
+| `org.renaissance.core.ModuleLoader`                                    |       1 |     24 B |  73.8 KB |         0.3% |
+| `scala.collection.immutable.HashMap`                                   |       1 |     16 B |  51.5 KB |         0.2% |
+| `cafesat.asts.core.Trees$PredicateSymbol`                              |     729 |  17.1 KB |  51.3 KB |         0.2% |
+| `scala.collection.immutable.Vector3`                                   |       3 |    144 B |  36.6 KB |         0.2% |
+| `cafesat.api.Formulas$Formula[]`                                       |       2 |  35.1 KB |  35.1 KB |         0.2% |
+| `cafesat.asts.core.Trees$PredicateApplication`                         |     729 |  17.1 KB |  17.1 KB |         0.1% |
+| `cafesat.api.Formulas$PropVar[][][]`                                   |       1 |     56 B |  16.4 KB |         0.1% |
+| `org.renaissance.harness.ConfigParser`                                 |       1 |     16 B |   5.8 KB |        <0.1% |
+| `java.lang.ThreadLocal$ThreadLocalMap`                                 |       1 |     24 B |   4.4 KB |        <0.1% |
+| `scala.collection.immutable.Vector2`                                   |       2 |     64 B |   3.8 KB |        <0.1% |
+| `org.renaissance.scala.sat.ScalaDoku`                                  |       1 |     24 B |   2.4 KB |        <0.1% |
+| `java.lang.String`                                                     |      33 |    792 B |   1.8 KB |        <0.1% |
+| `scala.Option[][]`                                                     |       1 |     56 B |   1.8 KB |        <0.1% |
+| `org.renaissance.core.BenchmarkDescriptor`                             |      25 |    600 B |    600 B |        <0.1% |
+| `org.renaissance.harness.ExecutionDriver`                              |       1 |     56 B |    400 B |        <0.1% |
+| `org.renaissance.harness.Config`                                       |       1 |     72 B |    360 B |        <0.1% |
+| `scala.collection.immutable.SetIterator`                               |       2 |     80 B |    320 B |        <0.1% |
+| `java.lang.reflect.Method`                                             |       1 |     88 B |    296 B |        <0.1% |
+| `org.renaissance.core.BenchmarkSuite$SuiteBenchmarkContext`            |       1 |     24 B |    280 B |        <0.1% |
+| `org.renaissance.harness.EventDispatcher`                              |       1 |     56 B |    248 B |        <0.1% |
+| `scala.collection.convert.JavaCollectionWrappers$JListWrapper`         |       1 |     16 B |    192 B |        <0.1% |
+| `java.lang.String[]`                                                   |       1 |     32 B |    128 B |        <0.1% |
+| `scala.collection.mutable.HashMap`                                     |       1 |     32 B |    112 B |        <0.1% |
+| `java.lang.invoke.BoundMethodHandle$Species_LL`                        |       2 |     80 B |     80 B |        <0.1% |
+| `scala.Tuple3`                                                         |       2 |     48 B |     80 B |        <0.1% |
+| `scala.collection.immutable.$colon$colon`                              |       2 |     48 B |     72 B |        <0.1% |
+| `java.lang.invoke.MemberName`                                          |       1 |     40 B |     56 B |        <0.1% |
+| `org.renaissance.harness.ExecutionPolicies$FixedOpCount`               |       1 |     24 B |     48 B |        <0.1% |
+| `scala.collection.convert.JavaCollectionWrappers$MutableMapWrapper`    |       1 |     32 B |     48 B |        <0.1% |
+| `java.lang.invoke.DirectMethodHandle`                                  |       1 |     40 B |     40 B |        <0.1% |
+| `java.security.AccessControlContext`                                   |       1 |     40 B |     40 B |        <0.1% |
+| `java.lang.Thread$FieldHolder`                                         |       1 |     40 B |     40 B |        <0.1% |
+| `org.renaissance.harness.RenaissanceSuite$$$Lambda+0x00007de4a41205b8` |       1 |     40 B |     40 B |        <0.1% |
+| `sun.nio.fs.UnixPath`                                                  |       1 |     32 B |     32 B |        <0.1% |
+| `jdk.internal.reflect.DirectMethodHandleAccessor`                      |       1 |     32 B |     32 B |        <0.1% |
+| `java.lang.Object[]`                                                   |       1 |     24 B |     24 B |        <0.1% |
+| `scala.collection.mutable.ArrayBuffer`                                 |       1 |     24 B |     24 B |        <0.1% |
+| `cafesat.sat.Solver$$Lambda+0x00007de4a41f7bd0`                        |       1 |     24 B |     24 B |        <0.1% |
+| `org.renaissance.BenchmarkResult[]`                                    |       1 |     24 B |     24 B |        <0.1% |
+| `org.renaissance.scala.sat.ScalaDoku$DokuResult`                       |       1 |     24 B |     24 B |        <0.1% |
+
+**Dominator chain to GC root:**
+
+1. `java.lang.Thread` (22.9 MB) — GC root: Thread (this object is directly held by a GC root; no intermediate chain)
+
+<details>
+<summary>Dominator subtree</summary>
+
+**Dominator subtree:**
+
+- `java.lang.Thread` (shallow 104 B, retained 22.9 MB)
+  - `scala.collection.immutable.HashSet` (shallow 16 B, retained 8.0 MB)
+    - `scala.collection.immutable.BitmapIndexedSetNode` (shallow 40 B, retained 8.0 MB)
+      - `java.lang.Object[]` (shallow 144 B, retained 8.0 MB)
+        - `scala.collection.immutable.BitmapIndexedSetNode` (shallow 40 B, retained 817.1 KB)
+          - `java.lang.Object[]` (shallow 144 B, retained 817.1 KB)
+            _… (1 deeper — full data in JSON)_
+
+</details>
+
+### 2. `java.lang.Class` — retains 3.5 MB (11.7% of reachable heap)
+
+1,669 instances of `java.lang.Class` together retain this heap (combined shallow 24.8 KB).
+
+_Note: `java.lang.Class` objects are normal — every loaded class has one. This suspect reflects class-metadata memory, not a leak in application code. It is worth investigating only if the instance count is unexpectedly high (e.g. due to classloader leaks)._
 
 #### Merged Paths to GC Roots
 
-- `cafesat.sat.Vector` (36,614 objects, retained 4.2 MB)
-  - `cafesat.sat.Vector` (36,614 objects, retained 4.2 MB)
-
-### 2. `scala.collection.immutable.$colon$colon` — retains 3.4 MB (11.3% of reachable heap)
-
-146,148 instances of `scala.collection.immutable.$colon$colon` together retain this heap (combined shallow 3.3 MB).
-
-#### Merged Paths to GC Roots
-
-- `scala.collection.immutable.$colon$colon` (146,148 objects, retained 3.4 MB)
-  - `scala.collection.immutable.$colon$colon` (146,148 objects, retained 3.4 MB)
+- `java.lang.Class` (1,669 objects, retained 3.5 MB)
+  - `java.time.zone.ZoneRulesProvider` (1 object, retained 198.4 KB) — GC root: Sticky Class
+  - `cafesat.sat.Solver$CNFFormula` (1 object, retained 3.8 KB)
+  - `sun.text.resources.cldr.FormatData_en` (1 object, retained 2.7 KB) — GC root: Sticky Class
+  - `cafesat.common.FixedIntDoublePriorityQueue` (1 object, retained 1.3 KB)
+  - `java.time.Month` (1 object, retained 1008 B) — GC root: Sticky Class
+  - `java.time.DayOfWeek` (1 object, retained 640 B) — GC root: Sticky Class
+  - `java.time.temporal.TemporalAdjusters` (1 object, retained 448 B) — GC root: Sticky Class
+  - `scala.collection.mutable.ArraySeq` (1 object, retained 408 B)
+  - `scala.Option` (2 objects, retained 400 B)
+  - `jdk.internal.logger.SimpleConsoleLogger$Formatting` (1 object, retained 352 B) — GC root: Sticky Class
+  - `sun.util.logging.PlatformLogger$Level` (1 object, retained 320 B) — GC root: Sticky Class
+  - `java.util.logging.SimpleFormatter` (1 object, retained 280 B) — GC root: Sticky Class
+  - `java.time.zone.ZoneOffsetTransitionRule$TimeDefinition` (1 object, retained 232 B) — GC root: Sticky Class
+  - `java.time.ZonedDateTime$1` (1 object, retained 144 B) — GC root: Sticky Class
+  - `scala.collection.immutable.Set` (1 object, retained 144 B)
+  - `java.lang.System$Logger$Level` (1 object, retained 136 B) — GC root: Sticky Class
+  - `java.time.ZonedDateTime` (1 object, retained 136 B) — GC root: Sticky Class
+  - `scala.Some` (2 objects, retained 128 B)
+  - `java.time.zone.ZoneRulesProvider$1` (1 object, retained 112 B) — GC root: Sticky Class
+  - `jdk.internal.logger.SimpleConsoleLogger` (1 object, retained 112 B) — GC root: Sticky Class
+  - `sun.util.logging.PlatformLogger` (1 object, retained 112 B) — GC root: Sticky Class
+  - `scala.collection.mutable.AbstractSeq` (2 objects, retained 96 B)
+  - `java.time.chrono.ChronoZonedDateTime` (1 object, retained 96 B) — GC root: Sticky Class
+  - `scala.collection.immutable.LazyList$State$Empty$` (2 objects, retained 80 B)
+  - `java.time.zone.ZoneOffsetTransition` (1 object, retained 80 B) — GC root: Sticky Class
+  - `scala.Function0` (2 objects, retained 64 B)
+  - `java.time.zone.TzdbZoneRulesProvider` (1 object, retained 64 B) — GC root: Sticky Class
+  - `java.util.Formatter$DateTime` (1 object, retained 64 B) — GC root: Sticky Class
+  - `java.time.zone.Ser` (1 object, retained 40 B) — GC root: Sticky Class
+  - `java.util.logging.StreamHandler` (1 object, retained 40 B) — GC root: Sticky Class
+  - `jdk.internal.logger.SurrogateLogger` (1 object, retained 40 B) — GC root: Sticky Class
+  - `java.lang.reflect.InvocationTargetException` (1 object, retained 32 B) — GC root: Sticky Class
+  - `java.util.logging.Formatter` (1 object, retained 32 B) — GC root: Sticky Class
+  - `java.io.Externalizable` (1 object, retained 24 B) — GC root: Sticky Class
+  - `java.nio.file.FileVisitor` (1 object, retained 24 B) — GC root: Sticky Class
+  - `jdk.internal.module.ModulePatcher$PatchedModuleReader` (1 object, retained 24 B) — GC root: Sticky Class
+  - `java.io.IOException` (1 object, retained 8 B) — GC root: Sticky Class
+  - `scala.collection.mutable.ArraySeq$ofRef` (1 object, retained 8 B)
+  - `scala.runtime.LongRef` (1 object, retained 8 B)
+  - `java.lang.Module$$Lambda+0x00007de4a4041e98` (1 object, retained 0 B) — GC root: Sticky Class
+  - `java.lang.System$Logger$Level[]` (1 object, retained 0 B)
+  - `java.lang.WeakPairMap$Pair$Weak` (1 object, retained 0 B) — GC root: Sticky Class
+  - `java.lang.WeakPairMap$Pair$Weak$1` (1 object, retained 0 B) — GC root: Sticky Class
+  - `java.lang.WeakPairMap$WeakRefPeer` (1 object, retained 0 B) — GC root: Sticky Class
+  - `java.lang.invoke.MemberName[]` (1 object, retained 0 B)
+  - `java.security.ProtectionDomain[]` (1 object, retained 0 B)
+  - `java.time.LocalDateTime[]` (1 object, retained 0 B)
+  - `java.time.temporal.TemporalAdjusters$$Lambda+0x00007de4a404ad48` (1 object, retained 0 B) — GC root: Sticky Class
+  - `java.time.zone.ZoneOffsetTransitionRule[]` (1 object, retained 0 B)
+  - `java.util.Arrays$ArrayItr` (1 object, retained 0 B) — GC root: Sticky Class
+  - `java.util.Formatter$FixedString` (1 object, retained 0 B) — GC root: Sticky Class
+  - `java.util.logging.SimpleFormatter$$Lambda+0x00007de4a4043800` (1 object, retained 0 B) — GC root: Sticky Class
+  - `scala.runtime.java8.JFunction1$mcDI$sp` (1 object, retained 0 B)
+  - `scala.runtime.java8.JFunction1$mcVI$sp` (1 object, retained 0 B)
+  - `sun.net.www.protocol.jrt.Handler` (1 object, retained 0 B) — GC root: Sticky Class
+  - `sun.nio.cs.UTF_8$Encoder` (1 object, retained 0 B) — GC root: Sticky Class
+  - `sun.util.calendar.ZoneInfoFile$Checksum` (1 object, retained 0 B) — GC root: Sticky Class
+  - `sun.util.logging.PlatformLogger$ConfigurableBridge$LoggerConfiguration` (1 object, retained 0 B) — GC root: Sticky Class
+  - `sun.util.logging.PlatformLogger$Level[]` (1 object, retained 0 B)
 
 ## Top Consumers
 
@@ -466,106 +603,104 @@ _Objects and class groups retaining the most heap, ranked by retained size. Thes
 
 _All top-level dominators ranked by retained heap. Unlike Leak Suspects, this list is unfiltered — it includes every object directly dominated by a GC root, down to the smallest. Use it when the suspect you care about didn't cross the leak-suspect threshold, or to see the full retention picture._
 
-|  # | Class                                             |  Shallow | Retained | % Heap |
-| -: | ------------------------------------------------- | -------: | -------: | -----: |
-|  1 | `java.net.URLClassLoader`                         |     88 B |   2.6 MB |   8.8% |
-|  2 | `java.util.zip.ZipFile$Source`                    |     80 B | 255.2 KB |   0.8% |
-|  3 | `byte[]`                                          | 255.1 KB | 255.1 KB |   0.8% |
-|  4 | `scala.collection.immutable.BitmapIndexedSetNode` |     40 B | 246.4 KB |   0.8% |
-|  5 | `cafesat.sat.Vector[]`                            | 143.0 KB | 143.0 KB |   0.5% |
-|  6 | `java.net.URLClassLoader`                         |     88 B | 129.0 KB |   0.4% |
-|  7 | `byte[][]`                                        |   1.4 KB |  94.1 KB |   0.3% |
-|  8 | `java.util.concurrent.ConcurrentHashMap`          |     64 B |  73.3 KB |   0.2% |
-|  9 | `cafesat.sat.Solver`                              |    168 B |  71.7 KB |   0.2% |
-| 10 | `int[]`                                           |  71.5 KB |  71.5 KB |   0.2% |
-| 11 | `cafesat.sat.Solver$Clause[]`                     |  71.5 KB |  71.5 KB |   0.2% |
-| 12 | `int[]`                                           |  71.5 KB |  71.5 KB |   0.2% |
-| 13 | `byte[]`                                          |  58.8 KB |  58.8 KB |   0.2% |
-| 14 | `scala.collection.immutable.HashSet`              |     16 B |  57.9 KB |   0.2% |
-| 15 | `byte[]`                                          |  54.0 KB |  54.0 KB |   0.2% |
-| 16 | `byte[]`                                          |  45.1 KB |  45.1 KB |   0.1% |
-| 17 | `java.lang.Object[]`                              |   8.9 KB |  35.8 KB |   0.1% |
-| 18 | `java.lang.Thread`                                |    104 B |  35.6 KB |   0.1% |
-| 19 | `int[]`                                           |  34.8 KB |  34.8 KB |   0.1% |
-| 20 | `int[]`                                           |  34.3 KB |  34.3 KB |   0.1% |
+|  # | Class                                             | Shallow | Retained | % Heap |
+| -: | ------------------------------------------------- | ------: | -------: | -----: |
+|  1 | `java.lang.Thread`                                |   104 B |  22.9 MB |  76.7% |
+|  2 | `scala.runtime.LazyVals$`                         |    32 B |   2.5 MB |   8.4% |
+|  3 | `java.util.jar.JarFile`                           |    64 B | 584.6 KB |   1.9% |
+|  4 | `java.util.jar.JarFile`                           |    64 B | 584.5 KB |   1.9% |
+|  5 | `java.util.zip.ZipFile$Source`                    |    80 B | 295.2 KB |   1.0% |
+|  6 | `java.util.zip.ZipFile$Source`                    |    80 B | 295.2 KB |   1.0% |
+|  7 | `java.time.zone.ZoneRulesProvider`                |    16 B | 198.4 KB |   0.6% |
+|  8 | `sun.util.calendar.ZoneInfoFile`                  |   120 B | 145.4 KB |   0.5% |
+|  9 | `java.net.URLClassLoader`                         |    88 B | 111.7 KB |   0.4% |
+| 10 | `sun.security.util.KnownOIDs`                     |  1.1 KB |  88.5 KB |   0.3% |
+| 11 | `java.lang.Object[]`                              |  8.9 KB |  75.6 KB |   0.2% |
+| 12 | `java.net.URLClassLoader`                         |    88 B |  72.4 KB |   0.2% |
+| 13 | `java.util.zip.ZipFile$Source`                    |    80 B |  68.2 KB |   0.2% |
+| 14 | `java.lang.invoke.MethodType`                     |    48 B |  65.0 KB |   0.2% |
+| 15 | `java.util.zip.ZipFile$Source`                    |    80 B |  62.8 KB |   0.2% |
+| 16 | `sun.util.locale.provider.LocaleProviderAdapter`  |    24 B |  62.3 KB |   0.2% |
+| 17 | `jdk.internal.loader.ClassLoaders$AppClassLoader` |    96 B |  57.3 KB |   0.2% |
+| 18 | `sun.security.provider.Sun`                       |   104 B |  53.7 KB |   0.2% |
+| 19 | `java.util.zip.ZipFile$Source`                    |    80 B |  52.5 KB |   0.2% |
+| 20 | `sun.util.resources.Bundles`                      |    24 B |  49.2 KB |   0.2% |
 
 ### Biggest Classes by Retained Heap
 
 _Classes whose instances together retain the most heap._
 
-|  # | Class                                             | Instances | Retained Heap |
-| -: | ------------------------------------------------- | --------: | ------------: |
-|  1 | `cafesat.sat.Vector`                              |    36,614 |        4.2 MB |
-|  2 | `scala.collection.immutable.$colon$colon`         |   146,148 |        3.4 MB |
-|  3 | `java.net.URLClassLoader`                         |         2 |        2.7 MB |
-|  4 | `scala.collection.immutable.Set$Set2`             |    44,626 |        2.7 MB |
-|  5 | `int[]`                                           |    88,089 |        2.5 MB |
-|  6 | `cafesat.sat.Literal`                             |    62,129 |        2.4 MB |
-|  7 | `cafesat.sat.Solver$Clause`                       |    65,563 |        2.0 MB |
-|  8 | `byte[]`                                          |    16,736 |        1.3 MB |
-|  9 | `java.lang.Object[]`                              |     8,721 |        1.1 MB |
-| 10 | `scala.collection.immutable.BitmapIndexedSetNode` |    12,953 |        1.0 MB |
-| 11 | `cafesat.asts.core.Trees$ConnectiveSymbol`        |    35,232 |      825.8 KB |
-| 12 | `cafesat.asts.core.Trees$ConnectiveApplication`   |    35,002 |      820.4 KB |
-| 13 | `java.lang.String`                                |    17,180 |      671.6 KB |
-| 14 | `scala.collection.immutable.Set$Set3`             |     8,746 |      546.6 KB |
-| 15 | `cafesat.asts.core.Trees$PredicateApplication`    |    18,304 |      429.0 KB |
-| 16 | `java.util.LinkedHashMap`                         |     5,826 |      364.1 KB |
-| 17 | `java.util.HashMap$Node`                          |     7,643 |      348.0 KB |
-| 18 | `cafesat.api.Formulas$Formula`                    |     8,907 |      347.9 KB |
-| 19 | `java.util.zip.ZipFile$Source`                    |        10 |      263.3 KB |
-| 20 | `java.lang.Class`                                 |     1,735 |      214.7 KB |
+|  # | Class                                                  | Instances | Retained Heap |
+| -: | ------------------------------------------------------ | --------: | ------------: |
+|  1 | `java.lang.Thread`                                     |        25 |       22.9 MB |
+|  2 | `java.lang.Class`                                      |     1,678 |        3.5 MB |
+|  3 | `java.util.jar.JarFile`                                |        10 |        1.2 MB |
+|  4 | `java.util.zip.ZipFile$Source`                         |        10 |      827.5 KB |
+|  5 | `java.lang.String`                                     |     9,115 |      606.0 KB |
+|  6 | `java.net.URLClassLoader`                              |         2 |      184.1 KB |
+|  7 | `java.lang.invoke.MethodType`                          |       888 |      118.5 KB |
+|  8 | `java.lang.Object[]`                                   |         4 |      106.6 KB |
+|  9 | `java.lang.Module`                                     |        61 |       63.1 KB |
+| 10 | `java.lang.invoke.LambdaForm`                          |       141 |       57.5 KB |
+| 11 | `jdk.internal.loader.ClassLoaders$AppClassLoader`      |         1 |       57.3 KB |
+| 12 | `sun.security.provider.Sun`                            |         1 |       53.7 KB |
+| 13 | `java.lang.invoke.MethodTypeForm`                      |       176 |       45.9 KB |
+| 14 | `java.lang.module.ModuleDescriptor`                    |        62 |       40.0 KB |
+| 15 | `jdk.internal.loader.ClassLoaders$PlatformClassLoader` |         1 |       39.6 KB |
+| 16 | `java.util.concurrent.ConcurrentHashMap`               |         1 |       34.0 KB |
+| 17 | `java.io.PrintStream`                                  |         1 |       17.3 KB |
+| 18 | `java.net.URI`                                         |        61 |       11.8 KB |
+| 19 | `java.lang.ModuleLayer`                                |         2 |       11.8 KB |
+| 20 | `jdk.internal.module.ModuleReferenceImpl`              |        62 |        8.9 KB |
 
 ### Top-Dominator Size Distribution
 
-_Retained-size spread across all 644694 top-level dominators (the biggest memory contributors)._
+_Retained-size spread across all 13474 top-level dominators (the biggest memory contributors)._
 
-- Dominators: 644,694
-- Smallest / largest retained: 0 B / 2.6 MB
-- Median retained: 24 B
+- Dominators: 13,474
+- Smallest / largest retained: 0 B / 22.9 MB
+- Median retained: 64 B
 - Total retained (top-level): 29.8 MB
 
-|   Size ≤ |   Count | % of Dom. |
-| -------: | ------: | --------: |
-|      1 B |     478 |      0.1% |
-|      8 B |     248 |     <0.1% |
-|     16 B |  11,224 |      1.7% |
-|     32 B | 413,264 |     64.1% |
-|     64 B | 170,866 |     26.5% |
-|    128 B |  44,307 |      6.9% |
-|    256 B |   2,049 |      0.3% |
-|    512 B |   1,731 |      0.3% |
-|   1.0 KB |     378 |      0.1% |
-|   2.0 KB |      59 |     <0.1% |
-|   4.0 KB |      22 |     <0.1% |
-|   8.0 KB |      22 |     <0.1% |
-|  16.0 KB |      10 |     <0.1% |
-|  32.0 KB |      15 |     <0.1% |
-|  64.0 KB |       9 |     <0.1% |
-| 128.0 KB |       6 |     <0.1% |
-| 256.0 KB |       5 |     <0.1% |
-|   4.0 MB |       1 |     <0.1% |
+|   Size ≤ | Count | % of Dom. |
+| -------: | ----: | --------: |
+|      1 B |   451 |      3.3% |
+|      8 B |   102 |      0.8% |
+|     16 B |   258 |      1.9% |
+|     32 B |   774 |      5.7% |
+|     64 B | 6,898 |     51.2% |
+|    128 B | 3,590 |     26.6% |
+|    256 B |   750 |      5.6% |
+|    512 B |   382 |      2.8% |
+|   1.0 KB |   130 |      1.0% |
+|   2.0 KB |    53 |      0.4% |
+|   4.0 KB |    31 |      0.2% |
+|   8.0 KB |    17 |      0.1% |
+|  16.0 KB |     9 |      0.1% |
+|  32.0 KB |     7 |      0.1% |
+|  64.0 KB |     8 |      0.1% |
+| 128.0 KB |     6 |     <0.1% |
+| 256.0 KB |     2 |     <0.1% |
+| 512.0 KB |     2 |     <0.1% |
+|   1.0 MB |     2 |     <0.1% |
+|   4.0 MB |     1 |     <0.1% |
+|  32.0 MB |     1 |     <0.1% |
 
 ### Biggest Packages by Retained Heap
 
 _Retained heap aggregated by package prefix (rows retaining <1% of the total are pruned)._
 
-| Package                      | Objects |  Shallow | Retained |
-| ---------------------------- | ------: | -------: | -------: |
-| `cafesat`                    | 263,266 |   7.6 MB |  11.2 MB |
-| `cafesat.sat`                | 164,335 |   5.4 MB |   8.8 MB |
-| `cafesat.asts`               |  89,272 |   2.0 MB |   2.0 MB |
-| `cafesat.asts.core`          |  89,272 |   2.0 MB |   2.0 MB |
-| `cafesat.api`                |   9,646 | 154.1 KB | 364.8 KB |
-| `scala`                      | 212,882 |   5.1 MB |   7.8 MB |
-| `scala.collection`           | 212,827 |   5.1 MB |   7.8 MB |
-| `scala.collection.immutable` | 212,793 |   5.1 MB |   7.8 MB |
-| `java`                       |  61,857 |   2.1 MB |   6.7 MB |
-| `java.net`                   |      97 |   6.6 KB |   2.7 MB |
-| `java.lang`                  |  35,067 |   1.1 MB |   2.2 MB |
-| `java.util`                  |  25,794 | 984.2 KB |   1.6 MB |
-| `java.util.concurrent`       |   3,432 | 143.5 KB | 389.0 KB |
-| `(primitives)`               | 104,866 |   3.9 MB |   3.9 MB |
+| Package            | Objects |  Shallow | Retained |
+| ------------------ | ------: | -------: | -------: |
+| `java`             |  12,512 | 358.8 KB |  26.6 MB |
+| `java.lang`        |  11,443 | 333.7 KB |  24.1 MB |
+| `java.lang.invoke` |   1,609 |  59.3 KB | 326.7 KB |
+| `java.util`        |     579 |  10.2 KB |   2.0 MB |
+| `java.util.jar`    |      33 |   1.1 KB |   1.2 MB |
+| `java.util.zip`    |      77 |   2.8 KB | 836.5 KB |
+| `scala`            |     127 |   1.2 KB |   2.5 MB |
+| `scala.runtime`    |      17 |    128 B |   2.5 MB |
+| `sun`              |     265 |   6.9 KB | 465.7 KB |
 
 ## Dominator Analysis
 
@@ -573,14 +708,23 @@ _Retained heap aggregated by package prefix (rows retaining <1% of the total are
 
 _Dominators where retained heap does not flow into a single child — the gap between an object's retained size and its largest child's retained size. A large drop means this object directly owns a lot of memory spread across many children (e.g. an array or collection). Threshold 0.3 MB (1% of reachable shallow). Multiple rows with the same class are distinct objects._
 
-| Object                    |      # |    Retained | Largest Child         | Child Retained |       Drop |
-| ------------------------- | -----: | ----------: | --------------------- | -------------: | ---------: |
-| `java.lang.Object[]`      |      1 |      2.5 MB | `java.lang.Object`    |           16 B |     2.5 MB |
-| `java.lang.Object[]`      |  50095 |      2.6 MB | `java.lang.Class`     |         2.5 MB |    67.5 KB |
-| `java.net.URLClassLoader` | 883965 |      2.6 MB | `java.util.ArrayList` |         2.6 MB |    43.9 KB |
-| `java.lang.Class`         | 876569 |      2.5 MB | `java.lang.Object[]`  |         2.5 MB |     1.1 KB |
-| `java.util.ArrayList`     |  50094 |      2.6 MB | `java.lang.Object[]`  |         2.6 MB |       24 B |
-| **Total**                 |        | **12.7 MB** |                       |    **10.1 MB** | **2.6 MB** |
+| Object                                    |      # |    Retained | Largest Child                                     | Child Retained |        Drop |
+| ----------------------------------------- | -----: | ----------: | ------------------------------------------------- | -------------: | ----------: |
+| `java.lang.Thread`                        | 883792 |     22.9 MB | `scala.collection.immutable.HashSet`              |         8.0 MB |     14.8 MB |
+| `java.lang.Object[]`                      | 312335 |      8.0 MB | `scala.collection.immutable.BitmapIndexedSetNode` |       817.1 KB |      7.2 MB |
+| `cafesat.sat.Vector[]`                    | 418848 |      4.3 MB | `cafesat.sat.Vector`                              |          136 B |      4.3 MB |
+| `java.lang.Object[]`                      |      1 |      2.5 MB | `java.lang.Object`                                |           16 B |      2.5 MB |
+| `java.util.HashMap$Node[]`                |     ×2 |    577.2 KB | `java.util.HashMap$Node`                          |         1000 B |    576.2 KB |
+| `java.lang.Object[]`                      | 507329 |    578.0 KB | `scala.collection.immutable.BitmapIndexedSetNode` |        20.8 KB |    557.3 KB |
+| `java.lang.Object[]`                      |  94766 |    343.1 KB | `scala.collection.immutable.BitmapIndexedSetNode` |        12.8 KB |    330.2 KB |
+| `cafesat.sat.Solver`                      | 264493 |      4.6 MB | `cafesat.sat.Vector[]`                            |         4.3 MB |    304.2 KB |
+| `java.lang.Object[]`                      | 313366 |    817.1 KB | `scala.collection.immutable.BitmapIndexedSetNode` |       585.4 KB |    231.6 KB |
+| `scala.collection.immutable.$colon$colon` | 112989 |      3.2 MB | `scala.collection.immutable.$colon$colon`         |         3.2 MB |     34.9 KB |
+| `java.lang.Object[]`                      | 440492 |    585.4 KB | `scala.collection.immutable.BitmapIndexedSetNode` |       578.3 KB |      7.1 KB |
+| `java.util.jar.Manifest`                  |     ×2 |    584.2 KB | `java.util.HashMap`                               |       577.2 KB |      6.9 KB |
+| `java.lang.Class`                         | 876569 |      2.5 MB | `java.lang.Object[]`                              |         2.5 MB |       920 B |
+| `scala.collection.immutable.$colon$colon` |    ×10 |      1.8 MB | `scala.collection.immutable.$colon$colon`         |         1.8 MB |       504 B |
+| **Total**                                 |        | **71.0 MB** |                                                   |    **39.6 MB** | **31.5 MB** |
 
 ### Immediate Dominators
 
@@ -588,37 +732,37 @@ _Objects immediately dominated, rolled up by the dominator's class; a heavy domi
 
 | Dominator Class                                   | #Dominators |  #Dominated | Dominator Shallow | Dominated Shallow |
 | ------------------------------------------------- | ----------: | ----------: | ----------------: | ----------------: |
-| `cafesat.sat.Vector`                              |      36,607 |      36,607 |          858.0 KB |            3.4 MB |
-| `java.lang.Object[]`                              |       5,833 |     161,270 |          845.2 KB |            3.0 MB |
-| `scala.collection.immutable.Set$Set2`             |      44,625 |      44,625 |            1.0 MB |            1.7 MB |
-| `java.lang.Class`                                 |       1,517 |       2,216 |           28.0 KB |          673.0 KB |
-| `scala.collection.immutable.BitmapIndexedSetNode` |      14,921 |      15,070 |          582.9 KB |          404.6 KB |
-| `scala.collection.immutable.Set$Set3`             |       8,747 |       8,747 |          205.0 KB |          341.7 KB |
-| `java.lang.String`                                |       6,612 |       6,612 |          155.0 KB |          285.2 KB |
-| `java.util.zip.ZipFile$Source`                    |           2 |           2 |             160 B |          262.5 KB |
-| `cafesat.api.Formulas$Formula`                    |       8,906 |       8,906 |          139.2 KB |          208.7 KB |
-| `java.util.concurrent.ConcurrentHashMap$Node`     |       3,851 |       4,466 |          120.3 KB |          167.9 KB |
-| `java.util.HashMap$Node`                          |       5,085 |       5,117 |          158.9 KB |          126.9 KB |
-| `java.util.concurrent.ConcurrentHashMap$Node[]`   |          39 |       3,226 |           51.0 KB |          102.8 KB |
+| `scala.collection.immutable.$colon$colon`         |     128,495 |     221,107 |            2.9 MB |            5.6 MB |
+| `java.lang.Object[]`                              |      23,311 |     231,148 |            1.3 MB |            4.7 MB |
+| `scala.collection.immutable.Set$Set2`             |      44,628 |      89,256 |            1.0 MB |            3.4 MB |
+| `cafesat.sat.Vector`                              |      36,614 |      36,615 |          858.1 KB |            3.4 MB |
+| `cafesat.sat.Solver$Clause`                       |      65,565 |      65,565 |            2.0 MB |            1.6 MB |
+| `cafesat.asts.core.Trees$ConnectiveApplication`   |      43,982 |      70,468 |            1.0 MB |            1.6 MB |
+| `scala.collection.immutable.BitmapIndexedSetNode` |      22,791 |      45,200 |          890.3 KB |            1.4 MB |
+| `java.lang.String`                                |      23,882 |      23,882 |          559.7 KB |            1.1 MB |
+| `scala.collection.immutable.Set$Set3`             |       8,748 |      26,244 |          205.0 KB |            1.0 MB |
+| `cafesat.sat.Vector[]`                            |           1 |      36,616 |          143.0 KB |          858.2 KB |
+| `java.util.zip.ZipFile$Source`                    |          10 |          30 |             800 B |          826.7 KB |
+| `java.lang.Class`                                 |       1,947 |       4,935 |           32.2 KB |          767.5 KB |
+| `java.lang.Thread`                                |          27 |      28,251 |            2.7 KB |          628.9 KB |
+| `cafesat.sat.Solver`                              |           1 |           9 |             168 B |          375.6 KB |
+| `java.util.jar.Attributes`                        |       5,786 |       5,786 |           90.4 KB |          361.6 KB |
+| `java.util.HashMap$Node`                          |       7,677 |      16,139 |          239.9 KB |          354.5 KB |
+| `java.util.HashMap$Node[]`                        |         348 |       7,671 |           86.8 KB |          239.9 KB |
+| `java.util.concurrent.ConcurrentHashMap$Node[]`   |          91 |       5,779 |           61.7 KB |          211.1 KB |
+| `java.util.concurrent.ConcurrentHashMap$Node`     |       5,097 |       6,647 |          159.3 KB |          210.8 KB |
 | `byte[][]`                                        |           1 |         346 |            1.4 KB |           92.8 KB |
-| `java.net.URLClassLoader`                         |           2 |       2,568 |             176 B |           87.5 KB |
-| `cafesat.sat.Solver`                              |           1 |           1 |             168 B |           71.5 KB |
-| `java.util.HashMap$Node[]`                        |         136 |       1,856 |           49.9 KB |           58.1 KB |
-| `java.lang.Thread`                                |           5 |          20 |             520 B |           35.3 KB |
-| `java.util.HashMap`                               |          25 |          27 |            1.2 KB |           30.7 KB |
-| `java.lang.Object[][]`                            |          11 |         197 |            1.2 KB |           27.6 KB |
+| `java.util.HashMap`                               |         348 |         400 |           16.3 KB |           87.6 KB |
+| `cafesat.common.FixedIntStack`                    |           1 |           1 |              24 B |           71.5 KB |
+| `java.util.concurrent.ConcurrentHashMap`          |          93 |         102 |            5.8 KB |           62.1 KB |
+| `java.util.LinkedHashMap`                         |          47 |       1,251 |            2.9 KB |           56.7 KB |
+| `java.lang.Object[][]`                            |          11 |         269 |            1.2 KB |           37.8 KB |
+| `java.lang.invoke.MethodTypeForm`                 |         217 |         434 |            6.8 KB |           32.2 KB |
+| `java.io.BufferedWriter`                          |           2 |           4 |              80 B |           32.1 KB |
+| `java.lang.invoke.MethodType`                     |         758 |       1,123 |           29.6 KB |           31.5 KB |
+| `java.util.LinkedHashMap$Entry`                   |       1,140 |       1,167 |           44.5 KB |           27.4 KB |
 | `jdk.internal.math.FDBigInteger`                  |         341 |         341 |           10.7 KB |           24.2 KB |
-| `java.util.concurrent.ConcurrentHashMap`          |          40 |          40 |            2.5 KB |           19.7 KB |
-| `scala.collection.immutable.$colon$colon`         |         805 |         805 |           18.9 KB |           18.9 KB |
-| `java.lang.Module`                                |          53 |         302 |            2.5 KB |           15.2 KB |
-| `java.lang.String[]`                              |           4 |         458 |            4.8 KB |           10.7 KB |
-| `java.lang.invoke.LambdaForm$Name`                |         385 |         391 |           12.0 KB |            9.4 KB |
-| `java.lang.Long[]`                                |           1 |         243 |            1.0 KB |            5.7 KB |
-| `scala.collection.immutable.BitmapIndexedMapNode` |         161 |         161 |            6.3 KB |            5.1 KB |
-| `char[][]`                                        |         103 |         207 |            2.4 KB |            4.8 KB |
-| `java.util.ArrayList`                             |           6 |           6 |             144 B |            4.8 KB |
-| `java.lang.invoke.DirectMethodHandle`             |         120 |         120 |            4.7 KB |            4.7 KB |
-| **Total**                                         | **138,945** | **304,953** |        **4.2 MB** |       **11.0 MB** |
+| **Total**                                         | **421,960** | **926,786** |       **11.6 MB** |       **29.1 MB** |
 
 ## Threads
 
@@ -628,10 +772,10 @@ _One row per resolved thread; columns mirror Eclipse MAT's Thread Overview._
 
 | Name                           | Shallow | Retained | Max. Locals' Retained | Context Class Loader                   | Daemon | Priority | State                                                  |
 | ------------------------------ | ------: | -------: | --------------------: | -------------------------------------- | ------ | -------: | ------------------------------------------------------ |
-| [main](#thread-1)              |   104 B |  35.6 KB |               71.7 KB | `java/net/URLClassLoader @ 0xc0412288` | no     |        5 | [alive, runnable]                                      |
-| [Reference Handler](#thread-2) |   104 B |    104 B |                   0 B | `—`                                    | yes    |       10 | [alive, runnable]                                      |
-| [Finalizer](#thread-3)         |   112 B |    168 B |                  40 B | `—`                                    | yes    |        8 | [alive, waiting, waiting indefinitely, in Object.wait] |
-| [Common-Cleaner](#thread-6)    |   112 B |    112 B |                 128 B | `—`                                    | yes    |        8 | [alive, waiting, waiting with timeout, parked]         |
+| [main](#thread-1)              |   104 B |  22.9 MB |                4.6 MB | `java/net/URLClassLoader @ 0xc0412288` | no     |        5 | [alive, runnable]                                      |
+| [Reference Handler](#thread-2) |   104 B |    200 B |                   0 B | `—`                                    | yes    |       10 | [alive, runnable]                                      |
+| [Finalizer](#thread-3)         |   112 B |    208 B |                  40 B | `—`                                    | yes    |        8 | [alive, waiting, waiting indefinitely, in Object.wait] |
+| [Common-Cleaner](#thread-6)    |   112 B |    168 B |                 128 B | `—`                                    | yes    |        8 | [alive, waiting, waiting with timeout, parked]         |
 
 <a id="thread-1"></a>
 
@@ -645,25 +789,26 @@ _Showing top 20 by retained heap (sizes overlap and do not sum to thread total).
 
 | Object                                          | Count | Shallow | Retained |
 | ----------------------------------------------- | ----: | ------: | -------: |
-| `cafesat/sat/Solver`                            |    ×2 |   168 B |  71.7 KB |
-| `scala/collection/immutable/SetIterator`        |    ×2 |    40 B |    112 B |
-| `scala/collection/immutable/$colon$colon`       |    ×2 |    24 B |     24 B |
+| `cafesat/sat/Solver`                            |    ×2 |   168 B |   4.6 MB |
+| `scala/collection/immutable/$colon$colon`       |     1 |    24 B |   3.2 MB |
+| `scala/collection/immutable/$colon$colon`       |     1 |    24 B | 962.2 KB |
+| `scala/runtime/ObjectRef`                       |    ×2 |    16 B | 962.1 KB |
+| `cafesat/asts/core/Trees$ConnectiveApplication` |     1 |    24 B | 208.8 KB |
+| `scala/collection/immutable/SetIterator`        |    ×2 |    40 B |    160 B |
 | `cafesat/sat/Solver$$Lambda+0x00007de4a41f7bd0` |     1 |    24 B |     24 B |
-| `cafesat/asts/core/Trees$ConnectiveApplication` |     1 |    24 B |     24 B |
 | `scala/collection/immutable/HashSet`            |    ×3 |    16 B |     16 B |
 | `cafesat/sat/Solver$$Lambda+0x00007de4a41f5a08` |    ×3 |    16 B |     16 B |
 | `scala/collection/immutable/Nil$`               |     1 |    16 B |     16 B |
 | `cafesat/api/Solver$`                           |     1 |    16 B |     16 B |
 | `[Lcafesat/sat/Literal;`                        |     1 |    16 B |     16 B |
-| `scala/runtime/ObjectRef`                       |    ×2 |    16 B |     16 B |
 | `cafesat/api/Formulas$Formula`                  |     1 |    16 B |     16 B |
 
-_Frame percentages are of this thread's 35.6 KB retained heap._
+_Frame percentages are of this thread's 22.9 MB retained heap._
 
 - `scala.collection.IterableOnceOps.count (IterableOnce.scala:618)`
-  - `scala.collection.immutable.SetIterator` retains 112 B (<0.1% of thread retained)
+  - `scala.collection.immutable.SetIterator` retains 160 B (<0.1% of thread retained)
 - `scala.collection.IterableOnceOps.exists (IterableOnce.scala:604)`
-  - `scala.collection.immutable.SetIterator` retains 112 B (<0.1% of thread retained)
+  - `scala.collection.immutable.SetIterator` retains 160 B (<0.1% of thread retained)
   - `cafesat.sat.Solver$$Lambda+0x00007de4a41f5a08` retains 16 B (<0.1% of thread retained)
 - `scala.collection.IterableOnceOps.exists$ (IterableOnce.scala:601)`
   - `cafesat.sat.Solver$$Lambda+0x00007de4a41f5a08` retains 16 B (<0.1% of thread retained)
@@ -672,21 +817,21 @@ _Frame percentages are of this thread's 35.6 KB retained heap._
   - `cafesat.sat.Solver$$Lambda+0x00007de4a41f5a08` retains 16 B (<0.1% of thread retained)
   - `scala.collection.immutable.HashSet` retains 16 B (<0.1% of thread retained)
 - `cafesat.sat.Solver.$anonfun$initClauses$1 (Solver.scala:124)`
+  - `scala.runtime.ObjectRef` retains 962.1 KB (3.2% of thread retained)
   - `scala.collection.immutable.HashSet` retains 16 B (<0.1% of thread retained)
-  - `scala.runtime.ObjectRef` retains 16 B (<0.1% of thread retained)
 - `scala.collection.immutable.List.foreach (List.scala:333)`
+  - `scala.collection.immutable.$colon$colon` retains 3.2 MB (10.9% of thread retained)
   - `cafesat.sat.Solver$$Lambda+0x00007de4a41f7bd0` retains 24 B (<0.1% of thread retained)
-  - `scala.collection.immutable.$colon$colon` retains 24 B (<0.1% of thread retained)
 - `cafesat.sat.Solver.initClauses (Solver.scala:115)`
-  - `cafesat.sat.Solver` retains 71.7 KB (0.2% of thread retained)
-  - `scala.collection.immutable.$colon$colon` retains 24 B (<0.1% of thread retained)
-  - `scala.runtime.ObjectRef` retains 16 B (<0.1% of thread retained)
+  - `cafesat.sat.Solver` retains 4.6 MB (15.5% of thread retained)
+  - `scala.collection.immutable.$colon$colon` retains 962.2 KB (3.2% of thread retained)
+  - `scala.runtime.ObjectRef` retains 962.1 KB (3.2% of thread retained)
 - `cafesat.sat.Solver.solve (Solver.scala:147)`
-  - `cafesat.sat.Solver` retains 71.7 KB (0.2% of thread retained)
+  - `cafesat.sat.Solver` retains 4.6 MB (15.5% of thread retained)
   - `cafesat.sat.Literal[]` retains 16 B (<0.1% of thread retained)
   - `scala.collection.immutable.Nil$` retains 16 B (<0.1% of thread retained)
 - `cafesat.api.Solver$.solveForSatisfiability (Solver.scala:84)`
-  - `cafesat.asts.core.Trees$ConnectiveApplication` retains 24 B (<0.1% of thread retained)
+  - `cafesat.asts.core.Trees$ConnectiveApplication` retains 208.8 KB (0.7% of thread retained)
   - `cafesat.api.Formulas$Formula` retains 16 B (<0.1% of thread retained)
   - `cafesat.api.Solver$` retains 16 B (<0.1% of thread retained)
 
@@ -714,7 +859,7 @@ _Local roots: 7._
 | `java/lang/ref/NativeReferenceQueue$Lock` |    ×3 |    16 B |     16 B |
 | `java/lang/System$2`                      |     1 |    16 B |     16 B |
 
-_Frame percentages are of this thread's 168 B retained heap._
+_Frame percentages are of this thread's 208 B retained heap._
 
 - `java.lang.Object.wait (Object.java:366)`
   - `java.lang.ref.NativeReferenceQueue$Lock` retains 16 B (<0.1% of thread retained)
@@ -742,12 +887,12 @@ _Local roots: 12._
 | ----------------------------------------------------------------------- | ----: | ------: | -------: |
 | `java/lang/Class`                                                       |    ×2 |    32 B |    128 B |
 | `java/util/concurrent/TimeUnit`                                         |     1 |    80 B |     80 B |
+| `java/lang/ref/ReferenceQueue`                                          |    ×3 |    32 B |     48 B |
 | `java/util/concurrent/locks/AbstractQueuedSynchronizer$ConditionNode`   |     1 |    32 B |     32 B |
-| `java/lang/ref/ReferenceQueue`                                          |    ×3 |    32 B |     32 B |
 | `java/util/concurrent/locks/AbstractQueuedSynchronizer$ConditionObject` |    ×2 |    24 B |     24 B |
 | `jdk/internal/ref/CleanerImpl`                                          |    ×3 |    24 B |     24 B |
 
-_Frame percentages are of this thread's 112 B retained heap._
+_Frame percentages are of this thread's 168 B retained heap._
 
 - `java.util.concurrent.locks.LockSupport.parkNanos (LockSupport.java:269)`
   - `java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject` retains 24 B (<0.1% of thread retained)
@@ -756,11 +901,11 @@ _Frame percentages are of this thread's 112 B retained heap._
   - `java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionNode` retains 32 B (<0.1% of thread retained)
   - `java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject` retains 24 B (<0.1% of thread retained)
 - `java.lang.ref.ReferenceQueue.await (ReferenceQueue.java:71)`
-  - `java.lang.ref.ReferenceQueue` retains 32 B (<0.1% of thread retained)
+  - `java.lang.ref.ReferenceQueue` retains 48 B (<0.1% of thread retained)
 - `java.lang.ref.ReferenceQueue.remove0 (ReferenceQueue.java:143)`
-  - `java.lang.ref.ReferenceQueue` retains 32 B (<0.1% of thread retained)
+  - `java.lang.ref.ReferenceQueue` retains 48 B (<0.1% of thread retained)
 - `java.lang.ref.ReferenceQueue.remove (ReferenceQueue.java:218)`
-  - `java.lang.ref.ReferenceQueue` retains 32 B (<0.1% of thread retained)
+  - `java.lang.ref.ReferenceQueue` retains 48 B (<0.1% of thread retained)
 - `jdk.internal.ref.CleanerImpl.run (CleanerImpl.java:140)`
   - `jdk.internal.ref.CleanerImpl` retains 24 B (<0.1% of thread retained)
 - `java.lang.Thread.runWith (Thread.java:1596)`
@@ -774,13 +919,13 @@ _Frame percentages are of this thread's 112 B retained heap._
 
 _Retained heap grouped by class loader (component); `% Heap` is the share of total reachable heap._
 
-| Component                                              | Retained | % Heap | Top classes                                                                                                                                                                                                                     |
-| ------------------------------------------------------ | -------: | -----: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `java/net/URLClassLoader`                              |  25.5 MB |  49.5% | `cafesat.sat.Literal` (4.8 MB), `cafesat.sat.Vector` (4.2 MB), `cafesat.sat.Solver$Clause[]` (3.4 MB), `scala.collection.immutable.$colon$colon` (3.4 MB), `scala.collection.immutable.Set$Set2` (2.7 MB)                       |
-| `<boot>`                                               |  23.4 MB |  45.5% | `java.lang.Object[]` (4.5 MB), `java.lang.Class` (2.8 MB), `java.net.URLClassLoader` (2.7 MB), `int[]` (2.6 MB), `java.util.ArrayList` (2.6 MB)                                                                                 |
-| `java/net/URLClassLoader`                              |   2.6 MB |   5.0% | `scala.runtime.LazyVals$` (2.5 MB), `scala.math.BigInt$` (8.1 KB), `scala.math.BigInt[]` (8.0 KB), `scopt.OptionDef` (4.1 KB), `org.renaissance.harness.ConfigParser$$anon$1` (1.6 KB)                                          |
-| `jdk/internal/loader/ClassLoaders$AppClassLoader`      |  30.0 KB |   0.1% | `org.renaissance.core.BenchmarkDescriptor` (28.2 KB), `org.renaissance.core.BenchmarkSuite` (496 B), `org.renaissance.core.Launcher` (192 B), `org.renaissance.core.ModuleLoader` (64 B), `org.renaissance.core.Logging` (56 B) |
-| `jdk/internal/loader/ClassLoaders$PlatformClassLoader` |     24 B |  <0.1% | `sun.util.resources.cldr.provider.CLDRLocaleDataMetaInfo` (24 B)                                                                                                                                                                |
+| Component                                              | Retained | % Heap | Top classes                                                                                                                                                                                                                                   |
+| ------------------------------------------------------ | -------: | -----: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `java/net/URLClassLoader`                              |  62.3 MB |  49.1% | `scala.collection.immutable.$colon$colon` (8.6 MB), `scala.collection.immutable.BitmapIndexedSetNode` (8.4 MB), `scala.collection.immutable.HashSet` (8.0 MB), `cafesat.sat.Literal` (4.8 MB), `cafesat.sat.Solver` (4.6 MB)                  |
+| `<boot>`                                               |  61.7 MB |  48.7% | `java.lang.Thread` (22.9 MB), `java.lang.Object[]` (11.4 MB), `java.lang.Class` (3.5 MB), `int[]` (2.6 MB), `java.lang.Object` (2.0 MB)                                                                                                       |
+| `java/net/URLClassLoader`                              |   2.6 MB |   2.1% | `scala.runtime.LazyVals$` (2.5 MB), `org.renaissance.harness.ConfigParser$$anon$1` (13.0 KB), `scala.math.BigInt$` (8.2 KB), `scopt.ORunner$` (8.1 KB), `scala.math.BigInt[]` (8.0 KB)                                                        |
+| `jdk/internal/loader/ClassLoaders$AppClassLoader`      | 235.6 KB |   0.2% | `org.renaissance.core.ModuleLoader` (149.8 KB), `org.renaissance.core.BenchmarkSuite` (77.0 KB), `org.renaissance.core.BenchmarkDescriptor` (2.3 KB), `org.renaissance.core.Launcher` (1.6 KB), `org.renaissance.core.ResourceUtils` (1.2 KB) |
+| `jdk/internal/loader/ClassLoaders$PlatformClassLoader` |   7.4 KB |  <0.1% | `sun.util.resources.cldr.provider.CLDRLocaleDataMetaInfo` (7.4 KB)                                                                                                                                                                            |
 
 ## Arrays by Size
 
@@ -1044,17 +1189,17 @@ _281 reference instances._
 
 | Class                                    | Objects | Shallow | Retained |
 | ---------------------------------------- | ------: | ------: | -------: |
-| `java.lang.invoke.LambdaForm`            |     178 |  8.3 KB |   8.9 KB |
-| `java.lang.invoke.DirectMethodHandle`    |      34 |  1.3 KB |   1.5 KB |
+| `java.lang.invoke.LambdaForm`            |     178 |  8.3 KB |  77.3 KB |
+| `java.lang.invoke.DirectMethodHandle`    |      34 |  1.3 KB |   1.3 KB |
 | `java.lang.Class$ReflectionData`         |      21 |  1.3 KB |   1.3 KB |
-| `sun.util.locale.BaseLocale`             |      20 |   640 B |    640 B |
-| `java.util.Locale`                       |      10 |   320 B |    608 B |
-| `java.util.jar.Manifest`                 |       8 |   192 B |    192 B |
-| `java.util.concurrent.ConcurrentHashMap` |       4 |   256 B |   1.6 KB |
+| `sun.util.locale.BaseLocale`             |      20 |   640 B |   1.2 KB |
+| `java.util.Locale`                       |      10 |   320 B |    320 B |
+| `java.util.jar.Manifest`                 |       8 |   192 B |   1.1 MB |
+| `java.util.concurrent.ConcurrentHashMap` |       4 |   256 B |   2.1 KB |
 | `[Ljava.lang.Object;`                    |       2 |    64 B |      0 B |
-| `java.util.ArrayList`                    |       1 |    24 B |     24 B |
-| `sun.text.resources.cldr.FormatData`     |       1 |    40 B |     40 B |
-| `sun.text.resources.cldr.FormatData_en`  |       1 |    40 B |     40 B |
+| `java.util.ArrayList`                    |       1 |    24 B |     80 B |
+| `sun.text.resources.cldr.FormatData`     |       1 |    40 B |  28.3 KB |
+| `sun.text.resources.cldr.FormatData_en`  |       1 |    40 B |  20.0 KB |
 | `sun.util.resources.Bundles$1`           |       1 |    40 B |     40 B |
 
 #### Only-weakly retained _(approximate)_
@@ -1075,13 +1220,13 @@ _975 reference instances._
 
 | Class                                                             | Objects | Shallow | Retained |
 | ----------------------------------------------------------------- | ------: | ------: | -------: |
-| `java.lang.invoke.MethodType`                                     |     894 | 34.9 KB |  38.1 KB |
+| `java.lang.invoke.MethodType`                                     |     894 | 34.9 KB | 118.7 KB |
 | `java.lang.ClassValue$Identity`                                   |      11 |   176 B |    176 B |
 | `java.util.logging.Level`                                         |       9 |   288 B |    288 B |
-| `java.util.logging.Logger`                                        |       8 |   448 B |    448 B |
-| `java.lang.ClassValue$Version`                                    |       6 |   144 B |    144 B |
-| `java.lang.Module`                                                |       4 |   192 B |  19.6 KB |
-| `java.util.logging.LogManager$RootLogger`                         |       4 |   256 B |    256 B |
+| `java.util.logging.Logger`                                        |       8 |   448 B |   4.3 KB |
+| `java.lang.ClassValue$Version`                                    |       6 |   144 B |    336 B |
+| `java.lang.Module`                                                |       4 |   192 B |  21.8 KB |
+| `java.util.logging.LogManager$RootLogger`                         |       4 |   256 B |   1.4 KB |
 | `sun.security.provider.FileInputStreamPool$UnclosableInputStream` |       2 |    32 B |     32 B |
 | `java.lang.ClassLoader`                                           |       1 |    16 B |      0 B |
 | `java.lang.ThreadGroup`                                           |       1 |    48 B |     48 B |
@@ -1115,11 +1260,11 @@ _38 reference instances._
 | ------------------------------------- | ------: | ------: | -------: |
 | `java.io.FileDescriptor`              |      12 |   480 B |    480 B |
 | `java.util.zip.Inflater`              |      11 |   704 B |    704 B |
-| `java.util.jar.JarFile`               |      10 |   640 B |    984 B |
+| `java.util.jar.JarFile`               |      10 |   640 B |   1.2 MB |
 | `java.lang.ref.Cleaner`               |       1 |    16 B |     16 B |
 | `java.nio.DirectByteBuffer`           |       1 |    72 B |     72 B |
-| `sun.net.www.protocol.jar.URLJarFile` |       1 |    80 B |    208 B |
-| `sun.nio.fs.NativeBuffer`             |       1 |    32 B |     32 B |
+| `sun.net.www.protocol.jar.URLJarFile` |       1 |    80 B |    344 B |
+| `sun.nio.fs.NativeBuffer`             |       1 |    32 B |     64 B |
 
 #### Only-weakly retained _(approximate)_
 
@@ -1303,31 +1448,42 @@ _Share of the reachable heap retained by the few largest top-level dominators (a
 
 | Scope           | Retained Share | Retained |
 | --------------- | -------------: | -------: |
-| Top 1 object    |           8.8% |   2.6 MB |
-| Top 10 objects  |          13.1% |   3.9 MB |
-| Top 100 objects |          17.0% |   5.1 MB |
+| Top 1 object    |          76.7% |  22.9 MB |
+| Top 10 objects  |          92.6% |  27.6 MB |
+| Top 100 objects |          96.4% |  28.7 MB |
 
-_1 object each hold ≥1% of the reachable heap._
+_4 objects each hold ≥1% of the reachable heap._
 
 ## Dominator-Depth Distribution
 
 _How far each live object sits below a GC root, counted in dominator hops. Most objects clustering at shallow depths means memory is held close to the roots; a long tail means deep, chained structures (often a sign of nested collections or linked leaks)._
 
-_Half of all live objects sit within 1 hop of a GC root; the deepest chain is 16 hops._
+_Half of all live objects sit within 10 hops of a GC root; the deepest chain is 41355 hops._
 
 | Depth | Objects | % Objects | Cumulative % |
 | ----: | ------: | --------: | -----------: |
-|     1 | 644,694 |     67.7% |        67.7% |
-|     2 | 146,089 |     15.3% |        83.0% |
-|     3 |  10,776 |      1.1% |        84.1% |
-|     4 |   5,611 |      0.6% |        84.7% |
-|     5 |   3,139 |      0.3% |        85.1% |
-|     6 | 133,559 |     14.0% |        99.1% |
-|     7 |   6,483 |      0.7% |        99.8% |
-|     8 |   1,191 |      0.1% |        99.9% |
-|     9 |   1,080 |      0.1% |       100.0% |
+|     1 |  13,474 |      1.4% |         1.4% |
+|     2 |  44,435 |      4.7% |         6.1% |
+|     3 | 157,764 |     16.6% |        22.6% |
+|     4 |  64,998 |      6.8% |        29.5% |
+|     5 |  65,480 |      6.9% |        36.3% |
+|     6 |  30,516 |      3.2% |        39.5% |
+|     7 |  16,550 |      1.7% |        41.3% |
+|     8 |  22,589 |      2.4% |        43.6% |
+|     9 |  33,631 |      3.5% |        47.2% |
+|    10 |  58,250 |      6.1% |        53.3% |
+|    11 |  42,886 |      4.5% |        57.8% |
+|    12 |  90,772 |      9.5% |        67.3% |
+|    13 |   3,095 |      0.3% |        67.6% |
+|    14 |   6,403 |      0.7% |        68.3% |
+|    15 |     338 |     <0.1% |        68.4% |
+|    16 |   1,417 |      0.1% |        68.5% |
+|    17 |   2,103 |      0.2% |        68.7% |
+|    18 |   7,873 |      0.8% |        69.5% |
+|    19 |   2,054 |      0.2% |        69.8% |
+|    20 |   2,128 |      0.2% |        70.0% |
 
-_… (+7 deeper buckets, 43 objects, 100.0% cumulative — full data in JSON)_
+_… (+41335 deeper buckets, 285,909 objects, 100.0% cumulative — full data in JSON)_
 
 ## Leak Indicators
 

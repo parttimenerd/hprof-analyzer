@@ -7,7 +7,7 @@
 //! pass1+pass2 (keeping tables resident across queries is out of scope for the
 //! foundation slice).
 
-use std::io::{self, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::time::Instant;
 
 use reedline::{
@@ -774,22 +774,11 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
     // Keep our own copies for the `!classes`/`!fields` listing commands (the
     // completer takes ownership of the originals).
     let names_for_meta = (class_names.clone(), field_names.clone());
-    let mut line_editor = build_editor(class_names, field_names);
-    let prompt = DefaultPrompt::default();
     let mut stdout = io::stdout();
-    // Reachable-only (MAT parity) is the session default; `!all`/`!reachable`
-    // toggle it. Mirrors the `query` subcommand's default.
     let mut reachable_only = true;
-    // Per-session display + query state:
-    //   * `max_width` caps each printed cell (0 = unlimited); set via `!width N`.
-    //   * `last_query` is the most recent OQL text, re-run by `!last`.
-    //   * `last_result` is the most recent successful result, saved by `!save`.
     let mut max_width: usize = 0;
     let mut last_query: Option<String> = None;
     let mut last_result: Option<QueryResult> = None;
-    // Warm cache for resident-only queries, built lazily on first eligible query
-    // (see `run_one` / `cache_eligible`). Reused for the whole session while the
-    // reachability mode is unchanged.
     let mut cache: Option<crate::query::run::ReplCache> = None;
     writeln!(
         stdout,
@@ -802,10 +791,36 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
         names_for_meta.0.len(),
         names_for_meta.1.len(),
     )?;
-    // Accumulator for multi-line queries: an OQL statement can span lines until
-    // it is terminated by a trailing `;` or a blank line. Meta-commands (`!...`)
-    // are recognized only at statement start (empty accumulator).
     let mut buffer_lines: Vec<String> = Vec::new();
+
+    // When stdin is not a TTY (e.g. piped in tests), skip reedline entirely and
+    // read plain lines so the REPL is usable non-interactively.
+    if !io::stdin().is_terminal() {
+        let stdin = io::stdin();
+        for line in stdin.lock().lines() {
+            let line = line?;
+            let quit = run_repl_line(
+                line,
+                path,
+                path_depth,
+                &mut reachable_only,
+                &mut max_width,
+                &mut last_query,
+                &mut last_result,
+                &mut cache,
+                &mut buffer_lines,
+                &names_for_meta,
+                &mut stdout,
+            )?;
+            if quit {
+                break;
+            }
+        }
+        return Ok(());
+    }
+
+    let mut line_editor = build_editor(class_names, field_names);
+    let prompt = DefaultPrompt::default();
     loop {
         match line_editor.read_line(&prompt) {
             Ok(Signal::Success(line)) => {
@@ -933,6 +948,122 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Process one input line in a non-interactive (piped) REPL session.
+/// Returns `Ok(true)` when the caller should stop (e.g. `!quit`).
+#[allow(clippy::too_many_arguments)]
+fn run_repl_line(
+    line: String,
+    path: &str,
+    path_depth: usize,
+    reachable_only: &mut bool,
+    max_width: &mut usize,
+    last_query: &mut Option<String>,
+    last_result: &mut Option<QueryResult>,
+    cache: &mut Option<crate::query::run::ReplCache>,
+    buffer_lines: &mut Vec<String>,
+    names_for_meta: &(Vec<String>, Vec<String>),
+    out: &mut impl Write,
+) -> io::Result<bool> {
+    let t = line.trim();
+    if buffer_lines.is_empty() && t.starts_with('!') {
+        let cmd = &t[1..];
+        let (verb, rest) = match cmd.split_once(char::is_whitespace) {
+            Some((v, r)) => (v, r.trim()),
+            None => (cmd, ""),
+        };
+        match verb {
+            "width" => {
+                handle_width(rest, max_width, out)?;
+                out.flush()?;
+                return Ok(false);
+            }
+            "count" => {
+                if rest.is_empty() {
+                    writeln!(out, "usage: !count <oql>")?;
+                } else {
+                    let wrapped = wrap_count(rest);
+                    if let Some(res) = run_and_print(
+                        path, &wrapped, path_depth, *reachable_only, *max_width, cache, out,
+                    )? {
+                        *last_query = Some(wrapped);
+                        *last_result = Some(res);
+                    }
+                }
+                out.flush()?;
+                return Ok(false);
+            }
+            "last" => {
+                match last_query.clone() {
+                    None => writeln!(out, "(no previous query to re-run)")?,
+                    Some(q) => {
+                        if let Some(res) = run_and_print(
+                            path, &q, path_depth, *reachable_only, *max_width, cache, out,
+                        )? {
+                            *last_result = Some(res);
+                        }
+                    }
+                }
+                out.flush()?;
+                return Ok(false);
+            }
+            "save" => {
+                handle_save(
+                    rest, path, path_depth, *reachable_only, *max_width,
+                    last_query, last_result, cache, out,
+                )?;
+                out.flush()?;
+                return Ok(false);
+            }
+            _ => {}
+        }
+        let quit = handle_meta(cmd, path_depth, reachable_only, names_for_meta, out)?;
+        out.flush()?;
+        return Ok(quit);
+    }
+    if t.is_empty() {
+        if !buffer_lines.is_empty() {
+            let query = buffer_lines.join("\n");
+            buffer_lines.clear();
+            if let Some(res) =
+                run_and_print(path, &query, path_depth, *reachable_only, *max_width, cache, out)?
+            {
+                *last_query = Some(query);
+                *last_result = Some(res);
+            }
+            out.flush()?;
+        }
+        return Ok(false);
+    }
+    if let Some(head) = t.strip_suffix(';') {
+        buffer_lines.push(head.trim_end().to_string());
+        let query = buffer_lines.join("\n");
+        buffer_lines.clear();
+        let query_str = query.trim().to_string();
+        if !query_str.is_empty() {
+            if let Some(res) = run_and_print(
+                path, &query_str, path_depth, *reachable_only, *max_width, cache, out,
+            )? {
+                *last_query = Some(query_str);
+                *last_result = Some(res);
+            }
+        }
+        out.flush()?;
+        return Ok(false);
+    }
+    if buffer_lines.is_empty() {
+        if let Some(res) =
+            run_and_print(path, t, path_depth, *reachable_only, *max_width, cache, out)?
+        {
+            *last_query = Some(t.to_string());
+            *last_result = Some(res);
+        }
+        out.flush()?;
+    } else {
+        buffer_lines.push(line);
+    }
+    Ok(false)
 }
 
 /// Time, run, and print a single OQL statement, reporting elapsed wall time in

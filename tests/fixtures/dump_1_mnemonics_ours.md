@@ -42,11 +42,10 @@ _At-a-glance digest; see the sections below for full detail._
 
 **Top suspects by retained heap**
 
-|  # | Suspect                                     | Retained | % Heap |
-| -: | ------------------------------------------- | -------: | -----: |
-|  1 | `byte[]` (48,035 instances)                 |   3.0 MB |  26.9% |
-|  2 | `java.net.URLClassLoader` (single object)   |   2.6 MB |  23.2% |
-|  3 | `java.util.HashMap$Node` (40,465 instances) |   1.9 MB |  17.2% |
+|  # | Suspect                                   | Retained | % Heap |
+| -: | ----------------------------------------- | -------: | -----: |
+|  1 | `java.lang.Thread` (single object)        |   5.5 MB |  48.8% |
+|  2 | `scala.runtime.LazyVals$` (single object) |   2.5 MB |  22.2% |
 
 **Likely problem:** retention is spread across several roots; no single object dominates.
 
@@ -54,10 +53,11 @@ _At-a-glance digest; see the sections below for full detail._
 
 _Where the reachable heap is concentrated, at a glance._
 
-- **Headline retainer:** `byte[]` (a class group) retains 3.0 MB (26.9% of reachable heap). See [Leak Suspects](#leak-suspects).
+- **Headline retainer:** `java.lang.Thread` (a single object) retains 5.5 MB (48.8% of reachable heap). See [Leak Suspects](#leak-suspects).
 - **Concentration:** diffuse — retention is spread across multiple roots, so there is no single object to free. See [Leak Suspects](#leak-suspects).
-- **Shape:** deep (retention flows through long dominator chains — often nested collections or linked structures) — 90% of objects within depth 6, max depth 72. See [Dominator-Depth Distribution](#dominator-depth-distribution).
-- **One leak or many:** the single biggest object, `java.net.URLClassLoader`, retains 23.2% and the top 10 retain 38.3% of the heap; 4 object(s) each hold >=1%. See [Top Consumers](#top-consumers).
+- **Shape:** deep (retention flows through long dominator chains — often nested collections or linked structures) — 90% of objects within depth 8, max depth 28. See [Dominator-Depth Distribution](#dominator-depth-distribution).
+- **One leak or many:** the single biggest object, `java.lang.Thread`, retains 48.8% and the top 10 retain 84.3% of the heap; 6 object(s) each hold >=1%. See [Top Consumers](#top-consumers).
+- **Thread pinning:** thread `main` retains 5.5 MB (48.8% of heap) and pins 329 thread-local roots — a live thread is holding memory alive. See [Threads](#threads).
 - **Off-heap (DirectByteBuffer):** 134.3 MB of native memory is held by live DirectByteBuffers — not counted in heap size but can dominate RSS. See [Leak Indicators](#leak-indicators).
 - **Fixed per-object header overhead:** 334,875 objects × 12 B header = 3.8 MB (34.1% of heap) is consumed by JVM object headers alone — consider value types, primitive arrays, or fewer wrapper objects. See [Header Overhead](#header-overhead).
 - **Empty-collection cemetery:** 2,943 of 3,891 tracked collections (75.6%) are empty (size == 0) — pre-allocated but never populated containers waste object-header overhead; consider lazy initialisation or null. See [Collections](#collections).
@@ -93,9 +93,9 @@ _Reachable-heap totals and the largest classes by retained heap._
 | Class loaders                                 | 5                                 |
 | Unreachable objects (excluded)                | 3,716 (659.6 KB)                  |
 | Heap fragmentation (unreachable / heap total) | 5.4%                              |
-| Top-class retained concentration              | 36.6%                             |
+| Top-class retained concentration              | 55.2%                             |
 
-- **Class loaders (labels):** java/net/URLClassLoader, jdk/internal/loader/ClassLoaders$PlatformClassLoader, jdk/internal/loader/ClassLoaders$AppClassLoader
+- **Class loaders (labels):** java/net/URLClassLoader, jdk/internal/loader/ClassLoaders$AppClassLoader, jdk/internal/loader/ClassLoaders$PlatformClassLoader
 
 ### GC Roots by Type
 
@@ -204,59 +204,59 @@ _Classes where object headers consume a large share of shallow heap. The practic
 
 _Top 50 classes ranked by retained heap; the full list is in the JSON output._
 
-|  # | Class                                                  | Instances | Shallow Heap |  Largest | Retained Heap | % Heap |
-| -: | ------------------------------------------------------ | --------: | -----------: | -------: | ------------: | -----: |
-|  1 | `byte[]`                                               |    60,520 |       4.1 MB | 255.1 KB |        4.1 MB |  36.6% |
-|  2 | `java.lang.Object[]`                                   |     2,329 |     722.5 KB | 512.0 KB |        3.4 MB |  30.4% |
-|  3 | `java.lang.Class`                                      |     2,294 |      30.0 KB |   1.1 KB |        3.3 MB |  29.0% |
-|  4 | `java.util.ArrayList`                                  |       528 |      12.4 KB |     24 B |        3.2 MB |  28.3% |
-|  5 | `java.util.HashMap$Node`                               |    47,746 |       1.5 MB |     32 B |        3.1 MB |  27.3% |
-|  6 | `java.net.URLClassLoader`                              |         2 |        176 B |     88 B |        2.6 MB |  23.2% |
-|  7 | `scala.runtime.LazyVals$`                              |         1 |         16 B |     16 B |        2.5 MB |  22.2% |
-|  8 | `java.lang.Object`                                     |   132,975 |       2.0 MB |     16 B |        2.0 MB |  18.0% |
-|  9 | `java.lang.String`                                     |    59,804 |       1.4 MB |     24 B |        1.9 MB |  17.0% |
-| 10 | `java.util.HashMap$Node[]`                             |       417 |     389.2 KB | 256.0 KB |        1.5 MB |  13.3% |
-| 11 | `java.util.HashMap`                                    |       410 |      19.2 KB |     48 B |        1.4 MB |  12.1% |
-| 12 | `jdk.internal.loader.ClassLoaders$AppClassLoader`      |         1 |         96 B |     96 B |      662.1 KB |   5.7% |
-| 13 | `java.lang.ref.SoftReference`                          |       148 |       5.8 KB |     40 B |      618.5 KB |   5.4% |
-| 14 | `jdk.internal.loader.URLClassPath`                     |         3 |        120 B |     40 B |      606.1 KB |   5.3% |
-| 15 | `jdk.internal.loader.URLClassPath$JarLoader`           |         7 |        336 B |     48 B |      605.1 KB |   5.3% |
-| 16 | `java.util.jar.JarFile`                                |         7 |        448 B |     64 B |      602.9 KB |   5.2% |
-| 17 | `java.util.zip.ZipFile$CleanableResource`              |         8 |        256 B |     32 B |      599.8 KB |   5.2% |
-| 18 | `java.util.ArrayDeque`                                 |        11 |        264 B |     24 B |      599.7 KB |   5.2% |
-| 19 | `java.io.FileCleanable`                                |         9 |        504 B |     56 B |      599.6 KB |   5.2% |
-| 20 | `java.util.zip.Inflater`                               |         8 |        512 B |     64 B |      599.4 KB |   5.2% |
-| 21 | `jdk.internal.ref.CleanerImpl$PhantomCleanableRef`     |        18 |        864 B |     48 B |      599.3 KB |   5.2% |
-| 22 | `java.util.zip.Inflater$InflaterZStreamRef`            |         8 |        192 B |     24 B |      599.3 KB |   5.2% |
-| 23 | `java.util.jar.Manifest`                               |         6 |        144 B |     24 B |      592.1 KB |   5.1% |
-| 24 | `java.util.zip.ZipFile$Source`                         |         7 |        560 B |     80 B |      449.7 KB |   3.9% |
-| 25 | `java.util.concurrent.ConcurrentHashMap$Node`          |     5,958 |     186.2 KB |     32 B |      394.7 KB |   3.4% |
-| 26 | `java.util.concurrent.ConcurrentHashMap$Node[]`        |        89 |      53.6 KB |   8.0 KB |      361.0 KB |   3.1% |
-| 27 | `java.util.concurrent.ConcurrentHashMap`               |       113 |       7.1 KB |     64 B |      249.6 KB |   2.2% |
-| 28 | `java.util.jar.Attributes`                             |     2,895 |      45.2 KB |     16 B |      240.2 KB |   2.1% |
-| 29 | `java.util.LinkedHashMap`                              |     2,935 |     183.4 KB |     64 B |      197.4 KB |   1.7% |
-| 30 | `int[]`                                                |       897 |     106.7 KB |  34.3 KB |      106.7 KB |   0.9% |
-| 31 | `byte[][]`                                             |         1 |       1.4 KB |   1.4 KB |       94.1 KB |   0.8% |
-| 32 | `jdk.internal.loader.ClassLoaders$PlatformClassLoader` |         1 |         96 B |     96 B |       70.5 KB |   0.6% |
-| 33 | `java.lang.Module`                                     |        70 |       3.3 KB |     48 B |       65.5 KB |   0.6% |
-| 34 | `jdk.internal.module.ModuleReferenceImpl`              |        62 |       3.4 KB |     56 B |       64.1 KB |   0.6% |
-| 35 | `java.util.LinkedHashMap$Entry`                        |     1,179 |      46.1 KB |     40 B |       56.6 KB |   0.5% |
-| 36 | `char[]`                                               |       223 |      55.7 KB |  16.0 KB |       55.7 KB |   0.5% |
-| 37 | `java.lang.invoke.MethodType`                          |       681 |      26.6 KB |     40 B |       55.0 KB |   0.5% |
-| 38 | `java.lang.invoke.MemberName`                          |       782 |      30.5 KB |     40 B |       51.6 KB |   0.4% |
-| 39 | `java.lang.ModuleLayer`                                |         2 |         80 B |     40 B |       50.6 KB |   0.4% |
-| 40 | `java.lang.module.ModuleDescriptor`                    |        62 |       3.9 KB |     64 B |       40.6 KB |   0.4% |
-| 41 | `java.util.HashSet`                                    |       245 |       3.8 KB |     16 B |       38.9 KB |   0.3% |
-| 42 | `java.lang.ref.SoftReference[]`                        |       272 |      20.2 KB |    120 B |       35.2 KB |   0.3% |
-| 43 | `jdk.internal.math.FDBigInteger`                       |       341 |      10.7 KB |     32 B |       35.0 KB |   0.3% |
-| 44 | `jdk.internal.loader.BuiltinClassLoader`               |         0 |          0 B |      0 B |       34.2 KB |   0.3% |
-| 45 | `java.util.ImmutableCollections$SetN`                  |       149 |       3.5 KB |     24 B |       30.9 KB |   0.3% |
-| 46 | `java.lang.invoke.LambdaForm$Name`                     |       404 |      12.6 KB |     32 B |       29.9 KB |   0.3% |
-| 47 | `java.lang.CharacterData00`                            |         1 |         16 B |     16 B |       29.8 KB |   0.3% |
-| 48 | `java.lang.String[]`                                   |       450 |      17.2 KB |   2.4 KB |       27.9 KB |   0.2% |
-| 49 | `java.lang.invoke.MethodTypeForm`                      |       167 |       5.2 KB |     32 B |       25.4 KB |   0.2% |
-| 50 | `jdk.internal.module.ServicesCatalog`                  |         4 |         64 B |     16 B |       23.8 KB |   0.2% |
-_… 2,336 more classes, 320.5 KB shallow / 843.9 KB retained (full list in JSON)._
+|  # | Class                                             | Instances | Shallow Heap |  Largest | Retained Heap | % Heap |
+| -: | ------------------------------------------------- | --------: | -----------: | -------: | ------------: | -----: |
+|  1 | `java.util.HashMap$Node[]`                        |       417 |     389.2 KB | 256.0 KB |        6.2 MB |  55.2% |
+|  2 | `java.util.HashMap`                               |       410 |      19.2 KB |     48 B |        6.2 MB |  54.7% |
+|  3 | `java.util.HashMap$Node`                          |    47,746 |       1.5 MB |     32 B |        5.8 MB |  52.0% |
+|  4 | `java.lang.Thread`                                |        27 |       2.7 KB |    104 B |        5.5 MB |  48.9% |
+|  5 | `java.util.HashSet`                               |       245 |       3.8 KB |     16 B |        5.2 MB |  46.0% |
+|  6 | `java.util.stream.ReduceOps$3ReducingSink`        |        18 |        576 B |     32 B |        5.1 MB |  45.5% |
+|  7 | `java.lang.String`                                |    59,804 |       1.4 MB |     24 B |        4.9 MB |  43.8% |
+|  8 | `byte[]`                                          |    60,520 |       4.1 MB | 255.1 KB |        4.1 MB |  36.6% |
+|  9 | `java.lang.Class`                                 |     2,294 |      30.0 KB |   1.1 KB |        3.5 MB |  30.7% |
+| 10 | `java.lang.Object[]`                              |     2,329 |     722.5 KB | 512.0 KB |        2.9 MB |  25.8% |
+| 11 | `scala.runtime.LazyVals$`                         |         1 |         16 B |     16 B |        2.5 MB |  22.2% |
+| 12 | `java.lang.Object`                                |   132,975 |       2.0 MB |     16 B |        2.0 MB |  18.0% |
+| 13 | `java.lang.ref.SoftReference`                     |       148 |       5.8 KB |     40 B |      605.2 KB |   5.3% |
+| 14 | `java.util.jar.JarFile`                           |         7 |        448 B |     64 B |      593.3 KB |   5.1% |
+| 15 | `java.util.jar.Manifest`                          |         6 |        144 B |     24 B |      590.3 KB |   5.1% |
+| 16 | `java.util.concurrent.ConcurrentHashMap`          |       113 |       7.1 KB |     64 B |      526.3 KB |   4.6% |
+| 17 | `java.util.concurrent.ConcurrentHashMap$Node[]`   |        89 |      53.6 KB |   8.0 KB |      519.6 KB |   4.5% |
+| 18 | `java.util.zip.ZipFile$Source`                    |         7 |        560 B |     80 B |      446.6 KB |   3.9% |
+| 19 | `java.util.concurrent.ConcurrentHashMap$Node`     |     5,958 |     186.2 KB |     32 B |      390.1 KB |   3.4% |
+| 20 | `java.util.LinkedHashMap`                         |     2,935 |     183.4 KB |     64 B |      338.1 KB |   2.9% |
+| 21 | `java.util.jar.Attributes`                        |     2,895 |      45.2 KB |     16 B |      238.4 KB |   2.1% |
+| 22 | `java.time.zone.ZoneRulesProvider`                |         0 |          0 B |      0 B |      198.4 KB |   1.7% |
+| 23 | `org.renaissance.core.ModuleLoader`               |         2 |         48 B |     24 B |      149.8 KB |   1.3% |
+| 24 | `sun.util.calendar.ZoneInfoFile`                  |         0 |          0 B |      0 B |      145.4 KB |   1.3% |
+| 25 | `java.util.LinkedHashMap$Entry`                   |     1,179 |      46.1 KB |     40 B |      145.1 KB |   1.3% |
+| 26 | `java.util.LinkedHashSet`                         |        38 |        608 B |     16 B |      144.6 KB |   1.3% |
+| 27 | `java.lang.invoke.MethodType`                     |       681 |      26.6 KB |     40 B |      132.0 KB |   1.1% |
+| 28 | `java.time.zone.TzdbZoneRulesProvider`            |         1 |         24 B |     24 B |      118.2 KB |   1.0% |
+| 29 | `int[]`                                           |       897 |     106.7 KB |  34.3 KB |      106.7 KB |   0.9% |
+| 30 | `byte[][]`                                        |         1 |       1.4 KB |   1.4 KB |       94.1 KB |   0.8% |
+| 31 | `java.util.ImmutableCollections$SetN`             |       149 |       3.5 KB |     24 B |       91.5 KB |   0.8% |
+| 32 | `sun.security.util.KnownOIDs`                     |       264 |      10.3 KB |     40 B |       88.5 KB |   0.8% |
+| 33 | `java.net.URLClassLoader`                         |         2 |        176 B |     88 B |       81.0 KB |   0.7% |
+| 34 | `org.renaissance.core.BenchmarkSuite`             |         1 |         32 B |     32 B |       77.0 KB |   0.7% |
+| 35 | `java.util.ArrayList`                             |       528 |      12.4 KB |     24 B |       76.0 KB |   0.7% |
+| 36 | `java.util.Optional`                              |         4 |         64 B |     16 B |       73.9 KB |   0.6% |
+| 37 | `java.lang.Module`                                |        70 |       3.3 KB |     48 B |       65.5 KB |   0.6% |
+| 38 | `sun.util.cldr.CLDRLocaleProviderAdapter`         |         1 |         80 B |     80 B |       62.6 KB |   0.5% |
+| 39 | `sun.util.locale.provider.LocaleProviderAdapter`  |         0 |          0 B |      0 B |       62.3 KB |   0.5% |
+| 40 | `java.lang.invoke.MemberName`                     |       782 |      30.5 KB |     40 B |       56.2 KB |   0.5% |
+| 41 | `char[]`                                          |       223 |      55.7 KB |  16.0 KB |       55.7 KB |   0.5% |
+| 42 | `sun.security.provider.Sun`                       |         1 |        104 B |    104 B |       53.7 KB |   0.5% |
+| 43 | `jdk.internal.loader.ClassLoaders$AppClassLoader` |         1 |         96 B |     96 B |       53.0 KB |   0.5% |
+| 44 | `java.lang.invoke.LambdaForm`                     |       138 |       6.5 KB |     48 B |       52.2 KB |   0.5% |
+| 45 | `sun.util.resources.Bundles`                      |         0 |          0 B |      0 B |       49.2 KB |   0.4% |
+| 46 | `jdk.internal.util.ReferencedKeyMap`              |         1 |         24 B |     24 B |       48.1 KB |   0.4% |
+| 47 | `jdk.internal.util.ReferencedKeySet`              |         1 |         16 B |     16 B |       48.1 KB |   0.4% |
+| 48 | `java.lang.module.ModuleDescriptor`               |        62 |       3.9 KB |     64 B |       40.1 KB |   0.3% |
+| 49 | `java.lang.invoke.MethodTypeForm`                 |       167 |       5.2 KB |     32 B |       38.1 KB |   0.3% |
+| 50 | `jdk.internal.math.FDBigInteger[]`                |         1 |       1.3 KB |   1.3 KB |       36.2 KB |   0.3% |
+_… 2,336 more classes, 365.3 KB shallow / 1.4 MB retained (full list in JSON)._
 
 ### Class Loaders
 
@@ -264,28 +264,109 @@ _Classes grouped by the loader that defined them. The **Loader** column shows th
 
 | Loader                                               | Address    | Classes | Instances | Shallow Heap | Retained Heap |
 | ---------------------------------------------------- | ---------- | ------: | --------: | -----------: | ------------: |
-| <boot>                                               | <boot>     |   1,703 |   334,432 |      11.2 MB |       37.2 MB |
+| <boot>                                               | <boot>     |   1,703 |   334,432 |      11.2 MB |       59.0 MB |
 | java/net/URLClassLoader                              | 0xce800048 |     575 |       330 |      18.0 KB |        2.6 MB |
-| jdk/internal/loader/ClassLoaders$AppClassLoader      | 0xffeecf48 |      90 |        68 |       1.4 KB |       21.8 KB |
+| jdk/internal/loader/ClassLoaders$AppClassLoader      | 0xffeecf48 |      90 |        68 |       1.4 KB |      238.0 KB |
+| java/net/URLClassLoader                              | 0xc0412620 |      17 |        44 |        880 B |        9.2 KB |
 | jdk/internal/loader/ClassLoaders$PlatformClassLoader | 0xffeec828 |       1 |         1 |         16 B |        7.4 KB |
-| java/net/URLClassLoader                              | 0xc0412620 |      17 |        44 |        880 B |        2.6 KB |
 
 ## Leak Suspects
 
 _Objects and class groups retaining the most heap, ranked by retained size. These are the most likely accumulation points for excessive memory usage. To fix: follow the dominator chain to the nearest object you control, and drop or null out the reference that keeps it alive. The path to GC root is shown for each suspect below — the tool cannot yet name the specific field; that requires field-labeled reference paths._
 
-### 1. `byte[]` — retains 3.0 MB (26.9% of reachable heap)
+### 1. `java.lang.Thread` — retains 5.5 MB (48.8% of reachable heap)
 
-48,035 instances of `byte[]` together retain this heap (combined shallow 3.0 MB).
+One `java.lang.Thread` object (shallow 104 B) dominates this retained heap.
 
-#### Merged Paths to GC Roots
+Held by a **Thread** GC root.
 
-- `byte[]` (48,035 objects, retained 3.0 MB)
-  - `byte[]` (48,035 objects, retained 3.0 MB)
+Retained heap accumulates at `java.util.HashMap$Node[]` (retained 4.2 MB).
 
-### 2. `java.net.URLClassLoader` — retains 2.6 MB (23.2% of reachable heap)
+_Directly dominates 25,551 objects (showing top 1 classes by retained heap)._
 
-One `java.net.URLClassLoader` object (shallow 88 B) dominates this retained heap.
+**Accumulated objects by class:**
+
+| Class                    | Objects |  Shallow | Retained | % of suspect |
+| ------------------------ | ------: | -------: | -------: | -----------: |
+| `java.util.HashMap$Node` |  25,551 | 798.5 KB |   4.0 MB |        72.1% |
+
+**Dominator chain to GC root:**
+
+1. `java.lang.Thread` (5.5 MB) — GC root: Thread (this object is directly held by a GC root; no intermediate chain)
+
+<details>
+<summary>Dominator subtree</summary>
+
+**Dominator subtree:**
+
+- `java.util.HashMap$Node[]` (shallow 256.0 KB, retained 4.2 MB)
+  - `java.util.HashMap$Node` (shallow 32 B, retained 768 B)
+    - `java.util.HashMap$Node` (shallow 32 B, retained 640 B)
+      - `java.util.HashMap$Node` (shallow 32 B, retained 512 B)
+        - `java.util.HashMap$Node` (shallow 32 B, retained 384 B)
+          - `java.util.HashMap$Node` (shallow 32 B, retained 256 B)
+            _… (2 deeper — full data in JSON)_
+          - `java.lang.String` (shallow 24 B, retained 96 B)
+            _… (1 deeper — full data in JSON)_
+        - `java.lang.String` (shallow 24 B, retained 96 B)
+          - `byte[]` (shallow 72 B, retained 72 B)
+      - `java.lang.String` (shallow 24 B, retained 96 B)
+        - `byte[]` (shallow 72 B, retained 72 B)
+    - `java.lang.String` (shallow 24 B, retained 96 B)
+      - `byte[]` (shallow 72 B, retained 72 B)
+  - `java.util.HashMap$Node` ×11 (shallow 32 B, retained 640 B each)
+    - `java.util.HashMap$Node` (shallow 32 B, retained 512 B)
+      - `java.util.HashMap$Node` (shallow 32 B, retained 384 B)
+        - `java.util.HashMap$Node` (shallow 32 B, retained 256 B)
+          - `java.util.HashMap$Node` (shallow 32 B, retained 128 B)
+            _… (1 deeper — full data in JSON)_
+          - `java.lang.String` (shallow 24 B, retained 96 B)
+            _… (1 deeper — full data in JSON)_
+        - `java.lang.String` (shallow 24 B, retained 96 B)
+          - `byte[]` (shallow 72 B, retained 72 B)
+      - `java.lang.String` (shallow 24 B, retained 96 B)
+        - `byte[]` (shallow 72 B, retained 72 B)
+    - `java.lang.String` (shallow 24 B, retained 96 B)
+      - `byte[]` (shallow 72 B, retained 72 B)
+  - `java.util.HashMap$Node` ×110 (shallow 32 B, retained 512 B each)
+    - `java.util.HashMap$Node` (shallow 32 B, retained 384 B)
+      - `java.util.HashMap$Node` (shallow 32 B, retained 256 B)
+        - `java.util.HashMap$Node` (shallow 32 B, retained 128 B)
+          - `java.lang.String` (shallow 24 B, retained 96 B)
+            _… (1 deeper — full data in JSON)_
+        - `java.lang.String` (shallow 24 B, retained 96 B)
+          - `byte[]` (shallow 72 B, retained 72 B)
+      - `java.lang.String` (shallow 24 B, retained 96 B)
+        - `byte[]` (shallow 72 B, retained 72 B)
+    - `java.lang.String` (shallow 24 B, retained 96 B)
+      - `byte[]` (shallow 72 B, retained 72 B)
+  - `java.util.HashMap$Node` ×4 (shallow 32 B, retained 504 B each)
+    - `java.util.HashMap$Node` (shallow 32 B, retained 376 B)
+      - `java.util.HashMap$Node` (shallow 32 B, retained 248 B)
+        - `java.util.HashMap$Node` (shallow 32 B, retained 120 B)
+          - `java.lang.String` (shallow 24 B, retained 88 B)
+            _… (1 deeper — full data in JSON)_
+        - `java.lang.String` (shallow 24 B, retained 96 B)
+          - `byte[]` (shallow 72 B, retained 72 B)
+      - `java.lang.String` (shallow 24 B, retained 96 B)
+        - `byte[]` (shallow 72 B, retained 72 B)
+    - `java.lang.String` (shallow 24 B, retained 96 B)
+      - `byte[]` (shallow 72 B, retained 72 B)
+  - `java.util.HashMap$Node` ×384 (shallow 32 B, retained 384 B each)
+    - `java.util.HashMap$Node` (shallow 32 B, retained 256 B)
+      - `java.util.HashMap$Node` (shallow 32 B, retained 128 B)
+        - `java.lang.String` (shallow 24 B, retained 96 B)
+          - `byte[]` (shallow 72 B, retained 72 B)
+      - `java.lang.String` (shallow 24 B, retained 96 B)
+        - `byte[]` (shallow 72 B, retained 72 B)
+    - `java.lang.String` (shallow 24 B, retained 96 B)
+      - `byte[]` (shallow 72 B, retained 72 B)
+
+</details>
+
+### 2. `scala.runtime.LazyVals$` — retains 2.5 MB (22.2% of reachable heap)
+
+One `scala.runtime.LazyVals$` object (shallow 32 B) dominates this retained heap.
 
 Retained heap accumulates at `java.lang.Object[]` (retained 2.5 MB).
 
@@ -295,11 +376,11 @@ _Directly dominates 131,072 objects (showing top 1 classes by retained heap)._
 
 | Class              | Objects | Shallow | Retained | % of suspect |
 | ------------------ | ------: | ------: | -------: | -----------: |
-| `java.lang.Object` | 131,072 |  2.0 MB |   2.0 MB |        76.6% |
+| `java.lang.Object` | 131,072 |  2.0 MB |   2.0 MB |        80.0% |
 
 **Dominator chain to GC root:**
 
-1. `java.net.URLClassLoader` (2.6 MB)
+1. `scala.runtime.LazyVals$` (2.5 MB)
 
 <details>
 <summary>Dominator subtree</summary>
@@ -311,15 +392,6 @@ _Directly dominates 131,072 objects (showing top 1 classes by retained heap)._
 
 </details>
 
-### 3. `java.util.HashMap$Node` — retains 1.9 MB (17.2% of reachable heap)
-
-40,465 instances of `java.util.HashMap$Node` together retain this heap (combined shallow 1.2 MB).
-
-#### Merged Paths to GC Roots
-
-- `java.util.HashMap$Node` (40,465 objects, retained 1.9 MB)
-  - `java.util.HashMap$Node` (40,465 objects, retained 1.9 MB)
-
 ## Top Consumers
 
 ### Biggest Objects (Top-Level Dominators)
@@ -328,26 +400,26 @@ _All top-level dominators ranked by retained heap. Unlike Leak Suspects, this li
 
 |  # | Class                                                  | Shallow | Retained | % Heap |
 | -: | ------------------------------------------------------ | ------: | -------: | -----: |
-|  1 | `java.net.URLClassLoader`                              |    88 B |   2.6 MB |  23.2% |
-|  2 | `jdk.internal.loader.ClassLoaders$AppClassLoader`      |    96 B | 662.0 KB |   5.7% |
-|  3 | `java.util.zip.ZipFile$Source`                         |    40 B | 448.0 KB |   3.9% |
-|  4 | `java.util.HashMap`                                    |    48 B | 256.3 KB |   2.2% |
-|  5 | `byte[][]`                                             |  1.4 KB |  94.1 KB |   0.8% |
-|  6 | `jdk.internal.loader.ClassLoaders$PlatformClassLoader` |    96 B |  70.4 KB |   0.6% |
-|  7 | `java.util.HashMap$Node[]`                             | 32.0 KB |  67.4 KB |   0.6% |
-|  8 | `java.util.concurrent.ConcurrentHashMap$Node[]`        |  4.0 KB |  60.6 KB |   0.5% |
-|  9 | `java.lang.ModuleLayer`                                |    40 B |  50.4 KB |   0.4% |
-| 10 | `java.lang.Object[]`                                   |  8.9 KB |  35.8 KB |   0.3% |
-| 11 | `jdk.internal.loader.BuiltinClassLoader`               |    16 B |  34.2 KB |   0.3% |
-| 12 | `java.lang.Object[]`                                   | 31.0 KB |  31.0 KB |   0.3% |
-| 13 | `java.lang.CharacterData00`                            |    40 B |  29.8 KB |   0.3% |
-| 14 | `java.util.concurrent.ConcurrentHashMap$Node[]`        |  4.0 KB |  29.1 KB |   0.3% |
-| 15 | `java.util.HashMap`                                    |    48 B |  27.5 KB |   0.2% |
-| 16 | `java.lang.Class`                                      |    72 B |  19.5 KB |   0.2% |
-| 17 | `java.io.PrintStream`                                  |    48 B |  17.3 KB |   0.1% |
-| 18 | `java.util.concurrent.ConcurrentHashMap$Node[]`        |  4.0 KB |  17.0 KB |   0.1% |
-| 19 | `java.util.HashMap$Node[]`                             |  4.0 KB |  16.8 KB |   0.1% |
-| 20 | `char[]`                                               | 16.0 KB |  16.0 KB |   0.1% |
+|  1 | `java.lang.Thread`                                     |   104 B |   5.5 MB |  48.8% |
+|  2 | `scala.runtime.LazyVals$`                              |    32 B |   2.5 MB |  22.2% |
+|  3 | `java.util.jar.JarFile`                                |    64 B | 585.1 KB |   5.1% |
+|  4 | `java.util.zip.ZipFile$Source`                         |    80 B | 295.2 KB |   2.6% |
+|  5 | `java.time.zone.ZoneRulesProvider`                     |    16 B | 198.4 KB |   1.7% |
+|  6 | `sun.util.calendar.ZoneInfoFile`                       |   120 B | 145.4 KB |   1.3% |
+|  7 | `sun.security.util.KnownOIDs`                          |  1.1 KB |  88.5 KB |   0.8% |
+|  8 | `java.lang.Object[]`                                   |  8.9 KB |  75.5 KB |   0.7% |
+|  9 | `java.net.URLClassLoader`                              |    88 B |  74.5 KB |   0.6% |
+| 10 | `java.util.zip.ZipFile$Source`                         |    80 B |  68.2 KB |   0.6% |
+| 11 | `sun.util.locale.provider.LocaleProviderAdapter`       |    24 B |  62.3 KB |   0.5% |
+| 12 | `sun.security.provider.Sun`                            |   104 B |  53.7 KB |   0.5% |
+| 13 | `jdk.internal.loader.ClassLoaders$AppClassLoader`      |    96 B |  53.0 KB |   0.5% |
+| 14 | `java.util.zip.ZipFile$Source`                         |    80 B |  52.5 KB |   0.5% |
+| 15 | `sun.util.resources.Bundles`                           |    24 B |  49.2 KB |   0.4% |
+| 16 | `java.lang.invoke.MethodType`                          |    48 B |  48.3 KB |   0.4% |
+| 17 | `java.util.concurrent.ConcurrentHashMap`               |    64 B |  34.0 KB |   0.3% |
+| 18 | `jdk.internal.loader.ClassLoaders$PlatformClassLoader` |    96 B |  32.8 KB |   0.3% |
+| 19 | `java.lang.Object[]`                                   | 31.0 KB |  31.0 KB |   0.3% |
+| 20 | `java.lang.CharacterData00`                            |    40 B |  29.8 KB |   0.3% |
 
 ### Biggest Classes by Retained Heap
 
@@ -355,75 +427,82 @@ _Classes whose instances together retain the most heap._
 
 |  # | Class                                                  | Instances | Retained Heap |
 | -: | ------------------------------------------------------ | --------: | ------------: |
-|  1 | `byte[]`                                               |    48,035 |        3.0 MB |
-|  2 | `java.net.URLClassLoader`                              |         2 |        2.6 MB |
-|  3 | `java.util.HashMap$Node`                               |    40,465 |        1.9 MB |
-|  4 | `java.lang.String`                                     |    24,636 |      884.5 KB |
-|  5 | `java.lang.Class`                                      |     1,617 |      745.7 KB |
-|  6 | `jdk.internal.loader.ClassLoaders$AppClassLoader`      |         1 |      662.0 KB |
-|  7 | `java.util.HashMap`                                    |       109 |      291.2 KB |
-|  8 | `java.util.HashMap$Node[]`                             |       122 |      137.9 KB |
-|  9 | `java.util.concurrent.ConcurrentHashMap$Node[]`        |        29 |      118.4 KB |
-| 10 | `java.util.concurrent.ConcurrentHashMap$Node`          |     1,403 |      107.5 KB |
-| 11 | `java.lang.Object[]`                                   |       496 |      101.5 KB |
-| 12 | `byte[][]`                                             |         1 |       94.1 KB |
-| 13 | `jdk.internal.loader.ClassLoaders$PlatformClassLoader` |         1 |       70.4 KB |
-| 14 | `jdk.internal.module.ModuleReferenceImpl`              |        62 |       64.1 KB |
-| 15 | `java.lang.ModuleLayer`                                |         1 |       50.4 KB |
-| 16 | `java.util.LinkedHashMap$Entry`                        |     1,114 |       43.5 KB |
-| 17 | `jdk.internal.math.FDBigInteger`                       |       340 |       34.8 KB |
-| 18 | `java.lang.invoke.MethodType`                          |       296 |       32.3 KB |
-| 19 | `java.util.ArrayList`                                  |       468 |       20.8 KB |
-| 20 | `java.lang.String[]`                                   |       324 |       20.2 KB |
+|  1 | `java.lang.Thread`                                     |        25 |        5.5 MB |
+|  2 | `java.lang.Class`                                      |     1,622 |        3.4 MB |
+|  3 | `java.util.jar.JarFile`                                |         7 |      592.8 KB |
+|  4 | `java.lang.String`                                     |     8,922 |      591.6 KB |
+|  5 | `java.util.zip.ZipFile$Source`                         |         7 |      446.2 KB |
+|  6 | `java.lang.Object[]`                                   |         4 |      106.6 KB |
+|  7 | `java.lang.invoke.MethodType`                          |       675 |       83.7 KB |
+|  8 | `java.net.URLClassLoader`                              |         2 |       80.8 KB |
+|  9 | `java.lang.Module`                                     |        61 |       63.1 KB |
+| 10 | `sun.security.provider.Sun`                            |         1 |       53.7 KB |
+| 11 | `jdk.internal.loader.ClassLoaders$AppClassLoader`      |         1 |       53.0 KB |
+| 12 | `java.lang.invoke.LambdaForm`                          |       103 |       41.7 KB |
+| 13 | `java.lang.module.ModuleDescriptor`                    |        62 |       40.0 KB |
+| 14 | `java.util.concurrent.ConcurrentHashMap`               |         1 |       34.0 KB |
+| 15 | `jdk.internal.loader.ClassLoaders$PlatformClassLoader` |         1 |       32.8 KB |
+| 16 | `java.lang.invoke.MethodTypeForm`                      |       107 |       28.9 KB |
+| 17 | `java.io.PrintStream`                                  |         1 |       17.3 KB |
+| 18 | `java.net.URI`                                         |        61 |       11.8 KB |
+| 19 | `java.lang.ModuleLayer`                                |         2 |       11.8 KB |
+| 20 | `jdk.internal.module.ModuleReferenceImpl`              |        62 |        8.9 KB |
 
 ### Top-Dominator Size Distribution
 
-_Retained-size spread across all 123989 top-level dominators (the biggest memory contributors)._
+_Retained-size spread across all 12733 top-level dominators (the biggest memory contributors)._
 
-- Dominators: 123,989
-- Smallest / largest retained: 0 B / 2.6 MB
+- Dominators: 12,733
+- Smallest / largest retained: 0 B / 5.5 MB
 - Median retained: 56 B
 - Total retained (top-level): 11.3 MB
 
-|   Size ≤ |  Count | % of Dom. |
-| -------: | -----: | --------: |
-|      1 B |    457 |      0.4% |
-|      8 B |    175 |      0.1% |
-|     16 B |  1,145 |      0.9% |
-|     32 B | 34,093 |     27.5% |
-|     64 B | 50,945 |     41.1% |
-|    128 B | 36,269 |     29.3% |
-|    256 B |    424 |      0.3% |
-|    512 B |    256 |      0.2% |
-|   1.0 KB |    121 |      0.1% |
-|   2.0 KB |     41 |     <0.1% |
-|   4.0 KB |     15 |     <0.1% |
-|   8.0 KB |     16 |     <0.1% |
-|  16.0 KB |     11 |     <0.1% |
-|  32.0 KB |     10 |     <0.1% |
-|  64.0 KB |      4 |     <0.1% |
-| 128.0 KB |      3 |     <0.1% |
-| 512.0 KB |      2 |     <0.1% |
-|   1.0 MB |      1 |     <0.1% |
-|   4.0 MB |      1 |     <0.1% |
+|   Size ≤ | Count | % of Dom. |
+| -------: | ----: | --------: |
+|      1 B |   446 |      3.5% |
+|      8 B |    96 |      0.8% |
+|     16 B |   178 |      1.4% |
+|     32 B |   741 |      5.8% |
+|     64 B | 6,770 |     53.2% |
+|    128 B | 3,371 |     26.5% |
+|    256 B |   580 |      4.6% |
+|    512 B |   309 |      2.4% |
+|   1.0 KB |   117 |      0.9% |
+|   2.0 KB |    47 |      0.4% |
+|   4.0 KB |    27 |      0.2% |
+|   8.0 KB |    19 |      0.1% |
+|  16.0 KB |     8 |      0.1% |
+|  32.0 KB |     6 |     <0.1% |
+|  64.0 KB |     8 |      0.1% |
+| 128.0 KB |     4 |     <0.1% |
+| 256.0 KB |     2 |     <0.1% |
+| 512.0 KB |     1 |     <0.1% |
+|   1.0 MB |     1 |     <0.1% |
+|   4.0 MB |     1 |     <0.1% |
+|   8.0 MB |     1 |     <0.1% |
 
 ### Biggest Packages by Retained Heap
 
 _Retained heap aggregated by package prefix (rows retaining <1% of the total are pruned)._
 
-| Package                | Objects |  Shallow | Retained |
-| ---------------------- | ------: | -------: | -------: |
-| `java`                 |  74,200 |   2.2 MB |   7.1 MB |
-| `java.util`            |  44,927 |   1.5 MB |   3.2 MB |
-| `java.util.zip`        |      24 |    504 B | 448.9 KB |
-| `java.util.concurrent` |   1,564 |  67.2 KB | 245.0 KB |
-| `java.net`             |      24 |   1.1 KB |   2.6 MB |
-| `java.lang`            |  28,434 | 763.1 KB |   1.3 MB |
-| `java.lang.invoke`     |   1,998 |  70.2 KB | 124.6 KB |
-| `(primitives)`         |  48,151 |   3.1 MB |   3.2 MB |
-| `jdk`                  |     689 |  20.2 KB | 903.2 KB |
-| `jdk.internal`         |     686 |  20.2 KB | 903.2 KB |
-| `jdk.internal.loader`  |      44 |    792 B | 773.6 KB |
+| Package             | Objects |  Shallow | Retained |
+| ------------------- | ------: | -------: | -------: |
+| `java`              |  11,875 | 337.8 KB |   8.1 MB |
+| `java.lang`         |  10,784 | 313.6 KB |   6.6 MB |
+| `java.lang.invoke`  |   1,265 |  46.1 KB | 241.8 KB |
+| `java.util`         |     610 |   9.7 KB |   1.1 MB |
+| `java.util.jar`     |      30 |    952 B | 594.8 KB |
+| `java.util.zip`     |      62 |   2.1 KB | 453.0 KB |
+| `java.time`         |     153 |   3.8 KB | 230.7 KB |
+| `java.time.zone`    |      11 |    208 B | 205.6 KB |
+| `scala`             |      67 |    760 B |   2.5 MB |
+| `scala.runtime`     |       8 |     96 B |   2.5 MB |
+| `sun`               |     265 |   6.9 KB | 465.7 KB |
+| `sun.util`          |      87 |   1.9 KB | 288.3 KB |
+| `sun.util.calendar` |       5 |    176 B | 145.5 KB |
+| `sun.security`      |      54 |   1.9 KB | 157.9 KB |
+| `jdk`               |     318 |   9.0 KB | 136.3 KB |
+| `jdk.internal`      |     315 |   9.0 KB | 136.2 KB |
 
 ## Dominator Analysis
 
@@ -431,32 +510,30 @@ _Retained heap aggregated by package prefix (rows retaining <1% of the total are
 
 _Dominators where retained heap does not flow into a single child — the gap between an object's retained size and its largest child's retained size. A large drop means this object directly owns a lot of memory spread across many children (e.g. an array or collection). Threshold 0.1 MB (1% of reachable shallow). Multiple rows with the same class are distinct objects._
 
-| Object                                             |      # |    Retained | Largest Child                             | Child Retained |       Drop |
-| -------------------------------------------------- | -----: | ----------: | ----------------------------------------- | -------------: | ---------: |
-| `java.lang.Object[]`                               |      1 |      2.5 MB | `java.lang.Object`                        |           16 B |     2.5 MB |
-| `java.util.HashMap$Node[]`                         |  50504 |    577.2 KB | `java.util.HashMap$Node`                  |         1000 B |   576.2 KB |
-| `java.util.HashMap$Node[]`                         | 176145 |    256.2 KB | `java.util.HashMap$Node`                  |           56 B |   256.2 KB |
-| `byte[]`                                           | 194886 |    255.1 KB | —                                         |            0 B |   255.1 KB |
-| `java.util.HashMap$Node[]`                         | 289922 |    447.8 KB | `java.util.HashMap$Node`                  |       295.8 KB |   152.0 KB |
-| `java.lang.Object[]`                               |  42026 |      2.6 MB | `java.lang.Class`                         |         2.5 MB |    68.6 KB |
-| `jdk.internal.loader.ClassLoaders$AppClassLoader`  | 336957 |    662.0 KB | `jdk.internal.loader.URLClassPath`        |       603.0 KB |    59.0 KB |
-| `java.net.URLClassLoader`                          | 287272 |      2.6 MB | `java.util.ArrayList`                     |         2.6 MB |    44.2 KB |
-| `java.util.zip.ZipFile$Source`                     | 314175 |    295.4 KB | `byte[]`                                  |       255.1 KB |    40.3 KB |
-| `java.util.jar.Manifest`                           |  29414 |    584.7 KB | `java.util.HashMap`                       |       577.2 KB |     7.5 KB |
-| `jdk.internal.ref.CleanerImpl$PhantomCleanableRef` | 314155 |    590.0 KB | `java.util.jar.JarFile`                   |       585.1 KB |     4.9 KB |
-| `java.util.jar.JarFile`                            | 294408 |    602.2 KB | `java.util.zip.ZipFile$CleanableResource` |       599.8 KB |     2.4 KB |
-| `jdk.internal.ref.CleanerImpl$PhantomCleanableRef` | 314143 |    598.0 KB | `java.util.zip.ZipFile$CleanableResource` |       595.7 KB |     2.3 KB |
-| `jdk.internal.ref.CleanerImpl$PhantomCleanableRef` | 314146 |    595.1 KB | `java.util.zip.ZipFile$CleanableResource` |       593.4 KB |     1.7 KB |
-| `jdk.internal.ref.CleanerImpl$PhantomCleanableRef` | 314149 |    592.9 KB | `java.util.zip.ZipFile$CleanableResource` |       591.4 KB |     1.5 KB |
-| `java.lang.Class`                                  | 306832 |      2.5 MB | `java.lang.Object[]`                      |         2.5 MB |     1.2 KB |
-| `jdk.internal.loader.URLClassPath$JarLoader`       | 294403 |    602.6 KB | `java.util.jar.JarFile`                   |       602.2 KB |      448 B |
-| `jdk.internal.ref.CleanerImpl$PhantomCleanableRef` | 314141 |    598.9 KB | `java.util.zip.ZipFile$CleanableResource` |       598.5 KB |      392 B |
-| `java.util.HashMap$Node`                           | 289923 |    295.8 KB | `java.util.zip.ZipFile$Source`            |       295.4 KB |      384 B |
-| `java.util.jar.JarFile`                            |  29411 |    585.1 KB | `java.lang.ref.SoftReference`             |       584.8 KB |      352 B |
-| `jdk.internal.ref.CleanerImpl$PhantomCleanableRef` | 314152 |    590.8 KB | `java.util.zip.ZipFile$CleanableResource` |       590.5 KB |      344 B |
-| `java.util.zip.ZipFile$CleanableResource`          |     ×3 |    595.7 KB | `java.util.ArrayDeque`                    |       595.4 KB |      304 B |
-| `jdk.internal.loader.URLClassPath`                 | 294396 |    603.0 KB | `java.util.ArrayList`                     |       602.7 KB |      304 B |
-| **Total**                                          |        | **21.0 MB** |                                           |    **17.1 MB** | **3.9 MB** |
+| Object                                          |      # |    Retained | Largest Child                                   | Child Retained |        Drop |
+| ----------------------------------------------- | -----: | ----------: | ----------------------------------------------- | -------------: | ----------: |
+| `java.util.HashMap$Node[]`                      | 176145 |      4.2 MB | `java.util.HashMap$Node`                        |          768 B |      4.2 MB |
+| `java.lang.Object[]`                            |      1 |      2.5 MB | `java.lang.Object`                              |           16 B |      2.5 MB |
+| `java.lang.Thread`                              | 314096 |      5.5 MB | `java.util.stream.ReduceOps$3ReducingSink`      |         4.2 MB |      1.3 MB |
+| `java.util.HashMap$Node[]`                      |  67833 |    611.9 KB | `java.util.HashMap$Node`                        |          592 B |    611.3 KB |
+| `java.util.HashMap$Node[]`                      |  50504 |    577.2 KB | `java.util.HashMap$Node`                        |         1000 B |    576.2 KB |
+| `java.util.HashMap$Node[]`                      |  83761 |    309.0 KB | `java.util.HashMap$Node`                        |          600 B |    308.4 KB |
+| `byte[]`                                        | 194886 |    255.1 KB | —                                               |            0 B |    255.1 KB |
+| `java.util.HashMap$Node[]`                      |  95440 |    136.9 KB | `java.util.HashMap$Node`                        |          824 B |    136.1 KB |
+| `java.util.concurrent.ConcurrentHashMap$Node[]` |  16249 |    115.6 KB | `byte[]`                                        |         1.4 KB |    114.2 KB |
+| `java.lang.Class`                               |  14328 |    198.4 KB | `java.time.zone.TzdbZoneRulesProvider`          |       118.2 KB |     80.2 KB |
+| `java.lang.Class`                               | 331877 |    145.4 KB | `byte[][]`                                      |        94.1 KB |     51.2 KB |
+| `java.util.zip.ZipFile$Source`                  | 314175 |    295.2 KB | `byte[]`                                        |       255.1 KB |     40.1 KB |
+| `java.util.jar.Manifest`                        |  29414 |    584.7 KB | `java.util.HashMap`                             |       577.2 KB |      7.5 KB |
+| `java.time.zone.TzdbZoneRulesProvider`          |  16243 |    118.2 KB | `java.util.concurrent.ConcurrentHashMap`        |       115.7 KB |      2.5 KB |
+| `java.lang.Class`                               | 306832 |      2.5 MB | `java.lang.Object[]`                            |         2.5 MB |      1.0 KB |
+| `java.util.jar.JarFile`                         |  29411 |    585.1 KB | `java.lang.ref.SoftReference`                   |       584.8 KB |       352 B |
+| `java.util.HashMap`                             |  94670 |    137.0 KB | `java.util.HashMap$Node[]`                      |       136.9 KB |        80 B |
+| `java.util.concurrent.ConcurrentHashMap`        |  16248 |    115.7 KB | `java.util.concurrent.ConcurrentHashMap$Node[]` |       115.6 KB |        64 B |
+| `java.util.HashMap`                             |     ×4 |    577.2 KB | `java.util.HashMap$Node[]`                      |       577.2 KB |        48 B |
+| `java.lang.ref.SoftReference`                   |  29413 |    584.8 KB | `java.util.jar.Manifest`                        |       584.7 KB |        40 B |
+| `java.util.stream.ReduceOps$3ReducingSink`      |     ×2 |    612.0 KB | `java.util.HashSet`                             |       612.0 KB |        32 B |
+| **Total**                                       |        | **25.9 MB** |                                                 |    **15.8 MB** | **10.1 MB** |
 
 ### Immediate Dominators
 
@@ -464,37 +541,37 @@ _Objects immediately dominated, rolled up by the dominator's class; a heavy domi
 
 | Dominator Class                                   | #Dominators |  #Dominated | Dominator Shallow | Dominated Shallow |
 | ------------------------------------------------- | ----------: | ----------: | ----------------: | ----------------: |
-| `java.lang.Object[]`                              |         208 |     133,824 |          545.7 KB |            2.1 MB |
-| `java.util.HashMap$Node`                          |      33,973 |      38,059 |            1.0 MB |          888.7 KB |
-| `java.lang.Class`                                 |       1,182 |       2,197 |           24.3 KB |          670.5 KB |
-| `java.lang.String`                                |      11,503 |      11,503 |          269.6 KB |          556.2 KB |
-| `java.util.zip.ZipFile$Source`                    |           7 |          26 |             560 B |          445.8 KB |
-| `java.util.HashMap`                               |         223 |         226 |           10.5 KB |          304.0 KB |
+| `java.lang.String`                                |      59,690 |      59,690 |            1.4 MB |            3.6 MB |
+| `java.lang.Object[]`                              |         234 |     134,015 |          557.2 KB |            2.1 MB |
+| `java.util.HashMap$Node`                          |      45,248 |      59,329 |            1.4 MB |            1.4 MB |
+| `java.util.HashMap$Node[]`                        |         372 |      37,135 |          379.7 KB |            1.1 MB |
+| `java.lang.Class`                                 |       1,472 |       4,404 |           27.4 KB |          738.3 KB |
+| `java.util.zip.ZipFile$Source`                    |           7 |          21 |             560 B |          445.6 KB |
+| `java.util.HashMap`                               |         371 |         423 |           17.4 KB |          376.5 KB |
+| `java.util.concurrent.ConcurrentHashMap$Node[]`   |          87 |       4,922 |           53.5 KB |          184.3 KB |
 | `java.util.jar.Attributes`                        |       2,895 |       2,895 |           45.2 KB |          180.9 KB |
-| `java.util.concurrent.ConcurrentHashMap$Node`     |       3,660 |       4,751 |          114.4 KB |          170.9 KB |
-| `java.util.HashMap$Node[]`                        |         266 |       5,189 |          348.3 KB |          162.1 KB |
-| `java.util.concurrent.ConcurrentHashMap$Node[]`   |          57 |       4,323 |           48.6 KB |          138.3 KB |
+| `java.util.concurrent.ConcurrentHashMap$Node`     |       4,050 |       5,024 |          126.6 KB |          175.7 KB |
 | `byte[][]`                                        |           1 |         346 |            1.4 KB |           92.8 KB |
-| `java.util.concurrent.ConcurrentHashMap`          |          61 |          67 |            3.8 KB |           34.5 KB |
+| `java.util.LinkedHashMap`                         |          45 |       1,228 |            2.8 KB |           55.6 KB |
+| `java.util.concurrent.ConcurrentHashMap`          |          89 |          98 |            5.6 KB |           53.8 KB |
+| `java.io.BufferedWriter`                          |           2 |           4 |              80 B |           32.1 KB |
+| `java.util.ArrayList`                             |         512 |         512 |           12.0 KB |           29.3 KB |
+| `java.util.LinkedHashMap$Entry`                   |       1,125 |       1,142 |           43.9 KB |           26.8 KB |
 | `jdk.internal.math.FDBigInteger`                  |         341 |         341 |           10.7 KB |           24.2 KB |
-| `java.lang.Module`                                |          62 |         362 |            2.9 KB |           16.2 KB |
-| `java.io.BufferedWriter`                          |           1 |           3 |              40 B |           16.1 KB |
-| `java.util.ImmutableCollections$SetN`             |         147 |         147 |            3.4 KB |           14.5 KB |
-| `java.util.ArrayList`                             |         212 |         212 |            5.0 KB |           13.7 KB |
-| `jdk.internal.module.ModuleReferenceImpl`         |          62 |         248 |            3.4 KB |           11.1 KB |
-| `java.lang.String[]`                              |           4 |         458 |            4.8 KB |           10.7 KB |
-| `java.lang.invoke.MethodType`                     |         208 |         316 |            8.1 KB |            8.3 KB |
-| `java.lang.invoke.LambdaForm$Name`                |         293 |         319 |            9.2 KB |            7.8 KB |
-| `java.lang.invoke.MemberName`                     |         208 |         360 |            8.1 KB |            6.9 KB |
-| `java.util.HashSet`                               |         139 |         139 |            2.2 KB |            6.5 KB |
-| `java.lang.invoke.MethodTypeForm`                 |          38 |          81 |            1.2 KB |            5.8 KB |
-| `java.lang.Long[]`                                |           1 |         243 |            1.0 KB |            5.7 KB |
-| `java.lang.module.ModuleDescriptor`               |          62 |         237 |            3.9 KB |            5.6 KB |
-| `java.lang.invoke.DirectMethodHandle$Constructor` |          77 |         125 |            3.6 KB |            4.9 KB |
-| `java.lang.invoke.DirectMethodHandle`             |         117 |         124 |            4.6 KB |            4.9 KB |
-| `char[][]`                                        |         103 |         207 |            2.4 KB |            4.8 KB |
-| `java.util.LinkedHashMap$Entry`                   |          65 |         141 |            2.5 KB |            4.2 KB |
-| **Total**                                         |  **56,176** | **207,469** |        **2.5 MB** |        **5.8 MB** |
+| `java.util.ImmutableCollections$SetN`             |         149 |         149 |            3.5 KB |           23.3 KB |
+| `java.lang.invoke.MethodType`                     |         565 |         805 |           22.1 KB |           21.9 KB |
+| `java.lang.Thread`                                |          27 |         496 |            2.7 KB |           21.0 KB |
+| `java.lang.invoke.MethodTypeForm`                 |         136 |         272 |            4.2 KB |           20.2 KB |
+| `java.lang.invoke.MemberName`                     |         492 |         785 |           19.2 KB |           14.0 KB |
+| `java.lang.invoke.LambdaForm`                     |         138 |         302 |            6.5 KB |           12.2 KB |
+| `java.lang.invoke.LambdaForm$Name[]`              |         134 |         371 |            5.7 KB |           11.6 KB |
+| `java.lang.invoke.DirectMethodHandle$Constructor` |         123 |         425 |            5.8 KB |           11.6 KB |
+| `java.util.HashSet`                               |         245 |         245 |            3.8 KB |           11.5 KB |
+| `java.lang.invoke.LambdaForm$Name`                |         309 |         417 |            9.7 KB |           11.1 KB |
+| `jdk.internal.math.FDBigInteger[]`                |           1 |         341 |            1.3 KB |           10.6 KB |
+| `java.lang.invoke.DirectMethodHandle`             |         160 |         161 |            6.2 KB |            6.3 KB |
+| `java.lang.String[]`                              |           3 |         252 |            2.5 KB |            5.9 KB |
+| **Total**                                         | **119,023** | **316,550** |        **4.1 MB** |       **10.7 MB** |
 
 ## Threads
 
@@ -504,10 +581,10 @@ _One row per resolved thread; columns mirror Eclipse MAT's Thread Overview._
 
 | Name                           | Shallow | Retained | Max. Locals' Retained | Context Class Loader                   | Daemon | Priority | State                                                  |
 | ------------------------------ | ------: | -------: | --------------------: | -------------------------------------- | ------ | -------: | ------------------------------------------------------ |
-| [main](#thread-1)              |   104 B |   2.2 KB |                 952 B | `java/net/URLClassLoader @ 0xc0412620` | no     |        5 | [alive, runnable]                                      |
-| [Reference Handler](#thread-2) |   104 B |    104 B |                   0 B | `—`                                    | yes    |       10 | [alive, runnable]                                      |
-| [Finalizer](#thread-3)         |   112 B |    128 B |                  40 B | `—`                                    | yes    |        8 | [alive, waiting, waiting indefinitely, in Object.wait] |
-| [Common-Cleaner](#thread-6)    |   112 B |    192 B |                 128 B | `—`                                    | yes    |        8 | [alive, waiting, waiting with timeout, parked]         |
+| [main](#thread-1)              |   104 B |   5.5 MB |                2.8 KB | `java/net/URLClassLoader @ 0xc0412620` | no     |        5 | [alive, runnable]                                      |
+| [Reference Handler](#thread-2) |   104 B |    200 B |                   0 B | `—`                                    | yes    |       10 | [alive, runnable]                                      |
+| [Finalizer](#thread-3)         |   112 B |    208 B |                  40 B | `—`                                    | yes    |        8 | [alive, waiting, waiting indefinitely, in Object.wait] |
+| [Common-Cleaner](#thread-6)    |   112 B |    168 B |                 128 B | `—`                                    | yes    |        8 | [alive, waiting, waiting with timeout, parked]         |
 
 <a id="thread-1"></a>
 
@@ -521,35 +598,34 @@ _Showing top 20 by retained heap (sizes overlap and do not sum to thread total).
 
 | Object                                                   | Count | Shallow | Retained |
 | -------------------------------------------------------- | ----: | ------: | -------: |
-| `org/renaissance/jdk/streams/MnemonicsCoderWithStream`   |     1 |    24 B |    952 B |
+| `org/renaissance/jdk/streams/MnemonicsCoderWithStream`   |     1 |    24 B |   2.8 KB |
+| `java/util/HashMap`                                      |     1 |    48 B |   1.7 KB |
 | `[Ljava/lang/String;`                                    |     1 |   160 B |    160 B |
+| `java/util/stream/IntPipeline$1$1`                       |    ×2 |    24 B |    152 B |
+| `java/util/stream/ReduceOps$3ReducingSink`               |     1 |    32 B |     88 B |
 | `java/util/HashSet`                                      |     1 |    16 B |     64 B |
-| `java/util/stream/ReduceOps$3ReducingSink`               |     1 |    32 B |     56 B |
-| `java/util/stream/Collectors$CollectorImpl`              |     1 |    32 B |     48 B |
-| `java/util/HashMap`                                      |     1 |    48 B |     48 B |
-| `java/lang/String`                                       |     1 |    24 B |     48 B |
+| `java/lang/String`                                       |    ×2 |    24 B |     48 B |
 | `java/util/ArrayList$ArrayListSpliterator`               |     1 |    32 B |     32 B |
+| `java/util/stream/Collectors$CollectorImpl`              |     1 |    32 B |     32 B |
 | `java/util/stream/ReduceOps$3ReducingSink`               |    ×3 |    32 B |     32 B |
-| `java/lang/String`                                       |     1 |    24 B |     24 B |
 | `java/util/stream/ReferencePipeline$7$1`                 |     1 |    24 B |     24 B |
-| `java/util/stream/IntPipeline$1$1`                       |    ×2 |    24 B |     24 B |
 | `java/lang/String`                                       |     1 |    24 B |     24 B |
 | `[B`                                                     |     1 |    24 B |     24 B |
 | `java/lang/String`                                       |     1 |    24 B |     24 B |
 | `java/util/stream/Collectors$$Lambda+0x00007ff1d406e898` |     1 |    16 B |     16 B |
 | `java/util/stream/Collectors$$Lambda+0x00007ff1d406eab8` |     1 |    16 B |     16 B |
 
-_Frame percentages are of this thread's 2.2 KB retained heap._
+_Frame percentages are of this thread's 5.5 MB retained heap._
 
 - `java.lang.StringLatin1$CharsSpliterator.forEachRemaining (StringLatin1.java:811)`
+  - `java.util.stream.IntPipeline$1$1` retains 152 B (<0.1% of thread retained)
   - `byte[]` retains 24 B (<0.1% of thread retained)
-  - `java.util.stream.IntPipeline$1$1` retains 24 B (<0.1% of thread retained)
 - `java.util.stream.AbstractPipeline.copyInto (AbstractPipeline.java:509)`
-  - `java.util.stream.IntPipeline$1$1` retains 24 B (<0.1% of thread retained)
+  - `java.util.stream.IntPipeline$1$1` retains 152 B (<0.1% of thread retained)
 - `java.util.stream.AbstractPipeline.wrapAndCopyInto (AbstractPipeline.java:499)`
-  - `java.util.stream.ReduceOps$3ReducingSink` retains 56 B (<0.1% of thread retained)
+  - `java.util.stream.ReduceOps$3ReducingSink` retains 88 B (<0.1% of thread retained)
 - `java.util.stream.Collectors.lambda$groupingBy$53 (Collectors.java:1105)`
-  - `java.util.HashMap` retains 48 B (<0.1% of thread retained)
+  - `java.util.HashMap` retains 1.7 KB (<0.1% of thread retained)
   - `java.lang.String` retains 24 B (<0.1% of thread retained)
   - `java.util.stream.Collectors$$Lambda+0x00007ff1d406e898` retains 16 B (<0.1% of thread retained)
   - `java.util.stream.Collectors$$Lambda+0x00007ff1d406eab8` retains 16 B (<0.1% of thread retained)
@@ -561,14 +637,14 @@ _Frame percentages are of this thread's 2.2 KB retained heap._
 - `java.util.stream.AbstractPipeline.wrapAndCopyInto (AbstractPipeline.java:499)`
   - `java.util.stream.ReduceOps$3ReducingSink` retains 32 B (<0.1% of thread retained)
 - `java.util.stream.ReferencePipeline.collect (ReferencePipeline.java:682)`
-  - `java.util.stream.Collectors$CollectorImpl` retains 48 B (<0.1% of thread retained)
+  - `java.util.stream.Collectors$CollectorImpl` retains 32 B (<0.1% of thread retained)
 - `org.renaissance.jdk.streams.MnemonicsCoderWithStream.encode (MnemonicsCoderWithStream.java:62)`
-  - `org.renaissance.jdk.streams.MnemonicsCoderWithStream` retains 952 B (<0.1% of thread retained)
+  - `org.renaissance.jdk.streams.MnemonicsCoderWithStream` retains 2.8 KB (<0.1% of thread retained)
   - `java.util.HashSet` retains 64 B (<0.1% of thread retained)
   - `java.lang.String` retains 24 B (<0.1% of thread retained)
 - `org.renaissance.jdk.streams.MnemonicsCoderWithStream.lambda$encode$9 (MnemonicsCoderWithStream.java:67)`
   - `java.lang.String` retains 48 B (<0.1% of thread retained)
-  - `java.lang.String` retains 24 B (<0.1% of thread retained)
+  - `java.lang.String` retains 48 B (<0.1% of thread retained)
 - `java.util.stream.ReferencePipeline$3$1.accept (ReferencePipeline.java:197)`
   - `java.util.stream.ReferencePipeline$7$1` retains 24 B (<0.1% of thread retained)
 - `java.util.ArrayList$ArrayListSpliterator.forEachRemaining (ArrayList.java:1708)`
@@ -598,7 +674,7 @@ _Local roots: 7._
 | `java/lang/ref/NativeReferenceQueue$Lock` |    ×3 |    16 B |     16 B |
 | `java/lang/System$2`                      |     1 |    16 B |     16 B |
 
-_Frame percentages are of this thread's 128 B retained heap._
+_Frame percentages are of this thread's 208 B retained heap._
 
 - `java.lang.Object.wait (Object.java:366)`
   - `java.lang.ref.NativeReferenceQueue$Lock` retains 16 B (<0.1% of thread retained)
@@ -625,13 +701,13 @@ _Local roots: 12._
 | Object                                                                  | Count | Shallow | Retained |
 | ----------------------------------------------------------------------- | ----: | ------: | -------: |
 | `java/lang/Class`                                                       |    ×2 |    32 B |    128 B |
-| `java/lang/ref/ReferenceQueue`                                          |    ×3 |    32 B |    112 B |
 | `java/util/concurrent/TimeUnit`                                         |     1 |    80 B |     80 B |
+| `java/lang/ref/ReferenceQueue`                                          |    ×3 |    32 B |     48 B |
 | `java/util/concurrent/locks/AbstractQueuedSynchronizer$ConditionNode`   |     1 |    32 B |     32 B |
 | `jdk/internal/ref/CleanerImpl`                                          |    ×3 |    24 B |     24 B |
 | `java/util/concurrent/locks/AbstractQueuedSynchronizer$ConditionObject` |    ×2 |    24 B |     24 B |
 
-_Frame percentages are of this thread's 192 B retained heap._
+_Frame percentages are of this thread's 168 B retained heap._
 
 - `java.util.concurrent.locks.LockSupport.parkNanos (LockSupport.java:269)`
   - `java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject` retains 24 B (<0.1% of thread retained)
@@ -640,11 +716,11 @@ _Frame percentages are of this thread's 192 B retained heap._
   - `java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionNode` retains 32 B (<0.1% of thread retained)
   - `java.util.concurrent.locks.AbstractQueuedSynchronizer$ConditionObject` retains 24 B (<0.1% of thread retained)
 - `java.lang.ref.ReferenceQueue.await (ReferenceQueue.java:71)`
-  - `java.lang.ref.ReferenceQueue` retains 112 B (<0.1% of thread retained)
+  - `java.lang.ref.ReferenceQueue` retains 48 B (<0.1% of thread retained)
 - `java.lang.ref.ReferenceQueue.remove0 (ReferenceQueue.java:143)`
-  - `java.lang.ref.ReferenceQueue` retains 112 B (<0.1% of thread retained)
+  - `java.lang.ref.ReferenceQueue` retains 48 B (<0.1% of thread retained)
 - `java.lang.ref.ReferenceQueue.remove (ReferenceQueue.java:218)`
-  - `java.lang.ref.ReferenceQueue` retains 112 B (<0.1% of thread retained)
+  - `java.lang.ref.ReferenceQueue` retains 48 B (<0.1% of thread retained)
 - `jdk.internal.ref.CleanerImpl.run (CleanerImpl.java:140)`
   - `jdk.internal.ref.CleanerImpl` retains 24 B (<0.1% of thread retained)
 - `java.lang.Thread.runWith (Thread.java:1596)`
@@ -658,13 +734,13 @@ _Frame percentages are of this thread's 192 B retained heap._
 
 _Retained heap grouped by class loader (component); `% Heap` is the share of total reachable heap._
 
-| Component                                              | Retained | % Heap | Top classes                                                                                                                                                                                                                                                                                                                                                             |
-| ------------------------------------------------------ | -------: | -----: | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `<boot>`                                               |  37.2 MB |  93.5% | `byte[]` (4.1 MB), `java.lang.Object[]` (3.4 MB), `java.lang.Class` (3.3 MB), `java.util.ArrayList` (3.2 MB), `java.util.HashMap$Node` (3.1 MB)                                                                                                                                                                                                                         |
-| `java/net/URLClassLoader`                              |   2.6 MB |   6.4% | `scala.runtime.LazyVals$` (2.5 MB), `org.renaissance.harness.RenaissanceSuite$` (14.0 KB), `scala.math.BigInt$` (8.1 KB), `scala.math.BigInt[]` (8.0 KB), `scopt.OptionDef` (4.3 KB)                                                                                                                                                                                    |
-| `jdk/internal/loader/ClassLoaders$AppClassLoader`      |  21.8 KB |   0.1% | `org.renaissance.BenchmarkResult$Validators` (3.9 KB), `org.renaissance.core.ModuleLoader` (3.5 KB), `org.renaissance.core.BenchmarkDescriptor` (3.2 KB), `org.renaissance.core.BenchmarkSuite` (2.5 KB), `org.renaissance.core.ResourceUtils` (2.3 KB)                                                                                                                 |
-| `jdk/internal/loader/ClassLoaders$PlatformClassLoader` |   7.4 KB |  <0.1% | `sun.util.resources.cldr.provider.CLDRLocaleDataMetaInfo` (7.4 KB)                                                                                                                                                                                                                                                                                                      |
-| `java/net/URLClassLoader`                              |   2.6 KB |  <0.1% | `org.renaissance.jdk.streams.MnemonicsCoderWithStream` (1.6 KB), `org.renaissance.jdk.streams.MnemonicsCoderWithStream$$Lambda+0x00007ff1d4127800` (384 B), `org.renaissance.jdk.streams.MnemonicsCoderWithStream$$Lambda+0x00007ff1d4126b18` (256 B), `org.renaissance.jdk.streams.Mnemonics` (200 B), `org.renaissance.jdk.streams.MnemonicsCoderWithStream$1` (72 B) |
+| Component                                              | Retained | % Heap | Top classes                                                                                                                                                                                                                                                                                                                                                               |
+| ------------------------------------------------------ | -------: | -----: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `<boot>`                                               |  59.0 MB |  95.4% | `java.util.HashMap$Node[]` (6.2 MB), `java.util.HashMap` (6.2 MB), `java.util.HashMap$Node` (5.8 MB), `java.lang.Thread` (5.5 MB), `java.util.HashSet` (5.2 MB)                                                                                                                                                                                                           |
+| `java/net/URLClassLoader`                              |   2.6 MB |   4.2% | `scala.runtime.LazyVals$` (2.5 MB), `org.renaissance.harness.ConfigParser$$anon$1` (13.0 KB), `scala.math.BigInt$` (8.2 KB), `scopt.ORunner$` (8.1 KB), `scala.math.BigInt[]` (8.0 KB)                                                                                                                                                                                    |
+| `jdk/internal/loader/ClassLoaders$AppClassLoader`      | 238.0 KB |   0.4% | `org.renaissance.core.ModuleLoader` (149.8 KB), `org.renaissance.core.BenchmarkSuite` (77.0 KB), `org.renaissance.BenchmarkResult$Validators` (2.5 KB), `org.renaissance.core.BenchmarkDescriptor` (2.3 KB), `org.renaissance.core.Launcher` (1.6 KB)                                                                                                                     |
+| `java/net/URLClassLoader`                              |   9.2 KB |  <0.1% | `org.renaissance.jdk.streams.MnemonicsCoderWithStream` (6.7 KB), `org.renaissance.jdk.streams.MnemonicsCoderWithStream$$Lambda+0x00007ff1d4127800` (1.4 KB), `org.renaissance.jdk.streams.MnemonicsCoderWithStream$1` (456 B), `org.renaissance.jdk.streams.Mnemonics` (312 B), `org.renaissance.jdk.streams.MnemonicsCoderWithStream$$Lambda+0x00007ff1d4126b18` (256 B) |
+| `jdk/internal/loader/ClassLoaders$PlatformClassLoader` |   7.4 KB |  <0.1% | `sun.util.resources.cldr.provider.CLDRLocaleDataMetaInfo` (7.4 KB)                                                                                                                                                                                                                                                                                                        |
 
 ## Arrays by Size
 
@@ -921,17 +997,17 @@ _218 reference instances._
 
 | Class                                    | Objects | Shallow | Retained |
 | ---------------------------------------- | ------: | ------: | -------: |
-| `java.lang.invoke.LambdaForm`            |     130 |  6.1 KB |  33.8 KB |
+| `java.lang.invoke.LambdaForm`            |     130 |  6.1 KB |  58.8 KB |
 | `java.lang.Class$ReflectionData`         |      21 |  1.3 KB |   1.3 KB |
-| `java.lang.invoke.DirectMethodHandle`    |      21 |   840 B |   3.4 KB |
-| `sun.util.locale.BaseLocale`             |      20 |   640 B |    640 B |
-| `java.util.Locale`                       |      10 |   320 B |    608 B |
-| `java.util.jar.Manifest`                 |       6 |   144 B | 592.0 KB |
-| `java.util.concurrent.ConcurrentHashMap` |       4 |   256 B |   2.3 KB |
+| `java.lang.invoke.DirectMethodHandle`    |      21 |   840 B |    840 B |
+| `sun.util.locale.BaseLocale`             |      20 |   640 B |   1.2 KB |
+| `java.util.Locale`                       |      10 |   320 B |    320 B |
+| `java.util.jar.Manifest`                 |       6 |   144 B | 590.2 KB |
+| `java.util.concurrent.ConcurrentHashMap` |       4 |   256 B |   1.7 KB |
 | `[Ljava.lang.Object;`                    |       2 |    64 B |      0 B |
-| `java.util.ArrayList`                    |       1 |    24 B |     24 B |
-| `sun.text.resources.cldr.FormatData`     |       1 |    40 B |     40 B |
-| `sun.text.resources.cldr.FormatData_en`  |       1 |    40 B |     40 B |
+| `java.util.ArrayList`                    |       1 |    24 B |     80 B |
+| `sun.text.resources.cldr.FormatData`     |       1 |    40 B |  28.3 KB |
+| `sun.text.resources.cldr.FormatData_en`  |       1 |    40 B |  20.0 KB |
 | `sun.util.resources.Bundles$1`           |       1 |    40 B |     40 B |
 
 #### Only-weakly retained _(approximate)_
@@ -952,12 +1028,12 @@ _745 reference instances._
 
 | Class                                                             | Objects | Shallow | Retained |
 | ----------------------------------------------------------------- | ------: | ------: | -------: |
-| `java.lang.invoke.MethodType`                                     |     681 | 26.6 KB |  76.9 KB |
+| `java.lang.invoke.MethodType`                                     |     681 | 26.6 KB |  83.9 KB |
 | `java.util.logging.Level`                                         |       9 |   288 B |    288 B |
-| `java.util.logging.Logger`                                        |       8 |   448 B |   4.5 KB |
-| `java.lang.Module`                                                |       4 |   192 B |  26.6 KB |
+| `java.util.logging.Logger`                                        |       8 |   448 B |   4.3 KB |
+| `java.lang.Module`                                                |       4 |   192 B |  21.8 KB |
 | `java.util.logging.LogManager$RootLogger`                         |       4 |   256 B |   1.4 KB |
-| `java.lang.ClassValue$Version`                                    |       3 |    72 B |     72 B |
+| `java.lang.ClassValue$Version`                                    |       3 |    72 B |    168 B |
 | `java.lang.ClassValue$Identity`                                   |       2 |    32 B |     32 B |
 | `sun.security.provider.FileInputStreamPool$UnclosableInputStream` |       2 |    32 B |     32 B |
 | `java.lang.ClassLoader`                                           |       1 |    16 B |      0 B |
@@ -990,13 +1066,13 @@ _29 reference instances._
 
 | Class                                 | Objects | Shallow | Retained |
 | ------------------------------------- | ------: | ------: | -------: |
-| `java.io.FileDescriptor`              |       9 |   360 B |   1.0 KB |
-| `java.util.zip.Inflater`              |       8 |   512 B |   3.5 MB |
-| `java.util.jar.JarFile`               |       7 |   448 B |   1.2 MB |
+| `java.io.FileDescriptor`              |       9 |   360 B |    360 B |
+| `java.util.zip.Inflater`              |       8 |   512 B |    512 B |
+| `java.util.jar.JarFile`               |       7 |   448 B | 592.8 KB |
 | `java.lang.ref.Cleaner`               |       1 |    16 B |     16 B |
 | `java.nio.DirectByteBuffer`           |       1 |    72 B |     72 B |
 | `sun.net.www.protocol.jar.URLJarFile` |       1 |    80 B |    344 B |
-| `sun.nio.fs.NativeBuffer`             |       1 |    32 B |    176 B |
+| `sun.nio.fs.NativeBuffer`             |       1 |    32 B |     64 B |
 
 #### Only-weakly retained _(approximate)_
 
@@ -1180,72 +1256,34 @@ _Share of the reachable heap retained by the few largest top-level dominators (a
 
 | Scope           | Retained Share | Retained |
 | --------------- | -------------: | -------: |
-| Top 1 object    |          23.2% |   2.6 MB |
-| Top 10 objects  |          38.3% |   4.3 MB |
-| Top 100 objects |          43.2% |   4.9 MB |
+| Top 1 object    |          48.8% |   5.5 MB |
+| Top 10 objects  |          84.3% |   9.5 MB |
+| Top 100 objects |          91.5% |  10.3 MB |
 
-_4 objects each hold ≥1% of the reachable heap._
+_6 objects each hold ≥1% of the reachable heap._
 
 ## Dominator-Depth Distribution
 
 _How far each live object sits below a GC root, counted in dominator hops. Most objects clustering at shallow depths means memory is held close to the roots; a long tail means deep, chained structures (often a sign of nested collections or linked leaks)._
 
-_Half of all live objects sit within 2 hops of a GC root; the deepest chain is 72 hops._
+_Half of all live objects sit within 3 hops of a GC root; the deepest chain is 28 hops._
 
 | Depth | Objects | % Objects | Cumulative % |
 | ----: | ------: | --------: | -----------: |
-|     1 | 123,989 |     37.0% |        37.0% |
-|     2 |  46,824 |     14.0% |        51.0% |
-|     3 |   4,334 |      1.3% |        52.3% |
-|     4 |   5,439 |      1.6% |        53.9% |
-|     5 |   4,055 |      1.2% |        55.1% |
-|     6 | 132,759 |     39.6% |        94.8% |
-|     7 |     683 |      0.2% |        95.0% |
-|     8 |     398 |      0.1% |        95.1% |
-|     9 |     200 |      0.1% |        95.2% |
-|    10 |     104 |     <0.1% |        95.2% |
-|    11 |     120 |     <0.1% |        95.2% |
-|    12 |      91 |     <0.1% |        95.3% |
-|    13 |      70 |     <0.1% |        95.3% |
-|    14 |      66 |     <0.1% |        95.3% |
-|    15 |      66 |     <0.1% |        95.3% |
-|    16 |     104 |     <0.1% |        95.3% |
-|    17 |      86 |     <0.1% |        95.4% |
-|    18 |      46 |     <0.1% |        95.4% |
-|    19 |      46 |     <0.1% |        95.4% |
-|    20 |      40 |     <0.1% |        95.4% |
-|    21 |      35 |     <0.1% |        95.4% |
-|    22 |      32 |     <0.1% |        95.4% |
-|    23 |      22 |     <0.1% |        95.4% |
-|    24 |      23 |     <0.1% |        95.4% |
-|    25 |      26 |     <0.1% |        95.5% |
-|    26 |      41 |     <0.1% |        95.5% |
-|    27 |      33 |     <0.1% |        95.5% |
-|    28 |      28 |     <0.1% |        95.5% |
-|    29 |      23 |     <0.1% |        95.5% |
-|    30 |      31 |     <0.1% |        95.5% |
-|    31 |      28 |     <0.1% |        95.5% |
-|    32 |      36 |     <0.1% |        95.5% |
-|    33 |      36 |     <0.1% |        95.5% |
-|    34 |      34 |     <0.1% |        95.5% |
-|    35 |      40 |     <0.1% |        95.6% |
-|    36 |      35 |     <0.1% |        95.6% |
-|    37 |      25 |     <0.1% |        95.6% |
-|    38 |      29 |     <0.1% |        95.6% |
-|    39 |      30 |     <0.1% |        95.6% |
-|    40 |      31 |     <0.1% |        95.6% |
-|    41 |      19 |     <0.1% |        95.6% |
-|    42 |      13 |     <0.1% |        95.6% |
-|    43 |      10 |     <0.1% |        95.6% |
-|    44 |      14 |     <0.1% |        95.6% |
-|    45 |      12 |     <0.1% |        95.6% |
-|    46 |      12 |     <0.1% |        95.6% |
-|    47 |      11 |     <0.1% |        95.6% |
-|    48 |      11 |     <0.1% |        95.6% |
-|    49 |       6 |     <0.1% |        95.6% |
-|    50 |       6 |     <0.1% |        95.6% |
+|     1 |  12,733 |      3.8% |         3.8% |
+|     2 |  15,866 |      4.7% |         8.5% |
+|     3 | 139,020 |     41.5% |        50.1% |
+|     4 |   8,803 |      2.6% |        52.7% |
+|     5 |   9,182 |      2.7% |        55.4% |
+|     6 |  39,469 |     11.8% |        67.2% |
+|     7 |  45,957 |     13.7% |        80.9% |
+|     8 |  46,876 |     14.0% |        94.9% |
+|     9 |  11,858 |      3.5% |        98.5% |
+|    10 |   3,070 |      0.9% |        99.4% |
+|    11 |   1,084 |      0.3% |        99.7% |
+|    12 |     631 |      0.2% |        99.9% |
 
-_… (+22 deeper buckets, 14,622 objects, 100.0% cumulative — full data in JSON)_
+_… (+16 deeper buckets, 325 objects, 100.0% cumulative — full data in JSON)_
 
 ## Leak Indicators
 

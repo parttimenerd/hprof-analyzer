@@ -15,12 +15,14 @@ use crate::query::plan::{PredCost, QueryPlan, StageOp};
 /// optimization of every query.
 #[derive(Debug, Default, Clone)]
 pub struct SchemaStats {
+    #[allow(dead_code)]
     pub instance_counts: HashMap<String, u64>,
 }
 
 impl SchemaStats {
     /// Instance count for a class by name, or 0 if the class was never seen
     /// (an absent class has no live instances, so 0 is the correct estimate).
+    #[allow(dead_code)]
     pub fn count_of(&self, class: &str) -> u64 {
         self.instance_counts.get(class).copied().unwrap_or(0)
     }

@@ -204,6 +204,7 @@ pub fn run_query_json(
 /// run_query_json so run semantics are identical to POST /. NDJSON is buffered
 /// (the run layer materializes rows first); this delivers the line-delimited,
 /// incrementally-parseable contract without a run-layer refactor.
+#[allow(dead_code)]
 pub fn run_query_ndjson(
     path: &str,
     text: &str,
@@ -371,6 +372,7 @@ impl ServerState {
     }
 
     /// Backward-compatible version (no retained data). Used by `query --server`.
+    #[allow(dead_code)]
     pub fn set_full_analysis(&self) {
         self.set_full_analysis_with_retained(Arc::new(Vec::new()));
     }

@@ -60,12 +60,15 @@ impl QueryExecState {
             carry,
         });
     }
+    #[allow(dead_code)]
     pub fn finished_len(&self) -> usize {
         self.finished.len()
     }
+    #[allow(dead_code)]
     pub fn pending_len(&self) -> usize {
         self.pending.len()
     }
+    #[allow(dead_code)]
     pub fn pending(&self) -> &[CrossPhaseEntry] {
         &self.pending
     }

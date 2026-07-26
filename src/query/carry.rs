@@ -4,6 +4,8 @@
 //! sorted address frontier. All layouts round-trip byte-exactly and enforce a
 //! cap that trips `truncated` so a pathological match set can't blow memory.
 
+#![allow(dead_code)]
+
 use crate::vbyte;
 
 /// Default cap on carried matches. Beyond this the carry stops accepting rows

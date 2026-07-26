@@ -52,7 +52,7 @@ pub(crate) fn render_duplicate_strings(
     d: &Option<crate::pass2::DupStrings>,
     graphs: bool,
 ) {
-    use crate::md::{bar, sparkline, Align, Table};
+    use crate::md::{bar, Align, Table};
     out.push_str("### Duplicate Strings (approximate)\n\n");
     let d = match d {
         None => {

@@ -882,16 +882,6 @@ fn run_default(cli: Cli) {
     }
 }
 
-/// Run the full analysis pipeline and return the Report model.
-/// Called by the HTTP server background thread; does not write any files.
-pub(crate) fn analyze_to_report(
-    path: &str,
-    opts: &AnalyzeOptions,
-) -> std::io::Result<crate::report::Report> {
-    let (report, _retained) = analyze_to_report_inner(path, opts)?;
-    Ok(report)
-}
-
 /// Like `analyze_to_report`, but also returns the per-object retained-size array
 /// so callers (e.g. the HTTP server) can reuse it for OQL queries without a
 /// full re-scan of the dump.

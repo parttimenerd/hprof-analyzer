@@ -2011,6 +2011,7 @@ impl QueryPlan {
     /// Machine-friendly plan summary: one short descriptor per active stage/feature.
     /// Used by `!plan` output and tests to assert optimizer effects (e.g. that a
     /// LIMIT was pushed to the scan).
+    #[allow(dead_code)]
     pub fn stage_list(&self) -> Vec<String> {
         let mut v = Vec::new();
         v.push(format!("stage={:?}", self.kind));
