@@ -917,6 +917,25 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             stdout.flush()?;
                             continue;
                         }
+                        "describe" => {
+                            let cls = rest.trim();
+                            if cls.is_empty() {
+                                writeln!(stdout, "usage: !describe <ClassName>")?;
+                            } else {
+                                let q = format!("SELECT * FROM {cls} LIMIT 1");
+                                match run_and_print(path, &q, path_depth, reachable_only, max_width,
+                                    &mut cache, &mut stdout) {
+                                    Ok(Some(res)) => {
+                                        let fields: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
+                                        writeln!(stdout, "{} fields: {}", fields.len(), fields.join(", "))?;
+                                    }
+                                    Ok(None) => {}
+                                    Err(e) => writeln!(stdout, "error: {e}")?,
+                                }
+                            }
+                            stdout.flush()?;
+                            continue;
+                        }
                         _ => {}
                     }
                     if handle_meta(cmd, path_depth, &mut reachable_only, &names_for_meta, &mut stdout)?
@@ -1078,6 +1097,24 @@ fn run_repl_line(
             }
             "unique" => {
                 handle_unique(rest, last_result, out)?;
+                out.flush()?;
+                return Ok(false);
+            }
+            "describe" => {
+                let cls = rest.trim();
+                if cls.is_empty() {
+                    writeln!(out, "usage: !describe <ClassName>")?;
+                } else {
+                    let q = format!("SELECT * FROM {cls} LIMIT 1");
+                    match run_and_print(path, &q, path_depth, *reachable_only, *max_width, cache, out) {
+                        Ok(Some(res)) => {
+                            let fields: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
+                            writeln!(out, "{} fields: {}", fields.len(), fields.join(", "))?;
+                        }
+                        Ok(None) => {} // error already printed
+                        Err(e) => writeln!(out, "error: {e}")?,
+                    }
+                }
                 out.flush()?;
                 return Ok(false);
             }
@@ -1589,6 +1626,7 @@ fn handle_meta(
             writeln!(out, "  !sort <col> [desc]    sort last result by column (prefix match)")?;
             writeln!(out, "  !stats <col>          numeric summary: min/max/mean/p50/p90/p99/sum")?;
             writeln!(out, "  !unique <col>         distinct value counts, sorted by frequency")?;
+            writeln!(out, "  !describe <class>     show all field names of a class")?;
             writeln!(out, "  !quit                 exit")?;
             writeln!(out, "  <oql>                 run a query and print results")?;
             writeln!(
