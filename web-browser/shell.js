@@ -880,7 +880,43 @@ function startTerminal() {
         return;
       }
       const [, cls, idx] = m;
-      await runQuery(`SELECT * FROM ${cls.trim()} s WHERE s.@objectId = ${idx}`);
+      const clsTrimmed = cls.trim();
+      // Run the query; if exactly 1 row, show as key=value (nicer than a 1-row table)
+      try {
+        const res = await fetch(serverUrl + '/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: `SELECT * FROM ${clsTrimmed} s WHERE s.@objectId = ${idx}` }),
+          signal: AbortSignal.timeout(10000),
+        }).then(r => r.json());
+        const r = res.result || res;
+        if (r.error) {
+          term.writeln(`\x1b[31merror: ${r.error}\x1b[0m`);
+        } else if (!r.columns || r.columns.length === 0) {
+          term.writeln(`\x1b[33m(no object ${clsTrimmed}#${idx} found)\x1b[0m`);
+        } else {
+          const colNames = r.columns.map(c => c.name || String(c));
+          const rows = r.rows || [];
+          if (rows.length === 1) {
+            const keyW = Math.max(...colNames.map(n => n.length)) + 2;
+            const idxW = String(colNames.length).length;
+            term.writeln(`\x1b[2m── ${clsTrimmed}#${idx} ──\x1b[0m`);
+            colNames.forEach((col, i) => {
+              const val = fmtCell(rows[0][i], col);
+              term.writeln(`  \x1b[2m${String(i + 1).padStart(idxW)}\x1b[0m  \x1b[36m${col.padEnd(keyW)}\x1b[0m  ${val}`);
+            });
+          } else if (rows.length === 0) {
+            term.writeln(`\x1b[33m(no object ${clsTrimmed}#${idx} found)\x1b[0m`);
+          } else {
+            renderResult(r);
+          }
+          lastResult = { columns: colNames, rows };
+          currentRowIdx = 0;
+        }
+      } catch (e) {
+        term.writeln(`\x1b[31merror: ${e.message}\x1b[0m`);
+      }
+      term.write(PROMPT);
       return;
     }
     if (cmd.startsWith('/plan ') || cmd === '/plan' ||

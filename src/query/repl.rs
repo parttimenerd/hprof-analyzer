@@ -1335,9 +1335,24 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                 }
                                 Some((cls, idx)) => {
                                     let q = format!("SELECT * FROM {cls} s WHERE s.@objectId = {idx}");
-                                    if let Some(res) = run_and_print(path, &q, path_depth, reachable_only,
-                                        max_width, &mut cache, &mut stdout)? {
-                                        last_result = Some(res);
+                                    let mut dev_null: Vec<u8> = Vec::new();
+                                    match run_one(path, &q, path_depth, reachable_only, &mut cache, &mut dev_null) {
+                                        Ok(res) => {
+                                            if res.rows.len() == 1 {
+                                                let key_w = res.columns.iter().map(|c| c.name.len()).max().unwrap_or(8);
+                                                let idx_w = res.columns.len().to_string().len();
+                                                writeln!(stdout, "── {cls}#{idx} ──")?;
+                                                for (i, (col, val)) in res.columns.iter().zip(res.rows[0].iter()).enumerate() {
+                                                    writeln!(stdout, "  \x1b[2m{:>idx_w$}\x1b[0m  {:<key_w$}  {}", i + 1, col.name, fmt_value(val))?;
+                                                }
+                                            } else if res.rows.is_empty() {
+                                                writeln!(stdout, "(no object {cls}#{idx} found)")?;
+                                            } else {
+                                                print_result(&res, std::time::Duration::ZERO, max_width, &mut stdout)?;
+                                            }
+                                            last_result = Some(res);
+                                        }
+                                        Err(e) => writeln!(stdout, "error: {e}")?,
                                     }
                                 }
                             }
@@ -1788,8 +1803,24 @@ fn run_repl_line(
                     }
                     Some((cls, idx)) => {
                         let q = format!("SELECT * FROM {cls} s WHERE s.@objectId = {idx}");
-                        if let Some(res) = run_and_print(path, &q, path_depth, *reachable_only, *max_width, cache, out)? {
-                            *last_result = Some(res);
+                        let mut dev_null: Vec<u8> = Vec::new();
+                        match run_one(path, &q, path_depth, *reachable_only, cache, &mut dev_null) {
+                            Ok(res) => {
+                                if res.rows.len() == 1 {
+                                    let key_w = res.columns.iter().map(|c| c.name.len()).max().unwrap_or(8);
+                                    let idx_w = res.columns.len().to_string().len();
+                                    writeln!(out, "── {cls}#{idx} ──")?;
+                                    for (i, (col, val)) in res.columns.iter().zip(res.rows[0].iter()).enumerate() {
+                                        writeln!(out, "  \x1b[2m{:>idx_w$}\x1b[0m  {:<key_w$}  {}", i + 1, col.name, fmt_value(val))?;
+                                    }
+                                } else if res.rows.is_empty() {
+                                    writeln!(out, "(no object {cls}#{idx} found)")?;
+                                } else {
+                                    print_result(&res, std::time::Duration::ZERO, *max_width, out)?;
+                                }
+                                *last_result = Some(res);
+                            }
+                            Err(e) => writeln!(out, "error: {e}")?,
                         }
                     }
                 }
