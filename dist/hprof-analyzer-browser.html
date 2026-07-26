@@ -2177,6 +2177,14 @@ function startTerminal() {
           .concat(lastResult.rows.map(row => csvRow(row.map((cell, i) => fmtCell(cell, lastResult.columns[i])))))
           .join('\n');
         mime = 'text/csv'; ext = 'csv';
+      } else if (fmt === 'json') {
+        const objs = lastResult.rows.map(row => {
+          const obj = {};
+          lastResult.columns.forEach((col, i) => { obj[col] = fmtCell(row[i], col); });
+          return obj;
+        });
+        text = JSON.stringify(objs, null, 2);
+        mime = 'application/json'; ext = 'json';
       } else {
         text = [lastResult.columns.join('\t')]
           .concat(lastResult.rows.map(row =>
@@ -2482,7 +2490,7 @@ function startTerminal() {
     c('/tail <N>',               '— last N rows');
     c('/unique <col>',           '— distinct value counts');
     c('/stats <col>',            '— min/max/mean/percentiles/sum');
-    c('/export [csv]',           '— copy to clipboard as TSV or CSV');
+    c('/export [csv|json]',     '— copy to clipboard as TSV, CSV, or JSON');
     h('History & bookmarks');
     c('/history [N|clear]',      '— show/clear history; !N to re-run');
     c('/bookmark  /save [name]', '— save last query as a named bookmark');
