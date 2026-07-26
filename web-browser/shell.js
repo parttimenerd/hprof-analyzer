@@ -1163,6 +1163,7 @@ function startTerminal() {
         } else {
           renderResult({ columns, rows: filtered, row_count: filtered.length });
           term.writeln(`\x1b[2m${filtered.length} of ${rows.length} rows match "${pattern}"\x1b[0m`);
+          lastResult = { columns, rows: filtered };
         }
       }
       term.write(PROMPT);
@@ -1513,7 +1514,7 @@ function startTerminal() {
           const ts = new Date().toLocaleTimeString('en-GB', { hour12: false });
           term.writeln(`${elapsedColor}${r.row_count} row${r.row_count !== 1 ? 's' : ''}, ${elapsedFmt}\x1b[0m\x1b[2m  [${ts}]\x1b[0m${trunc}${note}`);
           if (rows.length > 20) {
-            term.writeln(`\x1b[2m  /filter <text|/re/>  /sort <col>  /export [csv]\x1b[0m`);
+            term.writeln(`\x1b[2m  /filter <text|/re/>  /sort <col>  /stats <col>  /unique <col>  /export [csv]\x1b[0m`);
           }
         } else {
           // No columns — just show the raw result
