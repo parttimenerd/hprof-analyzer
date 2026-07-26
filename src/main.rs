@@ -22,6 +22,7 @@ mod html;
 mod id_map;
 mod mat;
 mod md;
+mod named_queries;
 #[cfg(test)]
 mod md_test;
 mod pass1;
