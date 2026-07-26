@@ -2798,8 +2798,9 @@ fn handle_pivot(
     Ok(())
 }
 
-/// `!export [csv|tsv|json]` — print the last result to stdout in the requested format.
-/// Defaults to CSV.  Useful for piping: `hprof-analyzer query … | grep …`
+/// `!export [csv|tsv|json] [filename]` — print the last result in the requested format.
+/// Without a filename, writes to stdout (useful for piping).
+/// With a filename, writes to that file and reports the path.
 fn handle_export(
     fmt: &str,
     last_result: &Option<QueryResult>,
@@ -2809,17 +2810,32 @@ fn handle_export(
         writeln!(out, "(no result — run a query first)")?;
         return Ok(());
     };
-    let fmt = fmt.trim().to_ascii_lowercase();
-    let content: String = match fmt.as_str() {
-        "" | "csv" => result_to_csv(res),
-        "tsv"      => result_to_tsv(res),
-        "json"     => result_to_json(res),
-        other      => {
+    // Parse: "csv myfile.csv" or "json report.json" or just "tsv"
+    let parts: Vec<&str> = fmt.trim().splitn(2, char::is_whitespace).collect();
+    let fmt_str = parts.first().copied().unwrap_or("").to_ascii_lowercase();
+    let file_arg = parts.get(1).map(|s| s.trim()).filter(|s| !s.is_empty());
+    let (fmt_str, file_arg) = if fmt_str.is_empty() {
+        ("csv".to_string(), file_arg)
+    } else {
+        (fmt_str, file_arg)
+    };
+    let content: String = match fmt_str.as_str() {
+        "csv"  => result_to_csv(res),
+        "tsv"  => result_to_tsv(res),
+        "json" => result_to_json(res),
+        other  => {
             writeln!(out, "unknown format {:?} — use csv, tsv, or json", other)?;
             return Ok(());
         }
     };
-    write!(out, "{}", content)?;
+    if let Some(path) = file_arg {
+        match std::fs::write(path, &content) {
+            Ok(()) => writeln!(out, "wrote {} rows to {:?}", res.rows.len(), path)?,
+            Err(e) => writeln!(out, "error: could not write {:?}: {e}", path)?,
+        }
+    } else {
+        write!(out, "{}", content)?;
+    }
     Ok(())
 }
 
@@ -2923,7 +2939,7 @@ fn handle_meta(
                 out,
                 "  !save <file> [oql]    write CSV/TSV/JSON to <file> (format by extension; of <oql>, else last result)"
             )?;
-            writeln!(out, "  !export [csv|tsv|json] print last result to stdout (default csv)")?;
+            writeln!(out, "  !export [csv|tsv|json] [file]  print or save last result (default csv to stdout)")?;
             writeln!(out, "  !filter <pattern>     filter rows: substring or /regex/ (/i for case-insensitive)")?;
             writeln!(out, "  !filter @<col> <pat>  filter by specific column (also works with !not)")?;
             writeln!(out, "  !not <pattern>        exclude rows matching pattern (inverse of !filter)")?;
