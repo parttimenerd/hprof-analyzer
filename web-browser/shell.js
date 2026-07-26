@@ -5,6 +5,7 @@ const PROMPT = 'oql> ';
 const HISTORY_KEY = 'hprof-analyzer.oql-history';
 const SETTINGS_KEY = 'hprof-analyzer.settings';
 const LAST_URL_KEY = 'hprof-analyzer.last-url';
+const BOOKMARKS_KEY = 'hprof-analyzer.bookmarks';
 
 // Restore last-used server URL into the input on page load
 (function restoreLastUrl() {
@@ -202,6 +203,25 @@ async function connectToServer() {
   }
 }
 
+function startKeepalive() {
+  if (keepaliveTimer) return;
+  keepaliveTimer = setInterval(async () => {
+    if (!serverUrl) { clearInterval(keepaliveTimer); keepaliveTimer = null; return; }
+    try {
+      await fetch(serverUrl + '/status', { signal: AbortSignal.timeout(3000) });
+    } catch (_) {
+      clearInterval(keepaliveTimer);
+      keepaliveTimer = null;
+      // Server gone — show a banner in the terminal if it's open
+      if (term) {
+        term.writeln('\r\n\x1b[31m[Server connection lost — reconnect with a new session]\x1b[0m');
+        const badge = document.getElementById('server-badge');
+        if (badge) { badge.textContent = '● Disconnected'; badge.style.color = '#d06060'; }
+      }
+    }
+  }, 15000);
+}
+
 // ── Shell screen ──────────────────────────────────────────────────────────────
 function showShell() {
   showScreen('shell-screen');
@@ -209,6 +229,7 @@ function showShell() {
   buildSidebar(false);
   startTerminal();
   pollAnalysisStatus();
+  startKeepalive();
   // Fetch class names for tab-completion (non-blocking)
   fetch(serverUrl + '/help').then(r => r.json()).then(data => {
     if (Array.isArray(data.classes)) classNames = data.classes;
@@ -219,6 +240,7 @@ document.getElementById('btn-disconnect').addEventListener('click', () => {
   serverUrl = null;
   hasRetained = false;
   if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+  if (keepaliveTimer) { clearInterval(keepaliveTimer); keepaliveTimer = null; }
   if (term) { term.dispose(); term = null; }
   document.getElementById('named-query-list').innerHTML = '';
   document.getElementById('connect-status').textContent = '';
@@ -251,6 +273,8 @@ document.getElementById('btn-analyze').addEventListener('click', async () => {
 });
 
 let pollTimer = null;
+let keepaliveTimer = null;  // detect server disconnects
+
 async function pollAnalysisStatus() {
   if (pollTimer) clearTimeout(pollTimer);
   if (!serverUrl) return;
@@ -484,7 +508,7 @@ function startTerminal() {
     if (line.startsWith('/') && !line.includes(' ')) {
       const partial = line.slice(1).toLowerCase();
       const cmds = ['help','clear','status','analyze','history','export','set','classes','filter',
-                    'sort','top','run'];
+                    'sort','top','run','bookmark','forget'];
       const matches = cmds.filter(c => c.startsWith(partial));
       if (matches.length === 1) {
         setLine('/' + matches[0] + ' ');
@@ -615,6 +639,50 @@ function startTerminal() {
         }
       } catch (e) {
         term.writeln(`\x1b[31merror: ${e.message}\x1b[0m`);
+      }
+      term.write(PROMPT);
+      return;
+    }
+    if (cmd.startsWith('/bookmark ') || cmd === '/bookmark') {
+      const bookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '{}');
+      const rest = cmd.slice(9).trim();
+      if (!rest) {
+        // Show all bookmarks
+        const entries = Object.entries(bookmarks);
+        if (entries.length === 0) {
+          term.writeln('\x1b[2m(no bookmarks yet — use /bookmark <name> to save last query)\x1b[0m');
+        } else {
+          term.writeln('\x1b[1mBookmarks:\x1b[0m');
+          entries.forEach(([name, oql]) => {
+            const truncated = oql.length > term.cols - name.length - 6
+              ? oql.slice(0, term.cols - name.length - 7) + '…' : oql;
+            term.writeln(`  \x1b[36m${name.padEnd(20)}\x1b[0m  \x1b[2m${truncated}\x1b[0m`);
+          });
+          term.writeln('\x1b[2m  Use /bookmark <name> to save, /forget <name> to delete, !<name> to run\x1b[0m');
+        }
+      } else {
+        // Save last query (or current line) under a name
+        const toSave = history[0];
+        if (!toSave) {
+          term.writeln('\x1b[33mNo query to bookmark — run a query first.\x1b[0m');
+        } else {
+          bookmarks[rest] = toSave;
+          localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
+          term.writeln(`\x1b[32m✓ Saved as "${rest}": \x1b[2m${toSave.length > 60 ? toSave.slice(0, 59) + '…' : toSave}\x1b[0m`);
+        }
+      }
+      term.write(PROMPT);
+      return;
+    }
+    if (cmd.startsWith('/forget ')) {
+      const bookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '{}');
+      const name = cmd.slice(8).trim();
+      if (bookmarks[name]) {
+        delete bookmarks[name];
+        localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
+        term.writeln(`\x1b[32m✓ Removed bookmark "${name}"\x1b[0m`);
+      } else {
+        term.writeln(`\x1b[31mNo bookmark named "${name}"\x1b[0m`);
       }
       term.write(PROMPT);
       return;
@@ -782,18 +850,33 @@ function startTerminal() {
       term.write(PROMPT);
       return;
     }
-    // !N — re-run history entry
-    if (/^!\d+$/.test(cmd)) {
-      const n = parseInt(cmd.slice(1), 10) - 1;
-      if (n < 0 || n >= history.length) {
-        term.writeln(`\x1b[31mNo history entry ${cmd.slice(1)}\x1b[0m`);
-        term.write(PROMPT);
+    // !N — re-run history entry; !name — run a bookmark
+    if (/^!.+$/.test(cmd)) {
+      if (/^!\d+$/.test(cmd)) {
+        const n = parseInt(cmd.slice(1), 10) - 1;
+        if (n < 0 || n >= history.length) {
+          term.writeln(`\x1b[31mNo history entry ${cmd.slice(1)}\x1b[0m`);
+          term.write(PROMPT);
+        } else {
+          const recalled = history[n];
+          const echo = recalled.length > term.cols - PROMPT.length - 1
+            ? recalled.slice(0, term.cols - PROMPT.length - 2) + '…' : recalled;
+          term.writeln(`\x1b[2m↳ ${echo}\x1b[0m`);
+          await runQuery(recalled);
+        }
       } else {
-        const recalled = history[n];
-        const echo = recalled.length > term.cols - PROMPT.length - 1
-          ? recalled.slice(0, term.cols - PROMPT.length - 2) + '…' : recalled;
-        term.writeln(`\x1b[2m↳ ${echo}\x1b[0m`);
-        await runQuery(recalled);
+        const name = cmd.slice(1);
+        const bookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '{}');
+        if (bookmarks[name]) {
+          const oql = bookmarks[name];
+          const echo = oql.length > term.cols - PROMPT.length - 1
+            ? oql.slice(0, term.cols - PROMPT.length - 2) + '…' : oql;
+          term.writeln(`\x1b[2m↳ [${name}] ${echo}\x1b[0m`);
+          await runQuery(oql);
+        } else {
+          term.writeln(`\x1b[31mNo bookmark "!${name}" — use /bookmark to list\x1b[0m`);
+          term.write(PROMPT);
+        }
       }
       return;
     }
@@ -913,7 +996,8 @@ function startTerminal() {
           const trunc = r.truncated ? '  \x1b[33m[truncated]\x1b[0m' : '';
           const elapsedFmt = elapsedMs < 1000 ? `${elapsedMs.toFixed(0)}ms` : `${(elapsedMs / 1000).toFixed(3)}s`;
           const elapsedColor = elapsedMs > 1000 ? '\x1b[31m' : elapsedMs > 300 ? '\x1b[33m' : '\x1b[2m';
-          term.writeln(`${elapsedColor}${r.row_count} row${r.row_count !== 1 ? 's' : ''}, ${elapsedFmt}\x1b[0m${trunc}${note}`);
+          const ts = new Date().toLocaleTimeString('en-GB', { hour12: false });
+          term.writeln(`${elapsedColor}${r.row_count} row${r.row_count !== 1 ? 's' : ''}, ${elapsedFmt}\x1b[0m\x1b[2m  [${ts}]\x1b[0m${trunc}${note}`);
         } else {
           // No columns — just show the raw result
           term.writeln(JSON.stringify(r, null, 2).split('\n').slice(0, 40).join('\r\n'));
@@ -943,6 +1027,8 @@ function startTerminal() {
     term.writeln('  \x1b[36m/export\x1b[0m            — copy last result to clipboard as TSV');
     term.writeln('  \x1b[36m/set [key val]\x1b[0m     — view/change display settings (limit, bytes, null)');
     term.writeln('  \x1b[36m/classes [pat]\x1b[0m     — list class names (optionally filtered by pattern)');
+    term.writeln('  \x1b[36m/bookmark [name]\x1b[0m   — save last query as a named bookmark');
+    term.writeln('  \x1b[36m/forget <name>\x1b[0m     — delete a bookmark');
     term.writeln('  \x1b[36m/filter <text>\x1b[0m     — filter last result rows by substring');
     term.writeln('  \x1b[36m/sort <col> [desc]\x1b[0m — sort last result by column');
     term.writeln('  \x1b[36m/top <N>\x1b[0m           — show top N rows of last result');
