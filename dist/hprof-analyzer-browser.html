@@ -1962,7 +1962,7 @@ function startTerminal() {
       } else {
         lastResult = prevResult;
         prevResult = null;
-        term.writeln(`\x1b[32mundone — restored ${lastResult.rows.length} row${lastResult.rows.length !== 1 ? 's' : ''}\x1b[0m`);
+        term.writeln(`\x1b[32m✓ undone\x1b[0m  \x1b[2m(restored ${lastResult.rows.length} row${lastResult.rows.length !== 1 ? 's' : ''})\x1b[0m`);
         renderResult({ columns: lastResult.columns, rows: lastResult.rows, row_count: lastResult.rows.length });
       }
       term.write(PROMPT);
@@ -2027,7 +2027,7 @@ function startTerminal() {
       if (!arg || arg === '0' || arg === 'unlimited') {
         settings.rowLimit = Infinity;
         localStorage.setItem(SETTINGS_KEY, JSON.stringify({ ...settings, rowLimit: 0 }));
-        term.writeln('\x1b[32mrow limit disabled\x1b[0m');
+        term.writeln('\x1b[32m✓ row limit: unlimited\x1b[0m');
       } else {
         const n = parseInt(arg, 10);
         if (isNaN(n) || n <= 0) {
@@ -2037,7 +2037,7 @@ function startTerminal() {
         }
         settings.rowLimit = n;
         localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-        term.writeln(`\x1b[32mrow limit set to ${n}\x1b[0m`);
+        term.writeln(`\x1b[32m✓ row limit: ${n}\x1b[0m`);
       }
       if (lastResult) {
         renderResult(lastResult);

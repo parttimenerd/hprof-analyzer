@@ -1800,6 +1800,9 @@ fn run_repl_line(
                 match prev_result.take() {
                     None => warn_out("(nothing to undo)", out)?,
                     Some(prev) => {
+                        let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+                        let (cg, cd, cr) = if color { ("\x1b[32m", "\x1b[2m", "\x1b[0m") } else { ("", "", "") };
+                        writeln!(out, "{cg}\u{2713} undone{cr}  {cd}(restored {} row{}){cr}", prev.rows.len(), if prev.rows.len() == 1 { "" } else { "s" })?;
                         print_result(&prev, std::time::Duration::ZERO, *max_width, out)?;
                         *last_result = Some(prev);
                     }
