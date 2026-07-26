@@ -356,6 +356,12 @@ enum Cmd {
         /// out of the reachable-only default.
         #[arg(long)]
         all: bool,
+        /// Run a named query by name (see `query --list-named` for available names).
+        #[arg(long = "run", value_name = "NAME")]
+        run: Option<String>,
+        /// List all named queries and exit.
+        #[arg(long = "list-named")]
+        list_named: bool,
     },
     /// Eclipse MAT cache generation
     Mat {
@@ -674,6 +680,8 @@ fn main() {
             port,
             reachable_only: _,
             all,
+            run,
+            list_named,
         }) => {
             if !input_is_hprof(&input) {
                 fail(format!(
@@ -703,8 +711,36 @@ fn main() {
                     fail(analyze_error_hint(&input, &e));
                 }
             } else {
+                if list_named {
+                    for nq in crate::named_queries::NAMED_QUERIES {
+                        println!("{:40}  [{}]  {}", nq.name, nq.group, nq.display);
+                    }
+                    return;
+                }
+                let mut queries_vec = query;
+                if let Some(ref name) = run {
+                    let nq = crate::named_queries::NAMED_QUERIES.iter().find(|q| q.name == name);
+                    match nq {
+                        None => {
+                            let prefix_len = name.len().min(3);
+                            let candidates: Vec<&str> = crate::named_queries::NAMED_QUERIES
+                                .iter()
+                                .filter(|q| q.name.starts_with(&name[..prefix_len]))
+                                .map(|q| q.name)
+                                .collect();
+                            eprintln!("error: unknown named query {:?}", name);
+                            if !candidates.is_empty() {
+                                eprintln!("  did you mean: {}", candidates.join(", "));
+                            }
+                            std::process::exit(1);
+                        }
+                        Some(nq) => {
+                            queries_vec.push(nq.oql.to_string());
+                        }
+                    }
+                }
                 let opts = AnalyzeOptions {
-                    queries: query,
+                    queries: queries_vec,
                     query_file,
                     query_path_depth,
                     // Query subcommand defaults to reachable-only (MAT parity);

@@ -967,6 +967,17 @@ fn run_repl_line(
     out: &mut impl Write,
 ) -> io::Result<bool> {
     let t = line.trim();
+    // /run <name> — dispatch a named query
+    if buffer_lines.is_empty() && t.starts_with("/run") {
+        let rest = t[4..].trim();
+        return dispatch_run(rest, path, path_depth, *reachable_only, *max_width, last_query, last_result, cache, out);
+    }
+    // /help — list named queries
+    if buffer_lines.is_empty() && (t == "/help" || t == "/help ") {
+        print_named_queries_help(out)?;
+        out.flush()?;
+        return Ok(false);
+    }
     if buffer_lines.is_empty() && t.starts_with('!') {
         let cmd = &t[1..];
         let (verb, rest) = match cmd.split_once(char::is_whitespace) {
@@ -1090,6 +1101,59 @@ fn run_and_print(
             Ok(None)
         }
     }
+}
+
+fn dispatch_run(
+    name: &str,
+    path: &str,
+    path_depth: usize,
+    reachable_only: bool,
+    max_width: usize,
+    last_query: &mut Option<String>,
+    last_result: &mut Option<QueryResult>,
+    cache: &mut Option<crate::query::run::ReplCache>,
+    out: &mut impl Write,
+) -> io::Result<bool> {
+    let nq = crate::named_queries::NAMED_QUERIES.iter().find(|q| q.name == name);
+    match nq {
+        None => {
+            let prefix_len = name.len().min(3);
+            let candidates: Vec<&str> = crate::named_queries::NAMED_QUERIES
+                .iter()
+                .filter(|q| q.name.starts_with(&name[..prefix_len]))
+                .map(|q| q.name)
+                .collect();
+            writeln!(out, "error: unknown query name {:?}", name)?;
+            if !candidates.is_empty() {
+                writeln!(out, "  did you mean: {}", candidates.join(", "))?;
+            } else {
+                writeln!(out, "  run /help to list available queries")?;
+            }
+        }
+        Some(nq) => {
+            writeln!(out, "↳ {}", nq.oql)?;
+            if let Some(res) = run_and_print(path, nq.oql, path_depth, reachable_only, max_width, cache, out)? {
+                *last_query = Some(nq.oql.to_string());
+                *last_result = Some(res);
+            }
+        }
+    }
+    out.flush()?;
+    Ok(false)
+}
+
+fn print_named_queries_help(out: &mut impl Write) -> io::Result<()> {
+    writeln!(out, "Named queries (/run <name>):")?;
+    let mut group = "";
+    for nq in crate::named_queries::NAMED_QUERIES {
+        if nq.group != group {
+            group = nq.group;
+            writeln!(out, "\n  {group}:")?;
+        }
+        let suffix = if nq.needs_retained { "  [needs full analysis]" } else { "" };
+        writeln!(out, "    {:40}  {}{}", nq.name, nq.display, suffix)?;
+    }
+    Ok(())
 }
 
 /// Set (or report) the per-cell display-width cap from a `!width` argument.
@@ -1250,6 +1314,8 @@ fn handle_meta(
                 out,
                 "  (queries may span multiple lines; end with `;` or a blank line)"
             )?;
+            writeln!(out, "  /run <name>           run a named query (see /help for list)")?;
+            writeln!(out, "  /help                 list all named queries")?;
         }
         "classes" | "fields" => {
             let (list, kind, kind_plural) = if verb == "classes" {
@@ -3170,5 +3236,58 @@ mod tests {
         // "SELECT " is 7 chars; token "s." starts at offset 7.
         assert_eq!(s[0].span.start, 7, "span start wrong: {:?}", s[0].span);
         assert_eq!(s[0].span.end, 9, "span end wrong: {:?}", s[0].span);
+    }
+
+    #[test]
+    fn run_command_dispatches_known_query() {
+        let nq = &crate::named_queries::NAMED_QUERIES[0]; // top-classes-by-count
+        let mut out = Vec::<u8>::new();
+        let mut last_q: Option<String> = None;
+        let mut last_r = None;
+        let mut cache = None;
+        let mut buf: Vec<String> = Vec::new();
+        let names = (vec![], vec![]);
+        let result = run_repl_line(
+            format!("/run {}", nq.name),
+            "tests/fixtures/dump_4_philosophers.hprof",
+            5,
+            &mut true,
+            &mut 0,
+            &mut last_q,
+            &mut last_r,
+            &mut cache,
+            &mut buf,
+            &names,
+            &mut out,
+        );
+        assert!(result.is_ok(), "run_repl_line returned error: {:?}", result);
+        let output = String::from_utf8_lossy(&out);
+        assert!(output.contains("↳"), "expected OQL echo (↳) in output:\n{output}");
+    }
+
+    #[test]
+    fn run_command_unknown_name_prints_error() {
+        let mut out = Vec::<u8>::new();
+        let mut last_q: Option<String> = None;
+        let mut last_r = None;
+        let mut cache = None;
+        let mut buf: Vec<String> = Vec::new();
+        let names = (vec![], vec![]);
+        let result = run_repl_line(
+            "/run no-such-query".to_string(),
+            "tests/fixtures/dump_4_philosophers.hprof",
+            5,
+            &mut true,
+            &mut 0,
+            &mut last_q,
+            &mut last_r,
+            &mut cache,
+            &mut buf,
+            &names,
+            &mut out,
+        );
+        assert!(result.is_ok());
+        let output = String::from_utf8_lossy(&out);
+        assert!(output.contains("unknown query"), "expected error for unknown name:\n{output}");
     }
 }

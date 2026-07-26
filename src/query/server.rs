@@ -434,12 +434,25 @@ impl ServerState {
             }
             ("GET", "/schema") => (200, schema_json().to_string(), "application/json"),
             ("GET", "/version") => (200, version_json().to_string(), "application/json"),
+            ("GET", "/named-queries") => {
+                let arr: serde_json::Value = crate::named_queries::NAMED_QUERIES
+                    .iter()
+                    .map(|nq| serde_json::json!({
+                        "name": nq.name,
+                        "display": nq.display,
+                        "group": nq.group,
+                        "needs_retained": nq.needs_retained,
+                        "oql": nq.oql,
+                    }))
+                    .collect();
+                (200, arr.to_string(), "application/json")
+            }
             // Known path, unsupported method -> 405 (not 404).
-            (_, "/") | (_, "/query") | (_, "/stream") | (_, "/help") | (_, "/schema") | (_, "/version") => (405, serde_json::json!({
+            (_, "/") | (_, "/query") | (_, "/stream") | (_, "/help") | (_, "/schema") | (_, "/version") | (_, "/named-queries") => (405, serde_json::json!({
                 "ok": false,
                 "error": {
                     "kind": "method",
-                    "message": format!("method {method} not allowed on {path} (use POST for /, /query, /stream; GET for /, /help, /schema, /version)")
+                    "message": format!("method {method} not allowed on {path} (use POST for /, /query, /stream; GET for /, /help, /schema, /version, /named-queries)")
                 }
             }).to_string(), "application/json"),
             _ => (404, serde_json::json!({
@@ -1010,5 +1023,17 @@ mod tests {
             direct_row_count as u64,
             "fast path and direct call must agree on row_count"
         );
+    }
+
+    #[test]
+    fn named_queries_endpoint_returns_20() {
+        let state = ServerState::load(FIXTURE, 5, true).expect("load");
+        let (status, body, ct) = state.route("GET", "/named-queries", "");
+        assert_eq!(status, 200);
+        assert_eq!(ct, "application/json");
+        let arr: serde_json::Value = serde_json::from_str(&body).expect("json");
+        assert_eq!(arr.as_array().unwrap().len(), 20);
+        assert_eq!(arr[0]["name"], "top-classes-by-count");
+        assert!(arr[0]["oql"].as_str().unwrap().starts_with("SELECT"));
     }
 }
