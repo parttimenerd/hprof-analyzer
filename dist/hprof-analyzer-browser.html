@@ -1308,12 +1308,28 @@ function startTerminal() {
         term.writeln('\x1b[2m(no history yet)\x1b[0m');
       } else {
         recent.forEach((h, i) => {
-          const num = String(recent.length - i).padStart(3);
+          const num = String(i + 1).padStart(3);
           const truncated = h.length > term.cols - 6 ? h.slice(0, term.cols - 7) + '…' : h;
           term.writeln(`\x1b[2m${num}\x1b[0m  ${truncated}`);
         });
+        term.writeln(`\x1b[2m  Use !N to re-run entry N\x1b[0m`);
       }
       term.write(PROMPT);
+      return;
+    }
+    // !N — re-run history entry
+    if (/^!\d+$/.test(cmd)) {
+      const n = parseInt(cmd.slice(1), 10) - 1;
+      if (n < 0 || n >= history.length) {
+        term.writeln(`\x1b[31mNo history entry ${cmd.slice(1)}\x1b[0m`);
+        term.write(PROMPT);
+      } else {
+        const recalled = history[n];
+        const echo = recalled.length > term.cols - PROMPT.length - 1
+          ? recalled.slice(0, term.cols - PROMPT.length - 2) + '…' : recalled;
+        term.writeln(`\x1b[2m↳ ${echo}\x1b[0m`);
+        await runQuery(recalled);
+      }
       return;
     }
     if (cmd.startsWith('/run ')) {
