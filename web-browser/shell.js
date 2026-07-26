@@ -571,9 +571,10 @@ function startTerminal() {
       }
       return;
     }
-    // Complete /describe <class> and /count <class>
+    // Complete /describe <class> and /count <class> and /obj <class>
     const classCmd = line.startsWith('/describe ') ? '/describe '
                    : line.startsWith('/count ')    ? '/count '
+                   : line.startsWith('/obj ')      ? '/obj '
                    : null;
     if (classCmd && classNames.length > 0) {
       const partial = line.slice(classCmd.length);
