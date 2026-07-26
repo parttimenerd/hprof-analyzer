@@ -799,22 +799,30 @@ function startTerminal() {
     if (cmd.startsWith('/describe ') || cmd === '/describe') {
       const cls = cmd.slice(9).trim();
       if (!cls) {
-        term.writeln('\x1b[33mUsage: /describe <ClassName>  — show fields by running SELECT * LIMIT 1\x1b[0m');
+        term.writeln('\x1b[33mUsage: /describe <ClassName>  — show fields and instance count\x1b[0m');
         term.write(PROMPT);
         return;
       }
       term.writeln(`\x1b[2mQuerying fields of ${cls}…\x1b[0m`);
       try {
-        const res = await fetch(serverUrl + '/', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query: `SELECT * FROM ${cls} LIMIT 1` }),
-          signal: AbortSignal.timeout(10000),
-        });
-        const data = await res.json();
+        const [fieldsRes, countRes] = await Promise.allSettled([
+          fetch(serverUrl + '/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query: `SELECT * FROM ${cls} LIMIT 1` }),
+            signal: AbortSignal.timeout(10000),
+          }).then(r => r.json()),
+          fetch(serverUrl + '/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query: `SELECT COUNT(*) FROM INSTANCEOF ${cls}` }),
+            signal: AbortSignal.timeout(10000),
+          }).then(r => r.json()),
+        ]);
         term.write('\r\x1b[K');
-        if (!data.ok || !data.result?.columns) {
-          const msg = data.error?.message || 'no result';
+        const data = fieldsRes.status === 'fulfilled' ? fieldsRes.value : null;
+        if (!data?.ok || !data.result?.columns) {
+          const msg = data?.error?.message || 'no result';
           term.writeln(`\x1b[31m${msg}\x1b[0m`);
           if (classNames.length > 0) {
             const lower = cls.toLowerCase();
@@ -824,11 +832,19 @@ function startTerminal() {
         } else {
           const colNames = data.result.columns.map(c => c.name || String(c));
           const rows = data.result.rows || [];
-          term.writeln(`\x1b[1mFields of ${cls}:\x1b[0m`);
+          // Extract count
+          let instanceCount = null;
+          if (countRes.status === 'fulfilled' && countRes.value?.ok) {
+            const cell = countRes.value.result?.rows?.[0]?.[0];
+            instanceCount = cell == null ? null : (typeof cell === 'object' ? cell.v : cell);
+          }
+          const countStr = instanceCount != null
+            ? `  \x1b[2m(${instanceCount.toLocaleString()} instance${instanceCount === 1 ? '' : 's'})\x1b[0m`
+            : '';
+          term.writeln(`\x1b[1mFields of ${cls}\x1b[0m${countStr}`);
           const idxW = String(colNames.length).length;
           const nameW = Math.max(...colNames.map(c => c.length), 8);
           colNames.forEach((n, i) => {
-            // Infer type from the single sample row
             let typeTag = 'null';
             if (rows.length > 0) {
               const cell = rows[0][i];
