@@ -1,6 +1,6 @@
 import React from "react";
 import type { AllocSites, ArraysBySize, BiggestCollectionRow, BiggestCollections, ClassRow, CollectionAttribution, CollectionContents, CollectionsAnalysis, Component, DominatorAnalysis, DuplicateClass, FieldsBySize, FillRatioBucket, HeapComposition, HistRow, KindStat, LeakIndicators, LoaderRollup, MergedPathNode, ObjRow, PackageNode, QueryResult, QueryValue, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalObj, TopArrays, TopComponents, UnreachableClassRow } from "./types";
-import { fmtCount, fmtExactBytes, formatBytes, formatEpochMs, pctOf, shortLoader } from "./format";
+import { fmtCount, fmtExactBytes, fmtPct, formatBytes, formatEpochMs, pctOf, shortLoader } from "./format";
 import {
   CompositionStackedBar,
   ConcentrationChart,
@@ -101,6 +101,26 @@ function ShowMoreRow({ extra, cols, showAll, setShowAll }: { extra: number; cols
   );
 }
 
+// A capped <tbody> for tables whose <tfoot> totals must reflect the FULL row
+// set. Renders only the first `cap` rows (unless expanded, per-table or via the
+// global expand-all toggle) plus a "Show N more" row, while the caller keeps
+// computing totals over the complete array. `cols` is the column count for the
+// ShowMoreRow's colSpan.
+function CappedTbody<T>({ rows, cols, renderRow, cap = TABLE_CAP }: {
+  rows: T[];
+  cols: number;
+  renderRow: (row: T, i: number) => React.ReactNode;
+  cap?: number;
+}) {
+  const { visible, extra, showAll, setShowAll } = useCapped(rows, cap);
+  return (
+    <tbody>
+      {visible.map(renderRow)}
+      <ShowMoreRow extra={extra} cols={cols} showAll={showAll} setShowAll={setShowAll} />
+    </tbody>
+  );
+}
+
 // ── Navigation ───────────────────────────────────────────────────────────────
 // A sticky in-page table of contents so long reports (hundreds of threads,
 // thousands of histogram rows) stay navigable — MAT's report has an equivalent
@@ -111,14 +131,19 @@ function Nav({ report }: { report: Report }) {
 
   // ── Overview group ──
   items.push(
-    ["triage",        "OOM Triage",          "Overview"],
-    ["overview",      "System Overview"],
-    ["record-census", "HPROF Record Census"],
+    ["memory-triage",  "Memory Triage",      "Overview"],
+  );
+  if (report.waste_summary && report.waste_summary.total_bytes > 0) {
+    items.push(["waste-summary", "Waste Summary"]);
+  }
+  items.push(
+    ["system-overview", "System Overview"],
+    ["hprof-record-census", "HPROF Record Census"],
   );
 
   // ── Analysis group ──
-  items.push(["leaks",              "Leak Suspects",    "Analysis"]);
-  items.push(["top",                "Top Consumers"]);
+  items.push(["leak-suspects",       "Leak Suspects",    "Analysis"]);
+  items.push(["top-consumers",       "Top Consumers"]);
   items.push(["dominator-analysis", "Dominator Analysis"]);
   items.push(["threads",            "Threads"]);
   if (report.top.size_distribution.count > 0) items.push(["size-distribution", "Size Distribution"]);
@@ -129,17 +154,18 @@ function Nav({ report }: { report: Report }) {
     if (!dataGroupSet) { items.push([id, label, "Data"]); dataGroupSet = true; }
     else items.push([id, label]);
   };
-  if (report.overview.duplicate_strings) addData("duplicate-strings", "Duplicate Strings");
+  if (report.overview.duplicate_strings) addData("duplicate-strings-approximate", "Duplicate Strings");
   if (report.overview.duplicate_prim_arrays) addData("duplicate-prim-arrays", "Duplicate Prim Arrays");
   if (report.overview.boxed_numbers?.length) addData("boxed-numbers", "Boxed Numbers");
-  if (report.overview.header_overhead?.length) addData("header-overhead", "Header Overhead");
+  if (report.overview.header_overhead?.length) addData("object-header-overhead", "Header Overhead");
   if (report.top_components?.components?.length) addData("top-components", "Top Components");
   addData("arrays-by-size", "Arrays by Size");
   addData("collections", "Collections");
-  if (report.collection_attribution) addData("container-attribution", "Container Attribution");
-  if (report.fields_by_size) addData("fields-by-size", "Fields by Size");
+  if (report.collection_attribution) addData("container-attribution-classfield", "Container Attribution");
+  if (report.fields_by_size) addData("fields-by-retained-size-classfield", "Fields by Size");
+  if (report.top_retainers?.length) addData("top-retainers", "Top Retainers");
   if (report.biggest_collections) addData("biggest-collections", "Biggest Collections");
-  if (report.collection_contents) addData("collection-contents", "Collection Contents");
+  if (report.collection_contents) addData("collection-contents-by-type", "Collection Contents");
   addData("references", "References");
   addData("unreachable-objects", "Unreachable Objects");
   if (report.alloc_sites) addData("alloc-sites", "Allocation Sites");
@@ -240,8 +266,8 @@ function InlineCode({ text }: { text: string }) {
 function OomTriage({ report }: { report: Report }) {
   const signals = report.triage ?? [];
   return (
-    <div className="oom" id="triage" tabIndex={-1}>
-      <h2>OOM Triage</h2>
+    <div className="oom" id="memory-triage" tabIndex={-1}>
+      <h2>Memory Triage</h2>
       <p className="subtitle">Where the reachable heap is concentrated, at a glance.</p>
       <ul>
         {signals.map((s, i) => (
@@ -260,12 +286,57 @@ function OomTriage({ report }: { report: Report }) {
   );
 }
 
+// ── Waste Summary ─────────────────────────────────────────────────────────
+// One headline "reclaimable N" figure folding every quantifiable waste source,
+// with a per-source breakdown that links into the section detailing each.
+// Sources are approximate and may overlap slightly. Mirrors the Rust md/graphs
+// "Waste Summary" section (same order, same values).
+function WasteSummarySection({ report }: { report: Report }) {
+  const w = report.waste_summary;
+  if (!w || w.total_bytes <= 0) return null;
+  const max = w.sources.reduce((m, s) => Math.max(m, s.bytes), 0);
+  return (
+    <section className="section" id="waste-summary" tabIndex={-1}>
+      <h2>Waste Summary</h2>
+      <p className="subtitle">
+        Approximately <strong>{formatBytes(w.total_bytes)}</strong> looks reclaimable across the
+        sources below. Figures are approximate and may overlap slightly.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Source</th>
+            <th className="num">Reclaimable</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {w.sources.map((s, i) => (
+            <tr key={i}>
+              <td>{s.anchor ? <a href={`#${s.anchor}`}>{s.label}</a> : s.label}</td>
+              <td className="num">{formatBytes(s.bytes)}</td>
+              <td className="num bar-cell">
+                <span className="bar-bg">
+                  <span
+                    className="bar-fill"
+                    style={{ width: `${max > 0 ? (s.bytes / max) * 100 : 0}%` }}
+                  />
+                </span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
 // ── KPI card strip ──────────────────────────────────────────────────────────
 function KpiStrip({ report }: { report: Report }) {
   const suspects = report.leaks.suspects;
   const top = suspects[0];
   const topShare = top
-    ? pctOf(top.retained, report.leaks.total_shallow).toFixed(1) + "%"
+    ? fmtPct(pctOf(top.retained, report.leaks.total_shallow))
     : "—";
   const dominantClass = top?.pretty_class ?? "—";
 
@@ -276,7 +347,7 @@ function KpiStrip({ report }: { report: Report }) {
   if (top && pct >= 50) {
     verdict = (
       <>
-        <strong>Likely problem:</strong> <code>{top.pretty_class}</code> retains {pct.toFixed(1)}% of the reachable heap
+        <strong>Likely problem:</strong> <code>{top.pretty_class}</code> retains {fmtPct(pct)} of the reachable heap
         — investigate this first.
       </>
     );
@@ -299,7 +370,7 @@ function KpiStrip({ report }: { report: Report }) {
       <div className="kpi-grid">
       <div className="kpi">
         <div className="kpi-value">{formatBytes(report.overview.total_shallow)}</div>
-        <div className="kpi-label">Total heap</div>
+        <div className="kpi-label">Total reachable heap</div>
       </div>
       <div className="kpi">
         <div className="kpi-value">{fmtCount(report.overview.total_objects)}</div>
@@ -435,8 +506,19 @@ function SortableTh<T>({ label, colKey, sortKey, setSortKey }: {
   label: string; colKey: keyof T; sortKey: keyof T; setSortKey: (k: keyof T) => void;
 }) {
   const active = sortKey === colKey;
+  const handleKey = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSortKey(colKey); }
+  };
   return (
-    <th className={"num sortable" + (active ? " active" : "")} onClick={() => setSortKey(colKey)} title={`Sort by ${label} (descending)`}>
+    <th
+      className={"num sortable" + (active ? " active" : "")}
+      onClick={() => setSortKey(colKey)}
+      onKeyDown={handleKey}
+      tabIndex={0}
+      role="button"
+      aria-sort={active ? "descending" : "none"}
+      title={`Sort by ${label} (descending)`}
+    >
       {label} {active ? "▾" : ""}
     </th>
   );
@@ -532,7 +614,7 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
               <td className="num">{formatBytes(h.shallow)}</td>
               <td className="num">{formatBytes(h.max_instance_shallow)}</td>
               <td className="num">{formatBytes(h.retained)}</td>
-              <td className="num">{totalShallow > 0 ? (h.retained / totalShallow * 100).toFixed(2) + "%" : "—"}</td>
+              <td className="num">{fmtPct(pctOf(h.retained, totalShallow))}</td>
             </tr>
           ))}
           <ShowMoreRow extra={extra} cols={99} showAll={showAll} setShowAll={setShowAll} />
@@ -611,7 +693,7 @@ function RecordCensusSection({ report }: { report: Report }) {
     ["Class dumps", c.class_dumps],
   ];
   return (
-    <section id="record-census">
+    <section id="hprof-record-census">
       <h2>HPROF Record Census</h2>
       <p className="subtitle">
         Raw HPROF record-type composition of the dump (pass-1 counts); additive, not parity-compared.
@@ -686,7 +768,7 @@ function SizeDistributionSection({ report }: { report: Report }) {
             <tr key={i}>
               <td className="num">{formatBytes(b.upper_bytes)}</td>
               <td className="num">{fmtCount(b.count)}</td>
-              <td className="num">{d.count > 0 ? (b.count / d.count * 100).toFixed(1) + "%" : "—"}</td>
+              <td className="num">{d.count > 0 ? fmtPct(b.count / d.count * 100) : "—"}</td>
             </tr>
           ))}
         </tbody>
@@ -883,7 +965,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
   const d = report.overview.duplicate_strings;
   if (!d) {
     return (
-      <section id="duplicate-strings">
+      <section id="duplicate-strings-approximate">
         <h2>Duplicate Strings (approximate)</h2>
         <p className="subtitle">
           Duplicate-string analysis not run (pass <code>--find-duplicates</code>).
@@ -893,7 +975,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
   }
   const w = d.char_array_waste;
   return (
-    <section id="duplicate-strings">
+    <section id="duplicate-strings-approximate">
       <h2>Duplicate Strings (approximate)</h2>
       <p className="subtitle">
         Opt-in (<code>--find-duplicates</code>): each <code>java.lang.String</code> value hashed to 64 bits; collisions accepted as approximation.
@@ -1027,7 +1109,7 @@ function BoxedNumbersSection({ report }: { report: Report }) {
               </td>
               <td className="num">{fmtCount(row.instances)}</td>
               <td className="num">{formatBytes(row.total_shallow)}</td>
-              <td className="num">{total > 0 ? (row.pct_of_heap_bp / 100).toFixed(2) + "%" : "—"}</td>
+              <td className="num">{total > 0 ? fmtPct(row.pct_of_heap_bp / 100) : "—"}</td>
               <td className="num">{formatBytes(row.avg_shallow)}</td>
             </tr>
           ))}
@@ -1072,7 +1154,7 @@ function HeaderOverheadSection({ report }: { report: Report }) {
   if (!rows?.length) return null;
   const { visible, extra, showAll, setShowAll } = useCapped(rows);
   return (
-    <section id="header-overhead">
+    <section id="object-header-overhead">
       <h2>Object Header Overhead</h2>
       <p className="subtitle">
         Classes where object headers consume a large share of shallow heap
@@ -1103,7 +1185,7 @@ function HeaderOverheadSection({ report }: { report: Report }) {
               <td className="num">{fmtCount(row.instances)}</td>
               <td className="num">{row.header_bytes} B</td>
               <td className="num">{formatBytes(row.total_header_bytes)}</td>
-              <td className="num">{(row.header_pct_of_shallow_bp / 100).toFixed(1)}%</td>
+              <td className="num">{fmtPct(row.header_pct_of_shallow_bp / 100)}</td>
               <td className="num">{formatBytes(row.avg_shallow)}</td>
             </tr>
           ))}
@@ -1117,7 +1199,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
   const o = report.overview;
   const threadCount = report.threads?.threads?.length ?? 0;
   return (
-    <section id="overview">
+    <section id="system-overview">
       <h2>System Overview</h2>
       <p className="subtitle">Reachable-heap totals and the largest classes by retained heap.</p>
 
@@ -1160,7 +1242,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
           )}
           <dt>Total objects</dt>
           <dd>{fmtCount(o.total_objects)}</dd>
-          <dt>Total shallow heap</dt>
+          <dt>Total reachable heap</dt>
           <dd>{formatBytes(o.total_shallow)}</dd>
           <dt>GC roots</dt>
           <dd>{fmtCount(o.gc_roots)}</dd>
@@ -1186,14 +1268,14 @@ function SystemOverviewSection({ report }: { report: Report }) {
           )}
           {(o.heap_fragmentation_ratio ?? 0) > 0 && (
             <>
-              <dt>Heap fragmentation</dt>
-              <dd>{((o.heap_fragmentation_ratio ?? 0) * 100).toFixed(1)}%</dd>
+              <dt>Heap fragmentation (unreachable / heap total)</dt>
+              <dd>{fmtPct((o.heap_fragmentation_ratio ?? 0) * 100)}</dd>
             </>
           )}
           {(o.top_class_concentration_bp ?? 0) > 0 && (
             <>
               <dt>Top-class retained concentration</dt>
-              <dd>{((o.top_class_concentration_bp ?? 0) / 100).toFixed(1)}%</dd>
+              <dd>{fmtPct((o.top_class_concentration_bp ?? 0) / 100)}</dd>
             </>
           )}
         </dl>
@@ -1210,16 +1292,14 @@ function SystemOverviewSection({ report }: { report: Report }) {
                   <th>Value</th>
                 </tr>
               </thead>
-              <tbody>
-                {o.system_properties.map((p, i) => (
+              <CappedTbody rows={o.system_properties} cols={2} renderRow={(p, i) => (
                   <tr key={i}>
                     <td>
                       <code>{p.key}</code>
                     </td>
                     <td className="sysprop-val">{p.value}</td>
                   </tr>
-                ))}
-              </tbody>
+                )} />
             </table>
           </div>
         </details>
@@ -1286,7 +1366,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
                           {r.root_type}
                         </td>
                         <td className="num">{fmtCount(r.count)}</td>
-                        <td className="num">{pct.toFixed(1)}%</td>
+                        <td className="num">{fmtPct(pct)}</td>
                       </tr>
                     );
                   })}
@@ -1451,12 +1531,12 @@ function AccumulationPath({ s }: { s: Suspect }) {
   );
 }
 
-function DominatedByClass({ rows }: { rows: HistRow[] }) {
+function DominatedByClass({ rows, suspectRetained }: { rows: HistRow[]; suspectRetained: number }) {
   if (rows.length === 0) return null;
   const { visible, extra, showAll, setShowAll } = useCapped(rows);
   return (
-    <details>
-      <summary>Accumulated objects grouped by class ({rows.length})</summary>
+    <details open>
+      <summary>Accumulated objects by class ({rows.length})</summary>
       <table>
         <thead>
           <tr>
@@ -1464,6 +1544,7 @@ function DominatedByClass({ rows }: { rows: HistRow[] }) {
             <th className="num">Instances</th>
             <th className="num">Shallow</th>
             <th className="num">Retained</th>
+            <th className="num">% of suspect</th>
           </tr>
         </thead>
         <tbody>
@@ -1475,9 +1556,10 @@ function DominatedByClass({ rows }: { rows: HistRow[] }) {
               <td className="num">{fmtCount(r.instances)}</td>
               <td className="num">{formatBytes(r.shallow)}</td>
               <td className="num">{formatBytes(r.retained)}</td>
+              <td className="num">{suspectRetained > 0 ? fmtPct(pctOf(r.retained, suspectRetained)) : "—"}</td>
             </tr>
           ))}
-          <ShowMoreRow extra={extra} cols={4} showAll={showAll} setShowAll={setShowAll} />
+          <ShowMoreRow extra={extra} cols={5} showAll={showAll} setShowAll={setShowAll} />
         </tbody>
       </table>
     </details>
@@ -1492,10 +1574,11 @@ function RootPathList({ steps }: { steps: RootPathStep[] }) {
   const last = steps.length - 1;
   return (
     <details>
-      <summary>Path to GC root · dominator chain ({steps.length} step{steps.length === 1 ? "" : "s"})</summary>
+      <summary>Dominator chain to GC root ({steps.length} step{steps.length === 1 ? "" : "s"})</summary>
       <ol className="accum-path">
         {steps.map((p, i) => (
           <li key={i}>
+            {p.field_edge && <span className="path-field">.{p.field_edge} → </span>}
             <code>{p.display_class}</code>{" "}
             <span className="path-ret">retains {formatBytes(p.retained)}</span>
             {i === last && p.root_type_label && (
@@ -1517,6 +1600,7 @@ function MergedPathsNode({ node, depth }: { node: MergedPathNode; depth: number 
   const hasChildren = node.children.length > 0;
   const label = (
     <>
+      {node.field_edge && <span className="path-field">.{node.field_edge} → </span>}
       <code>{node.display_class}</code>{" "}
       <span className="path-ret">
         {fmtCount(node.object_count)} object{node.object_count === 1 ? "" : "s"} · retained {formatBytes(node.retained)}
@@ -1564,13 +1648,13 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
   return (
     <div className="suspect" id={`suspect-${rank}`}>
       <h3 style={{ margin: "0 0 0.25rem" }}>
-        <span className="rank">Problem Suspect {rank}</span> <code>{s.pretty_class}</code>
+        <span className="rank">Suspect #{rank}</span> <code>{s.pretty_class}</code>
         <span className="pill">{s.is_single ? "single object" : `class group ×${fmtCount(s.instance_count)}`}</span>
       </h3>
       <p style={{ margin: "0.25rem 0" }}>
         Retains <strong title={fmtExactBytes(s.retained)}>{formatBytes(s.retained)}</strong>{" "}
         <span className="mat-exact">
-          {fmtExactBytes(s.retained)} ({share.toFixed(2)}%)
+          {fmtExactBytes(s.retained)} ({fmtPct(share)})
         </span>
         {s.shallow > 0 && <> · shallow {formatBytes(s.shallow)}</>}.
       </p>
@@ -1600,8 +1684,8 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
           {s.accumulation_retained != null && <> retaining {formatBytes(s.accumulation_retained)}</>}.
         </p>
       )}
+      <DominatedByClass rows={s.dominated_by_class} suspectRetained={s.retained} />
       <AccumulationPath s={s} />
-      <DominatedByClass rows={s.dominated_by_class} />
       {s.dominated.length > 0 && (
         <details>
           <summary>
@@ -1643,7 +1727,7 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
 function LeakSuspectsSection({ report }: { report: Report }) {
   const l = report.leaks;
   return (
-    <section id="leaks">
+    <section id="leak-suspects">
       <h2>Leak Suspects</h2>
       <p className="subtitle">Ranked accumulation points holding the most retained heap.</p>
       {l.suspects.length === 0 ? (
@@ -1717,17 +1801,27 @@ function TopConsumersSection({ report }: { report: Report }) {
   const clsSort = useSortedRows<ClassRow>(t.biggest_classes, "retained");
   const objCap = useCapped(objSort.sorted);
   const clsCap = useCapped(clsSort.sorted);
+  // "Held via" shows the dominant Class#field owner OR the holding stack frame;
+  // the column is shown only when at least one row has either.
+  const objHasOwner = t.biggest_objects.some((o) => !!o.owner || !!o.held_via);
+  const objCols = objHasOwner ? 6 : 5;
 
   // Column resize hooks for the two main tables.
-  const objResize = useColumnResize(5);
+  const objResize = useColumnResize(objCols);
   const clsResize = useColumnResize(4);
 
   return (
-    <section id="top">
+    <section id="top-consumers">
       <h2>Top Consumers</h2>
       <p className="subtitle">Biggest individual objects, classes, and packages by retained heap.</p>
 
       <h3>Biggest Objects</h3>
+      {objHasOwner && (
+        <p className="subtitle">
+          The <strong>Held via</strong> column names the dominant incoming <code>Class#field</code>{" "}
+          reference that holds each object (the primary referrer; an object may have several).
+        </p>
+      )}
       <div className="resizable-table-wrap">
       <table className="resizable-table">
         {objResize.widths.some((w) => w > 0) && (
@@ -1742,6 +1836,9 @@ function TopConsumersSection({ report }: { report: Report }) {
             <SortableTh<ObjRow> label="Shallow" colKey="shallow" sortKey={objSort.sortKey} setSortKey={objSort.setSortKey} />
             <SortableTh<ObjRow> label="Retained" colKey="retained" sortKey={objSort.sortKey} setSortKey={objSort.setSortKey} />
             <SortableTh<ObjRow> label="% Heap" colKey="pct_bp" sortKey={objSort.sortKey} setSortKey={objSort.setSortKey} />
+            {objHasOwner && (
+              <th className="resizable">Held via (Class#field)<span className="col-resize-handle" onMouseDown={objResize.onMouseDown(5)} /></th>
+            )}
           </tr>
         </thead>
         <tbody>
@@ -1755,10 +1852,19 @@ function TopConsumersSection({ report }: { report: Report }) {
               <td className="num" title={fmtExactBytes(o.retained)}>
                 {formatBytes(o.retained)}
               </td>
-              <td className="num">{pctOf(o.retained, total).toFixed(1)}%</td>
+              <td className="num">{fmtPct(pctOf(o.retained, total))}</td>
+              {objHasOwner && (
+                <td>
+                  {o.owner ? (
+                    <code>{o.owner}</code>
+                  ) : o.held_via ? (
+                    <><code>{o.held_via}</code> <span className="muted">(stack)</span></>
+                  ) : "—"}
+                </td>
+              )}
             </tr>
           ))}
-          <ShowMoreRow extra={objCap.extra} cols={5} showAll={objCap.showAll} setShowAll={objCap.setShowAll} />
+          <ShowMoreRow extra={objCap.extra} cols={objCols} showAll={objCap.showAll} setShowAll={objCap.setShowAll} />
         </tbody>
       </table>
       </div>
@@ -1792,7 +1898,7 @@ function TopConsumersSection({ report }: { report: Report }) {
               <td className="num" title={fmtExactBytes(c.retained)}>
                 {formatBytes(c.retained)}
               </td>
-              <td className="num">{pctOf(c.retained, total).toFixed(1)}%</td>
+              <td className="num">{fmtPct(pctOf(c.retained, total))}</td>
             </tr>
           ))}
           <ShowMoreRow extra={clsCap.extra} cols={4} showAll={clsCap.showAll} setShowAll={clsCap.setShowAll} />
@@ -1805,7 +1911,7 @@ function TopConsumersSection({ report }: { report: Report }) {
           <h3>Biggest Packages</h3>
           <p className="subtitle">
             Expand a package to drill into its sub-packages. Totals are cumulative over the subtree. Only top-level
-            dominators retaining at least {(t.threshold_bp / 100).toFixed(t.threshold_bp % 100 === 0 ? 0 : 2)}% of the
+            dominators retaining at least {fmtPct(t.threshold_bp / 100)} of the
             heap are included (smaller ones are pruned, MAT-style).
           </p>
           <TreemapBar
@@ -1845,11 +1951,13 @@ function TopConsumersSection({ report }: { report: Report }) {
 // the upstream (thread_serial-sorted) order for determinism.
 // a small table of a thread's GC-thread-local root
 // objects. Renders nothing for an empty list. Mirrors report.rs::render_thread_locals.
-function ThreadLocalsTable({ objs }: { objs: ThreadLocalObj[] }) {
+function ThreadLocalsTable({ objs, totalCount }: { objs: ThreadLocalObj[]; totalCount: number }) {
   if (objs.length === 0) return null;
   return (
-    <details className="thread-locals-detail">
-      <summary>Local root objects ({fmtCount(objs.length)})</summary>
+    <div className="thread-locals-inline">
+      <p className="thread-locals-label">Local root objects ({fmtCount(objs.length)}
+        {objs.length < totalCount && ` — showing top ${fmtCount(objs.length)} of ${fmtCount(totalCount)}; sizes overlap and do not sum to thread total`}
+      )</p>
       <table>
         <thead>
           <tr>
@@ -1858,8 +1966,7 @@ function ThreadLocalsTable({ objs }: { objs: ThreadLocalObj[] }) {
             <th className="num">Retained</th>
           </tr>
         </thead>
-        <tbody>
-          {objs.map((o, i) => (
+        <CappedTbody rows={objs} cols={3} renderRow={(o: ThreadLocalObj, i: number) => (
             <tr key={i}>
               <td>
                 <span className="copy-cell">
@@ -1870,10 +1977,9 @@ function ThreadLocalsTable({ objs }: { objs: ThreadLocalObj[] }) {
               <td className="num">{formatBytes(o.shallow)}</td>
               <td className="num">{formatBytes(o.retained)}</td>
             </tr>
-          ))}
-        </tbody>
+          )} />
       </table>
-    </details>
+    </div>
   );
 }
 
@@ -1919,8 +2025,10 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
             <span className="thread-meta-item"><span className="thread-meta-label">state</span>{t.thread_state.replace(/[\[\]]/g, "")}</span>
           )}
         </div>
-        {t.local_objects && <ThreadLocalsTable objs={t.local_objects} />}
+        {t.local_objects && <ThreadLocalsTable objs={t.local_objects} totalCount={t.local_root_count} />}
         {sig.length > 0 ? (
+          <>
+            <p className="subtitle"><em>Frame percentages are of this thread's {formatBytes(t.retained)} retained heap.</em></p>
           <ul className="sig-frames">
             {sig.map((sf, i) => (
               <li key={i}>
@@ -1930,7 +2038,7 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
                     {sf.locals.map((loc, j) => (
                       <li key={j}>
                         <code>{loc.display_class}</code>{" "}
-                        <span className="path-ret">retains {formatBytes(loc.retained)} ({loc.pct.toFixed(1)}%)</span>
+                        <span className="path-ret">retains {formatBytes(loc.retained)} ({fmtPct(loc.pct)} of thread retained)</span>
                       </li>
                     ))}
                   </ul>
@@ -1938,6 +2046,7 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
               </li>
             ))}
           </ul>
+          </>
         ) : (
           <pre className="stack">{t.frames.join("\n")}</pre>
         )}
@@ -2101,7 +2210,7 @@ function TopComponentsSection({ data }: { data: TopComponents }) {
                   <code title={c.loader_label ?? undefined}>{fmtLoader(c.loader_label ?? "")}</code>
                 </td>
                 <td className="num">{formatBytes(c.retained)}</td>
-                <td className="num">{c.pct.toFixed(1)}%</td>
+                <td className="num">{fmtPct(c.pct)}</td>
                 <td>
                   {c.top_classes.map((cc, j) => (
                     <span key={j}>
@@ -2153,7 +2262,7 @@ function ArraysBySizeSection({ data, totalShallow }: { data?: ArraysBySize; tota
                   <td className="num">&le; {fmtCount(b.upper_len)}</td>
                   <td className="num">{fmtCount(b.objects)}</td>
                   <td className="num">{formatBytes(b.shallow)}</td>
-                  <td className="num">{totalShallow > 0 ? (b.shallow / totalShallow * 100).toFixed(1) + "%" : "—"}</td>
+                  <td className="num">{totalShallow > 0 ? fmtPct(b.shallow / totalShallow * 100) : "—"}</td>
                 </tr>
               ))}
             </tbody>
@@ -2162,7 +2271,7 @@ function ArraysBySizeSection({ data, totalShallow }: { data?: ArraysBySize; tota
                 <td className="num"><strong>Total</strong></td>
                 <td className="num"><strong>{fmtCount(totalObjects)}</strong></td>
                 <td className="num"><strong>{formatBytes(totalBytes)}</strong></td>
-                <td className="num"><strong>{totalShallow > 0 ? (totalBytes / totalShallow * 100).toFixed(1) + "%" : "—"}</strong></td>
+                <td className="num"><strong>{totalShallow > 0 ? fmtPct(totalBytes / totalShallow * 100) : "—"}</strong></td>
               </tr>
             </tfoot>
           </table>
@@ -2210,7 +2319,9 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
   const topArraysBlock = (t: TopArrays | undefined, kind: string) => {
     const individual = t?.top_individual ?? [];
     const byClass = t?.top_by_class ?? [];
+    const hasFill = individual.some((r) => r.non_null != null);
     const hasOwner = individual.some((r) => r.owner != null);
+    const colCount = 2 + (hasFill ? 1 : 0) + 1 + (hasOwner ? 1 : 0);
     return (
       <>
         <h3>Top Arrays ({kind})</h3>
@@ -2225,24 +2336,25 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
               <tr>
                 <th>Array class</th>
                 <th className="num">Length</th>
+                {hasFill && <th className="num">Used/Length</th>}
                 <th className="num">Shallow</th>
                 {hasOwner && <th>Owner (Class#field)</th>}
               </tr>
             </thead>
-            <tbody>
-              {individual.map((r, i) => (
+            <CappedTbody rows={individual} cols={colCount} renderRow={(r, i) => (
                 <tr key={i}>
                   <td><code>{r.array_class}</code></td>
                   <td className="num">{fmtCount(r.length)}</td>
+                  {hasFill && <td className="num">{r.non_null != null ? `${fmtCount(r.non_null)}/${fmtCount(r.length)}` : "—"}</td>}
                   <td className="num">{formatBytes(r.shallow)}</td>
                   {hasOwner && <td>{r.owner ? <code>{r.owner}</code> : "—"}</td>}
                 </tr>
-              ))}
-            </tbody>
+              )} />
             <tfoot>
               <tr>
                 <td className="num"><strong>Total</strong></td>
                 <td className="num"></td>
+                {hasFill && <td className="num"></td>}
                 <td className="num"><strong>{formatBytes(individual.reduce((s, r) => s + r.shallow, 0))}</strong></td>
                 {hasOwner && <td></td>}
               </tr>
@@ -2261,15 +2373,13 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
                 <th className="num">Shallow</th>
               </tr>
             </thead>
-            <tbody>
-              {byClass.map((r, i) => (
+            <CappedTbody rows={byClass} cols={3} renderRow={(r, i) => (
                 <tr key={i}>
                   <td><code>{r.array_class}</code></td>
                   <td className="num">{fmtCount(r.objects)}</td>
                   <td className="num">{formatBytes(r.shallow)}</td>
                 </tr>
-              ))}
-            </tbody>
+              )} />
             <tfoot>
               <tr>
                 <td className="num"><strong>Total</strong></td>
@@ -2484,8 +2594,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
               {cpaHasOwner && <th>Owner (Class#field)</th>}
             </tr>
           </thead>
-          <tbody>
-            {cpaRows.map((r, i) => (
+          <CappedTbody rows={cpaRows} cols={cpaHasOwner ? 6 : 5} renderRow={(r, i) => (
               <tr key={i}>
                 <td><code>{r.array_class}</code></td>
                 <td className="num">{fmtCount(r.length)}</td>
@@ -2494,8 +2603,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
                 <td className="num">{formatBytes(r.shallow)}</td>
                 {cpaHasOwner && <td>{r.owner ? <code>{r.owner}</code> : "—"}</td>}
               </tr>
-            ))}
-          </tbody>
+            )} />
         </table>
       )}
 
@@ -2509,6 +2617,33 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
 // Which holder Class#field points at the most container memory. Absent when
 // --collections was off (data undefined → section not rendered). Mirrors
 // render_md.rs::render_collection_attribution (HTML has no bar columns).
+function TinyCollectionTable({ rows }: { rows: import("./types").TinyCollectionRow[] }) {
+  return (
+    <table>
+      <thead>
+        <tr>
+          <th>Class#field</th>
+          <th>Kind</th>
+          <th className="num">Empty</th>
+          <th className="num">Singleton</th>
+          <th className="num">Overhead Bytes</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r, i) => (
+          <tr key={i}>
+            <td><code>{r.holder_class}#{r.field}</code></td>
+            <td>{r.container_kind}</td>
+            <td className="num">{fmtCount(r.empty_count)}</td>
+            <td className="num">{fmtCount(r.singleton_count)}</td>
+            <td className="num">{formatBytes(r.overhead_bytes)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 function CollectionAttributionSection({ data }: { data?: CollectionAttribution }) {
   if (!data) return null;
   const mostOverall = data.most_overall ?? [];
@@ -2516,7 +2651,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
   const overallCap = useCapped(mostOverall);
   const singleCap = useCapped(biggestSingle);
   return (
-    <section id="container-attribution">
+    <section id="container-attribution-classfield">
       <h2>Container Attribution (Class#field)</h2>
       <p className="subtitle">
         Which holder <code>Class#field</code> points at the most container memory. Two rankings: total across
@@ -2536,6 +2671,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
               <th className="num">Holder Instances</th>
               <th className="num">Total Elements</th>
               <th className="num">Total Retained</th>
+              <th className="num">Wasted Bytes</th>
             </tr>
           </thead>
           <tbody>
@@ -2547,9 +2683,10 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
                 <td className="num">{fmtCount(r.holder_instances)}</td>
                 <td className="num">{fmtCount(r.total_elements)}</td>
                 <td className="num">{formatBytes(r.total_retained)}</td>
+                <td className="num">{r.total_wasted_bytes != null ? formatBytes(r.total_wasted_bytes) : "—"}</td>
               </tr>
             ))}
-            <ShowMoreRow extra={overallCap.extra} cols={6} showAll={overallCap.showAll} setShowAll={overallCap.setShowAll} />
+            <ShowMoreRow extra={overallCap.extra} cols={7} showAll={overallCap.showAll} setShowAll={overallCap.setShowAll} />
           </tbody>
         </table>
       )}
@@ -2563,6 +2700,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
             <tr>
               <th>Class#field</th>
               <th>Container Class</th>
+              <th>Kind</th>
               <th className="num">Elements</th>
               <th className="num">Capacity</th>
               <th className="num">Retained</th>
@@ -2573,14 +2711,26 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
               <tr key={i}>
                 <td><code>{r.holder_class}#{r.field}</code></td>
                 <td><code>{r.container_class}</code></td>
+                <td>{r.container_kind}</td>
                 <td className="num">{fmtCount(r.elements)}</td>
                 <td className="num">{fmtCount(r.capacity)}</td>
                 <td className="num">{formatBytes(r.retained)}</td>
               </tr>
             ))}
-            <ShowMoreRow extra={singleCap.extra} cols={5} showAll={singleCap.showAll} setShowAll={singleCap.setShowAll} />
+            <ShowMoreRow extra={singleCap.extra} cols={6} showAll={singleCap.showAll} setShowAll={singleCap.setShowAll} />
           </tbody>
         </table>
+      )}
+
+      {data.tiny_overhead && data.tiny_overhead.length > 0 && (
+        <>
+          <h3>Tiny Collection Overhead</h3>
+          <p className="subtitle">
+            Empty (size-0) and singleton (size-1) collections whose wrapper objects are pure overhead.
+            Overhead bytes = object count × reference-slot width.
+          </p>
+          <TinyCollectionTable rows={data.tiny_overhead} />
+        </>
       )}
 
       {data.truncated && (
@@ -2597,11 +2747,32 @@ function BiggestCollectionsTable({ rows, title }: { rows: BiggestCollectionRow[]
   if (rows.length === 0) return null;
   const hasRetained = rows.some((r) => r.retained != null);
   const hasOwner = rows.some((r) => r.owner != null);
-  const hasValue = rows.some((r) => r.dominant_value_type != null);
   const hasBreakdown = rows.some((r) => (r.value_type_breakdown?.length ?? 0) > 0);
+  // Drop standalone Value Type column when breakdown is present (it duplicates the lead entry).
+  const hasValue = !hasBreakdown && rows.some((r) => r.dominant_value_type != null);
   const totalElements = rows.reduce((s, r) => s + r.elements, 0);
   const totalRetained = rows.reduce((s, r) => s + (r.retained ?? 0), 0);
-  const { visible, extra, showAll, setShowAll } = useCapped(rows);
+
+  // Coalesce consecutive identical rows.
+  type Coalesced = { row: BiggestCollectionRow; count: number };
+  const coalesced: Coalesced[] = [];
+  for (const r of rows) {
+    const last = coalesced[coalesced.length - 1];
+    if (
+      last &&
+      last.row.kind === r.kind &&
+      last.row.container_class === r.container_class &&
+      last.row.elements === r.elements &&
+      last.row.owner === r.owner &&
+      last.row.retained === r.retained
+    ) {
+      last.count++;
+    } else {
+      coalesced.push({ row: r, count: 1 });
+    }
+  }
+
+  const { visible, extra, showAll, setShowAll } = useCapped(coalesced);
   return (
     <>
       <h3>{title}</h3>
@@ -2618,11 +2789,14 @@ function BiggestCollectionsTable({ rows, title }: { rows: BiggestCollectionRow[]
           </tr>
         </thead>
         <tbody>
-          {visible.map((r, i) => (
+          {visible.map(({ row: r, count }, i) => (
             <tr key={i}>
               <td>{r.kind}</td>
-              <td><code>{r.container_class}</code></td>
-              <td className="num">{fmtCount(r.elements)}</td>
+              <td>
+                <code>{r.container_class}</code>
+                {count > 1 && <span className="muted"> ×{fmtCount(count)}</span>}
+              </td>
+              <td className="num">{count > 1 ? `${fmtCount(r.elements)} each` : fmtCount(r.elements)}</td>
               {hasValue && <td>{r.dominant_value_type ? <code>{r.dominant_value_type}</code> : "—"}</td>}
               {hasBreakdown && (
                 <td>
@@ -2682,7 +2856,7 @@ function CollectionContentsSection({ data }: { data?: CollectionContents }) {
   const rows = data.rows ?? [];
   const { visible, extra, showAll, setShowAll } = useCapped(rows);
   return (
-    <section id="collection-contents">
+    <section id="collection-contents-by-type">
       <h2>Collection Contents by Type</h2>
       <p className="subtitle">
         What runtime element/value types your collections hold, aggregated per collection class.
@@ -2738,10 +2912,16 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
   const rows = data.rows ?? [];
   const totalRetained = rows.reduce((s, r) => s + r.total_retained, 0);
   const totalPointees = rows.reduce((s, r) => s + r.pointees, 0);
+  const hasElements = rows.some((r) => (r.elements ?? 0) > 0);
   const { visible, extra, showAll, setShowAll } = useCapped(rows);
   return (
-    <section id="fields-by-size">
+    <section id="fields-by-retained-size-classfield">
       <h2>Fields by Retained Size (Class#field)</h2>
+      {data.truncated && (
+        <p className="subtitle">
+          Field grouping was truncated (group or pointee cap hit); ranking is a bounded sample.
+        </p>
+      )}
       <p className="subtitle">
         Which holder <code>Class#field</code> retains the most memory, summed over every object the
         field points at. Runtime pointee type is the dominant concrete class reached through the
@@ -2757,8 +2937,9 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
               <th>Runtime Pointee Type</th>
               <th>Category</th>
               <th className="num">Pointees</th>
-              <th className="num">Elements</th>
+              {hasElements && <th className="num">Elements</th>}
               <th className="num">Holder Instances</th>
+              <th className="num">Sharing</th>
               <th className="num">Retained</th>
             </tr>
           </thead>
@@ -2769,12 +2950,13 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
                 <td><code>{r.pointee_type}</code></td>
                 <td>{r.category ?? "—"}</td>
                 <td className="num">{fmtCount(r.pointees)}</td>
-                <td className="num">{r.elements != null ? fmtCount(r.elements) : "—"}</td>
+                {hasElements && <td className="num">{r.elements != null ? fmtCount(r.elements) : "—"}</td>}
                 <td className="num">{fmtCount(r.holder_instances)}</td>
+                <td className="num">{r.holder_instances > 0 ? `${(r.pointees / r.holder_instances).toFixed(1)}×` : "—"}</td>
                 <td className="num">{formatBytes(r.total_retained)}</td>
               </tr>
             ))}
-            <ShowMoreRow extra={extra} cols={7} showAll={showAll} setShowAll={setShowAll} />
+            <ShowMoreRow extra={extra} cols={hasElements ? 8 : 7} showAll={showAll} setShowAll={setShowAll} />
           </tbody>
           <tfoot>
             <tr>
@@ -2782,17 +2964,13 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
               <td></td>
               <td></td>
               <td className="num"><strong>{fmtCount(totalPointees)}</strong></td>
-              <td className="num"><strong>{fmtCount(rows.reduce((s,r)=>s+(r.elements??0),0))}</strong></td>
+              {hasElements && <td className="num"><strong>{fmtCount(rows.reduce((s,r)=>s+(r.elements??0),0))}</strong></td>}
+              <td className="num"></td>
               <td className="num"></td>
               <td className="num"><strong>{formatBytes(totalRetained)}</strong></td>
             </tr>
           </tfoot>
         </table>
-      )}
-      {data.truncated && (
-        <p className="subtitle">
-          Field grouping was truncated (group or pointee cap hit); ranking is a bounded sample.
-        </p>
       )}
     </section>
   );
@@ -2810,6 +2988,7 @@ function RefClassTable({ rows }: { rows: RefStatClassRow[] }) {
           <th>Class</th>
           <th className="num">Objects</th>
           <th className="num">Shallow</th>
+          <th className="num">Retained</th>
         </tr>
       </thead>
       <tbody>
@@ -2818,15 +2997,17 @@ function RefClassTable({ rows }: { rows: RefStatClassRow[] }) {
             <td><code>{r.pretty_class}</code></td>
             <td className="num">{fmtCount(r.objects)}</td>
             <td className="num">{formatBytes(r.shallow)}</td>
+            <td className="num">{formatBytes(r.retained ?? 0)}</td>
           </tr>
         ))}
-        <ShowMoreRow extra={extra} cols={3} showAll={showAll} setShowAll={setShowAll} />
+        <ShowMoreRow extra={extra} cols={4} showAll={showAll} setShowAll={setShowAll} />
       </tbody>
       <tfoot>
         <tr>
           <td className="num"><strong>Total</strong></td>
           <td className="num"><strong>{fmtCount(rows.reduce((s, r) => s + r.objects, 0))}</strong></td>
           <td className="num"><strong>{formatBytes(rows.reduce((s, r) => s + r.shallow, 0))}</strong></td>
+          <td className="num"><strong>{formatBytes(rows.reduce((s, r) => s + (r.retained ?? 0), 0))}</strong></td>
         </tr>
       </tfoot>
     </table>
@@ -2838,6 +3019,15 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
     (s): s is ReferenceStats => s != null,
   );
 
+  const kindCaption = (kind: string) => {
+    switch (kind) {
+      case "Soft": return "Soft references keep objects alive until the JVM needs memory — cleared under GC pressure. A large soft-referenced heap is often an unbounded cache; consider bounding the cache size.";
+      case "Weak": return "Weak references do not prevent GC. Objects listed here are reachable only via weak chains — under any GC they may be reclaimed. Large counts are usually benign.";
+      case "Phantom": return "Phantom references mark objects in finalization or cleanup pipelines. A large backlog may indicate that the ReferenceQueue processor is too slow or blocked, or that native resources are not being released promptly.";
+      default: return "";
+    }
+  };
+
   return (
     <section id="references">
       <h2>References</h2>
@@ -2848,15 +3038,16 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
         kinds.map((stats) => (
           <React.Fragment key={stats.kind}>
             <h3>{stats.kind} References</h3>
+            <p className="subtitle">{kindCaption(stats.kind)}</p>
             <p className="subtitle">{fmtCount(stats.reference_instances)} reference instances.</p>
             <h4>Referent classes</h4>
             <RefClassTable rows={stats.referent_histogram ?? []} />
-            {(stats.only_weakly_retained ?? []).length > 0 && (
-              <>
-                <h4>Only-weakly retained (approximate)</h4>
-                <RefClassTable rows={stats.only_weakly_retained} />
-              </>
-            )}
+            <h4>Only-weakly retained (approximate)</h4>
+            <p className="subtitle">Objects with no incoming strong reference other than this reference chain — GC pressure would free them.</p>
+            {(stats.only_weakly_retained ?? []).length > 0
+              ? <RefClassTable rows={stats.only_weakly_retained} />
+              : <p className="subtitle"><em>None found — no objects are exclusively reachable via this reference kind.</em></p>
+            }
           </React.Fragment>
         ))
       )}
@@ -3029,6 +3220,10 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
   const sorted = React.useMemo(() => [...rows].sort((a, b) => b[sortKey] - a[sortKey]), [rows, sortKey]);
   const { visible, extra, showAll, setShowAll } = useCapped(sorted);
   const colCount = 1 + UNREACHABLE_COLS.length; // Class + data columns
+  const unreachablePct = React.useMemo(() => {
+    const total = (data?.total_shallow ?? 0) + (data?.unreachable_shallow ?? 0);
+    return total > 0 ? (data?.unreachable_shallow ?? 0) / total * 100 : 0;
+  }, [data]);
   return (
     <section id="unreachable-objects">
       <h2>Unreachable Objects</h2>
@@ -3037,9 +3232,14 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
       ) : (
         <>
           <p className="subtitle">
-            {fmtCount(data?.unreachable_count ?? 0)} unreachable objects retaining{" "}
-            {formatBytes(data?.unreachable_shallow ?? 0)} shallow
-            {` (${formatBytes(data?.unreachable_retained ?? 0)} retained within the unreachable forest; top ${fmtCount(rows.length)} classes by shallow).`}
+            {fmtCount(data?.unreachable_count ?? 0)} unreachable objects,{" "}
+            {formatBytes(data?.unreachable_shallow ?? 0)} shallow heap
+            {` (within the unreachable forest retained = shallow since all paths stay in-forest; top ${fmtCount(rows.length)} classes by shallow).`}
+          </p>
+          <p className="subtitle">
+            {unreachablePct >= 5
+              ? `Unreachable objects are eligible for collection but have not yet been reclaimed. At ${fmtPct(unreachablePct)} of heap total (reachable + unreachable) this is elevated — the JVM may not have had time to GC before the dump was taken, or finalization may be backed up.`
+              : "Unreachable objects are eligible for collection but have not yet been reclaimed. A small unreachable heap (< 5% of heap total) is normal between GC cycles."}
           </p>
           {data?.unreachable_composition && (
             <UnreachableCompositionTable comp={data.unreachable_composition} />
@@ -3091,9 +3291,9 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
 function AllocSitesSection({ data }: { data: AllocSites }) {
   const { visible, extra, showAll, setShowAll } = useCapped(data.sites);
   return (
-    <section id="alloc-sites">
+    <section id="allocation-sites">
       <h2>Allocation Sites</h2>
-      <p className="subtitle">Objects grouped by the stack trace that allocated them.</p>
+      <p className="subtitle">Objects grouped by the stack trace that allocated them. Shallow heap is additive; retained is omitted because summing per-object retained over-counts shared subgraphs.</p>
       {!data.traces_present ? (
         <p className="subtitle">
           Allocation tracking was off in this dump (<code>stack_trace_serial = 0</code>); no allocation sites available.
@@ -3105,7 +3305,6 @@ function AllocSitesSection({ data }: { data: AllocSites }) {
               <th>Stack</th>
               <th className="num">Objects</th>
               <th className="num">Shallow</th>
-              <th className="num">Retained</th>
             </tr>
           </thead>
           <tbody>
@@ -3129,19 +3328,15 @@ function AllocSitesSection({ data }: { data: AllocSites }) {
                 </td>
                 <td className="num">{fmtCount(s.object_count)}</td>
                 <td className="num">{formatBytes(s.shallow_total)}</td>
-                <td className="num" title={fmtExactBytes(s.retained_total)}>
-                  {formatBytes(s.retained_total)}
-                </td>
               </tr>
             ))}
-            <ShowMoreRow extra={extra} cols={4} showAll={showAll} setShowAll={setShowAll} />
+            <ShowMoreRow extra={extra} cols={3} showAll={showAll} setShowAll={setShowAll} />
           </tbody>
           <tfoot>
             <tr>
               <td className="num"><strong>Total</strong></td>
               <td className="num"><strong>{fmtCount(data.sites.reduce((s, r) => s + r.object_count, 0))}</strong></td>
               <td className="num"><strong>{formatBytes(data.sites.reduce((s, r) => s + r.shallow_total, 0))}</strong></td>
-              <td className="num"><strong>{formatBytes(data.sites.reduce((s, r) => s + r.retained_total, 0))}</strong></td>
             </tr>
           </tfoot>
         </table>
@@ -3177,22 +3372,21 @@ function RetentionConcentrationSection({ report }: { report: Report }) {
         <tbody>
           <tr>
             <td>Top 1 object</td>
-            <td className="num">{(rc.top1_bp / 100).toFixed(1)}%</td>
+            <td className="num">{fmtPct(rc.top1_bp / 100)}</td>
           </tr>
           <tr>
             <td>Top 10 objects</td>
-            <td className="num">{(rc.top10_bp / 100).toFixed(1)}%</td>
+            <td className="num">{fmtPct(rc.top10_bp / 100)}</td>
           </tr>
           <tr>
             <td>Top 100 objects</td>
-            <td className="num">{(rc.top100_bp / 100).toFixed(1)}%</td>
-          </tr>
-          <tr>
-            <td>Objects each &ge;1%</td>
-            <td className="num">{fmtCount(rc.num_objects_ge_1pct)}</td>
+            <td className="num">{fmtPct(rc.top100_bp / 100)}</td>
           </tr>
         </tbody>
       </table>
+      {rc.num_objects_ge_1pct > 0 && (
+        <p className="subtitle"><em>{fmtCount(rc.num_objects_ge_1pct)} {rc.num_objects_ge_1pct === 1 ? "object" : "objects"} each hold ≥1% of the reachable heap.</em></p>
+      )}
     </section>
   );
 }
@@ -3240,16 +3434,14 @@ function DominatorDepthSection({ report }: { report: Report }) {
               <th className="num">Cumulative %</th>
             </tr>
           </thead>
-          <tbody>
-            {rows.map((r, i) => (
+          <CappedTbody rows={rows} cols={4} renderRow={(r, i) => (
               <tr key={i}>
                 <td className="num">{r.depth}</td>
                 <td className="num">{fmtCount(r.objects)}</td>
-                <td className="num">{r.pct.toFixed(2)}%</td>
-                <td className="num">{r.cum.toFixed(2)}%</td>
+                <td className="num">{fmtPct(r.pct)}</td>
+                <td className="num">{fmtPct(r.cum)}</td>
               </tr>
-            ))}
-          </tbody>
+            )} />
         </table>
       </details>
     </section>
@@ -3297,6 +3489,40 @@ function LeakIndicatorsSection({ data }: { data?: LeakIndicators }) {
               <td className="num">{formatBytes(direct_byte_buffer_capacity_sum)}</td>
             </tr>
           )}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+// ── Top Retainers (§813) ───────────────────────────────────────────────────────
+// Merged Class#field + stack-frame retainers, sorted by retained desc.
+function TopRetainersSection({ rows }: { rows?: import("./types").RetainerRow[] }) {
+  if (!rows || rows.length === 0) return null;
+  return (
+    <section id="top-retainers">
+      <h2>Top Retainers</h2>
+      <p className="subtitle">
+        Merged ranking of <code>Class#field</code> references and stack-frame locals by total
+        retained heap. Fields come from collection attribution; stack frames from thread-local
+        analysis (<code>--thread-locals</code>).
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Kind</th>
+            <th className="num">Retained</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i}>
+              <td><code>{r.name}</code></td>
+              <td>{r.kind}</td>
+              <td className="num">{formatBytes(r.retained)}</td>
+            </tr>
+          ))}
         </tbody>
       </table>
     </section>
@@ -3532,24 +3758,75 @@ function DiffSection({
 // The verdict line: mirrors the Markdown verdict (the sole percentage).
 function diffVerdict(diff: SeriesDiffResult): string {
   const firstShallow = diff.total_shallow[0] ?? 0;
-  const pct = firstShallow > 0 ? (diff.delta_total_shallow / firstShallow) * 100 : 0;
   const newSuspects = diff.grown_suspects.filter((s) => s.is_new).length;
   let line: string;
-  if (diff.delta_total_shallow > 0) {
-    const lead = diff.growth_leaders[0];
-    const driver = lead
-      ? `; largest driver ${lead.pretty_class} (${fmtDeltaBytes(lead.delta_retained)} retained)`
-      : "";
-    line = `Heap grew ${pct.toFixed(1)}% (${fmtDeltaBytes(diff.delta_total_shallow)} shallow)${driver}.`;
-  } else if (diff.delta_total_shallow < 0) {
-    line = `Heap shrank ${Math.abs(pct).toFixed(1)}% (${fmtDeltaBytes(diff.delta_total_shallow)} shallow); no net growth.`;
+  if (firstShallow === 0) {
+    // Undefined percentage against an empty baseline (§37.3).
+    if (diff.delta_total_shallow > 0) {
+      const lead = diff.growth_leaders[0];
+      const driver = lead
+        ? `; largest driver ${lead.pretty_class} (${fmtDeltaBytes(lead.delta_retained)} retained)`
+        : "";
+      line = `Heap grew by ${fmtDeltaBytes(diff.delta_total_shallow)} shallow (baseline was empty)${driver}.`;
+    } else {
+      line = "Heap size is unchanged (baseline was empty).";
+    }
   } else {
-    line = "Heap size is unchanged.";
+    const pct = (diff.delta_total_shallow / firstShallow) * 100;
+    if (diff.delta_total_shallow > 0) {
+      const lead = diff.growth_leaders[0];
+      const driver = lead
+        ? `; largest driver ${lead.pretty_class} (${fmtDeltaBytes(lead.delta_retained)} retained)`
+        : "";
+      line = `Heap grew ${pct.toFixed(1)}% (${fmtDeltaBytes(diff.delta_total_shallow)} shallow)${driver}.`;
+    } else if (diff.delta_total_shallow < 0) {
+      line = `Heap shrank ${Math.abs(pct).toFixed(1)}% (${fmtDeltaBytes(diff.delta_total_shallow)} shallow); no net growth.`;
+    } else {
+      line = "Heap size is unchanged.";
+    }
+  }
+  // Gross churn when a net-flat/shrinking series still churned a lot (§37.2).
+  if (
+    diff.gross_growth_retained > 0 &&
+    diff.gross_growth_retained > Math.max(diff.net_delta_retained, 0) * 2
+  ) {
+    line += ` Gross retained churn: +${formatBytes(diff.gross_growth_retained)} grown / ${MINUS}${formatBytes(diff.gross_shrink_retained)} reclaimed across steps.`;
   }
   if (newSuspects > 0) {
     line += ` ${newSuspects} new suspect${newSuspects === 1 ? "" : "s"}.`;
   }
   return line;
+}
+
+// A dedicated table for Transient Spikes (§37.1): name | r1…rN | Peak | Peak−r1.
+function SpikeTable({ labels, rows }: { labels: string[]; rows: SeriesClassRow[] }) {
+  const n = labels.length;
+  return (
+    <table className="data">
+      <thead>
+        <tr>
+          <th>Class</th>
+          {labels.map((lbl, i) => (
+            <th key={i} className="num" title={`${lbl} retained`}>r{i + 1}</th>
+          ))}
+          <th className="num">Peak</th>
+          <th className="num">Peak−r1</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={row.pretty_class}>
+            <td><code>{row.pretty_class}</code></td>
+            {Array.from({ length: n }, (_, i) => (
+              <td key={i} className="num">{formatBytes(row.retained[i] ?? 0)}</td>
+            ))}
+            <td className="num">{formatBytes(row.peak_retained)}</td>
+            <td className="num">{fmtDeltaBytes(row.peak_over_baseline)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
 }
 
 export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
@@ -3582,6 +3859,7 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
           <li><strong>Δ Objects (r1→rN):</strong> {fmtDeltaCount(diff.delta_total_objects)}</li>
           <li><strong>Δ Shallow heap (r1→rN):</strong> {fmtDeltaBytes(diff.delta_total_shallow)}</li>
           <li><strong>Net Δ Retained (all classes, r1→rN):</strong> {fmtDeltaBytes(diff.net_delta_retained)}</li>
+          <li><strong>Gross Retained churn (all classes, per-step):</strong> +{formatBytes(diff.gross_growth_retained)} grown / {MINUS}{formatBytes(diff.gross_shrink_retained)} reclaimed</li>
         </ul>
       </section>
 
@@ -3592,6 +3870,17 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
         rows={diff.growth_leaders}
         emptyNote="No class grew in retained heap."
       />
+      {diff.spike_leaders.length > 0 ? (
+        <section className="diff-section">
+          <h2>Transient Spikes (peak above baseline)</h2>
+          <p>
+            Classes that climbed well above their baseline mid-series then fell back — a
+            first→last Δ alone would miss them. Ranked by peak-over-baseline; the peak may be
+            at any intermediate dump.
+          </p>
+          <SpikeTable labels={labels} rows={diff.spike_leaders} />
+        </section>
+      ) : null}
       <DiffSection
         title="New Classes"
         nameLabel="Class"
@@ -3621,13 +3910,18 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
         rows={diff.shrunk_suspects}
         emptyNote="No leak suspect shrank in the current dump."
       />
-      <DiffSection
-        title="Disappeared Leak Suspects"
-        nameLabel="Suspect"
-        labels={labels}
-        rows={diff.gone_suspects}
-        emptyNote="No leak suspect disappeared in the current dump."
-      />
+      <section className="diff-section">
+        <h2>Disappeared Leak Suspects (resolved)</h2>
+        <p>
+          Informational: these were flagged in an earlier dump but are gone from the current
+          one — a fixed or transient issue, not a current problem. Listed last for that reason.
+        </p>
+        {diff.gone_suspects.length === 0 ? (
+          <p>No leak suspect disappeared in the current dump.</p>
+        ) : (
+          <SeriesTable nameLabel="Suspect" labels={labels} rows={diff.gone_suspects} />
+        )}
+      </section>
       <BackToTop />
     </div>
   );
@@ -3650,11 +3944,14 @@ export default function App({ report }: { report: Report }) {
   return (
     <TableExpansionCtx.Provider value={expandAllTables}>
     <div className="app">
-      <a href="#triage" className="skip-link">Skip to content</a>
+      <a href="#memory-triage" className="skip-link">Skip to content</a>
       <h1>
-        Heap Dump Analysis: <code>{report.overview.source_name}</code>
+        Heap Dump Analysis: <code>{report.overview?.source_name ?? "(unknown)"}</code>
       </h1>
       <p className="subtitle">Generated by hprof-analyzer — {report.generated}</p>
+      <p className="subtitle" style={{ marginTop: "-0.5rem" }}>
+        All sizes are binary (1&nbsp;KB = 1024 bytes, 1&nbsp;MB = 1024&nbsp;KB, and so on).
+      </p>
       <div className="theme-toggle-wrap">
         <button className="theme-toggle" onClick={() => setExpandAllTables((v) => !v)}>
           {expandAllTables ? "⊟ Collapse tables" : "⊞ Expand all tables"}
@@ -3663,6 +3960,7 @@ export default function App({ report }: { report: Report }) {
       </div>
       <Nav report={report} />
       <OomTriage report={report} />
+      <WasteSummarySection report={report} />
       <KpiStrip report={report} />
       <SystemOverviewSection report={report} />
       <RecordCensusSection report={report} />
@@ -3684,6 +3982,9 @@ export default function App({ report }: { report: Report }) {
         <CollectionAttributionSection data={report.collection_attribution} />
       )}
       {report.fields_by_size && <FieldsBySizeSection data={report.fields_by_size} />}
+      {report.top_retainers && report.top_retainers.length > 0 && (
+        <TopRetainersSection rows={report.top_retainers} />
+      )}
       {report.biggest_collections && <BiggestCollectionsSection data={report.biggest_collections} />}
       {report.collection_contents && <CollectionContentsSection data={report.collection_contents} />}
       <ReferencesSection data={report.references} />
@@ -3698,4 +3999,40 @@ export default function App({ report }: { report: Report }) {
     </div>
     </TableExpansionCtx.Provider>
   );
+}
+
+/// Catches any render-time exception below it and shows a styled panel instead of
+/// a blank page. `boot()` wraps the whole app in this, so a bug in one section
+/// degrades to an error message rather than a white screen with the report data
+/// still embedded but invisible.
+export class ErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { error: Error | null }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    // Surface to the console for anyone with devtools open.
+    console.error("hprof-analyzer report render failed:", error, info);
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="render-error" role="alert">
+          <h1>Report failed to render</h1>
+          <p>
+            The report data loaded, but a rendering error occurred. This is a bug
+            in the viewer — the underlying JSON is intact. Details:
+          </p>
+          <pre>{String(this.state.error?.stack || this.state.error)}</pre>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }

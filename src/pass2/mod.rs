@@ -13,6 +13,7 @@
 use std::{
     collections::HashMap,
     io::{self, ErrorKind},
+    time::Instant,
 };
 
 use crate::{
@@ -79,6 +80,15 @@ impl Pass2 {
         // surface `QueryResult.truncated` even when the map is non-empty.
         bool,
     )> {
+        let _t_build = Instant::now();
+        macro_rules! t_phase {
+            ($label:expr) => {
+                if std::env::var_os("HPROF_TIMING").is_some() {
+                    eprintln!("[timing] {}: {:.3}s", $label, _t_build.elapsed().as_secs_f64());
+                }
+            };
+        }
+
         let n = p1.id_map.len();
         let id_size = p1.id_size;
         let ptr_size = id_size as usize;
@@ -444,6 +454,24 @@ impl Pass2 {
         // pay zero extra allocation on the array path.
         let scan_wants_arrays = scan_driver.wants_arrays();
 
+        // When --ref-paths is set, also build named plans (field name strings) for
+        // use during the forward-CSR fill to annotate each edge with its field name.
+        // Gated: the extra allocations are acceptable only under this explicit flag.
+        let field_plans_named_dense: Vec<FieldPlanNamed> = if opts.ref_paths {
+            let named = build_field_plans_named(&p1.class_map, &p1.strings, id_size as usize);
+            let mut dense: Vec<FieldPlanNamed> = vec![Vec::new(); n_dense_classes];
+            for (&class_addr, &hidx) in &class_addr_to_hist {
+                if let Some(plan) = named.get(&class_addr) {
+                    if !plan.is_empty() {
+                        dense[hidx as usize] = plan.clone();
+                    }
+                }
+            }
+            dense
+        } else {
+            Vec::new()
+        };
+
         // Compress class_idx and alloc_stack_serial NOW — before the 2a scan
         // allocates out_degree and in_degree (~4 GB). Both arrays are final at
         // this point and not read again until the retained/report phases. Freeing
@@ -463,6 +491,35 @@ impl Pass2 {
             None
         };
         crate::trace::probe("pass2: after early-compress class_idx+alloc_serial (before 2a scan)");
+
+        // Collect thread object addresses for capture during 2a scan.
+        let capture_thread_addrs: std::collections::HashSet<u64> =
+            p1.thread_serial_to_obj_id.values().copied().collect();
+        let mut captured_thread_blobs: HashMap<u64, (u64, Vec<u8>)> = HashMap::new();
+
+        // Pre-locate java/lang/System class addr and "props" name_id so we can
+        // capture the props static field address during the 2a CLASS_DUMP scan.
+        let (system_class_addr, props_name_id) = {
+            let props_nid = p1
+                .strings
+                .iter()
+                .find(|(_, v)| v.as_str() == "props")
+                .map(|(&k, _)| k)
+                .unwrap_or(0);
+            let system_caddr = p1
+                .class_map
+                .iter()
+                .find(|(_, ci)| {
+                    p1.strings
+                        .get(&ci.name_id)
+                        .map(|s| s.as_str() == "java/lang/System")
+                        .unwrap_or(false)
+                })
+                .map(|(&a, _)| a)
+                .unwrap_or(0);
+            (system_caddr, props_nid)
+        };
+        let mut captured_props_addr: u64 = 0;
 
         // ── Sub-pass 2a scan ─────────────────────────────────────────────
         {
@@ -498,6 +555,13 @@ impl Pass2 {
                             scan_wants_arrays,
                             &p1.class_map,
                             &p1.strings,
+                            &capture_thread_addrs,
+                            &mut captured_thread_blobs,
+                            &std::collections::HashSet::new(),
+                            &mut HashMap::new(),
+                            system_class_addr,
+                            props_name_id,
+                            &mut captured_props_addr,
                         )?;
                     }
                     tags::HEAP_DUMP_END => break,
@@ -508,6 +572,7 @@ impl Pass2 {
             }
         }
         crate::trace::probe("pass2: after 2a scan (out+in_degree filled)");
+        t_phase!("2a scan done");
 
         // Finalize SingleScan query results while class metadata is still live.
         // (No name/OQL source yet — the CLI wiring task fills these; empty slices
@@ -570,17 +635,41 @@ impl Pass2 {
             let addr = p1.id_map.addr_at(i);
             if class_addrs.contains(&addr) {
                 let ci = p1.class_map.get(&addr);
-                let idx = get_or_insert_class(
-                    addr,
-                    &|| {
-                        ci.and_then(|c| p1.strings.get(&c.name_id).cloned())
-                            .unwrap_or_else(|| format!("unknown@{addr:#x}"))
-                    },
-                    &|| ci.map(|c| c.loader_id).unwrap_or(0),
-                );
+                // Determine the histogram row this class-object represents.
+                // Must use the SAME key that instances of the class use:
+                //   - Primitive array class-objects ([I, [B, ...): PRIM_KEY_BASE|tc
+                //   - java/lang/Class class-object: JLC_KEY
+                //   - All other class-objects: addr-based key (same as instances)
+                let name = ci.and_then(|c| p1.strings.get(&c.name_id));
+                let idx = if let Some(n) = name {
+                    if let Some(tc) = prim_array_type_code(n) {
+                        // Class-object for a primitive array: register under PRIM_KEY
+                        get_or_insert_class(
+                            PRIM_KEY_BASE | tc as u64,
+                            &|| prim_array_class_name(tc).to_string(),
+                            &|| 0,
+                        )
+                    } else if n == "java/lang/Class" {
+                        // Class-object for java.lang.Class: register under JLC_KEY
+                        get_or_insert_class(JLC_KEY, &|| "java/lang/Class".to_string(), &|| 0)
+                    } else {
+                        get_or_insert_class(
+                            addr,
+                            &|| n.to_string(),
+                            &|| ci.map(|c| c.loader_id).unwrap_or(0),
+                        )
+                    }
+                } else {
+                    get_or_insert_class(
+                        addr,
+                        &|| format!("unknown@{addr:#x}"),
+                        &|| ci.map(|c| c.loader_id).unwrap_or(0),
+                    )
+                };
                 class_obj_class_idx.insert(i as u32, idx);
             }
         }
+        let _ = jlc_idx;
         let _ = jlc_idx;
 
         // ── OQL HistogramOnly: build ClassSummary + run now ──────────────────
@@ -665,6 +754,11 @@ impl Pass2 {
                 *s = min_obj;
             }
         }
+        // kind is now dead (last user was the zero-shallow loop above and the
+        // loader-label loop earlier). Free before the GC-root and fielddecode
+        // phases to lower peak RSS on large dumps.
+        p1.kind = Vec::new();
+        crate::trace::trim();
 
         // ── Phase 2: Build GC root indices ───────────────────────────────
         let mut gc_root_set: std::collections::HashSet<u32> = std::collections::HashSet::new();
@@ -748,11 +842,11 @@ impl Pass2 {
         let alloc_frames_by_serial: Option<std::collections::HashMap<u32, Vec<String>>> =
             Some(resolve_alloc_frames(&p1));
 
-        // Decode each thread's java.lang.Thread.name via a bounded 3-pass
-        // worklist, while class_map/strings/id_map are still alive (freed just
-        // below). All captured sets are bounded by #threads, so this stays off
-        // the per-object RSS budget on multi-GB dumps.
-        let thread_props = resolve_thread_names(path, &p1)?;
+        // Decode each thread's java.lang.Thread.name. Thread instance blobs were
+        // captured during the 2a scan; remaining hops (String objects, backing
+        // arrays) need 2 more targeted collect_blobs calls instead of 3.
+        let thread_props = resolve_thread_names(path, &p1, captured_thread_blobs)?;
+        t_phase!("thread_names done");
 
         // Opt-in approximate duplicate-java.lang.String report. Runs two extra
         // full-file scans and keeps only hashes+lengths+counts (never the
@@ -796,7 +890,9 @@ impl Pass2 {
         // stays off the per-object RSS budget on multi-GB dumps. Derives a JVM
         // version from the decoded properties. Falls back to empty/None (never
         // garbage) if the layout does not match the Hashtable form.
-        let (system_properties, jvm_version) = resolve_system_properties(path, &p1)?;
+        let (system_properties, jvm_version) =
+            resolve_system_properties(path, &p1, captured_props_addr)?;
+        t_phase!("system_props done");
 
         // Always-on field-decode views (collections, arrays, references). One
         // shared 3-scan pass; all aggregates are capped (see fielddecode.rs), so
@@ -808,6 +904,7 @@ impl Pass2 {
             fd_attribution_raw,
             fd_fields_by_size_raw,
             fd_coll_values_raw,
+            fd_node_kv,
             fd_attribution_trunc,
             fd_dbb_capacity_sum,
             fd_tl_null_key_count,
@@ -819,6 +916,7 @@ impl Pass2 {
             &opts.coll_descs,
         )?;
         crate::trace::probe("pass2: after field_decode_views (3 extra scans done)");
+        t_phase!("fielddecode done");
 
         // Free class_ids now: build_field_decode_views was its last reader
         // (class_name_of_index uses it for referent class lookups). Releasing
@@ -942,6 +1040,7 @@ impl Pass2 {
             None
         };
         crate::trace::probe("pass2: after compress-cold shallow+in_degree (before fwd_targets)");
+        t_phase!("compress-cold done");
 
         // ── Phase 3b: Build forward CSR ──────────────────────────────────
         // The forward fill runs FIRST (inside build); the inbound CSR is
@@ -949,6 +1048,24 @@ impl Pass2 {
         // the rpo phase's arrays. The forward fill never touches inb_flat.
         let total_edges = *fwd_offsets.last().unwrap() as usize;
         let mut fwd_targets = crate::chunkvec::ChunkU32::zeroed(total_edges);
+        // Optional per-edge field-name index, populated only under --ref-paths.
+        // Parallel to fwd_targets (same indexing). 0 = "no name".
+        let mut fwd_field_name_idx_opt: Option<Vec<u16>> = if opts.ref_paths {
+            Some(vec![0u16; total_edges])
+        } else {
+            None
+        };
+        // Interned field-name pool (pool[0] = ""). Built only under --ref-paths.
+        let mut field_name_pool: Vec<String> = if opts.ref_paths {
+            let mut pool = Vec::new();
+            pool.push(String::new()); // index 0 = no name
+            pool
+        } else {
+            Vec::new()
+        };
+        // Reverse map name -> pool index, for dedup during the fill.
+        let mut field_name_pool_idx: std::collections::HashMap<String, u16> =
+            std::collections::HashMap::new();
         crate::trace::probe("pass2: after fwd_targets alloc");
         // B3: no fwd_cursor clone. fwd_offsets is advanced in place as the
         // write cursor during the fill, then restored by right-shift below.
@@ -973,10 +1090,14 @@ impl Pass2 {
                             &p1.id_map,
                             &class_addr_to_hist,
                             &field_plans_dense,
+                            &field_plans_named_dense,
                             true,
                             false,
                             &mut fwd_targets,
                             &mut fwd_offsets,
+                            &mut fwd_field_name_idx_opt,
+                            &mut field_name_pool,
+                            &mut field_name_pool_idx,
                             &mut inb_flat_stub,
                             &mut in_degree_stub,
                             &mut scratch,
@@ -994,6 +1115,7 @@ impl Pass2 {
         for &(src, dst) in &synthetic_edges {
             let pos = fwd_offsets[src as usize] as usize;
             fwd_targets.set(pos, dst);
+            // Synthetic edges have no field name (index 0 = "no name").
             fwd_offsets[src as usize] += 1;
         }
 
@@ -1101,8 +1223,15 @@ impl Pass2 {
             collection_attribution_truncated: fd_attribution_trunc,
             fields_by_size_raw: fd_fields_by_size_raw,
             coll_values_raw: fd_coll_values_raw,
+            node_kv: fd_node_kv,
             direct_byte_buffer_capacity_sum: fd_dbb_capacity_sum,
             thread_local_null_key_count: fd_tl_null_key_count,
+            fwd_field_name_idx: fwd_field_name_idx_opt,
+            field_name_pool: if opts.ref_paths {
+                Some(field_name_pool)
+            } else {
+                None
+            },
             unreachable_retained: None,
         };
 
@@ -1123,6 +1252,8 @@ impl Pass2 {
             total_inb,
             synthetic_edges,
         };
+
+        t_phase!("2b scan done");
 
         // Query results are tagged by slot inside `query_state`; the caller
         // reassembles them in input order after the late (retained) stage runs,
@@ -1163,6 +1294,13 @@ impl Pass2 {
         visit_arrays: bool,
         class_map: &HashMap<u64, crate::pass1::ClassInfo>,
         strings: &HashMap<u64, String>,
+        capture_inst: &std::collections::HashSet<u64>,
+        captured_inst: &mut HashMap<u64, (u64, Vec<u8>)>,
+        capture_obj: &std::collections::HashSet<u64>,
+        captured_obj: &mut HashMap<u64, Vec<u8>>,
+        system_class_addr: u64,
+        props_name_id: u64,
+        captured_props_addr: &mut u64,
     ) -> io::Result<()> {
         let ids = id_size as u64;
         let mut cache = crate::id_map::IndexCache::new();
@@ -1217,8 +1355,16 @@ impl Pass2 {
                     checked_sub!(remaining, ids + 8);
                 }
                 heap::CLASS_DUMP => {
-                    let consumed =
-                        Self::count_class_dump_edges(r, id_size, id_map, out_degree, in_degree)?;
+                    let consumed = Self::count_class_dump_edges(
+                        r,
+                        id_size,
+                        id_map,
+                        out_degree,
+                        in_degree,
+                        system_class_addr,
+                        props_name_id,
+                        captured_props_addr,
+                    )?;
                     checked_sub!(remaining, consumed);
                 }
                 heap::INSTANCE_DUMP => {
@@ -1234,6 +1380,11 @@ impl Pass2 {
                     }
                     r.read_bytes_reuse(scratch, data_len as usize)?;
                     checked_sub!(remaining, ids + 4 + ids + 4 + data_len);
+
+                    // Capture blob for wanted addresses (e.g. thread objects).
+                    if !capture_inst.is_empty() && capture_inst.contains(&addr) {
+                        captured_inst.insert(addr, (class_id, scratch.clone()));
+                    }
 
                     let src_idx = match id_map.index_of(addr) {
                         Some(i) => i,
@@ -1278,6 +1429,11 @@ impl Pass2 {
                     }
                     r.read_bytes_reuse(scratch, byte_len as usize)?;
                     checked_sub!(remaining, ids + 4 + 4 + ids + byte_len);
+
+                    // Capture obj-array blob for wanted addresses (e.g. Hashtable table).
+                    if !capture_obj.is_empty() && capture_obj.contains(&addr) {
+                        captured_obj.insert(addr, scratch.clone());
+                    }
 
                     let src_idx = match id_map.index_of(addr) {
                         Some(i) => i,
@@ -1364,19 +1520,24 @@ impl Pass2 {
         id_map: &crate::id_map::IdMap,
         class_addr_to_hist: &HashMap<u64, u32>,
         field_plans_dense: &[FieldPlan],
+        field_plans_named_dense: &[FieldPlanNamed],
         do_fwd: bool,
         do_inb: bool,
         fwd_targets: &mut crate::chunkvec::ChunkU32,
         fwd_offsets: &mut Vec<u32>,
+        fwd_field_name_idx: &mut Option<Vec<u16>>,
+        field_name_pool: &mut Vec<String>,
+        field_name_pool_idx: &mut std::collections::HashMap<String, u16>,
         inb_flat: &mut crate::chunkvec::ChunkU32,
         in_degree: &mut Vec<u32>,
         scratch: &mut Vec<u8>,
     ) -> io::Result<()> {
         let ids = id_size as u64;
         let mut cache = crate::id_map::IndexCache::new();
+        let do_names = fwd_field_name_idx.is_some() && do_fwd;
 
         macro_rules! add_edge {
-            ($src:expr, $dst_addr:expr, $excluded:expr) => {
+            ($src:expr, $dst_addr:expr, $excluded:expr, $name_idx:expr) => {
                 if $dst_addr != 0 {
                     if let Some(dst) = cache.index_of(id_map, $dst_addr) {
                         let src = $src as usize;
@@ -1384,6 +1545,11 @@ impl Pass2 {
                             // fwd_offsets[src] is the in-place write cursor.
                             let pos = fwd_offsets[src] as usize;
                             fwd_targets.set(pos, dst as u32);
+                            if do_names {
+                                if let Some(idx_vec) = fwd_field_name_idx.as_mut() {
+                                    idx_vec[pos] = $name_idx;
+                                }
+                            }
                             fwd_offsets[src] += 1;
                         }
                         if do_inb {
@@ -1447,6 +1613,7 @@ impl Pass2 {
                         do_inb,
                         fwd_targets,
                         fwd_offsets,
+                        fwd_field_name_idx,
                         inb_flat,
                         in_degree,
                     )?;
@@ -1472,15 +1639,35 @@ impl Pass2 {
                     };
 
                     // Edge: instance → class object
-                    add_edge!(src_idx, class_id, false);
+                    add_edge!(src_idx, class_id, false, 0u16);
 
                     // Edges from Object-type fields (dense Vec by class histogram idx)
                     if let Some(&cidx) = class_addr_to_hist.get(&class_id) {
-                        for &(off, excluded) in &field_plans_dense[cidx as usize] {
+                        let named_plan = if do_names && (cidx as usize) < field_plans_named_dense.len() {
+                            &field_plans_named_dense[cidx as usize]
+                        } else {
+                            &[][..]
+                        };
+                        for (fi, &(off, excluded)) in field_plans_dense[cidx as usize].iter().enumerate() {
                             let off = off as usize;
                             if off + id_size as usize <= scratch.len() {
                                 let ref_val = read_ref(&scratch[off..], id_size as usize);
-                                add_edge!(src_idx, ref_val, excluded);
+                                let name_idx = if do_names && fi < named_plan.len() {
+                                    let fname = &named_plan[fi].2;
+                                    if fname.is_empty() {
+                                        0u16
+                                    } else if let Some(&idx) = field_name_pool_idx.get(fname) {
+                                        idx
+                                    } else {
+                                        let new_idx = field_name_pool.len() as u16;
+                                        field_name_pool.push(fname.clone());
+                                        field_name_pool_idx.insert(fname.clone(), new_idx);
+                                        new_idx
+                                    }
+                                } else {
+                                    0u16
+                                };
+                                add_edge!(src_idx, ref_val, excluded, name_idx);
                             }
                         }
                     }
@@ -1506,12 +1693,12 @@ impl Pass2 {
                     };
 
                     // Edge: array → element class
-                    add_edge!(src_idx, elem_class_id, false);
+                    add_edge!(src_idx, elem_class_id, false, 0u16);
 
                     // Edges to elements
                     for chunk in scratch.chunks(ids as usize) {
                         let ref_val = read_id(chunk, id_size);
-                        add_edge!(src_idx, ref_val, false);
+                        add_edge!(src_idx, ref_val, false, 0u16);
                     }
                 }
                 heap::PRIM_ARRAY_DUMP => {
@@ -1541,7 +1728,7 @@ impl Pass2 {
     /// object's structural edges (→ superclass, → loader, → each Object-typed
     /// static field) into the forward and/or inbound CSR. Returns bytes consumed.
     #[allow(clippy::too_many_arguments)]
-    fn fill_class_dump_edges(
+    pub(crate) fn fill_class_dump_edges(
         r: &mut HprofReader,
         id_size: u8,
         id_map: &crate::id_map::IdMap,
@@ -1549,6 +1736,7 @@ impl Pass2 {
         do_inb: bool,
         fwd_targets: &mut crate::chunkvec::ChunkU32,
         fwd_offsets: &mut Vec<u32>,
+        fwd_field_name_idx: &mut Option<Vec<u16>>,
         inb_flat: &mut crate::chunkvec::ChunkU32,
         in_degree: &mut Vec<u32>,
     ) -> io::Result<u64> {
@@ -1567,6 +1755,7 @@ impl Pass2 {
         consumed += ids * 4 + 4;
 
         let src_idx_opt = id_map.index_of(class_addr);
+        let _ = fwd_field_name_idx;
 
         macro_rules! add_edge_inner {
             ($src:expr, $dst_addr:expr) => {
@@ -1645,12 +1834,18 @@ impl Pass2 {
     /// COUNT-phase counterpart to `fill_class_dump_edges`: counts a class
     /// object's structural edges (→ superclass, → loader, → each Object-typed
     /// static field) into the degree arrays. Returns bytes consumed.
+    /// If `system_class_addr != 0` and this CLASS_DUMP is for that class, also
+    /// captures the static Object field with name_id `props_name_id` into
+    /// `captured_props_addr` (used to locate java/lang/System.props).
     fn count_class_dump_edges(
         r: &mut HprofReader,
         id_size: u8,
         id_map: &crate::id_map::IdMap,
         out_degree: &mut Vec<u32>,
         in_degree: &mut Vec<u32>,
+        system_class_addr: u64,
+        props_name_id: u64,
+        captured_props_addr: &mut u64,
     ) -> io::Result<u64> {
         let ids = id_size as u64;
         let mut consumed = 0u64;
@@ -1700,8 +1895,11 @@ impl Pass2 {
 
         let sc = r.u2()? as u64;
         consumed += 2;
+        let capture_props = system_class_addr != 0
+            && class_addr == system_class_addr
+            && props_name_id != 0;
         for _ in 0..sc {
-            r.skip(ids)?;
+            let name_id = r.id()?;
             consumed += ids;
             let tp = r.u1()?;
             consumed += 1;
@@ -1710,6 +1908,9 @@ impl Pass2 {
                 let ref_val = read_id_from_reader(r, id_size)?;
                 consumed += vs;
                 count_edge!(ref_val);
+                if capture_props && name_id == props_name_id && ref_val != 0 {
+                    *captured_props_addr = ref_val;
+                }
             } else {
                 r.skip(vs)?;
                 consumed += vs;
@@ -1774,7 +1975,7 @@ mod tests {
         if !std::path::Path::new(DUMP).exists() {
             return;
         }
-        let p1 = Pass1::run(DUMP).unwrap();
+        let p1 = Pass1::run(DUMP, false).unwrap();
         let (g, inbound, _sc, _ci, _as, _q, _rw, _sv, _sv_trunc) = Pass2::build(
             DUMP,
             p1,
@@ -1815,7 +2016,7 @@ mod tests {
         if !std::path::Path::new(DUMP).exists() {
             return;
         }
-        let p1 = Pass1::run(DUMP).unwrap();
+        let p1 = Pass1::run(DUMP, false).unwrap();
         let (g, _inbound, _sc, _ci, _as, _q, _rw, _sv, _sv_trunc) = Pass2::build(
             DUMP,
             p1,
@@ -1849,7 +2050,7 @@ mod tests {
         if !std::path::Path::new(DUMP).exists() {
             return;
         }
-        let p1 = Pass1::run(DUMP).unwrap();
+        let p1 = Pass1::run(DUMP, false).unwrap();
         let class_addrs: std::collections::HashSet<u64> = p1.class_map.keys().cloned().collect();
         assert!(!class_addrs.is_empty(), "expected some class objects");
         let mut class_count = 0usize;

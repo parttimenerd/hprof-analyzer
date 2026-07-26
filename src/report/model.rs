@@ -152,6 +152,14 @@ pub struct RetentionSummary {
     pub top1_bp: u32,
     pub top10_bp: u32,
     pub top100_bp: u32,
+    /// Exact retained bytes for the top-1 / top-10 / top-100 top-level dominators.
+    /// Derive % from these rather than reconstructing from bp to avoid rounding loss.
+    #[serde(default)]
+    pub top1_retained: u64,
+    #[serde(default)]
+    pub top10_retained: u64,
+    #[serde(default)]
+    pub top100_retained: u64,
     /// Count of single objects each retaining >=1% of total reachable shallow.
     pub num_objects_ge_1pct: u64,
 }
@@ -446,6 +454,12 @@ pub struct RootPathStep {
     pub retained: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub root_type_label: Option<String>,
+    /// Name of the field on this object that points to the next hop (parent's
+    /// field → child). Only present when `--ref-paths` was set. Empty string
+    /// means "no field name available" (class edge, array element, synthetic
+    /// thread-local edge).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field_edge: Option<String>,
 }
 
 /// One immediately-dominated child of an accumulation point (a row of the
@@ -488,6 +502,11 @@ pub struct MergedPathNode {
     /// GC-root type label when this node is a root (the chain terminus).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub root_type_label: Option<String>,
+    /// Field name on the parent node that points to this child; only present
+    /// when `--ref-paths` was set and a consistent field name was found across
+    /// all chains that pass through this node.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field_edge: Option<String>,
     pub children: Vec<MergedPathNode>,
 }
 
@@ -584,6 +603,11 @@ pub struct ObjRow {
     /// `None` when `--collections` was off or no attributed field points at it.
     #[serde(default)]
     pub owner: Option<String>,
+    /// Stack-frame holding this object (`ClassName#methodName()`), when the
+    /// object is a significant local in a thread's stack frame and no field
+    /// owner was found. `None` otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_via: Option<String>,
 }
 
 /// One row of "Biggest Classes".
@@ -710,7 +734,8 @@ pub struct SignificantLocal {
     pub display_class: String,
     /// Retained heap of the local object.
     pub retained: u64,
-    /// Retained heap as a percentage of the owning thread's retained heap.
+    /// Retained heap as a percentage of total reachable shallow heap (same
+    /// basis as every other "% Heap" figure in the report).
     pub pct: f64,
 }
 
@@ -922,9 +947,13 @@ pub struct TopArrayRow {
     pub length: u64,
     pub shallow: u64,
     pub obj_index_1based: u64,
-    /// Primary incoming reference (`Class#field`) that points at this array,
-    /// resolved from the `--collections` holder-edge scan. `None` when
-    /// `--collections` was off or no field edge references it. Additive.
+    /// Non-null (occupied) slot count for object arrays; `None` for primitive
+    /// arrays (every slot is always occupied). Additive.
+    #[serde(default)]
+    pub non_null: Option<u64>,
+    /// Primary incoming reference (`Class#field`) that points at this array.
+    /// Resolved unconditionally from instance-dump field edges (first-wins).
+    /// `None` when no field edge references this array. Additive.
     #[serde(default)]
     pub owner: Option<String>,
 }
@@ -974,11 +1003,43 @@ pub struct CollectionsAnalysis {
     pub kind_summary: CollectionKindSummary,
 }
 
-/// One collection-kind's aggregate stats. Additive.
+/// One reclaimable-waste source in the Waste Summary: a human label, the
+/// approximate reclaimable bytes, and an optional anchor to the section that
+/// details it. Additive.
 #[derive(
     Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
 )]
-pub struct CollectionKindStat {
+pub struct WasteSource {
+    /// Human-readable source label, e.g. "Under-filled collections".
+    pub label: String,
+    /// Approximate reclaimable bytes attributed to this source.
+    pub bytes: u64,
+    /// Canonical section slug this source drills into (e.g. "collections"),
+    /// or None when there is no dedicated section.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<String>,
+}
+
+/// A single headline "reclaimable N bytes" figure folding every waste source
+/// the report can quantify (under-filled collections & object arrays, duplicate
+/// String values, String backing-array slack, duplicate primitive arrays). The
+/// sources are approximate and may overlap slightly; `total_bytes` is their sum.
+/// Present only when at least one source is nonzero. Additive; not part of MAT
+/// parity comparison.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct WasteSummary {
+    /// Sum of every source's bytes (the headline "reclaimable" figure).
+    pub total_bytes: u64,
+    /// Per-source breakdown, sorted by bytes desc. Only nonzero sources.
+    pub sources: Vec<WasteSource>,
+}
+
+/// One collection-kind's aggregate stats. Additive.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]pub struct CollectionKindStat {
     pub kind: String,        // "list"/"map"/"set"/"deque"/"queue"/"tree"
     pub count: u64,          // number of collections of this kind (with a readable size)
     pub total_elements: u64, // sum of sizes
@@ -1010,6 +1071,16 @@ pub struct FieldAttributionRow {
     /// class has no histogram row. Additive.
     #[serde(default)]
     pub holder_instances: u64,
+    /// Sum of (capacity - elements) across all distinct containers reached by
+    /// this field. Counts empty slots, not bytes. Zero for classified
+    /// collections (their capacity is not cheaply available). Additive.
+    #[serde(default)]
+    pub total_wasted_slots: u64,
+    /// `total_wasted_slots × object-reference width (bytes)` — the actual bytes
+    /// of backing-array capacity that is null/unused. More directly comparable
+    /// than slot count when array types differ. Additive.
+    #[serde(default)]
+    pub total_wasted_bytes: u64,
 }
 
 /// One holder `Class#field` whose single largest container is ranked by element count.
@@ -1028,6 +1099,9 @@ pub struct FieldAttributionBiggestRow {
     /// note; the backing array's true length is not cheaply joinable). Additive.
     #[serde(default)]
     pub capacity: u64,
+    /// Kind of the single largest container (same labels as `FieldAttributionRow::container_kind`).
+    #[serde(default)]
+    pub container_kind: String,
 }
 
 /// Container attribution by holder `Class#field`, present only when `--collections` was passed.
@@ -1037,7 +1111,25 @@ pub struct FieldAttributionBiggestRow {
 pub struct CollectionAttribution {
     pub most_overall: Vec<FieldAttributionRow>,
     pub biggest_single: Vec<FieldAttributionBiggestRow>,
+    /// Class#field pairs owning the most size-{0,1} collections,
+    /// ranked by wrapper-overhead bytes.
+    #[serde(default)]
+    pub tiny_overhead: Vec<TinyCollectionRow>,
     pub truncated: bool,
+}
+
+/// One row in the tiny-collection overhead ranking (§46.2).
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct TinyCollectionRow {
+    pub holder_class: String,
+    pub field: String,
+    pub container_kind: String,
+    pub empty_count: u64,
+    pub singleton_count: u64,
+    /// Estimated overhead bytes: (empty_count + singleton_count) × 80.
+    pub overhead_bytes: u64,
 }
 
 /// One holder `Class#field` (with declared field type) ranked by the total
@@ -1167,6 +1259,8 @@ pub struct RefStatClassRow {
     pub pretty_class: String,
     pub objects: u64,
     pub shallow: u64,
+    #[serde(default)]
+    pub retained: u64,
 }
 
 /// Statistics for one reference kind (Soft/Weak/Phantom). `kind` is the
@@ -1247,11 +1341,17 @@ pub struct TriageSignal {
     /// Link text for `anchor`, e.g. `"Leak Indicators"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub anchor_label: Option<String>,
+    /// Reclaimable/attributable bytes this signal quantifies, when the rule has a
+    /// concrete figure (e.g. wasted collection bytes, duplicate-String waste). Used
+    /// to rank problem signals by impact; `None` for orientation signals and rules
+    /// without a byte figure. Not rendered — ordering only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
 }
 
 /// Schema version for the machine-readable JSON output. Bump on any
 /// breaking change to the `Report` shape; the JSON always carries this.
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 9;
 
 /// One allocation site: a distinct HPROF stack-trace serial, its resolved frame
 /// lines, and the aggregate footprint of the objects allocated there.
@@ -1324,12 +1424,31 @@ pub struct Report {
     /// round-trip with older JSON.
     #[serde(default)]
     pub leak_indicators: LeakIndicators,
+    /// One headline "reclaimable N bytes" figure folding every quantifiable
+    /// waste source. Present only when at least one source is nonzero. Additive;
+    /// `#[serde(default)]` keeps older JSON (which lacks the field) loadable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waste_summary: Option<WasteSummary>,
     /// Fired OOM-triage signals, evaluated once over the finished report by the
     /// rule framework in `triage.rs`. Order is the registry order (render order).
     /// `#[serde(default)]` keeps pre-v4 JSON (which lacks the field) loadable.
     #[serde(default)]
     pub triage: Vec<TriageSignal>,
+    /// Merged top-retainers: `Class#field` holders + `Class#method()` stack
+    /// frames, sorted by total retained descending, capped at 20.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub top_retainers: Vec<RetainerRow>,
     /// Custom OQL query results (empty unless --query/--query-file was given).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub queries: Vec<crate::query::model::QueryResult>,
+}
+
+/// One row of the merged Top Retainers table (§813).
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct RetainerRow {
+    pub name: String,
+    pub kind: String,
+    pub retained: u64,
 }

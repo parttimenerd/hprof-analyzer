@@ -12,6 +12,7 @@
 use std::collections::HashMap;
 
 use crate::{
+    id_map::IndexCache,
     pass1::Pass1,
     report::{
         ArrayFillRatio, CollectionFillRatio, CollectionKindStat, CollectionKindSummary,
@@ -61,6 +62,10 @@ const FIELD_SIZE_POINTEES_PER_GROUP: usize = 100_000;
 const COLL_VALUES_PER_COLLECTION: usize = 4_096;
 /// Max distinct collections whose element types are tallied.
 const COLL_VALUES_GROUP_CAP: usize = 200_000;
+/// Max node/entry wrapper objects stored in the node-KV map (dense idx →
+/// (key dense idx, value dense idx)). Entries beyond this cap are silently
+/// dropped; callers fall back to showing the wrapper class name.
+const NODE_KV_CAP: usize = 5_000_000;
 
 // ── Collection descriptor table ──────────────────────────────────────────────
 
@@ -339,7 +344,7 @@ static REF_CLASSES: [&str; 3] = [
 /// Resolved role of an instance's class, computed at most once per distinct
 /// class-object address (there are only thousands of classes, so this is
 /// bounded).
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 enum ClassRole {
     /// Nothing to decode for this class.
     Plain,
@@ -560,6 +565,8 @@ struct ArrayWant {
     coll_kind: u8,
     /// Pretty class name of the owning collection instance.
     coll_class: String,
+    /// Heap address of the owning collection instance (for ContainerRecord capacity update).
+    coll_addr: u64,
 }
 
 /// Number of individual arrays and array classes surfaced per category.
@@ -575,6 +582,9 @@ struct TopArrayCand {
     obj_index: u32,
     length: u64,
     class_key: u64,
+    /// Non-null slot count for object arrays; `u64::MAX` signals "primitive
+    /// array" (render as `None` in the model).
+    non_null: u64,
 }
 impl PartialOrd for TopArrayCand {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
@@ -602,7 +612,7 @@ struct TopArrayAcc {
     by_class: HashMap<u64, (u64, u64)>,
 }
 impl TopArrayAcc {
-    fn add(&mut self, obj_index: u32, class_key: u64, length: u64, shallow: u64) {
+    fn add(&mut self, obj_index: u32, class_key: u64, length: u64, shallow: u64, non_null: u64) {
         let e = self.by_class.entry(class_key).or_insert((0, 0));
         e.0 += 1;
         e.1 += shallow;
@@ -612,6 +622,7 @@ impl TopArrayAcc {
             obj_index,
             length,
             class_key,
+            non_null,
         };
         if self.heap.len() < TOP_ARRAYS_N {
             self.heap.push(std::cmp::Reverse(cand));
@@ -647,6 +658,11 @@ impl TopArrayAcc {
                     length: c.length,
                     shallow: c.shallow,
                     obj_index_1based: c.obj_index as u64 + 1,
+                    non_null: if c.non_null == u64::MAX {
+                        None
+                    } else {
+                        Some(c.non_null)
+                    },
                     owner,
                 }
             })
@@ -781,14 +797,25 @@ fn assemble_field_size_raw(
             set.insert(idx as u32);
         }
     }
-    groups
+    let mut out: Vec<FieldSizeRaw> = groups
         .into_iter()
-        .map(|((hk, fk), set)| FieldSizeRaw {
-            holder_class: holder_class_names[hk as usize].clone(),
-            field: field_names[fk as usize].clone(),
-            pointee_indices: set.into_iter().collect(),
+        .map(|((hk, fk), set)| {
+            let mut pointee_indices: Vec<u32> = set.into_iter().collect();
+            // HashSet iteration order is nondeterministic; sort so the pointee
+            // list (and any first-wins owner join against it) is stable run to run.
+            pointee_indices.sort_unstable();
+            FieldSizeRaw {
+                holder_class: holder_class_names[hk as usize].clone(),
+                field: field_names[fk as usize].clone(),
+                pointee_indices,
+            }
         })
-        .collect()
+        .collect();
+    // HashMap iteration order is nondeterministic; sort the groups by
+    // (holder_class, field) so downstream "first writer wins" owner attribution
+    // (build.rs `biggest_owner`) picks the same label every run.
+    out.sort_by(|a, b| a.holder_class.cmp(&b.holder_class).then(a.field.cmp(&b.field)));
+    out
 }
 
 /// Enumerate every Object-type instance field of `class_id`, returning
@@ -874,6 +901,7 @@ type FieldDecodeViews = (
     Option<Vec<AttributionRaw>>,
     Option<Vec<FieldSizeRaw>>,
     Option<Vec<CollValuesRaw>>,
+    Option<HashMap<u32, (u32, u32)>>, // node_kv: wrapper dense idx → (key, val)
     bool,
     u64, // direct_byte_buffer_capacity_sum
     u64, // thread_local_null_key_count
@@ -900,6 +928,8 @@ pub(crate) fn build_field_decode_views(
 
     // Memoized per-class classification (bounded by #classes).
     let mut role_cache: HashMap<u64, ClassRole> = HashMap::new();
+    // Memoized per-class pretty name (bounded by #classes, avoids per-instance allocation).
+    let mut pretty_name_cache: HashMap<u64, String> = HashMap::new();
 
     // Collection views.
     let mut coll_size_acc = SizeHistAcc::default();
@@ -944,6 +974,27 @@ pub(crate) fn build_field_decode_views(
     let mut container_records: HashMap<u64, ContainerRecord> = HashMap::new();
     let mut containers_truncated = false;
 
+    // ── Unconditional lightweight array owner map ─────────────────────────────
+    // First-wins `Class#field` label for every array address, built from the
+    // instance-dump field scan regardless of --collections. Bounded at 500K
+    // entries to avoid unbounded growth on huge heaps (the top-10 arrays are
+    // what this exists for; the cap is 50000× that).
+    const ARRAY_OWNER_CAP: usize = 500_000;
+    let mut array_owner_by_addr: HashMap<u64, String> = HashMap::new();
+    // Memoized per-class field layout for the lightweight scan: class_id →
+    // [(field_name_id, byte_offset)].  Populated unconditionally, separate from
+    // `obj_field_layout` (which uses interned u32 keys, only under --collections).
+    let mut light_field_layout: HashMap<u64, Vec<(u64, u32)>> = HashMap::new();
+
+    // ── Node/Entry KV unwrapping (only under --collections) ──────────────────
+    // Maps each Node/Entry wrapper's dense index to the dense indices of its
+    // `key` and `value` fields. Used in build_model to show real K/V types in
+    // Biggest Collections instead of the tautological wrapper class name.
+    // class_id → Option<(key_byte_offset, val_byte_offset)>: None = not a wrapper
+    let mut node_kv_layout: HashMap<u64, Option<(u32, u32)>> = HashMap::new();
+    // dense_idx → (key_dense_idx, val_dense_idx); u32::MAX = null/missing
+    let mut node_kv_raw: HashMap<u32, (u32, u32)> = HashMap::new();
+
     // ── DirectByteBuffer capacity sum ────────────────────────────────────────
     // Resolve once before scan 1: find the class-object address for
     // java/nio/DirectByteBuffer and the byte-offset of the `capacity` field
@@ -982,19 +1033,21 @@ pub(crate) fn build_field_decode_views(
     let mut const_other: (u64, u64) = (0, 0);
     let mut const_truncated = false;
     // Per-group sample of member array addresses, used post-scan to resolve the
-    // dominant `Class#field` owner via `owner_by_addr`. Only populated under
-    // `--collections`; each group samples at most `CONST_ARRAY_OWNER_SAMPLE`
-    // addresses so memory stays bounded on heaps with huge constant-array groups.
+    // dominant `Class#field` owner via `owner_by_addr`. Each group samples at
+    // most `CONST_ARRAY_OWNER_SAMPLE` addresses so memory stays bounded on
+    // heaps with huge constant-array groups.
     let mut const_owner_samples: HashMap<(u8, u64, i64), Vec<u64>> = HashMap::new();
     let mut array_fill = FillAcc::default();
-    // Raw per-obj-array (addr, non_null, count) collected during the pass; the
+    // Raw per-obj-array data collected during the pass; the
     // `wanted_arrays` collection-fill/map-collision fold runs AFTER the pass, in
     // memory, because an OBJ_ARRAY_DUMP may precede its owning collection's
     // INSTANCE_DUMP (HPROF has no record-ordering guarantee), so `wanted_arrays`
-    // is not fully populated until the single scan completes. Sums are
-    // order-independent, so folding post-pass is byte-identical to the old
-    // scan-1-then-scan-3 ordering.
+    // is not fully populated until the single scan completes.
+    // When collect_attribution is off, slot_targets are never populated so we
+    // use a compact (addr, non_null, count) triple to halve per-entry cost and
+    // eliminate all Vec heap allocations for the entries.
     let mut obj_array_raw: Vec<(u64, u64, u64, Vec<u32>)> = Vec::new();
+    let mut obj_array_raw_compact: Vec<(u64, u32, u32)> = Vec::new();
 
     // ── Single fused full-file scan (instances + prim arrays + obj arrays) ─────
     // Replaces three separate full-file scans with ONE pass. Each record kind
@@ -1002,6 +1055,7 @@ pub(crate) fn build_field_decode_views(
     // state (the only cross-record dependency, `wanted_arrays`, is resolved in a
     // post-pass loop). Only one record's bytes are resident at a time, so peak
     // RSS is unchanged.
+    let mut ic = IndexCache::new();
     scan_all_records(path, id_size, |rec| match rec {
         // ── on_instance: every INSTANCE_DUMP ──────────────────────────────────
         Record::Instance(addr, class_id, blob) => {
@@ -1033,9 +1087,8 @@ pub(crate) fn build_field_decode_views(
                 } => {
                     let is_map = descs[desc_idx].kind == CollKind::Map;
                     // Shallow size of THIS collection instance (precomputed vec).
-                    let coll_shallow = p1
-                        .id_map
-                        .index_of(addr)
+                    let coll_shallow = ic
+                        .index_of(&p1.id_map, addr)
                         .map(|i| shallow[i] as u64)
                         .unwrap_or(0);
                     // Read size (if this collection exposes a plain size field).
@@ -1059,7 +1112,7 @@ pub(crate) fn build_field_decode_views(
                     // the read size (0 when the collection has no plain
                     // size field, e.g. ConcurrentHashMap — documented limitation).
                     if collect_attribution {
-                        if let Some(cidx) = p1.id_map.index_of(addr) {
+                        if let Some(cidx) = ic.index_of(&p1.id_map, addr) {
                             if container_records.len() < CONTAINER_CAP {
                                 container_records.insert(
                                     addr,
@@ -1097,13 +1150,13 @@ pub(crate) fn build_field_decode_views(
                                         size: size.unwrap_or(0),
                                         is_map,
                                         coll_shallow,
-                                        coll_idx: p1
-                                            .id_map
-                                            .index_of(addr)
+                                        coll_idx: ic
+                                            .index_of(&p1.id_map, addr)
                                             .map(|i| i as u32)
                                             .unwrap_or(u32::MAX),
                                         coll_kind: descs[desc_idx].kind.discriminant(),
                                         coll_class: pretty_name(class_id, p1),
+                                        coll_addr: addr,
                                     },
                                 );
                             }
@@ -1124,7 +1177,7 @@ pub(crate) fn build_field_decode_views(
                             if is_tl_entry {
                                 tl_null_key_count += 1;
                             }
-                        } else if let Some(ridx) = p1.id_map.index_of(referent) {
+                        } else if let Some(ridx) = ic.index_of(&p1.id_map, referent) {
                             let name = class_name_of_index(ridx, p1);
                             let sh = shallow[ridx] as u64;
                             let hist = &mut ref_hist[kind_idx];
@@ -1194,17 +1247,145 @@ pub(crate) fn build_field_decode_views(
                     }
                 }
             }
+
+            // Unconditional lightweight array-owner fill: always record the
+            // first inbound `Class#field` edge for each pointee. Bounded by
+            // ARRAY_OWNER_CAP. Uses a separate layout cache (light_field_layout)
+            // keyed by (name_id, byte_offset) to avoid touching the interning
+            // maps above.
+            if array_owner_by_addr.len() < ARRAY_OWNER_CAP {
+                if !light_field_layout.contains_key(&class_id) {
+                    let raw = enumerate_object_fields(class_id, class_map, obj_ref_width);
+                    light_field_layout.insert(class_id, raw);
+                }
+                let layout = &light_field_layout[&class_id];
+                // Re-read class name inline (cheap; memoized per class).
+                let holder_name = pretty_name_cache
+                    .entry(class_id)
+                    .or_insert_with(|| pretty_name(class_id, p1));
+                for &(fname_id, offset) in layout {
+                    let o = offset as usize;
+                    if o + obj_ref_width <= blob.len() {
+                        let pointee = read_ref(&blob[o..], obj_ref_width);
+                        if pointee != 0 && !array_owner_by_addr.contains_key(&pointee) {
+                            let fname = strings
+                                .get(&fname_id)
+                                .map(|s| s.as_str())
+                                .unwrap_or("");
+                            array_owner_by_addr.insert(
+                                pointee,
+                                format!("{}#{}", holder_name, fname),
+                            );
+                        }
+                    }
+                    if array_owner_by_addr.len() >= ARRAY_OWNER_CAP {
+                        break;
+                    }
+                }
+            }
+
+            // ── Node/Entry KV unwrapping (under --collections) ────────────────
+            // Detect Node/Entry wrapper objects and record their key/value refs
+            // so build_model can show real K/V classes instead of the wrapper.
+            if collect_attribution && node_kv_raw.len() < NODE_KV_CAP {
+                // Resolve and memoize whether this class is a wrapper + offsets.
+                let kv_offsets = node_kv_layout.entry(class_id).or_insert_with(|| {
+                    // Check class name for wrapper suffixes ($Node, $Entry,
+                    // $MapEntry).  The raw name uses '/' separators (HPROF format).
+                    let raw_name = class_map
+                        .get(&class_id)
+                        .and_then(|ci| strings.get(&ci.name_id))
+                        .map(|s| s.as_str())
+                        .unwrap_or("");
+                    let is_wrapper = raw_name.ends_with("$Node")
+                        || raw_name.ends_with("$Entry")
+                        || raw_name.ends_with("$MapEntry")
+                        || raw_name.ends_with("$HashEntry")
+                        || raw_name.ends_with("$KeyValueHolder");
+                    if !is_wrapper {
+                        return None;
+                    }
+                    // Walk the class's fields to find `key` and `value` offsets.
+                    let mut key_off: Option<u32> = None;
+                    let mut val_off: Option<u32> = None;
+                    let mut byte_offset: u32 = 0;
+                    let mut cur = class_id;
+                    'outer: loop {
+                        let ci = match class_map.get(&cur) {
+                            Some(c) => c,
+                            None => break,
+                        };
+                        for &(fname_id, ftype) in &ci.fields {
+                            let fsize = if ftype == crate::types::HprofType::Object {
+                                obj_ref_width as u32
+                            } else {
+                                ftype.byte_size() as u32
+                            };
+                            if ftype == crate::types::HprofType::Object {
+                                let fname = strings
+                                    .get(&fname_id)
+                                    .map(|s| s.as_str())
+                                    .unwrap_or("");
+                                if fname == "key" {
+                                    key_off = Some(byte_offset);
+                                } else if fname == "value" || fname == "val" {
+                                    val_off = Some(byte_offset);
+                                }
+                            }
+                            byte_offset += fsize;
+                            if key_off.is_some() && val_off.is_some() {
+                                break 'outer;
+                            }
+                        }
+                        if ci.super_id == 0 {
+                            break;
+                        }
+                        cur = ci.super_id;
+                    }
+                    match (key_off, val_off) {
+                        (Some(k), Some(v)) => Some((k, v)),
+                        _ => None,
+                    }
+                });
+                if let Some((key_off, val_off)) = *kv_offsets {
+                    if let Some(self_idx) = ic.index_of(&p1.id_map, addr) {
+                        let ko = key_off as usize;
+                        let vo = val_off as usize;
+                        let key_dense = if ko + obj_ref_width <= blob.len() {
+                            let r = read_ref(&blob[ko..], obj_ref_width);
+                            if r != 0 {
+                                ic.index_of(&p1.id_map, r).map(|i| i as u32).unwrap_or(u32::MAX)
+                            } else {
+                                u32::MAX
+                            }
+                        } else {
+                            u32::MAX
+                        };
+                        let val_dense = if vo + obj_ref_width <= blob.len() {
+                            let r = read_ref(&blob[vo..], obj_ref_width);
+                            if r != 0 {
+                                ic.index_of(&p1.id_map, r).map(|i| i as u32).unwrap_or(u32::MAX)
+                            } else {
+                                u32::MAX
+                            }
+                        } else {
+                            u32::MAX
+                        };
+                        node_kv_raw.insert(self_idx as u32, (key_dense, val_dense));
+                    }
+                }
+            }
         }
         // ── on_prim_array: every PRIM_ARRAY_DUMP ──────────────────────────────
         Record::PrimArray(addr, elem_type, count, bytes) => {
             // Top prim arrays: fold EVERY primitive array (not just constant ones).
             // Key on the element type code; the name resolves without `class_ids`.
-            let (idx, sh) = match p1.id_map.index_of(addr) {
+            let (idx, sh) = match ic.index_of(&p1.id_map, addr) {
                 Some(i) => (i as u32, shallow[i] as u64),
                 None => (u32::MAX, 0),
             };
             if idx != u32::MAX {
-                top_prim.add(idx, elem_type as u64, count, sh);
+                top_prim.add(idx, elem_type as u64, count, sh, u64::MAX);
             }
             // Attribution: record this primitive array as a container (kind 7).
             if collect_attribution && idx != u32::MAX {
@@ -1279,7 +1460,7 @@ pub(crate) fn build_field_decode_views(
                 if r != 0 {
                     non_null += 1;
                     if collect_attribution && slot_targets.len() < COLL_VALUES_PER_COLLECTION {
-                        if let Some(ti) = p1.id_map.index_of(r) {
+                        if let Some(ti) = ic.index_of(&p1.id_map, r) {
                             slot_targets.push(ti as u32);
                         }
                     }
@@ -1287,17 +1468,20 @@ pub(crate) fn build_field_decode_views(
             }
             // #11 array fill ratio over ALL object arrays. Attribute THIS array's
             // own shallow size.
-            let (arr_idx, arr_shallow) = match p1.id_map.index_of(addr) {
+            let (arr_idx, arr_shallow) = match ic.index_of(&p1.id_map, addr) {
                 Some(i) => (i as u32, shallow[i] as u64),
                 None => (u32::MAX, 0),
             };
-            array_fill.add(non_null, count, arr_shallow, 0);
+            // Wasted bytes: unused (null) slots × the reference slot width — the
+            // reclaimable backing-store bytes if the array were sized to fit.
+            let arr_wasted = count.saturating_sub(non_null).saturating_mul(obj_ref_width as u64);
+            array_fill.add(non_null, count, arr_shallow, arr_wasted);
 
             // Top object arrays: fold EVERY object array. The per-class key is the
             // array class id read from the record; names resolved later via
             // obj_array_name_of_key (no class_ids needed at assembly time).
             if arr_idx != u32::MAX {
-                top_obj.add(arr_idx, array_class_id, count, arr_shallow);
+                top_obj.add(arr_idx, array_class_id, count, arr_shallow, non_null);
             }
 
             // Attribution: record this object array as a container (kind 6).
@@ -1307,10 +1491,10 @@ pub(crate) fn build_field_decode_views(
                         addr,
                         ContainerRecord {
                             container_idx: arr_idx,
-                            elements: count,
+                            elements: non_null, // used slots (non-null)
                             kind: 6,
                             container_class: pretty_name(array_class_id, p1),
-                            // Object array: length == capacity == elements.
+                            // Capacity = total slot count; elements = non-null slots.
                             capacity: count,
                         },
                     );
@@ -1323,7 +1507,12 @@ pub(crate) fn build_field_decode_views(
             // `wanted_arrays` may not yet contain this array's owning collection
             // (its INSTANCE_DUMP can appear later in the file). Collect the raw
             // per-array data now; fold after the single scan completes.
-            obj_array_raw.push((addr, non_null, count, slot_targets));
+            if collect_attribution {
+                obj_array_raw.push((addr, non_null, count, slot_targets));
+            } else {
+                // Compact path: slot_targets is always empty, avoid Vec overhead.
+                obj_array_raw_compact.push((addr, non_null as u32, count as u32));
+            }
         }
     })?;
 
@@ -1336,35 +1525,48 @@ pub(crate) fn build_field_decode_views(
     let mut map_collision_tracked: u64 = 0;
     let mut coll_values: Vec<CollValuesRaw> = Vec::new();
     let mut coll_values_truncated = false;
-    for (addr, non_null, count, slot_targets) in obj_array_raw.drain(..) {
+
+    // Compact path (default): drain the compact vec without slot_targets.
+    for (addr, non_null_u32, count_u32) in obj_array_raw_compact.drain(..) {
+        let non_null = non_null_u32 as u64;
+        let count = count_u32 as u64;
         if let Some(want) = wanted_arrays.get(&addr) {
-            // ConcurrentHashMap has no plain size: approximate size as non-null
-            // slot count (want.size stays 0 in that case).
             let used = if want.size > 0 { want.size } else { non_null };
-            // #9 collection fill ratio: used / capacity(=count). wasted = the
-            // unused slots' worth of refs (capacity - used) clamped >=0. shallow
-            // attributes the COLLECTION instance (backing-array bytes already
-            // counted under array_fill).
             let wasted = count
                 .saturating_sub(used.min(count))
                 .saturating_mul(obj_ref_width as u64);
             coll_fill.add(used, count, want.coll_shallow, wasted);
             coll_fill_tracked += 1;
             if want.is_map {
-                // #13 map-collision proxy = occupied slots / capacity. A high
-                // occupancy vs. size disparity hints at collisions/chaining.
                 map_collision.add(non_null, count, want.coll_shallow, 0);
                 map_collision_tracked += 1;
             }
-            // Value-type tally: record the backing array's non-null slot targets
-            // against the OWNING collection instance (only under --collections).
-            if collect_attribution && !slot_targets.is_empty() {
+        }
+    }
+
+    // Attribution path (--collections): drain the full vec with slot_targets.
+    for (addr, non_null, count, slot_targets) in obj_array_raw.drain(..) {
+        if let Some(want) = wanted_arrays.get(&addr) {
+            let used = if want.size > 0 { want.size } else { non_null };
+            let wasted = count
+                .saturating_sub(used.min(count))
+                .saturating_mul(obj_ref_width as u64);
+            coll_fill.add(used, count, want.coll_shallow, wasted);
+            coll_fill_tracked += 1;
+            if let Some(rec) = container_records.get_mut(&want.coll_addr) {
+                rec.elements = used;
+                rec.capacity = count;
+            }
+            if want.is_map {
+                map_collision.add(non_null, count, want.coll_shallow, 0);
+                map_collision_tracked += 1;
+            }
+            if !slot_targets.is_empty() {
                 if coll_values.len() < COLL_VALUES_GROUP_CAP {
                     coll_values.push(CollValuesRaw {
                         container_idx: want.coll_idx,
                         kind: want.coll_kind,
                         container_class: want.coll_class.clone(),
-                        // Owner is joined below, once owner_by_addr is built.
                         owner: None,
                         value_indices: slot_targets,
                     });
@@ -1391,11 +1593,12 @@ pub(crate) fn build_field_decode_views(
     let attribution_truncated = edges_truncated || containers_truncated || coll_values_truncated;
 
     // ── Array-owner map: pointee address → primary `Class#field` (first-wins).
-    // Used to attribute each top individual array to a referencing field. Only
-    // built under --collections; keyed by address so it joins against the top
-    // arrays' addresses (resolved via id_map.addr_at). ────────────────────────
-    let owner_by_addr: Option<HashMap<u64, String>> = if collect_attribution {
-        let mut m: HashMap<u64, String> = HashMap::new();
+    // Built unconditionally from array_owner_by_addr (the lightweight scan).
+    // Under --collections, also merge edges-derived labels for collection
+    // backing arrays (these may override the light-scan label, giving the
+    // collection-aware attribution priority for tracked collections).
+    let owner_by_addr: HashMap<u64, String> = if collect_attribution {
+        let mut m = array_owner_by_addr;
         for e in &edges {
             m.entry(e.pointee).or_insert_with(|| {
                 format!(
@@ -1405,9 +1608,9 @@ pub(crate) fn build_field_decode_views(
                 )
             });
         }
-        Some(m)
+        m
     } else {
-        None
+        array_owner_by_addr
     };
 
     // ── Fields-by-size raw groups: (holder_class, field) → distinct pointee
@@ -1430,11 +1633,9 @@ pub(crate) fn build_field_decode_views(
     // Runtime element types resolved later in build_model. Only present under
     // `--collections`. ─────────────────────────────────────────────────────────
     let coll_values_raw: Option<Vec<CollValuesRaw>> = if collect_attribution {
-        if let Some(m) = owner_by_addr.as_ref() {
-            for c in &mut coll_values {
-                let addr = p1.id_map.addr_at(c.container_idx as usize);
-                c.owner = m.get(&addr).cloned();
-            }
+        for c in &mut coll_values {
+            let addr = p1.id_map.addr_at(c.container_idx as usize);
+            c.owner = owner_by_addr.get(&addr).cloned();
         }
         Some(coll_values)
     } else {
@@ -1487,16 +1688,16 @@ pub(crate) fn build_field_decode_views(
         constant_primitive_arrays: assemble_const_arrays(
             const_groups,
             const_owner_samples,
-            owner_by_addr.as_ref(),
+            Some(&owner_by_addr),
             const_other,
             const_truncated,
         ),
         top_prim_arrays: top_prim.into_top_arrays(
             p1,
             prim_array_name_of_key,
-            owner_by_addr.as_ref(),
+            Some(&owner_by_addr),
         ),
-        top_obj_arrays: top_obj.into_top_arrays(p1, obj_array_name_of_key, owner_by_addr.as_ref()),
+        top_obj_arrays: top_obj.into_top_arrays(p1, obj_array_name_of_key, Some(&owner_by_addr)),
         kind_summary,
     };
 
@@ -1514,6 +1715,11 @@ pub(crate) fn build_field_decode_views(
         attribution_raw,
         fields_by_size_raw,
         coll_values_raw,
+        if collect_attribution {
+            Some(node_kv_raw)
+        } else {
+            None
+        },
         attribution_truncated,
         dbb_capacity_sum,
         tl_null_key_count,
@@ -1642,6 +1848,7 @@ fn assemble_ref_stats(
             pretty_class: name.clone(),
             objects,
             shallow,
+            retained: 0, // back-filled by build_references() after dominator pass
         })
         .collect();
     rows.sort_by(|a, b| {
@@ -1654,6 +1861,7 @@ fn assemble_ref_stats(
             pretty_class: "<other>".to_string(),
             objects: other.0,
             shallow: other.1,
+            retained: 0, // back-filled by build_references()
         });
     }
     Some(ReferenceStats {
@@ -1943,7 +2151,7 @@ mod tests {
         // Feed more than TOP_ARRAYS_N candidates with increasing shallow; the
         // heap must retain only the TOP_ARRAYS_N largest.
         for i in 0..(TOP_ARRAYS_N as u32 + 5) {
-            acc.add(i, 0, i as u64, (i as u64) * 100);
+            acc.add(i, 0, i as u64, (i as u64) * 100, u64::MAX);
         }
         assert_eq!(acc.heap.len(), TOP_ARRAYS_N);
         // The retained candidates are the TOP_ARRAYS_N largest shallows.

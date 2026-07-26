@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hprof-analyzer — Criticism Picker (Before / After)</title>
+<style>
+  :root{
+    --bg:#0f1115; --card:#181b22; --fg:#e6e8ee; --muted:#9aa3b2;
+    --border:#2a2f3a; --accent:#6ea8fe; --bad:#ff6b6b; --good:#4ade80;
+    --p0:#ff6b6b; --p1:#ffa94d; --p2:#ffd43b; --p3:#74c0fc;
+    --before-bg:#241618; --after-bg:#132018;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f6f7f9; --card:#fff; --fg:#1a1d24; --muted:#5b6472;
+           --border:#e0e3e9; --before-bg:#fdecec; --after-bg:#ecfbf0; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+       background:var(--bg);color:var(--fg)}
+  header{padding:28px 24px 12px;max-width:1100px;margin:0 auto}
+  h1{margin:0 0 6px;font-size:24px}
+  .sub{color:var(--muted);margin:0 0 18px}
+  .controls{max-width:1100px;margin:0 auto;padding:0 24px 8px;display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+  .controls button{background:var(--card);color:var(--fg);border:1px solid var(--border);
+       border-radius:8px;padding:6px 12px;cursor:pointer;font-size:13px}
+  .controls button:hover{border-color:var(--accent)}
+  .controls .count{color:var(--muted);font-size:13px;margin-left:auto}
+  main{max-width:1100px;margin:0 auto;padding:8px 24px 80px}
+  .grp-title{margin:26px 0 8px;font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:12px;margin:12px 0;overflow:hidden}
+  .card.picked{border-color:var(--good);box-shadow:0 0 0 1px var(--good) inset}
+  .card > .head{display:flex;gap:12px;align-items:flex-start;padding:14px 16px;cursor:pointer}
+  .card > .head:hover{background:rgba(127,127,127,.06)}
+  .pill{flex:none;font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;color:#111}
+  .pill.P0{background:var(--p0)} .pill.P1{background:var(--p1)}
+  .pill.P2{background:var(--p2)} .pill.P3{background:var(--p3)}
+  .effort{flex:none;font-size:11px;color:var(--muted);border:1px solid var(--border);
+       border-radius:6px;padding:2px 7px;margin-left:4px}
+  .titlewrap{flex:1;min-width:0}
+  .title{font-weight:600}
+  .refs{color:var(--muted);font-size:12px}
+  .chk{flex:none;width:22px;height:22px;border:2px solid var(--border);border-radius:6px;
+       display:grid;place-items:center;font-size:14px;color:var(--good)}
+  .card.picked .chk{border-color:var(--good)}
+  .body{display:none;padding:0 16px 16px;border-top:1px solid var(--border)}
+  .card.open .body{display:block}
+  .why{margin:12px 0 14px;color:var(--fg)}
+  .why b{color:var(--accent)}
+  .ba{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  @media(max-width:720px){.ba{grid-template-columns:1fr}}
+  .col{border:1px solid var(--border);border-radius:8px;overflow:hidden}
+  .col h4{margin:0;padding:6px 10px;font-size:12px;letter-spacing:.05em;text-transform:uppercase}
+  .col.before h4{background:var(--before-bg);color:var(--bad)}
+  .col.after h4{background:var(--after-bg);color:var(--good)}
+  pre{margin:0;padding:10px;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+      white-space:pre-wrap;word-break:break-word;overflow-x:auto}
+  .note{font-size:12px;color:var(--muted);padding:8px 16px 0}
+  footer{max-width:1100px;margin:0 auto;padding:0 24px 60px;color:var(--muted);font-size:12px}
+  .summary{position:sticky;bottom:0;background:var(--card);border-top:1px solid var(--border);
+      padding:10px 24px;font-size:13px;display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+  .summary .pk{color:var(--good);font-weight:600}
+  .summary button{background:var(--accent);color:#06121f;border:0;border-radius:8px;
+      padding:6px 14px;cursor:pointer;font-weight:600}
+  code{background:rgba(127,127,127,.15);padding:1px 5px;border-radius:4px;font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <h1>hprof-analyzer — Criticism Picker</h1>
+  <p class="sub">Every finding from <code>CRIT.md</code> with a concrete <b style="color:var(--bad)">before</b> / <b style="color:var(--good)">after</b> mock-up and one-line reasoning.
+  Click a card to expand. Tick the ones you want; the bar at the bottom lists your picks (copyable).
+  Effort: <b>H</b>=render-only · <b>C</b>=compute-cheap · <b>A</b>=new heap pass · <b>F</b>=prose/plumbing.</p>
+</header>
+
+<div class="controls">
+  <button data-filter="all">All</button>
+  <button data-filter="P0">P0 only</button>
+  <button data-filter="P1">P0+P1</button>
+  <button data-expand="open">Expand all</button>
+  <button data-expand="close">Collapse all</button>
+  <span class="count" id="count"></span>
+</div>
+
+<main id="list"></main>
+
+<div class="summary">
+  <span>Picked: <span class="pk" id="pkcount">0</span></span>
+  <span id="pklist" style="color:var(--muted)">— none —</span>
+  <button id="copybtn" style="margin-left:auto">Copy picks</button>
+</div>
+
+<footer>
+  Generated from CRIT.md (44 sections, 25 passes). Before/after panels are illustrative mock-ups of the described change, not live renderer output. Section refs (e.g. §29.2) point into CRIT.md for full reasoning and file:line grounding.
+</footer>
+
+<script>
+const DATA = [
+/* ---------------- P0 ---------------- */
+{id:"graphs-drops-sections",p:"P0",eff:"F",refs:"§29.2 §29.3",
+ title:"BUG: md-graphs silently drops 3 whole sections + a dead triage link",
+ why:"The graphs renderer re-implements sections by hand instead of delegating, so Boxed Numbers, Duplicate Primitive Arrays and Header Overhead are simply <b>absent</b> from graphs output — and a triage \"See X\" link points at a section that isn't there. Fix: make render_graphs delegate to the shared render_md section functions.",
+ before:"## Report (md-graphs)\n... System Overview ...\n... Top Consumers ...\n\n(no Boxed Numbers section)\n(no Duplicate Primitive Arrays)\n(no Header Overhead)\n\nTriage: → See [Boxed Numbers](#boxed-numbers)\n            ^ link 404s in this format",
+ after:"## Report (md-graphs)\n... System Overview ...\n... Top Consumers ...\n\n### Boxed Numbers\n| Class          | Count   | Waste  |\n| Integer        | 812,004 | 6.2 MB |\n\n### Duplicate Primitive Arrays  …\n### Header Overhead  …\n\nTriage: → See [Boxed Numbers](#boxed-numbers)  ✓ resolves"},
+
+{id:"anchor-namespace",p:"P0",eff:"C",refs:"§42.0 §42.1",
+ title:"BUG: triage “See X” links dead-end (different links break per format)",
+ why:"Anchors are authored in three unreconciled namespaces (md heading-slugs, HTML <code>id=</code>, triage literals). <code>#overview</code> works in HTML but 404s in md (heading slugs to <code>system-overview</code>); <code>#leak-suspects</code> works in md but 404s in HTML (id is <code>leaks</code>). Fix: one canonical SectionId → per-format-slug map feeding all three.",
+ before:"MARKDOWN sample line 60:\n  → See [System Overview](#overview)\n     click … nothing (heading is #system-overview)\n\nHTML:\n  <a href=\"#leak-suspects\">Leak Suspects</a>\n     click … nothing (id is \"leaks\")",
+ after:"One source of truth:\n  SectionId::Overview → md \"#system-overview\"\n                      → html id=\"system-overview\"\n                      → triage anchor → same\n\nEvery “See X” link resolves in every format."},
+
+{id:"dom-tree-cap",p:"P0",eff:"C",refs:"§28.1 §29.1 §3.1 §13.3",
+ title:"Cap the dominator subtree & collapse repeated chains",
+ why:"The dominator tree is <b>43% of the plain-md report and 72% of the graphs report</b> — pages of near-identical cons-cell chains that bury everything else. Fix: cap depth≤4 / breadth≤5, collapse repeated single-child chains as <code>×N</code>, fence it in box-drawing.",
+ before:"Dominator Tree\n└ $colon$colon (24 B)\n  └ $colon$colon (24 B)\n    └ $colon$colon (24 B)\n      └ $colon$colon (24 B)\n        └ $colon$colon (24 B)\n          └ … (11,270 more rows)\n\n[43% of the entire report is this]",
+ after:"Dominator Tree (depth≤4, breadth≤5; ×N = collapsed chain)\n┌─────────────────────────────┐\n│ Thread (22.9 MB)             │\n│ └ $colon$colon ×11,273 (8.6 MB)│\n│ └ HashSet (8.0 MB)          │\n└─────────────────────────────┘\n[now ~3% of the report]"},
+
+{id:"pct-heap-label",p:"P0",eff:"F",refs:"§27.1 §27.2 §27.5 §35.5",
+ title:"Relabel retained-share “% Heap” (it's a category error) + one canonical base",
+ why:"“% Heap” is computed as retained ÷ <i>shallow</i>-total — two different denominators — so percentages can exceed 100% and don't sum. Fix: define “reachable heap” <b>once</b>, canonically, and have every %/bp display reference that same base.",
+ before:"| Class    | Retained | % Heap |\n| Thread   | 22.9 MB  | 76.3%  |\n| Object[] | 11.4 MB  | 38.0%  |\n| HashSet  |  8.0 MB  | 26.7%  |\n              (sums to 141% — ?)",
+ after:"Reachable heap = 30.0 MB (defined once, top of report)\n\n| Class    | Retained | % of reachable |\n| Thread   | 22.9 MB  | 76.3%          |\n| Object[] | 11.4 MB  | 38.0%*         |\n*overlaps: retained sets nest; see note"},
+
+{id:"waste-summary",p:"P0",eff:"C",refs:"§24 §34.1 §34.2 §35.1 §35.2",
+ title:"Waste Summary — one headline “reclaimable N MB” + table",
+ why:"The waste analyses (dup strings, boxed numbers, empty collections, coder-waste, header overhead…) are scattered across the report. Fix: one headline number and a 9–10-row table so a user immediately sees the total recoverable heap and where it is.",
+ before:"(Duplicate Strings section … somewhere)\n(Boxed Numbers section … elsewhere)\n(Empty Collections … buried)\nUser must add these up by hand to know\nhow much is actually reclaimable.",
+ after:"## Waste Summary\n▶ Est. reclaimable: 14.8 MB (49% of heap)\n\n| Source              | Reclaimable |\n| Duplicate strings   |  5.1 MB     |\n| Boxed numbers       |  6.2 MB     |\n| Empty collections   |  1.9 MB     |\n| String coder waste  |  1.6 MB     |\n→ drill down: by-package waste"},
+
+{id:"heap-origin-spine",p:"P0",eff:"H",refs:"§25",
+ title:"Heap-Origin spine — one lead-in linking the 5 attribution axes",
+ why:"Five “where does the heap come from” views (by class, package, dominator, allocation site, retainer) exist but stand disconnected. Fix: one ordered lead-in paragraph that links them as a drill path, so the reader knows they're facets of one question.",
+ before:"## Biggest Classes\n## Biggest Objects\n## By Package\n## Allocation Sites\n## Dominators\n(five separate sections, no connective tissue)",
+ after:"## Where Your Heap Comes From\nStart broad → narrow:\n  by class → by package → by dominator\n  → by allocation site → by retainer.\n[links to each of the 5 sections below]"},
+
+{id:"biggest-coll-dedup",p:"P0",eff:"C",refs:"§10.1",
+ title:"Biggest Collections: remove Combined + ByKind duplication",
+ why:"The same collections are listed twice — once combined, once split by kind — doubling the section for no new information.",
+ before:"## Biggest Collections (Combined)\n1. HashMap  4.2 MB\n2. ArrayList 3.1 MB\n\n## Biggest Collections (By Kind)\nHashMap: 1. HashMap 4.2 MB\nList:    1. ArrayList 3.1 MB   ← same rows again",
+ after:"## Biggest Collections\n| Kind    | Instance   | Retained |\n| HashMap | userCache  | 4.2 MB   |\n| List    | pendingLog | 3.1 MB   |\n(one table, kind as a column)"},
+
+{id:"const-prim-arrays",p:"P0",eff:"C",refs:"§8.6",
+ title:"Constant Primitive Arrays: filter noise",
+ why:"The scan lists thousands of tiny identical arrays (e.g. empty <code>byte[0]</code>) that are pure noise and drown the few that actually matter. Fix: filter by size/count threshold.",
+ before:"Constant Primitive Arrays\nbyte[0]  × 41,200   (0 B each)\nchar[0]  × 12,800   (0 B each)\nint[1]   ×  8,004\n… (pages of near-zero rows)",
+ after:"Constant Primitive Arrays (≥ 4 KB total)\nbyte[8192] × 220  → 1.7 MB duplicated\nint[4096]  × 120  → 1.9 MB duplicated\n(only rows worth acting on)"},
+
+/* ---------------- P1 ---------------- */
+{id:"triage-rank-bytes",p:"P1",eff:"C/F",refs:"§26.2",
+ title:"Triage: rank fired signals by reclaimable bytes; split orientation from problems",
+ why:"Triage mixes 5 always-on orientation signals with real problems in arbitrary order. Fix: rank by reclaimable bytes and visually separate “heads-up” from “problem.”",
+ before:"Triage:\n- Info: heap is 30 MB\n- Warn: possible leak in HashSet\n- Info: 27 threads\n- Warn: 6.2 MB boxed numbers\n- Info: dominator depth 11273\n(flat, unordered)",
+ after:"Triage\nPROBLEMS (by reclaimable):\n  ⚠ 6.2 MB boxed numbers\n  ⚠ HashSet leak suspect (8.0 MB)\nORIENTATION:\n  ℹ heap 30 MB · 27 threads · depth 11273"},
+
+{id:"triage-false-pos",p:"P1",eff:"C",refs:"§26.3",
+ title:"Triage: calibrate false-positive-prone rules",
+ why:"Rules like classloader-leak, threadlocal-leak and name-pattern (session/connection/listener) fire on healthy heaps. Fix: raise thresholds / add corroborating conditions so they don't cry wolf.",
+ before:"⚠ Potential ThreadLocal leak: 1 entry\n⚠ Potential listener leak: found class\n  named *Listener (12 instances)\n(fires on every normal app)",
+ after:"(no signal — 1 ThreadLocal entry and 12\nlisteners are normal; rule now needs\n>N entries AND growth corroboration\nbefore firing)"},
+
+{id:"triage-not-analyzed",p:"P1",eff:"F",refs:"§26.4b",
+ title:"Triage: “not analyzed” note for gated rules (absence ≠ clean)",
+ why:"When a rule is skipped (e.g. no allocation traces), its silence looks like a clean bill of health. Fix: explicitly say “not analyzed — no data.”",
+ before:"Triage: no allocation-site leaks found.\n(but there were no traces to analyze —\n silence read as “clean”)",
+ after:"Triage: allocation-site analysis skipped\n(no stack traces in this dump).\nAbsence of a signal here ≠ no problem."},
+
+{id:"offheap-ratio",p:"P1",eff:"C",refs:"§27.3",
+ title:"Surface off-heap : on-heap ratio",
+ why:"134 MB off-heap vs 30 MB on-heap is a dominant fact buried deep. Fix: put the ratio near the top.",
+ before:"System Overview\nHeap: 30 MB\n… (off-heap DirectByteBuffer total\n   appears 400 lines later)",
+ after:"System Overview\nOn-heap:  30 MB\nOff-heap: 134 MB  ⚠ 4.5× the heap\n(DirectByteBuffer / native — investigate)"},
+
+{id:"field-labeled-path",p:"P1",eff:"A",refs:"§30.2a",
+ title:"Field-labeled reference path-to-GC-roots (the one true MAT gap)",
+ why:"Dominator/merged-path views show the chain but not the <i>field names</i> — so you can't tell which field to null out. Fix: capture field labels on the path.",
+ before:"Path to GC root:\n Thread → Object[] → HashSet → target\n (which field holds it? unknown)",
+ after:"Path to GC root:\n Thread.threadLocals\n  → Object[17]\n   → HashSet.elements\n    → target   (null out Thread.threadLocals)"},
+
+{id:"unwrap-map-entry",p:"P1",eff:"A",refs:"§28.5",
+ title:"Collection Contents: unwrap map-entry wrappers",
+ why:"6 of 7 rows are tautological (<code>HashMap → HashMap$Node</code>). Fix: unwrap wrapper nodes to show the real key/value classes.",
+ before:"HashMap contains:\n  HashMap$Node   (99%)\n  … (tells you nothing)",
+ after:"HashMap contains:\n  key:   String     (100%)\n  value: UserSession (100%)\n(the actual payload types)"},
+
+{id:"healthy-sample",p:"P1",eff:"F",refs:"§31.1",
+ title:"Ship a healthy sample dump",
+ why:"Both samples are leak-heavy, so the empty-state / all-clear prose is never exercised by example. Fix: commit one healthy fixture and regenerate.",
+ before:"docs/samples/\n  scala-doku.*      (leak-heavy)\n  scala-doku-full.* (leak-heavy)\n(no healthy example)",
+ after:"docs/samples/\n  scala-doku.*\n  scala-doku-full.*\n  healthy-webapp.*  ← all-clear prose shown"},
+
+{id:"domtree-svg-vars",p:"P1",eff:"F",refs:"§32.1",
+ title:"BUG: HTML dom-tree SVG uses phantom CSS vars → breaks in dark mode",
+ why:"The SVG references <code>--surface</code>/<code>--text-muted</code> which don't exist, so it's stuck light and vanishes on dark backgrounds. Fix: swap to the real <code>--card</code>/<code>--fg</code>/<code>--muted</code> (3 edits).",
+ before:"HTML dark mode:\n[dominator tree SVG =\n white boxes on white,\n text invisible]",
+ after:"HTML dark mode:\n[dominator tree SVG =\n --card boxes, --fg text,\n readable in both themes]"},
+
+{id:"what-to-do",p:"P1",eff:"F",refs:"§33.2 §33.3 §33.4",
+ title:"Add a “What to do” clause to each section caption",
+ why:"Sections diagnose but don't prescribe — Container Attribution even names the fixable <code>Class#field</code> yet never says to bound/evict/null it. Fix: one action clause per caption.",
+ before:"Container Attribution\nUserCache#sessions retains 8 MB.\n(… and then what?)",
+ after:"Container Attribution\nUserCache#sessions retains 8 MB.\n→ Bound this map (LRU/TTL) or clear it\n  on logout — it never evicts."},
+
+{id:"triage-waste-bullet",p:"P1",eff:"C",refs:"§1.4 §26.5",
+ title:"Triage: add wasted-slots / reclaimable-waste bullet",
+ why:"Triage never states the total reclaimable waste as a signal. Fix: add one bullet.",
+ before:"Triage:\n- Warn: possible leak\n(no mention of the 14.8 MB reclaimable)",
+ after:"Triage:\n- Warn: possible leak\n- ♻ 14.8 MB reclaimable (dup/boxed/empty)"},
+
+{id:"summary-triage-dedup",p:"P1",eff:"F",refs:"§1.1",
+ title:"Summary / Triage: remove duplication",
+ why:"The Summary and Triage restate the same findings. Fix: Summary points to Triage rather than repeating it.",
+ before:"## Summary\n- possible HashSet leak\n- 6.2 MB boxed numbers\n## Triage\n- possible HashSet leak   ← again\n- 6.2 MB boxed numbers    ← again",
+ after:"## Summary\nHeap 30 MB, 3 issues found — see Triage.\n## Triage\n- possible HashSet leak\n- 6.2 MB boxed numbers"},
+
+{id:"histogram-retained",p:"P1",eff:"H",refs:"§2.2",
+ title:"Class Histogram: add Retained column",
+ why:"The histogram shows shallow only; retained is the number that tells you what's actually holding memory. Data already exists. Fix: add the column.",
+ before:"| Class   | Count   | Shallow |\n| Thread  |     27  |  2.7 KB |\n(shallow says Thread is tiny)",
+ after:"| Class   | Count | Shallow | Retained |\n| Thread  |    27 |  2.7 KB | 22.9 MB  |\n(retained reveals the real holder)"},
+
+{id:"concentration-bytes",p:"P1",eff:"H/C",refs:"§15.2 §15.3",
+ title:"Retention Concentration: absolute bytes + name the objects",
+ why:"Concentration is shown as bare percentages with no bytes and no object identity. Fix: add bytes and enumerate the named objects.",
+ before:"Top 1 holds 76% of heap.\nTop 10 holds 94%.\n(which objects? how many bytes?)",
+ after:"Top 1 = Thread “main” — 22.9 MB (76%)\nTop 10 = [main, Solver, …] — 28.2 MB (94%)"},
+
+{id:"md-chart-parity",p:"P1",eff:"H",refs:"§19.1 §19.5",
+ title:"Bring plain Markdown to HTML chart parity",
+ why:"Plain md has no bars/sparklines though the data is identical to HTML's. Fix: render the same bars from existing data.",
+ before:"Plain md:\n| Class  | Retained |\n| Thread | 22.9 MB  |\n(no visual)",
+ after:"Plain md:\n| Class  | Retained |         |\n| Thread | 22.9 MB  |████████|\n(bars, from data already present)"},
+
+{id:"alloc-sites-explain",p:"P1",eff:"F",refs:"§14.1",
+ title:"Allocation Sites: hide or explain when no stack data",
+ why:"An empty Allocation Sites section looks like a bug. Fix: hide it, or explain that the dump has no allocation traces.",
+ before:"## Allocation Sites\n(empty)\n(reads as broken)",
+ after:"## Allocation Sites\nNot available — this dump has no allocation\nstack traces (run JVM with -XX:+…)."},
+
+{id:"fields-drop-empty-col",p:"P1",eff:"H",refs:"§9.1",
+ title:"Fields by Retained: drop always-0 Elements column for non-collections",
+ why:"A column that is always 0 for non-collection classes is pure clutter. Fix: drop it when it carries no data.",
+ before:"| Field    | Retained | Elements |\n| cache    | 8 MB     | 0        |\n| buffer   | 3 MB     | 0        |\n(Elements always 0 here)",
+ after:"| Field    | Retained |\n| cache    | 8 MB     |\n| buffer   | 3 MB     |\n(column dropped when meaningless)"},
+
+{id:"json-version-gate",p:"P1",eff:"F",refs:"§36.1",
+ title:"JSON version gate contradicts its own evolution machinery",
+ why:"Read path is exact-match (<code>!=</code>) yet the model has 50 <code>#[serde(default)]</code> for cross-version tolerance — the two disagree. Fix: relax to <code>&lt;=</code> or document why exact-match.",
+ before:"if json.schema_version != 6 { error }\n// but 50 fields have #[serde(default)]\n// for forward-compat that can never trigger",
+ after:"if json.schema_version > 6 { error }\n// older reports (default-filled) now load,\n// which is what the defaults were for"},
+
+{id:"diff-endpoints-only",p:"P1",eff:"C",refs:"§37.1",
+ title:"Diff ranking is endpoints-only — transient leaks vanish",
+ why:"Every Δ is <code>retained[last]−retained[0]</code>, so a class that spikes at r2 and is reclaimed by rN shows Δ=0 and never appears. Fix: rank by peak-vs-baseline / monotonic run.",
+ before:"Growth Leaders (r1 → r5):\n Foo  +0 MB   (spiked +500 MB at r3!)\n(transient leak invisible)",
+ after:"Growth Leaders:\n Foo  peak +500 MB @ r3 (reclaimed by r5)\n(transient spike surfaced)"},
+
+{id:"diff-net-delta",p:"P1",eff:"C",refs:"§37.2",
+ title:"Diff “Net Δ Retained” hides offsetting churn",
+ why:"Summing signed per-class deltas means +500 MB Foo vs −480 MB Bar reads as a reassuring +20 MB. Fix: show gross-growth and gross-shrinkage separately.",
+ before:"Net Δ Retained: +20 MB  🙂\n(looks calm; actually 500 MB churned)",
+ after:"Gross growth:   +500 MB ⚠\nGross shrinkage: −480 MB\nNet:              +20 MB"},
+
+/* ---------------- P2 (compact but with before/after) ---------------- */
+{id:"compare-sample",p:"P2",eff:"F",refs:"§37.4",
+ title:"Commit a compare sample + golden test",
+ why:"The ~200-line diff output has no sample and no regression guard. Fix: capture one and pin it.",
+ before:"docs/samples/ — no compare output\ntests/ — no diff golden",
+ after:"docs/samples/compare-r1-r5.md\ntests/golden: diff output pinned"},
+
+{id:"graphs-downgrade",p:"P2",eff:"F",refs:"§38.1",
+ title:"md-graphs silently downgrades to plain md when inferred",
+ why:"A <code>graphs.md</code> output path can't express the format, so it quietly falls back. Fix: warn on stderr or honor the <code>.graphs.md</code> convention.",
+ before:"$ hprof-analyzer d.hprof -o out.graphs.md\n(writes plain md silently)",
+ after:"$ hprof-analyzer d.hprof -o out.graphs.md\n(writes graphs md — .graphs.md recognized)"},
+
+{id:"detail-max-blowup",p:"P2",eff:"C",refs:"§38.3",
+ title:"--detail max feeds the dominator blow-up",
+ why:"<code>--detail max</code> sets 100,000 dom-tree nodes — 20× the default the report already struggles with. Fix: apply the rendered-tree collapse regardless of --detail.",
+ before:"--detail max → 100,000 dom nodes\n→ report becomes unusable",
+ after:"--detail max → more data collected,\nbut render still collapses/caps the tree"},
+
+{id:"collconf-slash",p:"P2",eff:"C",refs:"§39.1",
+ title:"Collection-config class field: no dotted-vs-slash guard",
+ why:"Users write <code>com.example.Foo</code> but builtins use <code>com/example/Foo</code>, so it silently matches nothing. Fix: accept/normalize both, or error.",
+ before:"[[collection]]\nclass = \"com.example.Foo\"\n→ 0 rows, no error (never matched)",
+ after:"class = \"com.example.Foo\"\n→ normalized to com/example/Foo\n  (or: error “use slash form”)"},
+
+{id:"collconf-docs",p:"P2",eff:"F",refs:"§39.4 §39.5",
+ title:"Document the custom collection-handler TOML",
+ why:"README covers <code>--collections</code> but never the <code>--collection-config</code> TOML, its shape, or the slash requirement.",
+ before:"README: mentions --collections only",
+ after:"README: [[collection]] shape, discovery\norder, slash-form requirement documented"},
+
+{id:"html-schema-check",p:"P2",eff:"F",refs:"§40.1",
+ title:"HTML: no client-side schema_version check",
+ why:"Rust hard-gates version but the browser renders whatever it parses. Fix: mirror the gate client-side.",
+ before:"boot(): JSON.parse → render (any version)",
+ after:"boot(): if schema_version!=6 → friendly\n“regenerate” panel, then render"},
+
+{id:"html-error-boundary",p:"P2",eff:"C",refs:"§40.2",
+ title:"HTML: no error boundary + #root cleared before render → blank page",
+ why:"Any render throw (e.g. missing <code>overview.source_name</code>) blanks the whole page. Fix: error boundary + guard the field.",
+ before:"missing key → exception → white screen",
+ after:"missing key → error panel: “couldn't render\n— report may be malformed”"},
+
+{id:"format-bytes-binary",p:"P2",eff:"F",refs:"§41.1",
+ title:"format_bytes: binary sizes labeled KB/MB/GB (undisclosed)",
+ why:"1024-base values wear decimal names — ~7% overstated at GB, never disclosed. Fix: one “sizes are binary” caption.",
+ before:"Heap: 30.0 GB\n(is that 10^9 or 2^30? unstated)",
+ after:"Heap: 30.0 GB   (sizes are binary: 1 GB = 2³⁰ B)"},
+
+{id:"fmt-pct-small",p:"P2",eff:"C",refs:"§41.3",
+ title:"fmt_pct renders sub-0.05% as “0.0%” (≡ true zero)",
+ why:"A tiny-but-present share is indistinguishable from zero next to a nonzero byte figure. One 2-line fix (<code>&lt;0.1%</code>) fixes every small-share site.",
+ before:"| Foo | 12 KB | 0.0% |   ← but it's not zero",
+ after:"| Foo | 12 KB | <0.1% |  ← present, just small"},
+
+{id:"json-absent-empty-docs",p:"P2",eff:"F",refs:"§36.2",
+ title:"Document omittable JSON keys + absent-vs-empty semantics",
+ why:"<code>alloc_sites</code> absent (=no tracking) vs present-with-empty is the likeliest integration bug. Fix: document it.",
+ before:"schema.json: no note on absent vs empty",
+ after:"docs: “alloc_sites absent = not analyzed;\npresent+empty = analyzed, none found”"},
+
+{id:"surface-schema",p:"P2",eff:"F",refs:"§36.5",
+ title:"Surface the JSON Schema",
+ why:"<code>dev emit-schema</code> is hidden under a dev command, so the contract is undiscoverable. Fix: promote it or commit <code>docs/schema.json</code>.",
+ before:"schema exists only via `dev emit-schema`",
+ after:"docs/schema.json committed + linked in README"},
+
+{id:"anchor-test",p:"P2",eff:"C",refs:"§26.6 §42.3",
+ title:"Cross-format anchor-resolution test",
+ why:"The durable guard for the §42 anchor bug — assert every triage anchor resolves in both md and HTML.",
+ before:"(no test — anchor bug can silently return)",
+ after:"test: every TriageSignal.anchor resolves\nin md-slug AND html id"},
+
+{id:"linkedlist-depth",p:"P2",eff:"C",refs:"§27.4",
+ title:"Special-case linked-list depth artifact",
+ why:"“p90 depth 11273” is one cons chain, not a shape statistic. Fix: detect and annotate it.",
+ before:"Dominator depth p90: 11,273\n(looks like a pathological tree)",
+ after:"Dominator depth p90: 11,273\n(≠ shape — one 11k-long cons list)"},
+
+{id:"threshold-provenance",p:"P2",eff:"F",refs:"§26.7",
+ title:"Document triage threshold provenance",
+ why:"Thresholds are opaque; surface which one was crossed in detail mode.",
+ before:"⚠ leak suspect (why? which threshold?)",
+ after:"⚠ leak suspect: 8.0 MB > 5% heap threshold"},
+
+{id:"reorder-drilldown",p:"P2",eff:"F",refs:"§28.6",
+ title:"Reorder sections into a drill-down; hoist waste out of System Overview",
+ why:"Waste analyses live under “System Overview” where they don't belong. Fix: reorder broad→narrow, waste in its own place.",
+ before:"System Overview\n  … duplicate strings\n  … boxed numbers\n(waste buried in overview)",
+ after:"System Overview (just the vitals)\n→ Heap Origin → Waste Summary → detail"},
+
+{id:"triage-lowwater",p:"P2",eff:"C",refs:"§31.2",
+ title:"Triage: low-water gate on headline retainer",
+ why:"Below ~5% the headline retainer isn't a story. Fix: downgrade to Info + “diffuse” wording.",
+ before:"⚠ Top retainer holds 3% of heap\n(not really a finding)",
+ after:"ℹ Retention is diffuse (top holds 3%);\nno single dominant retainer."},
+
+{id:"triage-allclear",p:"P2",eff:"C",refs:"§31.5",
+ title:"Triage: explicit all-clear line",
+ why:"When everything is Info, say so affirmatively instead of leaving the reader guessing.",
+ before:"Triage:\n- Info: heap 12 MB\n- Info: 8 threads\n(is that… good?)",
+ after:"Triage: ✓ heap appears healthy — no\nleak/waste signals crossed threshold."},
+
+{id:"empty-sections",p:"P2",eff:"F",refs:"§31.4",
+ title:"Empty sections: hoist emptiness check + reconcile ToC vs body",
+ why:"Degenerate dumps drift: ToC lists sections the body omits. Fix: check emptiness before the header.",
+ before:"ToC: • Allocation Sites\nBody: (Allocation Sites missing)",
+ after:"ToC and body agree; empty sections\neither omitted from both or shown as N/A"},
+
+{id:"html-kbd-sort",p:"P2",eff:"C",refs:"§32.2",
+ title:"HTML: keyboard-operable sortable headers",
+ why:"Sort headers are mouse-only (WCAG fail). Fix: add tabIndex/role/onKeyDown/aria-sort.",
+ before:"<th onclick=sort>Retained</th>\n(no keyboard, no aria)",
+ after:"<th tabindex=0 role=button aria-sort=…\n     onkeydown=Enter>Retained</th>"},
+
+{id:"html-copy-focus",p:"P2",eff:"C",refs:"§32.5",
+ title:"HTML: copy buttons are mouse-only",
+ why:"<code>visibility:hidden</code> blocks keyboard focus. Fix: reveal on <code>:focus-within</code>.",
+ before:"copy btn: visibility:hidden until hover\n(keyboard users can't reach it)",
+ after:"copy btn revealed on hover OR focus-within"},
+
+{id:"action-and-limit",p:"P2",eff:"C/A",refs:"§33.5",
+ title:"State the action and its current limit for the 3 non-prescriptive sections",
+ why:"Leak-path, alloc sites, header overhead say “consider…” instead of a concrete action + its known limit.",
+ before:"“Consider investigating the leak path.”",
+ after:"“Null Thread.threadLocals to release this.\n(Note: path shown to depth 4 only.)”"},
+
+{id:"invaliddata-hint",p:"P2",eff:"F",refs:"§43.2 §43.1",
+ title:"analyze_error_hint drops every InvalidData error",
+ why:"EOF and wrong-file get friendly hints; bad-id_size / unknown-sub-tag fall through to a bare io::Error. Fix: add an InvalidData arm.",
+ before:"$ hprof-analyzer weird.hprof\nError: unknown heap sub-tag: 0x2c",
+ after:"Error: 'weird.hprof' parsed as HPROF but a\nrecord was malformed/unsupported (possibly\na newer JVM). Analysis cannot continue."},
+
+{id:"corrupt-fixtures",p:"P2",eff:"C",refs:"§43.4",
+ title:"Add corrupt/truncated-input test fixtures",
+ why:"No test pins clean-EOF vs mid-record-error, the id_size gate, or the unknown-sub-tag abort — a refactor could emit a partial report labeled complete.",
+ before:"tests: only the valid DUMP fixture",
+ after:"tests: +truncated-at-boundary,\n+truncated-mid-record, +bad-subtag"},
+
+{id:"graphs-shared-denom",p:"P2",eff:"C",refs:"§44.1",
+ title:"Graphs: bar columns have no shared denominator",
+ why:"Nine per-table local maxes — a full bar means 22.9 MB in one table, 19.7 MB in another; the eye can't compare across sections. Fix: one shared retained denominator (+caption where units differ).",
+ before:"Heap Composition: Instances 19.7 MB ████████\nBiggest Classes: Thread  22.9 MB ████████\n(same bar, different amount)",
+ after:"scaled to reachable heap (30 MB):\nInstances 19.7 MB ██████████▌\nThread    22.9 MB ████████████▎"},
+
+{id:"graphs-linear-tail",p:"P2",eff:"C",refs:"§44.2",
+ title:"Graphs: linear bars erase the power-law tail",
+ why:"Below one cell (~max/16) every value renders blank, so 55 long strings up to 17,989 B show as empty. Fix: guarantee a min-visible ▏ for nonzero, or log-scale.",
+ before:"≤ 256  35 |          |  ← blank\n≤ 512   9 |          |  ← blank\n(long-string tail invisible)",
+ after:"≤ 256  35 |▏         |\n≤ 512   9 |▏         |\n(nonzero always shows a sliver)"},
+
+{id:"graphs-sparkline-honest",p:"P2",eff:"C",refs:"§44.3",
+ title:"Graphs: sparkline is less honest than the bar table beside it",
+ why:"<code>(v*7)/max</code> floors small-nonzero to the zero glyph, so a 78-value bucket and a 1-value bucket look identical (▁) while the sibling bar column distinguishes them. Fix: lift nonzero to ≥ level 1, add an axis, or drop it.",
+ before:"▁▁▂▄▅▇█▂▁▁▁▁▁▁▁\n(trailing ▁ = 78 values AND 1 value,\n indistinguishable)",
+ after:"▁▁▂▄▅▇█▂▂▁▂▁▁▁▂\n(nonzero ≥▂; true zero stays ▁)\n+ axis: len 1 … 32768"},
+
+/* remaining A-effort P2 data-adds (compact) */
+{id:"true-retained-collkind",p:"P2",eff:"A",refs:"§8.2",
+ title:"True retained per collection kind",
+ why:"Collections show shallow, not the retained memory the kind actually holds. Needs a heap pass.",
+ before:"HashMap: 1.2 MB shallow\n(what does it really retain?)",
+ after:"HashMap: 1.2 MB shallow / 8.4 MB retained"},
+
+{id:"wasted-bytes-fill",p:"P2",eff:"A",refs:"§8.4 §8.7",
+ title:"Wasted bytes (element-size-weighted) + fill-ratio attribution",
+ why:"Fill-ratio is shown as a count, not bytes. Weight by element size to get real wasted bytes.",
+ before:"ArrayList 20% full (rest = null)",
+ after:"ArrayList 20% full → 2.4 MB wasted capacity"},
+
+{id:"cap0-split",p:"P2",eff:"A",refs:"§8.3",
+ title:"Collections: split “cap 0” vs “0 elements, cap>0”",
+ why:"An unused (cap 0) collection and a drained-but-oversized one are different problems, currently merged.",
+ before:"Empty collections: 4,201",
+ after:"Never-used (cap 0): 3,900\nDrained but oversized (cap>0): 301 → 1.9 MB"},
+
+{id:"depth-truncate",p:"P2",eff:"H/C",refs:"§16.1 §16.2",
+ title:"Depth Distribution: truncate past last meaningful depth",
+ why:"The distribution runs far past the last nonzero bucket. Fix: truncate + bar.",
+ before:"depth 40: 0\ndepth 41: 0 … (empty rows to 11273)",
+ after:"depth 40: 0  (← last meaningful; rest omitted)"},
+
+{id:"bigcoll-adjacent-dedup",p:"P2",eff:"C",refs:"§10.5 §10.3",
+ title:"Biggest Collections: de-duplicate identical adjacent rows",
+ why:"Identical adjacent rows repeat. Fix: collapse with a count.",
+ before:"userCache 4.2 MB\nuserCache 4.2 MB\nuserCache 4.2 MB",
+ after:"userCache 4.2 MB ×3"},
+
+{id:"dupstr-skip-binary",p:"P2",eff:"A",refs:"§2.4",
+ title:"Duplicate Strings: skip binary/garbage in Longest",
+ why:"The “longest strings” list surfaces binary blobs decoded as text. Fix: skip non-textual values.",
+ before:"Longest: \"\\x00\\x01\\xff…\" (17,989 B)",
+ after:"Longest: \"<serialized config XML>\" (4,096 B)\n(binary blobs skipped)"},
+
+{id:"immdom-retained",p:"P2",eff:"A",refs:"§25.4 §34.5 §35.3",
+ title:"Immediate Dominators: add dominated_retained (enables Reference-Hubs)",
+ why:"The hub axis isn't comparable without a retained measure; this single Add also enables a Reference-Hubs view without a new section.",
+ before:"Immediate dominator: Object[] (× 25,579)\n(how much does it hold? unknown)",
+ after:"Immediate dominator: Object[] — dominates\n11.4 MB across 25,579 refs (a hub)"},
+];
+
+/* P3 items: title + reasoning only, compact list (before/after optional) */
+const P3 = [
+ ["hist-interactive","§19.7","H","HTML: interactive sortable/filterable class histogram (the MAT feature)."],
+ ["md-treemap","§20.1","H","Port the retained treemap to md-graphs (already in HTML)."],
+ ["md-boxtree","§29.1 §29.4","C","Back-port graphs box-drawing tree + in-table bars to plain md."],
+ ["cap-honest-total","§27.6 §27.7","F","Cap-honest “Total (top N shown)” labels + sub-0.1% rounding (root-cause: §41.3)."],
+ ["threadlocal-enum","§6.2","A","Enumerate ThreadLocal value classes, not just counts."],
+ ["referent-retained","§12.1","A","Add referent-class retained column to References."],
+ ["growth-path-triage","§20.4","C","Triage bullet for pathological chain depth."],
+ ["submb-pct","§31.6","C","Suppress percentages for sub-MB heaps (they degrade to 0.0%)."],
+ ["bytes-tb-pb","§41.2","C","format_bytes: add TB/PB tier (petabyte currently prints “1048576.00 GB”)."],
+ ["concentration-rounding","§41.4","C","Derive concentration bytes + percent from one rounding so they can't disagree."],
+ ["unify-count-fmt","§41.5","F","Unify fmt_count and fmt_delta_count on one digit-grouper."],
+ ["html-slice-kbd","§32.3","C","HTML: keyboard path + role=button for chart slices / treemap tiles."],
+ ["html-chart-aria","§32.4","C","HTML: descriptive chart aria-labels + figure/table association."],
+ ["html-treemap-legend","§32.6","C","HTML: treemap legend + colorblind-safe palette."],
+ ["html-theme-aria","§32.7","C","HTML: theme-toggle aria-label states the action; visible exact-byte tooltips."],
+ ["new-triage-rules","§26.5 §26.8","C","New triage rules: fill-ratio attribution, extreme top-100 concentration, diffuse classloader leak."],
+ ["beyond-mat","§30.3","F","Advertise “Beyond MAT” strengths (waste/unreachable/N-way diff) up front."],
+ ["golden-nonmat","§30.4","C","Golden-file tests for non-MAT sections."],
+ ["oql-links","§30.2b","A","Suggested-OQL links on suspects once the OQL engine lands."],
+ ["pending-finalization","§34.4","C","NEW: Pending-Finalization subsection — enumerate what's stuck."],
+ ["structural-dedup","§34.3","A","NEW: structural object-graph dedup (exceeds MAT; research direction)."],
+ ["diff-shrink-base","§37.3","F","Diff verdict: note shrink-% base + guard zero-base (“n/a” not “0.0%”)."],
+ ["diff-removed-demote","§37.5","F","Diff: demote & relabel Removed/Gone (least-actionable, fragile basis)."],
+ ["compare-output-file","§38.5","F","Give `compare reports` an output-path + .gz arg (currently stdout-only)."],
+ ["detail-option","§38.2","F","Make --detail an Option so explicit --detail default gets the “no effect” hint."],
+ ["collconf-fail-loud","§39.3","F","Collection-config: fail loudly (exit 1) when an explicit config can't be read."],
+ ["collconf-feedback","§39.2","C","Collection-config: print “loaded N handlers; M matched” under --verbose."],
+ ["html-lazy-render","§40.3","C","HTML: lazy-render heavy sections (dom tree, 500-row histogram) for --detail max."],
+ ["html-fail-panel","§40.4","F","HTML: upgrade fail() from bare textContent to a styled “regenerate” panel."],
+ ["parse-capacity-clamp","§43.3","C","Parse: drop/clamp Vec::with_capacity(num_frames) (corrupt count over-reserves GBs)."],
+ ["sparkline-relocate","§44.4","F","Graphs: drop redundant sparkline; relocate to `compare` as a trend line."],
+];
+
+const list = document.getElementById('list');
+const groups = {P0:"Must-fix (P0)",P1:"High-impact (P1)",P2:"Worthwhile (P2)"};
+let currentTier = 3;
+
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;');}
+
+function render(){
+  list.innerHTML='';
+  ['P0','P1','P2'].forEach(tier=>{
+    const items = DATA.filter(d=>d.p===tier);
+    const gt = document.createElement('div'); gt.className='grp-title';
+    gt.textContent = groups[tier]+' — '+items.length+' items'; gt.dataset.tier=tier;
+    list.appendChild(gt);
+    items.forEach(d=>list.appendChild(card(d)));
+  });
+  // P3 compact
+  const gt = document.createElement('div'); gt.className='grp-title'; gt.dataset.tier='P3';
+  gt.textContent='Polish (P3) — '+P3.length+' items'; list.appendChild(gt);
+  P3.forEach(([id,refs,eff,txt])=>list.appendChild(p3card(id,refs,eff,txt)));
+  applyFilter();
+  updateSummary();
+}
+
+function card(d){
+  const el=document.createElement('div'); el.className='card'; el.dataset.tier=d.p; el.dataset.id=d.id;
+  el.innerHTML=`
+    <div class="head">
+      <span class="pill ${d.p}">${d.p}</span>
+      <div class="titlewrap">
+        <div class="title">${d.title}</div>
+        <div class="refs">${d.refs} · effort ${d.eff}</div>
+      </div>
+      <span class="effort">${d.eff}</span>
+      <span class="chk"></span>
+    </div>
+    <div class="body">
+      <div class="why">${d.why}</div>
+      <div class="ba">
+        <div class="col before"><h4>Before</h4><pre>${esc(d.before)}</pre></div>
+        <div class="col after"><h4>After</h4><pre>${esc(d.after)}</pre></div>
+      </div>
+    </div>`;
+  const head=el.querySelector('.head');
+  head.addEventListener('click',e=>{
+    if(e.target.classList.contains('chk')){toggle(el);return;}
+    el.classList.toggle('open');
+  });
+  el.querySelector('.chk').addEventListener('click',e=>{e.stopPropagation();toggle(el);});
+  return el;
+}
+
+function p3card(id,refs,eff,txt){
+  const el=document.createElement('div'); el.className='card'; el.dataset.tier='P3'; el.dataset.id=id;
+  el.innerHTML=`
+    <div class="head">
+      <span class="pill P3">P3</span>
+      <div class="titlewrap"><div class="title">${txt}</div><div class="refs">${refs} · effort ${eff}</div></div>
+      <span class="effort">${eff}</span>
+      <span class="chk"></span>
+    </div>`;
+  el.querySelector('.chk').addEventListener('click',e=>{e.stopPropagation();toggle(el);});
+  el.querySelector('.head').addEventListener('click',e=>{if(e.target.classList.contains('chk'))return;toggle(el);});
+  return el;
+}
+
+function toggle(el){el.classList.toggle('picked');el.querySelector('.chk').textContent=el.classList.contains('picked')?'✓':'';updateSummary();}
+
+function applyFilter(){
+  document.querySelectorAll('.card,.grp-title').forEach(el=>{
+    const t=el.dataset.tier; const rank={P0:0,P1:1,P2:2,P3:3}[t];
+    el.style.display = (rank<=currentTier)?'':'none';
+  });
+  const shown=[...document.querySelectorAll('.card')].filter(c=>c.style.display!=='none').length;
+  document.getElementById('count').textContent=shown+' items shown';
+}
+
+function updateSummary(){
+  const picked=[...document.querySelectorAll('.card.picked')];
+  document.getElementById('pkcount').textContent=picked.length;
+  const ids=picked.map(c=>{
+    const t=c.querySelector('.title').textContent;
+    const r=c.querySelector('.refs').textContent.split(' ·')[0];
+    const p=c.dataset.tier;
+    return `[${p}] ${t} (${r})`;
+  });
+  document.getElementById('pklist').textContent=ids.length?ids.join('  •  '):'— none —';
+  window.__picks=ids;
+}
+
+document.querySelectorAll('.controls [data-filter]').forEach(b=>b.addEventListener('click',()=>{
+  currentTier={all:3,P0:0,P1:1}[b.dataset.filter]; applyFilter();
+}));
+document.querySelectorAll('.controls [data-expand]').forEach(b=>b.addEventListener('click',()=>{
+  const open=b.dataset.expand==='open';
+  document.querySelectorAll('.card').forEach(c=>c.classList.toggle('open',open));
+}));
+document.getElementById('copybtn').addEventListener('click',()=>{
+  const txt=(window.__picks||[]).join('\n');
+  navigator.clipboard.writeText(txt||'(no picks)').then(()=>{
+    const b=document.getElementById('copybtn'); const o=b.textContent; b.textContent='Copied!'; setTimeout(()=>b.textContent=o,1200);
+  });
+});
+
+render();
+</script>
+</body>
+</html>

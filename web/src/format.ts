@@ -24,6 +24,15 @@ export function pctOf(part: number, total: number): number {
   return total > 0 ? (part / total) * 100 : 0;
 }
 
+// Format a percentage with one decimal place and a `<0.1%` floor, mirroring
+// Rust's `fmt_pct`. Use this wherever a "% Heap" or "% of total" figure is
+// displayed so all formats agree on precision and the floor.
+export function fmtPct(p: number): string {
+  if (p <= 0) return "0.0%";
+  if (p < 0.1) return "<0.1%";
+  return p.toFixed(1) + "%";
+}
+
 // A dump-creation timestamp: millis since epoch -> ISO date (UTC, second res).
 export function formatEpochMs(ms: number): string {
   if (ms <= 0) return "";

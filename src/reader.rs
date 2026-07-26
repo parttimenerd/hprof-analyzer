@@ -25,6 +25,9 @@ pub struct HprofReader {
     buf: Vec<u8>,
     pos: usize,
     end: usize,
+    /// Total bytes delivered to callers since `open()`. Used to record the
+    /// HPROF file offset of each object record for the MAT `o2hprof` index.
+    bytes_consumed: u64,
 }
 
 impl HprofReader {
@@ -51,6 +54,7 @@ impl HprofReader {
             buf: vec![0u8; BUF_CAP],
             pos: 0,
             end: 0,
+            bytes_consumed: 0,
         };
         r.read_header()?;
         Ok(r)
@@ -125,6 +129,7 @@ impl HprofReader {
         }
         let b = self.buf[self.pos];
         self.pos += 1;
+        self.bytes_consumed += 1;
         Ok(b)
     }
 
@@ -135,6 +140,7 @@ impl HprofReader {
         let p = self.pos;
         let v = u16::from_be_bytes([self.buf[p], self.buf[p + 1]]);
         self.pos = p + 2;
+        self.bytes_consumed += 2;
         Ok(v)
     }
 
@@ -150,6 +156,7 @@ impl HprofReader {
             self.buf[p + 3],
         ]);
         self.pos = p + 4;
+        self.bytes_consumed += 4;
         Ok(v)
     }
 
@@ -169,6 +176,7 @@ impl HprofReader {
             self.buf[p + 7],
         ]);
         self.pos = p + 8;
+        self.bytes_consumed += 8;
         Ok(v)
     }
 
@@ -187,6 +195,7 @@ impl HprofReader {
 
     /// Advance the stream by `n` bytes without materializing them.
     pub fn skip(&mut self, mut n: u64) -> io::Result<()> {
+        let skipped_total = n;
         while n > 0 {
             let avail = self.end - self.pos;
             if avail == 0 {
@@ -199,6 +208,7 @@ impl HprofReader {
             self.pos += take;
             n -= take as u64;
         }
+        self.bytes_consumed += skipped_total;
         Ok(())
     }
 
@@ -206,13 +216,23 @@ impl HprofReader {
     pub fn read_bytes(&mut self, n: usize) -> io::Result<Vec<u8>> {
         let mut v = vec![0u8; n];
         self.read_into(&mut v)?;
+        self.bytes_consumed += n as u64;
         Ok(v)
     }
 
     /// Like `read_bytes` but reuses an existing buffer to avoid repeated allocation.
     pub fn read_bytes_reuse(&mut self, buf: &mut Vec<u8>, n: usize) -> io::Result<()> {
         buf.resize(n, 0);
-        self.read_into(buf)
+        self.read_into(buf)?;
+        self.bytes_consumed += n as u64;
+        Ok(())
+    }
+
+    /// Number of bytes delivered to callers since `open()`.
+    /// Used to record the HPROF file offset of each object record.
+    #[inline]
+    pub fn bytes_consumed(&self) -> u64 {
+        self.bytes_consumed
     }
 
     /// Fill `dst` completely from the internal buffer + underlying stream.
@@ -301,6 +321,7 @@ mod tests {
             buf: vec![0u8; BUF_CAP],
             pos: 0,
             end: 0,
+            bytes_consumed: 0,
         };
         assert_eq!(r.u1().unwrap(), 0xAB);
         assert_eq!(r.u2().unwrap(), 0x1234);
@@ -319,6 +340,7 @@ mod tests {
             buf: vec![0u8; BUF_CAP],
             pos: 0,
             end: 0,
+            bytes_consumed: 0,
         };
         assert_eq!(r.u1().unwrap(), 0);
         r.skip(9).unwrap(); // skip 1..=9
@@ -346,6 +368,7 @@ mod tests {
             buf: vec![0u8; BUF_CAP],
             pos: 0,
             end: 0,
+            bytes_consumed: 0,
         }
     }
 

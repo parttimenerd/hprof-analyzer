@@ -39,6 +39,8 @@ const PROXY_BLOAT_PCT: f64 = 50.0;
 const PROXY_MIN_CLASSES: u64 = 200;
 /// Objects reachable only via soft/weak/phantom refs before the escape rule.
 const WEAKREF_FLOOR: u64 = 1000;
+/// Retained bytes reachable only via soft/weak/phantom refs before the escape rule.
+const WEAKREF_BYTES_FLOOR: u64 = 5 * 1024 * 1024; // 5 MB
 /// Wasted collection backing-array bytes as a share of heap.
 const OVERCAP_WASTE_PCT: f64 = 5.0;
 /// Total shallow bytes in constant-value primitive arrays before the rule.
@@ -181,7 +183,18 @@ fn rules() -> Vec<Box<dyn Rule>> {
 
 /// Evaluate every rule once, in registry order, collecting the ones that fire.
 pub fn evaluate_triage(r: &Report) -> Vec<TriageSignal> {
-    rules().iter().filter_map(|rule| rule.eval(r)).collect()
+    let mut signals: Vec<TriageSignal> = rules().iter().filter_map(|rule| rule.eval(r)).collect();
+    if r.collection_attribution.is_none() {
+        signals.push(signal(
+            "collections-not-analyzed",
+            TriageSeverity::Info,
+            "Collection waste not analyzed",
+            "_Collection waste not analyzed — re-run with `--collections` to check for wasted capacity._"
+                .to_string(),
+            None,
+        ));
+    }
+    signals
 }
 
 /// Percentage of total reachable shallow heap. Basis matches the report tables.
@@ -212,6 +225,7 @@ fn signal(
         detail,
         anchor,
         anchor_label,
+        bytes: None,
     }
 }
 
@@ -437,6 +451,23 @@ impl Rule for ClassloaderLeak {
             .duplicate_classes
             .iter()
             .max_by_key(|d| d.total_retained)?;
+        if dup.total_retained < 524_288 {
+            return None;
+        }
+        if dup.loader_count < 5 {
+            return Some(signal(
+                "classloader-leak",
+                TriageSeverity::Info,
+                "Classloader reload (low count)",
+                format!(
+                    "`{}` is loaded by {} class loaders ({} retained) — possible reload, but count is low; investigate only if count grows.",
+                    dup.pretty_class,
+                    dup.loader_count,
+                    format_bytes(dup.total_retained),
+                ),
+                Some(("duplicate-classes", "Duplicate Classes")),
+            ));
+        }
         Some(signal(
             "classloader-leak",
             TriageSeverity::Warning,
@@ -511,13 +542,19 @@ struct WeakRefEscape;
 impl Rule for WeakRefEscape {
     fn eval(&self, r: &Report) -> Option<TriageSignal> {
         let refs = &r.references;
-        let only_weak: u64 = [&refs.soft, &refs.weak, &refs.phantom]
+        let only_weak_objects: u64 = [&refs.soft, &refs.weak, &refs.phantom]
             .into_iter()
             .flatten()
             .flat_map(|s| s.only_weakly_retained.iter())
             .map(|row| row.objects)
             .sum();
-        if only_weak < WEAKREF_FLOOR {
+        let only_weak_retained: u64 = [&refs.soft, &refs.weak, &refs.phantom]
+            .into_iter()
+            .flatten()
+            .flat_map(|s| s.only_weakly_retained.iter())
+            .map(|row| row.retained)
+            .sum();
+        if only_weak_objects < WEAKREF_FLOOR && only_weak_retained < WEAKREF_BYTES_FLOOR {
             return None;
         }
         Some(signal(
@@ -525,8 +562,9 @@ impl Rule for WeakRefEscape {
             TriageSeverity::Info,
             "Weak-ref escape",
             format!(
-                "{} objects are reachable only via soft/weak/phantom references — likely reclaimable under memory pressure.",
-                fmt_count(only_weak),
+                "{} objects only weakly retained, totaling {} — GC pressure or explicit clear() would reclaim them.",
+                fmt_count(only_weak_objects),
+                format_bytes(only_weak_retained),
             ),
             Some(("references", "References")),
         ))
@@ -1578,6 +1616,8 @@ mod tests {
             collection_contents: None,
             leak_indicators: LeakIndicators::default(),
             triage: Vec::new(),
+            waste_summary: None,
+            top_retainers: Vec::new(),
             queries: Vec::new(),
         }
     }
@@ -2211,6 +2251,7 @@ mod tests {
             shallow: 100 * 1024 * 1024, // 50% — fires
             obj_index_1based: 1,
             owner: None,
+            non_null: None,
         }];
         let s = OversizedPrimArray.eval(&r).expect("huge array must fire");
         assert!(s.detail.contains("byte[]"));

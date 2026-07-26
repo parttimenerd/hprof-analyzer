@@ -180,15 +180,15 @@ function TreeSvg({ root, maxRetained, ariaLabel }: { root: GenNode; maxRetained:
           const barW = maxRetained > 0 ? Math.round((node.node.retained / maxRetained) * (NODE_W - 8)) : 0;
           return (
             <g key={node.id} transform={`translate(${x},${y})`}>
-              <rect width={NODE_W} height={NODE_H} rx={5} fill="var(--surface, #f8fafc)" stroke={col} strokeWidth={2} />
+              <rect width={NODE_W} height={NODE_H} rx={5} fill="var(--card, #f7f7f8)" stroke={col} strokeWidth={2} />
               <rect x={4} y={NODE_H - 8} width={barW} height={4} rx={2} fill={col} opacity={0.6} />
               <text x={NODE_W / 2} y={16} textAnchor="middle" fontSize={FONT_SIZE} fontWeight="bold" fill={col} fontFamily="monospace">
                 {truncateClass(node.node.label)}
               </text>
-              <text x={NODE_W / 2} y={30} textAnchor="middle" fontSize={FONT_SIZE - 1} fill="var(--text-muted, #64748b)" fontFamily="system-ui, sans-serif">
+              <text x={NODE_W / 2} y={30} textAnchor="middle" fontSize={FONT_SIZE - 1} fill="var(--muted, #666)" fontFamily="system-ui, sans-serif">
                 {formatBytes(node.node.retained)} retained
               </text>
-              <text x={NODE_W / 2} y={43} textAnchor="middle" fontSize={FONT_SIZE - 2} fill="var(--text-muted, #94a3b8)" fontFamily="system-ui, sans-serif">
+              <text x={NODE_W / 2} y={43} textAnchor="middle" fontSize={FONT_SIZE - 2} fill="var(--muted, #9aa0aa)" fontFamily="system-ui, sans-serif">
                 {node.node.sublabel}
               </text>
             </g>

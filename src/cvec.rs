@@ -82,16 +82,15 @@ impl CompressedU32 {
     }
 
     /// Restore the full `Vec<u32>` (byte-identical to the original input).
+    /// Uses a streaming 64 KiB decoder to avoid materializing a full-size byte
+    /// intermediate (which would transiently double peak RSS to ~4 GB on large dumps).
     pub fn restore(&self) -> io::Result<Vec<u32>> {
         match self.codec {
             Codec::None => Ok(self.raw.clone()),
             Codec::Deflate9 => {
-                let bytes = deflate_decompress(&self.blob, self.len * 4)?;
-                debug_assert_eq!(bytes.len(), self.len * 4);
-                Ok(bytes
-                    .chunks_exact(4)
-                    .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                    .collect())
+                let mut out = Vec::with_capacity(self.len);
+                self.for_each_u32(|x| out.push(x))?;
+                Ok(out)
             }
         }
     }
@@ -164,6 +163,74 @@ fn stream_u32s<R: Read, F: FnMut(u32)>(mut r: R, f: &mut F) -> io::Result<()> {
     }
     debug_assert_eq!(carry_len, 0);
     Ok(())
+}
+
+/// A `Vec<u64>` held compressed across the peak window. Same codec choices as
+/// [`CompressedU32`]. Used for `mat_addrs` and `mat_hprof_offsets`.
+pub struct CompressedU64 {
+    codec: Codec,
+    blob: Vec<u8>,
+    raw: Vec<u64>,
+    len: usize,
+}
+
+impl CompressedU64 {
+    pub fn compress(v: &[u64], codec: Codec) -> io::Result<Self> {
+        let len = v.len();
+        match codec {
+            Codec::None => Ok(Self { codec, blob: Vec::new(), raw: v.to_vec(), len }),
+            Codec::Deflate9 => {
+                let bytes = unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, len * 8) };
+                let blob = deflate_compress(bytes)?;
+                Ok(Self { codec, blob, raw: Vec::new(), len })
+            }
+        }
+    }
+
+    pub fn restore(&self) -> io::Result<Vec<u64>> {
+        match self.codec {
+            Codec::None => Ok(self.raw.clone()),
+            Codec::Deflate9 => {
+                let bytes = deflate_decompress(&self.blob, self.len * 8)?;
+                Ok(bytes.chunks_exact(8).map(|c| u64::from_le_bytes(c.try_into().unwrap())).collect())
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn held_bytes(&self) -> usize {
+        match self.codec {
+            Codec::None => self.raw.len() * 8,
+            Codec::Deflate9 => self.blob.len(),
+        }
+    }
+}
+
+/// A `Vec<u8>` held compressed across a peak window. Used for `inb_data`
+/// (vbyte-encoded inbound edge bytes) to avoid inflating the emit_outbound peak.
+pub struct CompressedBytes {
+    codec: Codec,
+    blob: Vec<u8>,
+    raw: Vec<u8>,
+}
+
+impl CompressedBytes {
+    pub fn compress(v: Vec<u8>, codec: Codec) -> io::Result<Self> {
+        match codec {
+            Codec::None => Ok(Self { codec, blob: Vec::new(), raw: v }),
+            Codec::Deflate9 => {
+                let blob = deflate_compress(&v)?;
+                Ok(Self { codec, blob, raw: Vec::new() })
+            }
+        }
+    }
+
+    pub fn restore(self) -> io::Result<Vec<u8>> {
+        match self.codec {
+            Codec::None => Ok(self.raw),
+            Codec::Deflate9 => deflate_decompress(&self.blob, self.blob.len() * 4),
+        }
+    }
 }
 
 #[cfg(test)]

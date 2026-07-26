@@ -149,7 +149,13 @@ fn assert_core_sections(html: &str, label: &str) {
     );
     // Core section IDs must exist in the bundle source.
     let bundle = bundle_js();
-    for id in &["triage", "overview", "leaks", "collections", "glossary"] {
+    for id in &[
+        "memory-triage",
+        "system-overview",
+        "leak-suspects",
+        "collections",
+        "glossary",
+    ] {
         assert!(
             bundle_contains_section_id(&bundle, id),
             "{label}: bundle missing section id:\"{id}\""
@@ -199,7 +205,10 @@ fn html_all_flags_philosophers() {
 
     // Verify the bundle always has the flag-gated section IDs.
     let bundle = bundle_js();
-    for id in &["duplicate-strings", "container-attribution"] {
+    for id in &[
+        "duplicate-strings-approximate",
+        "container-attribution-classfield",
+    ] {
         assert!(
             bundle_contains_section_id(&bundle, id),
             "bundle missing flag-gated section id:\"{id}\""
@@ -236,11 +245,11 @@ fn html_anchor_ids_present() {
     // on-disk bundle.js which is what gets compiled into the binary.
     let bundle = bundle_js();
     let required_ids = [
-        "triage",
-        "overview",
-        "record-census",
-        "leaks",
-        "top",
+        "memory-triage",
+        "system-overview",
+        "hprof-record-census",
+        "leak-suspects",
+        "top-consumers",
         "dominator-analysis",
         "threads",
         "arrays-by-size",

@@ -110,6 +110,11 @@ summary { cursor: pointer; color: var(--accent); font-size: 0.85rem; }
 .skip-link { position: absolute; left: -9999px; top: 1rem; z-index: 100; background: var(--accent); color: #fff; padding: 0.5rem 1rem; border-radius: 6px; font-size: 0.9rem; text-decoration: none; }
 .skip-link:focus { left: 1rem; }
 
+/* Error-boundary fallback: a legible panel instead of a blank page. */
+.render-error { max-width: 60rem; margin: 3rem auto; padding: 1.5rem 2rem; background: var(--card); border: 1px solid var(--border); border-radius: 8px; color: var(--fg); }
+.render-error h1 { margin-top: 0; color: #c0392b; }
+.render-error pre { overflow-x: auto; padding: 1rem; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; font-size: 0.85rem; white-space: pre-wrap; }
+
 /* Fixed back-to-top button, visible after scrolling down. */
 .back-to-top { position: fixed; right: 1rem; bottom: 1rem; z-index: 10; background: var(--card); color: var(--accent); border: 1px solid var(--border); border-radius: 999px; padding: 0.5rem 0.7rem; cursor: pointer; font-size: 1rem; line-height: 1; }
 
@@ -143,6 +148,7 @@ th.sortable.active { color: var(--accent); }
 .accum-path li:first-child::before { top: 0.6rem; }
 .accum-path li:last-child::before { bottom: calc(100% - 0.6rem); }
 .path-ret { color: var(--muted); font-size: 0.78rem; margin-left: 0.5rem; }
+.path-field { color: var(--muted); font-size: 0.85rem; }
 
 /* Exact retained byte + precise percent, MAT-report style ("509,972,304 (41.08%)"). */
 .mat-exact { color: var(--muted); font-size: 0.8rem; font-variant-numeric: tabular-nums; }
@@ -171,7 +177,7 @@ th.sortable.active { color: var(--accent); }
 .copy-cell code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .copy-btn { visibility: hidden; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 0.78rem; padding: 0 0.15rem; line-height: 1; border-radius: 3px; }
 .copy-btn:hover, .copy-btn:focus { color: var(--accent); visibility: visible; outline: none; }
-td:hover .copy-btn { visibility: visible; }
+td:hover .copy-btn, .copy-cell:focus-within .copy-btn { visibility: visible; }
 
 /* Print: hide interactive chrome, expand collapsibles, avoid mid-card breaks. */
 @media print {
@@ -185,7 +191,7 @@ td:hover .copy-btn { visibility: visible; }
 
 /* Responsive tables: make every table scroll horizontally rather than overflow */
 /* display:block + overflow-x:auto is the only CSS-only approach that works on <table> */
-section table, .thread-overview-detail table, .thread-locals-detail table,
+section table, .thread-overview-detail table, .thread-locals-inline table,
 details > table, .sysprops table {
   display: block;
   overflow-x: auto;
@@ -195,10 +201,12 @@ details > table, .sysprops table {
 section table thead, section table tbody, section table tfoot,
 .thread-overview-detail table thead, .thread-overview-detail table tbody, .thread-overview-detail table tfoot,
 details > table thead, details > table tbody, details > table tfoot,
-.thread-locals-detail table thead, .thread-locals-detail table tbody, .thread-locals-detail table tfoot {
+.thread-locals-inline table thead, .thread-locals-inline table tbody, .thread-locals-inline table tfoot {
   display: table;
   width: 100%;
 }
+.thread-locals-inline { margin-top: 0.4rem; }
+.thread-locals-label { font-size: 0.82rem; color: var(--muted); margin: 0 0 0.25rem; font-weight: 600; }
 
 /* Resizable tables must stay as display:table so table-layout:fixed works.
    Restore display:table and use an outer wrapper for scroll instead.       */

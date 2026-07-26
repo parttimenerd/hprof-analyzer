@@ -122,7 +122,9 @@ mod tests {
             biggest_collections: None,
             collection_contents: None,
             leak_indicators: Default::default(),
+            waste_summary: None,
             triage: Vec::new(),
+            top_retainers: Vec::new(),
             queries: Vec::new(),
         }
     }
@@ -626,6 +628,7 @@ mod tests {
             pct_bp: 0,
             pct: 0.0,
             owner: None,
+            held_via: None,
         }
     }
     fn classrow(name: &str, inst: u64, ret: u64) -> report::ClassRow {

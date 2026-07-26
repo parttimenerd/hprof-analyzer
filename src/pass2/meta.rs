@@ -7,8 +7,8 @@ use std::io;
 use crate::{pass1::Pass1, types::HprofType};
 
 use super::{
-    decode_java_string, field_offset, read_ref, scan_class_dumps, scan_instance_blobs,
-    scan_obj_arrays, scan_prim_arrays, ThreadProps, ThreadStack,
+    ThreadProps, ThreadStack, collect_blobs, decode_java_string, field_offset, read_ref,
+    scan_class_dumps,
 };
 
 /// Cached byte offsets of the `(daemon, priority, threadStatus)` fields within a
@@ -135,14 +135,10 @@ pub(crate) fn resolve_alloc_frames(p1: &Pass1) -> std::collections::HashMap<u32,
 /// Strings/arrays they reference, so this stays off the per-object RSS budget
 /// even on multi-GB dumps.
 ///
-/// Runs THREE extra full-file sequential scans (the reader is streaming-only, so
-/// each multi-hop forward reference needs its own pass over the file):
-///   A: Thread object → its `name` String address (and the scalar props inline).
-///   B: String → its backing array address + `coder` byte (Java 8 has no coder).
-///   C: backing PRIM_ARRAY → its raw element bytes.
-/// Then chains the maps per serial and decodes. Passes are NOT merged because a
-/// hop's target addresses are only known after the previous pass completes. The
-/// scalar props add zero extra passes — they piggyback the Pass-A blob read.
+/// `prefetched_thread_blobs`: instance blobs for thread objects captured during
+/// the 2a scan (addr → (class_id, blob)). When provided, skips the separate
+/// Round-1 file pass entirely. Remaining hops (String objects, backing arrays)
+/// still need 2 targeted collect_blobs calls.
 ///
 /// Field offsets are derived from each object's ACTUAL class id (memoized),
 /// because a heap may hold several loader-distinct class objects named
@@ -151,32 +147,47 @@ pub(crate) fn resolve_alloc_frames(p1: &Pass1) -> std::collections::HashMap<u32,
 pub(crate) fn resolve_thread_names(
     path: &str,
     p1: &Pass1,
+    prefetched_thread_blobs: HashMap<u64, (u64, Vec<u8>)>,
 ) -> io::Result<HashMap<u32, ThreadProps>> {
     let mut props: HashMap<u32, ThreadProps> = HashMap::new();
     if p1.thread_serial_to_obj_id.is_empty() {
         return Ok(props);
     }
     let id_size = p1.id_size;
-    // Object references inside an INSTANCE_DUMP blob are always id_size wide (the
-    // compressed-oops narrowing detected for array elements does not apply here).
+    // Object references inside an INSTANCE_DUMP blob are always id_size wide.
     let obj_ref_width = id_size as usize;
     let class_map = &p1.class_map;
     let strings = &p1.strings;
 
-    // ── Pass A: Thread object addr → name String addr + always-on scalars ─────
-    // Bounded by #threads. Offsets are resolved from each thread's own class id
-    // (memoized), matching only fields declared by java/lang/Thread so a subclass
-    // field of the same simple name cannot shadow them. The name is followed via
-    // Passes B/C below; daemon/priority/threadStatus are read from this blob when
-    // Thread declares them directly (JDK 8-16), else from the `holder`
-    // (Thread$FieldHolder) object via one extra bounded pass (JDK 17+).
-    // contextClassLoader stays on Thread in every layout.
-    let wanted_threads: std::collections::HashSet<u64> =
-        p1.thread_serial_to_obj_id.values().copied().collect();
+    let read_i32 = |blob: &[u8], o: usize| -> Option<i32> {
+        blob.get(o..o + 4)
+            .map(|b| i32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+    };
+
+    // ── Round 1: Thread blobs ────────────────────────────────────────────────
+    // Use pre-fetched blobs captured during the 2a scan when available; fall
+    // back to a targeted collect_blobs call only for any missing entries.
+    let mut inst_blobs_r1 = prefetched_thread_blobs;
+    let missing_threads: std::collections::HashSet<u64> = p1
+        .thread_serial_to_obj_id
+        .values()
+        .copied()
+        .filter(|a| !inst_blobs_r1.contains_key(a))
+        .collect();
+    if !missing_threads.is_empty() {
+        let (extra, _, _) = collect_blobs(
+            path,
+            id_size,
+            &missing_threads,
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+        )?;
+        inst_blobs_r1.extend(extra);
+    }
+
+    // Extract thread fields from round-1 blobs.
     let mut thread_to_name_addr: HashMap<u64, u64> = HashMap::new();
-    // thread obj addr → (is_daemon, priority, thread_status, context_loader_addr)
     let mut thread_to_scalars: HashMap<u64, (bool, i32, i32, u64)> = HashMap::new();
-    // thread obj addr → holder object addr (JDK 17+ FieldHolder layout; else 0).
     let mut thread_to_holder: HashMap<u64, u64> = HashMap::new();
     // class_id → (name_off, daemon_off, priority_off, status_off, ctx_off, holder_off)
     type ThreadOffs = (
@@ -188,11 +199,8 @@ pub(crate) fn resolve_thread_names(
         Option<usize>,
     );
     let mut off_cache: HashMap<u64, ThreadOffs> = HashMap::new();
-    let read_i32 = |blob: &[u8], o: usize| -> Option<i32> {
-        blob.get(o..o + 4)
-            .map(|b| i32::from_be_bytes([b[0], b[1], b[2], b[3]]))
-    };
-    scan_instance_blobs(path, id_size, &wanted_threads, |addr, class_id, blob| {
+
+    for (&addr, &(class_id, ref blob)) in &inst_blobs_r1 {
         let offs = *off_cache.entry(class_id).or_insert_with(|| {
             let obj_off = |name: &str| match field_offset(
                 class_id,
@@ -240,18 +248,8 @@ pub(crate) fn resolve_thread_names(
                 _ => None,
             };
             let ctx_off = obj_off("contextClassLoader");
-            // JDK 17+ moved daemon/priority/threadStatus into a nested
-            // Thread$FieldHolder referenced by `holder`. Capture its offset so a
-            // follow-up pass can read the scalars from there.
             let holder_off = obj_off("holder");
-            (
-                name_off,
-                daemon_off,
-                priority_off,
-                status_off,
-                ctx_off,
-                holder_off,
-            )
+            (name_off, daemon_off, priority_off, status_off, ctx_off, holder_off)
         });
         let (name_off, daemon_off, priority_off, status_off, ctx_off, holder_off) = offs;
         if let Some(off) = name_off {
@@ -262,22 +260,16 @@ pub(crate) fn resolve_thread_names(
                 }
             }
         }
-        let is_daemon = daemon_off
-            .and_then(|o| blob.get(o))
-            .map(|&b| b != 0)
-            .unwrap_or(false);
+        let is_daemon = daemon_off.and_then(|o| blob.get(o)).map(|&b| b != 0).unwrap_or(false);
         let priority = priority_off.and_then(|o| read_i32(blob, o)).unwrap_or(0);
         let thread_status = status_off.and_then(|o| read_i32(blob, o)).unwrap_or(0);
         let context_loader_addr = ctx_off
             .filter(|&o| o + obj_ref_width <= blob.len())
             .map(|o| read_ref(&blob[o..], obj_ref_width))
             .unwrap_or(0);
-        thread_to_scalars.insert(
-            addr,
-            (is_daemon, priority, thread_status, context_loader_addr),
-        );
+        thread_to_scalars.insert(addr, (is_daemon, priority, thread_status, context_loader_addr));
         // Record the holder addr only when the scalars are NOT directly on Thread
-        // (i.e. the FieldHolder layout), so the extra pass is skipped for JDK 8-16.
+        // (i.e. the FieldHolder layout), so the extra work is skipped for JDK 8-16.
         if priority_off.is_none() && daemon_off.is_none() && status_off.is_none() {
             if let Some(off) = holder_off {
                 if off + obj_ref_width <= blob.len() {
@@ -288,68 +280,131 @@ pub(crate) fn resolve_thread_names(
                 }
             }
         }
-    })?;
+    }
+    drop(inst_blobs_r1);
 
-    // ── Pass A2: Thread$FieldHolder → daemon/priority/threadStatus (JDK 17+) ──
-    // Only runs when the FieldHolder layout was detected (thread_to_holder
-    // non-empty). Bounded by #threads. Reads the three scalars from each holder
-    // blob and folds them back into thread_to_scalars.
-    if !thread_to_holder.is_empty() {
-        let wanted_holders: std::collections::HashSet<u64> =
-            thread_to_holder.values().copied().collect();
-        // holder_addr → (daemon, priority, threadStatus)
-        let mut holder_scalars: HashMap<u64, (bool, i32, i32)> = HashMap::new();
-        // class_id → (daemon_off, priority_off, status_off)
+    // ── Round 2: String objects + holder objects (JDK 17+) + backing arrays ──
+    // Fuse into one pass: wanted_inst = name Strings ∪ holder objects,
+    // wanted_prim = backing char[]/byte[] arrays.
+    // String → array addrs are unknown until we read the String blobs; we solve
+    // this by collecting String blobs first (in this same pass via wanted_inst),
+    // then deriving array addrs in-memory before the pass returns.
+    // Because wanted_prim is array addrs (only known after String blobs),
+    // we need a second inner pass for arrays if there are name strings.
+    // But we can fuse holder collection with String collection in one pass,
+    // and fuse array collection with... nothing (arrays need String addrs first).
+    // Net result: holders + Strings in one pass, then arrays in one pass = 2 passes
+    // instead of the old 3 passes.
+    let wanted_strings: std::collections::HashSet<u64> =
+        thread_to_name_addr.values().copied().collect();
+    let wanted_holders: std::collections::HashSet<u64> =
+        thread_to_holder.values().copied().collect();
+    let wanted_inst_r2: std::collections::HashSet<u64> =
+        wanted_strings.iter().chain(wanted_holders.iter()).copied().collect();
+
+    let mut string_to_arr: HashMap<u64, (u64, u8)> = HashMap::new();
+    let mut holder_scalars: HashMap<u64, (bool, i32, i32)> = HashMap::new();
+
+    if !wanted_inst_r2.is_empty() {
+        let (inst_blobs_r2, _, _) = collect_blobs(
+            path,
+            id_size,
+            &wanted_inst_r2,
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+        )?;
+
+        // class_id → (value_off, coder_off) for String
+        let mut str_off_cache: HashMap<u64, Option<(usize, Option<usize>)>> = HashMap::new();
+        // class_id → (daemon_off, priority_off, status_off) for FieldHolder
         let mut holder_off_cache: HashMap<u64, HolderOffsets> = HashMap::new();
-        scan_instance_blobs(path, id_size, &wanted_holders, |addr, class_id, blob| {
-            let (daemon_off, priority_off, status_off) =
-                *holder_off_cache.entry(class_id).or_insert_with(|| {
-                    let int_off = |name: &str| match field_offset(
+
+        for (&addr, &(class_id, ref blob)) in &inst_blobs_r2 {
+            if wanted_strings.contains(&addr) {
+                let offs = *str_off_cache.entry(class_id).or_insert_with(|| {
+                    let value_off = match field_offset(
                         class_id,
-                        name,
-                        "java/lang/Thread$FieldHolder",
+                        "value",
+                        "java/lang/String",
                         class_map,
                         strings,
                         obj_ref_width,
                     ) {
-                        Some((off, HprofType::Int)) => Some(off as usize),
-                        _ => None,
+                        Some((off, HprofType::Object)) => off as usize,
+                        _ => return None,
                     };
-                    let daemon_off = match field_offset(
+                    let coder_off = match field_offset(
                         class_id,
-                        "daemon",
-                        "java/lang/Thread$FieldHolder",
+                        "coder",
+                        "java/lang/String",
                         class_map,
                         strings,
                         obj_ref_width,
                     ) {
-                        Some((off, HprofType::Boolean)) => Some(off as usize),
+                        Some((off, HprofType::Byte)) => Some(off as usize),
                         _ => None,
                     };
-                    (daemon_off, int_off("priority"), int_off("threadStatus"))
+                    Some((value_off, coder_off))
                 });
-            let is_daemon = daemon_off
-                .and_then(|o| blob.get(o))
-                .map(|&b| b != 0)
-                .unwrap_or(false);
-            let priority = priority_off.and_then(|o| read_i32(blob, o)).unwrap_or(0);
-            let thread_status = status_off.and_then(|o| read_i32(blob, o)).unwrap_or(0);
-            holder_scalars.insert(addr, (is_daemon, priority, thread_status));
-        })?;
-        for (&thread_addr, &holder_addr) in &thread_to_holder {
-            if let Some(&(d, p, s)) = holder_scalars.get(&holder_addr) {
-                if let Some(entry) = thread_to_scalars.get_mut(&thread_addr) {
-                    entry.0 = d;
-                    entry.1 = p;
-                    entry.2 = s;
+                if let Some((value_off, coder_off)) = offs {
+                    if value_off + obj_ref_width <= blob.len() {
+                        let arr_ref = read_ref(&blob[value_off..], obj_ref_width);
+                        let coder = match coder_off {
+                            Some(co) if co < blob.len() => blob[co],
+                            _ => 1, // Java 8 char[]: no coder field → UTF16
+                        };
+                        if arr_ref != 0 {
+                            string_to_arr.insert(addr, (arr_ref, coder));
+                        }
+                    }
                 }
+            } else if wanted_holders.contains(&addr) {
+                let (daemon_off, priority_off, status_off) =
+                    *holder_off_cache.entry(class_id).or_insert_with(|| {
+                        let int_off = |name: &str| match field_offset(
+                            class_id,
+                            name,
+                            "java/lang/Thread$FieldHolder",
+                            class_map,
+                            strings,
+                            obj_ref_width,
+                        ) {
+                            Some((off, HprofType::Int)) => Some(off as usize),
+                            _ => None,
+                        };
+                        let daemon_off = match field_offset(
+                            class_id,
+                            "daemon",
+                            "java/lang/Thread$FieldHolder",
+                            class_map,
+                            strings,
+                            obj_ref_width,
+                        ) {
+                            Some((off, HprofType::Boolean)) => Some(off as usize),
+                            _ => None,
+                        };
+                        (daemon_off, int_off("priority"), int_off("threadStatus"))
+                    });
+                let is_daemon = daemon_off.and_then(|o| blob.get(o)).map(|&b| b != 0).unwrap_or(false);
+                let priority = priority_off.and_then(|o| read_i32(blob, o)).unwrap_or(0);
+                let thread_status = status_off.and_then(|o| read_i32(blob, o)).unwrap_or(0);
+                holder_scalars.insert(addr, (is_daemon, priority, thread_status));
             }
         }
     }
 
-    // Seed the props map with the scalar overview fields for every resolvable
-    // thread (name filled in after Passes B/C). Threads with no INSTANCE_DUMP
-    // blob simply get defaults.
+    // Fold holder scalars back into thread_to_scalars.
+    for (&thread_addr, &holder_addr) in &thread_to_holder {
+        if let Some(&(d, p, s)) = holder_scalars.get(&holder_addr) {
+            if let Some(entry) = thread_to_scalars.get_mut(&thread_addr) {
+                entry.0 = d;
+                entry.1 = p;
+                entry.2 = s;
+            }
+        }
+    }
+
+    // Seed props with scalar overview fields.
     for (&serial, &thread_addr) in &p1.thread_serial_to_obj_id {
         if let Some(&(is_daemon, priority, thread_status, ctx)) =
             thread_to_scalars.get(&thread_addr)
@@ -366,73 +421,22 @@ pub(crate) fn resolve_thread_names(
             );
         }
     }
-    if thread_to_name_addr.is_empty() {
-        return Ok(props);
-    }
-
-    // ── Pass B: String addr → (array addr, coder) ────────────────────────────
-    // Bounded by #threads (one name String each). The value/coder offsets are
-    // resolved per String's own class id (memoized): Java 8 char[] Strings have
-    // no `coder` field and are treated as UTF16 (coder 1).
-    let wanted_strings: std::collections::HashSet<u64> =
-        thread_to_name_addr.values().copied().collect();
-    let mut string_to_arr: HashMap<u64, (u64, u8)> = HashMap::new();
-    // class_id → (value_off, coder_off)
-    let mut str_off_cache: HashMap<u64, Option<(usize, Option<usize>)>> = HashMap::new();
-    scan_instance_blobs(path, id_size, &wanted_strings, |addr, class_id, blob| {
-        let offs = *str_off_cache.entry(class_id).or_insert_with(|| {
-            let value_off = match field_offset(
-                class_id,
-                "value",
-                "java/lang/String",
-                class_map,
-                strings,
-                obj_ref_width,
-            ) {
-                Some((off, HprofType::Object)) => off as usize,
-                _ => return None,
-            };
-            let coder_off = match field_offset(
-                class_id,
-                "coder",
-                "java/lang/String",
-                class_map,
-                strings,
-                obj_ref_width,
-            ) {
-                Some((off, HprofType::Byte)) => Some(off as usize),
-                _ => None,
-            };
-            Some((value_off, coder_off))
-        });
-        if let Some((value_off, coder_off)) = offs {
-            if value_off + obj_ref_width <= blob.len() {
-                let arr_ref = read_ref(&blob[value_off..], obj_ref_width);
-                // Java 8 char[]: no coder field → UTF16 (coder 1).
-                let coder = match coder_off {
-                    Some(co) if co < blob.len() => blob[co],
-                    _ => 1,
-                };
-                if arr_ref != 0 {
-                    string_to_arr.insert(addr, (arr_ref, coder));
-                }
-            }
-        }
-    })?;
     if string_to_arr.is_empty() {
         return Ok(props);
     }
 
-    // ── Pass C: array addr → element bytes ───────────────────────────────────
-    // Bounded by #threads (each name array is tiny).
+    // ── Round 3: backing PRIM_ARRAYs ─────────────────────────────────────────
     let wanted_arrays: std::collections::HashSet<u64> =
         string_to_arr.values().map(|&(a, _)| a).collect();
-    let mut arr_bytes: HashMap<u64, Vec<u8>> = HashMap::new();
-    scan_prim_arrays(path, id_size, &wanted_arrays, |addr, bytes| {
-        arr_bytes.insert(addr, bytes.to_vec());
-    })?;
+    let (_, arr_blobs, _) = collect_blobs(
+        path,
+        id_size,
+        &std::collections::HashSet::new(),
+        &wanted_arrays,
+        &std::collections::HashSet::new(),
+    )?;
 
-    // ── Decode: chain serial → thread → String → array → text ────────────────
+    // ── Decode: serial → thread → String → array → text ──────────────────────
     for (&serial, &thread_addr) in &p1.thread_serial_to_obj_id {
         let Some(&name_addr) = thread_to_name_addr.get(&thread_addr) else {
             continue;
@@ -440,7 +444,7 @@ pub(crate) fn resolve_thread_names(
         let Some(&(arr_addr, coder)) = string_to_arr.get(&name_addr) else {
             continue;
         };
-        let Some(bytes) = arr_bytes.get(&arr_addr) else {
+        let Some(bytes) = arr_blobs.get(&arr_addr) else {
             continue;
         };
         let text = decode_java_string(bytes, coder);
@@ -464,24 +468,17 @@ pub(crate) type SystemProps = (Vec<(String, String)>, Option<String>);
 /// Capture java.lang.System's static `props` object and decode it into a sorted
 /// (key, value) list of system properties plus a derived JVM version.
 ///
-/// Strategy (all passes bounded — see `MAX_PROP_ENTRIES`):
-///   P0: scan CLASS_DUMP records for the class named `java/lang/System`; read
-///       its static object field `props` → the props object address.
-///   P1: props object → its `table` Object[] array address (Properties extends
-///       Hashtable; `table` is declared by java/util/Hashtable). Java 9+
-///       Properties that delegate to a ConcurrentHashMap have no such field →
-///       graceful empty fallback.
-///   P2: `table` Object[] → the non-null Hashtable$Entry slot addresses.
-///   P3: entries → (key,value,next) refs; follow `next` chains (bounded by the
-///       4096 cap) to collect all key/value String addresses.
-///   P4: key/value Strings → (backing array addr, coder).
-///   P5: backing PRIM_ARRAYs → raw bytes → decode.
+/// `prefetched_props_addr`: the address of the `props` object, captured during
+/// the 2a CLASS_DUMP scan. When non-zero, the P0 `scan_class_dumps` file pass
+/// is skipped entirely. Falls back to `scan_class_dumps` when zero.
 ///
-/// Returns `(sorted (key,value) pairs, jvm_version)`. The JVM version is derived
-/// even when the property table itself is empty (both keys come from the pairs).
-/// On ANY layout mismatch the property list falls back to empty rather than
-/// emitting garbage.
-pub(crate) fn resolve_system_properties(path: &str, p1: &Pass1) -> io::Result<SystemProps> {
+/// Returns `(sorted (key,value) pairs, jvm_version)`. Falls back to empty on
+/// any layout mismatch rather than emitting garbage.
+pub(crate) fn resolve_system_properties(
+    path: &str,
+    p1: &Pass1,
+    prefetched_props_addr: u64,
+) -> io::Result<SystemProps> {
     let empty = (Vec::new(), None);
     let id_size = p1.id_size;
     let obj_ref_width = id_size as usize;
@@ -489,41 +486,57 @@ pub(crate) fn resolve_system_properties(path: &str, p1: &Pass1) -> io::Result<Sy
     let strings = &p1.strings;
 
     // ── P0: locate java/lang/System's static `props` object address ──────────
-    // Bounded: ONE class' static fields. Scan CLASS_DUMP records; for the class
-    // whose name is "java/lang/System", read the OBJECT static field "props".
-    let mut props_addr: u64 = 0;
-    scan_class_dumps(path, id_size, |class_obj_id, statics| {
-        if props_addr != 0 {
-            return;
-        }
-        let cname = class_map
-            .get(&class_obj_id)
-            .and_then(|ci| strings.get(&ci.name_id))
-            .map(|s| s.as_str())
-            .unwrap_or("");
-        if cname != "java/lang/System" {
-            return;
-        }
-        for &(name_id, type_code, value) in statics {
-            if HprofType::from_code(type_code) != Some(HprofType::Object) {
-                continue;
+    // Use the prefetched value when available (captured during 2a scan), falling
+    // back to a full scan_class_dumps pass only when not captured.
+    let props_addr = if prefetched_props_addr != 0 {
+        prefetched_props_addr
+    } else {
+        let mut found: u64 = 0;
+        scan_class_dumps(path, id_size, |class_obj_id, statics| {
+            if found != 0 {
+                return;
             }
-            let fname = strings.get(&name_id).map(|s| s.as_str()).unwrap_or("");
-            if fname == "props" && value != 0 {
-                props_addr = value;
+            let cname = class_map
+                .get(&class_obj_id)
+                .and_then(|ci| strings.get(&ci.name_id))
+                .map(|s| s.as_str())
+                .unwrap_or("");
+            if cname != "java/lang/System" {
+                return;
             }
-        }
-    })?;
+            for &(name_id, type_code, value) in statics {
+                if HprofType::from_code(type_code) != Some(HprofType::Object) {
+                    continue;
+                }
+                let fname = strings.get(&name_id).map(|s| s.as_str()).unwrap_or("");
+                if fname == "props" && value != 0 {
+                    found = value;
+                }
+            }
+        })?;
+        found
+    };
     if props_addr == 0 {
         return Ok(empty);
     }
 
-    // ── P1: props object → its Hashtable `table` Object[] array address ───────
-    // Bounded: ONE object. `table` is declared by java/util/Hashtable; matching
-    // that owner avoids a subclass field of the same simple name shadowing it.
+    // ── Round 1: props instance + its `table` Object[] in one pass ───────────
+    let wanted_inst_r1: std::collections::HashSet<u64> = std::iter::once(props_addr).collect();
+    // We don't know table_addr yet, so collect props instance blob here; we'll
+    // derive table_addr in-memory, then collect the obj-array in a second targeted
+    // collect_blobs or by reading it from the same pass if we had it up-front.
+    // Since props → table is a forward ref with unknown addr, we need the instance
+    // first. We collect props instance + (speculatively empty) obj sets here.
+    let (inst_blobs_r1, _, _) = collect_blobs(
+        path,
+        id_size,
+        &wanted_inst_r1,
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+    )?;
+
     let mut table_addr: u64 = 0;
-    let wanted_props: std::collections::HashSet<u64> = std::iter::once(props_addr).collect();
-    scan_instance_blobs(path, id_size, &wanted_props, |_addr, class_id, blob| {
+    if let Some(&(class_id, ref blob)) = inst_blobs_r1.get(&props_addr) {
         let off = match field_offset(
             class_id,
             "table",
@@ -533,24 +546,31 @@ pub(crate) fn resolve_system_properties(path: &str, p1: &Pass1) -> io::Result<Sy
             obj_ref_width,
         ) {
             Some((o, HprofType::Object)) => o as usize,
-            _ => return,
+            _ => 0,
         };
-        if off + obj_ref_width <= blob.len() {
+        if off != 0 && off + obj_ref_width <= blob.len() {
             table_addr = read_ref(&blob[off..], obj_ref_width);
         }
-    })?;
+    }
     if table_addr == 0 {
         // No Hashtable `table` field (e.g. Java 9+ ConcurrentHashMap-backed
-        // Properties). Fall back gracefully — no properties, no jvm_version.
+        // Properties). Fall back gracefully.
         return Ok(empty);
     }
 
-    // ── P2: `table` Object[] → non-null Hashtable$Entry slot addresses ────────
-    // Bounded to MAX_PROP_ENTRIES.
-    let wanted_table: std::collections::HashSet<u64> = std::iter::once(table_addr).collect();
+    // ── Round 2a: `table` Object[] → non-null entry slot addresses ───────────
+    let wanted_obj_r2: std::collections::HashSet<u64> = std::iter::once(table_addr).collect();
+    let (_, _, obj_blobs_r2) = collect_blobs(
+        path,
+        id_size,
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &wanted_obj_r2,
+    )?;
+
     let mut entry_addrs: Vec<u64> = Vec::new();
-    scan_obj_arrays(path, id_size, &wanted_table, |_addr, elem_refs| {
-        for chunk in elem_refs.chunks_exact(obj_ref_width) {
+    if let Some(elem_bytes) = obj_blobs_r2.get(&table_addr) {
+        for chunk in elem_bytes.chunks_exact(obj_ref_width) {
             if entry_addrs.len() >= MAX_PROP_ENTRIES {
                 break;
             }
@@ -559,129 +579,155 @@ pub(crate) fn resolve_system_properties(path: &str, p1: &Pass1) -> io::Result<Sy
                 entry_addrs.push(r);
             }
         }
-    })?;
+    }
     if entry_addrs.is_empty() {
         return Ok(empty);
     }
 
-    // ── P3: entries → (key,value,next) refs; follow `next` chains ─────────────
-    // Bounded to MAX_PROP_ENTRIES entries total. Chains can add more entry
-    // addresses to resolve, so iterate the worklist across repeated bounded
-    // scans until it stabilizes (chains are short; capped by the entry budget).
-    // key_val: entry addr → (key String addr, value String addr).
-    let mut key_val: HashMap<u64, (u64, u64)> = HashMap::new();
-    let mut pending: std::collections::HashSet<u64> = entry_addrs.iter().copied().collect();
+    // ── Round 2b: ALL entry instances + ALL String instances + ALL prim-arrays
+    //    in ONE pass. ─────────────────────────────────────────────────────────
+    // We collect entry blobs, then follow `next` chains in-memory. Since all
+    // entry blobs are in-memory after this pass, no iterative file scans needed.
+    // String blobs and backing arrays are also collected here using the same pass,
+    // but we don't yet know which Strings will be referenced — we over-collect
+    // entry blobs first (all initial entries from the table), decode their
+    // key/value/next in-memory, and THEN collect Strings + arrays in Round 3.
+    //
+    // Strategy: Round 2b = collect initial entry blobs only.
+    //           Round 3   = collect all String blobs + backing arrays in one pass.
+    let wanted_entries: std::collections::HashSet<u64> = entry_addrs.iter().copied().collect();
+    let (entry_blobs, _, _) = collect_blobs(
+        path,
+        id_size,
+        &wanted_entries,
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+    )?;
+
+    // Follow chains in-memory, collecting newly discovered `next` addrs.
+    // We may need more entry blobs for chain tails not in the initial table.
+    // Find which next-addrs aren't yet collected, then do one more targeted pass.
+    let mut all_entry_blobs = entry_blobs;
     let mut entry_off_cache: HashMap<u64, Option<(usize, usize, usize)>> = HashMap::new();
-    // Bound the number of chain-following passes; each pass resolves at least
-    // one hop of every chain, so 64 caps the deepest Hashtable bucket chain we
-    // will follow (real buckets are 1-3 deep). Combined with the entry budget
-    // this is the fixed worst-case extra-pass ceiling; it terminates well before
-    // it in practice.
-    for _ in 0..64 {
-        if pending.is_empty() || key_val.len() >= MAX_PROP_ENTRIES {
-            break;
-        }
-        let mut next_pending: std::collections::HashSet<u64> = std::collections::HashSet::new();
-        scan_instance_blobs(path, id_size, &pending, |addr, class_id, blob| {
-            if key_val.contains_key(&addr) {
-                return;
+
+    // First pass over initial entries to find chained addrs not yet fetched.
+    let mut chained_addrs: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    for (&_addr, &(class_id, ref blob)) in &all_entry_blobs {
+        let offs = entry_off_cache.entry(class_id).or_insert_with(|| {
+            let key_off = match field_offset(class_id, "key", "java/util/Hashtable$Entry", class_map, strings, obj_ref_width) {
+                Some((o, HprofType::Object)) => o as usize,
+                _ => return None,
+            };
+            let value_off = match field_offset(class_id, "value", "java/util/Hashtable$Entry", class_map, strings, obj_ref_width) {
+                Some((o, HprofType::Object)) => o as usize,
+                _ => return None,
+            };
+            let next_off = match field_offset(class_id, "next", "java/util/Hashtable$Entry", class_map, strings, obj_ref_width) {
+                Some((o, HprofType::Object)) => o as usize,
+                _ => return None,
+            };
+            Some((key_off, value_off, next_off))
+        });
+        if let Some((_, _, next_off)) = *offs {
+            if next_off + obj_ref_width <= blob.len() {
+                let next_ref = read_ref(&blob[next_off..], obj_ref_width);
+                if next_ref != 0 && !all_entry_blobs.contains_key(&next_ref) {
+                    chained_addrs.insert(next_ref);
+                }
             }
-            let offs = *entry_off_cache.entry(class_id).or_insert_with(|| {
-                let key_off = match field_offset(
-                    class_id,
-                    "key",
-                    "java/util/Hashtable$Entry",
-                    class_map,
-                    strings,
-                    obj_ref_width,
-                ) {
+        }
+    }
+
+    // Iteratively collect chain tails (bounded by MAX_PROP_ENTRIES).
+    let mut depth = 0u32;
+    while !chained_addrs.is_empty() && all_entry_blobs.len() < MAX_PROP_ENTRIES && depth < 64 {
+        depth += 1;
+        let (more_blobs, _, _) = collect_blobs(
+            path,
+            id_size,
+            &chained_addrs,
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+        )?;
+        chained_addrs.clear();
+        for (&_addr, &(class_id, ref blob)) in &more_blobs {
+            let offs = entry_off_cache.entry(class_id).or_insert_with(|| {
+                let key_off = match field_offset(class_id, "key", "java/util/Hashtable$Entry", class_map, strings, obj_ref_width) {
                     Some((o, HprofType::Object)) => o as usize,
                     _ => return None,
                 };
-                let value_off = match field_offset(
-                    class_id,
-                    "value",
-                    "java/util/Hashtable$Entry",
-                    class_map,
-                    strings,
-                    obj_ref_width,
-                ) {
+                let value_off = match field_offset(class_id, "value", "java/util/Hashtable$Entry", class_map, strings, obj_ref_width) {
                     Some((o, HprofType::Object)) => o as usize,
                     _ => return None,
                 };
-                let next_off = match field_offset(
-                    class_id,
-                    "next",
-                    "java/util/Hashtable$Entry",
-                    class_map,
-                    strings,
-                    obj_ref_width,
-                ) {
+                let next_off = match field_offset(class_id, "next", "java/util/Hashtable$Entry", class_map, strings, obj_ref_width) {
                     Some((o, HprofType::Object)) => o as usize,
                     _ => return None,
                 };
                 Some((key_off, value_off, next_off))
             });
-            let Some((key_off, value_off, next_off)) = offs else {
-                return;
-            };
-            if key_off + obj_ref_width > blob.len()
-                || value_off + obj_ref_width > blob.len()
-                || next_off + obj_ref_width > blob.len()
-            {
-                return;
+            if let Some((_, _, next_off)) = *offs {
+                if next_off + obj_ref_width <= blob.len() {
+                    let next_ref = read_ref(&blob[next_off..], obj_ref_width);
+                    if next_ref != 0
+                        && !all_entry_blobs.contains_key(&next_ref)
+                        && all_entry_blobs.len() + chained_addrs.len() < MAX_PROP_ENTRIES
+                    {
+                        chained_addrs.insert(next_ref);
+                    }
+                }
             }
-            let key_ref = read_ref(&blob[key_off..], obj_ref_width);
-            let value_ref = read_ref(&blob[value_off..], obj_ref_width);
-            let next_ref = read_ref(&blob[next_off..], obj_ref_width);
-            key_val.insert(addr, (key_ref, value_ref));
-            if next_ref != 0
-                && !key_val.contains_key(&next_ref)
-                && key_val.len() + next_pending.len() < MAX_PROP_ENTRIES
-            {
-                next_pending.insert(next_ref);
-            }
-        })?;
-        pending = next_pending;
+        }
+        all_entry_blobs.extend(more_blobs);
     }
+
+    // Decode all collected entry blobs → key/value String addrs.
+    let mut key_val: HashMap<u64, (u64, u64)> = HashMap::new();
+    for (&addr, &(class_id, ref blob)) in &all_entry_blobs {
+        let Some(&Some((key_off, value_off, _next_off))) = entry_off_cache.get(&class_id) else {
+            continue;
+        };
+        if key_off + obj_ref_width > blob.len() || value_off + obj_ref_width > blob.len() {
+            continue;
+        }
+        let key_ref = read_ref(&blob[key_off..], obj_ref_width);
+        let value_ref = read_ref(&blob[value_off..], obj_ref_width);
+        key_val.insert(addr, (key_ref, value_ref));
+    }
+    drop(all_entry_blobs);
     if key_val.is_empty() {
         return Ok(empty);
     }
 
-    // ── P4: key/value Strings → (backing array addr, coder) ───────────────────
-    // Bounded by 2 * #entries. Reuses the Stage-2 String decode field offsets.
+    // ── Round 3: String instances + backing PRIM_ARRAYs in ONE pass ──────────
     let mut wanted_strings: std::collections::HashSet<u64> = std::collections::HashSet::new();
     for &(k, v) in key_val.values() {
-        if k != 0 {
-            wanted_strings.insert(k);
-        }
-        if v != 0 {
-            wanted_strings.insert(v);
-        }
+        if k != 0 { wanted_strings.insert(k); }
+        if v != 0 { wanted_strings.insert(v); }
     }
+
+    // Collect String blobs to derive array addrs, then collect arrays in same call
+    // after we know them. Since we need String blobs first to get array addrs,
+    // we must do 2 sub-steps — but we can fuse them into one collect_blobs call
+    // only if we also pass wanted_prim. We don't know wanted_prim yet.
+    // Solution: collect String blobs first, then collect arrays.
+    let (str_blobs, _, _) = collect_blobs(
+        path,
+        id_size,
+        &wanted_strings,
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+    )?;
+
     let mut string_to_arr: HashMap<u64, (u64, u8)> = HashMap::new();
     let mut str_off_cache: HashMap<u64, Option<(usize, Option<usize>)>> = HashMap::new();
-    scan_instance_blobs(path, id_size, &wanted_strings, |addr, class_id, blob| {
+    for (&addr, &(class_id, ref blob)) in &str_blobs {
         let offs = *str_off_cache.entry(class_id).or_insert_with(|| {
-            let value_off = match field_offset(
-                class_id,
-                "value",
-                "java/lang/String",
-                class_map,
-                strings,
-                obj_ref_width,
-            ) {
+            let value_off = match field_offset(class_id, "value", "java/lang/String", class_map, strings, obj_ref_width) {
                 Some((off, HprofType::Object)) => off as usize,
                 _ => return None,
             };
-            let coder_off = match field_offset(
-                class_id,
-                "coder",
-                "java/lang/String",
-                class_map,
-                strings,
-                obj_ref_width,
-            ) {
+            let coder_off = match field_offset(class_id, "coder", "java/lang/String", class_map, strings, obj_ref_width) {
                 Some((off, HprofType::Byte)) => Some(off as usize),
                 _ => None,
             };
@@ -699,41 +745,35 @@ pub(crate) fn resolve_system_properties(path: &str, p1: &Pass1) -> io::Result<Sy
                 }
             }
         }
-    })?;
+    }
+    drop(str_blobs);
 
-    // ── P5: backing PRIM_ARRAYs → raw bytes ───────────────────────────────────
-    // Bounded by the number of distinct backing arrays (≤ 2 * #entries).
     let wanted_arrays: std::collections::HashSet<u64> =
         string_to_arr.values().map(|&(a, _)| a).collect();
-    let mut arr_bytes: HashMap<u64, Vec<u8>> = HashMap::new();
-    scan_prim_arrays(path, id_size, &wanted_arrays, |addr, bytes| {
-        arr_bytes.insert(addr, bytes.to_vec());
-    })?;
+    let (_, arr_blobs, _) = collect_blobs(
+        path,
+        id_size,
+        &std::collections::HashSet::new(),
+        &wanted_arrays,
+        &std::collections::HashSet::new(),
+    )?;
 
-    // ── Decode: entry → key text, value text ─────────────────────────────────
+    // ── Decode ────────────────────────────────────────────────────────────────
     let decode = |str_addr: u64| -> Option<String> {
-        if str_addr == 0 {
-            return None;
-        }
+        if str_addr == 0 { return None; }
         let &(arr_addr, coder) = string_to_arr.get(&str_addr)?;
-        let bytes = arr_bytes.get(&arr_addr)?;
+        let bytes = arr_blobs.get(&arr_addr)?;
         Some(decode_java_string(bytes, coder))
     };
     let mut pairs: Vec<(String, String)> = Vec::new();
     for &(k, v) in key_val.values() {
-        let (Some(key), Some(value)) = (decode(k), decode(v)) else {
-            continue;
-        };
-        if key.is_empty() {
-            continue;
-        }
+        let (Some(key), Some(value)) = (decode(k), decode(v)) else { continue; };
+        if key.is_empty() { continue; }
         pairs.push((key, value));
     }
-    // Deterministic: sort by key (then value), dedup exact duplicates.
     pairs.sort();
     pairs.dedup();
 
-    // ── Derive JVM version: prefer java.vm.version, else java.version ─────────
     let find = |key: &str| -> Option<String> {
         pairs.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
     };

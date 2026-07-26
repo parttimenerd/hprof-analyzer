@@ -235,3 +235,38 @@ fn json_gzip_roundtrip() {
         "rendered .json.gz did not match a plain JSON render of the same dump"
     );
 }
+
+/// `--ref-paths` smoke test: the flag must not crash, and the JSON output must
+/// parse cleanly. Field annotations only appear on multi-hop chains that have
+/// named forward edges; the philosophers dump has only single-step chains so we
+/// just verify correctness of the structural output here.
+#[test]
+fn ref_paths_flag_smoke() {
+    let hprof = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/dump_4_philosophers.hprof"
+    );
+    match std::fs::metadata(hprof) {
+        Ok(m) if m.len() >= 1024 => {}
+        _ => return,
+    }
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_hprof-analyzer"))
+        .arg(hprof)
+        .arg("--ref-paths")
+        .arg("--format")
+        .arg("json")
+        .output()
+        .expect("failed to run hprof-analyzer --ref-paths");
+    assert!(
+        out.status.success(),
+        "--ref-paths exited non-zero; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("--ref-paths JSON output was not valid JSON");
+    // The report must still contain the leaks section.
+    assert!(
+        v.get("leaks").is_some(),
+        "--ref-paths JSON missing 'leaks' key"
+    );
+}

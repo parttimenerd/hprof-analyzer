@@ -177,7 +177,13 @@ pub fn bar(value: u64, max: u64, width: usize) -> String {
     let v = value.min(max);
     // Work in eighths of a cell to get sub-cell resolution deterministically
     // with integer math: total filled eighths across the whole bar.
-    let total_eighths = (v as u128 * (width as u128) * 8) / max as u128;
+    let mut total_eighths = (v as u128 * (width as u128) * 8) / max as u128;
+    // Min-visible floor: a strictly-positive value must render at least one
+    // eighth, otherwise a real (but tiny) contributor is indistinguishable from
+    // an empty/zero bar. `value == 0` was already returned above.
+    if total_eighths == 0 {
+        total_eighths = 1;
+    }
     let full = (total_eighths / 8) as usize;
     let rem = (total_eighths % 8) as usize;
     let mut s = String::with_capacity(width * 3);
@@ -198,6 +204,7 @@ pub fn bar(value: u64, max: u64, width: usize) -> String {
 /// A one-line sparkline of `values`, one glyph per value, scaled to the series
 /// max. An empty series yields an empty string; an all-zero series yields the
 /// lowest glyph repeated (a flat baseline).
+#[allow(dead_code)]
 pub fn sparkline(values: &[u64]) -> String {
     if values.is_empty() {
         return String::new();
@@ -209,7 +216,13 @@ pub fn sparkline(values: &[u64]) -> String {
     let mut s = String::with_capacity(values.len() * 3);
     for &v in values {
         // Map v into 0..=7. Guard the top so v==max lands on the highest glyph.
-        let idx = ((v as u128 * 7) / max as u128) as usize;
+        let mut idx = ((v as u128 * 7) / max as u128) as usize;
+        // Min-visible floor: a strictly-positive sample must land on at least
+        // level 1 so a real (but tiny) value is distinguishable from a zero
+        // baseline (which stays on level 0).
+        if v > 0 && idx == 0 {
+            idx = 1;
+        }
         s.push(SPARK[idx.min(7)]);
     }
     s
@@ -321,6 +334,26 @@ mod tests {
         assert_eq!(s.chars().count(), 4);
         // Max value maps to the tallest glyph; min (nonzero) to a low glyph.
         assert!(s.ends_with('█'), "spark: {s:?}");
+    }
+
+    #[test]
+    fn bar_tiny_nonzero_floors_to_one_eighth() {
+        // A real but tiny contributor must not render as a fully empty bar:
+        // 1/1000 over 4 cells floors to 0 eighths, so the min-visible floor
+        // promotes it to the ▏ (1/8) glyph. Zero stays empty (early return).
+        assert_eq!(bar(1, 1000, 4), "▏   ");
+        assert_eq!(bar(0, 1000, 4), "    ");
+    }
+
+    #[test]
+    fn sparkline_tiny_nonzero_floors_above_baseline() {
+        // A tiny nonzero sample must be distinguishable from a zero baseline:
+        // it floors to level 1 (▂), while zeros stay on level 0 (▁).
+        let s = sparkline(&[0, 1, 1000]);
+        let cs: Vec<char> = s.chars().collect();
+        assert_eq!(cs[0], '▁', "zero stays baseline: {s:?}");
+        assert_eq!(cs[1], '▂', "tiny nonzero floors to level 1: {s:?}");
+        assert_eq!(cs[2], '█', "max is tallest: {s:?}");
     }
 
     #[test]

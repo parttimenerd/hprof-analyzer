@@ -172,6 +172,13 @@
         "components": []
       }
     },
+    "top_retainers": {
+      "description": "Merged top-retainers: `Class#field` holders + `Class#method()` stack\nframes, sorted by total retained descending, capped at 20.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RetainerRow"
+      }
+    },
     "triage": {
       "description": "Fired OOM-triage signals, evaluated once over the finished report by the\nrule framework in `triage.rs`. Order is the registry order (render order).\n`#[serde(default)]` keeps pre-v4 JSON (which lacks the field) loadable.",
       "type": "array",
@@ -179,6 +186,17 @@
       "items": {
         "$ref": "#/$defs/TriageSignal"
       }
+    },
+    "waste_summary": {
+      "description": "One headline \"reclaimable N bytes\" figure folding every quantifiable\nwaste source. Present only when at least one source is nonzero. Additive;\n`#[serde(default)]` keeps older JSON (which lacks the field) loadable.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WasteSummary"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [
@@ -609,6 +627,14 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/FieldAttributionRow"
+          }
+        },
+        "tiny_overhead": {
+          "description": "Class#field pairs owning the most size-{0,1} collections,\nranked by wrapper-overhead bytes.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/TinyCollectionRow"
           }
         },
         "truncated": {
@@ -1375,6 +1401,11 @@
         "container_class": {
           "type": "string"
         },
+        "container_kind": {
+          "description": "Kind of the single largest container (same labels as `FieldAttributionRow::container_kind`).",
+          "type": "string",
+          "default": ""
+        },
         "elements": {
           "type": "integer",
           "format": "uint64",
@@ -1433,6 +1464,20 @@
         "total_retained": {
           "type": "integer",
           "format": "uint64",
+          "minimum": 0
+        },
+        "total_wasted_bytes": {
+          "description": "`total_wasted_slots × object-reference width (bytes)` — the actual bytes\nof backing-array capacity that is null/unused. More directly comparable\nthan slot count when array types differ. Additive.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
+        "total_wasted_slots": {
+          "description": "Sum of (capacity - elements) across all distinct containers reached by\nthis field. Counts empty slots, not bytes. Zero for classified\ncollections (their capacity is not cheaply available). Additive.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
           "minimum": 0
         }
       },
@@ -1938,6 +1983,13 @@
         "display_class": {
           "type": "string"
         },
+        "field_edge": {
+          "description": "Field name on the parent node that points to this child; only present\nwhen `--ref-paths` was set and a consistent field name was found across\nall chains that pass through this node.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "object_count": {
           "description": "Number of member chains passing through this node.",
           "type": "integer",
@@ -1971,6 +2023,13 @@
       "properties": {
         "display_class": {
           "type": "string"
+        },
+        "held_via": {
+          "description": "Stack-frame holding this object (`ClassName#methodName()`), when the\nobject is a significant local in a thread's stack frame and no field\nowner was found. `None` otherwise.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "obj_index_1based": {
           "type": "integer",
@@ -2413,6 +2472,12 @@
         "pretty_class": {
           "type": "string"
         },
+        "retained": {
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
         "shallow": {
           "type": "integer",
           "format": "uint64",
@@ -2496,6 +2561,28 @@
         }
       }
     },
+    "RetainerRow": {
+      "description": "One row of the merged Top Retainers table (§813).",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "retained": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "retained"
+      ]
+    },
     "RetentionSummary": {
       "description": "B3: retention concentration over top-level dominators. Basis-point shares\n(of total reachable shallow heap) held by the top-1/10/100 objects, plus how\nmany single objects each hold >=1% of the heap. Answers \"one leak or many?\".",
       "type": "object",
@@ -2511,15 +2598,34 @@
           "format": "uint32",
           "minimum": 0
         },
+        "top100_retained": {
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
         "top10_bp": {
           "type": "integer",
           "format": "uint32",
+          "minimum": 0
+        },
+        "top10_retained": {
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
           "minimum": 0
         },
         "top1_bp": {
           "description": "Retained share of the top-1 / top-10 / top-100 top-level dominators, in\ninteger basis points (100 bp = 1%) of total reachable shallow heap.",
           "type": "integer",
           "format": "uint32",
+          "minimum": 0
+        },
+        "top1_retained": {
+          "description": "Exact retained bytes for the top-1 / top-10 / top-100 top-level dominators.\nDerive % from these rather than reconstructing from bp to avoid rounding loss.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
           "minimum": 0
         },
         "total_retained": {
@@ -2542,6 +2648,13 @@
       "properties": {
         "display_class": {
           "type": "string"
+        },
+        "field_edge": {
+          "description": "Name of the field on this object that points to the next hop (parent's\nfield → child). Only present when `--ref-paths` was set. Empty string\nmeans \"no field name available\" (class edge, array element, synthetic\nthread-local edge).",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "obj_index_1based": {
           "type": "integer",
@@ -2596,7 +2709,7 @@
           "type": "string"
         },
         "pct": {
-          "description": "Retained heap as a percentage of the owning thread's retained heap.",
+          "description": "Retained heap as a percentage of total reachable shallow heap (same\nbasis as every other \"% Heap\" figure in the report).",
           "type": "number",
           "format": "double"
         },
@@ -3297,6 +3410,45 @@
         "threads"
       ]
     },
+    "TinyCollectionRow": {
+      "description": "One row in the tiny-collection overhead ranking (§46.2).",
+      "type": "object",
+      "properties": {
+        "container_kind": {
+          "type": "string"
+        },
+        "empty_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "field": {
+          "type": "string"
+        },
+        "holder_class": {
+          "type": "string"
+        },
+        "overhead_bytes": {
+          "description": "Estimated overhead bytes: (empty_count + singleton_count) × 80.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "singleton_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "holder_class",
+        "field",
+        "container_kind",
+        "empty_count",
+        "singleton_count",
+        "overhead_bytes"
+      ]
+    },
     "TopArrayClassRow": {
       "description": "One array class in a \"top array classes by aggregate shallow bytes\" list.\nAdditive.",
       "type": "object",
@@ -3333,13 +3485,23 @@
           "format": "uint64",
           "minimum": 0
         },
+        "non_null": {
+          "description": "Non-null (occupied) slot count for object arrays; `None` for primitive\narrays (every slot is always occupied). Additive.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "default": null,
+          "minimum": 0
+        },
         "obj_index_1based": {
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
         "owner": {
-          "description": "Primary incoming reference (`Class#field`) that points at this array,\nresolved from the `--collections` holder-edge scan. `None` when\n`--collections` was off or no field edge references it. Additive.",
+          "description": "Primary incoming reference (`Class#field`) that points at this array.\nResolved unconditionally from instance-dump field edges (first-wins).\n`None` when no field edge references this array. Additive.",
           "type": [
             "string",
             "null"
@@ -3515,6 +3677,15 @@
             "null"
           ]
         },
+        "bytes": {
+          "description": "Reclaimable/attributable bytes this signal quantifies, when the rule has a\nconcrete figure (e.g. wasted collection bytes, duplicate-String waste). Used\nto rank problem signals by impact; `None` for orientation signals and rules\nwithout a byte figure. Not rendered — ordering only.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
         "detail": {
           "description": "One-sentence explanation; may contain backtick code spans.",
           "type": "string"
@@ -3681,6 +3852,56 @@
       },
       "required": [
         "kind"
+      ]
+    },
+    "WasteSource": {
+      "description": "One reclaimable-waste source in the Waste Summary: a human label, the\napproximate reclaimable bytes, and an optional anchor to the section that\ndetails it. Additive.",
+      "type": "object",
+      "properties": {
+        "anchor": {
+          "description": "Canonical section slug this source drills into (e.g. \"collections\"),\nor None when there is no dedicated section.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bytes": {
+          "description": "Approximate reclaimable bytes attributed to this source.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "label": {
+          "description": "Human-readable source label, e.g. \"Under-filled collections\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "bytes"
+      ]
+    },
+    "WasteSummary": {
+      "description": "A single headline \"reclaimable N bytes\" figure folding every waste source\nthe report can quantify (under-filled collections & object arrays, duplicate\nString values, String backing-array slack, duplicate primitive arrays). The\nsources are approximate and may overlap slightly; `total_bytes` is their sum.\nPresent only when at least one source is nonzero. Additive; not part of MAT\nparity comparison.",
+      "type": "object",
+      "properties": {
+        "sources": {
+          "description": "Per-source breakdown, sorted by bytes desc. Only nonzero sources.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WasteSource"
+          }
+        },
+        "total_bytes": {
+          "description": "Sum of every source's bytes (the headline \"reclaimable\" figure).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "total_bytes",
+        "sources"
       ]
     }
   }

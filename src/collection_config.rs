@@ -74,20 +74,24 @@ pub(crate) fn parse_toml_str(src: &str) -> Result<Vec<CollDesc>, String> {
         .into_iter()
         .map(|e| {
             let kind = parse_kind(&e.kind)?;
+            // Normalise class names: user may write "com.example.Foo" (dotted)
+            // but the HPROF name table uses "com/example/Foo" (slash). Accept
+            // both and convert to slash form so matches don't silently fail.
+            let class_slash = e.class.replace('.', "/");
             let size_field = e.size_field.map(|s| {
-                let (f, o) = parse_class_field(&s, &e.class);
-                (f, o)
+                let (f, o) = parse_class_field(&s, &class_slash);
+                (f, o.replace('.', "/"))
             });
             let array_field = e.array_field.map(|s| {
-                let (f, o) = parse_class_field(&s, &e.class);
-                (f, o)
+                let (f, o) = parse_class_field(&s, &class_slash);
+                (f, o.replace('.', "/"))
             });
             let nested_map_field = e.nested_map_field.map(|s| {
-                let (f, o) = parse_class_field(&s, &e.class);
-                (f, o)
+                let (f, o) = parse_class_field(&s, &class_slash);
+                (f, o.replace('.', "/"))
             });
             Ok(CollDesc {
-                class_name: e.class,
+                class_name: class_slash,
                 size_field,
                 array_field,
                 nested_map_field,

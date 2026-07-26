@@ -226,6 +226,7 @@ export interface RootPathStep {
   display_class: string;
   retained: number;
   root_type_label?: string;
+  field_edge?: string;
 }
 
 // One node of the full multi-level dominator subtree
@@ -246,6 +247,7 @@ export interface MergedPathNode {
   object_count: number;
   retained: number;
   root_type_label?: string;
+  field_edge?: string;
   children: MergedPathNode[];
 }
 
@@ -316,6 +318,9 @@ export interface ObjRow {
   // Dominant incoming reference (`Class#field`) that holds this object. Absent
   // when --collections was off or no attributed field points at it.
   owner?: string | null;
+  // Stack-frame holding this object (`ClassName#methodName()`). Present only
+  // when the object is a significant local and no field owner was found.
+  held_via?: string | null;
 }
 
 export interface ClassRow {
@@ -523,7 +528,9 @@ export interface TopArrayRow {
   length: number;
   shallow: number;
   obj_index_1based: number;
-  // Primary incoming reference (`Class#field`). Absent when --collections off.
+  // Non-null (occupied) slot count for object arrays; absent for primitive arrays.
+  non_null?: number;
+  // Primary incoming reference (`Class#field`). Absent when no field edge found.
   owner?: string;
 }
 
@@ -572,6 +579,8 @@ export interface FieldAttributionRow {
   total_retained: number;
   container_count: number;
   holder_instances: number;
+  total_wasted_slots?: number;
+  total_wasted_bytes?: number;
 }
 export interface FieldAttributionBiggestRow {
   holder_class: string;
@@ -585,6 +594,17 @@ export interface CollectionAttribution {
   most_overall: FieldAttributionRow[];
   biggest_single: FieldAttributionBiggestRow[];
   truncated: boolean;
+  // Size-{0,1} collection overhead by Class#field (§46.2).
+  tiny_overhead?: TinyCollectionRow[];
+}
+
+export interface TinyCollectionRow {
+  holder_class: string;
+  field: string;
+  container_kind: string;
+  empty_count: number;
+  singleton_count: number;
+  overhead_bytes: number;
 }
 
 // Fields by Retained Size (Class#field): which holder field retains the most
@@ -634,6 +654,7 @@ export interface RefStatClassRow {
   pretty_class: string;
   objects: number;
   shallow: number;
+  retained?: number;
 }
 
 export interface ReferenceStats {
@@ -669,6 +690,9 @@ export interface TriageSignal {
   detail: string;
   anchor?: string | null;
   anchor_label?: string | null;
+  // Reclaimable/attributable bytes used to rank problem signals (§26.2). Present
+  // only on quantified problem rules; not rendered — ordering happens in Rust.
+  bytes?: number | null;
 }
 
 export interface QueryColumn {
@@ -734,10 +758,37 @@ export interface Report {
   references: ReferencesAnalysis;
   // Scalar leak-pattern indicators. Always-on; zero fields omitted.
   leak_indicators?: LeakIndicators;
+  // Headline reclaimable-bytes figure folding every quantifiable waste source.
+  // Absent when every source is zero.
+  waste_summary?: WasteSummary;
   // Fired OOM-triage signals, evaluated once in Rust (order = render order).
   triage?: TriageSignal[];
+  // Merged top retainers: Class#field + stack-frame, sorted by retained desc (§813).
+  top_retainers?: RetainerRow[];
   // Custom OQL query results. Absent/empty when no queries were run.
   queries?: QueryResult[];
+}
+
+// One row of the merged Top Retainers table (§813).
+export interface RetainerRow {
+  name: string;
+  kind: string;
+  retained: number;
+}
+
+// One quantifiable waste source: a human label, approximate reclaimable bytes,
+// and an optional canonical section slug it drills into.
+export interface WasteSource {
+  label: string;
+  bytes: number;
+  anchor?: string;
+}
+
+// Headline "reclaimable N bytes" figure folding every waste source. Sources are
+// approximate and may overlap slightly; total_bytes is their sum.
+export interface WasteSummary {
+  total_bytes: number;
+  sources: WasteSource[];
 }
 
 declare global {
@@ -757,6 +808,12 @@ export interface SeriesClassRow {
   instances: number[];
   delta_retained: number;
   delta_instances: number;
+  // Peak retained across all reports; peak minus baseline (§37.1); and gross
+  // per-step growth/shrinkage churn (§37.2). See src/diff_reports.rs.
+  peak_retained: number;
+  peak_over_baseline: number;
+  gross_growth: number;
+  gross_shrink: number;
 }
 
 // One joined leak-suspect row across N reports.
@@ -777,7 +834,10 @@ export interface SeriesDiffResult {
   delta_total_objects: number;
   delta_total_shallow: number;
   net_delta_retained: number;
+  gross_growth_retained: number;
+  gross_shrink_retained: number;
   growth_leaders: SeriesClassRow[];
+  spike_leaders: SeriesClassRow[];
   new_classes: SeriesClassRow[];
   removed_classes: SeriesClassRow[];
   grown_suspects: SeriesSuspectRow[];

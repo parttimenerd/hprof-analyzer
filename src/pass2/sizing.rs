@@ -118,6 +118,10 @@ pub(crate) fn class_obj_shallow(ci: &ClassInfo, _ptr_size: usize, ref_size: usiz
 /// dominator computation (weak-reference / finalizer fields).
 pub type FieldPlan = Vec<(u32, bool)>;
 
+/// Like `FieldPlan` but additionally stores the field name as a pre-resolved
+/// owned String. Only built when `--ref-paths` is set.
+pub type FieldPlanNamed = Vec<(u32, bool, String)>;
+
 /// Build the FieldPlan for every class in `class_map`, walking each class's
 /// super chain once. Excluded fields are marked via `is_excluded_field`.
 /// Precomputing this up front lets the hot scan loop borrow immutably with no
@@ -162,6 +166,57 @@ pub(crate) fn build_field_plans(
                     let fname = strings.get(&fname_id).map(|s| s.as_str()).unwrap_or("");
                     let excluded = is_excluded_field(cname, fname);
                     plan.push((byte_offset as u32, excluded));
+                }
+                byte_offset += fsize;
+            }
+        }
+        plans.insert(class_addr, plan);
+    }
+    plans
+}
+
+/// Like `build_field_plans` but also retains the field name string. Only called
+/// when `--ref-paths` is enabled; the extra allocations are acceptable there.
+pub(crate) fn build_field_plans_named(
+    class_map: &HashMap<u64, ClassInfo>,
+    strings: &HashMap<u64, String>,
+    id_size: usize,
+) -> HashMap<u64, FieldPlanNamed> {
+    let mut plans: HashMap<u64, FieldPlanNamed> = HashMap::with_capacity(class_map.len());
+    let mut chain: Vec<u64> = Vec::new();
+    for &class_addr in class_map.keys() {
+        chain.clear();
+        let mut cur = class_addr;
+        loop {
+            match class_map.get(&cur) {
+                None => break,
+                Some(ci) => {
+                    chain.push(cur);
+                    if ci.super_id == 0 {
+                        break;
+                    }
+                    cur = ci.super_id;
+                }
+            }
+        }
+        let mut plan: FieldPlanNamed = Vec::new();
+        let mut byte_offset = 0usize;
+        for &caddr in &chain {
+            let ci = match class_map.get(&caddr) {
+                Some(c) => c,
+                None => break,
+            };
+            let cname = strings.get(&ci.name_id).map(|s| s.as_str()).unwrap_or("");
+            for &(fname_id, t) in &ci.fields {
+                let fsize = if t == HprofType::Object {
+                    id_size
+                } else {
+                    t.byte_size()
+                };
+                if t == HprofType::Object {
+                    let fname = strings.get(&fname_id).map(|s| s.as_str()).unwrap_or("");
+                    let excluded = is_excluded_field(cname, fname);
+                    plan.push((byte_offset as u32, excluded, fname.to_string()));
                 }
                 byte_offset += fsize;
             }
@@ -222,6 +277,25 @@ pub(crate) fn prim_array_class_name(elem_type_code: u8) -> &'static str {
         11 => "[J", // long
         _ => "[?",
     }
+}
+
+/// Return the element type code for a primitive array class name, or `None`.
+/// Inverse of `prim_array_class_name`: `"[I"` → `Some(10)`, etc.
+pub(crate) fn prim_array_type_code(name: &str) -> Option<u8> {
+    if !is_primitive_array_class_name(name) {
+        return None;
+    }
+    Some(match name.as_bytes()[1] {
+        b'Z' => 4,
+        b'C' => 5,
+        b'F' => 6,
+        b'D' => 7,
+        b'B' => 8,
+        b'S' => 9,
+        b'I' => 10,
+        b'J' => 11,
+        _ => return None,
+    })
 }
 
 /// True iff `name` is a JVM primitive-array class descriptor: a single `[`

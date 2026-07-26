@@ -37,11 +37,11 @@ fn load_report(path: &str) -> io::Result<Report> {
             format!("invalid report JSON ({path}): {e}"),
         )
     })?;
-    if report.schema_version != report::SCHEMA_VERSION {
+    if report.schema_version > report::SCHEMA_VERSION {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
-                "report {} schema_version {} does not match supported version {}; refusing to diff",
+                "report {} schema_version {} is newer than supported version {}; update hprof-analyzer",
                 path,
                 report.schema_version,
                 report::SCHEMA_VERSION
@@ -66,6 +66,8 @@ pub struct SeriesClassRow {
     pub delta_retained: i64,
     /// last − first instances.
     pub delta_instances: i64,
+    /// Maximum retained across all N reports.
+    pub peak_retained: u64,
 }
 
 /// One joined leak-suspect row across N reports.
@@ -99,7 +101,15 @@ pub struct SeriesDiffResult {
     pub delta_total_shallow: i64,
     /// Sum over classes of (last − first) retained.
     pub net_delta_retained: i64,
+    /// Sum over classes with positive (last − first) retained.
+    pub gross_growth_retained: i64,
+    /// Sum over classes with negative (last − first) retained (negative value).
+    pub gross_shrink_retained: i64,
     pub growth_leaders: Vec<SeriesClassRow>,
+    /// Classes whose peak retained (any report) significantly exceeded their last
+    /// retained — only populated when N ≥ 3. Sorted by (peak − first) desc,
+    /// name asc. A class appears here only if peak > last (it spiked then reclaimed).
+    pub spike_leaders: Vec<SeriesClassRow>,
     /// Classes absent in the first report, present in the last.
     pub new_classes: Vec<SeriesClassRow>,
     /// Classes present in the first report, absent in the last.
@@ -163,6 +173,8 @@ pub fn diff_series(reports: &[Report]) -> SeriesDiffResult {
     let mut new_classes: Vec<SeriesClassRow> = Vec::new();
     let mut removed_classes: Vec<SeriesClassRow> = Vec::new();
     let mut net_delta_retained: i64 = 0;
+    let mut gross_growth_retained: i64 = 0;
+    let mut gross_shrink_retained: i64 = 0;
     for (name, cells) in &joined {
         let instances: Vec<u64> = cells.iter().map(|c| c.map_or(0, |(i, _)| i)).collect();
         let retained: Vec<u64> = cells.iter().map(|c| c.map_or(0, |(_, r)| r)).collect();
@@ -178,13 +190,20 @@ pub fn diff_series(reports: &[Report]) -> SeriesDiffResult {
         } else {
             instances[last] as i64 - instances[0] as i64
         };
+        let peak_retained = retained.iter().copied().max().unwrap_or(0);
         net_delta_retained += delta_retained;
+        if delta_retained > 0 {
+            gross_growth_retained += delta_retained;
+        } else if delta_retained < 0 {
+            gross_shrink_retained += delta_retained;
+        }
         let row = SeriesClassRow {
             pretty_class: (*name).to_string(),
             retained,
             instances,
             delta_retained,
             delta_instances,
+            peak_retained,
         };
         // "new" iff present in last and absent in first; "removed" iff reverse.
         if last_present && !first_present {
@@ -195,17 +214,46 @@ pub fn diff_series(reports: &[Report]) -> SeriesDiffResult {
         all_rows.push(row);
     }
 
-    // Growth leaders: largest POSITIVE first→last Δretained, desc, name tie-break.
+    // Growth leaders: sorted by (peak_retained − first retained) desc (peak-vs-baseline),
+    // so a class that spiked to a high then reclaimed is still ranked by its spike height.
+    // Only classes with peak > first (any growth at any point) are included.
+    let first_retained_for = |row: &SeriesClassRow| -> u64 { row.retained.first().copied().unwrap_or(0) };
+    let peak_delta = |row: &SeriesClassRow| -> i64 {
+        row.peak_retained as i64 - first_retained_for(row) as i64
+    };
     let mut growth_leaders: Vec<SeriesClassRow> = all_rows
-        .into_iter()
-        .filter(|c| c.delta_retained > 0)
+        .iter()
+        .filter(|c| peak_delta(c) > 0)
+        .cloned()
         .collect();
     growth_leaders.sort_by(|x, y| {
-        y.delta_retained
-            .cmp(&x.delta_retained)
+        peak_delta(y)
+            .cmp(&peak_delta(x))
             .then_with(|| x.pretty_class.cmp(&y.pretty_class))
     });
     growth_leaders.truncate(TOP_N);
+
+    // Spike leaders (N ≥ 3 only): classes that peaked mid-series and have since
+    // reclaimed — i.e. peak > last AND peak > first. Sorted by (peak − first) desc.
+    let spike_leaders: Vec<SeriesClassRow> = if n >= 3 {
+        let mut spikes: Vec<SeriesClassRow> = all_rows
+            .iter()
+            .filter(|c| {
+                let first = first_retained_for(c);
+                c.peak_retained > first && c.peak_retained > c.retained.last().copied().unwrap_or(0)
+            })
+            .cloned()
+            .collect();
+        spikes.sort_by(|x, y| {
+            peak_delta(y)
+                .cmp(&peak_delta(x))
+                .then_with(|| x.pretty_class.cmp(&y.pretty_class))
+        });
+        spikes.truncate(TOP_N);
+        spikes
+    } else {
+        vec![]
+    };
 
     // New classes: sorted by last retained desc, then name asc.
     new_classes.sort_by(|x, y| {
@@ -293,7 +341,10 @@ pub fn diff_series(reports: &[Report]) -> SeriesDiffResult {
         delta_total_objects,
         delta_total_shallow,
         net_delta_retained,
+        gross_growth_retained,
+        gross_shrink_retained,
         growth_leaders,
+        spike_leaders,
         new_classes,
         removed_classes,
         grown_suspects,
@@ -380,6 +431,15 @@ fn verdict(d: &SeriesDiffResult) -> String {
     } else {
         "Heap size is unchanged.".to_string()
     };
+    // §37.2: append gross churn summary when there is measurable churn (before
+    // the new-suspect count so the churn info is next to the growth figure).
+    if d.gross_growth_retained != 0 || d.gross_shrink_retained != 0 {
+        line.push_str(&format!(
+            " Gross retained churn: {} grown / {} reclaimed across steps.",
+            fmt_delta_bytes(d.gross_growth_retained),
+            fmt_delta_bytes(d.gross_shrink_retained),
+        ));
+    }
     if new_suspects > 0 {
         let plural = if new_suspects == 1 { "" } else { "s" };
         line.push_str(&format!(" {new_suspects} new suspect{plural}."));
@@ -444,16 +504,46 @@ pub fn render_md(d: &SeriesDiffResult) -> String {
         fmt_delta_bytes(d.delta_total_shallow)
     ));
     out.push_str(&format!(
+        "- **Gross growth (classes that grew, r1→rN):** {}\n",
+        fmt_delta_bytes(d.gross_growth_retained)
+    ));
+    out.push_str(&format!(
+        "- **Gross reclaimed (classes that shrank, r1→rN):** {}\n",
+        fmt_delta_bytes(d.gross_shrink_retained)
+    ));
+    // Combined gross-churn line (§37.2): total bytes that churned direction.
+    let churn = d.gross_growth_retained.unsigned_abs().saturating_add(
+        d.gross_shrink_retained.unsigned_abs()
+    ) as i64;
+    out.push_str(&format!(
+        "- **Gross Retained churn (growth + reclaimed, r1→rN):** {}\n",
+        fmt_delta_bytes(churn)
+    ));
+    out.push_str(&format!(
         "- **Net Δ Retained (all classes, r1→rN):** {}\n\n",
         fmt_delta_bytes(d.net_delta_retained)
     ));
 
-    out.push_str("### Growth Leaders (by Δ retained)\n\n");
+    out.push_str("### Growth Leaders (by peak−baseline retained)\n\n");
     if d.growth_leaders.is_empty() {
         out.push_str("No class grew in retained heap.\n\n");
     } else {
         let mut t = series_table("Class", n);
         for c in &d.growth_leaders {
+            t.row(retained_row(&c.pretty_class, &c.retained, c.delta_retained));
+        }
+        t.render(&mut out);
+        out.push('\n');
+    }
+
+    if !d.spike_leaders.is_empty() {
+        out.push_str("### Spike Leaders (peaked then reclaimed)\n\n");
+        out.push_str(
+            "_Classes whose retained peaked at an intermediate report then reclaimed memory \
+             by the last report. Sorted by peak−baseline retained._\n\n",
+        );
+        let mut t = series_table("Class", n);
+        for c in &d.spike_leaders {
             t.row(retained_row(&c.pretty_class, &c.retained, c.delta_retained));
         }
         t.render(&mut out);
@@ -673,6 +763,8 @@ mod tests {
             collection_contents: None,
             leak_indicators: Default::default(),
             triage: Vec::new(),
+            waste_summary: None,
+            top_retainers: Vec::new(),
             queries: Vec::new(),
         }
     }
@@ -713,7 +805,9 @@ mod tests {
         assert!(md.contains("`r2` ="));
         assert!(md.contains("**Verdict:**"));
         assert!(md.contains("### Headline Totals"));
-        assert!(md.contains("### Growth Leaders (by Δ retained)"));
+        assert!(md.contains("### Growth Leaders (by peak"));
+        assert!(md.contains("Gross growth"));
+        assert!(md.contains("Gross reclaimed"));
         assert!(md.contains("### New Classes"));
         assert!(md.contains("### Removed Classes"));
         assert!(md.contains("### New / Grown Leak Suspects"));

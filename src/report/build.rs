@@ -67,9 +67,10 @@ pub fn build_model(
         opts.dominator_tree_max_depth,
     );
     crate::trace::probe("build_model: after leak_suspects aggregates");
-    let top = build_top_consumers(g, opts.top_consumers);
+    let stack_held_via = build_stack_held_via(g);
+    let top = build_top_consumers(g, opts.top_consumers, &stack_held_via);
     crate::trace::probe("build_model: after top_consumers aggregates");
-    let threads = build_thread_overview(g);
+    let threads = build_thread_overview(g, overview.total_shallow);
     crate::trace::probe("build_model: after thread_overview aggregates");
     let top_components = build_top_components(&overview);
     crate::trace::probe("build_model: after top_components aggregates");
@@ -81,6 +82,7 @@ pub fn build_model(
     let fields_by_size = build_fields_by_size(g, &overview);
     let biggest_collections = build_biggest_collections(g);
     let collection_contents = build_collection_contents(g);
+    let top_retainers = build_top_retainers(&fields_by_size, &threads);
     let mut report = Report {
         schema_version: SCHEMA_VERSION,
         generated,
@@ -99,11 +101,23 @@ pub fn build_model(
         biggest_collections,
         collection_contents,
         leak_indicators: build_leak_indicators(g),
+        waste_summary: None,
         triage: Vec::new(),
+        top_retainers,
         queries: Vec::new(),
     };
+    // Fold every quantifiable waste source into one headline reclaimable figure.
+    report.waste_summary = build_waste_summary(&report);
     // Evaluate the OOM-triage rule framework once over the finished report.
     report.triage = crate::report::evaluate_triage(&report);
+    // Invariant: the "% Heap" denominator is one number. `leaks.total_shallow`
+    // and `overview.total_shallow` are computed by separate passes but must agree,
+    // or the same figure would slug to different percentages in different sections.
+    debug_assert_eq!(
+        report.leaks.total_shallow, report.overview.total_shallow,
+        "reachable-shallow basis diverged: leaks={} overview={}",
+        report.leaks.total_shallow, report.overview.total_shallow,
+    );
     report
 }
 
@@ -117,6 +131,86 @@ fn is_anonymous_class(name: &str) -> bool {
     }
     // Lambda, cglib anon, and reflection proxy patterns
     name.contains("$$Lambda$") || name.contains("$$Anon") || name.contains("$Proxy")
+}
+
+/// Fold every quantifiable waste source into one headline "reclaimable N bytes"
+/// figure. Sources are approximate and may overlap slightly; `total_bytes` is
+/// their arithmetic sum (the plan's §24 headline). Returns `None` when every
+/// source is zero so the section is omitted rather than showing "0 B".
+///
+/// Reads only already-computed aggregates on the finished `Report`, so it runs
+/// after the rest of the model is built and adds no heap pass.
+fn build_waste_summary(report: &Report) -> Option<WasteSummary> {
+    let mut sources: Vec<WasteSource> = Vec::new();
+    let mut push = |label: &str, bytes: u64, anchor: Option<&str>| {
+        if bytes > 0 {
+            sources.push(WasteSource {
+                label: label.to_string(),
+                bytes,
+                anchor: anchor.map(|s| s.to_string()),
+            });
+        }
+    };
+
+    // Under-filled collections: (capacity − used) × slot width, already summed
+    // into each fill-ratio bucket's `wasted`.
+    let coll_fill: u64 = report
+        .collections
+        .collection_fill_ratio
+        .buckets
+        .iter()
+        .map(|b| b.wasted)
+        .sum();
+    push(
+        "Under-filled collections",
+        coll_fill,
+        Some(SectionId::Collections.slug()),
+    );
+
+    // Under-filled object arrays: null slots × reference width.
+    let arr_fill: u64 = report
+        .collections
+        .array_fill_ratio
+        .buckets
+        .iter()
+        .map(|b| b.wasted)
+        .sum();
+    push(
+        "Under-filled object arrays",
+        arr_fill,
+        Some(SectionId::Collections.slug()),
+    );
+
+    if let Some(dup) = report.overview.duplicate_strings.as_ref() {
+        push(
+            "Duplicate String values",
+            dup.approx_wasted_bytes,
+            Some(SectionId::DuplicateStrings.slug()),
+        );
+        if let Some(caw) = dup.char_array_waste.as_ref() {
+            push(
+                "String backing-array slack",
+                caw.total_wasted_bytes,
+                Some(SectionId::DuplicateStrings.slug()),
+            );
+        }
+    }
+
+    if let Some(dpa) = report.overview.duplicate_prim_arrays.as_ref() {
+        // Rendered as a `###` subsection of System Overview, no dedicated anchor.
+        push("Duplicate primitive arrays", dpa.total_wasted_bytes, None);
+    }
+
+    if sources.is_empty() {
+        return None;
+    }
+    // Largest reclaimable source first; ties broken by label for stable output.
+    sources.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.label.cmp(&b.label)));
+    let total_bytes = sources.iter().map(|s| s.bytes).sum();
+    Some(WasteSummary {
+        total_bytes,
+        sources,
+    })
 }
 
 fn build_leak_indicators(g: &Graph) -> LeakIndicators {
@@ -162,6 +256,35 @@ fn class_display(g: &Graph, i: usize) -> String {
     }
 }
 
+/// Resolve the display type string for a collection element at dense index
+/// `vi`. For plain elements, returns the class name. For Node/Entry wrapper
+/// objects whose key/value fields were recorded in `g.node_kv`, returns
+/// `"KeyClass → ValueClass"` (or a partial form when only one side is
+/// available). Falls back to the raw class name when no KV data is present.
+fn element_type_display(g: &Graph, vi: u32) -> String {
+    if let Some(kv_map) = &g.node_kv {
+        if let Some(&(key_idx, val_idx)) = kv_map.get(&vi) {
+            let key_cls = if key_idx != u32::MAX {
+                class_display(g, key_idx as usize)
+            } else {
+                String::new()
+            };
+            let val_cls = if val_idx != u32::MAX {
+                class_display(g, val_idx as usize)
+            } else {
+                String::new()
+            };
+            return match (key_cls.is_empty(), val_cls.is_empty()) {
+                (false, false) => format!("{} \u{2192} {}", key_cls, val_cls),
+                (false, true) => key_cls,
+                (true, false) => val_cls,
+                (true, true) => class_display(g, vi as usize),
+            };
+        }
+    }
+    class_display(g, vi as usize)
+}
+
 /// Build the reference-kind statistics for the report from the graph's
 /// always-on reference analysis, filling in each present kind's
 /// `only_weakly_retained` rollup.
@@ -188,28 +311,71 @@ fn build_references(g: &Graph) -> ReferencesAnalysis {
         let Some(stats) = stats.as_mut() else {
             continue;
         };
-        let mut by_class: HashMap<String, (u64, u64)> = HashMap::new();
+
+        // Accumulate retained per class for the referent histogram (capped at
+        // REFERENT_HIST_CAP classes; overflow lands in "<other>"). The
+        // HashMap is bounded to the same 200-entry cap as the histogram itself.
+        // This is a no-alloc pass: HashMap keys are borrowed from the existing
+        // histogram rows, so we build a lookup map from row index.
+        let known_classes: HashMap<&str, usize> = stats
+            .referent_histogram
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (r.pretty_class.as_str(), i))
+            .collect();
+        let mut retained_per_class = vec![0u64; stats.referent_histogram.len()];
+        let mut retained_other = 0u64;
+        for &ri in &g.reference_referent_idx[kind] {
+            let i = ri as usize;
+            let ret = if i < g.retained.len() { g.retained[i] } else { 0 };
+            let cls = class_display(g, i);
+            if let Some(&idx) = known_classes.get(cls.as_str()) {
+                retained_per_class[idx] += ret;
+            } else {
+                retained_other += ret;
+            }
+        }
+        for (row, &ret) in stats
+            .referent_histogram
+            .iter_mut()
+            .zip(retained_per_class.iter())
+        {
+            row.retained = ret;
+        }
+        // Back-fill the "<other>" row if present (always last when non-empty).
+        if let Some(other_row) = stats
+            .referent_histogram
+            .last_mut()
+            .filter(|r| r.pretty_class == "<other>")
+        {
+            other_row.retained = retained_other;
+        }
+
+        // only_weakly_retained: referents with no strong dominator (idom == undef).
+        let mut by_class: HashMap<String, (u64, u64, u64)> = HashMap::new();
         for &ri in &g.reference_referent_idx[kind] {
             let i = ri as usize;
             if g.idom[i] != undef {
                 continue; // has a strong dominator -> not only-weakly-retained
             }
-            let e = by_class.entry(class_display(g, i)).or_insert((0, 0));
+            let e = by_class.entry(class_display(g, i)).or_insert((0, 0, 0));
             e.0 += 1;
             e.1 += g.shallow[i] as u64;
+            e.2 += if i < g.retained.len() { g.retained[i] } else { 0 };
         }
         let mut rows: Vec<RefStatClassRow> = by_class
             .into_iter()
-            .map(|(pretty_class, (objects, shallow))| RefStatClassRow {
+            .map(|(pretty_class, (objects, shallow, retained))| RefStatClassRow {
                 pretty_class,
                 objects,
                 shallow,
+                retained,
             })
             .collect();
-        // Deterministic: objects desc, then pretty_class asc.
+        // Deterministic: retained desc, then pretty_class asc.
         rows.sort_unstable_by(|a, b| {
-            b.objects
-                .cmp(&a.objects)
+            b.retained
+                .cmp(&a.retained)
                 .then_with(|| a.pretty_class.cmp(&b.pretty_class))
         });
         stats.only_weakly_retained = rows;
@@ -258,6 +424,7 @@ fn build_collection_attribution(
         &g.retained,
         g.collection_attribution_truncated,
         &holder_counts,
+        g.ref_size as u64,
     ))
 }
 
@@ -437,7 +604,7 @@ fn build_biggest_collections(g: &Graph) -> Option<BiggestCollections> {
             let mut counts: std::collections::HashMap<String, u64> =
                 std::collections::HashMap::new();
             for &vi in &c.value_indices {
-                *counts.entry(class_display(g, vi as usize)).or_insert(0) += 1;
+                *counts.entry(element_type_display(g, vi)).or_insert(0) += 1;
             }
             let retained = g
                 .retained
@@ -514,7 +681,7 @@ fn build_collection_contents(g: &Graph) -> Option<CollectionContents> {
         acc.total_values += c.value_indices.len() as u64;
         for &vi in &c.value_indices {
             *acc.type_counts
-                .entry(class_display(g, vi as usize))
+                .entry(element_type_display(g, vi))
                 .or_insert(0) += 1;
         }
     }
@@ -547,6 +714,7 @@ fn aggregate_collection_attribution(
     retained: &[u64],
     truncated: bool,
     holder_counts: &std::collections::HashMap<String, u64>,
+    obj_ref_width: u64,
 ) -> CollectionAttribution {
     use std::collections::HashMap;
 
@@ -554,6 +722,7 @@ fn aggregate_collection_attribution(
     struct OverallAcc {
         total_elements: u64,
         total_retained: u64,
+        total_wasted_slots: u64,
         // Distinct container indices under this key: powers container_count and
         // dedups elements/retained so a shared container isn't double-counted.
         seen: std::collections::HashSet<u32>,
@@ -568,10 +737,18 @@ fn aggregate_collection_attribution(
         retained: u64,
         container_class: String,
         capacity: u64,
+        container_kind: u8,
     }
 
     let mut overall: HashMap<(String, String), OverallAcc> = HashMap::new();
     let mut biggest: HashMap<(String, String), BiggestAcc> = HashMap::new();
+    // tiny: keyed by (holder_class, field, container_kind), dedup by container_idx.
+    struct TinyAcc {
+        empty_count: u64,
+        singleton_count: u64,
+        seen: std::collections::HashSet<u32>,
+    }
+    let mut tiny: HashMap<(String, String, u8), TinyAcc> = HashMap::new();
 
     for rec in raw {
         let retained_bytes = retained
@@ -584,6 +761,7 @@ fn aggregate_collection_attribution(
         let acc = overall.entry(key.clone()).or_insert_with(|| OverallAcc {
             total_elements: 0,
             total_retained: 0,
+            total_wasted_slots: 0,
             seen: std::collections::HashSet::new(),
             first_kind: rec.container_kind,
             mixed: false,
@@ -591,6 +769,7 @@ fn aggregate_collection_attribution(
         if acc.seen.insert(rec.container_idx) {
             acc.total_elements += rec.elements;
             acc.total_retained += retained_bytes;
+            acc.total_wasted_slots += rec.capacity.saturating_sub(rec.elements);
             // Mixed determination only considers DISTINCT containers.
             if rec.container_kind != acc.first_kind {
                 acc.mixed = true;
@@ -605,6 +784,7 @@ fn aggregate_collection_attribution(
             retained: 0,
             container_class: String::new(),
             capacity: 0,
+            container_kind: rec.container_kind,
         });
         if rec.elements > b.elements || (rec.elements == b.elements && retained_bytes > b.retained)
         {
@@ -612,6 +792,25 @@ fn aggregate_collection_attribution(
             b.retained = retained_bytes;
             b.container_class = crate::report::pretty_class_name(&rec.container_class);
             b.capacity = rec.capacity;
+            b.container_kind = rec.container_kind;
+        }
+
+        // tiny: count empty/singleton containers per (holder, field, kind).
+        if rec.elements <= 1 {
+            let ta = tiny
+                .entry((rec.holder_class.clone(), rec.field.clone(), rec.container_kind))
+                .or_insert_with(|| TinyAcc {
+                    empty_count: 0,
+                    singleton_count: 0,
+                    seen: std::collections::HashSet::new(),
+                });
+            if ta.seen.insert(rec.container_idx) {
+                if rec.elements == 0 {
+                    ta.empty_count += 1;
+                } else {
+                    ta.singleton_count += 1;
+                }
+            }
         }
     }
 
@@ -625,6 +824,8 @@ fn aggregate_collection_attribution(
             },
             total_elements: acc.total_elements,
             total_retained: acc.total_retained,
+            total_wasted_slots: acc.total_wasted_slots,
+            total_wasted_bytes: acc.total_wasted_slots.saturating_mul(obj_ref_width),
             container_count: acc.seen.len() as u64,
             holder_instances: holder_counts
                 .get(&crate::report::pretty_class_name(&holder_class))
@@ -653,6 +854,7 @@ fn aggregate_collection_attribution(
             elements: b.elements,
             retained: b.retained,
             capacity: b.capacity,
+            container_kind: kind_label(b.container_kind).to_string(),
         })
         .collect();
     // elements desc, retained desc, holder_class asc, field asc.
@@ -665,9 +867,35 @@ fn aggregate_collection_attribution(
     });
     biggest_single.truncate(ATTRIBUTION_TOP_N);
 
+    let mut tiny_overhead: Vec<crate::report::model::TinyCollectionRow> = tiny
+        .into_iter()
+        .filter_map(|((holder_class, field, kind), ta)| {
+            let total = ta.empty_count + ta.singleton_count;
+            if total == 0 {
+                return None;
+            }
+            Some(crate::report::model::TinyCollectionRow {
+                holder_class,
+                field,
+                container_kind: kind_label(kind).to_string(),
+                empty_count: ta.empty_count,
+                singleton_count: ta.singleton_count,
+                overhead_bytes: total * 80,
+            })
+        })
+        .collect();
+    tiny_overhead.sort_by(|a, b| {
+        b.overhead_bytes
+            .cmp(&a.overhead_bytes)
+            .then_with(|| a.holder_class.cmp(&b.holder_class))
+            .then_with(|| a.field.cmp(&b.field))
+    });
+    tiny_overhead.truncate(20);
+
     CollectionAttribution {
         most_overall,
         biggest_single,
+        tiny_overhead,
         truncated,
     }
 }
@@ -1066,7 +1294,7 @@ pub(crate) fn build_alloc_sites_from<I: Iterator<Item = u32>>(
 /// Resolve each thread stack into a `ThreadInfo`. The thread's class name is
 /// looked up via its object index (`u32::MAX` = unresolved). Small: one entry
 /// per stack trace.
-pub(crate) fn build_thread_overview(g: &Graph) -> ThreadOverview {
+pub(crate) fn build_thread_overview(g: &Graph, total_shallow: u64) -> ThreadOverview {
     let threads = g
         .thread_stacks
         .iter()
@@ -1135,7 +1363,7 @@ pub(crate) fn build_thread_overview(g: &Graph) -> ThreadOverview {
                 .map(|addr| loader_label_for_addr(g, addr));
 
             // Gated per-frame significant locals (only when --thread-locals ran).
-            let (significant_frames, max_local_retained) = build_significant_frames(g, t, retained);
+            let (significant_frames, max_local_retained) = build_significant_frames(g, t, total_shallow);
 
             ThreadInfo {
                 thread_serial: t.thread_serial,
@@ -1184,7 +1412,7 @@ fn loader_label_for_addr(g: &Graph, addr: u64) -> String {
 fn build_significant_frames(
     g: &Graph,
     t: &crate::pass2::ThreadStack,
-    thread_retained: u64,
+    total_shallow: u64,
 ) -> (Vec<SignificantFrame>, u64) {
     use std::collections::BTreeMap;
     let Some(pairs) = g.thread_local_frame_samples.get(&t.thread_serial) else {
@@ -1223,8 +1451,8 @@ fn build_significant_frames(
                     .unwrap_or_else(|| "<unknown>".to_string());
                 let retained = g.retained.get(li as usize).copied().unwrap_or(0);
                 max_local_retained = max_local_retained.max(retained);
-                let pct = if thread_retained > 0 {
-                    retained as f64 / thread_retained as f64 * 100.0
+                let pct = if total_shallow > 0 {
+                    retained as f64 / total_shallow as f64 * 100.0
                 } else {
                     0.0
                 };
@@ -1534,11 +1762,17 @@ fn build_system_overview(g: &Graph, depth_counts: &[u64], top_n: usize) -> Syste
         let total_retained: u64 = tops.iter().sum();
         let one_pct = denom / 100;
         let num_objects_ge_1pct = tops.iter().filter(|&&r| r >= one_pct).count() as u64;
+        let top1_retained = prefix(1);
+        let top10_retained = prefix(10);
+        let top100_retained = prefix(100);
         RetentionSummary {
             total_retained,
-            top1_bp: bp(prefix(1)),
-            top10_bp: bp(prefix(10)),
-            top100_bp: bp(prefix(100)),
+            top1_bp: bp(top1_retained),
+            top10_bp: bp(top10_retained),
+            top100_bp: bp(top100_retained),
+            top1_retained,
+            top10_retained,
+            top100_retained,
             num_objects_ge_1pct,
         }
     };
@@ -2171,6 +2405,26 @@ pub(crate) fn build_leak_suspects(
     // recursive borrows; find-or-create scans a node's `children` for a matching
     // label, so iterating members in a deterministic (ascending index) order
     // makes insertion order — and therefore the result — deterministic.
+
+    // Helper: look up the field name on `parent` that references `child`.
+    // Returns `None` when --ref-paths was not set or no matching named edge exists.
+    let field_name_for = |parent: usize, child: usize| -> Option<String> {
+        let pool = g.field_name_pool.as_ref()?;
+        let idx_vec = g.fwd_field_name_idx.as_ref()?;
+        let start = g.fwd_offsets[parent] as usize;
+        let end = g.fwd_offsets[parent + 1] as usize;
+        for pos in start..end {
+            if g.fwd_targets.get(pos) as usize == child {
+                let name_idx = idx_vec[pos] as usize;
+                if name_idx < pool.len() && !pool[name_idx].is_empty() {
+                    return Some(pool[name_idx].clone());
+                }
+                return None;
+            }
+        }
+        None
+    };
+
     let vroot_u32 = n as u32;
     let build_merged_paths = |members: &[u32], group_label: &str| -> Option<MergedPathNode> {
         if members.is_empty() {
@@ -2181,6 +2435,9 @@ pub(crate) fn build_leak_suspects(
             object_count: u64,
             retained: u64,
             root_type_label: Option<String>,
+            /// The field on the parent that points here. `None` when not all
+            /// member chains agree on a single field name, or --ref-paths off.
+            field_edge: Option<String>,
             children: Vec<usize>,
         }
         let mut arena: Vec<MNode> = Vec::new();
@@ -2191,6 +2448,7 @@ pub(crate) fn build_leak_suspects(
             object_count: 0,
             retained: 0,
             root_type_label: None,
+            field_edge: None,
             children: Vec::new(),
         });
 
@@ -2221,6 +2479,13 @@ pub(crate) fn build_leak_suspects(
             arena[node].retained += g.retained[m as usize];
             for (hop_i, &obj) in chain.iter().enumerate() {
                 let label = display_of(obj);
+                // The field edge on this node is the field on chain[hop_i+1]
+                // (the parent, one hop closer to root) that references obj.
+                let this_field_edge = if hop_i + 1 < chain.len() {
+                    field_name_for(chain[hop_i + 1], obj)
+                } else {
+                    None
+                };
                 // find-or-create a child of `node` with this label.
                 let existing = arena[node]
                     .children
@@ -2228,7 +2493,13 @@ pub(crate) fn build_leak_suspects(
                     .copied()
                     .find(|&c| arena[c].display_class == label);
                 let child = match existing {
-                    Some(c) => c,
+                    Some(c) => {
+                        // Clear field_edge if chains disagree.
+                        if arena[c].field_edge.as_deref() != this_field_edge.as_deref() {
+                            arena[c].field_edge = None;
+                        }
+                        c
+                    }
                     None => {
                         // Node cap: stop creating NEW nodes once reached, but keep
                         // accumulating into existing matching nodes above.
@@ -2241,6 +2512,7 @@ pub(crate) fn build_leak_suspects(
                             object_count: 0,
                             retained: 0,
                             root_type_label: None,
+                            field_edge: this_field_edge,
                             children: Vec::new(),
                         });
                         arena[node].children.push(idx);
@@ -2284,6 +2556,7 @@ pub(crate) fn build_leak_suspects(
                 object_count: node.object_count,
                 retained: node.retained,
                 root_type_label: node.root_type_label.clone(),
+                field_edge: node.field_edge.clone(),
                 children: node.children.iter().map(|&c| to_model(arena, c)).collect(),
             }
         }
@@ -2485,7 +2758,9 @@ pub(crate) fn build_leak_suspects(
 
     // For each SINGLE suspect, walk the DOMINATOR chain from the
     // suspect object up toward the GC root, emitting a bounded reference chain.
-    // This mirrors MAT's Leak Suspects "path to the accumulation point", which is
+    // For each SINGLE suspect, walk dominator chain from suspect object toward GC
+    // root (bounded by `root_path_max_depth`) and attaches the full dominator
+    // chain. This mirrors MAT's Leak Suspects "path to the accumulation point", which is
     // itself dominator-based: `idom[node]` is the object that must be released for
     // `node` to become collectable, so the chain suspect -> idom -> ... -> root is
     // exactly "what is keeping this alive". It reuses the already-resident `idom`
@@ -2508,11 +2783,19 @@ pub(crate) fn build_leak_suspects(
                 let root_type_label = root_type_of
                     .get(&(cur as u32))
                     .and_then(|&ty| gc_root_type_label_opt(ty).map(|l| l.to_string()));
+                // The field_edge for step i is the field on the NEXT hop (idom[cur])
+                // that references cur. We look it up here, before advancing cur.
+                let field_edge = if !is_root && idom != undef {
+                    field_name_for(idom as usize, cur)
+                } else {
+                    None
+                };
                 chain.push(RootPathStep {
                     obj_index_1based: cur + 1,
                     display_class: display_of(cur),
                     retained: g.retained[cur],
                     root_type_label,
+                    field_edge,
                 });
                 if is_root || idom == undef {
                     break;
@@ -2596,10 +2879,122 @@ pub(crate) fn build_size_distribution(retained_desc: &[u64]) -> TopSizeDistribut
     }
 }
 
+/// Build a dense-object-index → "ClassName#methodName()" map for every object
+/// that appears as a significant local in any thread's stack frames. Used to
+/// annotate `ObjRow::held_via` for objects held by stack frames rather than
+/// fields. Returns an empty map when `--thread-locals` was not set (the gated
+/// `thread_local_frame_samples` map is empty).
+fn build_stack_held_via(g: &Graph) -> std::collections::HashMap<u32, String> {
+    use std::collections::HashMap;
+    let mut out: HashMap<u32, String> = HashMap::new();
+    for (&_thread_serial, pairs) in &g.thread_local_frame_samples {
+        // Find the ThreadStack for this thread so we can resolve frame_number.
+        let stack = g.thread_stacks.iter().find(|ts| {
+            pairs
+                .iter()
+                .any(|_| ts.thread_serial == _thread_serial)
+        });
+        for &(frame_number, local_idx) in pairs {
+            if out.contains_key(&local_idx) {
+                continue; // first writer wins — highest-retained frame
+            }
+            let label = if let Some(ts) = stack {
+                if frame_number == u32::MAX {
+                    "<no frame>".to_string()
+                } else {
+                    ts.frames
+                        .get(frame_number as usize)
+                        .cloned()
+                        .unwrap_or_else(|| format!("<frame #{frame_number}>"))
+                }
+            } else {
+                format!("<frame #{frame_number}>")
+            };
+            // Convert the pre-rendered "class.method (source:line)" label to
+            // "ClassName#methodName()" for the held-via column.
+            out.insert(local_idx, frame_to_class_method(&label));
+        }
+    }
+    out
+}
+
+/// Convert a pre-rendered frame line `"com.example.Foo.bar (Foo.java:42)"` to
+/// `"com.example.Foo#bar()"`. Falls back to the original string on any parse
+/// failure so the column always has a non-empty value.
+fn frame_to_class_method(frame: &str) -> String {
+    // Frame format: "class.method (source:line)" — strip the " (…)" suffix first.
+    let label = if let Some(paren) = frame.find(" (") {
+        &frame[..paren]
+    } else {
+        frame
+    };
+    // Split at the LAST dot to separate class from method.
+    if let Some(dot) = label.rfind('.') {
+        let class = &label[..dot];
+        let method = &label[dot + 1..];
+        if !class.is_empty() && !method.is_empty() {
+            return format!("{}#{}()", class, method);
+        }
+    }
+    frame.to_string()
+}
+
+/// Build the merged Top Retainers table (§813): combine `fields_by_size` rows
+/// (Class#field retainers) and significant thread frames, deduplicated and
+/// sorted by retained desc. Capped at 25 rows. Returns an empty Vec when both
+/// sources are absent.
+fn build_top_retainers(
+    fields_by_size: &Option<FieldsBySize>,
+    threads: &ThreadOverview,
+) -> Vec<RetainerRow> {
+    use std::collections::HashMap;
+    let mut by_name: HashMap<String, (String, u64)> = HashMap::new(); // name -> (kind, retained)
+
+    // Source 1: Class#field attribution rows.
+    if let Some(fbs) = fields_by_size {
+        for row in &fbs.rows {
+            let name = format!("{}#{}", row.holder_class, row.field);
+            let entry = by_name.entry(name).or_insert(("field".to_string(), 0));
+            entry.1 = entry.1.saturating_add(row.total_retained);
+        }
+    }
+
+    // Source 2: significant stack frames from thread overview.
+    for thread in &threads.threads {
+        for sf in &thread.significant_frames {
+            if sf.frame.starts_with('<') {
+                continue; // skip synthetic no-frame bucket
+            }
+            let label = frame_to_class_method(&sf.frame);
+            let frame_retained: u64 = sf.locals.iter().map(|l| l.retained).sum();
+            if frame_retained == 0 {
+                continue;
+            }
+            let entry = by_name
+                .entry(label)
+                .or_insert(("stack-frame".to_string(), 0));
+            entry.1 = entry.1.saturating_add(frame_retained);
+        }
+    }
+
+    let mut rows: Vec<RetainerRow> = by_name
+        .into_iter()
+        .map(|(name, (kind, retained))| RetainerRow { name, kind, retained })
+        .collect();
+    // Retained desc; tie-break name asc for determinism.
+    rows.sort_by(|a, b| b.retained.cmp(&a.retained).then(a.name.cmp(&b.name)));
+    rows.truncate(25);
+    rows
+}
+
 /// Build the "Top Consumers" model: biggest objects (top-level dominators by
 /// retained), biggest classes, and the pruned package tree. Bounded reductions
 /// over the graph; no per-object Vec is retained.
-fn build_top_consumers(g: &Graph, top_n: usize) -> TopConsumers {
+fn build_top_consumers(
+    g: &Graph,
+    top_n: usize,
+    stack_held_via: &std::collections::HashMap<u32, String>,
+) -> TopConsumers {
     let n = g.n;
     let vroot = n as u32;
     let undef = u32::MAX;
@@ -2694,6 +3089,13 @@ fn build_top_consumers(g: &Graph, top_n: usize) -> TopConsumers {
                 0
             };
 
+            let owner = biggest_owner.get(&i).cloned();
+            // held_via: use stack frame annotation only when no field owner found.
+            let held_via = if owner.is_none() {
+                stack_held_via.get(&i).cloned()
+            } else {
+                None
+            };
             ObjRow {
                 obj_index_1based: idx + 1,
                 display_class,
@@ -2701,7 +3103,8 @@ fn build_top_consumers(g: &Graph, top_n: usize) -> TopConsumers {
                 retained: g.retained[idx],
                 pct_bp,
                 pct,
-                owner: biggest_owner.get(&i).cloned(),
+                owner,
+                held_via,
             }
         })
         .collect();
@@ -2904,7 +3307,7 @@ mod attribution_tests {
         // Metric A: holder-instance lookup keyed by PRETTIFIED class name.
         let mut holders = std::collections::HashMap::new();
         holders.insert("com.foo.Big".to_string(), 3u64);
-        let ca = aggregate_collection_attribution(&raw, &retained, false, &holders);
+        let ca = aggregate_collection_attribution(&raw, &retained, false, &holders, 8);
         assert_eq!(ca.most_overall.len(), 2);
         assert_eq!(ca.most_overall[0].holder_class, "com/foo/Big");
         assert_eq!(ca.most_overall[0].total_elements, 100);
@@ -2937,7 +3340,7 @@ mod attribution_tests {
             rec(0, "com/foo/Cache", "map", 0, "java/util/HashMap", 42),
         ];
         let retained = vec![9000u64];
-        let ca = aggregate_collection_attribution(&raw, &retained, false, &no_holders());
+        let ca = aggregate_collection_attribution(&raw, &retained, false, &no_holders(), 8);
         assert_eq!(ca.most_overall.len(), 1);
         let row = &ca.most_overall[0];
         assert_eq!(row.container_count, 1, "shared container counted once");
@@ -2956,7 +3359,7 @@ mod attribution_tests {
             rec(1, "com/foo/Holder", "data", 6, "[Ljava/lang/Object;", 7),
         ];
         let retained = vec![100u64, 200u64];
-        let ca = aggregate_collection_attribution(&raw, &retained, false, &no_holders());
+        let ca = aggregate_collection_attribution(&raw, &retained, false, &no_holders(), 8);
         assert_eq!(ca.most_overall.len(), 1);
         assert_eq!(ca.most_overall[0].container_kind, "mixed");
         assert_eq!(ca.most_overall[0].container_count, 2);
@@ -2969,7 +3372,7 @@ mod attribution_tests {
     fn test_single_kind_label() {
         let raw = vec![rec(0, "com/foo/H", "arr", 7, "[I", 3)];
         let retained = vec![64u64];
-        let ca = aggregate_collection_attribution(&raw, &retained, true, &no_holders());
+        let ca = aggregate_collection_attribution(&raw, &retained, true, &no_holders(), 8);
         assert_eq!(ca.most_overall[0].container_kind, "primitive array");
         assert!(ca.truncated);
     }
@@ -2979,7 +3382,7 @@ mod attribution_tests {
     fn test_out_of_range_retained_is_zero() {
         let raw = vec![rec(99, "com/foo/H", "f", 0, "java/util/ArrayList", 1)];
         let retained = vec![10u64]; // idx 99 is out of range
-        let ca = aggregate_collection_attribution(&raw, &retained, false, &no_holders());
+        let ca = aggregate_collection_attribution(&raw, &retained, false, &no_holders(), 8);
         assert_eq!(ca.most_overall[0].total_retained, 0);
         assert_eq!(ca.biggest_single[0].retained, 0);
     }

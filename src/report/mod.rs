@@ -11,6 +11,7 @@
 //! byte-exact- and golden-tested, so opt-in fields are `Option<T>` +
 //! `skip_serializing_if` and absent by default to preserve parity.
 
+mod anchors;
 mod build;
 pub(crate) mod format;
 mod model;
@@ -18,6 +19,7 @@ mod render_graphs;
 mod render_md;
 mod triage;
 
+pub use anchors::*;
 pub use build::*;
 pub use format::*;
 pub use model::*;
@@ -228,6 +230,9 @@ mod tests {
             direct_byte_buffer_capacity_sum: 0,
             thread_local_null_key_count: 0,
             unreachable_retained: None,
+            node_kv: None,
+            fwd_field_name_idx: None,
+            field_name_pool: None,
         };
         (g, dc_off, dc_tgt)
     }
@@ -1293,11 +1298,11 @@ mod tests {
         let md = render_markdown(&r);
         let doc = Md::parse(&md);
 
-        // (a) new OOM-triage heading + headline retainer line present.
+        // (a) new memory-triage heading + headline retainer line present.
         let triage = doc
-            .section("OOM Triage")
-            .expect("missing OOM Triage heading");
-        assert_eq!(triage.level(), 2, "OOM Triage should be an H2 section");
+            .section("Memory Triage")
+            .expect("missing Memory Triage heading");
+        assert_eq!(triage.level(), 2, "Memory Triage should be an H2 section");
         // The headline retainer is a bullet, not just loose text.
         assert!(
             triage.has_bullet_starting_with("**Headline retainer:**"),
@@ -1314,9 +1319,9 @@ mod tests {
         );
 
         // The triage block must precede System Overview.
-        let tri = doc.heading_offset("OOM Triage").unwrap();
+        let tri = doc.heading_offset("Memory Triage").unwrap();
         let sys = doc.heading_offset("System Overview").unwrap();
-        assert!(tri < sys, "OOM Triage must come before System Overview");
+        assert!(tri < sys, "Memory Triage must come before System Overview");
 
         // (b) determinism guard: render twice == identical.
         assert_eq!(md, render_markdown(&r));
@@ -1418,7 +1423,7 @@ mod tests {
     fn schema_version_guard() {
         let r = fixture_report();
         assert_eq!(r.schema_version, SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 6);
+        assert_eq!(SCHEMA_VERSION, 9);
     }
 
     #[test]
@@ -1448,7 +1453,7 @@ mod tests {
                 frames: vec!["x.y (Unknown Source)".to_string()],
             },
         ];
-        let ov = build_thread_overview(&g);
+        let ov = build_thread_overview(&g, 0);
         assert_eq!(ov.threads.len(), 2);
         assert_eq!(ov.threads[0].thread_serial, 7);
         assert_eq!(

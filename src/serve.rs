@@ -171,9 +171,12 @@ impl ServeState {
                                 }
                             }
                         }
-                        "/report/overview" => section_response(&report.overview, want_md, |r, out| {
-                            crate::report::render_system_overview(r, out);
-                        }),
+                        "/report/overview" => {
+                            let off_heap_cap = report.leak_indicators.direct_byte_buffer_capacity_sum;
+                            section_response(&report.overview, want_md, move |r, out| {
+                                crate::report::render_system_overview(r, off_heap_cap, out);
+                            })
+                        }
                         "/report/leaks" => {
                             let limit = parse_limit(query);
                             if let Some(n) = limit.filter(|&n| n < report.leaks.suspects.len()) {

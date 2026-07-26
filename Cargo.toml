@@ -24,6 +24,11 @@ tiny_http = "0.12"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 flate2 = "1"
+# default-features = false drops legacy/arrays/zdict_builder C extensions; only encode/decode needed
+zstd = { version = "0.13", default-features = false }
+# Used for reading Eclipse MAT plugin jars (DEFLATE-compressed entries) to
+# detect the installed MAT parser ID. deflate feature only; no bzip2/zstd needed.
+zip = { version = "2", default-features = false, features = ["deflate"] }
 scraper = "0.27"
 # pinned to =1.2.1: schemars 1.x had breaking API changes; bump carefully
 schemars = "=1.2.1"

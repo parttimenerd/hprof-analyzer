@@ -732,7 +732,7 @@ fn history_path() -> Option<std::path::PathBuf> {
 /// completes keywords/attributes. Pass1 is run ONCE; both name sets are harvested
 /// from the same result to avoid a second scan.
 pub(crate) fn harvest_names(path: &str) -> (Vec<String>, Vec<String>) {
-    match crate::pass1::Pass1::run(path) {
+    match crate::pass1::Pass1::run(path, false) {
         Ok(p) => {
             let mut class_names: Vec<String> = p
                 .class_map
