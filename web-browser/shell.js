@@ -515,7 +515,7 @@ function startTerminal() {
     if (line.startsWith('/') && !line.includes(' ')) {
       const partial = line.slice(1).toLowerCase();
       const cmds = ['help','clear','status','analyze','history','export','set','classes','filter',
-                    'sort','top','run','bookmark','forget','last','describe','count'];
+                    'sort','top','run','bookmark','forget','last','describe','count','watch'];
       const matches = cmds.filter(c => c.startsWith(partial));
       if (matches.length === 1) {
         setLine('/' + matches[0] + ' ');
@@ -718,6 +718,47 @@ function startTerminal() {
         term.writeln(`\x1b[31merror: ${e.message}\x1b[0m`);
       }
       term.write(PROMPT);
+      return;
+    }
+    if (cmd === '/watch' || cmd.startsWith('/watch ')) {
+      const args = cmd.slice(6).trim();
+      // /watch stop
+      if (args === 'stop' || args === '') {
+        if (watchTimer) {
+          clearInterval(watchTimer);
+          watchTimer = null;
+          term.writeln('\x1b[33mWatch stopped.\x1b[0m');
+        } else if (args === '') {
+          term.writeln('\x1b[33mUsage: /watch <seconds> <oql>  — refresh query every N seconds; /watch stop\x1b[0m');
+        } else {
+          term.writeln('\x1b[2mNo active watch.\x1b[0m');
+        }
+        term.write(PROMPT);
+        return;
+      }
+      const m = args.match(/^(\d+(?:\.\d+)?)\s+(.+)$/s);
+      if (!m) {
+        term.writeln('\x1b[33mUsage: /watch <seconds> <oql>\x1b[0m');
+        term.write(PROMPT);
+        return;
+      }
+      const secs = parseFloat(m[1]);
+      const watchOql = m[2].trim();
+      if (secs < 1) {
+        term.writeln('\x1b[31mMinimum interval is 1 second.\x1b[0m');
+        term.write(PROMPT);
+        return;
+      }
+      if (watchTimer) { clearInterval(watchTimer); watchTimer = null; }
+      term.writeln(`\x1b[2mWatching every ${secs}s — Ctrl+C or /watch stop to cancel\x1b[0m`);
+      const tick = async () => {
+        const ts = new Date().toLocaleTimeString('en-GB', { hour12: false });
+        term.writeln(`\x1b[2m── ${ts} ──────────────────────────────────────────\x1b[0m`);
+        await runQuery(watchOql);
+        term.write(PROMPT);
+      };
+      await tick();
+      watchTimer = setInterval(tick, secs * 1000);
       return;
     }
     if (cmd.startsWith('/count ') || cmd === '/count') {
@@ -1046,6 +1087,7 @@ function startTerminal() {
 
   let currentAbort = null;  // AbortController for in-flight query
   let lastResult = null;    // { columns, rows } of last successful query for /export
+  let watchTimer = null;    // setInterval handle for /watch
 
   function cellColor(cell, colName) {
     if (cell === null || cell === undefined) return '\x1b[2m';
@@ -1205,6 +1247,7 @@ function startTerminal() {
     term.writeln('  \x1b[36m/classes [pat]\x1b[0m     — list class names (optionally filtered by pattern)');
     term.writeln('  \x1b[36m/describe <cls>\x1b[0m    — show fields of a class');
     term.writeln('  \x1b[36m/count <cls>\x1b[0m       — count live instances of a class');
+    term.writeln('  \x1b[36m/watch <s> <oql>\x1b[0m   — repeat query every N seconds; /watch stop to cancel');
     term.writeln('  \x1b[36m/last\x1b[0m              — re-display last query result');
     term.writeln('  \x1b[36m/bookmark [name]\x1b[0m   — save last query as a named bookmark');
     term.writeln('  \x1b[36m/forget <name>\x1b[0m     — delete a bookmark');
@@ -1434,6 +1477,12 @@ function startTerminal() {
       if (currentAbort) {
         currentAbort.abort();
         currentAbort = null;
+      } else if (watchTimer) {
+        clearInterval(watchTimer);
+        watchTimer = null;
+        term.writeln('^C');
+        term.writeln('\x1b[33mWatch stopped.\x1b[0m');
+        term.write(PROMPT);
       } else {
         term.writeln('^C');
         line = '';
