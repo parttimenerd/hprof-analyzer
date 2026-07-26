@@ -897,6 +897,26 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             stdout.flush()?;
                             continue;
                         }
+                        "filter" => {
+                            handle_filter(rest, &mut last_result, max_width, &mut stdout)?;
+                            stdout.flush()?;
+                            continue;
+                        }
+                        "sort" => {
+                            handle_sort(rest, &mut last_result, max_width, &mut stdout)?;
+                            stdout.flush()?;
+                            continue;
+                        }
+                        "stats" => {
+                            handle_stats(rest, &mut last_result, &mut stdout)?;
+                            stdout.flush()?;
+                            continue;
+                        }
+                        "unique" => {
+                            handle_unique(rest, &mut last_result, &mut stdout)?;
+                            stdout.flush()?;
+                            continue;
+                        }
                         _ => {}
                     }
                     if handle_meta(cmd, path_depth, &mut reachable_only, &names_for_meta, &mut stdout)?
@@ -1038,6 +1058,26 @@ fn run_repl_line(
                     rest, path, path_depth, *reachable_only, *max_width,
                     last_query, last_result, cache, out,
                 )?;
+                out.flush()?;
+                return Ok(false);
+            }
+            "filter" => {
+                handle_filter(rest, last_result, *max_width, out)?;
+                out.flush()?;
+                return Ok(false);
+            }
+            "sort" => {
+                handle_sort(rest, last_result, *max_width, out)?;
+                out.flush()?;
+                return Ok(false);
+            }
+            "stats" => {
+                handle_stats(rest, last_result, out)?;
+                out.flush()?;
+                return Ok(false);
+            }
+            "unique" => {
+                handle_unique(rest, last_result, out)?;
                 out.flush()?;
                 return Ok(false);
             }
@@ -1271,6 +1311,228 @@ fn handle_save(
     Ok(())
 }
 
+/// Filter rows of the last result by a substring pattern.
+/// `!filter <pattern>` — case-insensitive substring match across all columns.
+fn handle_filter(
+    pattern: &str,
+    last_result: &mut Option<QueryResult>,
+    max_width: usize,
+    out: &mut impl Write,
+) -> io::Result<()> {
+    if pattern.is_empty() {
+        writeln!(out, "usage: !filter <pattern>  — case-insensitive substring match")?;
+        return Ok(());
+    }
+    match last_result {
+        None => writeln!(out, "(no previous result — run a query first)")?,
+        Some(res) => {
+            let pat_lower = pattern.to_ascii_lowercase();
+            let filtered_rows: Vec<Vec<QueryValue>> = res
+                .rows
+                .iter()
+                .filter(|row| {
+                    row.iter().any(|v| fmt_value(v).to_ascii_lowercase().contains(&pat_lower))
+                })
+                .cloned()
+                .collect();
+            let total = res.rows.len();
+            let filtered_count = filtered_rows.len();
+            let filtered_res = QueryResult {
+                columns: res.columns.clone(),
+                rows: filtered_rows,
+                row_count: filtered_count as u64,
+                truncated: false,
+                note: None,
+                error: None,
+                name: res.name.clone(),
+                oql: res.oql.clone(),
+                viz: None,
+                elapsed_ms: None,
+            };
+            print_result(&filtered_res, std::time::Duration::ZERO, max_width, out)?;
+            writeln!(out, "-- {} of {} rows match {:?}", filtered_count, total, pattern)?;
+        }
+    }
+    Ok(())
+}
+
+/// Sort the last result by a column name (case-insensitive prefix match).
+/// `!sort <col> [desc]`
+fn handle_sort(
+    args: &str,
+    last_result: &mut Option<QueryResult>,
+    max_width: usize,
+    out: &mut impl Write,
+) -> io::Result<()> {
+    if args.is_empty() {
+        writeln!(out, "usage: !sort <col> [desc]")?;
+        return Ok(());
+    }
+    match last_result {
+        None => writeln!(out, "(no previous result — run a query first)")?,
+        Some(res) => {
+            let parts: Vec<&str> = args.splitn(2, char::is_whitespace).collect();
+            let col_arg = parts[0].to_ascii_lowercase();
+            let desc = parts.get(1).map(|s| s.trim().eq_ignore_ascii_case("desc")).unwrap_or(false);
+            let col_idx = res.columns.iter().position(|c| {
+                c.name.to_ascii_lowercase() == col_arg
+                    || c.name.to_ascii_lowercase().contains(&col_arg)
+            });
+            match col_idx {
+                None => {
+                    let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
+                    writeln!(out, "column {:?} not found — available: {}", args, names.join(", "))?;
+                }
+                Some(ci) => {
+                    let col_name = res.columns[ci].name.clone();
+                    let mut sorted = res.rows.clone();
+                    sorted.sort_by(|a, b| {
+                        let av = fmt_value(&a[ci]);
+                        let bv = fmt_value(&b[ci]);
+                        // Numeric sort when both parse as f64
+                        let cmp = match (av.replace(',', "").parse::<f64>(), bv.replace(',', "").parse::<f64>()) {
+                            (Ok(an), Ok(bn)) => an.partial_cmp(&bn).unwrap_or(std::cmp::Ordering::Equal),
+                            _ => av.cmp(&bv),
+                        };
+                        if desc { cmp.reverse() } else { cmp }
+                    });
+                    let sorted_res = QueryResult {
+                        columns: res.columns.clone(),
+                        rows: sorted.clone(),
+                        row_count: sorted.len() as u64,
+                        truncated: false,
+                        note: None,
+                        error: None,
+                        name: res.name.clone(),
+                        oql: res.oql.clone(),
+                        viz: None,
+                        elapsed_ms: None,
+                    };
+                    // Update last_result so chained !filter/!sort work on sorted data
+                    res.rows = sorted;
+                    res.row_count = sorted_res.row_count;
+                    print_result(&sorted_res, std::time::Duration::ZERO, max_width, out)?;
+                    writeln!(out, "-- sorted by {} {}", col_name, if desc { "desc" } else { "asc" })?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Show numeric statistics for a column of the last result.
+/// `!stats <col>` — min, max, mean, p50, p90, p99, sum
+fn handle_stats(
+    col_arg: &str,
+    last_result: &mut Option<QueryResult>,
+    out: &mut impl Write,
+) -> io::Result<()> {
+    if col_arg.is_empty() {
+        writeln!(out, "usage: !stats <col>  — numeric summary (min/max/mean/p50/p90/p99/sum)")?;
+        return Ok(());
+    }
+    match last_result {
+        None => writeln!(out, "(no previous result — run a query first)")?,
+        Some(res) => {
+            let col_lower = col_arg.to_ascii_lowercase();
+            let col_idx = res.columns.iter().position(|c| {
+                c.name.to_ascii_lowercase() == col_lower
+                    || c.name.to_ascii_lowercase().contains(&col_lower)
+            });
+            match col_idx {
+                None => {
+                    let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
+                    writeln!(out, "column {:?} not found — available: {}", col_arg, names.join(", "))?;
+                }
+                Some(ci) => {
+                    let col_name = &res.columns[ci].name;
+                    let mut vals: Vec<f64> = res.rows.iter().filter_map(|row| {
+                        match &row[ci] {
+                            QueryValue::Int(i) => Some(*i as f64),
+                            QueryValue::Float(f) => Some(*f),
+                            _ => None,
+                        }
+                    }).collect();
+                    if vals.is_empty() {
+                        writeln!(out, "no numeric values in column {:?}", col_name)?;
+                    } else {
+                        vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                        let n = vals.len();
+                        let sum: f64 = vals.iter().sum();
+                        let mean = sum / n as f64;
+                        let p50 = vals[n * 50 / 100];
+                        let p90 = vals[n * 90 / 100];
+                        let p99 = vals[n * 99 / 100];
+                        let fv = |v: f64| -> String {
+                            if v.fract() == 0.0 && v.abs() < 1e15 {
+                                fmt_int(v as i64)
+                            } else {
+                                format!("{v:.3}")
+                            }
+                        };
+                        writeln!(out, "{}  ({} values)", col_name, n)?;
+                        writeln!(out, "  min  {}", fv(vals[0]))?;
+                        writeln!(out, "  max  {}", fv(vals[n - 1]))?;
+                        writeln!(out, "  mean {}", fv(mean))?;
+                        writeln!(out, "  p50  {}", fv(p50))?;
+                        writeln!(out, "  p90  {}", fv(p90))?;
+                        writeln!(out, "  p99  {}", fv(p99))?;
+                        writeln!(out, "  sum  {}", fv(sum))?;
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Show distinct value counts for a column of the last result.
+/// `!unique <col>` — sorted by count desc
+fn handle_unique(
+    col_arg: &str,
+    last_result: &mut Option<QueryResult>,
+    out: &mut impl Write,
+) -> io::Result<()> {
+    if col_arg.is_empty() {
+        writeln!(out, "usage: !unique <col>  — distinct value counts")?;
+        return Ok(());
+    }
+    match last_result {
+        None => writeln!(out, "(no previous result — run a query first)")?,
+        Some(res) => {
+            let col_lower = col_arg.to_ascii_lowercase();
+            let col_idx = res.columns.iter().position(|c| {
+                c.name.to_ascii_lowercase() == col_lower
+                    || c.name.to_ascii_lowercase().contains(&col_lower)
+            });
+            match col_idx {
+                None => {
+                    let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
+                    writeln!(out, "column {:?} not found — available: {}", col_arg, names.join(", "))?;
+                }
+                Some(ci) => {
+                    use std::collections::HashMap;
+                    let col_name = &res.columns[ci].name;
+                    let mut counts: HashMap<String, usize> = HashMap::new();
+                    for row in &res.rows {
+                        *counts.entry(fmt_value(&row[ci])).or_insert(0) += 1;
+                    }
+                    let mut entries: Vec<(String, usize)> = counts.into_iter().collect();
+                    entries.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                    let val_w = entries.iter().map(|(v, _)| v.len()).max().unwrap_or(0).max(col_name.len());
+                    writeln!(out, "{:<val_w$}  count", col_name)?;
+                    writeln!(out, "{}", "─".repeat(val_w + 8))?;
+                    for (val, cnt) in &entries {
+                        writeln!(out, "{:<val_w$}  {}", val, fmt_int(*cnt as i64))?;
+                    }
+                    writeln!(out, "({} distinct)", entries.len())?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Handle a meta-command (the text after the leading `!`). Returns `Ok(true)`
 /// when the command asks the REPL to quit. `reachable_only` is the session's
 /// current GC-reachability mode; `!all`/`!reachable` mutate it. `names` is the
@@ -1323,6 +1585,10 @@ fn handle_meta(
                 out,
                 "  !save <file> [oql]    write CSV to <file> (of <oql>, else the last result)"
             )?;
+            writeln!(out, "  !filter <pattern>     show only rows matching pattern (case-insensitive)")?;
+            writeln!(out, "  !sort <col> [desc]    sort last result by column (prefix match)")?;
+            writeln!(out, "  !stats <col>          numeric summary: min/max/mean/p50/p90/p99/sum")?;
+            writeln!(out, "  !unique <col>         distinct value counts, sorted by frequency")?;
             writeln!(out, "  !quit                 exit")?;
             writeln!(out, "  <oql>                 run a query and print results")?;
             writeln!(
@@ -1604,6 +1870,9 @@ fn print_result(
         }
     }
     write_row(&headers, &widths, out)?;
+    // Separator line under headers
+    let sep: Vec<String> = widths.iter().map(|&w| "─".repeat(w)).collect();
+    write_row(&sep, &widths, out)?;
     for row in &body {
         write_row(row, &widths, out)?;
     }
@@ -1674,11 +1943,34 @@ fn fmt_value(v: &QueryValue) -> String {
     match v {
         QueryValue::Null => "null".into(),
         QueryValue::Bool(b) => b.to_string(),
-        QueryValue::Int(i) => i.to_string(),
-        QueryValue::Float(f) => f.to_string(),
+        QueryValue::Int(i) => fmt_int(*i),
+        QueryValue::Float(f) => {
+            // 6 significant figures, trim trailing zeros
+            let s = format!("{:.6}", f);
+            let s = s.trim_end_matches('0');
+            let s = s.trim_end_matches('.');
+            s.to_string()
+        }
         QueryValue::Str(s) => s.clone(),
         QueryValue::ObjRef { index, class, .. } => format!("{class}@{index}"),
     }
+}
+
+/// Format an integer with thousands separators (e.g. 1234567 → "1,234,567").
+fn fmt_int(i: i64) -> String {
+    if i < 0 {
+        return format!("-{}", fmt_int(-i));
+    }
+    let s = i.to_string();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (pos, ch) in s.chars().enumerate() {
+        let remaining = s.len() - pos;
+        if pos > 0 && remaining % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
 }
 
 /// Serialize a `QueryResult` as RFC-4180-ish CSV: header row from column names,
@@ -2113,12 +2405,12 @@ mod tests {
             elapsed_ms: None,
         };
         let out = print_to_string(&res);
-        // Header cell "id" padded to width 4 -> "id  " before the separator.
-        assert!(out.contains("id   | name"), "header not aligned:\n{out}");
-        // First data row: "1" padded to width 4 -> "1   ".
-        assert!(out.contains("1    | alice"), "row1 not aligned:\n{out}");
-        // Widest row: "1000" occupies the full width, no extra pad.
-        assert!(out.contains("1000 | bob"), "row2 not aligned:\n{out}");
+        // "1,000" is 5 chars wide (widest in col 0); "id" padded to 5.
+        assert!(out.contains("id    | name"), "header not aligned:\n{out}");
+        // First data row: "1" padded to width 5.
+        assert!(out.contains("1     | alice"), "row1 not aligned:\n{out}");
+        // Widest row: "1,000" occupies the full width, no extra pad.
+        assert!(out.contains("1,000 | bob"), "row2 not aligned:\n{out}");
     }
 
     #[test]
