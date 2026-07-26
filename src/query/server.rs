@@ -111,14 +111,14 @@ pub fn run_query_json(
                 None => {
                     // Cache was rebuilt with wrong reachable_only; fall through to full pipeline.
                     let (flat, union_groups) = crate::query::run::expand_union_queries(&[(q, plan)]);
-                    let opts = crate::AnalyzeOptions { reachable_only, query_path_depth: path_depth, ..crate::AnalyzeOptions::default() };
-                    crate::run_oql_escalated(path, &flat, &union_groups, reachable_only, &opts)
+                    let opts = crate::opts::AnalyzeOptions { reachable_only, query_path_depth: path_depth, ..crate::opts::AnalyzeOptions::default() };
+                    crate::run_oql::run_oql_escalated(path, &flat, &union_groups, reachable_only, &opts)
                 }
             }
         } else {
             let (flat, union_groups) = crate::query::run::expand_union_queries(&[(q, plan)]);
-            let opts = crate::AnalyzeOptions { reachable_only, query_path_depth: path_depth, ..crate::AnalyzeOptions::default() };
-            crate::run_oql_escalated(path, &flat, &union_groups, reachable_only, &opts)
+            let opts = crate::opts::AnalyzeOptions { reachable_only, query_path_depth: path_depth, ..crate::opts::AnalyzeOptions::default() };
+            crate::run_oql::run_oql_escalated(path, &flat, &union_groups, reachable_only, &opts)
         }
     } else {
         let eligible = crate::query::repl::cache_eligible(&q, &plan);

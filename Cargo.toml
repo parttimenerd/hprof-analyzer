@@ -12,6 +12,15 @@ keywords = ["hprof", "heap-dump", "java", "memory", "oom"]
 categories = ["command-line-utilities", "development-tools::profiling"]
 exclude = ["tests/fixtures/*.hprof", ".git-worktrees/*", "docs/*", "*.png"]
 
+[[bin]]
+name = "hprof-analyzer"
+path = "src/main.rs"
+
+[lib]
+name = "hprof_analyzer"
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
 [features]
 # Opt-in Eclipse MAT differential-oracle test harness (tests/mat_oracle.rs).
 # No extra deps: the harness shells out to scripts/mat-oracle.sh. Compiled only

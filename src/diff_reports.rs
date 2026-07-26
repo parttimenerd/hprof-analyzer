@@ -15,7 +15,7 @@ use std::io::{self, Read};
 
 use crate::md::{Align, Table};
 use crate::report::{self, Report};
-use crate::OutputFormat;
+use crate::opts::OutputFormat;
 
 /// Cap on the number of rows shown in the growth-leaders and new-classes
 /// lists. Suspects are uncapped (there are only ever a handful).
