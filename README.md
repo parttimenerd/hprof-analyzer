@@ -392,6 +392,29 @@ hprof-analyzer heap.hprof report.html \
 The full OQL language reference — grammar, attributes, aggregates, visualization
 directives, worked examples — is in [docs/OQL.md](docs/OQL.md).
 
+#### Compatibility with Eclipse MAT OQL
+
+`hprof-analyzer`'s OQL is modelled on Eclipse MAT's dialect and is largely
+compatible. Key differences:
+
+**Extensions (not in MAT):** `MEDIAN`/`PERCENTILE` aggregates, `GROUP BY` /
+`HAVING`, `path()` reachability, `-- @viz` directives, arithmetic in `SELECT`
+and `WHERE`, system-properties snapshot (`@systemProperties`), interactive REPL
+with tab-completion, named queries library (`/run <name>`), report embedding
+(`--query` / `--query-file`).
+
+**Behavioural differences:** unreachable objects are *included* (MAT discards
+them); `s.count`/`s.offset` are absent (modern JDK layout — use `s.value`,
+`s.coder`); integer division by zero returns `NULL` instead of throwing;
+`toString()` on non-String returns `NULL` (no live JVM reflection); `get(n)`
+array/collection access and `COUNT(*) FROM (subquery)` are rejected.
+
+**Not yet supported:** `FROM OBJECTS <decimal-id>` (hex works), array indexing
+(`s[0]`), `${snapshot}.getClasses()`. Some object-ref field navigations (where
+the declared type is `Object`) silently return `NULL` — see [docs/OQL.md §
+Eclipse MAT OQL compatibility](docs/OQL.md#eclipse-mat-oql-compatibility) for
+details and workarounds.
+
 ### HTTP server (`server` subcommand)
 
 `server` starts a lightweight HTTP API on `127.0.0.1` (loopback only) that

@@ -657,14 +657,25 @@ These constructs produce results matching MAT (modulo the reachability note belo
 
 | Construct | Example | Notes |
 |-----------|---------|-------|
-| `FROM OBJECTS <decimal-id>` | `FROM OBJECTS 123456` | Hex address (`FROM OBJECTS 0x7f3a`) works; decimal object-id lookup is a small routing fix |
-| `s[0]` / `s[1:3]` array element access | `SELECT s[0] FROM int[]` | Parsed and planned; blocked on scan-time element capture |
-| `${snapshot}.getClasses()` | `FROM ${snapshot}.getClasses()` | Iterating class objects (not instances) — needs new executor path |
+| `FROM OBJECTS <decimal-id>` | `FROM OBJECTS 123456` | Hex address (`FROM OBJECTS 0x7f3a`) works; decimal object-id lookup requires a new lexer token to distinguish from hex at parse time |
+| `s[0]` / `s[1:3]` array element access | `SELECT s[0] FROM int[]` | Parsed and planned; execution returns `NULL`; blocked on scan-time element capture (memory-intensive design decision) |
+| `${snapshot}.getClasses()` | `FROM ${snapshot}.getClasses()` | Iterating class objects (not heap instances) — needs a new executor path |
 
-### Query-file parse error format
+### Silent NULLs (not an error, but worth knowing)
 
-When `--query-file` contains a syntax error, the error includes the filename
-and 1-based line number:
+Some field navigations silently return `NULL` rather than raising an error, because the necessary type information is not available at plan time:
+
+| Case | Example | Workaround |
+|------|---------|------------|
+| **Object-ref field navigation** | `x.parent` where `parent` is typed `Object` | Field names are known but types are not; the engine cannot auto-rewrite to a ref-walk at plan time. Use `@objectAddress` and a separate query to look up the referent. |
+| **Two-hop collection introspection** | `x.size` on `java.util.HashSet` | `HashSet` delegates to a backing `HashMap`; a single-hop field read returns `NULL`. Use `FROM INSTANCEOF java.util.AbstractCollection` to reach classes that store size directly. |
+
+Both limitations require extending the field-type schema (`FieldSchema` currently provides names only, not types). They are tracked for a future pass.
+
+### `--query-file` parse error format
+
+When `--query-file` contains a syntax error, the error should include the
+filename and 1-based line number so you can jump straight to the offending line:
 
 ```
 error: --query-file 'queries.oql': parse error on line 3
@@ -672,3 +683,8 @@ error: --query-file 'queries.oql': parse error on line 3
     | ^^^^^ expected SELECT
   hint: did you mean SELECT?
 ```
+
+> **Note:** Line numbers in `--query-file` errors are not yet wired up. The
+> current output shows the parse error text but without the filename/line
+> prefix. This will be fixed in a future release.
+
