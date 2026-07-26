@@ -343,6 +343,12 @@ function startTerminal() {
   let cursorPos = 0;  // index within line where the cursor sits
   let histIdx = -1;
   const history = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
+  let killRing = '';  // text killed by Ctrl+K/W/U
+
+  // Ctrl+R incremental search state
+  let isearching = false;
+  let isearchQuery = '';
+  let isearchMatch = -1;  // index into history of current match
 
   // Redraw line and reposition cursor; does NOT change histIdx
   function redrawLine() {
@@ -351,6 +357,51 @@ function startTerminal() {
       // Move cursor left from end to cursorPos
       term.write(`\x1b[${line.length - cursorPos}D`);
     }
+  }
+
+  function isearchPrompt() {
+    const q = isearchQuery;
+    const match = isearchMatch >= 0 ? history[isearchMatch] : '';
+    const hi = match.toLowerCase().indexOf(q.toLowerCase());
+    let display = match;
+    if (hi >= 0 && q) {
+      // Highlight matched portion in bold
+      display = match.slice(0, hi) + '\x1b[1m' + match.slice(hi, hi + q.length) + '\x1b[0m' + match.slice(hi + q.length);
+    }
+    const label = `\x1b[35m(reverse-i-search)\x1b[0m \`${q}\`: `;
+    const maxContent = term.cols - (label.replace(/\x1b\[[^m]*m/g, '').length) - 1;
+    const truncDisplay = match.length > maxContent
+      ? display.slice(0, maxContent - 1) + '…' : display;
+    term.write('\r\x1b[K' + label + truncDisplay);
+  }
+
+  function exitIsearch(acceptMatch) {
+    isearching = false;
+    if (acceptMatch && isearchMatch >= 0) {
+      line = history[isearchMatch];
+    } else if (!acceptMatch) {
+      // Keep line unchanged
+    }
+    cursorPos = line.length;
+    isearchQuery = '';
+    isearchMatch = -1;
+    redrawLine();
+  }
+
+  function isearchStep() {
+    if (!isearchQuery) { isearchMatch = -1; isearchPrompt(); return; }
+    const q = isearchQuery.toLowerCase();
+    const start = isearchMatch >= 0 ? isearchMatch + 1 : 0;
+    let found = -1;
+    for (let i = start; i < history.length; i++) {
+      if (history[i].toLowerCase().includes(q)) { found = i; break; }
+    }
+    if (found < 0 && isearchMatch < 0) {
+      // No match at all — try from the beginning
+      found = history.findIndex(h => h.toLowerCase().includes(q));
+    }
+    isearchMatch = found;
+    isearchPrompt();
   }
 
   function setLine(newLine) {
@@ -463,8 +514,32 @@ function startTerminal() {
       term.write(PROMPT);
       return;
     }
+    if (cmd === '/export') {
+      if (!lastResult) {
+        term.writeln('\x1b[33mNo result to export — run a query first.\x1b[0m');
+      } else {
+        const tsv = [lastResult.columns.join('\t')]
+          .concat(lastResult.rows.map(row =>
+            row.map((cell, i) => fmtCell(cell, lastResult.columns[i])).join('\t')
+          ))
+          .join('\n');
+        try {
+          await navigator.clipboard.writeText(tsv);
+          term.writeln(`\x1b[32m✓ Copied ${lastResult.rows.length} rows as TSV to clipboard\x1b[0m`);
+        } catch (_) {
+          // Clipboard API unavailable — offer a download instead
+          const blob = new Blob([tsv], { type: 'text/tab-separated-values' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url; a.download = 'query-result.tsv'; a.click();
+          URL.revokeObjectURL(url);
+          term.writeln(`\x1b[32m✓ Downloaded result as query-result.tsv (${lastResult.rows.length} rows)\x1b[0m`);
+        }
+      }
+      term.write(PROMPT);
+      return;
+    }
     if (cmd === '/history') {
-      const recent = history.slice(0, 20);
       if (recent.length === 0) {
         term.writeln('\x1b[2m(no history yet)\x1b[0m');
       } else {
@@ -520,6 +595,7 @@ function startTerminal() {
   }
 
   let currentAbort = null;  // AbortController for in-flight query
+  let lastResult = null;    // { columns, rows } of last successful query for /export
 
   async function runQuery(oql) {
     const t0 = performance.now();
@@ -594,6 +670,7 @@ function startTerminal() {
           if (rows.length > 200) {
             term.writeln(`\x1b[2m… ${rows.length - 200} more rows (truncated display)\x1b[0m`);
           }
+          lastResult = { columns: colNames, rows };
           const note = r.note ? `  \x1b[33m[${r.note}]\x1b[0m` : '';
           const trunc = r.truncated ? '  \x1b[33m[truncated]\x1b[0m' : '';
           term.writeln(`\x1b[2m${r.row_count} row${r.row_count !== 1 ? 's' : ''}, ${elapsed}s${trunc}${note}\x1b[0m`);
@@ -623,18 +700,21 @@ function startTerminal() {
     term.writeln('  \x1b[36m/status\x1b[0m            — show analysis status');
     term.writeln('  \x1b[36m/analyze\x1b[0m           — trigger full heap analysis (enables @retainedHeapSize)');
     term.writeln('  \x1b[36m/history\x1b[0m           — show recent query history');
+    term.writeln('  \x1b[36m/export\x1b[0m            — copy last result to clipboard as TSV');
     term.writeln('  \x1b[36m/run <name>\x1b[0m        — run a named query');
     term.writeln('');
     term.writeln('\x1b[1mKeyboard shortcuts:\x1b[0m');
     term.writeln('  \x1b[36mTab\x1b[0m                — OQL completion');
     term.writeln('  \x1b[36mUp/Down\x1b[0m            — history');
+    term.writeln('  \x1b[36mCtrl+R\x1b[0m             — incremental history search');
     term.writeln('  \x1b[36mLeft/Right\x1b[0m         — move cursor (Ctrl/Alt: by word)');
     term.writeln('  \x1b[36mHome / Ctrl+A\x1b[0m      — beginning of line');
     term.writeln('  \x1b[36mEnd  / Ctrl+E\x1b[0m      — end of line');
     term.writeln('  \x1b[36mCtrl+K\x1b[0m             — kill to end of line');
     term.writeln('  \x1b[36mCtrl+W\x1b[0m             — kill previous word');
     term.writeln('  \x1b[36mCtrl+U\x1b[0m             — kill to beginning of line');
-    term.writeln('  \x1b[36mCtrl+C\x1b[0m             — cancel current line');
+    term.writeln('  \x1b[36mCtrl+Y\x1b[0m             — yank (paste) killed text');
+    term.writeln('  \x1b[36mCtrl+C\x1b[0m             — cancel current line / abort query');
     term.writeln('  \x1b[36mCtrl+L\x1b[0m             — clear screen');
     term.writeln('');
     term.writeln('\x1b[1mNamed queries\x1b[0m (/run <name>):');
@@ -667,6 +747,44 @@ function startTerminal() {
   // ── Key handler ──────────────────────────────────────────────────────────────
   term.onKey(({ key, domEvent: ev }) => {
     const code = ev.key;
+
+    // Ctrl+R incremental reverse search — intercept most keys while active
+    if (isearching) {
+      if (code === 'Enter') {
+        exitIsearch(true);
+        term.writeln('');
+        const text = line;
+        line = '';
+        cursorPos = 0;
+        handleEnter(text);
+        return;
+      }
+      if (code === 'Escape' || (ev.ctrlKey && (code === 'g' || code === 'c'))) {
+        exitIsearch(false);
+        return;
+      }
+      if (code === 'Backspace') {
+        isearchQuery = isearchQuery.slice(0, -1);
+        isearchMatch = -1;
+        isearchStep();
+        return;
+      }
+      if (ev.ctrlKey && code === 'r') {
+        // Deeper search — handled below
+        isearchStep();
+        return;
+      }
+      // Any other control key: accept match and fall through
+      if (ev.ctrlKey || ev.metaKey || ev.altKey || code.length > 1) {
+        exitIsearch(true);
+        // fall through to normal handling below
+      } else {
+        isearchQuery += key;
+        isearchMatch = -1;
+        isearchStep();
+        return;
+      }
+    }
 
     if (code === 'Enter') {
       const text = line;
@@ -758,6 +876,14 @@ function startTerminal() {
       return;
     }
 
+    if (ev.ctrlKey && code === 'r') {
+      isearching = true;
+      isearchQuery = '';
+      isearchMatch = -1;
+      isearchPrompt();
+      return;
+    }
+
     if (ev.ctrlKey && code === 'c') {
       if (currentAbort) {
         currentAbort.abort();
@@ -780,6 +906,7 @@ function startTerminal() {
 
     if (ev.ctrlKey && code === 'u') {
       if (line.length > 0) {
+        killRing = line.slice(0, cursorPos);
         line = line.slice(cursorPos);
         cursorPos = 0;
         redrawLine();
@@ -789,6 +916,7 @@ function startTerminal() {
 
     if (ev.ctrlKey && code === 'k') {
       if (cursorPos < line.length) {
+        killRing = line.slice(cursorPos);
         line = line.slice(0, cursorPos);
         redrawLine();
       }
@@ -801,8 +929,19 @@ function startTerminal() {
       while (p > 0 && line[p - 1] === ' ') p--;
       while (p > 0 && line[p - 1] !== ' ') p--;
       if (p !== cursorPos) {
+        killRing = line.slice(p, cursorPos);
         line = line.slice(0, p) + line.slice(cursorPos);
         cursorPos = p;
+        redrawLine();
+      }
+      return;
+    }
+
+    if (ev.ctrlKey && code === 'y') {
+      // Yank (paste) kill ring
+      if (killRing) {
+        line = line.slice(0, cursorPos) + killRing + line.slice(cursorPos);
+        cursorPos += killRing.length;
         redrawLine();
       }
       return;
