@@ -1949,7 +1949,7 @@ function startTerminal() {
           } else {
             const total = lastResult.rows.length;
             const nonNull = lastResult.rows.filter(row => row[ci] !== null && row[ci] !== undefined && !(typeof row[ci] === 'object' && row[ci]?.kind === 'null')).length;
-            term.writeln(`\x1b[32m${nonNull.toLocaleString()}\x1b[0m non-null / ${total.toLocaleString()} total in "${lastResult.columns[ci]}"`);
+            term.writeln(`\x1b[32m${nonNull.toLocaleString()}\x1b[0m non-null / \x1b[32m${total.toLocaleString()}\x1b[0m total in "${lastResult.columns[ci]}"`);
           }
         }
       }
@@ -2009,7 +2009,7 @@ function startTerminal() {
       const keyW = Math.max(...lastResult.columns.map(c => c.length)) + 2;
       const idxW = String(lastResult.columns.length).length;
       const total = lastResult.rows.length;
-      const navHint = total > 1 ? `\x1b[2m  (/row next or /row prev to navigate)\x1b[0m` : '';
+      const navHint = total > 1 ? `\x1b[2m  (use /row next / /row prev to navigate)\x1b[0m` : '';
       term.writeln(`\x1b[2m── row ${n} of ${total} ──\x1b[0m${navHint}`);
       lastResult.columns.forEach((col, i) => {
         const key = col.padEnd(keyW);
@@ -2695,7 +2695,7 @@ function startTerminal() {
           return true;
         });
         const removed = lastResult.rows.length - kept.length;
-        const note = `${kept.length} unique rows (${removed} duplicate${removed !== 1 ? 's' : ''} removed)`;
+        const note = `${kept.length} unique row${kept.length !== 1 ? 's' : ''} (${removed} duplicate${removed !== 1 ? 's' : ''} removed)`;
         const newResult = { columns: lastResult.columns, rows: kept, row_count: kept.length, note };
         renderResult(newResult);
         prevResult = lastResult;
