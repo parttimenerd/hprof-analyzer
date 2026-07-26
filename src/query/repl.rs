@@ -1038,12 +1038,14 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                         }
                         "count" => {
                             if rest.is_empty() {
+                                let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+                                let (cg, cr) = if color { ("\x1b[32m", "\x1b[0m") } else { ("", "") };
                                 match &last_result {
                                     None => writeln!(stdout, "(no result — run a query first)")?,
                                     Some(res) => {
                                         let rows = res.rows.len();
                                         let cols = res.columns.len();
-                                        writeln!(stdout, "{} row{} × {} col{}", rows, if rows == 1 { "" } else { "s" }, cols, if cols == 1 { "" } else { "s" })?;
+                                        writeln!(stdout, "{cg}{}{cr} row{} × {cg}{}{cr} col{}", rows, if rows == 1 { "" } else { "s" }, cols, if cols == 1 { "" } else { "s" })?;
                                     }
                                 }
                             } else {
@@ -1583,12 +1585,14 @@ fn run_repl_line(
             }
             "count" => {
                 if rest.is_empty() {
+                    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+                    let (cg, cr) = if color { ("\x1b[32m", "\x1b[0m") } else { ("", "") };
                     match last_result.as_ref() {
                         None => writeln!(out, "(no result — run a query first)")?,
                         Some(res) => {
                             let rows = res.rows.len();
                             let cols = res.columns.len();
-                            writeln!(out, "{} row{} × {} col{}", rows, if rows == 1 { "" } else { "s" }, cols, if cols == 1 { "" } else { "s" })?;
+                            writeln!(out, "{cg}{}{cr} row{} × {cg}{}{cr} col{}", rows, if rows == 1 { "" } else { "s" }, cols, if cols == 1 { "" } else { "s" })?;
                         }
                     }
                 } else {
@@ -2213,11 +2217,14 @@ fn handle_set(rest: &str, out: &mut impl Write) -> io::Result<()> {
 /// bare `COUNT(*)` select is passed through unchanged (wrapping it would be a
 /// redundant `COUNT(*)` over one row).
 fn wrap_count(body: &str) -> String {
-    let lower = body.to_ascii_lowercase();
-    // Cheap heuristic: if it already selects COUNT(*) as its first projection,
-    // don't double-wrap. Anything else gets wrapped as a subquery.
-    if lower.trim_start().starts_with("select") && lower.contains("count(*)") {
+    let lower = body.trim().to_ascii_lowercase();
+    // Already a COUNT(*) query — pass through.
+    if lower.starts_with("select") && lower.contains("count(*)") {
         return body.to_string();
+    }
+    // Looks like a class name (no SELECT/FROM keywords) — use INSTANCEOF shorthand.
+    if !lower.starts_with("select") && !lower.starts_with("from") {
+        return format!("SELECT COUNT(*) FROM INSTANCEOF {}", body.trim());
     }
     format!("SELECT COUNT(*) FROM ( {} )", body.trim())
 }
@@ -4555,6 +4562,18 @@ mod tests {
     fn wrap_count_passes_through_existing_count() {
         let q = "SELECT COUNT(*) FROM java.lang.String";
         assert_eq!(wrap_count(q), q, "already-COUNT query must not double-wrap");
+    }
+
+    #[test]
+    fn wrap_count_class_name_uses_instanceof() {
+        assert_eq!(
+            wrap_count("java.lang.String"),
+            "SELECT COUNT(*) FROM INSTANCEOF java.lang.String"
+        );
+        assert_eq!(
+            wrap_count("com.example.Foo"),
+            "SELECT COUNT(*) FROM INSTANCEOF com.example.Foo"
+        );
     }
 
     // --- reedline completer + editor construction ---
