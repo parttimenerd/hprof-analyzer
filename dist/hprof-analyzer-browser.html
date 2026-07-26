@@ -949,14 +949,21 @@ function isNumericKind(cell) {
   return cell.kind === 'int' || cell.kind === 'float';
 }
 
-function fmtCell(cell) {
+function fmtCell(cell, colName) {
   if (cell === null || cell === undefined) return 'null';
   if (typeof cell !== 'object') return String(cell);
   const kind = cell.kind;
   const v = cell.v;
   if (kind === 'null') return 'null';
   if (kind === 'bool') return v ? 'true' : 'false';
-  if (kind === 'int') return typeof v === 'number' ? v.toLocaleString('en-US') : String(v);
+  if (kind === 'int') {
+    if (typeof v !== 'number') return String(v);
+    // Address-like columns shown as hex
+    if (colName && /address|addr|ptr|id$/i.test(colName)) {
+      return '0x' + v.toString(16).toUpperCase().padStart(8, '0');
+    }
+    return v.toLocaleString('en-US');
+  }
   if (kind === 'float') return typeof v === 'number' ? v.toPrecision(6) : String(v);
   if (kind === 'str') return String(v);
   if (kind === 'obj_ref') {
@@ -1361,7 +1368,7 @@ function startTerminal() {
           });
           // Per-column width: max of header and content, capped so total fits terminal
           const colW = colNames.map((n, i) => {
-            const contentMax = rows.slice(0, 200).reduce((m, row) => Math.max(m, fmtCell(row[i]).length), 0);
+            const contentMax = rows.slice(0, 200).reduce((m, row) => Math.max(m, fmtCell(row[i], n).length), 0);
             return Math.max(n.length, contentMax, 4);
           });
           // Scale down proportionally if total exceeds terminal width
@@ -1377,7 +1384,7 @@ function startTerminal() {
 
           const displayRows = rows.slice(0, 200);
           displayRows.forEach(row => {
-            const cells = row.map((cell, i) => padTo(fmtCell(cell), adjW[i], isNumeric[i]));
+            const cells = row.map((cell, i) => padTo(fmtCell(cell, colNames[i]), adjW[i], isNumeric[i]));
             term.writeln(cells.join('  '));
           });
           if (rows.length > 200) {
@@ -1437,6 +1444,20 @@ function startTerminal() {
     });
     term.writeln('');
   }
+
+  // ── Paste handler — xterm fires onData for pasted text ──────────────────────
+  term.onData(data => {
+    // Filter to printable ASCII range (avoid control sequences from paste)
+    const printable = data.replace(/[^\x20-\x7E -￿]/g, '');
+    if (!printable) return;
+    if (printable.length > 1 || printable !== data) {
+      // Multi-char or filtered: it's a paste
+      line = line.slice(0, cursorPos) + printable + line.slice(cursorPos);
+      cursorPos += printable.length;
+      redrawLine();
+    }
+    // Single printable chars are handled by onKey
+  });
 
   // ── Key handler ──────────────────────────────────────────────────────────────
   term.onKey(({ key, domEvent: ev }) => {
