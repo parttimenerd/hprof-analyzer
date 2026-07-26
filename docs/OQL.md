@@ -593,3 +593,91 @@ $ curl -s http://127.0.0.1:7070/stream \
     -d 'SELECT @objectId, @usedHeapSize FROM java.lang.String' \
     | wc -l
 ```
+
+---
+
+## Eclipse MAT OQL compatibility
+
+`hprof-analyzer`'s OQL is modelled on Eclipse MAT's OQL dialect. This section
+documents what works identically, what works with known differences, and what is
+not yet supported.
+
+### Fully compatible
+
+These constructs produce identical results to MAT (modulo the reachability caveat
+below):
+
+| Construct | Example |
+|-----------|---------|
+| `SELECT *` / bare alias | `SELECT * FROM java.lang.String` |
+| `FROM <class>` exact match | `FROM java.lang.Thread` |
+| `FROM OBJECTS <class>` (`OBJECTS` is a no-op) | `FROM OBJECTS java.lang.String` |
+| `FROM INSTANCEOF <class>` including subclasses | `FROM INSTANCEOF java.util.Map` |
+| `FROM "<regex>"` double-quoted regex | `FROM "java\.util\..*"` |
+| `FROM (subquery)` semi-join | `FROM (SELECT * FROM java.lang.Thread) t` |
+| `WHERE <field> <op> <value>` | `WHERE s.count > 0` |
+| `WHERE x INSTANCEOF C` | `WHERE t INSTANCEOF java.lang.Thread` |
+| `WHERE … LIKE "<regex>"` / `NOT LIKE` | `WHERE toString(s) LIKE ".*error.*"` |
+| `ORDER BY <expr> [ASC\|DESC]` | `ORDER BY @usedHeapSize DESC` |
+| `LIMIT n` | `LIMIT 20` |
+| `UNION SELECT …` | `SELECT … UNION SELECT …` |
+| Top-level `UNION … LIMIT n` | applies after branch concatenation |
+| `SELECT DISTINCT` | row-level dedup on full tuple |
+| `SELECT OBJECTS <expr>` | no-op projection marker |
+| `SELECT … AS RETAINED SET` | sets retained-set flag |
+| `<expr> AS <name>` column alias | `@usedHeapSize AS bytes` |
+| `COUNT(*)`, `SUM`, `MIN`, `MAX`, `AVG` | aggregate functions |
+| `MEDIAN(e)`, `PERCENTILE(e, n)` | hprof-analyzer extension |
+| `classof(x)` | returns class name string |
+| `toString(x)` | decodes `java.lang.String` instances |
+| `dominators(x)`, `dominatorof(x)` | full-analyze path only |
+| `@objectAddress`, `@objectId`, `@usedHeapSize` | object attributes |
+| `@retainedHeapSize`, `@inbounds`, `@outbounds` | full-analyze path only |
+| `@displayName`, `@length`, `@GCRoots`, `@GCRootInfo` | |
+| Field paths: `s.fieldName`, `s.a.b` | |
+| MAT-API name aliases: `getObjectAddress()`, `getUsedHeapSize()`, etc. | method → attr rewrite |
+| `getKey()`, `getValue()` | ref-hop to backing field |
+| Boxed-primitive: `intValue()`, `longValue()`, `size()`, etc. | decodes backing `value` field |
+| Arithmetic: `+`, `-`, `*`, `/`, unary `+`/`-`, parens | `@usedHeapSize * 2` |
+
+### Intentional differences from MAT
+
+| Area | MAT behaviour | hprof-analyzer behaviour |
+|------|--------------|--------------------------|
+| **Reachability** | Unreachable objects discarded at index time | Raw heap scan includes unreachable objects; MAT ⊆ ours for class queries |
+| **Integer `/0`** | Throws `ArithmeticException` | Returns `NULL` (safe row-level sentinel — analyzer must not crash on one bad row) |
+| **Float `/0.0`** | IEEE 754 `±inf`/`NaN` | Same — IEEE 754 (Java parity) |
+| **Integer overflow** | Java `long` wrapping | Same — `wrapping_*` (Java parity) |
+| **`equals()`** | Java `.equals()` (value equality for strings etc.) | Identity / `QueryValue` value-equality (`qv_value_eq`) — not Java `.equals()` |
+| **`contains()`** | Full Java String.contains | String-only; receiver must be a live `java.lang.String` |
+| **`get(n)` indexed access** | Works on arrays/collections | Rejected with actionable error pointing to backing field |
+| **`toString()` on non-String** | Calls object's `toString()` via JVM reflection | String-only; non-String input returns `NULL` |
+| **`SELECT COUNT(*) FROM (subquery)`** | Returns count | Rejected at plan time with actionable error (aggregate the inner query instead) |
+| **`s.count` / `s.offset` on String** | Works on pre-JDK9 layout | "Unknown field" — modern JDK layout has `value`/`coder`/`hash` |
+
+### Not yet supported
+
+These MAT constructs are recognised by MAT's OQL but are not implemented:
+
+| Construct | MAT example | Status |
+|-----------|-------------|--------|
+| `FROM OBJECTS <address>` | `FROM OBJECTS 0x7f3a` | Single object by id/address — not started |
+| `FROM OBJECTS <decimal-id>` | `FROM OBJECTS 123456` | Same |
+| `${snapshot}.getClasses()` | `FROM ${snapshot}.getClasses()` | Reflection-style FROM — out of scope |
+| `s[1:3]` array slicing | `SELECT s[0] FROM int[]` | Array element / slice access — not started |
+| `get(n)` indexed element | `list.get(0)` | Deferred — no flat-Vec backing |
+| Numeric literal suffixes | `100L`, `1.5F`, `2.0D` | Parsed as plain int/float; suffix ignored or error |
+| Arbitrary `toString()` | `toString(myObj)` on non-String | Non-String returns NULL |
+| `@referenceArray`, `@valueArray` | `s.@referenceArray` | Parsed, currently returns NULL |
+
+### Query-file parse error format
+
+When `--query-file` contains a syntax error, the error includes the filename
+and 1-based line number:
+
+```
+error: --query-file 'queries.oql': parse error on line 3
+  3 | SELEC COUNT(*) FROM java.lang.String
+    | ^^^^^ expected SELECT
+  hint: did you mean SELECT?
+```
