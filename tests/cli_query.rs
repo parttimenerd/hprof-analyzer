@@ -4,6 +4,7 @@
 //! fixture is absent the fixture-dependent tests no-op, matching the pattern in
 //! `cli_unified.rs`.
 
+use std::io::Write;
 use std::process::Command;
 
 const BIN: &str = env!("CARGO_BIN_EXE_hprof-analyzer");
@@ -92,7 +93,6 @@ fn query_subcommand_without_any_query_fails_with_hint() {
 /// than silently dropping it). Empty stdin makes the REPL exit immediately.
 #[test]
 fn repl_with_inline_query_warns_it_is_ignored() {
-    use std::io::Write;
     use std::process::Stdio;
     let Some(hprof) = philosophers() else { return };
     let mut child = Command::new(BIN)
@@ -5332,4 +5332,27 @@ fn array_slice_oob_end_clamps_gracefully() {
     );
     assert!(out.contains("slc"), "expected 'slc' column header, got: {out}");
     assert!(!out.to_lowercase().contains("error"), "unexpected error in output, got: {out}");
+}
+
+#[test]
+fn query_file_parse_error_includes_line_number() {
+    let Some(hprof) = philosophers() else { return };
+    let mut f = tempfile::NamedTempFile::new().unwrap();
+    writeln!(f, "SELECT COUNT(*) FROM java.lang.String").unwrap();
+    writeln!(f, "SELEC * FROM java.lang.Object").unwrap(); // typo on line 2
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query-file", f.path().to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "expected non-zero exit for parse error, got success"
+    );
+    assert!(
+        stderr.contains("line 2") || stderr.contains(":2"),
+        "expected line number in error output:\n{stderr}"
+    );
 }

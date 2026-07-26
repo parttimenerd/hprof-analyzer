@@ -67,6 +67,7 @@ libc = "0.2"
 [dev-dependencies]
 jsonschema = "0.47.0"
 proptest = "1"
+tempfile = "3"
 
 [build-dependencies]
 flate2 = "1"

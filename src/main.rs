@@ -1216,7 +1216,9 @@ fn collect_query_texts(opts: &AnalyzeOptions) -> io::Result<Vec<CollectedQuery>>
         })?;
         // A pending `-- @viz` directive line waits for the next query line.
         let mut pending_directive: Option<String> = None;
+        let mut line_num = 0usize;
         for line in body.lines() {
+            line_num += 1;
             let t = line.trim();
             if t.is_empty() || t.starts_with('#') {
                 continue;
@@ -1231,6 +1233,13 @@ fn collect_query_texts(opts: &AnalyzeOptions) -> io::Result<Vec<CollectedQuery>>
                 None => t.to_string(),
             };
             let (text, viz, warning) = query::viz::split_directive(&full);
+            // Validate parse eagerly so we can attach the line number.
+            if let Err(e) = query::parse::parse(&text) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("--query-file '{qf}': parse error on line {line_num}: {}", e.0),
+                ));
+            }
             collected.push(CollectedQuery {
                 text,
                 viz,
