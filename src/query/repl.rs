@@ -2760,7 +2760,7 @@ fn handle_meta(
             writeln!(out, "  !grep <pattern>       alias for !filter")?;
             writeln!(out, "  !sample [N]           show N randomly sampled rows from last result (default 10)")?;
             writeln!(out, "  !distinct             remove duplicate rows (!dedup is an alias)")?;
-            writeln!(out, "  !sort <col> [desc] [,col2 [desc]…]  sort last result by one or more columns")?;
+            writeln!(out, "  !sort <col> [desc] [,col2 [desc]…]  sort; prefix - for desc (e.g. !sort -size,name)")?;
             writeln!(out, "  !stats <col>          numeric summary: min/max/mean/p50/p90/p99/sum")?;
             writeln!(out, "  !unique <col>         distinct value counts, sorted by frequency")?;
             writeln!(out, "  !pivot <col>          group by column → (value, count) table (chainable)")?;
