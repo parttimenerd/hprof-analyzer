@@ -2934,7 +2934,7 @@ fn handle_describe(
         }
         Ok(res) => {
             let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-            let (cb, cd, cr) = if color { ("\x1b[1m", "\x1b[2m", "\x1b[0m") } else { ("", "", "") };
+            let (cb, cc, cd, cr) = if color { ("\x1b[1m", "\x1b[36m", "\x1b[2m", "\x1b[0m") } else { ("", "", "", "") };
             let count_str = match &count_res {
                 Ok(cr_) => {
                     match cr_.rows.first().and_then(|r| r.first()) {
@@ -2949,9 +2949,9 @@ fn handle_describe(
             writeln!(out, "Fields of {cb}{}{cr}{}", cls, count_str)?;
             for (i, col) in res.columns.iter().enumerate() {
                 let type_tag = infer_col_type(i, &res.rows);
-                writeln!(out, "  {:>idx_w$}  {:<col_w$}  {cd}{}{cr}", i + 1, col.name, type_tag)?;
+                writeln!(out, "  {cd}{:>idx_w$}{cr}  {cc}{:<col_w$}{cr}  {cd}{}{cr}", i + 1, col.name, type_tag)?;
             }
-            writeln!(out, "({} field{})", res.columns.len(), if res.columns.len() == 1 { "" } else { "s" })?;
+            writeln!(out, "{cd}({} field{}){cr}", res.columns.len(), if res.columns.len() == 1 { "" } else { "s" })?;
         }
     }
     Ok(())
