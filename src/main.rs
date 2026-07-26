@@ -1157,7 +1157,7 @@ fn run(
             g.idom = c.restore()?;
         }
         let addrs = addrs_c.restore()?;
-        let mut mm = mat::MatIdMap::build(g.n, &g.idom, |i| addrs[i]);
+        let mm = mat::MatIdMap::build(g.n, &g.idom, |i| addrs[i]);
         // Drop idom immediately after build; mm.sorted holds old-ids in addr order.
         g.idom = Vec::new();
         crate::trace::trim();

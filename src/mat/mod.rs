@@ -20,8 +20,6 @@ pub struct MatClassMeta {
     pub class_info: HashMap<u64, (u64, u64, u32)>,
     /// GC-root object addresses (direct, non-thread-local), in encounter order
     pub gc_root_addrs: Vec<u64>,
-    /// Per-root HPROF sub-tag byte, 1:1 with gc_root_addrs
-    pub gc_root_types: Vec<u8>,
     /// HPROF base timestamp in milliseconds since Unix epoch (from header)
     pub timestamp_ms: u64,
     /// HPROF total file size in bytes
@@ -41,7 +39,6 @@ impl MatClassMeta {
         MatClassMeta {
             class_info,
             gc_root_addrs: p1.gc_root_addrs.clone(),
-            gc_root_types: p1.gc_root_types.clone(),
             timestamp_ms: p1.header_timestamp_ms,
             file_size: p1.file_size,
             format: p1.format.clone(),
@@ -838,7 +835,7 @@ impl MatEmitter {
 
         // --- 3. roots: HashMapIntObject<XGCRootInfo[]> ---
         // Key = object mat-id, value = XGCRootInfo[1] (one root per object).
-        let mut roots_hm = MatIntMap::new(meta.gc_root_addrs.len() as i32);
+        let roots_hm = MatIntMap::new(meta.gc_root_addrs.len() as i32);
         let mut _root_entries: Vec<(i32, u8)> = Vec::new();
         for (i, &addr) in meta.gc_root_addrs.iter().enumerate() {
             // addr is the GC-root object address; translate to mat-id via address lookup.

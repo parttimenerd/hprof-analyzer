@@ -573,9 +573,6 @@ pub(crate) fn render_dominator_depth(o: &SystemOverview, out: &mut String) {
     render_dominator_depth_inner(o, false, out);
 }
 
-pub(crate) fn render_dominator_depth_graphs(o: &SystemOverview, out: &mut String) {
-    render_dominator_depth_inner(o, true, out);
-}
 
 fn render_dominator_depth_inner(o: &SystemOverview, graphs: bool, out: &mut String) {
     use crate::md::{Align, Table, bar};

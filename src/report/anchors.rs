@@ -124,13 +124,6 @@ impl SectionId {
         }
     }
 
-    /// A short human label for the anchor link text (e.g. the "See X" target in
-    /// triage). Defaults to the heading; overridden where the link should read
-    /// differently from the heading.
-    pub const fn label(self) -> &'static str {
-        self.heading()
-    }
-
     /// A Markdown ToC bullet: `- [Heading](#slug)\n`.
     pub fn toc_bullet(self) -> String {
         format!("- [{}](#{})\n", self.heading(), self.slug())
