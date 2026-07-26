@@ -1147,14 +1147,14 @@ function startTerminal() {
       } else {
         const parts = cmd.slice(7).trim().split(/\s+/);
         if (parts.length < 2 || !parts[0] || !parts[1]) {
-          term.writeln(`\x1b[33musage: /rename <oldcol> <newcol>  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
+          term.writeln(`\x1b[33musage: /rename <col> <newname>  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
         } else {
-          const [oldName, newName] = parts;
-          const lower = lastResult.columns.map(f => f.toLowerCase());
-          const i = lower.findIndex(f => f === oldName.toLowerCase() || f.includes(oldName.toLowerCase()));
-          if (i === -1) {
-            term.writeln(`\x1b[31mcolumn ${JSON.stringify(oldName)} not found — available: ${lastResult.columns.join(', ')}\x1b[0m`);
+          const [oldArg, newName] = parts;
+          const i = resolveCol(oldArg, lastResult.columns);
+          if (i < 0) {
+            term.writeln(`\x1b[31mcolumn ${JSON.stringify(oldArg)} not found — available: ${lastResult.columns.join(', ')}\x1b[0m`);
           } else {
+            const oldName = lastResult.columns[i];
             prevResult = { columns: [...lastResult.columns], rows: lastResult.rows };
             lastResult.columns[i] = newName;
             term.writeln(`\x1b[2mrenamed column ${JSON.stringify(oldName)} → ${JSON.stringify(newName)}\x1b[0m`);

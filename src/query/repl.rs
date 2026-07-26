@@ -1276,9 +1276,9 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                 match &last_result {
                                     Some(res) if !res.columns.is_empty() => {
                                         let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                                        writeln!(stdout, "usage: !rename <oldcol> <newcol>  — available: {}", names.join(", "))?;
+                                        writeln!(stdout, "usage: !rename <col> <newname>  — available: {}", names.join(", "))?;
                                     }
-                                    _ => writeln!(stdout, "usage: !rename <oldcol> <newcol>")?,
+                                    _ => writeln!(stdout, "usage: !rename <col> <newname>")?,
                                 }
                             } else {
                                 let old = parts[0];
@@ -1286,18 +1286,14 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                 match last_result.as_mut() {
                                     None => writeln!(stdout, "(no result — run a query first)")?,
                                     Some(res) => {
-                                        let lower = old.to_ascii_lowercase();
-                                        match res.columns.iter_mut().find(|c|
-                                            c.name.to_ascii_lowercase() == lower
-                                            || c.name.to_ascii_lowercase().contains(&lower))
-                                        {
+                                        match resolve_col(old, &res.columns) {
                                             None => {
                                                 let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
                                                 writeln!(stdout, "column {:?} not found — available: {}", old, names.join(", "))?;
                                             }
-                                            Some(col) => {
-                                                let prev = col.name.clone();
-                                                col.name = new.to_string();
+                                            Some(ci) => {
+                                                let prev = res.columns[ci].name.clone();
+                                                res.columns[ci].name = new.to_string();
                                                 writeln!(stdout, "renamed {:?} → {:?}", prev, new)?;
                                             }
                                         }
@@ -1652,9 +1648,9 @@ fn run_repl_line(
                     match last_result.as_ref() {
                         Some(res) if !res.columns.is_empty() => {
                             let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                            writeln!(out, "usage: !rename <oldcol> <newcol>  — available: {}", names.join(", "))?;
+                            writeln!(out, "usage: !rename <col> <newname>  — available: {}", names.join(", "))?;
                         }
-                        _ => writeln!(out, "usage: !rename <oldcol> <newcol>")?,
+                        _ => writeln!(out, "usage: !rename <col> <newname>")?,
                     }
                 } else {
                     let old = parts[0];
@@ -1662,18 +1658,14 @@ fn run_repl_line(
                     match last_result.as_mut() {
                         None => writeln!(out, "(no result — run a query first)")?,
                         Some(res) => {
-                            let lower = old.to_ascii_lowercase();
-                            match res.columns.iter_mut().find(|c|
-                                c.name.to_ascii_lowercase() == lower
-                                || c.name.to_ascii_lowercase().contains(&lower))
-                            {
+                            match resolve_col(old, &res.columns) {
                                 None => {
                                     let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
                                     writeln!(out, "column {:?} not found — available: {}", old, names.join(", "))?;
                                 }
-                                Some(col) => {
-                                    let prev = col.name.clone();
-                                    col.name = new.to_string();
+                                Some(ci) => {
+                                    let prev = res.columns[ci].name.clone();
+                                    res.columns[ci].name = new.to_string();
                                     writeln!(out, "renamed {:?} → {:?}", prev, new)?;
                                 }
                             }
