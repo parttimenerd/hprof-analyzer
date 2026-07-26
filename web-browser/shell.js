@@ -537,7 +537,7 @@ function startTerminal() {
     // Complete / commands
     if (line.startsWith('/') && !line.includes(' ')) {
       const partial = line.slice(1).toLowerCase();
-      const cmds = ['help','clear','status','analyze','history','export','set','classes','filter',
+      const cmds = ['help','clear','status','analyze','history','export','set','classes','filter','grep',
                     'sort','unique','stats','top','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
       const matches = cmds.filter(c => c.startsWith(partial));
       if (matches.length === 1) {
@@ -609,9 +609,11 @@ function startTerminal() {
       return;
     }
     // Complete /sort <col> from lastResult columns
-    if (line.startsWith('/sort ') || line.startsWith('/filter ') || line.startsWith('/unique ') || line.startsWith('/stats ')) {
+    if (line.startsWith('/sort ') || line.startsWith('/filter ') || line.startsWith('/grep ') ||
+        line.startsWith('/unique ') || line.startsWith('/stats ')) {
       if (lastResult && lastResult.columns.length > 0) {
-        const pfxLen = line.startsWith('/sort ') ? 6 : line.startsWith('/stats ') ? 7 : 8;
+        const pfxLen = line.startsWith('/sort ') ? 6 : line.startsWith('/stats ') ? 7
+                     : line.startsWith('/grep ') ? 6 : 8;
         const partial = line.slice(pfxLen).toLowerCase();
         const cols = lastResult.columns.filter(c => c.toLowerCase().startsWith(partial));
         if (cols.length === 1) { setLine(line.slice(0, pfxLen) + cols[0]); }
@@ -966,12 +968,14 @@ function startTerminal() {
         return;
       }
       const colName = lastResult.columns[ci];
-      const vals = lastResult.rows.map(row => {
+      const allVals = lastResult.rows.map(row => {
         const cell = row[ci];
         if (cell === null || cell === undefined) return null;
         const v = typeof cell === 'object' ? cell.v : cell;
         return typeof v === 'number' ? v : null;
-      }).filter(v => v !== null).sort((a, b) => a - b);
+      });
+      const vals = allVals.filter(v => v !== null).sort((a, b) => a - b);
+      const nullCount = allVals.length - vals.length;
       if (vals.length === 0) {
         term.writeln(`\x1b[33mNo numeric values in column "${colName}"\x1b[0m`);
         term.write(PROMPT);
@@ -986,7 +990,8 @@ function startTerminal() {
         if (!settings.bytesRaw && colName && /bytes$|_size$|heap_size$/i.test(colName)) return fmtBytes(v);
         return v.toLocaleString('en-US');
       };
-      term.writeln(`\x1b[1m${colName}\x1b[0m  \x1b[2m(${vals.length} non-null values)\x1b[0m`);
+      const nullInfo = nullCount > 0 ? `  \x1b[2m(${nullCount} null)\x1b[0m` : '';
+      term.writeln(`\x1b[1m${colName}\x1b[0m  \x1b[2m(${vals.length} non-null values)\x1b[0m${nullInfo}`);
       term.writeln(`  min    \x1b[32m${fmtV(vals[0])}\x1b[0m`);
       term.writeln(`  max    \x1b[32m${fmtV(vals[vals.length - 1])}\x1b[0m`);
       term.writeln(`  mean   \x1b[32m${fmtV(mean)}\x1b[0m`);
@@ -1004,8 +1009,10 @@ function startTerminal() {
       } else if (!n || n < 1) {
         term.writeln('\x1b[33mUsage: /top <N>  — show top N rows of last result\x1b[0m');
       } else {
-        renderResult({ columns: lastResult.columns, rows: lastResult.rows.slice(0, n), row_count: n });
+        const sliced = lastResult.rows.slice(0, n);
+        renderResult({ columns: lastResult.columns, rows: sliced, row_count: n });
         term.writeln(`\x1b[2mShowing top ${n} of ${lastResult.rows.length} rows\x1b[0m`);
+        lastResult = { columns: lastResult.columns, rows: sliced };
       }
       term.write(PROMPT);
       return;
@@ -1044,12 +1051,14 @@ function startTerminal() {
       term.write(PROMPT);
       return;
     }
-    if (cmd.startsWith('/filter ') || cmd === '/filter') {
-      const pattern = cmd.slice(7).trim();
+    if (cmd.startsWith('/filter ') || cmd === '/filter' ||
+        cmd.startsWith('/grep ')   || cmd === '/grep') {
+      const isGrep = cmd.startsWith('/grep');
+      const pattern = cmd.slice(isGrep ? 5 : 7).trim();
       if (!lastResult) {
         term.writeln('\x1b[33mNo result to filter — run a query first.\x1b[0m');
       } else if (!pattern) {
-        term.writeln('\x1b[33mUsage: /filter <text>  or  /filter /regex/[flags]\x1b[0m');
+        term.writeln('\x1b[33mUsage: /filter <text>  or  /filter /regex/[flags]  (/grep is an alias)\x1b[0m');
       } else {
         const { columns, rows } = lastResult;
         let re;
@@ -1450,7 +1459,7 @@ function startTerminal() {
     c('/count <cls>',            '— count live instances of a class');
     h('Result post-processing');
     c('/last',                   '— re-display last result');
-    c('/filter <text|/re/>',     '— filter rows by substring or regex');
+    c('/filter <text|/re/>',     '— filter rows by substring or regex  (/grep is an alias)');
     c('/sort <col> [desc]',      '— sort rows by column');
     c('/top <N>',                '— first N rows');
     c('/unique <col>',           '— distinct value counts');
