@@ -1506,7 +1506,7 @@ function startTerminal() {
             const p99_2 = vals2[Math.floor(vals2.length * 0.99)];
             const fmtV2 = v => Number.isInteger(v) ? v.toLocaleString('en-US') : parseFloat(v.toPrecision(6)).toLocaleString('en-US');
             const nullNote2 = nullCount2 > 0 ? `  \x1b[2m(${nullCount2} null)\x1b[0m` : '';
-            term.writeln(`\x1b[36m${cName}\x1b[0m  (${vals2.length} values)${nullNote2}`);
+            term.writeln(`\x1b[1m${cName}\x1b[0m  \x1b[2m(${vals2.length} non-null values)\x1b[0m${nullNote2}`);
             term.writeln(`  min    \x1b[32m${fmtV2(vals2[0])}\x1b[0m`);
             term.writeln(`  max    \x1b[32m${fmtV2(vals2[vals2.length - 1])}\x1b[0m`);
             term.writeln(`  mean   \x1b[32m${fmtV2(mean2)}\x1b[0m`);
