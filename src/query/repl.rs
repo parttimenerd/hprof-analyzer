@@ -566,6 +566,35 @@ impl Completer for OqlCompleter {
         if let Some(sugg) = viz_directive_suggestions(upto, pos) {
             return sugg;
         }
+        // `!<cmd>` — complete meta-command names.
+        if let Some(partial) = upto.strip_prefix('!') {
+            if !partial.contains(char::is_whitespace) {
+                const META_CMDS: &[&str] = &[
+                    "help", "quit", "q", "exit",
+                    "plan", "explain",
+                    "classes", "fields",
+                    "reachable", "all", "mode",
+                    "width", "count", "last", "save",
+                    "filter", "grep", "sort", "stats", "unique",
+                    "top", "head", "tail", "cols", "columns",
+                    "describe", "obj",
+                    "run",
+                ];
+                let lower = partial.to_ascii_lowercase();
+                return META_CMDS
+                    .iter()
+                    .filter(|c| c.starts_with(lower.as_str()))
+                    .map(|c| Suggestion {
+                        value: format!("!{c}"),
+                        description: None,
+                        style: None,
+                        extra: None,
+                        span: Span { start: 0, end: pos },
+                        append_whitespace: true,
+                    })
+                    .collect();
+            }
+        }
         // Delegate /run completion to the WASM-safe free function.
         if upto.starts_with("/run ") {
             return crate::query::complete::complete(upto, pos, &self.class_names, &self.field_names)
