@@ -1250,7 +1250,13 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                         let fill = if total > 0 {
                                             format!("  {}/{} ({:.0}%)", non_null, total, non_null as f64 / total as f64 * 100.0)
                                         } else { String::new() };
-                                        writeln!(stdout, "  {:>idx_w$}  {:<col_w$}  \x1b[2m{:<8}{}\x1b[0m", i + 1, f, type_tag, fill)?;
+                                        let all_null = total > 0 && non_null == 0;
+                                        let (name_color, suffix) = if all_null {
+                                            ("\x1b[2;33m", "  \x1b[33m(all null)\x1b[0m")
+                                        } else {
+                                            ("", "")
+                                        };
+                                        writeln!(stdout, "  {:>idx_w$}  {name_color}{f:<col_w$}\x1b[0m  \x1b[2m{:<8}{}\x1b[0m{suffix}", i + 1, type_tag, fill)?;
                                     }
                                     writeln!(stdout, "({} column{})", fields.len(), if fields.len() == 1 { "" } else { "s" })?;
                                 }
@@ -1719,7 +1725,13 @@ fn run_repl_line(
                             let fill = if total > 0 {
                                 format!("  {}/{} ({:.0}%)", non_null, total, non_null as f64 / total as f64 * 100.0)
                             } else { String::new() };
-                            writeln!(out, "  {:>idx_w$}  {:<col_w$}  {:<8}{}", i + 1, f, type_tag, fill)?;
+                            let all_null = total > 0 && non_null == 0;
+                            let (name_color, suffix) = if all_null {
+                                ("\x1b[2;33m", "  \x1b[33m(all null)\x1b[0m")
+                            } else {
+                                ("", "")
+                            };
+                            writeln!(out, "  {:>idx_w$}  {name_color}{f:<col_w$}\x1b[0m  \x1b[2m{:<8}{}\x1b[0m{suffix}", i + 1, type_tag, fill)?;
                         }
                         writeln!(out, "({} column{})", fields.len(), if fields.len() == 1 { "" } else { "s" })?;
                     }

@@ -1126,7 +1126,10 @@ function startTerminal() {
             if (typeTag === 'null') typeTag = cell.kind || typeof cell;
           }
           const fill = total > 0 ? `  ${nonNull}/${total} (${Math.round(nonNull / total * 100)}%)` : '';
-          term.writeln(`  \x1b[2m${String(i + 1).padStart(idxW)}\x1b[0m  \x1b[36m${f.padEnd(colW)}\x1b[0m  \x1b[2m${typeTag.padEnd(8)}${fill}\x1b[0m`);
+          const allNull = total > 0 && nonNull === 0;
+          const nameColor = allNull ? '\x1b[2;33m' : '\x1b[36m';
+          const dimSuffix = allNull ? ' \x1b[33m(all null)\x1b[0m' : '';
+          term.writeln(`  \x1b[2m${String(i + 1).padStart(idxW)}\x1b[0m  ${nameColor}${f.padEnd(colW)}\x1b[0m  \x1b[2m${typeTag.padEnd(8)}${fill}\x1b[0m${dimSuffix}`);
         });
         term.writeln(`\x1b[2m${fields.length} column${fields.length !== 1 ? 's' : ''}\x1b[0m`);
       }
