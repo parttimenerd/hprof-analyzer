@@ -3149,6 +3149,37 @@ fn handle_row(
     Ok(())
 }
 
+/// Print an OQL language quick-reference: keywords, aggregate functions,
+/// scalar functions, methods, and attributes in a compact columnar layout.
+fn print_oql_ref(out: &mut impl Write) -> io::Result<()> {
+    use crate::query::parse::{AGG_FUNCS, ATTRIBUTES, FUNCS, KEYWORDS, METHODS, RESERVED};
+    let print_cols = |label: &str, items: &[&str], out: &mut dyn Write| -> io::Result<()> {
+        writeln!(out, "\n  {label}")?;
+        let col_w = items.iter().map(|s| s.len()).max().unwrap_or(8) + 2;
+        let cols = (76usize).saturating_div(col_w.max(1)).max(1);
+        for chunk in items.chunks(cols) {
+            let row: String = chunk.iter().map(|s| format!("    {:<col_w$}", s)).collect();
+            writeln!(out, "{}", row.trim_end())?;
+        }
+        Ok(())
+    };
+    writeln!(out, "OQL Language Reference  (!help for REPL commands)")?;
+    let all_keywords: Vec<&str> = KEYWORDS.iter().chain(RESERVED.iter()).copied().collect();
+    print_cols("Keywords", &all_keywords, out)?;
+    print_cols("Aggregate functions", AGG_FUNCS, out)?;
+    print_cols("Scalar functions", FUNCS, out)?;
+    print_cols("Methods  (object.method())", METHODS, out)?;
+    print_cols("Attributes  (@ prefix)", ATTRIBUTES, out)?;
+    writeln!(out, "\n  Syntax examples")?;
+    writeln!(out, "    SELECT * FROM java.lang.String")?;
+    writeln!(out, "    SELECT s.@objectAddress, s.value FROM java.lang.String s WHERE s.count > 100")?;
+    writeln!(out, "    SELECT classof(s).@name, COUNT(*) FROM java.lang.Object s GROUP BY classof(s)")?;
+    writeln!(out, "    SELECT * FROM INSTANCEOF java.util.Collection")?;
+    writeln!(out, "    SELECT s.@retainedHeapSize FROM java.lang.Thread s ORDER BY s.@retainedHeapSize DESC")?;
+    writeln!(out, "\n  Tip: use !describe <ClassName> to see available fields")?;
+    Ok(())
+}
+
 /// Handle a meta-command (the text after the leading `!`). Returns `Ok(true)`
 /// when the command asks the REPL to quit. `reachable_only` is the session's
 /// current GC-reachability mode; `!all`/`!reachable` mutate it. `names` is the
@@ -3167,7 +3198,11 @@ fn handle_meta(
     match verb {
         "quit" | "q" | "exit" => return Ok(true),
         "help" | "h" => {
-            writeln!(out, "OQL REPL commands  (prefix: !, e.g. !help)")?;
+            if rest == "oql" {
+                print_oql_ref(out)?;
+                return Ok(false);
+            }
+            writeln!(out, "OQL REPL commands  (prefix: !, e.g. !help oql for language reference)")?;
             writeln!(out)?;
             writeln!(out, "  Heap exploration")?;
             writeln!(out, "    !classes [pat]        list class names (substring-filtered)")?;
@@ -3224,6 +3259,7 @@ fn handle_meta(
             writeln!(out)?;
             writeln!(out, "  Session")?;
             writeln!(out, "    !help                 show this help")?;
+            writeln!(out, "    !help oql             OQL language reference (keywords, functions, syntax)")?;
             writeln!(out, "    !quit                 exit")?;
             writeln!(out)?;
             writeln!(out, "  OQL queries may span multiple lines; end with `;` or a blank line.")?;
