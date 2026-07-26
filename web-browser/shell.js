@@ -1107,27 +1107,26 @@ function startTerminal() {
       } else {
         const args = cmd.slice(7).trim().split(/\s+/).filter(Boolean);
         if (args.length === 0) {
-          term.writeln('\x1b[33musage: /select <col1> [col2] …  (names or 1-based numbers)\x1b[0m');
+          term.writeln('\x1b[33musage: /select <col1> [col2] …  (names, 1-based numbers, or ranges like 1-3)\x1b[0m');
         } else {
           const fields = lastResult.columns;
-          const lower = fields.map(f => f.toLowerCase());
           const indices = [];
           let ok = true;
           for (const arg of args) {
-            // Accept 1-based numeric index
-            const n = parseInt(arg, 10);
-            if (!isNaN(n) && String(n) === arg && n >= 1 && n <= fields.length) {
-              indices.push(n - 1);
-              continue;
+            // Accept N-M ranges
+            const rangeM = arg.match(/^(\d+)-(\d+)$/);
+            if (rangeM) {
+              const lo = Math.max(1, parseInt(rangeM[1], 10));
+              const hi = Math.min(fields.length, parseInt(rangeM[2], 10));
+              if (lo <= hi) { for (let i = lo; i <= hi; i++) indices.push(i - 1); continue; }
             }
-            const larg = arg.toLowerCase();
-            const i = lower.findIndex(f => f === larg || f.includes(larg));
-            if (i === -1) {
+            const ci = resolveCol(arg, fields);
+            if (ci < 0) {
               term.writeln(`\x1b[31mcolumn ${JSON.stringify(arg)} not found — available: ${fields.join(', ')}\x1b[0m`);
               ok = false;
               break;
             }
-            indices.push(i);
+            indices.push(ci);
           }
           if (ok) {
             const newCols = indices.map(i => fields[i]);

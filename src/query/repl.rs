@@ -1143,28 +1143,17 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             prev_result = last_result.clone();
                             let col_args: Vec<&str> = rest.split_whitespace().collect();
                             if col_args.is_empty() {
-                                writeln!(stdout, "usage: !select <col1> [col2 ...]  — keep named or numbered columns (see !cols)")?;
+                                writeln!(stdout, "usage: !select <col1> [col2 ...]  — names, numbers, or ranges (e.g. 1-3)")?;
                             } else {
                                 match &last_result {
                                     None => writeln!(stdout, "(no result — run a query first)")?,
                                     Some(res) => {
-                                        let mut indices = Vec::new();
+                                        let mut indices: Vec<usize> = Vec::new();
                                         let mut ok = true;
                                         for arg in &col_args {
-                                            // Accept 1-based numeric column index
-                                            if let Ok(n) = arg.parse::<usize>() {
-                                                if n >= 1 && n <= res.columns.len() {
-                                                    indices.push(n - 1);
-                                                    continue;
-                                                }
-                                            }
-                                            let lower = arg.to_ascii_lowercase();
-                                            match res.columns.iter().position(|c|
-                                                c.name.to_ascii_lowercase() == lower
-                                                || c.name.to_ascii_lowercase().contains(&lower))
-                                            {
-                                                Some(i) => indices.push(i),
-                                                None => {
+                                            match expand_col_spec(arg, &res.columns) {
+                                                Ok(v) => indices.extend(v),
+                                                Err(_) => {
                                                     let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
                                                     writeln!(stdout, "column {:?} not found — available: {}", arg, names.join(", "))?;
                                                     ok = false;
@@ -1576,28 +1565,17 @@ fn run_repl_line(
                 // !select col1 [col2 ...] — project columns from last result
                 let col_args: Vec<&str> = rest.split_whitespace().collect();
                 if col_args.is_empty() {
-                    writeln!(out, "usage: !select <col1> [col2 ...]  — keep named or numbered columns (see !cols)")?;
+                    writeln!(out, "usage: !select <col1> [col2 ...]  — names, numbers, or ranges (e.g. 1-3)")?;
                 } else {
                     match last_result {
                         None => writeln!(out, "(no result — run a query first)")?,
                         Some(res) => {
-                            let mut indices = Vec::new();
+                            let mut indices: Vec<usize> = Vec::new();
                             let mut ok = true;
                             for arg in &col_args {
-                                // Accept 1-based numeric column index
-                                if let Ok(n) = arg.parse::<usize>() {
-                                    if n >= 1 && n <= res.columns.len() {
-                                        indices.push(n - 1);
-                                        continue;
-                                    }
-                                }
-                                let lower = arg.to_ascii_lowercase();
-                                match res.columns.iter().position(|c|
-                                    c.name.to_ascii_lowercase() == lower
-                                    || c.name.to_ascii_lowercase().contains(&lower))
-                                {
-                                    Some(i) => indices.push(i),
-                                    None => {
+                                match expand_col_spec(arg, &res.columns) {
+                                    Ok(v) => indices.extend(v),
+                                    Err(_) => {
                                         let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
                                         writeln!(out, "column {:?} not found — available: {}", arg, names.join(", "))?;
                                         ok = false;
@@ -2285,6 +2263,30 @@ fn resolve_col(spec: &str, columns: &[crate::query::model::QueryColumn]) -> Opti
     columns.iter().position(|c| {
         c.name.to_ascii_lowercase() == lower || c.name.to_ascii_lowercase().contains(&lower)
     })
+}
+
+/// Expand a single col-spec token into one or more column indices.
+/// Handles `N-M` numeric ranges (e.g. "2-4" → [1,2,3]), otherwise
+/// delegates to `resolve_col`.  Returns `Err(spec)` if unresolved.
+fn expand_col_spec<'a>(
+    spec: &'a str,
+    columns: &[crate::query::model::QueryColumn],
+) -> Result<Vec<usize>, &'a str> {
+    if let Some((a, b)) = spec.split_once('-').filter(|(a, b)| {
+        a.chars().all(|c| c.is_ascii_digit()) && b.chars().all(|c| c.is_ascii_digit())
+    }) {
+        if let (Ok(lo), Ok(hi)) = (a.parse::<usize>(), b.parse::<usize>()) {
+            let lo = lo.max(1);
+            let hi = hi.min(columns.len());
+            if lo <= hi {
+                return Ok((lo..=hi).map(|n| n - 1).collect());
+            }
+        }
+    }
+    match resolve_col(spec, columns) {
+        Some(i) => Ok(vec![i]),
+        None => Err(spec),
+    }
 }
 
 /// Sort the last result by a column name (case-insensitive prefix match).
