@@ -1858,25 +1858,39 @@ function startTerminal() {
       return;
     }
     if (cmd.startsWith('/count ') || cmd === '/count') {
-      const cls = cmd.slice(6).trim();
-      if (!cls) {
-        term.writeln('\x1b[33mUsage: /count <ClassName>  — number of live instances\x1b[0m');
+      const arg = cmd.slice(6).trim();
+      if (!arg) {
+        if (lastResult) {
+          const n = lastResult.rows.length;
+          const m = lastResult.columns.length;
+          term.writeln(`\x1b[32m${n.toLocaleString()}\x1b[0m row${n !== 1 ? 's' : ''} × \x1b[32m${m}\x1b[0m col${m !== 1 ? 's' : ''}`);
+          term.write(PROMPT); return;
+        }
+        term.writeln('\x1b[33mUsage: /count <ClassName|oql>  — count instances or rows\x1b[0m');
         term.write(PROMPT);
         return;
       }
+      // If it looks like a full OQL query (has SELECT or FROM), wrap it in COUNT;
+      // otherwise treat as a class name and use INSTANCEOF
+      const lc = arg.toLowerCase().trim();
+      const isOql = /^select\s|^from\s/.test(lc);
+      const countQuery = isOql
+        ? (lc.includes('count(*)') ? arg : `SELECT COUNT(*) FROM ( ${arg} )`)
+        : `SELECT COUNT(*) FROM INSTANCEOF ${arg}`;
+      const label = isOql ? 'rows matching query' : `instances of \x1b[36m${arg}\x1b[0m`;
       term.write('\x1b[2m⠋ counting…\x1b[0m');
       try {
         const res = await fetch(serverUrl + '/', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query: `SELECT COUNT(*) FROM INSTANCEOF ${cls}` }),
+          body: JSON.stringify({ query: countQuery }),
         });
         const data = await res.json();
         term.write('\r\x1b[K');
         if (data.ok) {
           const cell = data.result?.rows?.[0]?.[0];
           const n = cell == null ? null : (typeof cell === 'object' ? cell.v : cell);
-          term.writeln(`\x1b[32m${n != null ? n.toLocaleString() : '?'}\x1b[0m instance${n === 1 ? '' : 's'} of \x1b[36m${cls}\x1b[0m`);
+          term.writeln(`\x1b[32m${n != null ? n.toLocaleString() : '?'}\x1b[0m ${label}`);
         } else {
           const msg = data.error?.message || data.error || 'unknown error';
           term.writeln(`\x1b[31merror: ${msg}\x1b[0m`);
@@ -3055,7 +3069,7 @@ function startTerminal() {
     c('/plan <oql>',             '— show query execution plan without scanning (/explain is an alias)');
     c('/classes [pat]',          '— list class names filtered by pattern');
     c('/describe <cls>',         '— show fields of a class');
-    c('/count <cls>',            '— count live instances of a class');
+    c('/count [cls|oql]',        '— count instances (class name) or rows (oql); no arg = last result shape');
     c('/obj <cls>#<idx>',        '— inspect a specific object by class + dense index');
     h('Result post-processing');
     c('/last',                   '— re-display last result');
