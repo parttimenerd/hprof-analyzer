@@ -3650,8 +3650,7 @@ fn print_result(
     let gutter_pad = if show_row_nums { " ".repeat(row_num_w + 2) } else { String::new() };
     if color {
         let mut hdr_buf: Vec<u8> = Vec::new();
-        // Headers always left-aligned; pass all-false alignment.
-        write_row(&headers, &widths, &vec![false; ncols], &mut hdr_buf)?;
+        write_row(&headers, &widths, &numeric, &mut hdr_buf)?;
         let hdr_str = String::from_utf8_lossy(&hdr_buf);
         let hdr_trimmed = hdr_str.trim_end_matches('\n');
         writeln!(out, "{gutter_pad}\x1b[1m{hdr_trimmed}\x1b[0m")?;
@@ -3663,7 +3662,7 @@ fn print_result(
         writeln!(out, "{gutter_pad}\x1b[2m{sep_trimmed}\x1b[0m")?;
     } else {
         if show_row_nums { write!(out, "{gutter_pad}")?; }
-        write_row(&headers, &widths, &vec![false; ncols], out)?;
+        write_row(&headers, &widths, &numeric, out)?;
         if show_row_nums { write!(out, "{gutter_pad}")?; }
         let sep: Vec<String> = widths.iter().map(|&w| "─".repeat(w)).collect();
         write_row(&sep, &widths, &vec![false; ncols], out)?;
@@ -4383,8 +4382,8 @@ mod tests {
             elapsed_ms: None,
         };
         let out = print_to_string(&res);
-        // "1,000" is 5 chars wide (widest in col 0); "id" padded to 5 (left).
-        assert!(out.contains("id    | name"), "header not aligned:\n{out}");
+        // "1,000" is 5 chars wide (widest in col 0); "id" right-aligned to 5.
+        assert!(out.contains("   id | name"), "header not right-aligned:\n{out}");
         // Numeric col 0 is right-aligned: "1" gets 4 leading spaces to fill width 5.
         assert!(out.contains("    1 | alice"), "row1 not right-aligned:\n{out}");
         // Widest row: "1,000" right-aligned at width 5 — no leading pad needed.
