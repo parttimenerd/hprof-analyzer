@@ -2186,7 +2186,13 @@ fn handle_sort(
     out: &mut impl Write,
 ) -> io::Result<()> {
     if args.is_empty() {
-        writeln!(out, "usage: !sort <col> [desc] [, <col2> [desc] …]")?;
+        match last_result {
+            Some(res) if !res.columns.is_empty() => {
+                let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
+                writeln!(out, "usage: !sort <col> [desc] [, <col2> [desc] …]  — available: {}", names.join(", "))?;
+            }
+            _ => writeln!(out, "usage: !sort <col> [desc] [, <col2> [desc] …]")?,
+        }
         return Ok(());
     }
     match last_result {
@@ -2265,7 +2271,13 @@ fn handle_stats(
     out: &mut impl Write,
 ) -> io::Result<()> {
     if col_arg.is_empty() {
-        writeln!(out, "usage: !stats <col>  — numeric summary (min/max/mean/p50/p90/p99/sum)")?;
+        match last_result {
+            Some(res) if !res.columns.is_empty() => {
+                let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
+                writeln!(out, "usage: !stats <col>  — available: {}", names.join(", "))?;
+            }
+            _ => writeln!(out, "usage: !stats <col>  — numeric summary (min/max/mean/p50/p90/p99/sum)")?,
+        }
         return Ok(());
     }
     match last_result {
@@ -2353,7 +2365,13 @@ fn handle_unique(
     out: &mut impl Write,
 ) -> io::Result<()> {
     if col_arg.is_empty() {
-        writeln!(out, "usage: !unique <col>  — distinct value counts")?;
+        match last_result {
+            Some(res) if !res.columns.is_empty() => {
+                let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
+                writeln!(out, "usage: !unique <col>  — available: {}", names.join(", "))?;
+            }
+            _ => writeln!(out, "usage: !unique <col>  — distinct value counts")?,
+        }
         return Ok(());
     }
     match last_result {
@@ -2410,7 +2428,13 @@ fn handle_pivot(
     out: &mut impl Write,
 ) -> io::Result<()> {
     if col_arg.is_empty() {
-        writeln!(out, "usage: !pivot <col>  — group by column, produce (value, count) table")?;
+        match last_result {
+            Some(res) if !res.columns.is_empty() => {
+                let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
+                writeln!(out, "usage: !pivot <col>  — available: {}", names.join(", "))?;
+            }
+            _ => writeln!(out, "usage: !pivot <col>  — group by column, produce (value, count) table")?,
+        }
         return Ok(());
     }
     match last_result {
