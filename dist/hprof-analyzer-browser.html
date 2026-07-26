@@ -1987,7 +1987,22 @@ function startTerminal() {
       }
       return;
     }
-    if (cmd.startsWith('/run ')) {
+    if (cmd.startsWith('/run ') || cmd === '/run') {
+      if (cmd === '/run') {
+        if (namedQueries.length === 0) {
+          term.writeln('\x1b[2m(no named queries loaded)\x1b[0m');
+        } else {
+          term.writeln('\x1b[1mNamed queries:\x1b[0m');
+          let lastGroup = '';
+          namedQueries.forEach(q => {
+            if (q.group !== lastGroup) { lastGroup = q.group; term.writeln(`\r  \x1b[2m${q.group}\x1b[0m`); }
+            const lock = (q.needs_retained && !hasRetained) ? ' \x1b[2m[needs analysis]\x1b[0m' : '';
+            term.writeln(`    \x1b[36m${q.name.padEnd(36)}\x1b[0m  \x1b[2m${q.display}\x1b[0m${lock}`);
+          });
+        }
+        term.write(PROMPT);
+        return;
+      }
       const name = cmd.slice(5).trim();
       const q = namedQueries.find(q => q.name === name);
       if (!q) {
@@ -2201,6 +2216,7 @@ function startTerminal() {
     term.writeln('  \x1b[36mCtrl+U\x1b[0m             — kill to beginning of line');
     term.writeln('  \x1b[36mCtrl+Y\x1b[0m             — yank (paste) killed text');
     term.writeln('  \x1b[36mCtrl+C\x1b[0m             — cancel current line / abort query');
+    term.writeln('  \x1b[36mCtrl+D\x1b[0m             — disconnect (on empty line)');
     term.writeln('  \x1b[36mCtrl+L\x1b[0m             — clear screen');
     term.writeln('  \x1b[36m\\\\ (backslash) at EOL\x1b[0m — continue query on next line');
     term.writeln('');
@@ -2430,6 +2446,14 @@ function startTerminal() {
     if (ev.ctrlKey && code === 'l') {
       term.clear();
       redrawLine();
+      return;
+    }
+
+    if (ev.ctrlKey && code === 'd') {
+      if (line.length === 0) {
+        term.writeln('\x1b[2m(Ctrl+D — disconnecting)\x1b[0m');
+        document.getElementById('btn-disconnect').click();
+      }
       return;
     }
 
