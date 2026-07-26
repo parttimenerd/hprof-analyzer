@@ -1856,6 +1856,19 @@ function startTerminal() {
         } else {
           term.writeln(`\x1b[31merror: ${kind}${msg}\x1b[0m`);
         }
+        // Suggest class names when the error looks like "class not found"
+        if (classNames.length > 0 && /class|type|not found|unknown/i.test(msg)) {
+          const wordMatch = msg.match(/[A-Z][a-zA-Z0-9$.]+/g) || [];
+          wordMatch.forEach(word => {
+            const lower = word.toLowerCase();
+            const suggestions = classNames
+              .filter(c => c.toLowerCase().includes(lower) || lower.includes(c.split('.').pop().toLowerCase()))
+              .slice(0, 3);
+            if (suggestions.length > 0) {
+              term.writeln(`\x1b[2mDid you mean: ${suggestions.map(s => s.split('.').pop()).join(', ')}?\x1b[0m`);
+            }
+          });
+        }
       } else {
         const r = data.result;
         if (r.error) {
