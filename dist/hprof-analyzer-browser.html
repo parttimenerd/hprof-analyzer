@@ -843,6 +843,16 @@ try {
 const PROMPT = 'oql> ';
 const HISTORY_KEY = 'hprof-analyzer.oql-history';
 const SETTINGS_KEY = 'hprof-analyzer.settings';
+const LAST_URL_KEY = 'hprof-analyzer.last-url';
+
+// Restore last-used server URL into the input on page load
+(function restoreLastUrl() {
+  const saved = localStorage.getItem(LAST_URL_KEY);
+  if (saved) {
+    const el = document.getElementById('server-url');
+    if (el) el.value = saved;
+  }
+})();
 
 // Display settings (persisted to localStorage)
 const defaultSettings = { rowLimit: 200, bytesRaw: false, nullStr: 'null' };
@@ -1019,6 +1029,7 @@ async function connectToServer() {
     status.textContent = `Connected to ${v.name || 'hprof-analyzer'} ${v.version || ''}`;
     status.className = 'ok';
     serverUrl = url;
+    localStorage.setItem(LAST_URL_KEY, url);
     showShell();
   } catch (e) {
     const hint = e.message.includes('timeout') || e.message.includes('fetch')
@@ -1184,7 +1195,7 @@ function startTerminal() {
 
   term.writeln('\x1b[1;36mhprof-analyzer OQL Shell\x1b[0m');
   term.writeln(`Connected to \x1b[32m${serverUrl}\x1b[0m`);
-  term.writeln('\x1b[2mType an OQL query and press Enter. Tab for completions. /help for commands.\x1b[0m');
+  term.writeln('\x1b[2mType an OQL query and press Enter. Tab = complete, Ctrl+R = search history, /help = commands.\x1b[0m');
   term.writeln('');
   term.write(PROMPT);
 
