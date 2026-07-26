@@ -1503,17 +1503,19 @@ function startTerminal() {
     }
     // Complete column names from lastResult for result-manipulation commands
     if (lastResult && lastResult.columns.length > 0) {
-      // /sort supports comma-separated multi-column: complete the last segment
+      // /sort supports comma-separated multi-column: complete the last segment; strip - prefix for desc
       if (line.startsWith('/sort ')) {
         const afterCmd = line.slice(6);
         const lastComma = afterCmd.lastIndexOf(',');
         const prefix = lastComma >= 0 ? line.slice(0, 6 + lastComma + 1).trimEnd() + ' ' : '/sort ';
-        const partial = (lastComma >= 0 ? afterCmd.slice(lastComma + 1) : afterCmd).trim().toLowerCase();
+        const segment = (lastComma >= 0 ? afterCmd.slice(lastComma + 1) : afterCmd).trim();
+        const isNeg = segment.startsWith('-');
+        const partial = (isNeg ? segment.slice(1) : segment).toLowerCase();
         const cols = lastResult.columns.filter(c => c.toLowerCase().startsWith(partial));
-        if (cols.length === 1) { setLine(prefix + cols[0]); }
+        if (cols.length === 1) { setLine(prefix + (isNeg ? '-' : '') + cols[0]); }
         else if (cols.length > 1 && cols.length <= 20) {
           term.writeln('');
-          term.writeln('  ' + cols.map(c => `\x1b[36m${c}\x1b[0m`).join('  '));
+          term.writeln('  ' + cols.map(c => `\x1b[36m${isNeg ? '-' : ''}${c}\x1b[0m`).join('  '));
           redrawLine();
         }
         return;
@@ -1523,12 +1525,14 @@ function startTerminal() {
                               '/not ', '/exclude ', '/rename ', '/sample '];
       const matched = singleColCmds.find(p => line.startsWith(p));
       if (matched) {
-        const partial = line.slice(matched.length).toLowerCase();
+        const rawArg = line.slice(matched.length);
+        const isAtCol = rawArg.startsWith('@') && (matched === '/filter ' || matched === '/grep ' || matched === '/not ' || matched === '/exclude ');
+        const partial = (isAtCol ? rawArg.slice(1) : rawArg).toLowerCase();
         const cols = lastResult.columns.filter(c => c.toLowerCase().startsWith(partial));
-        if (cols.length === 1) { setLine(matched + cols[0]); }
+        if (cols.length === 1) { setLine(matched + (isAtCol ? '@' : '') + cols[0]); }
         else if (cols.length > 1 && cols.length <= 20) {
           term.writeln('');
-          term.writeln('  ' + cols.map(c => `\x1b[36m${c}\x1b[0m`).join('  '));
+          term.writeln('  ' + cols.map(c => `\x1b[36m${isAtCol ? '@' : ''}${c}\x1b[0m`).join('  '));
           redrawLine();
         }
         return;
