@@ -2755,10 +2755,10 @@ function startTerminal() {
       if (!args[0]) {
         // Print current settings
         term.writeln('\x1b[1mCurrent settings:\x1b[0m');
-        term.writeln(`  limit    ${settings.rowLimit === Infinity ? 'unlimited' : settings.rowLimit}  \x1b[2m(rows displayed per query; 0 or "unlimited" = no cap)\x1b[0m`);
-        term.writeln(`  bytes    ${settings.bytesRaw ? 'raw' : 'human'}  \x1b[2m(raw = show bytes as numbers)\x1b[0m`);
-        term.writeln(`  null     "${settings.nullStr}"  \x1b[2m(how null values display)\x1b[0m`);
-        term.writeln(`  color    ${settings.color ? 'on' : 'off'}  \x1b[2m(colorize table cells)\x1b[0m`);
+        term.writeln(`  \x1b[1mlimit\x1b[0m    \x1b[32m${settings.rowLimit === Infinity ? 'unlimited' : settings.rowLimit}\x1b[0m  \x1b[2m(rows displayed per query; 0 or "unlimited" = no cap)\x1b[0m`);
+        term.writeln(`  \x1b[1mbytes\x1b[0m    \x1b[32m${settings.bytesRaw ? 'raw' : 'human'}\x1b[0m  \x1b[2m(raw = show bytes as numbers)\x1b[0m`);
+        term.writeln(`  \x1b[1mnull\x1b[0m     \x1b[32m"${settings.nullStr}"\x1b[0m  \x1b[2m(how null values display)\x1b[0m`);
+        term.writeln(`  \x1b[1mcolor\x1b[0m    \x1b[32m${settings.color ? 'on' : 'off'}\x1b[0m  \x1b[2m(colorize table cells)\x1b[0m`);
         term.writeln('\x1b[2mUsage: /set limit 500 | /set bytes raw | /set bytes human | /set null ∅ | /set color off\x1b[0m');
       } else if (args[0] === 'limit') {
         const n = args[1] === '0' || args[1] === 'unlimited' || args[1] === 'none' ? 0 : parseInt(args[1], 10);
@@ -3041,7 +3041,7 @@ function startTerminal() {
       term.writeln(`\x1b[2m… ${rows.length - settings.rowLimit} more rows (display limit ${settings.rowLimit} — use /set limit N)\x1b[0m`);
     }
     if (r.note) {
-      term.writeln(`\x1b[33m-- ${r.note}\x1b[0m`);
+      term.writeln(`\x1b[33m-- ${r.note} --\x1b[0m`);
     }
     return { colNames, adjW, isNumeric };
   }
