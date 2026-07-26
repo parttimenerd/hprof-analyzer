@@ -1675,7 +1675,7 @@ function startTerminal() {
     if (cmd.startsWith('/describe ') || cmd === '/describe') {
       const cls = cmd.slice(9).trim();
       if (!cls) {
-        term.writeln('\x1b[2mUsage: /describe <ClassName>  — show fields and instance count\x1b[0m');
+        term.writeln('\x1b[2musage: /describe <ClassName>  — show fields and instance count\x1b[0m');
         term.write(PROMPT);
         return;
       }
@@ -1744,14 +1744,14 @@ function startTerminal() {
       // /obj <ClassName>#<idx>  or  /obj <ClassName> <idx>
       const arg = cmd.slice(4).trim();
       if (!arg) {
-        term.writeln('\x1b[2mUsage: /obj <ClassName>#<idx>  — inspect a specific object by class + dense index\x1b[0m');
+        term.writeln('\x1b[2musage: /obj <ClassName>#<idx>  — inspect a specific object by class + dense index\x1b[0m');
         term.write(PROMPT);
         return;
       }
       // Parse "<Class>#<n>" or "<Class> <n>" formats
       const m = arg.match(/^(.+?)#(\d+)$/) || arg.match(/^(.+?)\s+(\d+)$/);
       if (!m) {
-        term.writeln('\x1b[2mUsage: /obj <ClassName>#<idx>  e.g. /obj java.lang.String#42\x1b[0m');
+        term.writeln('\x1b[2musage: /obj <ClassName>#<idx>  e.g. /obj java.lang.String#42\x1b[0m');
         term.write(PROMPT);
         return;
       }
@@ -1803,7 +1803,7 @@ function startTerminal() {
       const isPlan = cmd.startsWith('/plan') || cmd === '/plan';
       const oql = cmd.slice(isPlan ? 5 : 8).trim();
       if (!oql) {
-        term.writeln(`\x1b[2mUsage: /plan <oql>  — show query execution plan (no scan)\x1b[0m`);
+        term.writeln(`\x1b[2musage: /plan <oql>  — show query execution plan (no scan)\x1b[0m`);
         term.write(PROMPT);
         return;
       }
@@ -1843,16 +1843,16 @@ function startTerminal() {
           watchTimer = null;
           term.writeln('\x1b[33mwatch stopped\x1b[0m');
         } else if (args === '') {
-          term.writeln('\x1b[2mUsage: /watch <seconds> <oql>  — refresh query every N seconds; /watch stop\x1b[0m');
+          term.writeln('\x1b[2musage: /watch <seconds> <oql>  — refresh query every N seconds; /watch stop\x1b[0m');
         } else {
-          term.writeln('\x1b[2mNo active watch.\x1b[0m');
+          term.writeln('\x1b[2m(no active watch)\x1b[0m');
         }
         term.write(PROMPT);
         return;
       }
       const m = args.match(/^(\d+(?:\.\d+)?)\s+(.+)$/s);
       if (!m) {
-        term.writeln('\x1b[2mUsage: /watch <seconds> <oql>\x1b[0m');
+        term.writeln('\x1b[2musage: /watch <seconds> <oql>\x1b[0m');
         term.write(PROMPT);
         return;
       }
@@ -1884,7 +1884,7 @@ function startTerminal() {
           term.writeln(`\x1b[32m${n.toLocaleString()}\x1b[0m row${n !== 1 ? 's' : ''} × \x1b[32m${m}\x1b[0m col${m !== 1 ? 's' : ''}`);
           term.write(PROMPT); return;
         }
-        term.writeln('\x1b[2mUsage: /count <ClassName|oql>  — count instances or rows\x1b[0m');
+        term.writeln('\x1b[2musage: /count <ClassName|oql>  — count instances or rows\x1b[0m');
         term.write(PROMPT);
         return;
       }
@@ -1999,7 +1999,7 @@ function startTerminal() {
           term.write(PROMPT);
           return;
         } else if (isNaN(n)) {
-          term.writeln(`\x1b[2mUsage: /row [N|first|last|next|prev]  — show row as key=value pairs\x1b[0m`);
+          term.writeln(`\x1b[2musage: /row [N|first|last|next|prev]  — show row as key=value pairs\x1b[0m`);
           term.write(PROMPT);
           return;
         }
@@ -2238,7 +2238,7 @@ function startTerminal() {
       }
       const rawArg = cmd.slice(7).trim();
       if (!rawArg) {
-        term.writeln(`\x1b[2mUsage: /unique <col> [N]  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
+        term.writeln(`\x1b[2musage: /unique <col> [N]  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
         term.write(PROMPT);
         return;
       }
@@ -2298,7 +2298,7 @@ function startTerminal() {
       }
       const rawArg = cmd.slice(6).trim();
       if (!rawArg) {
-        term.writeln(`\x1b[2mUsage: /pivot <col> [N]  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
+        term.writeln(`\x1b[2musage: /pivot <col> [N]  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
         term.write(PROMPT);
         return;
       }
@@ -2474,7 +2474,7 @@ function startTerminal() {
       if (!lastResult) {
         term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
       } else if (!n || n < 1) {
-        term.writeln('\x1b[2mUsage: /top [N]  (or /head [N]) — show first N rows of last result (default 10)\x1b[0m');
+        term.writeln('\x1b[2musage: /top [N]  (or /head [N]) — show first N rows of last result (default 10)\x1b[0m');
       } else {
         const total = lastResult.rows.length;
         const sliced = lastResult.rows.slice(0, n);
@@ -2494,7 +2494,7 @@ function startTerminal() {
       if (!lastResult) {
         term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
       } else if (!n || n < 1) {
-        term.writeln('\x1b[2mUsage: /tail [N]  — show last N rows of last result (default 10)\x1b[0m');
+        term.writeln('\x1b[2musage: /tail [N]  — show last N rows of last result (default 10)\x1b[0m');
       } else {
         const total = lastResult.rows.length;
         const sliced = lastResult.rows.slice(-n);
@@ -2512,7 +2512,7 @@ function startTerminal() {
       const args = cmd.slice(5).trim();
       if (!lastResult || !args) {
         if (!lastResult) term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
-        else term.writeln(`\x1b[2mUsage: /sort <col> [desc] [,-col2…]  (-col for desc)  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
+        else term.writeln(`\x1b[2musage: /sort <col> [desc] [,-col2…]  (-col for desc)  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
         term.write(PROMPT);
         return;
       }
@@ -2567,13 +2567,13 @@ function startTerminal() {
       if (!lastResult) {
         term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
       } else if (!rawPattern) {
-        term.writeln('\x1b[2mUsage: /filter <text>  or  /filter /regex/[flags]  or  /filter @<col> <text>\x1b[0m');
+        term.writeln('\x1b[2musage: /filter <text>  or  /filter /regex/[flags]  or  /filter @<col> <text>\x1b[0m');
       } else {
         const { columns, rows } = lastResult;
         let colIdx = null, pattern = rawPattern;
         if (rawPattern.startsWith('@')) {
           const sp = rawPattern.slice(1).match(/^(\S+)\s+(.+)$/);
-          if (!sp) { term.writeln('\x1b[2mUsage: /filter @<col> <pattern>\x1b[0m'); term.write(PROMPT); return; }
+          if (!sp) { term.writeln('\x1b[2musage: /filter @<col> <pattern>\x1b[0m'); term.write(PROMPT); return; }
           colIdx = resolveCol(sp[1], columns);
           if (colIdx < 0) {
             term.writeln(`\x1b[31mcolumn "${sp[1]}" not found\x1b[0m  \x1b[2mavailable: ${columns.join(', ')}\x1b[0m`);
@@ -2615,13 +2615,13 @@ function startTerminal() {
       if (!lastResult) {
         term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
       } else if (!rawPattern) {
-        term.writeln('\x1b[2mUsage: /not <text>  or  /not /regex/[flags]  or  /not @<col> <text>  — exclude matching rows\x1b[0m');
+        term.writeln('\x1b[2musage: /not <text>  or  /not /regex/[flags]  or  /not @<col> <text>  — exclude matching rows\x1b[0m');
       } else {
         const { columns, rows } = lastResult;
         let colIdx = null, pattern = rawPattern;
         if (rawPattern.startsWith('@')) {
           const sp = rawPattern.slice(1).match(/^(\S+)\s+(.+)$/);
-          if (!sp) { term.writeln('\x1b[2mUsage: /not @<col> <pattern>\x1b[0m'); term.write(PROMPT); return; }
+          if (!sp) { term.writeln('\x1b[2musage: /not @<col> <pattern>\x1b[0m'); term.write(PROMPT); return; }
           colIdx = resolveCol(sp[1], columns);
           if (colIdx < 0) {
             term.writeln(`\x1b[31mcolumn "${sp[1]}" not found\x1b[0m  \x1b[2mavailable: ${columns.join(', ')}\x1b[0m`);
@@ -2718,7 +2718,7 @@ function startTerminal() {
         const cols = Math.max(1, Math.floor((term.cols - 4) / colW));
         for (let i = 0; i < matches.length; i += cols) {
           const row = matches.slice(i, i + cols);
-          term.writeln('  ' + row.map(c => c.padEnd(colW)).join('').trimEnd());
+          term.writeln('  ' + row.map(c => `\x1b[36m${c}\x1b[0m${' '.repeat(colW - c.length)}`).join('').trimEnd());
         }
         term.writeln(`\x1b[2m${matches.length} class${matches.length !== 1 ? 'es' : ''}\x1b[0m`);
       }
@@ -2743,7 +2743,7 @@ function startTerminal() {
         const cols = Math.max(1, Math.floor((term.cols - 4) / colW));
         for (let i = 0; i < matches.length; i += cols) {
           const row = matches.slice(i, i + cols);
-          term.writeln('  ' + row.map(f => f.padEnd(colW)).join('').trimEnd());
+          term.writeln('  ' + row.map(f => `\x1b[36m${f}\x1b[0m${' '.repeat(colW - f.length)}`).join('').trimEnd());
         }
         term.writeln(`\x1b[2m${matches.length} field${matches.length !== 1 ? 's' : ''}\x1b[0m`);
       }
@@ -2759,11 +2759,11 @@ function startTerminal() {
         term.writeln(`  \x1b[1mbytes\x1b[0m    \x1b[32m${settings.bytesRaw ? 'raw' : 'human'}\x1b[0m  \x1b[2m(raw = show bytes as numbers)\x1b[0m`);
         term.writeln(`  \x1b[1mnull\x1b[0m     \x1b[32m"${settings.nullStr}"\x1b[0m  \x1b[2m(how null values display)\x1b[0m`);
         term.writeln(`  \x1b[1mcolor\x1b[0m    \x1b[32m${settings.color ? 'on' : 'off'}\x1b[0m  \x1b[2m(colorize table cells)\x1b[0m`);
-        term.writeln('\x1b[2mUsage: /set limit 500 | /set bytes raw | /set bytes human | /set null ∅ | /set color off\x1b[0m');
+        term.writeln('\x1b[2musage: /set limit 500 | /set bytes raw | /set bytes human | /set null ∅ | /set color off\x1b[0m');
       } else if (args[0] === 'limit') {
         const n = args[1] === '0' || args[1] === 'unlimited' || args[1] === 'none' ? 0 : parseInt(args[1], 10);
         if (isNaN(n) || n < 0 || n > 100000) {
-          term.writeln('\x1b[2mUsage: /set limit <N>  (0 or "unlimited" = no cap)\x1b[0m');
+          term.writeln('\x1b[2musage: /set limit <N>  (0 or "unlimited" = no cap)\x1b[0m');
         } else if (n === 0) {
           settings.rowLimit = Infinity;
           localStorage.setItem(SETTINGS_KEY, JSON.stringify({ ...settings, rowLimit: 0 }));
@@ -2776,7 +2776,7 @@ function startTerminal() {
       } else if (args[0] === 'bytes') {
         if (args[1] === 'raw') { settings.bytesRaw = true; }
         else if (args[1] === 'human') { settings.bytesRaw = false; }
-        else { term.writeln('\x1b[2mUsage: /set bytes raw|human\x1b[0m'); term.write(PROMPT); return; }
+        else { term.writeln('\x1b[2musage: /set bytes raw|human\x1b[0m'); term.write(PROMPT); return; }
         localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
         term.writeln(`\x1b[32mbytes display: ${settings.bytesRaw ? 'raw numbers' : 'human-readable'}\x1b[0m`);
       } else if (args[0] === 'null') {
@@ -2786,7 +2786,7 @@ function startTerminal() {
       } else if (args[0] === 'color') {
         if (args[1] === 'off' || args[1] === 'false') { settings.color = false; }
         else if (args[1] === 'on' || args[1] === 'true' || !args[1]) { settings.color = true; }
-        else { term.writeln('\x1b[2mUsage: /set color on|off\x1b[0m'); term.write(PROMPT); return; }
+        else { term.writeln('\x1b[2musage: /set color on|off\x1b[0m'); term.write(PROMPT); return; }
         localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
         term.writeln(`\x1b[32mcell color: ${settings.color ? 'on' : 'off'}\x1b[0m`);
       } else {
@@ -3253,11 +3253,11 @@ function startTerminal() {
     section('Attributes (@ prefix)', ref_.attributes?.map(a => '@' + a));
     term.writeln('');
     term.writeln('  \x1b[33mSyntax examples\x1b[0m');
-    term.writeln('    SELECT * FROM java.lang.String');
-    term.writeln('    SELECT s.@objectAddress, s.value FROM java.lang.String s WHERE s.count > 100');
-    term.writeln('    SELECT classof(s).@name, COUNT(*) FROM java.lang.Object s GROUP BY classof(s)');
-    term.writeln('    SELECT * FROM INSTANCEOF java.util.Collection');
-    term.writeln('    SELECT s.@retainedHeapSize FROM java.lang.Thread s ORDER BY s.@retainedHeapSize DESC');
+    term.writeln('    \x1b[2mSELECT * FROM java.lang.String\x1b[0m');
+    term.writeln('    \x1b[2mSELECT s.@objectAddress, s.value FROM java.lang.String s WHERE s.count > 100\x1b[0m');
+    term.writeln('    \x1b[2mSELECT classof(s).@name, COUNT(*) FROM java.lang.Object s GROUP BY classof(s)\x1b[0m');
+    term.writeln('    \x1b[2mSELECT * FROM INSTANCEOF java.util.Collection\x1b[0m');
+    term.writeln('    \x1b[2mSELECT s.@retainedHeapSize FROM java.lang.Thread s ORDER BY s.@retainedHeapSize DESC\x1b[0m');
     term.writeln('');
     term.writeln('  \x1b[2mTip: /describe <ClassName> to see available fields\x1b[0m');
     term.writeln('');
