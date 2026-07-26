@@ -575,7 +575,7 @@ impl Completer for OqlCompleter {
                     "classes", "fields",
                     "reachable", "all", "mode",
                     "width", "count", "last", "save",
-                    "filter", "grep", "not", "exclude", "sample", "sort", "stats", "unique",
+                    "filter", "grep", "not", "exclude", "sample", "distinct", "dedup", "sort", "stats", "unique",
                     "top", "head", "tail", "select", "rename", "wc", "cols", "columns",
                     "describe", "obj",
                     "run",
@@ -956,6 +956,11 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             stdout.flush()?;
                             continue;
                         }
+                        "distinct" | "dedup" => {
+                            handle_distinct(&mut last_result, max_width, &mut stdout)?;
+                            stdout.flush()?;
+                            continue;
+                        }
                         "sample" => {
                             handle_sample(rest, &mut last_result, max_width, &mut stdout)?;
                             stdout.flush()?;
@@ -1329,6 +1334,11 @@ fn run_repl_line(
             }
             "not" | "exclude" => {
                 handle_filter_not(rest, last_result, *max_width, out)?;
+                out.flush()?;
+                return Ok(false);
+            }
+            "distinct" | "dedup" => {
+                handle_distinct(last_result, *max_width, out)?;
                 out.flush()?;
                 return Ok(false);
             }
@@ -1967,6 +1977,45 @@ fn handle_sample(
     Ok(())
 }
 
+/// `!distinct` — remove duplicate rows from last result.
+fn handle_distinct(
+    last_result: &mut Option<QueryResult>,
+    max_width: usize,
+    out: &mut impl Write,
+) -> io::Result<()> {
+    match last_result {
+        None => writeln!(out, "(no result — run a query first)")?,
+        Some(res) => {
+            use std::collections::HashSet;
+            let mut seen: HashSet<Vec<String>> = HashSet::new();
+            let kept: Vec<Vec<QueryValue>> = res.rows.iter()
+                .filter(|row| {
+                    let key: Vec<String> = row.iter().map(|v| fmt_value(v)).collect();
+                    seen.insert(key)
+                })
+                .cloned()
+                .collect();
+            let removed = res.rows.len() - kept.len();
+            let kept_n = kept.len() as u64;
+            let dedup_res = QueryResult {
+                columns: res.columns.clone(),
+                rows: kept,
+                row_count: kept_n,
+                truncated: false,
+                note: Some(format!("{} duplicate{} removed", removed, if removed == 1 { "" } else { "s" })),
+                error: None,
+                name: res.name.clone(),
+                oql: res.oql.clone(),
+                viz: None,
+                elapsed_ms: None,
+            };
+            print_result(&dedup_res, std::time::Duration::ZERO, max_width, out)?;
+            *last_result = Some(dedup_res);
+        }
+    }
+    Ok(())
+}
+
 /// Sort the last result by a column name (case-insensitive prefix match).
 /// `!sort <col> [desc]`
 fn handle_sort(
@@ -2239,6 +2288,7 @@ fn handle_meta(
             writeln!(out, "  !not <pattern>        exclude rows matching pattern (inverse of !filter)")?;
             writeln!(out, "  !grep <pattern>       alias for !filter")?;
             writeln!(out, "  !sample <N>           show N randomly sampled rows from last result")?;
+            writeln!(out, "  !distinct             remove duplicate rows (!dedup is an alias)")?;
             writeln!(out, "  !sort <col> [desc]    sort last result by column (prefix match)")?;
             writeln!(out, "  !stats <col>          numeric summary: min/max/mean/p50/p90/p99/sum")?;
             writeln!(out, "  !unique <col>         distinct value counts, sorted by frequency")?;
