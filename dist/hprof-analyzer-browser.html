@@ -1868,7 +1868,7 @@ function startTerminal() {
       const tick = async () => {
         const ts = new Date().toLocaleTimeString('en-GB', { hour12: false });
         term.writeln(`\x1b[2m── ${ts} ──────────────────────────────────────────\x1b[0m`);
-        await runQuery(watchOql);
+        await runQuery(watchOql, { showHint: false });
         term.write(PROMPT);
       };
       await tick();
@@ -3064,7 +3064,7 @@ function startTerminal() {
     return { colNames, adjW, isNumeric };
   }
 
-  async function runQuery(oql) {
+  async function runQuery(oql, { showHint = true } = {}) {
     // Soft warning: if query references retained-size attributes but analysis hasn't run
     if (!hasRetained && /@retainedHeapSize|@dominatorClass|dominators\s*\(|retained\s*\(/i.test(oql)) {
       term.writeln('\x1b[33m[hint] Query uses retained-size data — click "Run Analysis" first for accurate results\x1b[0m');
@@ -3142,7 +3142,7 @@ function startTerminal() {
           const elapsedColor = elapsedMs > 1000 ? '\x1b[31m' : elapsedMs > 300 ? '\x1b[33m' : '\x1b[2m';
           const ts = new Date().toLocaleTimeString('en-GB', { hour12: false });
           term.writeln(`${elapsedColor}${r.row_count} row${r.row_count !== 1 ? 's' : ''}, ${elapsedFmt}\x1b[0m\x1b[2m  [${ts}]\x1b[0m${trunc}`);
-          if (rows.length > 20) {
+          if (rows.length > 20 && showHint) {
             const hasNumeric = colNames.some((_, i) => {
               const sample = rows.find(row => row[i] !== null && row[i] !== undefined);
               return sample ? isNumericKind(sample[i]) : false;
