@@ -538,7 +538,7 @@ function startTerminal() {
     if (line.startsWith('/') && !line.includes(' ')) {
       const partial = line.slice(1).toLowerCase();
       const cmds = ['help','clear','status','analyze','history','export','set','classes','filter','grep',
-                    'sort','unique','stats','top','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
+                    'sort','unique','stats','top','head','tail','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
       const matches = cmds.filter(c => c.startsWith(partial));
       if (matches.length === 1) {
         setLine('/' + matches[0] + ' ');
@@ -938,11 +938,13 @@ function startTerminal() {
         seen.set(key, (seen.get(key) || 0) + 1);
       });
       const entries = [...seen.entries()].sort((a, b) => b[1] - a[1]);
+      const maxCnt = entries.length > 0 ? entries[0][1] : 0;
+      const cntW = Math.max(5, String(maxCnt).length);
       const colW = Math.max(colName.length, ...entries.map(([v]) => v.length), 4);
-      term.writeln(`\x1b[1m${colName.padEnd(colW)}  count\x1b[0m`);
-      term.writeln('\x1b[2m' + '─'.repeat(Math.min(colW + 8, term.cols - 2)) + '\x1b[0m');
+      term.writeln(`\x1b[1m${colName.padEnd(colW)}  ${'count'.padStart(cntW)}\x1b[0m`);
+      term.writeln('\x1b[2m' + '─'.repeat(Math.min(colW + cntW + 2, term.cols - 2)) + '\x1b[0m');
       entries.slice(0, settings.rowLimit).forEach(([val, cnt]) => {
-        term.writeln(`${val.padEnd(colW)}  \x1b[32m${String(cnt).padStart(5)}\x1b[0m`);
+        term.writeln(`${val.padEnd(colW)}  \x1b[32m${String(cnt).padStart(cntW)}\x1b[0m`);
       });
       term.writeln(`\x1b[2m${seen.size} distinct value${seen.size !== 1 ? 's' : ''} in ${lastResult.rows.length} rows\x1b[0m`);
       term.write(PROMPT);
@@ -1002,16 +1004,33 @@ function startTerminal() {
       term.write(PROMPT);
       return;
     }
-    if (cmd.startsWith('/top ') || cmd === '/top') {
-      const n = parseInt(cmd.slice(4).trim(), 10);
+    if (cmd.startsWith('/top ') || cmd === '/top' ||
+        cmd.startsWith('/head ') || cmd === '/head') {
+      const isHead = cmd.startsWith('/head');
+      const n = parseInt(cmd.slice(isHead ? 5 : 4).trim(), 10);
       if (!lastResult) {
         term.writeln('\x1b[33mNo result to slice — run a query first.\x1b[0m');
       } else if (!n || n < 1) {
-        term.writeln('\x1b[33mUsage: /top <N>  — show top N rows of last result\x1b[0m');
+        term.writeln('\x1b[33mUsage: /top <N>  (or /head <N>) — show first N rows of last result\x1b[0m');
       } else {
         const sliced = lastResult.rows.slice(0, n);
         renderResult({ columns: lastResult.columns, rows: sliced, row_count: n });
         term.writeln(`\x1b[2mShowing top ${n} of ${lastResult.rows.length} rows\x1b[0m`);
+        lastResult = { columns: lastResult.columns, rows: sliced };
+      }
+      term.write(PROMPT);
+      return;
+    }
+    if (cmd.startsWith('/tail ') || cmd === '/tail') {
+      const n = parseInt(cmd.slice(5).trim(), 10);
+      if (!lastResult) {
+        term.writeln('\x1b[33mNo result to slice — run a query first.\x1b[0m');
+      } else if (!n || n < 1) {
+        term.writeln('\x1b[33mUsage: /tail <N>  — show last N rows of last result\x1b[0m');
+      } else {
+        const sliced = lastResult.rows.slice(-n);
+        renderResult({ columns: lastResult.columns, rows: sliced, row_count: sliced.length });
+        term.writeln(`\x1b[2mShowing last ${sliced.length} of ${lastResult.rows.length} rows\x1b[0m`);
         lastResult = { columns: lastResult.columns, rows: sliced };
       }
       term.write(PROMPT);
@@ -1461,7 +1480,8 @@ function startTerminal() {
     c('/last',                   '— re-display last result');
     c('/filter <text|/re/>',     '— filter rows by substring or regex  (/grep is an alias)');
     c('/sort <col> [desc]',      '— sort rows by column');
-    c('/top <N>',                '— first N rows');
+    c('/top <N>  /head <N>',      '— first N rows (updates lastResult for chaining)');
+    c('/tail <N>',               '— last N rows');
     c('/unique <col>',           '— distinct value counts');
     c('/stats <col>',            '— min/max/mean/percentiles/sum');
     c('/export [csv]',           '— copy to clipboard as TSV or CSV');
