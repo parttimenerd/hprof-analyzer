@@ -110,6 +110,13 @@ function isNumericKind(cell) {
   return cell.kind === 'int' || cell.kind === 'float';
 }
 
+function fmtBytes(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
+  return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+}
+
 function fmtCell(cell, colName) {
   if (cell === null || cell === undefined) return 'null';
   if (typeof cell !== 'object') return String(cell);
@@ -120,8 +127,12 @@ function fmtCell(cell, colName) {
   if (kind === 'int') {
     if (typeof v !== 'number') return String(v);
     // Address-like columns shown as hex
-    if (colName && /address|addr|ptr|id$/i.test(colName)) {
+    if (colName && /address|addr|ptr/i.test(colName)) {
       return '0x' + v.toString(16).toUpperCase().padStart(8, '0');
+    }
+    // Byte-size columns shown as human-readable
+    if (colName && /bytes$|_size$|heap_size$/i.test(colName)) {
+      return fmtBytes(v);
     }
     return v.toLocaleString('en-US');
   }
