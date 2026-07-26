@@ -13,8 +13,8 @@ use std::time::Instant;
 
 use reedline::{
     ColumnarMenu, Completer, DefaultPrompt, Emacs, FileBackedHistory, KeyCode, KeyModifiers,
-    MenuBuilder, Reedline, ReedlineEvent, ReedlineMenu, Signal, Span, Suggestion,
-    default_emacs_keybindings,
+    MenuBuilder, Reedline, ReedlineEvent, ReedlineMenu, SearchDirection, SearchQuery, Signal,
+    Span, Suggestion, default_emacs_keybindings,
 };
 
 use crate::query::model::{QueryResult, QueryValue};
@@ -597,7 +597,7 @@ impl Completer for OqlCompleter {
                     "width", "count", "last", "save",
                     "filter", "grep", "not", "exclude", "sample", "distinct", "dedup", "sort", "stats", "unique", "pivot",
                     "top", "head", "tail", "select", "rename", "wc", "row", "undo", "cols", "columns",
-                    "describe", "obj",
+                    "describe", "obj", "history",
                     "run",
                 ];
                 let lower = partial.to_ascii_lowercase();
@@ -1123,7 +1123,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             prev_result = last_result.clone();
                             let col_args: Vec<&str> = rest.split_whitespace().collect();
                             if col_args.is_empty() {
-                                writeln!(stdout, "usage: !select <col1> [col2 ...]  — keep only named columns")?;
+                                writeln!(stdout, "usage: !select <col1> [col2 ...]  — keep named or numbered columns (see !cols)")?;
                             } else {
                                 match &last_result {
                                     None => writeln!(stdout, "(no result — run a query first)")?,
@@ -1131,6 +1131,13 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                         let mut indices = Vec::new();
                                         let mut ok = true;
                                         for arg in &col_args {
+                                            // Accept 1-based numeric column index
+                                            if let Ok(n) = arg.parse::<usize>() {
+                                                if n >= 1 && n <= res.columns.len() {
+                                                    indices.push(n - 1);
+                                                    continue;
+                                                }
+                                            }
                                             let lower = arg.to_ascii_lowercase();
                                             match res.columns.iter().position(|c|
                                                 c.name.to_ascii_lowercase() == lower
@@ -1213,14 +1220,30 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                 None => writeln!(stdout, "(no result — run a query first)")?,
                                 Some(res) => {
                                     let fields: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                                    let col_w = fields.iter().map(|f| f.len()).max().unwrap_or(10) + 2;
-                                    let cols = (80usize).saturating_div(col_w).max(1);
-                                    for chunk in fields.chunks(cols) {
-                                        let row: String = chunk.iter().map(|f| format!("  {:<col_w$}", f)).collect();
-                                        writeln!(stdout, "{}", row.trim_end())?;
+                                    let idx_w = fields.len().to_string().len();
+                                    let col_w = fields.iter().map(|f| f.len()).max().unwrap_or(10);
+                                    for (i, f) in fields.iter().enumerate() {
+                                        writeln!(stdout, "  {:>idx_w$}  {:<col_w$}", i + 1, f)?;
                                     }
                                     writeln!(stdout, "({} column{})", fields.len(), if fields.len() == 1 { "" } else { "s" })?;
                                 }
+                            }
+                            stdout.flush()?;
+                            continue;
+                        }
+                        "history" => {
+                            let n: usize = rest.trim().parse().unwrap_or(20);
+                            let entries = line_editor
+                                .history()
+                                .search(SearchQuery::everything(SearchDirection::Backward, None))
+                                .unwrap_or_default();
+                            let start = entries.len().saturating_sub(n);
+                            for (i, item) in entries[start..].iter().enumerate() {
+                                let idx = start + i + 1;
+                                writeln!(stdout, "  {:>4}  {}", idx, item.command_line)?;
+                            }
+                            if entries.is_empty() {
+                                writeln!(stdout, "(no history yet)")?;
                             }
                             stdout.flush()?;
                             continue;
@@ -1515,13 +1538,21 @@ fn run_repl_line(
                 // !select col1 [col2 ...] — project columns from last result
                 let col_args: Vec<&str> = rest.split_whitespace().collect();
                 if col_args.is_empty() {
-                    writeln!(out, "usage: !select <col1> [col2 ...]  — keep only named columns")?;
+                    writeln!(out, "usage: !select <col1> [col2 ...]  — keep named or numbered columns (see !cols)")?;
                 } else {
                     match last_result {
                         None => writeln!(out, "(no result — run a query first)")?,
                         Some(res) => {
                             let mut indices = Vec::new();
+                            let mut ok = true;
                             for arg in &col_args {
+                                // Accept 1-based numeric column index
+                                if let Ok(n) = arg.parse::<usize>() {
+                                    if n >= 1 && n <= res.columns.len() {
+                                        indices.push(n - 1);
+                                        continue;
+                                    }
+                                }
                                 let lower = arg.to_ascii_lowercase();
                                 match res.columns.iter().position(|c|
                                     c.name.to_ascii_lowercase() == lower
@@ -1531,30 +1562,32 @@ fn run_repl_line(
                                     None => {
                                         let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
                                         writeln!(out, "column {:?} not found — available: {}", arg, names.join(", "))?;
-                                        out.flush()?;
-                                        return Ok(false);
+                                        ok = false;
+                                        break;
                                     }
                                 }
                             }
-                            use crate::query::model::QueryColumn;
-                            let new_cols: Vec<QueryColumn> = indices.iter().map(|&i| res.columns[i].clone()).collect();
-                            let new_rows: Vec<Vec<QueryValue>> = res.rows.iter()
-                                .map(|row| indices.iter().map(|&i| row[i].clone()).collect())
-                                .collect();
-                            let projected = QueryResult {
-                                columns: new_cols,
-                                rows: new_rows.clone(),
-                                row_count: new_rows.len() as u64,
-                                truncated: false,
-                                note: None,
-                                error: None,
-                                name: res.name.clone(),
-                                oql: res.oql.clone(),
-                                viz: None,
-                                elapsed_ms: None,
-                            };
-                            print_result(&projected, std::time::Duration::ZERO, *max_width, out)?;
-                            *last_result = Some(projected);
+                            if ok {
+                                use crate::query::model::QueryColumn;
+                                let new_cols: Vec<QueryColumn> = indices.iter().map(|&i| res.columns[i].clone()).collect();
+                                let new_rows: Vec<Vec<QueryValue>> = res.rows.iter()
+                                    .map(|row| indices.iter().map(|&i| row[i].clone()).collect())
+                                    .collect();
+                                let projected = QueryResult {
+                                    columns: new_cols,
+                                    rows: new_rows.clone(),
+                                    row_count: new_rows.len() as u64,
+                                    truncated: false,
+                                    note: None,
+                                    error: None,
+                                    name: res.name.clone(),
+                                    oql: res.oql.clone(),
+                                    viz: None,
+                                    elapsed_ms: None,
+                                };
+                                print_result(&projected, std::time::Duration::ZERO, *max_width, out)?;
+                                *last_result = Some(projected);
+                            }
                         }
                     }
                 }
@@ -2542,6 +2575,7 @@ fn handle_meta(
             writeln!(out, "  !tail <N>             show last N rows of last result")?;
             writeln!(out, "  !row [N]              show row N (1-based) as vertical key=value pairs")?;
             writeln!(out, "  !undo                 restore last result before last manipulation")?;
+            writeln!(out, "  !history [N]          show last N queries from history (default 20)")?;
             writeln!(out, "  !select <cols...>     project columns from last result")?;
             writeln!(out, "  !rename <old> <new>   rename a column in last result")?;
             writeln!(out, "  !describe <class>     show all field names of a class")?;
