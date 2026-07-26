@@ -1005,15 +1005,32 @@ function startTerminal() {
         return;
       }
       const arg = cmd.slice(4).trim();
-      const n = arg ? parseInt(arg, 10) : 1;
-      if (isNaN(n) || n < 1 || n > lastResult.rows.length) {
-        term.writeln(`\x1b[33mUsage: /row [N]  — show row N (1-based) as key=value pairs (default: 1)\x1b[0m`);
-        term.write(PROMPT);
-        return;
+      let n;
+      if (!arg || arg === 'first') {
+        n = 1; currentRowIdx = 0;
+      } else if (arg === 'next' || arg === '+') {
+        currentRowIdx = Math.min(currentRowIdx + 1, lastResult.rows.length - 1);
+        n = currentRowIdx + 1;
+      } else if (arg === 'prev' || arg === '-') {
+        currentRowIdx = Math.max(currentRowIdx - 1, 0);
+        n = currentRowIdx + 1;
+      } else if (arg === 'last') {
+        currentRowIdx = lastResult.rows.length - 1;
+        n = currentRowIdx + 1;
+      } else {
+        n = parseInt(arg, 10);
+        if (isNaN(n) || n < 1 || n > lastResult.rows.length) {
+          term.writeln(`\x1b[33mUsage: /row [N|first|last|next|prev]  — show row as key=value pairs\x1b[0m`);
+          term.write(PROMPT);
+          return;
+        }
+        currentRowIdx = n - 1;
       }
       const row = lastResult.rows[n - 1];
       const keyW = Math.max(...lastResult.columns.map(c => c.length)) + 2;
-      term.writeln(`\x1b[2m── row ${n} of ${lastResult.rows.length} ──\x1b[0m`);
+      const total = lastResult.rows.length;
+      const navHint = total > 1 ? `\x1b[2m  (/row next or /row prev to navigate)\x1b[0m` : '';
+      term.writeln(`\x1b[2m── row ${n} of ${total} ──\x1b[0m${navHint}`);
       lastResult.columns.forEach((col, i) => {
         const key = col.padEnd(keyW);
         const val = fmtCell(row[i], col);
@@ -1785,6 +1802,7 @@ function startTerminal() {
   let lastResult = null;    // { columns, rows } of last successful query for /export
   let prevResult = null;    // single-level undo: saved before result-mutating commands
   let watchTimer = null;    // setInterval handle for /watch
+  let currentRowIdx = 0;    // 0-based row cursor for /row next/prev
 
   function cellColor(cell, colName) {
     if (!settings.color) return '';
@@ -1920,6 +1938,7 @@ function startTerminal() {
           const rows = r.rows || [];
           renderResult(r);
           lastResult = { columns: colNames, rows };
+          currentRowIdx = 0;
           const note = r.note ? `  \x1b[33m[${r.note}]\x1b[0m` : '';
           const trunc = r.truncated ? '  \x1b[33m[truncated]\x1b[0m' : '';
           const elapsedFmt = elapsedMs < 1000 ? `${elapsedMs.toFixed(0)}ms` : `${(elapsedMs / 1000).toFixed(3)}s`;
@@ -1968,7 +1987,7 @@ function startTerminal() {
     h('Result post-processing');
     c('/last',                   '— re-display last result');
     c('/wc',                     '— show row count of last result');
-    c('/row [N]',                '— show row N (1-based) as key=value pairs');
+    c('/row [N|next|prev|last]', '— show row as key=value pairs; next/prev navigate sequentially');
     c('/undo',                   '— restore last result before the previous manipulation');
     c('/limit <N>',              '— set display row limit and re-display (alias for /set limit N)');
     c('/cols',                   '— list column names with index numbers');

@@ -905,6 +905,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
     let mut last_query: Option<String> = None;
     let mut last_result: Option<QueryResult> = None;
     let mut prev_result: Option<QueryResult> = None; // single-level undo
+    let mut current_row: usize = 0;                   // 0-based cursor for !row next/prev
     let mut cache: Option<crate::query::run::ReplCache> = None;
     writeln!(
         stdout,
@@ -1038,7 +1039,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             continue;
                         }
                         "row" => {
-                            handle_row(rest, &last_result, &mut stdout)?;
+                            handle_row(rest, &last_result, &mut current_row, &mut stdout)?;
                             stdout.flush()?;
                             continue;
                         }
@@ -1347,6 +1348,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                     {
                         last_query = Some(query);
                         last_result = Some(res);
+                        current_row = 0;
                     }
                     stdout.flush()?;
                     continue;
@@ -1363,6 +1365,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                         )? {
                             last_query = Some(query.to_string());
                             last_result = Some(res);
+                            current_row = 0;
                         }
                     }
                     stdout.flush()?;
@@ -1376,6 +1379,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                     {
                         last_query = Some(t.to_string());
                         last_result = Some(res);
+                        current_row = 0;
                     }
                     stdout.flush()?;
                 } else {
@@ -1480,7 +1484,7 @@ fn run_repl_line(
                 return Ok(false);
             }
             "row" => {
-                handle_row(rest, last_result, out)?;
+                handle_row(rest, last_result, &mut 0, out)?;
                 out.flush()?;
                 return Ok(false);
             }
@@ -2638,10 +2642,11 @@ fn handle_export(
 }
 
 /// Display a single row (1-based) from last result in vertical key=value layout.
-/// With no argument, shows row 1.  Useful for wide results with many columns.
+/// With no argument or "first", shows row 1.  Supports "next"/"prev"/"last" navigation.
 fn handle_row(
     arg: &str,
     last_result: &Option<QueryResult>,
+    current_row: &mut usize,
     out: &mut impl Write,
 ) -> io::Result<()> {
     let Some(res) = last_result else {
@@ -2652,24 +2657,31 @@ fn handle_row(
         writeln!(out, "(result has no rows)")?;
         return Ok(());
     }
-    let idx: usize = if arg.trim().is_empty() {
-        1
-    } else {
-        match arg.trim().parse::<usize>() {
-            Ok(n) if n >= 1 && n <= res.rows.len() => n,
-            Ok(n) => {
-                writeln!(out, "row {n} out of range — result has {} rows", res.rows.len())?;
-                return Ok(());
-            }
-            Err(_) => {
-                writeln!(out, "usage: !row [N]  — show row N (1-based) as key=value pairs")?;
-                return Ok(());
+    let n_rows = res.rows.len();
+    let arg = arg.trim();
+    let idx: usize = match arg {
+        "" | "first" => { *current_row = 0; 1 }
+        "next" | "+" => { *current_row = (*current_row + 1).min(n_rows - 1); *current_row + 1 }
+        "prev" | "-" => { *current_row = current_row.saturating_sub(1); *current_row + 1 }
+        "last"       => { *current_row = n_rows - 1; n_rows }
+        other => {
+            match other.parse::<usize>() {
+                Ok(n) if n >= 1 && n <= n_rows => { *current_row = n - 1; n }
+                Ok(n) => {
+                    writeln!(out, "row {n} out of range — result has {n_rows} rows")?;
+                    return Ok(());
+                }
+                Err(_) => {
+                    writeln!(out, "usage: !row [N|first|last|next|prev]  — show row as key=value pairs")?;
+                    return Ok(());
+                }
             }
         }
     };
     let row = &res.rows[idx - 1];
     let key_w = res.columns.iter().map(|c| c.name.len()).max().unwrap_or(8);
-    writeln!(out, "── row {idx} of {} ──", res.rows.len())?;
+    let nav = if n_rows > 1 { format!("  \x1b[2m(use !row next / !row prev to navigate)\x1b[0m") } else { String::new() };
+    writeln!(out, "── row {idx} of {n_rows} ──{nav}")?;
     for (col, val) in res.columns.iter().zip(row.iter()) {
         writeln!(out, "  {:<key_w$}  {}", col.name, fmt_value(val))?;
     }
@@ -2742,7 +2754,7 @@ fn handle_meta(
             writeln!(out, "  !pivot <col>          group by column → (value, count) table (chainable)")?;
             writeln!(out, "  !top [N]  /  !head [N]  show first N rows of last result (default 10)")?;
             writeln!(out, "  !tail [N]             show last N rows of last result (default 10)")?;
-            writeln!(out, "  !row [N]              show row N (1-based) as vertical key=value pairs")?;
+            writeln!(out, "  !row [N|first|last|next|prev]  show a row as key=value pairs; next/prev to navigate")?;
             writeln!(out, "  !undo                 restore last result before last manipulation")?;
             writeln!(out, "  !history [N]          show last N queries from history (default 20)")?;
             writeln!(out, "  !select <cols...>     project columns from last result")?;
