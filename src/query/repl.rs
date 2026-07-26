@@ -2193,7 +2193,7 @@ fn handle_set(rest: &str, out: &mut impl Write) -> io::Result<()> {
         writeln!(out, "  {cb}limit{cr}  {limit_str:<12}  {cd}(rows displayed; 0 = no cap){cr}")?;
         writeln!(out, "  {cb}bytes{cr}  {:<12}  {cd}(raw = show numbers, human = 4.3 KiB){cr}", if bytes_raw { "raw" } else { "human" })?;
         writeln!(out, "  {cb}color{cr}  {:<12}  {cd}(ANSI colours in table cells){cr}", if color { "on" } else { "off" })?;
-        writeln!(out, "  {cb}null{cr}   \"{null_str:<11}  {cd}(null display string){cr}")?;
+        writeln!(out, "  {cb}null{cr}   {:<12}  {cd}(null display string){cr}", format!("\"{}\"", null_str))?;
         writeln!(out, "{cd}Usage: !set limit N | !set bytes raw|human | !set color on|off | !set null <str>{cr}")?;
         return Ok(());
     }
