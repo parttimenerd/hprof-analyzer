@@ -1343,8 +1343,8 @@ function startTerminal() {
           term.writeln('\x1b[2m  Use /bookmark <name> to save, /forget <name> to delete, !<name> to run\x1b[0m');
         }
       } else {
-        // Save last query (or current line) under a name
-        const toSave = history[0];
+        // history[0] is the /bookmark command itself; history[1] is the last real query
+        const toSave = history.find(h => !h.startsWith('/bookmark') && !h.startsWith('/save'));
         if (!toSave) {
           term.writeln('\x1b[33m(no query to bookmark — run a query first)\x1b[0m');
         } else {
