@@ -48,7 +48,10 @@ for p in [
         sys.exit(1)
 
 html = read('web-browser/index.html')
-html = html.replace('%%WASM_JS%%',  read('crates/hprof-wasm/pkg/hprof_wasm.js'))
+wasm_js = read('crates/hprof-wasm/pkg/hprof_wasm.js')
+# Escape characters that would corrupt the enclosing template literal in index.html
+wasm_js_escaped = wasm_js.replace('\\', '\\\\').replace('`', '\\`').replace('${', '\\${')
+html = html.replace('%%WASM_JS%%',  wasm_js_escaped)
 html = html.replace('%%WASM_B64%%', readb64('crates/hprof-wasm/pkg/hprof_wasm_bg.wasm'))
 html = html.replace('%%SHELL_JS%%', read('web-browser/shell.js'))
 html = html.replace('%%STYLE_CSS%%', read('web-browser/style.css'))

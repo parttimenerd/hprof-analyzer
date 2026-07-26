@@ -138,6 +138,7 @@ document.getElementById('server-url').addEventListener('keydown', e => {
 async function connectToServer() {
   const url = document.getElementById('server-url').value.trim().replace(/\/$/, '');
   const status = document.getElementById('connect-status');
+  document.getElementById('btn-connect').disabled = true;
   status.textContent = 'Connecting…';
   status.className = '';
   try {
@@ -156,6 +157,7 @@ async function connectToServer() {
       : '';
     status.textContent = `Cannot connect: ${e.message}${hint}`;
     status.className = 'err';
+    document.getElementById('btn-connect').disabled = false;
   }
 }
 
@@ -171,6 +173,7 @@ function showShell() {
 document.getElementById('btn-disconnect').addEventListener('click', () => {
   serverUrl = null;
   hasRetained = false;
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
   if (term) { term.dispose(); term = null; }
   document.getElementById('named-query-list').innerHTML = '';
   document.getElementById('connect-status').textContent = '';
@@ -271,6 +274,7 @@ function buildSidebar(analysisReady) {
 
 // ── Terminal ──────────────────────────────────────────────────────────────────
 function startTerminal() {
+  if (term) { term.dispose(); term = null; }
   term = new Terminal({
     theme: {
       background: '#0a0a14',
