@@ -1399,7 +1399,7 @@ function startTerminal() {
     if (line.startsWith('/') && !line.includes(' ')) {
       const partial = line.slice(1).toLowerCase();
       const cmds = ['help','clear','status','analyze','history','export','set','classes','filter',
-                    'sort','top','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
+                    'sort','unique','top','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
       const matches = cmds.filter(c => c.startsWith(partial));
       if (matches.length === 1) {
         setLine('/' + matches[0] + ' ');
@@ -1470,9 +1470,9 @@ function startTerminal() {
       return;
     }
     // Complete /sort <col> from lastResult columns
-    if (line.startsWith('/sort ') || line.startsWith('/filter ')) {
+    if (line.startsWith('/sort ') || line.startsWith('/filter ') || line.startsWith('/unique ')) {
       if (lastResult && lastResult.columns.length > 0) {
-        const pfxLen = line.startsWith('/sort ') ? 6 : 8;
+        const pfxLen = line.startsWith('/sort ') ? 6 : line.startsWith('/unique ') ? 8 : 8;
         const partial = line.slice(pfxLen).toLowerCase();
         const cols = lastResult.columns.filter(c => c.toLowerCase().startsWith(partial));
         if (cols.length === 1) { setLine(line.slice(0, pfxLen) + cols[0]); }
@@ -1768,6 +1768,42 @@ function startTerminal() {
       } else {
         term.writeln(`\x1b[31mNo bookmark named "${name}"\x1b[0m`);
       }
+      term.write(PROMPT);
+      return;
+    }
+    if (cmd.startsWith('/unique ') || cmd === '/unique') {
+      if (!lastResult) {
+        term.writeln('\x1b[33mNo result — run a query first.\x1b[0m');
+        term.write(PROMPT);
+        return;
+      }
+      const colArg = cmd.slice(7).trim();
+      if (!colArg) {
+        term.writeln('\x1b[33mUsage: /unique <col>  — show distinct values in a column\x1b[0m');
+        term.write(PROMPT);
+        return;
+      }
+      const ci = lastResult.columns.findIndex(c => c.toLowerCase() === colArg.toLowerCase()
+        || c.toLowerCase().includes(colArg.toLowerCase()));
+      if (ci < 0) {
+        term.writeln(`\x1b[31mColumn "${colArg}" not found. Available: ${lastResult.columns.join(', ')}\x1b[0m`);
+        term.write(PROMPT);
+        return;
+      }
+      const colName = lastResult.columns[ci];
+      const seen = new Map();
+      lastResult.rows.forEach(row => {
+        const key = fmtCell(row[ci], colName);
+        seen.set(key, (seen.get(key) || 0) + 1);
+      });
+      const entries = [...seen.entries()].sort((a, b) => b[1] - a[1]);
+      const colW = Math.max(colName.length, ...entries.map(([v]) => v.length), 4);
+      term.writeln(`\x1b[1m${colName.padEnd(colW)}  count\x1b[0m`);
+      term.writeln('\x1b[2m' + '─'.repeat(Math.min(colW + 8, term.cols - 2)) + '\x1b[0m');
+      entries.slice(0, settings.rowLimit).forEach(([val, cnt]) => {
+        term.writeln(`${val.padEnd(colW)}  \x1b[32m${String(cnt).padStart(5)}\x1b[0m`);
+      });
+      term.writeln(`\x1b[2m${seen.size} distinct value${seen.size !== 1 ? 's' : ''} in ${lastResult.rows.length} rows\x1b[0m`);
       term.write(PROMPT);
       return;
     }
@@ -2216,6 +2252,7 @@ function startTerminal() {
     term.writeln('  \x1b[36m/forget <name>\x1b[0m     — delete a bookmark');
     term.writeln('  \x1b[36m/filter <text|/re/>\x1b[0m — filter last result rows by substring or regex');
     term.writeln('  \x1b[36m/sort <col> [desc]\x1b[0m — sort last result by column');
+    term.writeln('  \x1b[36m/unique <col>\x1b[0m      — count distinct values in a column');
     term.writeln('  \x1b[36m/top <N>\x1b[0m           — show top N rows of last result');
     term.writeln('  \x1b[36m/run <name>\x1b[0m        — run a named query');
     term.writeln('');
