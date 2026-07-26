@@ -596,7 +596,7 @@ impl Completer for OqlCompleter {
                     "reachable", "all", "mode",
                     "width", "count", "last", "save",
                     "filter", "grep", "not", "exclude", "sample", "distinct", "dedup", "sort", "stats", "unique", "pivot",
-                    "top", "head", "tail", "select", "rename", "wc", "row", "cols", "columns",
+                    "top", "head", "tail", "select", "rename", "wc", "row", "undo", "cols", "columns",
                     "describe", "obj",
                     "run",
                 ];
@@ -896,6 +896,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
     }
     let mut last_query: Option<String> = None;
     let mut last_result: Option<QueryResult> = None;
+    let mut prev_result: Option<QueryResult> = None; // single-level undo
     let mut cache: Option<crate::query::run::ReplCache> = None;
     writeln!(
         stdout,
@@ -1011,6 +1012,17 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             stdout.flush()?;
                             continue;
                         }
+                        "undo" => {
+                            match prev_result.take() {
+                                None => writeln!(stdout, "(nothing to undo)")?,
+                                Some(prev) => {
+                                    writeln!(stdout, "-- undone; restored result with {} row{}", prev.rows.len(), if prev.rows.len() == 1 { "" } else { "s" })?;
+                                    last_result = Some(prev);
+                                }
+                            }
+                            stdout.flush()?;
+                            continue;
+                        }
                         "row" => {
                             handle_row(rest, &last_result, &mut stdout)?;
                             stdout.flush()?;
@@ -1025,26 +1037,31 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             continue;
                         }
                         "filter" | "grep" => {
+                            prev_result = last_result.clone();
                             handle_filter(rest, &mut last_result, max_width, &mut stdout)?;
                             stdout.flush()?;
                             continue;
                         }
                         "not" | "exclude" => {
+                            prev_result = last_result.clone();
                             handle_filter_not(rest, &mut last_result, max_width, &mut stdout)?;
                             stdout.flush()?;
                             continue;
                         }
                         "distinct" | "dedup" => {
+                            prev_result = last_result.clone();
                             handle_distinct(&mut last_result, max_width, &mut stdout)?;
                             stdout.flush()?;
                             continue;
                         }
                         "sample" => {
+                            prev_result = last_result.clone();
                             handle_sample(rest, &mut last_result, max_width, &mut stdout)?;
                             stdout.flush()?;
                             continue;
                         }
                         "sort" => {
+                            prev_result = last_result.clone();
                             handle_sort(rest, &mut last_result, max_width, &mut stdout)?;
                             stdout.flush()?;
                             continue;
@@ -1060,11 +1077,13 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             continue;
                         }
                         "pivot" => {
+                            prev_result = last_result.clone();
                             handle_pivot(rest, &mut last_result, max_width, &mut stdout)?;
                             stdout.flush()?;
                             continue;
                         }
                         "top" | "head" => {
+                            prev_result = last_result.clone();
                             match rest.trim().parse::<usize>() {
                                 Ok(n) if n > 0 => {
                                     match last_result.as_mut() {
@@ -1082,6 +1101,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             continue;
                         }
                         "tail" => {
+                            prev_result = last_result.clone();
                             match rest.trim().parse::<usize>() {
                                 Ok(n) if n > 0 => {
                                     match last_result.as_mut() {
@@ -1100,6 +1120,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             continue;
                         }
                         "select" => {
+                            prev_result = last_result.clone();
                             let col_args: Vec<&str> = rest.split_whitespace().collect();
                             if col_args.is_empty() {
                                 writeln!(stdout, "usage: !select <col1> [col2 ...]  — keep only named columns")?;
@@ -2520,6 +2541,7 @@ fn handle_meta(
             writeln!(out, "  !top <N>  /  !head <N>  show first N rows of last result")?;
             writeln!(out, "  !tail <N>             show last N rows of last result")?;
             writeln!(out, "  !row [N]              show row N (1-based) as vertical key=value pairs")?;
+            writeln!(out, "  !undo                 restore last result before last manipulation")?;
             writeln!(out, "  !select <cols...>     project columns from last result")?;
             writeln!(out, "  !rename <old> <new>   rename a column in last result")?;
             writeln!(out, "  !describe <class>     show all field names of a class")?;

@@ -547,7 +547,7 @@ function startTerminal() {
     if (line.startsWith('/') && !line.includes(' ')) {
       const partial = line.slice(1).toLowerCase();
       const cmds = ['help','clear','status','analyze','history','export','set','classes','plan','explain','filter','grep',
-                    'sort','unique','pivot','stats','top','head','tail','row','sample','cols','columns','select','rename','wc','limit','not','exclude','distinct','dedup','obj','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
+                    'sort','unique','pivot','stats','top','head','tail','row','undo','sample','cols','columns','select','rename','wc','limit','not','exclude','distinct','dedup','obj','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
       const matches = cmds.filter(c => c.startsWith(partial));
       if (matches.length === 1) {
         setLine('/' + matches[0] + ' ');
@@ -972,6 +972,18 @@ function startTerminal() {
       term.write(PROMPT);
       return;
     }
+    if (cmd === '/undo') {
+      if (!prevResult) {
+        term.writeln('\x1b[33m(nothing to undo)\x1b[0m');
+      } else {
+        lastResult = prevResult;
+        prevResult = null;
+        term.writeln(`\x1b[32mUndone — restored ${lastResult.rows.length} row${lastResult.rows.length !== 1 ? 's' : ''}\x1b[0m`);
+        renderResult({ columns: lastResult.columns, rows: lastResult.rows, row_count: lastResult.rows.length });
+      }
+      term.write(PROMPT);
+      return;
+    }
     if (cmd.startsWith('/row ') || cmd === '/row') {
       if (!lastResult) {
         term.writeln('\x1b[33mNo result — run a query first.\x1b[0m');
@@ -1065,6 +1077,7 @@ function startTerminal() {
           if (ok) {
             const newCols = indices.map(i => fields[i]);
             const newRows = lastResult.rows.map(r => indices.map(i => r[i]));
+            prevResult = lastResult;
             lastResult = { columns: newCols, rows: newRows };
             renderResult({ columns: lastResult.columns, rows: lastResult.rows, row_count: lastResult.rows.length });
           }
@@ -1087,6 +1100,7 @@ function startTerminal() {
           if (i === -1) {
             term.writeln(`\x1b[31mcolumn ${JSON.stringify(oldName)} not found — available: ${lastResult.columns.join(', ')}\x1b[0m`);
           } else {
+            prevResult = { columns: [...lastResult.columns], rows: lastResult.rows };
             lastResult.columns[i] = newName;
             term.writeln(`\x1b[2mrenamed column ${JSON.stringify(oldName)} → ${JSON.stringify(newName)}\x1b[0m`);
           }
@@ -1218,6 +1232,7 @@ function startTerminal() {
       const pivotRows = entries.map(([v, c]) => [v, c]);
       const pivotResult = { columns: [colName, 'count'], rows: pivotRows, row_count: pivotRows.length };
       renderResult(pivotResult);
+      prevResult = lastResult;
       lastResult = pivotResult;
       term.write(PROMPT);
       return;
@@ -1309,6 +1324,7 @@ function startTerminal() {
         const sliced = lastResult.rows.slice(0, n);
         renderResult({ columns: lastResult.columns, rows: sliced, row_count: n });
         term.writeln(`\x1b[2mShowing top ${n} of ${lastResult.rows.length} rows\x1b[0m`);
+        prevResult = lastResult;
         lastResult = { columns: lastResult.columns, rows: sliced };
       }
       term.write(PROMPT);
@@ -1324,6 +1340,7 @@ function startTerminal() {
         const sliced = lastResult.rows.slice(-n);
         renderResult({ columns: lastResult.columns, rows: sliced, row_count: sliced.length });
         term.writeln(`\x1b[2mShowing last ${sliced.length} of ${lastResult.rows.length} rows\x1b[0m`);
+        prevResult = lastResult;
         lastResult = { columns: lastResult.columns, rows: sliced };
       }
       term.write(PROMPT);
@@ -1367,6 +1384,7 @@ function startTerminal() {
         return 0;
       });
       renderResult({ columns: lastResult.columns, rows: sorted, row_count: sorted.length });
+      prevResult = lastResult;
       lastResult = { columns: lastResult.columns, rows: sorted };
       const label = specs.map(s => `${s.name} ${s.desc ? 'desc' : 'asc'}`).join(', ');
       term.writeln(`\x1b[2mSorted by ${label}\x1b[0m`);
@@ -1400,6 +1418,7 @@ function startTerminal() {
         } else {
           renderResult({ columns, rows: filtered, row_count: filtered.length });
           term.writeln(`\x1b[2m${filtered.length} of ${rows.length} rows match "${pattern}"\x1b[0m`);
+          prevResult = lastResult;
           lastResult = { columns, rows: filtered };
         }
       }
@@ -1430,6 +1449,7 @@ function startTerminal() {
         );
         renderResult({ columns, rows: kept, row_count: kept.length });
         term.writeln(`\x1b[2m${rows.length - kept.length} of ${rows.length} rows excluded by "${pattern}"\x1b[0m`);
+        prevResult = lastResult;
         lastResult = { columns, rows: kept };
       }
       term.write(PROMPT);
@@ -1474,6 +1494,7 @@ function startTerminal() {
         const removed = lastResult.rows.length - kept.length;
         renderResult({ columns: lastResult.columns, rows: kept, row_count: kept.length });
         term.writeln(`\x1b[2m${kept.length} unique rows (${removed} duplicate${removed !== 1 ? 's' : ''} removed)\x1b[0m`);
+        prevResult = lastResult;
         lastResult = { columns: lastResult.columns, rows: kept };
       }
       term.write(PROMPT);
@@ -1706,6 +1727,7 @@ function startTerminal() {
 
   let currentAbort = null;  // AbortController for in-flight query
   let lastResult = null;    // { columns, rows } of last successful query for /export
+  let prevResult = null;    // single-level undo: saved before result-mutating commands
   let watchTimer = null;    // setInterval handle for /watch
 
   function cellColor(cell, colName) {
@@ -1891,6 +1913,7 @@ function startTerminal() {
     c('/last',                   '— re-display last result');
     c('/wc',                     '— show row count of last result');
     c('/row [N]',                '— show row N (1-based) as key=value pairs');
+    c('/undo',                   '— restore last result before the previous manipulation');
     c('/limit <N>',              '— set display row limit and re-display (alias for /set limit N)');
     c('/cols',                   '— list column names of last result');
     c('/select <col> …',         '— project (keep) specific columns from last result');
