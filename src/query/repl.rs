@@ -1350,7 +1350,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                                 let idx_w = res.columns.len().to_string().len();
                                                 writeln!(stdout, "── {cls}#{idx} ──")?;
                                                 for (i, (col, val)) in res.columns.iter().zip(res.rows[0].iter()).enumerate() {
-                                                    writeln!(stdout, "  \x1b[2m{:>idx_w$}\x1b[0m  {:<key_w$}  {}", i + 1, col.name, fmt_value(val))?;
+                                                    writeln!(stdout, "  \x1b[2m{:>idx_w$}\x1b[0m  {:<key_w$}  {}", i + 1, col.name, fmt_value_for_col(val, &col.name))?;
                                                 }
                                             } else if res.rows.is_empty() {
                                                 writeln!(stdout, "(no object {cls}#{idx} found)")?;
@@ -1859,7 +1859,7 @@ fn run_repl_line(
                                     let idx_w = res.columns.len().to_string().len();
                                     writeln!(out, "── {cls}#{idx} ──")?;
                                     for (i, (col, val)) in res.columns.iter().zip(res.rows[0].iter()).enumerate() {
-                                        writeln!(out, "  \x1b[2m{:>idx_w$}\x1b[0m  {:<key_w$}  {}", i + 1, col.name, fmt_value(val))?;
+                                        writeln!(out, "  \x1b[2m{:>idx_w$}\x1b[0m  {:<key_w$}  {}", i + 1, col.name, fmt_value_for_col(val, &col.name))?;
                                     }
                                 } else if res.rows.is_empty() {
                                     writeln!(out, "(no object {cls}#{idx} found)")?;
@@ -3030,7 +3030,7 @@ fn handle_row(
     let nav = if n_rows > 1 { format!("  \x1b[2m(use !row next / !row prev to navigate)\x1b[0m") } else { String::new() };
     writeln!(out, "── row {idx} of {n_rows} ──{nav}")?;
     for (i, (col, val)) in res.columns.iter().zip(row.iter()).enumerate() {
-        writeln!(out, "  \x1b[2m{:>idx_w$}\x1b[0m  {:<key_w$}  {}", i + 1, col.name, fmt_value(val))?;
+        writeln!(out, "  \x1b[2m{:>idx_w$}\x1b[0m  {:<key_w$}  {}", i + 1, col.name, fmt_value_for_col(val, &col.name))?;
     }
     Ok(())
 }
@@ -3382,7 +3382,12 @@ fn print_result(
     let body: Vec<Vec<String>> = res
         .rows
         .iter()
-        .map(|row| row.iter().map(|v| truncate_cell(&fmt_value(v), max_width)).collect())
+        .map(|row| {
+            row.iter().enumerate().map(|(i, v)| {
+                let col_name = res.columns.get(i).map(|c| c.name.as_str()).unwrap_or("");
+                truncate_cell(&fmt_value_for_col(v, col_name), max_width)
+            }).collect()
+        })
         .collect();
     // Per-column display width = max over header + all cells (char count, since
     // truncate_cell already bounded each string). Guards against ragged rows.
@@ -3491,6 +3496,38 @@ fn fmt_value(v: &QueryValue) -> String {
         }
         QueryValue::Str(s) => s.clone(),
         QueryValue::ObjRef { index, class, .. } => format!("{class}@{index}"),
+    }
+}
+
+/// Format a value with column-name-aware heuristics:
+/// - address/addr/ptr columns → hex (0xDEADBEEF)
+/// - *bytes / *_size / *heap_size columns → human-readable (4.3 KiB)
+fn fmt_value_for_col(v: &QueryValue, col_name: &str) -> String {
+    if let QueryValue::Int(i) = v {
+        let lower = col_name.to_ascii_lowercase();
+        if lower.contains("address") || lower.contains("addr") || lower.contains("ptr") {
+            return format!("0x{:016X}", *i as u64);
+        }
+        if lower.ends_with("bytes") || lower.ends_with("_size") || lower.ends_with("heap_size") {
+            return fmt_bytes(*i as u64);
+        }
+    }
+    fmt_value(v)
+}
+
+/// Format a byte count as a compact human-readable size (e.g. 4.3 KiB, 12.7 MiB).
+fn fmt_bytes(n: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = 1024 * KIB;
+    const GIB: u64 = 1024 * MIB;
+    if n >= GIB {
+        format!("{:.1} GiB", n as f64 / GIB as f64)
+    } else if n >= MIB {
+        format!("{:.1} MiB", n as f64 / MIB as f64)
+    } else if n >= KIB {
+        format!("{:.1} KiB", n as f64 / KIB as f64)
+    } else {
+        format!("{} B", n)
     }
 }
 
