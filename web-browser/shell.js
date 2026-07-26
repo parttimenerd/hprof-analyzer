@@ -515,7 +515,7 @@ function startTerminal() {
     if (line.startsWith('/') && !line.includes(' ')) {
       const partial = line.slice(1).toLowerCase();
       const cmds = ['help','clear','status','analyze','history','export','set','classes','filter',
-                    'sort','top','run','bookmark','forget','last'];
+                    'sort','top','run','bookmark','forget','last','describe','count'];
       const matches = cmds.filter(c => c.startsWith(partial));
       if (matches.length === 1) {
         setLine('/' + matches[0] + ' ');
@@ -535,6 +535,22 @@ function startTerminal() {
       } else if (matches.length > 1) {
         term.writeln('');
         matches.forEach(q => term.writeln(`  \x1b[36m${q.name.padEnd(36)}\x1b[0m  \x1b[2m${q.display}\x1b[0m`));
+        redrawLine();
+      }
+      return;
+    }
+    // Complete /describe <class> and /count <class>
+    const classCmd = line.startsWith('/describe ') ? '/describe '
+                   : line.startsWith('/count ')    ? '/count '
+                   : null;
+    if (classCmd && classNames.length > 0) {
+      const partial = line.slice(classCmd.length);
+      const matches = classNames.filter(c => c.toLowerCase().startsWith(partial.toLowerCase()));
+      if (matches.length === 1) {
+        setLine(classCmd + matches[0]);
+      } else if (matches.length > 1 && matches.length <= 20) {
+        term.writeln('');
+        term.writeln('  ' + matches.map(c => `\x1b[36m${c}\x1b[0m`).join('  '));
         redrawLine();
       }
       return;
@@ -696,7 +712,38 @@ function startTerminal() {
       term.write(PROMPT);
       return;
     }
+    if (cmd.startsWith('/count ') || cmd === '/count') {
+      const cls = cmd.slice(6).trim();
+      if (!cls) {
+        term.writeln('\x1b[33mUsage: /count <ClassName>  — number of live instances\x1b[0m');
+        term.write(PROMPT);
+        return;
+      }
+      term.write('\x1b[2m⠋ counting…\x1b[0m');
+      try {
+        const res = await fetch(serverUrl + '/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: `SELECT COUNT(*) FROM INSTANCEOF ${cls}` }),
+        });
+        const data = await res.json();
+        term.write('\r\x1b[K');
+        if (data.ok) {
+          const n = data.rows?.[0]?.[0];
+          term.writeln(`\x1b[32m${n != null ? n.toLocaleString() : '?'}\x1b[0m instance${n === 1 ? '' : 's'} of \x1b[36m${cls}\x1b[0m`);
+        } else {
+          const msg = data.error?.message || data.error || 'unknown error';
+          term.writeln(`\x1b[31merror: ${msg}\x1b[0m`);
+        }
+      } catch (e) {
+        term.write('\r\x1b[K');
+        term.writeln(`\x1b[31mrequest failed: ${e.message}\x1b[0m`);
+      }
+      term.write(PROMPT);
+      return;
+    }
     if (cmd === '/last') {
+      if (!lastResult) {
         term.writeln('\x1b[33mNo result yet — run a query first.\x1b[0m');
       } else {
         renderResult(lastResult);
@@ -1109,6 +1156,7 @@ function startTerminal() {
     term.writeln('  \x1b[36m/set [key val]\x1b[0m     — view/change display settings (limit, bytes, null)');
     term.writeln('  \x1b[36m/classes [pat]\x1b[0m     — list class names (optionally filtered by pattern)');
     term.writeln('  \x1b[36m/describe <cls>\x1b[0m    — show fields of a class');
+    term.writeln('  \x1b[36m/count <cls>\x1b[0m       — count live instances of a class');
     term.writeln('  \x1b[36m/last\x1b[0m              — re-display last query result');
     term.writeln('  \x1b[36m/bookmark [name]\x1b[0m   — save last query as a named bookmark');
     term.writeln('  \x1b[36m/forget <name>\x1b[0m     — delete a bookmark');
