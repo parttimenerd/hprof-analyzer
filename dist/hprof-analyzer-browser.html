@@ -2465,17 +2465,24 @@ function startTerminal() {
     const maxW = term.cols - 2;
     const scale = totalW > maxW ? maxW / totalW : 1;
     const adjW = colW.map(w => Math.max(4, Math.floor(w * scale)));
-    const header = colNames.map((n, i) => padTo(n, adjW[i], isNumeric[i])).join('  ');
+    const displayRows = rows.slice(0, settings.rowLimit);
+    // Add a row-number gutter when there are 2+ rows
+    const showRowNums = displayRows.length >= 2;
+    const rowNumW = showRowNums ? String(displayRows.length).length : 0;
+    const gutterPad = showRowNums ? ' '.repeat(rowNumW + 2) : '';
+    const header = gutterPad + colNames.map((n, i) => padTo(n, adjW[i], isNumeric[i])).join('  ');
     term.writeln('\x1b[1m' + header + '\x1b[0m');
     term.writeln('\x1b[2m' + '─'.repeat(Math.min(header.length, term.cols - 2)) + '\x1b[0m');
-    const displayRows = rows.slice(0, settings.rowLimit);
-    displayRows.forEach(row => {
+    displayRows.forEach((row, ri) => {
       const cells = row.map((cell, i) => {
         const txt = padTo(fmtCell(cell, colNames[i]), adjW[i], isNumeric[i]);
         const color = cellColor(cell, colNames[i]);
         return color ? color + txt + '\x1b[0m' : txt;
       });
-      term.writeln(cells.join('  '));
+      const gutter = showRowNums
+        ? `\x1b[2m${String(ri + 1).padStart(rowNumW)}\x1b[0m  `
+        : '';
+      term.writeln(gutter + cells.join('  '));
     });
     if (rows.length > settings.rowLimit) {
       term.writeln(`\x1b[2m… ${rows.length - settings.rowLimit} more rows (display limit ${settings.rowLimit} — use /set limit N)\x1b[0m`);
