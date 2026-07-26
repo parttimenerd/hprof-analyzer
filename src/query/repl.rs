@@ -973,7 +973,7 @@ fn run_repl_line(
         return dispatch_run(rest, path, path_depth, *reachable_only, *max_width, last_query, last_result, cache, out);
     }
     // /help — list named queries
-    if buffer_lines.is_empty() && (t == "/help" || t == "/help ") {
+    if buffer_lines.is_empty() && t == "/help" {
         print_named_queries_help(out)?;
         out.flush()?;
         return Ok(false);
@@ -1117,10 +1117,11 @@ fn dispatch_run(
     let nq = crate::named_queries::NAMED_QUERIES.iter().find(|q| q.name == name);
     match nq {
         None => {
-            let prefix_len = name.len().min(3);
+            let prefix_end = name.char_indices().nth(3).map(|(i, _)| i).unwrap_or(name.len());
+            let prefix = &name[..prefix_end];
             let candidates: Vec<&str> = crate::named_queries::NAMED_QUERIES
                 .iter()
-                .filter(|q| q.name.starts_with(&name[..prefix_len]))
+                .filter(|q| q.name.starts_with(prefix))
                 .map(|q| q.name)
                 .collect();
             writeln!(out, "error: unknown query name {:?}", name)?;

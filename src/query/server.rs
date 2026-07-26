@@ -254,7 +254,8 @@ pub fn version_json() -> serde_json::Value {
             {"method":"POST","path":"/stream","desc":"run OQL, NDJSON rows (one per line)"},
             {"method":"GET","path":"/help","desc":"language reference JSON"},
             {"method":"GET","path":"/schema","desc":"JSON Schema for QueryResult"},
-            {"method":"GET","path":"/version","desc":"this document"}
+            {"method":"GET","path":"/version","desc":"this document"},
+            {"method":"GET","path":"/named-queries","desc":"all named queries with OQL"}
         ]
     })
 }
@@ -611,6 +612,7 @@ pub fn run_server(path: &str, path_depth: usize, port: u16) -> io::Result<()> {
     println!("  GET  /help     -> language reference JSON");
     println!("  GET  /schema   -> JSON Schema for QueryResult");
     println!("  GET  /version  -> server version + endpoint catalog");
+    println!("  GET  /named-queries -> list of all named queries");
     println!("examples:");
     println!("  curl -s http://{bound}/ -d 'SELECT @objectAddress FROM java.lang.Thread'");
     println!("  curl -s http://{bound}/help | jq .");
@@ -859,7 +861,7 @@ mod tests {
         let v = version_json();
         let paths: Vec<&str> = v["endpoints"].as_array().unwrap().iter()
             .map(|e| e["path"].as_str().unwrap()).collect();
-        for p in ["/", "/query", "/stream", "/help", "/schema", "/version"] {
+        for p in ["/", "/query", "/stream", "/help", "/schema", "/version", "/named-queries"] {
             assert!(paths.contains(&p), "endpoint catalog missing {p}: {v}");
         }
     }

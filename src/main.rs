@@ -722,10 +722,11 @@ fn main() {
                     let nq = crate::named_queries::NAMED_QUERIES.iter().find(|q| q.name == name);
                     match nq {
                         None => {
-                            let prefix_len = name.len().min(3);
+                            let prefix_end = name.char_indices().nth(3).map(|(i, _)| i).unwrap_or(name.len());
+                            let prefix = &name[..prefix_end];
                             let candidates: Vec<&str> = crate::named_queries::NAMED_QUERIES
                                 .iter()
-                                .filter(|q| q.name.starts_with(&name[..prefix_len]))
+                                .filter(|q| q.name.starts_with(prefix))
                                 .map(|q| q.name)
                                 .collect();
                             eprintln!("error: unknown named query {:?}", name);
