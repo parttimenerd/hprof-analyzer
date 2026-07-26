@@ -2443,6 +2443,12 @@ fn handle_filter(
                 .collect();
             let total = res.rows.len();
             let filtered_count = filtered_rows.len();
+            if filtered_count == 0 {
+                let cy = if color { "\x1b[33m" } else { "" };
+                let cr2 = if color { "\x1b[0m" } else { "" };
+                writeln!(out, "{cy}(no rows match {pattern:?}){cr2}")?;
+                return Ok(());
+            }
             let note = format!("{} of {} rows match {:?}", filtered_count, total, pattern);
             let filtered_res = QueryResult {
                 columns: res.columns.clone(),
@@ -2532,7 +2538,14 @@ fn handle_filter_not(
                 .collect();
             let total = res.rows.len();
             let kept = filtered_rows.len();
-            let note = format!("{} of {} rows excluded {:?}", total - kept, total, actual_pattern);
+            let excluded = total - kept;
+            if excluded == 0 {
+                let cy = if color { "\x1b[33m" } else { "" };
+                let cr2 = if color { "\x1b[0m" } else { "" };
+                writeln!(out, "{cy}(no rows match {actual_pattern:?} — nothing excluded){cr2}")?;
+                return Ok(());
+            }
+            let note = format!("{} of {} rows excluded {:?}", excluded, total, actual_pattern);
             let filtered_res = QueryResult {
                 columns: res.columns.clone(),
                 rows: filtered_rows,
