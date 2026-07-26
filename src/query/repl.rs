@@ -977,6 +977,23 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             stdout.flush()?;
                             continue;
                         }
+                        "cols" | "columns" => {
+                            match &last_result {
+                                None => writeln!(stdout, "(no result — run a query first)")?,
+                                Some(res) => {
+                                    let fields: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
+                                    let col_w = fields.iter().map(|f| f.len()).max().unwrap_or(10) + 2;
+                                    let cols = (80usize).saturating_div(col_w).max(1);
+                                    for chunk in fields.chunks(cols) {
+                                        let row: String = chunk.iter().map(|f| format!("  {:<col_w$}", f)).collect();
+                                        writeln!(stdout, "{}", row.trim_end())?;
+                                    }
+                                    writeln!(stdout, "({} column{})", fields.len(), if fields.len() == 1 { "" } else { "s" })?;
+                                }
+                            }
+                            stdout.flush()?;
+                            continue;
+                        }
                         "obj" => {
                             let arg = rest.trim();
                             let parsed = arg.split_once('#')
@@ -1215,6 +1232,23 @@ fn run_repl_line(
                         }
                         Ok(None) => {} // error already printed
                         Err(e) => writeln!(out, "error: {e}")?,
+                    }
+                }
+                out.flush()?;
+                return Ok(false);
+            }
+            "cols" | "columns" => {
+                match last_result {
+                    None => writeln!(out, "(no result — run a query first)")?,
+                    Some(res) => {
+                        let fields: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
+                        let col_w = fields.iter().map(|f| f.len()).max().unwrap_or(10) + 2;
+                        let cols = (80usize).saturating_div(col_w).max(1);
+                        for chunk in fields.chunks(cols) {
+                            let row: String = chunk.iter().map(|f| format!("  {:<col_w$}", f)).collect();
+                            writeln!(out, "{}", row.trim_end())?;
+                        }
+                        writeln!(out, "({} column{})", fields.len(), if fields.len() == 1 { "" } else { "s" })?;
                     }
                 }
                 out.flush()?;
@@ -1790,6 +1824,7 @@ fn handle_meta(
             writeln!(out, "  !top <N>  /  !head <N>  show first N rows of last result")?;
             writeln!(out, "  !tail <N>             show last N rows of last result")?;
             writeln!(out, "  !describe <class>     show all field names of a class")?;
+            writeln!(out, "  !cols                 list column names of last result")?;
             writeln!(out, "  !obj <class>#<idx>    inspect a specific object (by dense index)")?;
             writeln!(out, "  !quit                 exit")?;
             writeln!(out, "  <oql>                 run a query and print results")?;
@@ -1821,8 +1856,12 @@ fn handle_meta(
                 // Cap the dump so an unfiltered `!classes` on a huge heap doesn't
                 // flood the terminal; tell the user how to narrow it.
                 const CAP: usize = 200;
-                for n in matches.iter().take(CAP) {
-                    writeln!(out, "  {n}")?;
+                let shown: Vec<&String> = matches.iter().take(CAP).copied().collect();
+                let col_w = shown.iter().map(|n| n.len()).max().unwrap_or(10) + 2;
+                let cols = (80usize).saturating_div(col_w).max(1);
+                for chunk in shown.chunks(cols) {
+                    let row: String = chunk.iter().map(|n| format!("  {:<col_w$}", n)).collect();
+                    writeln!(out, "{}", row.trim_end())?;
                 }
                 if matches.len() > CAP {
                     writeln!(
