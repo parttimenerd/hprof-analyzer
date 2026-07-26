@@ -3317,30 +3317,36 @@ fn handle_row(
 /// scalar functions, methods, and attributes in a compact columnar layout.
 fn print_oql_ref(out: &mut impl Write) -> io::Result<()> {
     use crate::query::parse::{AGG_FUNCS, ATTRIBUTES, FUNCS, KEYWORDS, METHODS, RESERVED};
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cb, cc, cd, cy, cr) = if color {
+        ("\x1b[1m", "\x1b[36m", "\x1b[2m", "\x1b[33m", "\x1b[0m")
+    } else {
+        ("", "", "", "", "")
+    };
     let print_cols = |label: &str, items: &[&str], out: &mut dyn Write| -> io::Result<()> {
-        writeln!(out, "\n  {label}")?;
+        writeln!(out, "\n  {cy}{label}{cr}")?;
         let col_w = items.iter().map(|s| s.len()).max().unwrap_or(8) + 2;
         let cols = (76usize).saturating_div(col_w.max(1)).max(1);
         for chunk in items.chunks(cols) {
-            let row: String = chunk.iter().map(|s| format!("    {:<col_w$}", s)).collect();
+            let row: String = chunk.iter().map(|s| format!("    {cc}{s}{cr}{}", " ".repeat(col_w - s.len()))).collect();
             writeln!(out, "{}", row.trim_end())?;
         }
         Ok(())
     };
-    writeln!(out, "OQL Language Reference  (!help for REPL commands)")?;
+    writeln!(out, "{cb}OQL Language Reference{cr}  {cd}(!help for REPL commands){cr}")?;
     let all_keywords: Vec<&str> = KEYWORDS.iter().chain(RESERVED.iter()).copied().collect();
     print_cols("Keywords", &all_keywords, out)?;
     print_cols("Aggregate functions", AGG_FUNCS, out)?;
     print_cols("Scalar functions", FUNCS, out)?;
     print_cols("Methods  (object.method())", METHODS, out)?;
     print_cols("Attributes  (@ prefix)", ATTRIBUTES, out)?;
-    writeln!(out, "\n  Syntax examples")?;
-    writeln!(out, "    SELECT * FROM java.lang.String")?;
-    writeln!(out, "    SELECT s.@objectAddress, s.value FROM java.lang.String s WHERE s.count > 100")?;
-    writeln!(out, "    SELECT classof(s).@name, COUNT(*) FROM java.lang.Object s GROUP BY classof(s)")?;
-    writeln!(out, "    SELECT * FROM INSTANCEOF java.util.Collection")?;
-    writeln!(out, "    SELECT s.@retainedHeapSize FROM java.lang.Thread s ORDER BY s.@retainedHeapSize DESC")?;
-    writeln!(out, "\n  Tip: use !describe <ClassName> to see available fields")?;
+    writeln!(out, "\n  {cy}Syntax examples{cr}")?;
+    writeln!(out, "    {cd}SELECT * FROM java.lang.String{cr}")?;
+    writeln!(out, "    {cd}SELECT s.@objectAddress, s.value FROM java.lang.String s WHERE s.count > 100{cr}")?;
+    writeln!(out, "    {cd}SELECT classof(s).@name, COUNT(*) FROM java.lang.Object s GROUP BY classof(s){cr}")?;
+    writeln!(out, "    {cd}SELECT * FROM INSTANCEOF java.util.Collection{cr}")?;
+    writeln!(out, "    {cd}SELECT s.@retainedHeapSize FROM java.lang.Thread s ORDER BY s.@retainedHeapSize DESC{cr}")?;
+    writeln!(out, "\n  {cd}Tip: use !describe <ClassName> to see available fields{cr}")?;
     Ok(())
 }
 
@@ -3369,12 +3375,12 @@ fn handle_meta(
                 return Ok(false);
             }
             let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-            let (ch, cc, cr) = if color { ("\x1b[1;33m", "\x1b[36m", "\x1b[0m") } else { ("", "", "") };
+            let (ch, cc, cd, cr) = if color { ("\x1b[1;33m", "\x1b[36m", "\x1b[2m", "\x1b[0m") } else { ("", "", "", "") };
             macro_rules! h { ($title:literal) => { writeln!(out, "\n{ch}{}{cr}", $title)?; }; }
             macro_rules! c { ($cmd:literal, $desc:literal) => {
                 writeln!(out, "  {cc}{:<28}{cr} {}", $cmd, $desc)?;
             }; }
-            writeln!(out, "OQL REPL commands  (prefix: !, e.g. !help oql for language reference)")?;
+            writeln!(out, "\x1b[1mOQL REPL commands\x1b[0m  {cd}(prefix: !, e.g. !help oql for language reference){cr}")?;
             h!("Heap exploration");
             c!("!classes [pat]",         "list class names (substring-filtered)");
             c!("!fields [pat]",          "list instance field names");
@@ -3425,7 +3431,7 @@ fn handle_meta(
             c!("!help oql",              "OQL language reference (keywords, functions, syntax)");
             c!("!quit",                  "exit");
             writeln!(out)?;
-            writeln!(out, "  OQL queries may span multiple lines; end with `;` or a blank line.")?;
+            writeln!(out, "  {cd}OQL queries may span multiple lines; end with `;` or a blank line.{cr}")?;
         }
         "classes" | "fields" => {
             let (list, kind, kind_plural) = if verb == "classes" {
