@@ -1171,7 +1171,13 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             prev_result = last_result.clone();
                             let col_args: Vec<&str> = rest.split_whitespace().collect();
                             if col_args.is_empty() {
-                                writeln!(stdout, "usage: !select <col1> [col2 ...]  — names, numbers, or ranges (e.g. 1-3)")?;
+                                match &last_result {
+                                    Some(res) if !res.columns.is_empty() => {
+                                        let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
+                                        writeln!(stdout, "usage: !select <col1> [col2 ...]  — available: {}", names.join(", "))?;
+                                    }
+                                    _ => writeln!(stdout, "usage: !select <col1> [col2 ...]  — names, numbers, or ranges (e.g. 1-3)")?,
+                                }
                             } else {
                                 match &last_result {
                                     None => writeln!(stdout, "(no result — run a query first)")?,
@@ -1687,7 +1693,13 @@ fn run_repl_line(
                 // !select col1 [col2 ...] — project columns from last result
                 let col_args: Vec<&str> = rest.split_whitespace().collect();
                 if col_args.is_empty() {
-                    writeln!(out, "usage: !select <col1> [col2 ...]  — names, numbers, or ranges (e.g. 1-3)")?;
+                    match last_result.as_ref() {
+                        Some(res) if !res.columns.is_empty() => {
+                            let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
+                            writeln!(out, "usage: !select <col1> [col2 ...]  — available: {}", names.join(", "))?;
+                        }
+                        _ => writeln!(out, "usage: !select <col1> [col2 ...]  — names, numbers, or ranges (e.g. 1-3)")?,
+                    }
                 } else {
                     *prev_result = last_result.clone();
                     match last_result {

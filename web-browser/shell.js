@@ -1193,7 +1193,12 @@ function startTerminal() {
       } else {
         const args = cmd.slice(7).trim().split(/\s+/).filter(Boolean);
         if (args.length === 0) {
-          term.writeln('\x1b[33musage: /select <col1> [col2] …  (names, 1-based numbers, or ranges like 1-3)\x1b[0m');
+          const fields = lastResult.columns;
+          if (fields && fields.length > 0) {
+            term.writeln(`\x1b[33musage: /select <col1> [col2] …  — available: ${fields.join(', ')}\x1b[0m`);
+          } else {
+            term.writeln('\x1b[33musage: /select <col1> [col2] …  (names, 1-based numbers, or ranges like 1-3)\x1b[0m');
+          }
         } else {
           const fields = lastResult.columns;
           const indices = [];
