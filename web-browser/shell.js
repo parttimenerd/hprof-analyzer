@@ -1177,7 +1177,7 @@ function startTerminal() {
       }
       const colArg = cmd.slice(7).trim();
       if (!colArg) {
-        term.writeln('\x1b[33mUsage: /unique <col>  — show distinct values in a column\x1b[0m');
+        term.writeln(`\x1b[33mUsage: /unique <col>  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
         term.write(PROMPT);
         return;
       }
@@ -1225,7 +1225,7 @@ function startTerminal() {
       }
       const colArg = cmd.slice(6).trim();
       if (!colArg) {
-        term.writeln('\x1b[33mUsage: /pivot <col>  — group by column → (value, count) table\x1b[0m');
+        term.writeln(`\x1b[33mUsage: /pivot <col>  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
         term.write(PROMPT);
         return;
       }
@@ -1258,7 +1258,7 @@ function startTerminal() {
       }
       const colArg = cmd.slice(6).trim();
       if (!colArg) {
-        term.writeln('\x1b[33mUsage: /stats <col>  — numeric summary of a column\x1b[0m');
+        term.writeln(`\x1b[33mUsage: /stats <col>  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
         term.write(PROMPT);
         return;
       }
@@ -1364,7 +1364,7 @@ function startTerminal() {
       const args = cmd.slice(5).trim();
       if (!lastResult || !args) {
         if (!lastResult) term.writeln('\x1b[33mNo result to sort — run a query first.\x1b[0m');
-        else term.writeln('\x1b[33mUsage: /sort <col> [desc] [, <col2> [desc] …]\x1b[0m');
+        else term.writeln(`\x1b[33mUsage: /sort <col> [desc] [,col2…]  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
         term.write(PROMPT);
         return;
       }
