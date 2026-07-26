@@ -628,9 +628,17 @@ impl Completer for OqlCompleter {
                 if let Ok(cols) = self.last_cols.lock() {
                     if !cols.is_empty() {
                         // For multi-value commands like !sort, complete after the last comma.
-                        let (before_comma, partial) = match rest.rfind(',') {
+                        let (before_comma, partial_raw) = match rest.rfind(',') {
                             Some(i) => (&rest[..=i], rest[i + 1..].trim_start()),
                             None => ("", rest),
+                        };
+                        // Strip leading `@` for !filter/@col syntax
+                        let (at_prefix, partial) = if partial_raw.starts_with('@')
+                            && matches!(verb, "filter" | "grep" | "not" | "exclude")
+                        {
+                            ("@", &partial_raw[1..])
+                        } else {
+                            ("", partial_raw)
                         };
                         let lower = partial.to_ascii_lowercase();
                         let prefix_end = upto.len() - partial.len();
@@ -642,7 +650,7 @@ impl Completer for OqlCompleter {
                             return matches
                                 .iter()
                                 .map(|c| Suggestion {
-                                    value: format!("!{verb} {before_comma}{c}"),
+                                    value: format!("!{verb} {before_comma}{at_prefix}{c}"),
                                     description: None,
                                     style: None,
                                     extra: None,
