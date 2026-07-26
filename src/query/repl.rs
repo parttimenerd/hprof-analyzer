@@ -2797,9 +2797,11 @@ fn handle_stats(
     last_result: &mut Option<QueryResult>,
     out: &mut impl Write,
 ) -> io::Result<()> {
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cd, ce, cr) = if color { ("\x1b[2m", "\x1b[31m", "\x1b[0m") } else { ("", "", "") };
     if col_arg.is_empty() {
         match last_result {
-            None => { writeln!(out, "usage: !stats <col>  — numeric summary (min/max/mean/stddev/p50/p90/p99/sum)")?; return Ok(()); }
+            None => { writeln!(out, "{cd}usage: !stats <col>  — numeric summary (min/max/mean/stddev/p50/p90/p99/sum){cr}")?; return Ok(()); }
             Some(res) if !res.columns.is_empty() => {
                 // Auto-select if exactly one numeric column; if multiple, show all
                 let numeric_cols: Vec<usize> = (0..res.columns.len())
@@ -2823,7 +2825,7 @@ fn handle_stats(
                     return Ok(());
                 }
                 let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                writeln!(out, "usage: !stats <col>  — no numeric columns found (available: {})", names.join(", "))?;
+                writeln!(out, "{cd}usage: !stats <col>  — no numeric columns found  available: {}{cr}", names.join(", "))?;
             }
             _ => warn_out("usage: !stats <col>  — numeric summary (min/max/mean/stddev/p50/p90/p99/sum)", out)?,
         }
@@ -2836,7 +2838,7 @@ fn handle_stats(
             match col_idx {
                 None => {
                     let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                    writeln!(out, "column {:?} not found — available: {}", col_arg, names.join(", "))?;
+                    writeln!(out, "{ce}column {:?} not found{cr}  {cd}available: {}{cr}", col_arg, names.join(", "))?;
                 }
                 Some(ci) => {
                     let col_name = &res.columns[ci].name;
@@ -2849,7 +2851,7 @@ fn handle_stats(
                         }
                     }).collect();
                     if vals.is_empty() {
-                        writeln!(out, "no numeric values in column {:?}", col_name)?;
+                        writeln!(out, "{ce}no numeric values in column {:?}{cr}", col_name)?;
                     } else {
                         vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
                         let n = vals.len();
@@ -2974,11 +2976,13 @@ fn handle_drop(
     max_width: usize,
     out: &mut impl Write,
 ) -> io::Result<()> {
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cd, ce, cr) = if color { ("\x1b[2m", "\x1b[31m", "\x1b[0m") } else { ("", "", "") };
     if col_arg.is_empty() {
         match last_result {
             Some(res) if !res.columns.is_empty() => {
                 let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                writeln!(out, "usage: !drop <col1> [col2 ...]  — available: {}", names.join(", "))?;
+                writeln!(out, "{cd}usage: !drop <col1> [col2 ...]  — available: {}{cr}", names.join(", "))?;
             }
             _ => warn_out("usage: !drop <col1> [col2 ...]  — remove columns from last result", out)?,
         }
@@ -2995,7 +2999,7 @@ fn handle_drop(
                     Ok(v) => { drop_set.extend(v); }
                     Err(_) => {
                         let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                        writeln!(out, "column {:?} not found — available: {}", arg, names.join(", "))?;
+                        writeln!(out, "{ce}column {:?} not found{cr}  {cd}available: {}{cr}", arg, names.join(", "))?;
                         ok = false;
                         break;
                     }
@@ -3003,7 +3007,7 @@ fn handle_drop(
             }
             if ok {
                 if drop_set.len() == res.columns.len() {
-                    writeln!(out, "cannot drop all columns")?;
+                    writeln!(out, "{ce}cannot drop all columns{cr}")?;
                     return Ok(());
                 }
                 use crate::query::model::QueryColumn;
@@ -3039,11 +3043,13 @@ fn handle_unique(
     last_result: &mut Option<QueryResult>,
     out: &mut impl Write,
 ) -> io::Result<()> {
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cd, ce, cr_outer) = if color { ("\x1b[2m", "\x1b[31m", "\x1b[0m") } else { ("", "", "") };
     if col_arg.is_empty() {
         match last_result {
             Some(res) if !res.columns.is_empty() => {
                 let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                writeln!(out, "usage: !unique <col> [N]  — available: {}", names.join(", "))?;
+                writeln!(out, "{cd}usage: !unique <col> [N]  — available: {}{cr_outer}", names.join(", "))?;
             }
             _ => warn_out("usage: !unique <col> [N]  — distinct value counts, optional top N", out)?,
         }
@@ -3068,11 +3074,10 @@ fn handle_unique(
             match col_idx {
                 None => {
                     let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                    writeln!(out, "column {:?} not found — available: {}", col_spec, names.join(", "))?;
+                    writeln!(out, "{ce}column {:?} not found{cr_outer}  {cd}available: {}{cr_outer}", col_spec, names.join(", "))?;
                 }
                 Some(ci) => {
                     use std::collections::HashMap;
-                    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
                     let (cb, cd, cr) = if color { ("\x1b[1m", "\x1b[2m", "\x1b[0m") } else { ("", "", "") };
                     let col_name = &res.columns[ci].name;
                     let mut counts: HashMap<String, usize> = HashMap::new();
@@ -3125,11 +3130,13 @@ fn handle_pivot(
     max_width: usize,
     out: &mut impl Write,
 ) -> io::Result<()> {
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cd, ce, cr) = if color { ("\x1b[2m", "\x1b[31m", "\x1b[0m") } else { ("", "", "") };
     if col_arg.is_empty() {
         match last_result {
             Some(res) if !res.columns.is_empty() => {
                 let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                writeln!(out, "usage: !pivot <col> [N]  — available: {}", names.join(", "))?;
+                writeln!(out, "{cd}usage: !pivot <col> [N]  — available: {}{cr}", names.join(", "))?;
             }
             _ => warn_out("usage: !pivot <col> [N]  — group by column, produce (value, count) table", out)?,
         }
@@ -3154,7 +3161,7 @@ fn handle_pivot(
             match col_idx {
                 None => {
                     let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                    writeln!(out, "column {:?} not found — available: {}", col_spec, names.join(", "))?;
+                    writeln!(out, "{ce}column {:?} not found{cr}  {cd}available: {}{cr}", col_spec, names.join(", "))?;
                 }
                 Some(ci) => {
                     use std::collections::HashMap;
@@ -3216,7 +3223,7 @@ fn handle_export(
     out: &mut impl Write,
 ) -> io::Result<()> {
     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-    let (cy, cg, cd, cr) = if color { ("\x1b[33m", "\x1b[32m", "\x1b[2m", "\x1b[0m") } else { ("", "", "", "") };
+    let (cy, cg, cd, ce, cr) = if color { ("\x1b[33m", "\x1b[32m", "\x1b[2m", "\x1b[31m", "\x1b[0m") } else { ("", "", "", "", "") };
     let Some(res) = last_result else {
         writeln!(out, "{cy}(no result — run a query first){cr}")?;
         return Ok(());
@@ -3235,15 +3242,14 @@ fn handle_export(
         "tsv"  => result_to_tsv(res),
         "json" => result_to_json(res),
         other  => {
-            if color { writeln!(out, "\x1b[31munknown format {:?} — use csv, tsv, or json\x1b[0m", other)?; }
-            else { writeln!(out, "unknown format {:?} — use csv, tsv, or json", other)?; }
+            writeln!(out, "{ce}unknown format {:?} — use csv, tsv, or json{cr}", other)?;
             return Ok(());
         }
     };
     if let Some(path) = file_arg {
         match std::fs::write(path, &content) {
             Ok(()) => writeln!(out, "{cg}{}{cr} row{} written to {cd}{:?}{cr}", res.rows.len(), if res.rows.len() == 1 { "" } else { "s" }, path)?,
-            Err(e) => { if color { writeln!(out, "\x1b[31merror: could not write {:?}: {e}\x1b[0m", path)?; } else { writeln!(out, "error: could not write {:?}: {e}", path)?; } }
+            Err(e) => writeln!(out, "{ce}error: could not write {:?}: {e}{cr}", path)?,
         }
     } else {
         write!(out, "{}", content)?;
