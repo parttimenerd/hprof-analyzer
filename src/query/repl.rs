@@ -1756,16 +1756,23 @@ fn handle_unique(
                     }
                     let mut entries: Vec<(String, usize)> = counts.into_iter().collect();
                     entries.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                    let total = res.rows.len();
                     let max_cnt = entries.first().map(|(_, c)| *c).unwrap_or(1);
                     let cnt_w = fmt_int(max_cnt as i64).len().max(5);
+                    let pct_w = 6usize; // "100.0%"
                     let val_w = entries.iter().map(|(v, _)| v.len()).max().unwrap_or(0).max(col_name.len());
                     const BAR_W: usize = 20;
-                    writeln!(out, "{:<val_w$}  {:>cnt_w$}  bar", col_name, "count")?;
-                    writeln!(out, "{}", "─".repeat(val_w + cnt_w + BAR_W + 4))?;
+                    writeln!(out, "{:<val_w$}  {:>cnt_w$}  {:>pct_w$}  bar", col_name, "count", "%")?;
+                    writeln!(out, "{}", "─".repeat(val_w + cnt_w + pct_w + BAR_W + 6))?;
                     for (val, cnt) in &entries {
                         let filled = if max_cnt > 0 { (cnt * BAR_W) / max_cnt } else { 0 };
                         let bar: String = "█".repeat(filled) + &"░".repeat(BAR_W - filled);
-                        writeln!(out, "{:<val_w$}  {:>cnt_w$}  {}", val, fmt_int(*cnt as i64), bar)?;
+                        let pct = if total > 0 {
+                            format!("{:.1}%", *cnt as f64 / total as f64 * 100.0)
+                        } else {
+                            "—".to_string()
+                        };
+                        writeln!(out, "{:<val_w$}  {:>cnt_w$}  {:>pct_w$}  {}", val, fmt_int(*cnt as i64), pct, bar)?;
                     }
                     writeln!(out, "({} distinct)", entries.len())?;
                 }

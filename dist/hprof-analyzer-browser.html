@@ -1857,21 +1857,24 @@ function startTerminal() {
         seen.set(key, (seen.get(key) || 0) + 1);
       });
       const entries = [...seen.entries()].sort((a, b) => b[1] - a[1]);
+      const total = lastResult.rows.length;
       const maxCnt = entries.length > 0 ? entries[0][1] : 0;
       const cntW = Math.max(5, String(maxCnt).length);
+      const pctW = 6;  // "100.0%"
       const colW = Math.max(colName.length, ...entries.map(([v]) => v.length), 4);
-      const barCap = Math.max(0, term.cols - colW - cntW - 6);
+      const barCap = Math.max(0, term.cols - colW - cntW - pctW - 8);
       const showBar = barCap >= 8;
-      const hdr = `${colName.padEnd(colW)}  ${'count'.padStart(cntW)}${showBar ? '  bar' : ''}`;
+      const hdr = `${colName.padEnd(colW)}  ${'count'.padStart(cntW)}  ${'%'.padStart(pctW)}${showBar ? '  bar' : ''}`;
       term.writeln(`\x1b[1m${hdr}\x1b[0m`);
       term.writeln('\x1b[2m' + '─'.repeat(Math.min(hdr.length, term.cols - 2)) + '\x1b[0m');
       entries.slice(0, settings.rowLimit).forEach(([val, cnt]) => {
+        const pct = total > 0 ? (cnt / total * 100).toFixed(1) + '%' : '—';
         let bar = '';
         if (showBar && maxCnt > 0) {
           const filled = Math.round((cnt / maxCnt) * barCap);
           bar = '  \x1b[2m' + '█'.repeat(filled) + '░'.repeat(barCap - filled) + '\x1b[0m';
         }
-        term.writeln(`${val.padEnd(colW)}  \x1b[32m${String(cnt).padStart(cntW)}\x1b[0m${bar}`);
+        term.writeln(`${val.padEnd(colW)}  \x1b[32m${String(cnt).padStart(cntW)}\x1b[0m  \x1b[2m${pct.padStart(pctW)}\x1b[0m${bar}`);
       });
       term.writeln(`\x1b[2m${seen.size} distinct value${seen.size !== 1 ? 's' : ''} in ${lastResult.rows.length} rows\x1b[0m`);
       term.write(PROMPT);
