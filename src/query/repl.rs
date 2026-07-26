@@ -1021,8 +1021,9 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                 None => writeln!(stdout, "(no result — run a query first)")?,
                                 Some(res) => {
                                     if rest.is_empty() {
-                                        let n = res.rows.len();
-                                        writeln!(stdout, "{} row{}", n, if n == 1 { "" } else { "s" })?;
+                                        let rows = res.rows.len();
+                                        let cols = res.columns.len();
+                                        writeln!(stdout, "{} row{} × {} col{}", rows, if rows == 1 { "" } else { "s" }, cols, if cols == 1 { "" } else { "s" })?;
                                     } else {
                                         match resolve_col(rest, &res.columns) {
                                             None => {
@@ -1477,8 +1478,9 @@ fn run_repl_line(
                     None => writeln!(out, "(no result — run a query first)")?,
                     Some(res) => {
                         if rest.is_empty() {
-                            let n = res.rows.len();
-                            writeln!(out, "{} row{}", n, if n == 1 { "" } else { "s" })?;
+                            let rows = res.rows.len();
+                            let cols = res.columns.len();
+                            writeln!(out, "{} row{} × {} col{}", rows, if rows == 1 { "" } else { "s" }, cols, if cols == 1 { "" } else { "s" })?;
                         } else {
                             match resolve_col(rest, &res.columns) {
                                 None => {
@@ -2951,7 +2953,7 @@ fn handle_meta(
             )?;
             writeln!(out, "  !count [<oql>]        print row count of last result, or run <oql> and show count")?;
             writeln!(out, "  !last                 re-run the previous query")?;
-            writeln!(out, "  !wc [col]             row count; with col: count non-null values")?;
+            writeln!(out, "  !wc [col]             shape (rows × cols); with col: count non-null values")?;
             writeln!(
                 out,
                 "  !save <file> [oql]    write CSV/TSV/JSON to <file> (format by extension; of <oql>, else last result)"
