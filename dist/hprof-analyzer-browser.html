@@ -1955,19 +1955,22 @@ function startTerminal() {
         term.writeln('\x1b[33mNo result — run a query first.\x1b[0m');
       } else {
         const fields = lastResult.columns;
+        const total = lastResult.rows.length;
         const idxW = String(fields.length).length;
         const colW = Math.max(...fields.map(f => f.length));
         fields.forEach((f, i) => {
-          // Infer type from first non-null value in the column
           let typeTag = 'null';
+          let nonNull = 0;
           for (const row of lastResult.rows) {
             const cell = row[i];
             if (cell === null || cell === undefined) continue;
-            if (typeof cell !== 'object') { typeTag = typeof cell; break; }
+            if (typeof cell !== 'object') { nonNull++; if (typeTag === 'null') typeTag = typeof cell; continue; }
             if (cell.kind === 'null') continue;
-            typeTag = cell.kind || typeof cell; break;
+            nonNull++;
+            if (typeTag === 'null') typeTag = cell.kind || typeof cell;
           }
-          term.writeln(`  \x1b[2m${String(i + 1).padStart(idxW)}\x1b[0m  \x1b[36m${f.padEnd(colW)}\x1b[0m  \x1b[2m${typeTag}\x1b[0m`);
+          const fill = total > 0 ? `  ${nonNull}/${total} (${Math.round(nonNull / total * 100)}%)` : '';
+          term.writeln(`  \x1b[2m${String(i + 1).padStart(idxW)}\x1b[0m  \x1b[36m${f.padEnd(colW)}\x1b[0m  \x1b[2m${typeTag.padEnd(8)}${fill}\x1b[0m`);
         });
         term.writeln(`\x1b[2m${fields.length} column${fields.length !== 1 ? 's' : ''}\x1b[0m`);
       }
@@ -2917,7 +2920,7 @@ function startTerminal() {
     c('/row [N|next|prev|last]', '— show row as key=value pairs; next/prev navigate sequentially');
     c('/undo',                   '— restore last result before the previous manipulation');
     c('/limit <N>',              '— set display row limit and re-display (alias for /set limit N)');
-    c('/cols',                   '— list column names with index numbers');
+    c('/cols',                   '— list columns with type and non-null fill rate');
     c('/select <col> …',         '— project (keep) specific columns (names or numbers)');
     c('/rename <old> <new>',     '— rename a column in last result');
     c('/filter <text|/re/>',     '— filter rows; /filter @<col> <text> to target one column  (/grep alias)');

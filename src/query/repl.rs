@@ -1247,10 +1247,14 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                     let fields: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
                                     let idx_w = fields.len().to_string().len();
                                     let col_w = fields.iter().map(|f| f.len()).max().unwrap_or(10);
+                                    let total = res.rows.len();
                                     for (i, f) in fields.iter().enumerate() {
-                                        // Infer type from first non-null value in the column
                                         let type_tag = infer_col_type(i, &res.rows);
-                                        writeln!(stdout, "  {:>idx_w$}  {:<col_w$}  \x1b[2m{}\x1b[0m", i + 1, f, type_tag)?;
+                                        let non_null = res.rows.iter().filter(|row| !matches!(row.get(i), Some(QueryValue::Null) | None)).count();
+                                        let fill = if total > 0 {
+                                            format!("  {}/{} ({:.0}%)", non_null, total, non_null as f64 / total as f64 * 100.0)
+                                        } else { String::new() };
+                                        writeln!(stdout, "  {:>idx_w$}  {:<col_w$}  \x1b[2m{:<8}{}\x1b[0m", i + 1, f, type_tag, fill)?;
                                     }
                                     writeln!(stdout, "({} column{})", fields.len(), if fields.len() == 1 { "" } else { "s" })?;
                                 }
@@ -1716,9 +1720,14 @@ fn run_repl_line(
                         let fields: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
                         let idx_w = fields.len().to_string().len();
                         let col_w = fields.iter().map(|f| f.len()).max().unwrap_or(10);
+                        let total = res.rows.len();
                         for (i, f) in fields.iter().enumerate() {
                             let type_tag = infer_col_type(i, &res.rows);
-                            writeln!(out, "  {:>idx_w$}  {:<col_w$}  {}", i + 1, f, type_tag)?;
+                            let non_null = res.rows.iter().filter(|row| !matches!(row.get(i), Some(QueryValue::Null) | None)).count();
+                            let fill = if total > 0 {
+                                format!("  {}/{} ({:.0}%)", non_null, total, non_null as f64 / total as f64 * 100.0)
+                            } else { String::new() };
+                            writeln!(out, "  {:>idx_w$}  {:<col_w$}  {:<8}{}", i + 1, f, type_tag, fill)?;
                         }
                         writeln!(out, "({} column{})", fields.len(), if fields.len() == 1 { "" } else { "s" })?;
                     }
@@ -2838,7 +2847,7 @@ fn handle_meta(
             writeln!(out, "  !select <cols...>     project columns from last result")?;
             writeln!(out, "  !rename <old> <new>   rename a column in last result")?;
             writeln!(out, "  !describe <class>     show all field names of a class")?;
-            writeln!(out, "  !cols                 list column names of last result")?;
+            writeln!(out, "  !cols                 list column names, types, and fill rate of last result")?;
             writeln!(out, "  !obj <class>#<idx>    inspect a specific object (by dense index)")?;
             writeln!(out, "  !run [<name>]         run a named query (no arg = list all)")?;
             writeln!(out, "  !quit                 exit")?;
