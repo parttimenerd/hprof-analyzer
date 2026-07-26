@@ -1084,37 +1084,37 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                         }
                         "top" | "head" => {
                             prev_result = last_result.clone();
-                            match rest.trim().parse::<usize>() {
-                                Ok(n) if n > 0 => {
-                                    match last_result.as_mut() {
-                                        None => writeln!(stdout, "(no result — run a query first)")?,
-                                        Some(res) => {
-                                            res.rows.truncate(n);
-                                            res.row_count = res.rows.len() as u64;
-                                            print_result(res, std::time::Duration::ZERO, max_width, &mut stdout)?;
-                                        }
+                            let n = if rest.trim().is_empty() { 10 } else { rest.trim().parse::<usize>().unwrap_or(0) };
+                            if n > 0 {
+                                match last_result.as_mut() {
+                                    None => writeln!(stdout, "(no result — run a query first)")?,
+                                    Some(res) => {
+                                        res.rows.truncate(n);
+                                        res.row_count = res.rows.len() as u64;
+                                        print_result(res, std::time::Duration::ZERO, max_width, &mut stdout)?;
                                     }
                                 }
-                                _ => writeln!(stdout, "usage: !top <N>  (N > 0)")?,
+                            } else {
+                                writeln!(stdout, "usage: !top [N]  (default 10)")?;
                             }
                             stdout.flush()?;
                             continue;
                         }
                         "tail" => {
                             prev_result = last_result.clone();
-                            match rest.trim().parse::<usize>() {
-                                Ok(n) if n > 0 => {
-                                    match last_result.as_mut() {
-                                        None => writeln!(stdout, "(no result — run a query first)")?,
-                                        Some(res) => {
-                                            let skip = res.rows.len().saturating_sub(n);
-                                            res.rows = res.rows.split_off(skip);
-                                            res.row_count = res.rows.len() as u64;
-                                            print_result(res, std::time::Duration::ZERO, max_width, &mut stdout)?;
-                                        }
+                            let n = if rest.trim().is_empty() { 10 } else { rest.trim().parse::<usize>().unwrap_or(0) };
+                            if n > 0 {
+                                match last_result.as_mut() {
+                                    None => writeln!(stdout, "(no result — run a query first)")?,
+                                    Some(res) => {
+                                        let skip = res.rows.len().saturating_sub(n);
+                                        res.rows = res.rows.split_off(skip);
+                                        res.row_count = res.rows.len() as u64;
+                                        print_result(res, std::time::Duration::ZERO, max_width, &mut stdout)?;
                                     }
                                 }
-                                _ => writeln!(stdout, "usage: !tail <N>  (N > 0)")?,
+                            } else {
+                                writeln!(stdout, "usage: !tail [N]  (default 10)")?;
                             }
                             stdout.flush()?;
                             continue;
@@ -1500,36 +1500,36 @@ fn run_repl_line(
                 return Ok(false);
             }
             "top" | "head" => {
-                match rest.trim().parse::<usize>() {
-                    Ok(n) if n > 0 => {
-                        match last_result.as_mut() {
-                            None => writeln!(out, "(no result — run a query first)")?,
-                            Some(res) => {
-                                res.rows.truncate(n);
-                                res.row_count = res.rows.len() as u64;
-                                print_result(res, std::time::Duration::ZERO, *max_width, out)?;
-                            }
+                let n = if rest.trim().is_empty() { 10 } else { rest.trim().parse::<usize>().unwrap_or(0) };
+                if n > 0 {
+                    match last_result.as_mut() {
+                        None => writeln!(out, "(no result — run a query first)")?,
+                        Some(res) => {
+                            res.rows.truncate(n);
+                            res.row_count = res.rows.len() as u64;
+                            print_result(res, std::time::Duration::ZERO, *max_width, out)?;
                         }
                     }
-                    _ => writeln!(out, "usage: !top <N>  (N > 0)")?,
+                } else {
+                    writeln!(out, "usage: !top [N]  (default 10)")?;
                 }
                 out.flush()?;
                 return Ok(false);
             }
             "tail" => {
-                match rest.trim().parse::<usize>() {
-                    Ok(n) if n > 0 => {
-                        match last_result.as_mut() {
-                            None => writeln!(out, "(no result — run a query first)")?,
-                            Some(res) => {
-                                let skip = res.rows.len().saturating_sub(n);
-                                res.rows = res.rows.split_off(skip);
-                                res.row_count = res.rows.len() as u64;
-                                print_result(res, std::time::Duration::ZERO, *max_width, out)?;
-                            }
+                let n = if rest.trim().is_empty() { 10 } else { rest.trim().parse::<usize>().unwrap_or(0) };
+                if n > 0 {
+                    match last_result.as_mut() {
+                        None => writeln!(out, "(no result — run a query first)")?,
+                        Some(res) => {
+                            let skip = res.rows.len().saturating_sub(n);
+                            res.rows = res.rows.split_off(skip);
+                            res.row_count = res.rows.len() as u64;
+                            print_result(res, std::time::Duration::ZERO, *max_width, out)?;
                         }
                     }
-                    _ => writeln!(out, "usage: !tail <N>  (N > 0)")?,
+                } else {
+                    writeln!(out, "usage: !tail [N]  (default 10)")?;
                 }
                 out.flush()?;
                 return Ok(false);
@@ -2570,8 +2570,8 @@ fn handle_meta(
             writeln!(out, "  !stats <col>          numeric summary: min/max/mean/p50/p90/p99/sum")?;
             writeln!(out, "  !unique <col>         distinct value counts, sorted by frequency")?;
             writeln!(out, "  !pivot <col>          group by column → (value, count) table (chainable)")?;
-            writeln!(out, "  !top <N>  /  !head <N>  show first N rows of last result")?;
-            writeln!(out, "  !tail <N>             show last N rows of last result")?;
+            writeln!(out, "  !top [N]  /  !head [N]  show first N rows of last result (default 10)")?;
+            writeln!(out, "  !tail [N]             show last N rows of last result (default 10)")?;
             writeln!(out, "  !row [N]              show row N (1-based) as vertical key=value pairs")?;
             writeln!(out, "  !undo                 restore last result before last manipulation")?;
             writeln!(out, "  !history [N]          show last N queries from history (default 20)")?;

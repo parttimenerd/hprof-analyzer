@@ -1327,11 +1327,12 @@ function startTerminal() {
     if (cmd.startsWith('/top ') || cmd === '/top' ||
         cmd.startsWith('/head ') || cmd === '/head') {
       const isHead = cmd.startsWith('/head');
-      const n = parseInt(cmd.slice(isHead ? 5 : 4).trim(), 10);
+      const arg = cmd.slice(isHead ? 5 : 4).trim();
+      const n = arg ? parseInt(arg, 10) : 10;
       if (!lastResult) {
         term.writeln('\x1b[33mNo result to slice — run a query first.\x1b[0m');
       } else if (!n || n < 1) {
-        term.writeln('\x1b[33mUsage: /top <N>  (or /head <N>) — show first N rows of last result\x1b[0m');
+        term.writeln('\x1b[33mUsage: /top [N]  (or /head [N]) — show first N rows of last result (default 10)\x1b[0m');
       } else {
         const sliced = lastResult.rows.slice(0, n);
         renderResult({ columns: lastResult.columns, rows: sliced, row_count: n });
@@ -1343,11 +1344,12 @@ function startTerminal() {
       return;
     }
     if (cmd.startsWith('/tail ') || cmd === '/tail') {
-      const n = parseInt(cmd.slice(5).trim(), 10);
+      const arg = cmd.slice(5).trim();
+      const n = arg ? parseInt(arg, 10) : 10;
       if (!lastResult) {
         term.writeln('\x1b[33mNo result to slice — run a query first.\x1b[0m');
       } else if (!n || n < 1) {
-        term.writeln('\x1b[33mUsage: /tail <N>  — show last N rows of last result\x1b[0m');
+        term.writeln('\x1b[33mUsage: /tail [N]  — show last N rows of last result (default 10)\x1b[0m');
       } else {
         const sliced = lastResult.rows.slice(-n);
         renderResult({ columns: lastResult.columns, rows: sliced, row_count: sliced.length });
@@ -1934,8 +1936,8 @@ function startTerminal() {
     c('/not <text|/re/>',        '— exclude rows matching pattern (inverse of /filter)');
     c('/distinct',               '— remove duplicate rows (/dedup is an alias)');
     c('/sort <col> [desc] [,col2…]', '— sort rows by one or more columns (comma-separated)');
-    c('/top <N>  /head <N>',      '— first N rows (updates lastResult for chaining)');
-    c('/tail <N>',               '— last N rows');
+    c('/top [N]  /head [N]',     '— first N rows, default 10 (updates lastResult for chaining)');
+    c('/tail [N]',               '— last N rows, default 10');
     c('/sample <N>',             '— N randomly sampled rows from last result');
     c('/unique <col>',           '— distinct value counts');
     c('/pivot <col>',            '— group by column → (value, count) table (chainable)');
