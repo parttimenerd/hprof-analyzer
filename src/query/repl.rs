@@ -3520,7 +3520,29 @@ fn handle_meta(
         }
         other => {
             let cy = if color { "\x1b[33m" } else { "" };
-            writeln!(out, "{cy}unknown command: !{other} (try !help){cr}")?;        }
+            // Offer did-you-mean for close matches
+            const CMDS: &[&str] = &[
+                "help", "h", "quit", "q", "exit",
+                "classes", "fields", "describe", "obj",
+                "count", "wc", "last", "cols", "columns", "history", "row", "plan", "explain",
+                "filter", "not", "sort", "select", "drop", "rename", "distinct", "dedup",
+                "sample", "top", "head", "tail", "unique", "pivot", "stats", "undo",
+                "run", "width", "set", "save", "export", "rename",
+                "reachable", "all", "mode",
+            ];
+            let lower = other.to_ascii_lowercase();
+            let candidates: Vec<&str> = CMDS.iter().copied()
+                .filter(|&c| {
+                    let cl = c.to_ascii_lowercase();
+                    cl.starts_with(&lower[..lower.len().min(2)]) || lower.contains(&cl) || cl.contains(&lower)
+                })
+                .take(3)
+                .collect();
+            writeln!(out, "{cy}unknown command: !{other} (try !help){cr}")?;
+            if !candidates.is_empty() {
+                writeln!(out, "{cd}  did you mean: {}{cr}", candidates.join(", "))?;
+            }
+        }
     }
     Ok(false)
 }

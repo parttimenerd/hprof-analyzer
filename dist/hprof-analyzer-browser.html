@@ -2952,7 +2952,23 @@ function startTerminal() {
     // rather than sending it to the server as OQL (which would just fail with a parse error).
     if (full.trim().startsWith('/')) {
       const cmdWord = full.trim().split(/\s+/)[0].toLowerCase();
-      term.writeln(`\x1b[33mUnknown command: ${cmdWord}  (type /help to see all commands)\x1b[0m`);
+      term.writeln(`\x1b[33munknown command: ${cmdWord}  (type /help to see all commands)\x1b[0m`);
+      const ALL_CMDS = [
+        '/classes', '/fields', '/describe', '/obj',
+        '/count', '/wc', '/last', '/cols', '/columns', '/history', '/row', '/plan', '/explain',
+        '/filter', '/grep', '/not', '/exclude', '/sort', '/select', '/drop', '/rename',
+        '/distinct', '/dedup', '/sample', '/top', '/head', '/tail', '/unique', '/pivot',
+        '/stats', '/undo', '/run', '/limit', '/set', '/export', '/bookmark', '/save',
+        '/forget', '/watch', '/analyze', '/status', '/clear', '/q', '/disconnect', '/help',
+      ];
+      const typed = cmdWord.slice(1);
+      const close = ALL_CMDS.filter(c => {
+        const n = c.slice(1);
+        return n.startsWith(typed.slice(0, 2)) || typed.startsWith(n.slice(0, 2)) || n.includes(typed) || typed.includes(n);
+      }).slice(0, 3);
+      if (close.length > 0) {
+        term.writeln(`\x1b[2m  did you mean: ${close.join(', ')}\x1b[0m`);
+      }
       term.write(PROMPT);
       return;
     }
