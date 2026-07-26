@@ -595,7 +595,7 @@ impl Completer for OqlCompleter {
                     "classes", "fields",
                     "reachable", "all", "mode",
                     "width", "count", "last", "save",
-                    "filter", "grep", "not", "exclude", "sample", "distinct", "dedup", "sort", "stats", "unique",
+                    "filter", "grep", "not", "exclude", "sample", "distinct", "dedup", "sort", "stats", "unique", "pivot",
                     "top", "head", "tail", "select", "rename", "wc", "cols", "columns",
                     "describe", "obj",
                     "run",
@@ -621,7 +621,7 @@ impl Completer for OqlCompleter {
             let rest = rest.trim_start();
             let needs_col = matches!(
                 verb,
-                "sort" | "filter" | "grep" | "not" | "exclude" | "stats" | "unique"
+                "sort" | "filter" | "grep" | "not" | "exclude" | "stats" | "unique" | "pivot"
                 | "select" | "rename" | "sample" | "top" | "head" | "tail"
             );
             if needs_col {
@@ -1054,6 +1054,11 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             stdout.flush()?;
                             continue;
                         }
+                        "pivot" => {
+                            handle_pivot(rest, &mut last_result, max_width, &mut stdout)?;
+                            stdout.flush()?;
+                            continue;
+                        }
                         "top" | "head" => {
                             match rest.trim().parse::<usize>() {
                                 Ok(n) if n > 0 => {
@@ -1432,6 +1437,11 @@ fn run_repl_line(
             }
             "unique" => {
                 handle_unique(rest, last_result, out)?;
+                out.flush()?;
+                return Ok(false);
+            }
+            "pivot" => {
+                handle_pivot(rest, last_result, *max_width, out)?;
                 out.flush()?;
                 return Ok(false);
             }
@@ -2323,6 +2333,79 @@ fn handle_unique(
     Ok(())
 }
 
+/// Group last result by a column, producing a new two-column table
+/// (`<col>`, `count`) sorted by count descending — suitable for chaining
+/// with `!sort`, `!filter`, `!select`, etc.
+fn handle_pivot(
+    col_arg: &str,
+    last_result: &mut Option<QueryResult>,
+    max_width: usize,
+    out: &mut impl Write,
+) -> io::Result<()> {
+    if col_arg.is_empty() {
+        writeln!(out, "usage: !pivot <col>  — group by column, produce (value, count) table")?;
+        return Ok(());
+    }
+    match last_result {
+        None => writeln!(out, "(no previous result — run a query first)")?,
+        Some(res) => {
+            let col_lower = col_arg.to_ascii_lowercase();
+            let col_idx = res.columns.iter().position(|c| {
+                c.name.to_ascii_lowercase() == col_lower
+                    || c.name.to_ascii_lowercase().contains(&col_lower)
+            });
+            match col_idx {
+                None => {
+                    let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
+                    writeln!(out, "column {:?} not found — available: {}", col_arg, names.join(", "))?;
+                }
+                Some(ci) => {
+                    use std::collections::HashMap;
+                    use crate::query::model::QueryColumn;
+                    let col_name = res.columns[ci].name.clone();
+                    let mut counts: HashMap<String, usize> = HashMap::new();
+                    let mut order: Vec<String> = Vec::new();
+                    for row in &res.rows {
+                        let key = fmt_value(&row[ci]);
+                        if !counts.contains_key(&key) {
+                            order.push(key.clone());
+                        }
+                        *counts.entry(key).or_insert(0) += 1;
+                    }
+                    let mut entries: Vec<(String, usize)> = counts.into_iter().collect();
+                    entries.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                    let rows: Vec<Vec<QueryValue>> = entries
+                        .iter()
+                        .map(|(v, c)| vec![
+                            QueryValue::Str(v.clone()),
+                            QueryValue::Int(*c as i64),
+                        ])
+                        .collect();
+                    let n = rows.len();
+                    let pivoted = QueryResult {
+                        columns: vec![
+                            QueryColumn { name: col_name.clone() },
+                            QueryColumn { name: "count".to_string() },
+                        ],
+                        rows: rows.clone(),
+                        row_count: n as u64,
+                        truncated: false,
+                        note: None,
+                        error: None,
+                        name: String::new(),
+                        oql: String::new(),
+                        viz: None,
+                        elapsed_ms: None,
+                    };
+                    print_result(&pivoted, std::time::Duration::ZERO, max_width, out)?;
+                    *last_result = Some(pivoted);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Handle a meta-command (the text after the leading `!`). Returns `Ok(true)`
 /// when the command asks the REPL to quit. `reachable_only` is the session's
 /// current GC-reachability mode; `!all`/`!reachable` mutate it. `names` is the
@@ -2384,6 +2467,7 @@ fn handle_meta(
             writeln!(out, "  !sort <col> [desc] [,col2 [desc]…]  sort last result by one or more columns")?;
             writeln!(out, "  !stats <col>          numeric summary: min/max/mean/p50/p90/p99/sum")?;
             writeln!(out, "  !unique <col>         distinct value counts, sorted by frequency")?;
+            writeln!(out, "  !pivot <col>          group by column → (value, count) table (chainable)")?;
             writeln!(out, "  !top <N>  /  !head <N>  show first N rows of last result")?;
             writeln!(out, "  !tail <N>             show last N rows of last result")?;
             writeln!(out, "  !select <cols...>     project columns from last result")?;

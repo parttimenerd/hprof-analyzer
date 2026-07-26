@@ -547,7 +547,7 @@ function startTerminal() {
     if (line.startsWith('/') && !line.includes(' ')) {
       const partial = line.slice(1).toLowerCase();
       const cmds = ['help','clear','status','analyze','history','export','set','classes','plan','explain','filter','grep',
-                    'sort','unique','stats','top','head','tail','sample','cols','columns','select','rename','wc','limit','not','exclude','distinct','dedup','obj','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
+                    'sort','unique','pivot','stats','top','head','tail','sample','cols','columns','select','rename','wc','limit','not','exclude','distinct','dedup','obj','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
       const matches = cmds.filter(c => c.startsWith(partial));
       if (matches.length === 1) {
         setLine('/' + matches[0] + ' ');
@@ -648,8 +648,8 @@ function startTerminal() {
         }
         return;
       }
-      // Single-column commands: /filter /grep /unique /stats /select /not /exclude /rename /sample
-      const singleColCmds = ['/filter ', '/grep ', '/unique ', '/stats ', '/select ',
+      // Single-column commands: /filter /grep /unique /stats /pivot /select /not /exclude /rename /sample
+      const singleColCmds = ['/filter ', '/grep ', '/unique ', '/stats ', '/pivot ', '/select ',
                               '/not ', '/exclude ', '/rename ', '/sample '];
       const matched = singleColCmds.find(p => line.startsWith(p));
       if (matched) {
@@ -1157,6 +1157,39 @@ function startTerminal() {
         term.writeln(`${val.padEnd(colW)}  \x1b[32m${String(cnt).padStart(cntW)}\x1b[0m  \x1b[2m${pct.padStart(pctW)}\x1b[0m${bar}`);
       });
       term.writeln(`\x1b[2m${seen.size} distinct value${seen.size !== 1 ? 's' : ''} in ${lastResult.rows.length} rows\x1b[0m`);
+      term.write(PROMPT);
+      return;
+    }
+    if (cmd.startsWith('/pivot ') || cmd === '/pivot') {
+      if (!lastResult) {
+        term.writeln('\x1b[33mNo result — run a query first.\x1b[0m');
+        term.write(PROMPT);
+        return;
+      }
+      const colArg = cmd.slice(6).trim();
+      if (!colArg) {
+        term.writeln('\x1b[33mUsage: /pivot <col>  — group by column → (value, count) table\x1b[0m');
+        term.write(PROMPT);
+        return;
+      }
+      const ci = lastResult.columns.findIndex(c => c.toLowerCase() === colArg.toLowerCase()
+        || c.toLowerCase().includes(colArg.toLowerCase()));
+      if (ci < 0) {
+        term.writeln(`\x1b[31mColumn "${colArg}" not found. Available: ${lastResult.columns.join(', ')}\x1b[0m`);
+        term.write(PROMPT);
+        return;
+      }
+      const colName = lastResult.columns[ci];
+      const counts = new Map();
+      lastResult.rows.forEach(row => {
+        const key = fmtCell(row[ci], colName);
+        counts.set(key, (counts.get(key) || 0) + 1);
+      });
+      const entries = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+      const pivotRows = entries.map(([v, c]) => [v, c]);
+      const pivotResult = { columns: [colName, 'count'], rows: pivotRows, row_count: pivotRows.length };
+      renderResult(pivotResult);
+      lastResult = pivotResult;
       term.write(PROMPT);
       return;
     }
@@ -1840,6 +1873,7 @@ function startTerminal() {
     c('/tail <N>',               '— last N rows');
     c('/sample <N>',             '— N randomly sampled rows from last result');
     c('/unique <col>',           '— distinct value counts');
+    c('/pivot <col>',            '— group by column → (value, count) table (chainable)');
     c('/stats <col>',            '— min/max/mean/percentiles/sum');
     c('/export [csv|json]',     '— copy to clipboard as TSV, CSV, or JSON');
     h('History & bookmarks');
