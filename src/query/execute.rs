@@ -946,8 +946,19 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
             Attr::Field(_) => QueryValue::Null,
             // Arrays have no reference fields to walk; a RefPath is Null.
             Attr::RefPath { .. } => QueryValue::Null,
-            // D4b: late resolution — ref-hop attrs; scan-time projects Null.
-            Attr::ValueArray | Attr::ReferenceArray => QueryValue::Null,
+            // D4b: late resolution — ref-hop attrs.
+            // @valueArray: arrays have no `.value` field (the rewriter would have
+            // lowered it to a RefPath); scan-time projects Null.
+            Attr::ValueArray => QueryValue::Null,
+            // @referenceArray on an array object: return the array itself as an
+            // ObjRef (the array IS the reference-typed element container). The
+            // plan-time check (`reject_reference_array_on_instance`) already
+            // rejects this attr when FROM is a non-array instance class.
+            Attr::ReferenceArray => QueryValue::ObjRef {
+                index: src_idx as u64,
+                class: class_name.to_string(),
+                addr: self.resolver.addr_of(src_idx),
+            },
             // G1: GC-root attrs; resolved in analyze-mode late phase only.
             Attr::GcRoots | Attr::GcRootInfo => QueryValue::Null,
             // Array index/slice: resolved in P2 late window; scan-time projects Null.

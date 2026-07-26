@@ -440,6 +440,38 @@ fn expr_any_attr(e: &Expr, pred: impl Fn(&Attr) -> bool) -> bool {
     found
 }
 
+/// Returns true if the expression tree contains an `Expr::Method` node whose
+/// name is `"contains"` or `"toString"`. These methods require the string-values
+/// side table (`needs.string_values`) to be armed so their string context is
+/// available in the late (P2) window.
+fn expr_has_string_method(e: &Expr) -> bool {
+    match e {
+        Expr::Method { name, receiver, args } => {
+            if name == "contains" || name == "toString" {
+                return true;
+            }
+            if expr_has_string_method(receiver) {
+                return true;
+            }
+            args.iter().any(expr_has_string_method)
+        }
+        Expr::Attr(_) | Expr::Lit(_) => false,
+        Expr::Binary { lhs, rhs, .. } => {
+            expr_has_string_method(lhs) || expr_has_string_method(rhs)
+        }
+        Expr::Unary { arg, .. } => expr_has_string_method(arg),
+        Expr::Aggregate { .. } => false,
+        Expr::Case { branches, else_ } => {
+            branches.iter().any(|(_, ex)| expr_has_string_method(ex))
+                || else_.as_ref().map_or(false, |e| expr_has_string_method(e))
+        }
+        Expr::Coalesce(args) => args.iter().any(expr_has_string_method),
+        Expr::NullIf { lhs, rhs } => {
+            expr_has_string_method(lhs) || expr_has_string_method(rhs)
+        }
+    }
+}
+
 /// Visit every `Attr` leaf reachable from a `Predicate` tree, calling `f` on
 /// each. Used by `expr_for_each_attr`'s `Expr::Case` arm to recurse into WHEN
 /// conditions.
@@ -570,7 +602,183 @@ fn reject_unsupported_methods(q: &Query) -> Result<(), QueryError> {
     Ok(())
 }
 
+/// Rewrite `Attr::ValueArray` in an `Attr` node to a 1-hop `RefPath` that
+/// follows the `value` field (projection-only role). This is the canonical
+/// lowering: `@valueArray` means "the object's `.value` field" — a forward
+/// reference to the backing byte/char array. The resulting `RefPath` is
+/// handled by the RefWalk machinery in the P2 late window.
+fn rewrite_value_array_attr(a: Attr) -> Attr {
+    match a {
+        Attr::ValueArray => Attr::RefPath {
+            hops: vec!["value".to_string()],
+            tail: Box::new(Attr::ObjectAddress),
+            role: RefRole::ProjectionOnly,
+        },
+        Attr::RefPath { hops, tail, role } => Attr::RefPath {
+            hops,
+            tail: Box::new(rewrite_value_array_attr(*tail)),
+            role,
+        },
+        Attr::ToHex(inner) => Attr::ToHex(Box::new(rewrite_value_array_expr(*inner))),
+        Attr::ArrayIndex { base, index } => Attr::ArrayIndex {
+            base: Box::new(rewrite_value_array_attr(*base)),
+            index: Box::new(rewrite_value_array_expr(*index)),
+        },
+        Attr::ArraySlice { base, start, end } => Attr::ArraySlice {
+            base: Box::new(rewrite_value_array_attr(*base)),
+            start: start.map(|e| Box::new(rewrite_value_array_expr(*e))),
+            end: end.map(|e| Box::new(rewrite_value_array_expr(*e))),
+        },
+        other => other,
+    }
+}
+
+fn rewrite_value_array_expr(e: Expr) -> Expr {
+    match e {
+        Expr::Attr(a) => Expr::Attr(rewrite_value_array_attr(a)),
+        Expr::Lit(_) => e,
+        Expr::Binary { op, lhs, rhs } => Expr::Binary {
+            op,
+            lhs: Box::new(rewrite_value_array_expr(*lhs)),
+            rhs: Box::new(rewrite_value_array_expr(*rhs)),
+        },
+        Expr::Unary { op, arg } => Expr::Unary {
+            op,
+            arg: Box::new(rewrite_value_array_expr(*arg)),
+        },
+        Expr::Method { receiver, name, args } => Expr::Method {
+            receiver: Box::new(rewrite_value_array_expr(*receiver)),
+            name,
+            args: args.into_iter().map(rewrite_value_array_expr).collect(),
+        },
+        Expr::Aggregate { func, arg } => Expr::Aggregate { func, arg },
+        Expr::Case { branches, else_ } => Expr::Case {
+            branches: branches
+                .into_iter()
+                .map(|(p, ex)| (rewrite_value_array_pred(p), rewrite_value_array_expr(ex)))
+                .collect(),
+            else_: else_.map(|e| Box::new(rewrite_value_array_expr(*e))),
+        },
+        Expr::Coalesce(args) => {
+            Expr::Coalesce(args.into_iter().map(rewrite_value_array_expr).collect())
+        }
+        Expr::NullIf { lhs, rhs } => Expr::NullIf {
+            lhs: Box::new(rewrite_value_array_expr(*lhs)),
+            rhs: Box::new(rewrite_value_array_expr(*rhs)),
+        },
+    }
+}
+
+fn rewrite_value_array_select_item(item: SelectItem) -> SelectItem {
+    match item {
+        SelectItem::Attr(a) => SelectItem::Attr(rewrite_value_array_attr(a)),
+        SelectItem::Aggregate { func, arg } => SelectItem::Aggregate {
+            func,
+            arg: Box::new(rewrite_value_array_select_item(*arg)),
+        },
+        SelectItem::Expr(e) => SelectItem::Expr(Box::new(rewrite_value_array_expr(*e))),
+        other => other,
+    }
+}
+
+fn rewrite_value_array_pred(p: Predicate) -> Predicate {
+    match p {
+        Predicate::And(a, b) => Predicate::And(
+            Box::new(rewrite_value_array_pred(*a)),
+            Box::new(rewrite_value_array_pred(*b)),
+        ),
+        Predicate::Or(a, b) => Predicate::Or(
+            Box::new(rewrite_value_array_pred(*a)),
+            Box::new(rewrite_value_array_pred(*b)),
+        ),
+        Predicate::Not(a) => Predicate::Not(Box::new(rewrite_value_array_pred(*a))),
+        Predicate::Compare { lhs, op, rhs } => Predicate::Compare {
+            lhs: rewrite_value_array_expr(lhs),
+            op,
+            rhs: rewrite_value_array_expr(rhs),
+        },
+        other => other,
+    }
+}
+
+/// Lower `@valueArray` in all SELECT items and WHERE predicates to a 1-hop
+/// `RefPath { hops: ["value"], tail: ObjectAddress, role: ProjectionOnly }`. The
+/// RefWalk machinery in the P2 window then resolves the hop transparently.
+fn rewrite_value_array_in_query(mut q: Query) -> Query {
+    q.select = q
+        .select
+        .into_iter()
+        .map(rewrite_value_array_select_item)
+        .collect();
+    q.where_ = q.where_.map(rewrite_value_array_pred);
+    q
+}
+
+/// Returns true if `Attr::ReferenceArray` appears anywhere in a `SelectItem`.
+fn select_item_has_reference_array(item: &SelectItem) -> bool {
+    match item {
+        SelectItem::Attr(Attr::ReferenceArray) => true,
+        SelectItem::Aggregate { arg, .. } => select_item_has_reference_array(arg),
+        SelectItem::Expr(e) => {
+            expr_any_attr(e, |a| matches!(a, Attr::ReferenceArray))
+        }
+        _ => false,
+    }
+}
+
+/// Returns true if `Attr::ReferenceArray` appears anywhere in a predicate tree.
+fn pred_has_reference_array(p: &Predicate) -> bool {
+    match p {
+        Predicate::And(a, b) | Predicate::Or(a, b) => {
+            pred_has_reference_array(a) || pred_has_reference_array(b)
+        }
+        Predicate::Not(a) => pred_has_reference_array(a),
+        Predicate::Compare { lhs, rhs, .. } => {
+            expr_any_attr(lhs, |a| matches!(a, Attr::ReferenceArray))
+                || expr_any_attr(rhs, |a| matches!(a, Attr::ReferenceArray))
+        }
+        _ => false,
+    }
+}
+
+/// Reject `@referenceArray` used against an instance-class FROM. Array types
+/// have class names ending in `[]`; everything else is an instance. For regex /
+/// glob FROM sources the concrete class is unknown at plan time so the check is
+/// skipped (the executor will project Null, which is acceptable parity for now).
+fn reject_reference_array_on_instance(q: &Query) -> Result<(), QueryError> {
+    let class_name = q.from.class_name();
+    // Skip check for: subqueries (empty class name), glob patterns, regex FROM
+    // (is_regex), and known array types (ending in `[]`).
+    if class_name.is_empty()
+        || class_name.contains('*')
+        || class_name.ends_with("[]")
+        || q.from.class_spec().map_or(false, |s| s.is_regex)
+    {
+        return Ok(());
+    }
+    let has_ref_array = q
+        .select
+        .iter()
+        .any(select_item_has_reference_array)
+        || q.where_.as_ref().map_or(false, pred_has_reference_array);
+    if has_ref_array {
+        return Err(QueryError(
+            "@referenceArray on an instance object is not supported; \
+             dereference the backing field directly \
+             (e.g. x.elementData for ArrayList, x.value for String)"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
+    // Lower @valueArray to a 1-hop RefPath before any planning so all
+    // downstream logic (needs analysis, refwalk op emission) sees it as a
+    // standard RefPath and handles it for free.
+    let q_owned = rewrite_value_array_in_query(q.clone());
+    let q = &q_owned;
+
     // Subqueries (FROM (...) and WHERE ... IN (...)) must be non-correlated:
     // the inner query may not reference an alias bound by the outer query.
     if let Some(inner) = q.from.as_subquery() {
@@ -584,6 +792,13 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
     // a scan-time value cannot return an error, so unknown method names are
     // caught here with an actionable message (before any heavy planning).
     reject_unsupported_methods(q)?;
+
+    // Reject `@referenceArray` used on an instance-class FROM (not an array type).
+    // `@referenceArray` is only meaningful on array objects (class name ends with
+    // `[]`). On instances it has no defined semantics; tell the user to dereference
+    // the backing field directly instead. Skip the check for regex/glob FROM sources
+    // since the concrete class is unknown at plan time.
+    reject_reference_array_on_instance(q)?;
 
     // Validate a quoted-regex FROM target once, at plan time, so a bad regex is
     // an ACTIONABLE error here rather than a silent no-match (or per-row panic)
@@ -641,7 +856,14 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             SelectItem::ToString(_) => {
                 needs.string_values = true;
             }
-            SelectItem::Expr(e) => expr_for_each_attr(e, &mut |a| note_attr_need_attr(a, &mut needs)),
+            SelectItem::Expr(e) => {
+                expr_for_each_attr(e, &mut |a| note_attr_need_attr(a, &mut needs));
+                // `contains` and `toString` method calls require the string-values
+                // side table (decoded String text) to be available in the late window.
+                if expr_has_string_method(e) {
+                    needs.string_values = true;
+                }
+            }
         }
     }
 
@@ -1656,6 +1878,11 @@ fn collect_pred_needs(pred: &Predicate, needs: &mut QueryNeeds) -> Result<(), Qu
             // The rhs may also carry attrs (arithmetic on the right). Note their needs.
             if rhs_val.is_none() {
                 expr_for_each_attr(rhs, &mut |a| note_attr_need_attr(a, needs));
+            }
+            // `contains` and `toString` method calls in WHERE require the
+            // string-values side table (decoded String text) in the late window.
+            if expr_has_string_method(lhs) || expr_has_string_method(rhs) {
+                needs.string_values = true;
             }
             Ok(())
         }
