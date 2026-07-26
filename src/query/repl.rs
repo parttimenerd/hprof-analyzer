@@ -2080,8 +2080,9 @@ fn handle_sample(
 ) -> io::Result<()> {
     let n: usize = match args.trim().parse() {
         Ok(n) if n > 0 => n,
+        _ if args.trim().is_empty() => 10,
         _ => {
-            writeln!(out, "usage: !sample <N>  (N > 0)")?;
+            writeln!(out, "usage: !sample [N]  (default 10)")?;
             return Ok(());
         }
     };
@@ -2588,7 +2589,7 @@ fn handle_meta(
             writeln!(out, "  !filter <pattern>     filter rows: substring or /regex/ (/i for case-insensitive)")?;
             writeln!(out, "  !not <pattern>        exclude rows matching pattern (inverse of !filter)")?;
             writeln!(out, "  !grep <pattern>       alias for !filter")?;
-            writeln!(out, "  !sample <N>           show N randomly sampled rows from last result")?;
+            writeln!(out, "  !sample [N]           show N randomly sampled rows from last result (default 10)")?;
             writeln!(out, "  !distinct             remove duplicate rows (!dedup is an alias)")?;
             writeln!(out, "  !sort <col> [desc] [,col2 [desc]…]  sort last result by one or more columns")?;
             writeln!(out, "  !stats <col>          numeric summary: min/max/mean/p50/p90/p99/sum")?;

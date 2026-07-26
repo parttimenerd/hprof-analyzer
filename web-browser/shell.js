@@ -1474,9 +1474,9 @@ function startTerminal() {
         term.writeln('\x1b[33mNo result — run a query first.\x1b[0m');
       } else {
         const nStr = cmd.slice(7).trim();
-        const n = parseInt(nStr, 10);
-        if (!nStr || isNaN(n) || n <= 0) {
-          term.writeln('\x1b[33musage: /sample <N>  — show N random rows\x1b[0m');
+        const n = nStr ? parseInt(nStr, 10) : 10;
+        if (isNaN(n) || n <= 0) {
+          term.writeln('\x1b[33musage: /sample [N]  — show N random rows (default 10)\x1b[0m');
         } else {
           const rows = lastResult.rows;
           const k = Math.min(n, rows.length);
@@ -1938,7 +1938,7 @@ function startTerminal() {
     c('/sort <col> [desc] [,col2…]', '— sort rows by one or more columns (comma-separated)');
     c('/top [N]  /head [N]',     '— first N rows, default 10 (updates lastResult for chaining)');
     c('/tail [N]',               '— last N rows, default 10');
-    c('/sample <N>',             '— N randomly sampled rows from last result');
+    c('/sample [N]',             '— N randomly sampled rows from last result (default 10)');
     c('/unique <col>',           '— distinct value counts');
     c('/pivot <col>',            '— group by column → (value, count) table (chainable)');
     c('/stats <col>',            '— min/max/mean/percentiles/sum');
