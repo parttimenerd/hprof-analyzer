@@ -1298,11 +1298,16 @@ function startTerminal() {
 
   function isearchPrompt() {
     const q = isearchQuery;
-    const match = isearchMatch >= 0 ? history[isearchMatch] : '';
+    if (isearchMatch < 0) {
+      const noMatch = q ? '\x1b[31m(no match)\x1b[0m' : '';
+      const label = `\x1b[35m(reverse-i-search)\x1b[0m \`${q}\`: `;
+      term.write('\r\x1b[K' + label + noMatch);
+      return;
+    }
+    const match = history[isearchMatch];
     const hi = match.toLowerCase().indexOf(q.toLowerCase());
     let display = match;
     if (hi >= 0 && q) {
-      // Highlight matched portion in bold
       display = match.slice(0, hi) + '\x1b[1m' + match.slice(hi, hi + q.length) + '\x1b[0m' + match.slice(hi + q.length);
     }
     const label = `\x1b[35m(reverse-i-search)\x1b[0m \`${q}\`: `;
@@ -1602,6 +1607,7 @@ function startTerminal() {
         return desc ? -cmp : cmp;
       });
       renderResult({ columns: lastResult.columns, rows: sorted, row_count: sorted.length });
+      lastResult = { columns: lastResult.columns, rows: sorted };
       term.writeln(`\x1b[2mSorted by ${colName} ${desc ? 'desc' : 'asc'}\x1b[0m`);
       term.write(PROMPT);
       return;
