@@ -1483,6 +1483,21 @@ function startTerminal() {
             term.writeln(`  p90    \x1b[32m${fmtV2(p90_2)}\x1b[0m`);
             term.writeln(`  p99    \x1b[32m${fmtV2(p99_2)}\x1b[0m`);
             term.writeln(`  sum    \x1b[33m${fmtV2(sum2)}\x1b[0m`);
+            if (vals2.length >= 2) {
+              const lo2 = vals2[0], hi2 = vals2[vals2.length - 1];
+              if (hi2 > lo2) {
+                const NBUCKETS2 = 10, BAR_MAX2 = Math.max(16, Math.floor(term.cols / 3));
+                const buckets2 = new Array(NBUCKETS2).fill(0);
+                const range2 = hi2 - lo2;
+                vals2.forEach(v => { const b = Math.min(NBUCKETS2-1, Math.floor((v-lo2)/range2*NBUCKETS2)); buckets2[b]++; });
+                const maxB2 = Math.max(...buckets2, 1);
+                term.writeln('  \x1b[2mdist:\x1b[0m');
+                buckets2.forEach((b, i) => {
+                  const barLen2 = Math.round(b / maxB2 * BAR_MAX2);
+                  term.writeln(`  \x1b[2m${fmtV2(lo2 + i * range2 / NBUCKETS2).padStart(10)}\x1b[0m  \x1b[32m${'█'.repeat(barLen2).padEnd(BAR_MAX2)}\x1b[0m  \x1b[2m${b}\x1b[0m`);
+                });
+              }
+            }
           }
           term.write(PROMPT);
           return;
