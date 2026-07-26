@@ -1718,7 +1718,8 @@ function startTerminal() {
         const data = await res.json();
         term.write('\r\x1b[K');
         if (data.ok) {
-          const n = data.rows?.[0]?.[0];
+          const cell = data.result?.rows?.[0]?.[0];
+          const n = cell == null ? null : (typeof cell === 'object' ? cell.v : cell);
           term.writeln(`\x1b[32m${n != null ? n.toLocaleString() : '?'}\x1b[0m instance${n === 1 ? '' : 's'} of \x1b[36m${cls}\x1b[0m`);
         } else {
           const msg = data.error?.message || data.error || 'unknown error';
@@ -2259,8 +2260,10 @@ function startTerminal() {
     term.write('\x1b[2m' + spinFrames[0] + ' running\x1b[0m');
     const spinTimer = setInterval(() => {
       spinIdx = (spinIdx + 1) % spinFrames.length;
-      term.write('\r\x1b[K\x1b[2m' + spinFrames[spinIdx] + ' running\x1b[0m');
-    }, 80);
+      const elapsed = (performance.now() - t0) / 1000;
+      const elStr = elapsed >= 1 ? ` ${elapsed.toFixed(1)}s` : '';
+      term.write('\r\x1b[K\x1b[2m' + spinFrames[spinIdx] + ' running' + elStr + '\x1b[0m');
+    }, 100);
     try {
       const res = await fetch(serverUrl + '/', {
         method: 'POST',
