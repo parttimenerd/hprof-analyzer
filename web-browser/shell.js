@@ -2590,11 +2590,15 @@ function startTerminal() {
         term.writeln('\x1b[32m✓ watch stopped\x1b[0m');
         term.write(PROMPT);
       } else {
+        const hadPending = pendingLines.length > 0;
         term.writeln('^C');
         line = '';
         cursorPos = 0;
         histIdx = -1;
         pendingLines = [];
+        if (hadPending) {
+          term.writeln('\x1b[2m(multi-line input discarded)\x1b[0m');
+        }
         term.write(PROMPT);
       }
       return;
