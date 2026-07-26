@@ -2374,7 +2374,7 @@ fn handle_filter(
         return Ok(());
     }
     match last_result {
-        None => warn_out("(no previous result — run a query first)", out)?,
+        None => warn_out("(no result — run a query first)", out)?,
         Some(res) => {
             // @col pattern — column-specific filter
             let (col_filter_idx, actual_pattern) = if pattern.starts_with('@') {
@@ -2485,7 +2485,7 @@ fn handle_filter_not(
         return Ok(());
     }
     match last_result {
-        None => warn_out("(no previous result — run a query first)", out)?,
+        None => warn_out("(no result — run a query first)", out)?,
         Some(res) => {
             // @col pattern — column-specific filter
             let (col_filter_idx, actual_pattern) = if pattern.starts_with('@') {
@@ -2733,7 +2733,7 @@ fn handle_sort(
         return Ok(());
     }
     match last_result {
-        None => warn_out("(no previous result — run a query first)", out)?,
+        None => warn_out("(no result — run a query first)", out)?,
         Some(res) => {
             // Parse comma-separated sort keys: "col1 desc, col2 asc, col3, -col4"
             let specs: Vec<(usize, bool)> = {
@@ -2848,7 +2848,7 @@ fn handle_stats(
         return Ok(());
     }
     match last_result {
-        None => warn_out("(no previous result — run a query first)", out)?,
+        None => warn_out("(no result — run a query first)", out)?,
         Some(res) => {
             let col_idx = resolve_col(col_arg, &res.columns);
             match col_idx {
@@ -3007,7 +3007,7 @@ fn handle_drop(
         return Ok(());
     }
     match last_result {
-        None => warn_out("(no previous result — run a query first)", out)?,
+        None => warn_out("(no result — run a query first)", out)?,
         Some(res) => {
             let col_args: Vec<&str> = col_arg.split_whitespace().collect();
             let mut drop_set: std::collections::HashSet<usize> = std::collections::HashSet::new();
@@ -3086,7 +3086,7 @@ fn handle_unique(
         }
     };
     match last_result {
-        None => warn_out("(no previous result — run a query first)", out)?,
+        None => warn_out("(no result — run a query first)", out)?,
         Some(res) => {
             let col_idx = resolve_col(col_spec, &res.columns);
             match col_idx {
@@ -3173,7 +3173,7 @@ fn handle_pivot(
         }
     };
     match last_result {
-        None => warn_out("(no previous result — run a query first)", out)?,
+        None => warn_out("(no result — run a query first)", out)?,
         Some(res) => {
             let col_idx = resolve_col(col_spec, &res.columns);
             match col_idx {
@@ -3286,7 +3286,7 @@ fn handle_row(
     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
     let (cd, cc, ce, cr) = if color { ("\x1b[2m", "\x1b[36m", "\x1b[31m", "\x1b[0m") } else { ("", "", "", "") };
     let Some(res) = last_result else {
-        warn_out("(no previous result \u{2014} run a query first)", out)?;
+        warn_out("(no result — run a query first)", out)?;
         return Ok(());
     };
     if res.rows.is_empty() {
