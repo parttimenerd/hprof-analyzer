@@ -3073,7 +3073,11 @@ fn print_result(
         writeln!(out, "-- results truncated --")?;
     }
     if body.len() > 20 {
-        writeln!(out, "\x1b[2m  !filter <pat>  !sort [-]<col>  !select <col>…  !pivot <col>  !row [N]  !export [csv|tsv|json]  !save <file>\x1b[0m")?;
+        let has_numeric = res.columns.iter().enumerate().any(|(i, _)| {
+            matches!(infer_col_type(i, &res.rows), "int" | "float")
+        });
+        let stat_hint = if has_numeric { "  !stats <col>" } else { "" };
+        writeln!(out, "\x1b[2m  !filter <pat>  !sort [-]<col>  !select <col>…  !pivot <col>  !row [N]{stat_hint}  !export [csv|tsv|json]\x1b[0m")?;
     }
     Ok(())
 }
