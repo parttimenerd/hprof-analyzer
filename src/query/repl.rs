@@ -3112,9 +3112,9 @@ fn handle_unique(
                         writeln!(out, "{:<val_w$}  {:>cnt_w$}  {:>pct_w$}  {cd}{}{cr}", val, fmt_int(*cnt as i64), pct, bar)?;
                     }
                     if shown < total_distinct {
-                        writeln!(out, "{cd}({} of {} distinct, showing top {}){cr}", shown, total_distinct, show_n)?;
+                        writeln!(out, "{cd}({} of {} distinct values, top {} shown  ·  {} total rows){cr}", shown, total_distinct, show_n, total)?;
                     } else {
-                        writeln!(out, "{cd}({} distinct){cr}", total_distinct)?;
+                        writeln!(out, "{cd}({} distinct value{} in {} rows){cr}", total_distinct, if total_distinct == 1 { "" } else { "s" }, total)?;
                     }
                 }
             }
