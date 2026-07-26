@@ -673,7 +673,13 @@ function startTerminal() {
       if (!data.ok) {
         const msg = data.error?.message || JSON.stringify(data.error) || 'unknown error';
         const kind = data.error?.kind ? `\x1b[2m[${data.error.kind}]\x1b[0m ` : '';
-        term.writeln(`\x1b[31merror: ${kind}${msg}\x1b[0m`);
+        const report = data.error?.report;
+        if (report) {
+          // Ariadne caret diagnostic — show each line with proper \r\n
+          report.split('\n').forEach(l => term.writeln(l));
+        } else {
+          term.writeln(`\x1b[31merror: ${kind}${msg}\x1b[0m`);
+        }
       } else {
         const r = data.result;
         if (r.error) {
