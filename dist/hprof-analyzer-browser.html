@@ -998,6 +998,15 @@ function fmtBytes(n) {
   return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
 }
 
+// Resolve a column specifier (name substring OR 1-based number) to an index.
+// Returns -1 if not found.
+function resolveCol(spec, columns) {
+  const n = parseInt(spec, 10);
+  if (!isNaN(n) && String(n) === spec && n >= 1 && n <= columns.length) return n - 1;
+  const lo = spec.toLowerCase();
+  return columns.findIndex(c => c.toLowerCase() === lo || c.toLowerCase().includes(lo));
+}
+
 function fmtCell(cell, colName) {
   if (cell === null || cell === undefined) return settings.nullStr;
   if (typeof cell !== 'object') return String(cell);
@@ -2033,8 +2042,7 @@ function startTerminal() {
         term.write(PROMPT);
         return;
       }
-      const ci = lastResult.columns.findIndex(c => c.toLowerCase() === colArg.toLowerCase()
-        || c.toLowerCase().includes(colArg.toLowerCase()));
+      const ci = resolveCol(colArg, lastResult.columns);
       if (ci < 0) {
         term.writeln(`\x1b[31mColumn "${colArg}" not found. Available: ${lastResult.columns.join(', ')}\x1b[0m`);
         term.write(PROMPT);
@@ -2082,8 +2090,7 @@ function startTerminal() {
         term.write(PROMPT);
         return;
       }
-      const ci = lastResult.columns.findIndex(c => c.toLowerCase() === colArg.toLowerCase()
-        || c.toLowerCase().includes(colArg.toLowerCase()));
+      const ci = resolveCol(colArg, lastResult.columns);
       if (ci < 0) {
         term.writeln(`\x1b[31mColumn "${colArg}" not found. Available: ${lastResult.columns.join(', ')}\x1b[0m`);
         term.write(PROMPT);
@@ -2116,8 +2123,7 @@ function startTerminal() {
         term.write(PROMPT);
         return;
       }
-      const ci = lastResult.columns.findIndex(c => c.toLowerCase() === colArg.toLowerCase()
-        || c.toLowerCase().includes(colArg.toLowerCase()));
+      const ci = resolveCol(colArg, lastResult.columns);
       if (ci < 0) {
         term.writeln(`\x1b[31mColumn "${colArg}" not found. Available: ${lastResult.columns.join(', ')}\x1b[0m`);
         term.write(PROMPT);
@@ -2227,9 +2233,9 @@ function startTerminal() {
       for (const spec of args.split(',')) {
         const parts = spec.trim().split(/\s+/);
         if (!parts[0]) continue;
-        const colArg = parts[0].toLowerCase();
+        const colArg = parts[0];
         const desc = parts[1]?.toLowerCase() === 'desc';
-        const ci = lastResult.columns.findIndex(c => c.toLowerCase() === colArg || c.toLowerCase().includes(colArg));
+        const ci = resolveCol(colArg, lastResult.columns);
         if (ci < 0) {
           term.writeln(`\x1b[31mColumn "${parts[0]}" not found. Available: ${lastResult.columns.join(', ')}\x1b[0m`);
           ok = false; break;
