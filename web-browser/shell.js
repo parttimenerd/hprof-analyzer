@@ -1997,19 +1997,19 @@ function startTerminal() {
       return;
     }
     if (cmd === '/history' || cmd.startsWith('/history ')) {
+      const args = cmd.slice(8).trim();
+      if (args === 'clear') {
+        history.length = 0;
+        localStorage.setItem(HISTORY_KEY, '[]');
+        term.writeln('\x1b[32m✓ history cleared\x1b[0m');
+        term.write(PROMPT);
+        return;
+      }
       // history[0] is the /history command itself; skip it for display
       const realHistory = history.slice(1);
       if (realHistory.length === 0) {
         term.writeln('\x1b[2m(no history yet)\x1b[0m');
       } else {
-        const args = cmd.slice(8).trim();
-        if (args === 'clear') {
-          history.length = 0;
-          localStorage.setItem(HISTORY_KEY, '[]');
-          term.writeln('\x1b[32m✓ history cleared\x1b[0m');
-          term.write(PROMPT);
-          return;
-        }
         const limit = args ? Math.min(parseInt(args, 10) || 20, realHistory.length) : Math.min(20, realHistory.length);
         const shown = realHistory.slice(0, limit);
         shown.forEach((h, i) => {
