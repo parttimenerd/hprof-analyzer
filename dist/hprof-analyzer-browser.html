@@ -1915,7 +1915,16 @@ function startTerminal() {
         const idxW = String(fields.length).length;
         const colW = Math.max(...fields.map(f => f.length));
         fields.forEach((f, i) => {
-          term.writeln(`  \x1b[2m${String(i + 1).padStart(idxW)}\x1b[0m  \x1b[36m${f.padEnd(colW)}\x1b[0m`);
+          // Infer type from first non-null value in the column
+          let typeTag = 'null';
+          for (const row of lastResult.rows) {
+            const cell = row[i];
+            if (cell === null || cell === undefined) continue;
+            if (typeof cell !== 'object') { typeTag = typeof cell; break; }
+            if (cell.kind === 'null') continue;
+            typeTag = cell.kind || typeof cell; break;
+          }
+          term.writeln(`  \x1b[2m${String(i + 1).padStart(idxW)}\x1b[0m  \x1b[36m${f.padEnd(colW)}\x1b[0m  \x1b[2m${typeTag}\x1b[0m`);
         });
         term.writeln(`\x1b[2m${fields.length} column${fields.length !== 1 ? 's' : ''}\x1b[0m`);
       }

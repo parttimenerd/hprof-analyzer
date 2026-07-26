@@ -1223,7 +1223,9 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                     let idx_w = fields.len().to_string().len();
                                     let col_w = fields.iter().map(|f| f.len()).max().unwrap_or(10);
                                     for (i, f) in fields.iter().enumerate() {
-                                        writeln!(stdout, "  {:>idx_w$}  {:<col_w$}", i + 1, f)?;
+                                        // Infer type from first non-null value in the column
+                                        let type_tag = infer_col_type(i, &res.rows);
+                                        writeln!(stdout, "  {:>idx_w$}  {:<col_w$}  \x1b[2m{}\x1b[0m", i + 1, f, type_tag)?;
                                     }
                                     writeln!(stdout, "({} column{})", fields.len(), if fields.len() == 1 { "" } else { "s" })?;
                                 }
@@ -1664,11 +1666,11 @@ fn run_repl_line(
                     None => writeln!(out, "(no result — run a query first)")?,
                     Some(res) => {
                         let fields: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                        let col_w = fields.iter().map(|f| f.len()).max().unwrap_or(10) + 2;
-                        let cols = (80usize).saturating_div(col_w).max(1);
-                        for chunk in fields.chunks(cols) {
-                            let row: String = chunk.iter().map(|f| format!("  {:<col_w$}", f)).collect();
-                            writeln!(out, "{}", row.trim_end())?;
+                        let idx_w = fields.len().to_string().len();
+                        let col_w = fields.iter().map(|f| f.len()).max().unwrap_or(10);
+                        for (i, f) in fields.iter().enumerate() {
+                            let type_tag = infer_col_type(i, &res.rows);
+                            writeln!(out, "  {:>idx_w$}  {:<col_w$}  {}", i + 1, f, type_tag)?;
                         }
                         writeln!(out, "({} column{})", fields.len(), if fields.len() == 1 { "" } else { "s" })?;
                     }
@@ -2162,6 +2164,21 @@ fn handle_distinct(
         }
     }
     Ok(())
+}
+
+/// Infer the display type tag for column `col_idx` by scanning the first non-null value.
+fn infer_col_type(col_idx: usize, rows: &[Vec<QueryValue>]) -> &'static str {
+    for row in rows {
+        match row.get(col_idx) {
+            Some(QueryValue::Int(_)) => return "int",
+            Some(QueryValue::Float(_)) => return "float",
+            Some(QueryValue::Bool(_)) => return "bool",
+            Some(QueryValue::Str(_)) => return "str",
+            Some(QueryValue::ObjRef { .. }) => return "ref",
+            Some(QueryValue::Null) | None => continue,
+        }
+    }
+    "null"
 }
 
 /// Resolve a column specifier (name substring OR 1-based index) to a column index.
