@@ -594,7 +594,7 @@ impl Completer for OqlCompleter {
                     "plan", "explain",
                     "classes", "fields",
                     "reachable", "all", "mode",
-                    "width", "count", "last", "save",
+                    "width", "count", "last", "save", "export",
                     "filter", "grep", "not", "exclude", "sample", "distinct", "dedup", "sort", "stats", "unique", "pivot",
                     "top", "head", "tail", "select", "rename", "wc", "row", "undo", "cols", "columns",
                     "describe", "obj", "history",
@@ -1036,6 +1036,11 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             stdout.flush()?;
                             continue;
                         }
+                        "export" => {
+                            handle_export(rest, &last_result, &mut stdout)?;
+                            stdout.flush()?;
+                            continue;
+                        }
                         "filter" | "grep" => {
                             prev_result = last_result.clone();
                             handle_filter(rest, &mut last_result, max_width, &mut stdout)?;
@@ -1464,6 +1469,11 @@ fn run_repl_line(
                     rest, path, path_depth, *reachable_only, *max_width,
                     last_query, last_result, cache, out,
                 )?;
+                out.flush()?;
+                return Ok(false);
+            }
+            "export" => {
+                handle_export(rest, last_result, out)?;
                 out.flush()?;
                 return Ok(false);
             }
@@ -2273,33 +2283,38 @@ fn handle_sort(
         match last_result {
             Some(res) if !res.columns.is_empty() => {
                 let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                writeln!(out, "usage: !sort <col> [desc] [, <col2> [desc] …]  — available: {}", names.join(", "))?;
+                writeln!(out, "usage: !sort <col> [desc] [, <col2> [desc] …]  (prefix - for desc)  — available: {}", names.join(", "))?;
             }
-            _ => writeln!(out, "usage: !sort <col> [desc] [, <col2> [desc] …]")?,
+            _ => writeln!(out, "usage: !sort <col> [desc] [, <col2> [desc] …]  (prefix - for desc)")?,
         }
         return Ok(());
     }
     match last_result {
         None => writeln!(out, "(no previous result — run a query first)")?,
         Some(res) => {
-            // Parse comma-separated sort keys: "col1 desc, col2 asc, col3"
+            // Parse comma-separated sort keys: "col1 desc, col2 asc, col3, -col4"
             let specs: Vec<(usize, bool)> = {
                 let mut v = Vec::new();
                 let mut ok = true;
                 for spec in args.split(',') {
                     let spec = spec.trim();
                     if spec.is_empty() { continue; }
-                    let parts: Vec<&str> = spec.splitn(2, char::is_whitespace).collect();
-                    let col_lower = parts[0].to_ascii_lowercase();
-                    let desc = parts.get(1).map(|s| s.trim().eq_ignore_ascii_case("desc")).unwrap_or(false);
-                    match resolve_col(parts[0], &res.columns) {
+                    // Support "-col" as shorthand for "col desc"
+                    let (col_spec, parts_desc) = if spec.starts_with('-') && spec.len() > 1 {
+                        (&spec[1..], true)
+                    } else {
+                        let parts: Vec<&str> = spec.splitn(2, char::is_whitespace).collect();
+                        let desc = parts.get(1).map(|s| s.trim().eq_ignore_ascii_case("desc")).unwrap_or(false);
+                        (parts[0], desc)
+                    };
+                    match resolve_col(col_spec, &res.columns) {
                         None => {
                             let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                            writeln!(out, "column {:?} not found — available: {}", parts[0], names.join(", "))?;
+                            writeln!(out, "column {:?} not found — available: {}", col_spec, names.join(", "))?;
                             ok = false;
                             break;
                         }
-                        Some(ci) => v.push((ci, desc)),
+                        Some(ci) => v.push((ci, parts_desc)),
                     }
                 }
                 if !ok { return Ok(()); }
@@ -2577,6 +2592,31 @@ fn handle_pivot(
     Ok(())
 }
 
+/// `!export [csv|tsv|json]` — print the last result to stdout in the requested format.
+/// Defaults to CSV.  Useful for piping: `hprof-analyzer query … | grep …`
+fn handle_export(
+    fmt: &str,
+    last_result: &Option<QueryResult>,
+    out: &mut impl Write,
+) -> io::Result<()> {
+    let Some(res) = last_result else {
+        writeln!(out, "(no result — run a query first)")?;
+        return Ok(());
+    };
+    let fmt = fmt.trim().to_ascii_lowercase();
+    let content: String = match fmt.as_str() {
+        "" | "csv" => result_to_csv(res),
+        "tsv"      => result_to_tsv(res),
+        "json"     => result_to_json(res),
+        other      => {
+            writeln!(out, "unknown format {:?} — use csv, tsv, or json", other)?;
+            return Ok(());
+        }
+    };
+    write!(out, "{}", content)?;
+    Ok(())
+}
+
 /// Display a single row (1-based) from last result in vertical key=value layout.
 /// With no argument, shows row 1.  Useful for wide results with many columns.
 fn handle_row(
@@ -2669,6 +2709,7 @@ fn handle_meta(
                 out,
                 "  !save <file> [oql]    write CSV/TSV/JSON to <file> (format by extension; of <oql>, else last result)"
             )?;
+            writeln!(out, "  !export [csv|tsv|json] print last result to stdout (default csv)")?;
             writeln!(out, "  !filter <pattern>     filter rows: substring or /regex/ (/i for case-insensitive)")?;
             writeln!(out, "  !filter @<col> <pat>  filter by specific column (also works with !not)")?;
             writeln!(out, "  !not <pattern>        exclude rows matching pattern (inverse of !filter)")?;
@@ -3000,7 +3041,7 @@ fn print_result(
         writeln!(out, "-- results truncated --")?;
     }
     if body.len() > 20 {
-        writeln!(out, "\x1b[2m  !filter <pattern>  !sort <col>  !select <col>…  !pivot <col>  !row [N]  !save <file>\x1b[0m")?;
+        writeln!(out, "\x1b[2m  !filter <pat>  !sort [-]<col>  !select <col>…  !pivot <col>  !row [N]  !export [csv|tsv|json]  !save <file>\x1b[0m")?;
     }
     Ok(())
 }

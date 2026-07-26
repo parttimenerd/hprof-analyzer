@@ -1373,18 +1373,25 @@ function startTerminal() {
       const args = cmd.slice(5).trim();
       if (!lastResult || !args) {
         if (!lastResult) term.writeln('\x1b[33mNo result to sort — run a query first.\x1b[0m');
-        else term.writeln(`\x1b[33mUsage: /sort <col> [desc] [,col2…]  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
+        else term.writeln(`\x1b[33mUsage: /sort <col> [desc] [,-col2…]  (-col for desc)  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
         term.write(PROMPT);
         return;
       }
-      // Parse comma-separated sort keys: "col1 desc, col2 asc, col3"
+      // Parse comma-separated sort keys: "col1 desc, col2 asc, col3, -col4"
       const specs = [];
       let ok = true;
       for (const spec of args.split(',')) {
-        const parts = spec.trim().split(/\s+/);
-        if (!parts[0]) continue;
-        const colArg = parts[0];
-        const desc = parts[1]?.toLowerCase() === 'desc';
+        const trimmed = spec.trim();
+        if (!trimmed) continue;
+        let colArg, desc;
+        if (trimmed.startsWith('-') && trimmed.length > 1) {
+          colArg = trimmed.slice(1);
+          desc = true;
+        } else {
+          const parts = trimmed.split(/\s+/);
+          colArg = parts[0];
+          desc = parts[1]?.toLowerCase() === 'desc';
+        }
         const ci = resolveCol(colArg, lastResult.columns);
         if (ci < 0) {
           term.writeln(`\x1b[31mColumn "${parts[0]}" not found. Available: ${lastResult.columns.join(', ')}\x1b[0m`);
@@ -1920,7 +1927,7 @@ function startTerminal() {
           const ts = new Date().toLocaleTimeString('en-GB', { hour12: false });
           term.writeln(`${elapsedColor}${r.row_count} row${r.row_count !== 1 ? 's' : ''}, ${elapsedFmt}\x1b[0m\x1b[2m  [${ts}]\x1b[0m${trunc}${note}`);
           if (rows.length > 20) {
-            term.writeln(`\x1b[2m  /filter <text|/re/>  /sort <col>  /select <col>…  /pivot <col>  /row [N]  /export [csv]\x1b[0m`);
+            term.writeln(`\x1b[2m  /filter <text|/re/>  /sort [-]<col>  /select <col>…  /pivot <col>  /row [N]  /export [csv]\x1b[0m`);
           }
         } else {
           // No columns — just show the raw result
@@ -1970,7 +1977,7 @@ function startTerminal() {
     c('/filter <text|/re/>',     '— filter rows; /filter @<col> <text> to target one column  (/grep alias)');
     c('/not <text|/re/>',        '— exclude matching rows; /not @<col> <text> to target one column');
     c('/distinct',               '— remove duplicate rows (/dedup is an alias)');
-    c('/sort <col> [desc] [,col2…]', '— sort rows by one or more columns (comma-separated)');
+    c('/sort <col> [desc] [,col2…]', '— sort by columns; prefix - for desc  (e.g. /sort -size,name)');
     c('/top [N]  /head [N]',     '— first N rows, default 10 (updates lastResult for chaining)');
     c('/tail [N]',               '— last N rows, default 10');
     c('/sample [N]',             '— N randomly sampled rows from last result (default 10)');
