@@ -1333,9 +1333,11 @@ function startTerminal() {
     for (let i = start; i < history.length; i++) {
       if (history[i].toLowerCase().includes(q)) { found = i; break; }
     }
-    if (found < 0 && isearchMatch < 0) {
-      // No match at all — try from the beginning
-      found = history.findIndex(h => h.toLowerCase().includes(q));
+    if (found < 0) {
+      // Wrap around: search from beginning up to (but not including) start
+      for (let i = 0; i < start; i++) {
+        if (history[i].toLowerCase().includes(q)) { found = i; break; }
+      }
     }
     isearchMatch = found;
     isearchPrompt();
@@ -1960,7 +1962,7 @@ function startTerminal() {
         const text = line;
         line = '';
         cursorPos = 0;
-        handleEnter(text);
+        void handleEnter(text);
         return;
       }
       if (code === 'Escape' || (ev.ctrlKey && (code === 'g' || code === 'c'))) {
@@ -1996,7 +1998,7 @@ function startTerminal() {
       cursorPos = 0;
       histIdx = -1;
       term.writeln('');
-      handleEnter(text);
+      void handleEnter(text);
       return;
     }
 
