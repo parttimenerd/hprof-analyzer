@@ -535,6 +535,46 @@ function startTerminal() {
       term.write(PROMPT);
       return;
     }
+    if (cmd.startsWith('/filter ') || cmd === '/filter') {
+      const pattern = cmd.slice(7).trim().toLowerCase();
+      if (!lastResult) {
+        term.writeln('\x1b[33mNo result to filter — run a query first.\x1b[0m');
+      } else if (!pattern) {
+        term.writeln('\x1b[33mUsage: /filter <text>  — filter last result rows by substring\x1b[0m');
+      } else {
+        const { columns, rows } = lastResult;
+        const filtered = rows.filter(row =>
+          row.some((cell, i) => fmtCell(cell, columns[i]).toLowerCase().includes(pattern))
+        );
+        if (filtered.length === 0) {
+          term.writeln(`\x1b[33mNo rows match "${pattern}"\x1b[0m`);
+        } else {
+          const isNumeric = columns.map((_, i) => {
+            const sample = filtered.find(row => row[i] !== null && row[i] !== undefined);
+            return sample ? isNumericKind(sample[i]) : false;
+          });
+          const colW = columns.map((n, i) => {
+            const contentMax = filtered.reduce((m, row) => Math.max(m, fmtCell(row[i], n).length), 0);
+            return Math.max(n.length, contentMax, 4);
+          });
+          const gap = 2;
+          const totalW = colW.reduce((s, w) => s + w + gap, 0) - gap;
+          const maxW = term.cols - 2;
+          const scale = totalW > maxW ? maxW / totalW : 1;
+          const adjW = colW.map(w => Math.max(4, Math.floor(w * scale)));
+          const header = columns.map((n, i) => padTo(n, adjW[i], isNumeric[i])).join('  ');
+          term.writeln('\x1b[1m' + header + '\x1b[0m');
+          term.writeln('\x1b[2m' + '─'.repeat(Math.min(header.length, term.cols - 2)) + '\x1b[0m');
+          filtered.slice(0, settings.rowLimit).forEach(row => {
+            const cells = row.map((cell, i) => padTo(fmtCell(cell, columns[i]), adjW[i], isNumeric[i]));
+            term.writeln(cells.join('  '));
+          });
+          term.writeln(`\x1b[2m${filtered.length} of ${rows.length} rows match "${pattern}"\x1b[0m`);
+        }
+      }
+      term.write(PROMPT);
+      return;
+    }
     if (cmd === '/classes' || cmd.startsWith('/classes ')) {
       const pattern = cmd.slice(8).trim().toLowerCase();
       const all = classNames.length > 0 ? classNames
@@ -699,6 +739,7 @@ function startTerminal() {
       // Erase spinner
       term.write('\r\x1b[K');
       const elapsed = ((performance.now() - t0) / 1000).toFixed(3);
+      const elapsedMs = performance.now() - t0;
       let data;
       try {
         data = await res.json();
@@ -757,7 +798,9 @@ function startTerminal() {
           lastResult = { columns: colNames, rows };
           const note = r.note ? `  \x1b[33m[${r.note}]\x1b[0m` : '';
           const trunc = r.truncated ? '  \x1b[33m[truncated]\x1b[0m' : '';
-          term.writeln(`\x1b[2m${r.row_count} row${r.row_count !== 1 ? 's' : ''}, ${elapsed}s${trunc}${note}\x1b[0m`);
+          const elapsedFmt = elapsedMs < 1000 ? `${elapsedMs.toFixed(0)}ms` : `${(elapsedMs / 1000).toFixed(3)}s`;
+          const elapsedColor = elapsedMs > 1000 ? '\x1b[31m' : elapsedMs > 300 ? '\x1b[33m' : '\x1b[2m';
+          term.writeln(`${elapsedColor}${r.row_count} row${r.row_count !== 1 ? 's' : ''}, ${elapsedFmt}\x1b[0m${trunc}${note}`);
         } else {
           // No columns — just show the raw result
           term.writeln(JSON.stringify(r, null, 2).split('\n').slice(0, 40).join('\r\n'));
@@ -787,6 +830,7 @@ function startTerminal() {
     term.writeln('  \x1b[36m/export\x1b[0m            — copy last result to clipboard as TSV');
     term.writeln('  \x1b[36m/set [key val]\x1b[0m     — view/change display settings (limit, bytes, null)');
     term.writeln('  \x1b[36m/classes [pat]\x1b[0m     — list class names (optionally filtered by pattern)');
+    term.writeln('  \x1b[36m/filter <text>\x1b[0m     — filter last result rows by substring');
     term.writeln('  \x1b[36m/run <name>\x1b[0m        — run a named query');
     term.writeln('');
     term.writeln('\x1b[1mKeyboard shortcuts:\x1b[0m');
