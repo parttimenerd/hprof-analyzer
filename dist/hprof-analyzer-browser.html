@@ -1155,13 +1155,24 @@ function startTerminal() {
   term.write(PROMPT);
 
   let line = '';
+  let cursorPos = 0;  // index within line where the cursor sits
   let histIdx = -1;
   const history = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
 
+  // Redraw line and reposition cursor; does NOT change histIdx
+  function redrawLine() {
+    term.write('\r\x1b[K' + PROMPT + line);
+    if (cursorPos < line.length) {
+      // Move cursor left from end to cursorPos
+      term.write(`\x1b[${line.length - cursorPos}D`);
+    }
+  }
+
   function setLine(newLine) {
-    term.write('\r\x1b[K' + PROMPT + newLine);
     line = newLine;
+    cursorPos = newLine.length;
     histIdx = -1;
+    redrawLine();
     term.focus();
   }
   window._hprofSetLine = setLine;
@@ -1171,6 +1182,7 @@ function startTerminal() {
     setLine(oql);
     const text = line;
     line = '';
+    cursorPos = 0;
     histIdx = -1;
     term.writeln('');
     await handleEnter(text);
@@ -1180,17 +1192,18 @@ function startTerminal() {
   function handleTab() {
     if (!wasmReady) return;
     try {
-      const cs = JSON.parse(wasmComplete(line, line.length, classNames));
+      const cs = JSON.parse(wasmComplete(line, cursorPos, classNames));
       if (cs.length === 0) return;
       if (cs.length === 1) {
-        // Complete to the single suggestion
-        const current = line.trimEnd();
+        // Complete to the single suggestion at cursor
+        const current = line.slice(0, cursorPos).trimEnd();
         const tokens = current.split(/[\s,(]+/);
         const lastToken = tokens[tokens.length - 1] || '';
         const suffix = cs[0].value.slice(lastToken.length);
         if (suffix) {
-          line += suffix;
-          term.write(suffix);
+          line = line.slice(0, cursorPos) + suffix + line.slice(cursorPos);
+          cursorPos += suffix.length;
+          redrawLine();
         }
       } else {
         // Show a list of completions below the current line
@@ -1208,7 +1221,7 @@ function startTerminal() {
         if (cs.length > 30) {
           term.writeln(`  \x1b[2m… ${cs.length - 30} more\x1b[0m`);
         }
-        term.write(PROMPT + line);
+        redrawLine();
       }
     } catch (_) { /* ignore */ }
   }
@@ -1271,14 +1284,21 @@ function startTerminal() {
 
   async function runQuery(oql) {
     const t0 = performance.now();
-    // Show spinner — will be erased when result arrives
-    term.write('\x1b[2m(running…)\x1b[0m');
+    // Animated spinner while waiting for response
+    const spinFrames = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
+    let spinIdx = 0;
+    term.write('\x1b[2m' + spinFrames[0] + ' running\x1b[0m');
+    const spinTimer = setInterval(() => {
+      spinIdx = (spinIdx + 1) % spinFrames.length;
+      term.write('\r\x1b[K\x1b[2m' + spinFrames[spinIdx] + ' running\x1b[0m');
+    }, 80);
     try {
       const res = await fetch(serverUrl + '/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query: oql }),
       });
+      clearInterval(spinTimer);
       // Erase spinner
       term.write('\r\x1b[K');
       const elapsed = ((performance.now() - t0) / 1000).toFixed(3);
@@ -1336,6 +1356,7 @@ function startTerminal() {
         }
       }
     } catch (e) {
+      clearInterval(spinTimer);
       term.write('\r\x1b[K');
       term.writeln(`\x1b[31merror: ${e.message}\x1b[0m`);
     }
@@ -1348,9 +1369,18 @@ function startTerminal() {
     term.writeln('  \x1b[36m/clear\x1b[0m             — clear terminal');
     term.writeln('  \x1b[36m/analyze\x1b[0m           — trigger full heap analysis (enables @retainedHeapSize)');
     term.writeln('  \x1b[36m/run <name>\x1b[0m        — run a named query');
+    term.writeln('');
+    term.writeln('\x1b[1mKeyboard shortcuts:\x1b[0m');
     term.writeln('  \x1b[36mTab\x1b[0m                — OQL completion');
     term.writeln('  \x1b[36mUp/Down\x1b[0m            — history');
+    term.writeln('  \x1b[36mLeft/Right\x1b[0m         — move cursor (Ctrl/Alt: by word)');
+    term.writeln('  \x1b[36mHome / Ctrl+A\x1b[0m      — beginning of line');
+    term.writeln('  \x1b[36mEnd  / Ctrl+E\x1b[0m      — end of line');
+    term.writeln('  \x1b[36mCtrl+K\x1b[0m             — kill to end of line');
+    term.writeln('  \x1b[36mCtrl+W\x1b[0m             — kill previous word');
+    term.writeln('  \x1b[36mCtrl+U\x1b[0m             — kill to beginning of line');
     term.writeln('  \x1b[36mCtrl+C\x1b[0m             — cancel current line');
+    term.writeln('  \x1b[36mCtrl+L\x1b[0m             — clear screen');
     term.writeln('');
     term.writeln('\x1b[1mNamed queries\x1b[0m (/run <name>):');
     let cur = '';
@@ -1372,6 +1402,7 @@ function startTerminal() {
     if (code === 'Enter') {
       const text = line;
       line = '';
+      cursorPos = 0;
       histIdx = -1;
       term.writeln('');
       handleEnter(text);
@@ -1379,9 +1410,18 @@ function startTerminal() {
     }
 
     if (code === 'Backspace') {
-      if (line.length > 0) {
-        line = line.slice(0, -1);
-        term.write('\b \b');
+      if (cursorPos > 0) {
+        line = line.slice(0, cursorPos - 1) + line.slice(cursorPos);
+        cursorPos--;
+        redrawLine();
+      }
+      return;
+    }
+
+    if (code === 'Delete') {
+      if (cursorPos < line.length) {
+        line = line.slice(0, cursorPos) + line.slice(cursorPos + 1);
+        redrawLine();
       }
       return;
     }
@@ -1412,17 +1452,47 @@ function startTerminal() {
     }
 
     if (code === 'ArrowLeft') {
-      // Basic: not tracking cursor within line, ignore
+      if (ev.ctrlKey || ev.altKey) {
+        // Jump to previous word boundary
+        let p = cursorPos;
+        while (p > 0 && line[p - 1] === ' ') p--;
+        while (p > 0 && line[p - 1] !== ' ') p--;
+        if (p !== cursorPos) { cursorPos = p; redrawLine(); }
+      } else if (cursorPos > 0) {
+        cursorPos--;
+        term.write('\x1b[D');
+      }
       return;
     }
 
     if (code === 'ArrowRight') {
+      if (ev.ctrlKey || ev.altKey) {
+        // Jump to next word boundary
+        let p = cursorPos;
+        while (p < line.length && line[p] !== ' ') p++;
+        while (p < line.length && line[p] === ' ') p++;
+        if (p !== cursorPos) { cursorPos = p; redrawLine(); }
+      } else if (cursorPos < line.length) {
+        cursorPos++;
+        term.write('\x1b[C');
+      }
+      return;
+    }
+
+    if (code === 'Home' || (ev.ctrlKey && code === 'a')) {
+      if (cursorPos > 0) { cursorPos = 0; redrawLine(); }
+      return;
+    }
+
+    if (code === 'End' || (ev.ctrlKey && code === 'e')) {
+      if (cursorPos < line.length) { cursorPos = line.length; redrawLine(); }
       return;
     }
 
     if (ev.ctrlKey && code === 'c') {
       term.writeln('^C');
       line = '';
+      cursorPos = 0;
       histIdx = -1;
       term.write(PROMPT);
       return;
@@ -1430,22 +1500,50 @@ function startTerminal() {
 
     if (ev.ctrlKey && code === 'l') {
       term.clear();
-      term.write(PROMPT + line);
+      redrawLine();
       return;
     }
 
     if (ev.ctrlKey && code === 'u') {
       if (line.length > 0) {
-        term.write('\r\x1b[K' + PROMPT);
-        line = '';
+        line = line.slice(cursorPos);
+        cursorPos = 0;
+        redrawLine();
       }
       return;
     }
 
-    // Printable characters only
+    if (ev.ctrlKey && code === 'k') {
+      if (cursorPos < line.length) {
+        line = line.slice(0, cursorPos);
+        redrawLine();
+      }
+      return;
+    }
+
+    if (ev.ctrlKey && code === 'w') {
+      // Kill previous word
+      let p = cursorPos;
+      while (p > 0 && line[p - 1] === ' ') p--;
+      while (p > 0 && line[p - 1] !== ' ') p--;
+      if (p !== cursorPos) {
+        line = line.slice(0, p) + line.slice(cursorPos);
+        cursorPos = p;
+        redrawLine();
+      }
+      return;
+    }
+
+    // Printable characters only — insert at cursorPos
     if (key.length === 1 && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
-      line += key;
-      term.write(key);
+      line = line.slice(0, cursorPos) + key + line.slice(cursorPos);
+      cursorPos++;
+      if (cursorPos === line.length) {
+        // Cursor at end — just append (no redraw flicker)
+        term.write(key);
+      } else {
+        redrawLine();
+      }
     }
   });
 }
