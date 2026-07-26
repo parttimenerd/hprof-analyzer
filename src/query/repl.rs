@@ -2081,12 +2081,13 @@ fn handle_filter(
                 .collect();
             let total = res.rows.len();
             let filtered_count = filtered_rows.len();
+            let note = format!("{} of {} rows match {:?}", filtered_count, total, pattern);
             let filtered_res = QueryResult {
                 columns: res.columns.clone(),
                 rows: filtered_rows,
                 row_count: filtered_count as u64,
                 truncated: false,
-                note: None,
+                note: Some(note.clone()),
                 error: None,
                 name: res.name.clone(),
                 oql: res.oql.clone(),
@@ -2094,7 +2095,6 @@ fn handle_filter(
                 elapsed_ms: None,
             };
             print_result(&filtered_res, std::time::Duration::ZERO, max_width, out)?;
-            writeln!(out, "-- {} of {} rows match {:?}", filtered_count, total, pattern)?;
             // Update last_result so chained !sort/!stats/!unique work on filtered data
             *last_result = Some(filtered_res);
         }
@@ -2168,12 +2168,13 @@ fn handle_filter_not(
                 .collect();
             let total = res.rows.len();
             let kept = filtered_rows.len();
+            let note = format!("{} of {} rows excluded {:?}", total - kept, total, actual_pattern);
             let filtered_res = QueryResult {
                 columns: res.columns.clone(),
                 rows: filtered_rows,
                 row_count: kept as u64,
                 truncated: false,
-                note: None,
+                note: Some(note),
                 error: None,
                 name: res.name.clone(),
                 oql: res.oql.clone(),
@@ -2181,7 +2182,6 @@ fn handle_filter_not(
                 elapsed_ms: None,
             };
             print_result(&filtered_res, std::time::Duration::ZERO, max_width, out)?;
-            writeln!(out, "-- {} of {} rows excluded {:?}", total - kept, total, actual_pattern)?;
             *last_result = Some(filtered_res);
         }
     }

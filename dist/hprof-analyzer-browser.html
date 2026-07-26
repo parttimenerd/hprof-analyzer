@@ -2500,10 +2500,11 @@ function startTerminal() {
         if (filtered.length === 0) {
           term.writeln(`\x1b[33mNo rows match "${pattern}"\x1b[0m`);
         } else {
-          renderResult({ columns, rows: filtered, row_count: filtered.length });
-          term.writeln(`\x1b[2m${filtered.length} of ${rows.length} rows match "${pattern}"\x1b[0m`);
+          const note = `${filtered.length} of ${rows.length} rows match "${pattern}"`;
+          const newResult = { columns, rows: filtered, row_count: filtered.length, note };
+          renderResult(newResult);
           prevResult = lastResult;
-          lastResult = { columns, rows: filtered };
+          lastResult = newResult;
         }
       }
       term.write(PROMPT);
@@ -2544,10 +2545,11 @@ function startTerminal() {
             ? !test(fmtCell(row[colIdx], columns[colIdx]))
             : !row.some((cell, i) => test(fmtCell(cell, columns[i])))
         );
-        renderResult({ columns, rows: kept, row_count: kept.length });
-        term.writeln(`\x1b[2m${rows.length - kept.length} of ${rows.length} rows excluded by "${pattern}"\x1b[0m`);
+        const note = `${rows.length - kept.length} of ${rows.length} rows excluded by "${pattern}"`;
+        const newResult = { columns, rows: kept, row_count: kept.length, note };
+        renderResult(newResult);
         prevResult = lastResult;
-        lastResult = { columns, rows: kept };
+        lastResult = newResult;
       }
       term.write(PROMPT);
       return;
