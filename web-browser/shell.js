@@ -547,7 +547,7 @@ function startTerminal() {
     if (line.startsWith('/') && !line.includes(' ')) {
       const partial = line.slice(1).toLowerCase();
       const cmds = ['help','clear','status','analyze','history','export','set','classes','plan','explain','filter','grep',
-                    'sort','unique','pivot','stats','top','head','tail','sample','cols','columns','select','rename','wc','limit','not','exclude','distinct','dedup','obj','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
+                    'sort','unique','pivot','stats','top','head','tail','row','sample','cols','columns','select','rename','wc','limit','not','exclude','distinct','dedup','obj','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
       const matches = cmds.filter(c => c.startsWith(partial));
       if (matches.length === 1) {
         setLine('/' + matches[0] + ' ');
@@ -969,6 +969,35 @@ function startTerminal() {
         const n = lastResult.rows.length;
         term.writeln(`\x1b[32m${n.toLocaleString()}\x1b[0m row${n !== 1 ? 's' : ''}`);
       }
+      term.write(PROMPT);
+      return;
+    }
+    if (cmd.startsWith('/row ') || cmd === '/row') {
+      if (!lastResult) {
+        term.writeln('\x1b[33mNo result — run a query first.\x1b[0m');
+        term.write(PROMPT);
+        return;
+      }
+      if (lastResult.rows.length === 0) {
+        term.writeln('\x1b[33m(result has no rows)\x1b[0m');
+        term.write(PROMPT);
+        return;
+      }
+      const arg = cmd.slice(4).trim();
+      const n = arg ? parseInt(arg, 10) : 1;
+      if (isNaN(n) || n < 1 || n > lastResult.rows.length) {
+        term.writeln(`\x1b[33mUsage: /row [N]  — show row N (1-based) as key=value pairs (default: 1)\x1b[0m`);
+        term.write(PROMPT);
+        return;
+      }
+      const row = lastResult.rows[n - 1];
+      const keyW = Math.max(...lastResult.columns.map(c => c.length)) + 2;
+      term.writeln(`\x1b[2m── row ${n} of ${lastResult.rows.length} ──\x1b[0m`);
+      lastResult.columns.forEach((col, i) => {
+        const key = col.padEnd(keyW);
+        const val = fmtCell(row[i], col);
+        term.writeln(`  \x1b[36m${key}\x1b[0m  ${val}`);
+      });
       term.write(PROMPT);
       return;
     }
@@ -1861,6 +1890,7 @@ function startTerminal() {
     h('Result post-processing');
     c('/last',                   '— re-display last result');
     c('/wc',                     '— show row count of last result');
+    c('/row [N]',                '— show row N (1-based) as key=value pairs');
     c('/limit <N>',              '— set display row limit and re-display (alias for /set limit N)');
     c('/cols',                   '— list column names of last result');
     c('/select <col> …',         '— project (keep) specific columns from last result');

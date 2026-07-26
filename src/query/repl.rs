@@ -596,7 +596,7 @@ impl Completer for OqlCompleter {
                     "reachable", "all", "mode",
                     "width", "count", "last", "save",
                     "filter", "grep", "not", "exclude", "sample", "distinct", "dedup", "sort", "stats", "unique", "pivot",
-                    "top", "head", "tail", "select", "rename", "wc", "cols", "columns",
+                    "top", "head", "tail", "select", "rename", "wc", "row", "cols", "columns",
                     "describe", "obj",
                     "run",
                 ];
@@ -1011,6 +1011,11 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             stdout.flush()?;
                             continue;
                         }
+                        "row" => {
+                            handle_row(rest, &last_result, &mut stdout)?;
+                            stdout.flush()?;
+                            continue;
+                        }
                         "save" => {
                             handle_save(
                                 rest, path, path_depth, reachable_only, max_width,
@@ -1394,6 +1399,11 @@ fn run_repl_line(
                         writeln!(out, "{} row{}", n, if n == 1 { "" } else { "s" })?;
                     }
                 }
+                out.flush()?;
+                return Ok(false);
+            }
+            "row" => {
+                handle_row(rest, last_result, out)?;
                 out.flush()?;
                 return Ok(false);
             }
@@ -2406,6 +2416,45 @@ fn handle_pivot(
     Ok(())
 }
 
+/// Display a single row (1-based) from last result in vertical key=value layout.
+/// With no argument, shows row 1.  Useful for wide results with many columns.
+fn handle_row(
+    arg: &str,
+    last_result: &Option<QueryResult>,
+    out: &mut impl Write,
+) -> io::Result<()> {
+    let Some(res) = last_result else {
+        writeln!(out, "(no previous result — run a query first)")?;
+        return Ok(());
+    };
+    if res.rows.is_empty() {
+        writeln!(out, "(result has no rows)")?;
+        return Ok(());
+    }
+    let idx: usize = if arg.trim().is_empty() {
+        1
+    } else {
+        match arg.trim().parse::<usize>() {
+            Ok(n) if n >= 1 && n <= res.rows.len() => n,
+            Ok(n) => {
+                writeln!(out, "row {n} out of range — result has {} rows", res.rows.len())?;
+                return Ok(());
+            }
+            Err(_) => {
+                writeln!(out, "usage: !row [N]  — show row N (1-based) as key=value pairs")?;
+                return Ok(());
+            }
+        }
+    };
+    let row = &res.rows[idx - 1];
+    let key_w = res.columns.iter().map(|c| c.name.len()).max().unwrap_or(8);
+    writeln!(out, "── row {idx} of {} ──", res.rows.len())?;
+    for (col, val) in res.columns.iter().zip(row.iter()) {
+        writeln!(out, "  {:<key_w$}  {}", col.name, fmt_value(val))?;
+    }
+    Ok(())
+}
+
 /// Handle a meta-command (the text after the leading `!`). Returns `Ok(true)`
 /// when the command asks the REPL to quit. `reachable_only` is the session's
 /// current GC-reachability mode; `!all`/`!reachable` mutate it. `names` is the
@@ -2470,6 +2519,7 @@ fn handle_meta(
             writeln!(out, "  !pivot <col>          group by column → (value, count) table (chainable)")?;
             writeln!(out, "  !top <N>  /  !head <N>  show first N rows of last result")?;
             writeln!(out, "  !tail <N>             show last N rows of last result")?;
+            writeln!(out, "  !row [N]              show row N (1-based) as vertical key=value pairs")?;
             writeln!(out, "  !select <cols...>     project columns from last result")?;
             writeln!(out, "  !rename <old> <new>   rename a column in last result")?;
             writeln!(out, "  !describe <class>     show all field names of a class")?;
