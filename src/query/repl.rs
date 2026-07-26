@@ -665,6 +665,39 @@ impl Completer for OqlCompleter {
                 }
             }
         }
+        // `!set <key>` — complete setting keys; `!set bytes|color <val>` complete value.
+        if upto.starts_with("!set") {
+            let after = upto["!set".len()..].trim_start();
+            let parts: Vec<&str> = after.splitn(3, char::is_whitespace).collect();
+            let build = |value: &str| Suggestion {
+                value: format!("!set {value}"),
+                description: None,
+                style: None,
+                extra: None,
+                span: Span { start: 0, end: pos },
+                append_whitespace: true,
+            };
+            if parts.len() <= 1 {
+                let partial = parts.first().copied().unwrap_or("").to_ascii_lowercase();
+                let keys = ["limit", "bytes", "color", "null"];
+                let matches: Vec<_> = keys.iter().filter(|k| k.starts_with(partial.as_str())).copied().collect();
+                if !matches.is_empty() {
+                    return matches.iter().map(|k| build(k)).collect();
+                }
+            } else if parts.len() == 2 {
+                let key = parts[0];
+                let partial = parts[1].to_ascii_lowercase();
+                let vals: &[&str] = match key {
+                    "bytes" => &["raw", "human"],
+                    "color" | "colour" => &["on", "off"],
+                    _ => &[],
+                };
+                let matches: Vec<_> = vals.iter().filter(|v| v.starts_with(partial.as_str())).copied().collect();
+                if !matches.is_empty() {
+                    return matches.iter().map(|v| build(&format!("{key} {v}"))).collect();
+                }
+            }
+        }
         // Delegate /run completion to the WASM-safe free function.
         if upto.starts_with("/run ") {
             return crate::query::complete::complete(upto, pos, &self.class_names, &self.field_names)
