@@ -883,6 +883,7 @@ let settings = Object.assign({}, defaultSettings,
   JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'));
 
 let serverUrl = null;
+let serverVersion = null;  // { name, version } from /version endpoint
 let term = null;
 let classNames = [];  // populated after session loads (server may expose /class-names later)
 let hasRetained = false;
@@ -1052,6 +1053,7 @@ async function connectToServer() {
     status.textContent = `Connected to ${v.name || 'hprof-analyzer'} ${v.version || ''}`;
     status.className = 'ok';
     serverUrl = url;
+    serverVersion = v;
     localStorage.setItem(LAST_URL_KEY, url);
     showShell();
   } catch (e) {
@@ -1266,9 +1268,14 @@ function startTerminal() {
   const ro = new ResizeObserver(() => fitAddon.fit());
   ro.observe(document.getElementById('terminal-container'));
 
-  term.writeln('\x1b[1;36mhprof-analyzer OQL Shell\x1b[0m');
-  term.writeln(`Connected to \x1b[32m${serverUrl}\x1b[0m`);
-  term.writeln('\x1b[2mType an OQL query and press Enter. Tab = complete, Ctrl+R = search history, /help = commands.\x1b[0m');
+  const verStr = serverVersion ? ` \x1b[2mv${serverVersion.version || ''}\x1b[0m` : '';
+  const histCount = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]').length;
+  term.writeln('\x1b[1;36m hprof-analyzer\x1b[0m\x1b[36m OQL Shell\x1b[0m' + verStr);
+  term.writeln(`\x1b[2m └─ ${serverUrl}`
+    + (namedQueries.length ? `  ·  ${namedQueries.length} named queries` : '')
+    + (histCount ? `  ·  ${histCount} history entries` : '')
+    + '\x1b[0m');
+  term.writeln('\x1b[2m    Tab = complete  ·  Ctrl+R = search history  ·  /help = commands\x1b[0m');
   term.writeln('');
   term.write(PROMPT);
 
