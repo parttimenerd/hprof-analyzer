@@ -934,6 +934,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                 &mut max_width,
                 &mut last_query,
                 &mut last_result,
+                &mut prev_result,
                 &mut cache,
                 &mut buffer_lines,
                 &names_for_meta,
@@ -1049,7 +1050,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             match prev_result.take() {
                                 None => writeln!(stdout, "(nothing to undo)")?,
                                 Some(prev) => {
-                                    writeln!(stdout, "-- undone; restored result with {} row{}", prev.rows.len(), if prev.rows.len() == 1 { "" } else { "s" })?;
+                                    print_result(&prev, std::time::Duration::ZERO, max_width, &mut stdout)?;
                                     last_result = Some(prev);
                                 }
                             }
@@ -1466,6 +1467,7 @@ fn run_repl_line(
     max_width: &mut usize,
     last_query: &mut Option<String>,
     last_result: &mut Option<QueryResult>,
+    prev_result: &mut Option<QueryResult>,
     cache: &mut Option<crate::query::run::ReplCache>,
     buffer_lines: &mut Vec<String>,
     names_for_meta: &(Vec<String>, Vec<String>),
@@ -1578,26 +1580,31 @@ fn run_repl_line(
                 return Ok(false);
             }
             "filter" | "grep" => {
+                *prev_result = last_result.clone();
                 handle_filter(rest, last_result, *max_width, out)?;
                 out.flush()?;
                 return Ok(false);
             }
             "not" | "exclude" => {
+                *prev_result = last_result.clone();
                 handle_filter_not(rest, last_result, *max_width, out)?;
                 out.flush()?;
                 return Ok(false);
             }
             "distinct" | "dedup" => {
+                *prev_result = last_result.clone();
                 handle_distinct(last_result, *max_width, out)?;
                 out.flush()?;
                 return Ok(false);
             }
             "sample" => {
+                *prev_result = last_result.clone();
                 handle_sample(rest, last_result, *max_width, out)?;
                 out.flush()?;
                 return Ok(false);
             }
             "sort" => {
+                *prev_result = last_result.clone();
                 handle_sort(rest, last_result, *max_width, out)?;
                 out.flush()?;
                 return Ok(false);
@@ -1608,16 +1615,19 @@ fn run_repl_line(
                 return Ok(false);
             }
             "unique" => {
+                *prev_result = last_result.clone();
                 handle_unique(rest, last_result, out)?;
                 out.flush()?;
                 return Ok(false);
             }
             "pivot" => {
+                *prev_result = last_result.clone();
                 handle_pivot(rest, last_result, *max_width, out)?;
                 out.flush()?;
                 return Ok(false);
             }
             "top" | "head" => {
+                *prev_result = last_result.clone();
                 let n = if rest.trim().is_empty() { 10 } else { rest.trim().parse::<usize>().unwrap_or(0) };
                 if n > 0 {
                     match last_result.as_mut() {
@@ -1640,6 +1650,7 @@ fn run_repl_line(
                 return Ok(false);
             }
             "tail" => {
+                *prev_result = last_result.clone();
                 let n = if rest.trim().is_empty() { 10 } else { rest.trim().parse::<usize>().unwrap_or(0) };
                 if n > 0 {
                     match last_result.as_mut() {
@@ -1661,12 +1672,24 @@ fn run_repl_line(
                 out.flush()?;
                 return Ok(false);
             }
+            "undo" => {
+                match prev_result.take() {
+                    None => writeln!(out, "(nothing to undo)")?,
+                    Some(prev) => {
+                        print_result(&prev, std::time::Duration::ZERO, *max_width, out)?;
+                        *last_result = Some(prev);
+                    }
+                }
+                out.flush()?;
+                return Ok(false);
+            }
             "select" => {
                 // !select col1 [col2 ...] — project columns from last result
                 let col_args: Vec<&str> = rest.split_whitespace().collect();
                 if col_args.is_empty() {
                     writeln!(out, "usage: !select <col1> [col2 ...]  — names, numbers, or ranges (e.g. 1-3)")?;
                 } else {
+                    *prev_result = last_result.clone();
                     match last_result {
                         None => writeln!(out, "(no result — run a query first)")?,
                         Some(res) => {
@@ -1711,6 +1734,7 @@ fn run_repl_line(
                 return Ok(false);
             }
             "drop" => {
+                *prev_result = last_result.clone();
                 handle_drop(rest, last_result, *max_width, out)?;
                 out.flush()?;
                 return Ok(false);
@@ -1747,6 +1771,18 @@ fn run_repl_line(
                                     writeln!(out, "column {:?} not found — available: {}", old, names.join(", "))?;
                                 }
                                 Some(ci) => {
+                                    *prev_result = Some(QueryResult {
+                                        columns: res.columns.clone(),
+                                        rows: res.rows.clone(),
+                                        row_count: res.row_count,
+                                        truncated: res.truncated,
+                                        note: res.note.clone(),
+                                        error: res.error.clone(),
+                                        name: res.name.clone(),
+                                        oql: res.oql.clone(),
+                                        viz: res.viz.clone(),
+                                        elapsed_ms: res.elapsed_ms,
+                                    });
                                     let prev = res.columns[ci].name.clone();
                                     res.columns[ci].name = new.to_string();
                                     writeln!(out, "renamed {:?} → {:?}", prev, new)?;
@@ -5087,6 +5123,7 @@ mod tests {
         let mut out = Vec::<u8>::new();
         let mut last_q: Option<String> = None;
         let mut last_r = None;
+        let mut prev_r = None;
         let mut cache = None;
         let mut buf: Vec<String> = Vec::new();
         let names = (vec![], vec![]);
@@ -5098,6 +5135,7 @@ mod tests {
             &mut 0,
             &mut last_q,
             &mut last_r,
+            &mut prev_r,
             &mut cache,
             &mut buf,
             &names,
@@ -5113,6 +5151,7 @@ mod tests {
         let mut out = Vec::<u8>::new();
         let mut last_q: Option<String> = None;
         let mut last_r = None;
+        let mut prev_r = None;
         let mut cache = None;
         let mut buf: Vec<String> = Vec::new();
         let names = (vec![], vec![]);
@@ -5124,6 +5163,7 @@ mod tests {
             &mut 0,
             &mut last_q,
             &mut last_r,
+            &mut prev_r,
             &mut cache,
             &mut buf,
             &names,
