@@ -1255,33 +1255,43 @@ function startTerminal() {
       const args = cmd.slice(5).trim();
       if (!lastResult || !args) {
         if (!lastResult) term.writeln('\x1b[33mNo result to sort — run a query first.\x1b[0m');
-        else term.writeln('\x1b[33mUsage: /sort <col> [desc]  — sort last result by column\x1b[0m');
+        else term.writeln('\x1b[33mUsage: /sort <col> [desc] [, <col2> [desc] …]\x1b[0m');
         term.write(PROMPT);
         return;
       }
-      const parts = args.split(/\s+/);
-      const colArg = parts[0].toLowerCase();
-      const desc = parts[1]?.toLowerCase() === 'desc';
-      const ci = lastResult.columns.findIndex(c => c.toLowerCase() === colArg
-        || c.toLowerCase().includes(colArg));
-      if (ci < 0) {
-        term.writeln(`\x1b[31mColumn "${parts[0]}" not found. Available: ${lastResult.columns.join(', ')}\x1b[0m`);
-        term.write(PROMPT);
-        return;
+      // Parse comma-separated sort keys: "col1 desc, col2 asc, col3"
+      const specs = [];
+      let ok = true;
+      for (const spec of args.split(',')) {
+        const parts = spec.trim().split(/\s+/);
+        if (!parts[0]) continue;
+        const colArg = parts[0].toLowerCase();
+        const desc = parts[1]?.toLowerCase() === 'desc';
+        const ci = lastResult.columns.findIndex(c => c.toLowerCase() === colArg || c.toLowerCase().includes(colArg));
+        if (ci < 0) {
+          term.writeln(`\x1b[31mColumn "${parts[0]}" not found. Available: ${lastResult.columns.join(', ')}\x1b[0m`);
+          ok = false; break;
+        }
+        specs.push({ ci, desc, name: lastResult.columns[ci] });
       }
-      const colName = lastResult.columns[ci];
+      if (!ok || specs.length === 0) { term.write(PROMPT); return; }
       const sorted = [...lastResult.rows].sort((a, b) => {
-        const av = a[ci], bv = b[ci];
-        const an = av?.v ?? av, bn = bv?.v ?? bv;
-        if (an === null || an === undefined) return 1;
-        if (bn === null || bn === undefined) return -1;
-        const cmp = typeof an === 'number' && typeof bn === 'number'
-          ? an - bn : String(an).localeCompare(String(bn));
-        return desc ? -cmp : cmp;
+        for (const { ci, desc } of specs) {
+          const av = a[ci], bv = b[ci];
+          const an = av?.v ?? av, bn = bv?.v ?? bv;
+          if (an === null || an === undefined) return 1;
+          if (bn === null || bn === undefined) return -1;
+          const cmp = typeof an === 'number' && typeof bn === 'number'
+            ? an - bn : String(an).localeCompare(String(bn));
+          const ord = desc ? -cmp : cmp;
+          if (ord !== 0) return ord;
+        }
+        return 0;
       });
       renderResult({ columns: lastResult.columns, rows: sorted, row_count: sorted.length });
       lastResult = { columns: lastResult.columns, rows: sorted };
-      term.writeln(`\x1b[2mSorted by ${colName} ${desc ? 'desc' : 'asc'}\x1b[0m`);
+      const label = specs.map(s => `${s.name} ${s.desc ? 'desc' : 'asc'}`).join(', ');
+      term.writeln(`\x1b[2mSorted by ${label}\x1b[0m`);
       term.write(PROMPT);
       return;
     }
@@ -1809,7 +1819,7 @@ function startTerminal() {
     c('/filter <text|/re/>',     '— filter rows by substring or regex  (/grep is an alias)');
     c('/not <text|/re/>',        '— exclude rows matching pattern (inverse of /filter)');
     c('/distinct',               '— remove duplicate rows (/dedup is an alias)');
-    c('/sort <col> [desc]',      '— sort rows by column');
+    c('/sort <col> [desc] [,col2…]', '— sort rows by one or more columns (comma-separated)');
     c('/top <N>  /head <N>',      '— first N rows (updates lastResult for chaining)');
     c('/tail <N>',               '— last N rows');
     c('/sample <N>',             '— N randomly sampled rows from last result');

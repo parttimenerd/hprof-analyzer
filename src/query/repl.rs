@@ -2025,56 +2025,75 @@ fn handle_sort(
     out: &mut impl Write,
 ) -> io::Result<()> {
     if args.is_empty() {
-        writeln!(out, "usage: !sort <col> [desc]")?;
+        writeln!(out, "usage: !sort <col> [desc] [, <col2> [desc] …]")?;
         return Ok(());
     }
     match last_result {
         None => writeln!(out, "(no previous result — run a query first)")?,
         Some(res) => {
-            let parts: Vec<&str> = args.splitn(2, char::is_whitespace).collect();
-            let col_arg = parts[0].to_ascii_lowercase();
-            let desc = parts.get(1).map(|s| s.trim().eq_ignore_ascii_case("desc")).unwrap_or(false);
-            let col_idx = res.columns.iter().position(|c| {
-                c.name.to_ascii_lowercase() == col_arg
-                    || c.name.to_ascii_lowercase().contains(&col_arg)
-            });
-            match col_idx {
-                None => {
-                    let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                    writeln!(out, "column {:?} not found — available: {}", args, names.join(", "))?;
+            // Parse comma-separated sort keys: "col1 desc, col2 asc, col3"
+            let specs: Vec<(usize, bool)> = {
+                let mut v = Vec::new();
+                let mut ok = true;
+                for spec in args.split(',') {
+                    let spec = spec.trim();
+                    if spec.is_empty() { continue; }
+                    let parts: Vec<&str> = spec.splitn(2, char::is_whitespace).collect();
+                    let col_lower = parts[0].to_ascii_lowercase();
+                    let desc = parts.get(1).map(|s| s.trim().eq_ignore_ascii_case("desc")).unwrap_or(false);
+                    match res.columns.iter().position(|c| {
+                        c.name.to_ascii_lowercase() == col_lower
+                            || c.name.to_ascii_lowercase().contains(&col_lower)
+                    }) {
+                        None => {
+                            let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
+                            writeln!(out, "column {:?} not found — available: {}", parts[0], names.join(", "))?;
+                            ok = false;
+                            break;
+                        }
+                        Some(ci) => v.push((ci, desc)),
+                    }
                 }
-                Some(ci) => {
-                    let col_name = res.columns[ci].name.clone();
-                    let mut sorted = res.rows.clone();
-                    sorted.sort_by(|a, b| {
-                        let av = fmt_value(&a[ci]);
-                        let bv = fmt_value(&b[ci]);
-                        // Numeric sort when both parse as f64
-                        let cmp = match (av.replace(',', "").parse::<f64>(), bv.replace(',', "").parse::<f64>()) {
-                            (Ok(an), Ok(bn)) => an.partial_cmp(&bn).unwrap_or(std::cmp::Ordering::Equal),
-                            _ => av.cmp(&bv),
-                        };
-                        if desc { cmp.reverse() } else { cmp }
-                    });
-                    let sorted_res = QueryResult {
-                        columns: res.columns.clone(),
-                        rows: sorted.clone(),
-                        row_count: sorted.len() as u64,
-                        truncated: false,
-                        note: None,
-                        error: None,
-                        name: res.name.clone(),
-                        oql: res.oql.clone(),
-                        viz: None,
-                        elapsed_ms: None,
-                    };
-                    // Update last_result so chained !filter/!sort work on sorted data
-                    res.rows = sorted;
-                    res.row_count = sorted_res.row_count;
-                    print_result(&sorted_res, std::time::Duration::ZERO, max_width, out)?;
-                    writeln!(out, "-- sorted by {} {}", col_name, if desc { "desc" } else { "asc" })?;
-                }
+                if !ok { return Ok(()); }
+                v
+            };
+            if specs.is_empty() {
+                writeln!(out, "usage: !sort <col> [desc] [, <col2> [desc] …]")?;
+                return Ok(());
             }
+            let mut sorted = res.rows.clone();
+            sorted.sort_by(|a, b| {
+                for &(ci, desc) in &specs {
+                    let av = fmt_value(&a[ci]);
+                    let bv = fmt_value(&b[ci]);
+                    let cmp = match (av.replace(',', "").parse::<f64>(), bv.replace(',', "").parse::<f64>()) {
+                        (Ok(an), Ok(bn)) => an.partial_cmp(&bn).unwrap_or(std::cmp::Ordering::Equal),
+                        _ => av.cmp(&bv),
+                    };
+                    let cmp = if desc { cmp.reverse() } else { cmp };
+                    if cmp != std::cmp::Ordering::Equal { return cmp; }
+                }
+                std::cmp::Ordering::Equal
+            });
+            let sort_label: Vec<String> = specs.iter()
+                .map(|&(ci, desc)| format!("{} {}", res.columns[ci].name, if desc { "desc" } else { "asc" }))
+                .collect();
+            let sorted_res = QueryResult {
+                columns: res.columns.clone(),
+                rows: sorted.clone(),
+                row_count: sorted.len() as u64,
+                truncated: false,
+                note: None,
+                error: None,
+                name: res.name.clone(),
+                oql: res.oql.clone(),
+                viz: None,
+                elapsed_ms: None,
+            };
+            res.rows = sorted;
+            res.row_count = sorted_res.row_count;
+            print_result(&sorted_res, std::time::Duration::ZERO, max_width, out)?;
+            writeln!(out, "-- sorted by {}", sort_label.join(", "))?;
         }
     }
     Ok(())
@@ -2289,7 +2308,7 @@ fn handle_meta(
             writeln!(out, "  !grep <pattern>       alias for !filter")?;
             writeln!(out, "  !sample <N>           show N randomly sampled rows from last result")?;
             writeln!(out, "  !distinct             remove duplicate rows (!dedup is an alias)")?;
-            writeln!(out, "  !sort <col> [desc]    sort last result by column (prefix match)")?;
+            writeln!(out, "  !sort <col> [desc] [,col2 [desc]…]  sort last result by one or more columns")?;
             writeln!(out, "  !stats <col>          numeric summary: min/max/mean/p50/p90/p99/sum")?;
             writeln!(out, "  !unique <col>         distinct value counts, sorted by frequency")?;
             writeln!(out, "  !top <N>  /  !head <N>  show first N rows of last result")?;
