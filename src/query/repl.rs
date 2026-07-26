@@ -2948,11 +2948,11 @@ fn handle_meta(
             writeln!(out, "  !explain [--raw] <oql> alias for !plan")?;
             writeln!(
                 out,
-                "  !classes [prefix]     list class names (optionally prefix-filtered)"
+                "  !classes [pat]        list class names (substring-filtered)"
             )?;
             writeln!(
                 out,
-                "  !fields [prefix]      list instance field names (optionally prefix-filtered)"
+                "  !fields [pat]         list instance field names (substring-filtered)"
             )?;
             writeln!(
                 out,
@@ -3015,7 +3015,7 @@ fn handle_meta(
             let prefix_lower = rest.to_ascii_lowercase();
             let matches: Vec<&String> = list
                 .iter()
-                .filter(|n| prefix_lower.is_empty() || n.to_ascii_lowercase().starts_with(&prefix_lower))
+                .filter(|n| prefix_lower.is_empty() || n.to_ascii_lowercase().contains(&prefix_lower))
                 .collect();
             if matches.is_empty() {
                 if rest.is_empty() {
@@ -3037,7 +3037,7 @@ fn handle_meta(
                 if matches.len() > CAP {
                     writeln!(
                         out,
-                        "  ... {} more (showing {CAP}; use `!{verb} <prefix>` to narrow)",
+                        "  ... {} more (showing {CAP}; use `!{verb} <pattern>` to narrow)",
                         matches.len() - CAP
                     )?;
                 }
