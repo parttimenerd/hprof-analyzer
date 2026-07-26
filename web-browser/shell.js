@@ -1296,11 +1296,21 @@ function startTerminal() {
         term.write(PROMPT);
         return;
       }
-      const colArg = cmd.slice(6).trim();
+      const colArgRaw = cmd.slice(6).trim();
+      let colArg = colArgRaw;
       if (!colArg) {
-        term.writeln(`\x1b[33mUsage: /stats <col>  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
-        term.write(PROMPT);
-        return;
+        // Auto-select if exactly one numeric column
+        const numericCols = lastResult.columns.map((_, i) => {
+          const sample = lastResult.rows.find(row => row[i] !== null && row[i] !== undefined);
+          return (sample && isNumericKind(sample[i])) ? i : -1;
+        }).filter(i => i >= 0);
+        if (numericCols.length === 1) {
+          colArg = lastResult.columns[numericCols[0]];
+        } else {
+          term.writeln(`\x1b[33mUsage: /stats <col>  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
+          term.write(PROMPT);
+          return;
+        }
       }
       const ci = resolveCol(colArg, lastResult.columns);
       if (ci < 0) {
