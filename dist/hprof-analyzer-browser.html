@@ -2283,9 +2283,9 @@ function startTerminal() {
         term.writeln(`${val.padEnd(colW)}  \x1b[32m${String(cnt).padStart(cntW)}\x1b[0m  \x1b[2m${pct.padStart(pctW)}\x1b[0m${bar}`);
       });
       if (shown < totalDistinct) {
-        term.writeln(`\x1b[2m${shown} of ${totalDistinct} distinct values shown (top ${showN})\x1b[0m`);
+        term.writeln(`\x1b[2m(${shown} of ${totalDistinct} distinct values, top ${showN} shown  ·  ${total} total rows)\x1b[0m`);
       } else {
-        term.writeln(`\x1b[2m${totalDistinct} distinct value${totalDistinct !== 1 ? 's' : ''} in ${lastResult.rows.length} rows\x1b[0m`);
+        term.writeln(`\x1b[2m(${totalDistinct} distinct value${totalDistinct !== 1 ? 's' : ''} in ${lastResult.rows.length} rows)\x1b[0m`);
       }
       term.write(PROMPT);
       return;
@@ -2717,14 +2717,19 @@ function startTerminal() {
           ? `\x1b[33m(no classes matching "${pattern}")\x1b[0m`
           : '\x1b[2m(no classes loaded — server may still be loading)\x1b[0m');
       } else {
-        const maxLen = matches.reduce((m, c) => Math.max(m, c.length), 0);
+        const CAP = 200;
+        const shown = matches.slice(0, CAP);
+        const maxLen = shown.reduce((m, c) => Math.max(m, c.length), 0);
         const colW = maxLen + 2;
         const cols = Math.max(1, Math.floor((term.cols - 4) / colW));
-        for (let i = 0; i < matches.length; i += cols) {
-          const row = matches.slice(i, i + cols);
+        for (let i = 0; i < shown.length; i += cols) {
+          const row = shown.slice(i, i + cols);
           term.writeln('  ' + row.map(c => `\x1b[36m${c}\x1b[0m${' '.repeat(colW - c.length)}`).join('').trimEnd());
         }
-        term.writeln(`\x1b[2m${matches.length} class${matches.length !== 1 ? 'es' : ''}\x1b[0m`);
+        if (matches.length > CAP) {
+          term.writeln(`\x1b[2m  ... ${matches.length - CAP} more (showing ${CAP}; use /classes <pattern> to narrow)\x1b[0m`);
+        }
+        term.writeln(`\x1b[2m(${matches.length} class${matches.length !== 1 ? 'es' : ''})\x1b[0m`);
       }
       term.write(PROMPT);
       return;
@@ -2742,14 +2747,19 @@ function startTerminal() {
           ? `\x1b[33m(no fields matching "${pattern}")\x1b[0m`
           : '\x1b[2m(no fields loaded — server may still be loading)\x1b[0m');
       } else {
-        const maxLen = matches.reduce((m, f) => Math.max(m, f.length), 0);
+        const CAP = 200;
+        const shown = matches.slice(0, CAP);
+        const maxLen = shown.reduce((m, f) => Math.max(m, f.length), 0);
         const colW = maxLen + 2;
         const cols = Math.max(1, Math.floor((term.cols - 4) / colW));
-        for (let i = 0; i < matches.length; i += cols) {
-          const row = matches.slice(i, i + cols);
+        for (let i = 0; i < shown.length; i += cols) {
+          const row = shown.slice(i, i + cols);
           term.writeln('  ' + row.map(f => `\x1b[36m${f}\x1b[0m${' '.repeat(colW - f.length)}`).join('').trimEnd());
         }
-        term.writeln(`\x1b[2m${matches.length} field${matches.length !== 1 ? 's' : ''}\x1b[0m`);
+        if (matches.length > CAP) {
+          term.writeln(`\x1b[2m  ... ${matches.length - CAP} more (showing ${CAP}; use /fields <pattern> to narrow)\x1b[0m`);
+        }
+        term.writeln(`\x1b[2m(${matches.length} field${matches.length !== 1 ? 's' : ''})\x1b[0m`);
       }
       term.write(PROMPT);
       return;
