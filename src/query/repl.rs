@@ -1348,7 +1348,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                         };
                                         writeln!(stdout, "  {:>idx_w$}  {name_color}{f:<col_w$}{cr}  {cd}{:<8}{}{cr}{suffix}", i + 1, type_tag, fill)?;
                                     }
-                                    writeln!(stdout, "({} column{})", fields.len(), if fields.len() == 1 { "" } else { "s" })?;
+                                    writeln!(stdout, "{cd}({} column{}){cr}", fields.len(), if fields.len() == 1 { "" } else { "s" })?;
                                 }
                             }
                             stdout.flush()?;
@@ -1357,7 +1357,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                         "history" => {
                             let arg = rest.trim();
                             if arg == "clear" {
-                                writeln!(stdout, "(clear not supported in reedline mode)")?;
+                                warn_out("(clear not supported in reedline mode)", &mut stdout)?;
                             } else {
                                 let color = SESSION_SETTINGS.with(|s| s.borrow().color);
                                 let (cd, cc, cr) = if color { ("\x1b[2m", "\x1b[36m", "\x1b[0m") } else { ("", "", "") };
@@ -1371,7 +1371,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                     writeln!(stdout, "  {cd}{:>3}{cr}  {cc}!{}{cr}  {}", i + 1, i + 1, item.command_line)?;
                                 }
                                 if entries.is_empty() {
-                                    writeln!(stdout, "(no history yet)")?;
+                                    warn_out("(no history yet)", &mut stdout)?;
                                 } else {
                                     if entries.len() > n {
                                         writeln!(stdout, "{cd}  … {} more — !history N to show more{cr}", entries.len() - n)?;
@@ -1447,7 +1447,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                                     writeln!(stdout, "  {cd}{:>idx_w$}{cr}  {cc}{:<key_w$}{cr}  {vp}{val_str}{vs}", i + 1, col.name)?;
                                                 }
                                             } else if res.rows.is_empty() {
-                                                writeln!(stdout, "(no object {cls}#{idx} found)")?;
+                                                warn_out(&format!("(no object {cls}#{idx} found)"), &mut stdout)?;
                                             } else {
                                                 print_result(&res, std::time::Duration::ZERO, max_width, &mut stdout)?;
                                             }
