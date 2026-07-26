@@ -2794,7 +2794,7 @@ function startTerminal() {
         localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
         term.writeln(`\x1b[32m✓ color: ${settings.color ? 'on' : 'off'}\x1b[0m`);
       } else {
-        term.writeln(`\x1b[31munknown setting: ${args[0]}\x1b[0m  \x1b[2moptions: limit, bytes, null, color\x1b[0m`);
+        term.writeln(`\x1b[31munknown setting: ${args[0]}\x1b[0m  \x1b[2moptions: limit, bytes, color, null\x1b[0m`);
       }
       term.write(PROMPT);
       return;
