@@ -1447,12 +1447,25 @@ function startTerminal() {
       else if (fmts.length > 1) { term.writeln(''); term.writeln('  tsv  csv'); redrawLine(); }
       return;
     }
-    // Complete /set <key>
+    // Complete /set <key> and /set <key> <value>
     if (line.startsWith('/set ')) {
-      const partial = line.slice(5).trim().toLowerCase();
-      const keys = ['limit', 'bytes', 'null', 'color'].filter(k => k.startsWith(partial));
-      if (keys.length === 1) { setLine('/set ' + keys[0] + ' '); }
-      else if (keys.length > 1) { term.writeln(''); term.writeln('  ' + keys.join('  ')); redrawLine(); }
+      const rest = line.slice(5);
+      const parts = rest.trimStart().split(/\s+/);
+      if (parts.length <= 1) {
+        // completing the key
+        const partial = rest.trim().toLowerCase();
+        const keys = ['limit', 'bytes', 'null', 'color'].filter(k => k.startsWith(partial));
+        if (keys.length === 1) { setLine('/set ' + keys[0] + ' '); }
+        else if (keys.length > 1) { term.writeln(''); term.writeln('  ' + keys.join('  ')); redrawLine(); }
+      } else {
+        // completing the value
+        const key = parts[0].toLowerCase();
+        const partial = (parts[1] || '').toLowerCase();
+        const valueMap = { bytes: ['raw', 'human'], color: ['on', 'off'] };
+        const vals = (valueMap[key] || []).filter(v => v.startsWith(partial));
+        if (vals.length === 1) { setLine('/set ' + key + ' ' + vals[0]); }
+        else if (vals.length > 1) { term.writeln(''); term.writeln('  ' + vals.join('  ')); redrawLine(); }
+      }
       return;
     }
     // Complete /forget <bookmark> and /bookmark <bookmark>
@@ -1802,10 +1815,18 @@ function startTerminal() {
       const maxCnt = entries.length > 0 ? entries[0][1] : 0;
       const cntW = Math.max(5, String(maxCnt).length);
       const colW = Math.max(colName.length, ...entries.map(([v]) => v.length), 4);
-      term.writeln(`\x1b[1m${colName.padEnd(colW)}  ${'count'.padStart(cntW)}\x1b[0m`);
-      term.writeln('\x1b[2m' + '─'.repeat(Math.min(colW + cntW + 2, term.cols - 2)) + '\x1b[0m');
+      const barCap = Math.max(0, term.cols - colW - cntW - 6);
+      const showBar = barCap >= 8;
+      const hdr = `${colName.padEnd(colW)}  ${'count'.padStart(cntW)}${showBar ? '  bar' : ''}`;
+      term.writeln(`\x1b[1m${hdr}\x1b[0m`);
+      term.writeln('\x1b[2m' + '─'.repeat(Math.min(hdr.length, term.cols - 2)) + '\x1b[0m');
       entries.slice(0, settings.rowLimit).forEach(([val, cnt]) => {
-        term.writeln(`${val.padEnd(colW)}  \x1b[32m${String(cnt).padStart(cntW)}\x1b[0m`);
+        let bar = '';
+        if (showBar && maxCnt > 0) {
+          const filled = Math.round((cnt / maxCnt) * barCap);
+          bar = '  \x1b[2m' + '█'.repeat(filled) + '░'.repeat(barCap - filled) + '\x1b[0m';
+        }
+        term.writeln(`${val.padEnd(colW)}  \x1b[32m${String(cnt).padStart(cntW)}\x1b[0m${bar}`);
       });
       term.writeln(`\x1b[2m${seen.size} distinct value${seen.size !== 1 ? 's' : ''} in ${lastResult.rows.length} rows\x1b[0m`);
       term.write(PROMPT);
