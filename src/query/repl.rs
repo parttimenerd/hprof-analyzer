@@ -2769,15 +2769,17 @@ fn handle_stats(
                         let null_note = if null_count > 0 { format!("  ({} null)", null_count) } else { String::new() };
                         let variance: f64 = vals.iter().map(|&v| (v - mean) * (v - mean)).sum::<f64>() / n as f64;
                         let stddev = variance.sqrt();
-                        writeln!(out, "{}  ({} values){}", col_name, n, null_note)?;
-                        writeln!(out, "  min    {}", fv(vals[0]))?;
-                        writeln!(out, "  max    {}", fv(vals[n - 1]))?;
-                        writeln!(out, "  mean   {}", fv(mean))?;
-                        writeln!(out, "  stddev {}", fv(stddev))?;
-                        writeln!(out, "  p50    {}", fv(p50))?;
-                        writeln!(out, "  p90    {}", fv(p90))?;
-                        writeln!(out, "  p99    {}", fv(p99))?;
-                        writeln!(out, "  sum    {}", fv(sum))?;
+                        let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+                        let (cv, cs, cr) = if color { ("\x1b[32m", "\x1b[33m", "\x1b[0m") } else { ("", "", "") };
+                        writeln!(out, "\x1b[1m{}\x1b[0m  ({} values){}", col_name, n, null_note)?;
+                        writeln!(out, "  min    {cv}{}{cr}", fv(vals[0]))?;
+                        writeln!(out, "  max    {cv}{}{cr}", fv(vals[n - 1]))?;
+                        writeln!(out, "  mean   {cv}{}{cr}", fv(mean))?;
+                        writeln!(out, "  stddev {cv}{}{cr}", fv(stddev))?;
+                        writeln!(out, "  p50    {cv}{}{cr}", fv(p50))?;
+                        writeln!(out, "  p90    {cv}{}{cr}", fv(p90))?;
+                        writeln!(out, "  p99    {cv}{}{cr}", fv(p99))?;
+                        writeln!(out, "  sum    {cs}{}{cr}", fv(sum))?;
                         // Mini histogram (10 buckets)
                         if n >= 2 {
                             let lo = vals[0];
@@ -2792,12 +2794,12 @@ fn handle_stats(
                                     buckets[b.min(NBUCKETS - 1)] += 1;
                                 }
                                 let max_b = *buckets.iter().max().unwrap_or(&1);
-                                writeln!(out, "  dist:")?;
+                                writeln!(out, "  \x1b[2mdist:\x1b[0m")?;
                                 for (i, &b) in buckets.iter().enumerate() {
                                     let bar_len = if max_b > 0 { b * BAR_MAX / max_b } else { 0 };
                                     let bar: String = "█".repeat(bar_len);
                                     let bucket_lo = lo + i as f64 * range / NBUCKETS as f64;
-                                    writeln!(out, "  {:>8}  {:<bar_w$}  {}", fv(bucket_lo), bar, b, bar_w = BAR_MAX)?;
+                                    writeln!(out, "  \x1b[2m{:>8}\x1b[0m  {cv}{:<bar_w$}{cr}  \x1b[2m{}\x1b[0m", fv(bucket_lo), bar, b, bar_w = BAR_MAX)?;
                                 }
                             }
                         }

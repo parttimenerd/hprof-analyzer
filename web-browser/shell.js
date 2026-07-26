@@ -2281,7 +2281,7 @@ function startTerminal() {
     c('/wc [col]',               '— shape (rows × cols); col arg = count non-null values');
     c('/row [N|next|prev|last]', '— show row as key=value pairs; next/prev navigate');
     c('/cols',                   '— list columns with type and non-null fill rate');
-    c('/stats [col]',            '— min/max/mean/stddev/p25/p50/p75/p90/p99; no arg = all numeric');
+    c('/stats [col]',            '— min/max/mean/stddev/p50/p90/p99/sum + histogram; no arg = all numeric');
     h('Shaping results');
     c('/filter <text|/re/>',     '— keep matching rows; /filter @<col> <text> for one column');
     c('/not <text|/re/>',        '— exclude matching rows; /not @<col> <text> for one column');
