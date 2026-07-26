@@ -1853,7 +1853,7 @@ function startTerminal() {
       const matches = pattern ? all.filter(c => c.toLowerCase().includes(pattern)) : all;
       if (matches.length === 0) {
         term.writeln(pattern
-          ? `\x1b[33m(no classes matching "${pattern}")\x1b[0m`
+          ? `\x1b[33m(no class names matching "${pattern}")\x1b[0m`
           : '\x1b[2m(no classes loaded — server may still be loading)\x1b[0m');
       } else {
         const CAP = 200;
@@ -1883,7 +1883,7 @@ function startTerminal() {
       const matches = pattern ? all.filter(f => f.toLowerCase().includes(pattern)) : all;
       if (matches.length === 0) {
         term.writeln(pattern
-          ? `\x1b[33m(no fields matching "${pattern}")\x1b[0m`
+          ? `\x1b[33m(no field names matching "${pattern}")\x1b[0m`
           : '\x1b[2m(no fields loaded — server may still be loading)\x1b[0m');
       } else {
         const CAP = 200;
