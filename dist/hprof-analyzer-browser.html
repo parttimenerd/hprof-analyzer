@@ -1369,7 +1369,7 @@ function startTerminal() {
     if (line.startsWith('/') && !line.includes(' ')) {
       const partial = line.slice(1).toLowerCase();
       const cmds = ['help','clear','status','analyze','history','export','set','classes','filter',
-                    'sort','top','run','bookmark','forget'];
+                    'sort','top','run','bookmark','forget','last'];
       const matches = cmds.filter(c => c.startsWith(partial));
       if (matches.length === 1) {
         setLine('/' + matches[0] + ' ');
@@ -1500,6 +1500,16 @@ function startTerminal() {
         }
       } catch (e) {
         term.writeln(`\x1b[31merror: ${e.message}\x1b[0m`);
+      }
+      term.write(PROMPT);
+      return;
+    }
+    if (cmd === '/last') {
+      if (!lastResult) {
+        term.writeln('\x1b[33mNo result yet — run a query first.\x1b[0m');
+      } else {
+        renderResult(lastResult);
+        term.writeln(`\x1b[2m${lastResult.rows.length} rows (re-displayed)\x1b[0m`);
       }
       term.write(PROMPT);
       return;
@@ -1862,7 +1872,7 @@ function startTerminal() {
         } else {
           // No columns — just show the raw result
           term.writeln(JSON.stringify(r, null, 2).split('\n').slice(0, 40).join('\r\n'));
-          term.writeln(`\x1b[2m${elapsed}s\x1b[0m`);
+          term.writeln(`\x1b[2m${elapsedMs < 1000 ? elapsedMs.toFixed(0) + 'ms' : elapsed + 's'}\x1b[0m`);
         }
       }
     } catch (e) {
@@ -1888,6 +1898,7 @@ function startTerminal() {
     term.writeln('  \x1b[36m/export\x1b[0m            — copy last result to clipboard as TSV');
     term.writeln('  \x1b[36m/set [key val]\x1b[0m     — view/change display settings (limit, bytes, null)');
     term.writeln('  \x1b[36m/classes [pat]\x1b[0m     — list class names (optionally filtered by pattern)');
+    term.writeln('  \x1b[36m/last\x1b[0m              — re-display last query result');
     term.writeln('  \x1b[36m/bookmark [name]\x1b[0m   — save last query as a named bookmark');
     term.writeln('  \x1b[36m/forget <name>\x1b[0m     — delete a bookmark');
     term.writeln('  \x1b[36m/filter <text>\x1b[0m     — filter last result rows by substring');
