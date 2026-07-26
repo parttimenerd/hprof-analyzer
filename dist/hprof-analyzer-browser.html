@@ -1903,11 +1903,11 @@ function startTerminal() {
         term.writeln('\x1b[33mNo result — run a query first.\x1b[0m');
       } else {
         const fields = lastResult.columns;
-        const colW = Math.max(...fields.map(f => f.length)) + 2;
-        const cols = Math.max(1, Math.floor((term.cols - 4) / colW));
-        for (let i = 0; i < fields.length; i += cols) {
-          term.writeln('  ' + fields.slice(i, i + cols).map(f => f.padEnd(colW)).join('').trimEnd());
-        }
+        const idxW = String(fields.length).length;
+        const colW = Math.max(...fields.map(f => f.length));
+        fields.forEach((f, i) => {
+          term.writeln(`  \x1b[2m${String(i + 1).padStart(idxW)}\x1b[0m  \x1b[36m${f.padEnd(colW)}\x1b[0m`);
+        });
         term.writeln(`\x1b[2m${fields.length} column${fields.length !== 1 ? 's' : ''}\x1b[0m`);
       }
       term.write(PROMPT);
@@ -1919,13 +1919,19 @@ function startTerminal() {
       } else {
         const args = cmd.slice(7).trim().split(/\s+/).filter(Boolean);
         if (args.length === 0) {
-          term.writeln('\x1b[33musage: /select <col1> [col2] …\x1b[0m');
+          term.writeln('\x1b[33musage: /select <col1> [col2] …  (names or 1-based numbers)\x1b[0m');
         } else {
           const fields = lastResult.columns;
           const lower = fields.map(f => f.toLowerCase());
           const indices = [];
           let ok = true;
           for (const arg of args) {
+            // Accept 1-based numeric index
+            const n = parseInt(arg, 10);
+            if (!isNaN(n) && String(n) === arg && n >= 1 && n <= fields.length) {
+              indices.push(n - 1);
+              continue;
+            }
             const larg = arg.toLowerCase();
             const i = lower.findIndex(f => f === larg || f.includes(larg));
             if (i === -1) {
@@ -2776,8 +2782,8 @@ function startTerminal() {
     c('/row [N]',                '— show row N (1-based) as key=value pairs');
     c('/undo',                   '— restore last result before the previous manipulation');
     c('/limit <N>',              '— set display row limit and re-display (alias for /set limit N)');
-    c('/cols',                   '— list column names of last result');
-    c('/select <col> …',         '— project (keep) specific columns from last result');
+    c('/cols',                   '— list column names with index numbers');
+    c('/select <col> …',         '— project (keep) specific columns (names or numbers)');
     c('/rename <old> <new>',     '— rename a column in last result');
     c('/filter <text|/re/>',     '— filter rows by substring or regex  (/grep is an alias)');
     c('/not <text|/re/>',        '— exclude rows matching pattern (inverse of /filter)');
