@@ -2189,12 +2189,13 @@ fn handle_set(rest: &str, out: &mut impl Write) -> io::Result<()> {
             (s.row_limit, s.bytes_raw, s.null_str.clone(), s.color)
         });
         let limit_str = if limit == 0 { "unlimited".to_string() } else { limit.to_string() };
+        let cg_val = if color { "\x1b[32m" } else { "" };
         writeln!(out, "{cb}Current settings:{cr}")?;
-        writeln!(out, "  {cb}limit{cr}  {limit_str:<12}  {cd}(rows displayed; 0 = no cap){cr}")?;
-        writeln!(out, "  {cb}bytes{cr}  {:<12}  {cd}(raw = show numbers, human = 4.3 KiB){cr}", if bytes_raw { "raw" } else { "human" })?;
-        writeln!(out, "  {cb}color{cr}  {:<12}  {cd}(ANSI colours in table cells){cr}", if color { "on" } else { "off" })?;
-        writeln!(out, "  {cb}null{cr}   {:<12}  {cd}(null display string){cr}", format!("\"{}\"", null_str))?;
-        writeln!(out, "{cd}Usage: !set limit N | !set bytes raw|human | !set color on|off | !set null <str>{cr}")?;
+        writeln!(out, "  {cb}limit{cr}  {cg_val}{limit_str:<12}{cr}  {cd}(rows displayed; 0 = no cap){cr}")?;
+        writeln!(out, "  {cb}bytes{cr}  {cg_val}{:<12}{cr}  {cd}(raw = show numbers, human = 4.3 KiB){cr}", if bytes_raw { "raw" } else { "human" })?;
+        writeln!(out, "  {cb}color{cr}  {cg_val}{:<12}{cr}  {cd}(ANSI colours in table cells){cr}", if color { "on" } else { "off" })?;
+        writeln!(out, "  {cb}null{cr}   {cg_val}{:<12}{cr}  {cd}(null display string){cr}", format!("\"{}\"", null_str))?;
+        writeln!(out, "{cd}usage: !set limit N | !set bytes raw|human | !set color on|off | !set null <str>{cr}")?;
         return Ok(());
     }
     let (key, val) = match rest.split_once(char::is_whitespace) {
