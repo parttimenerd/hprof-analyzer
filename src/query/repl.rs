@@ -983,8 +983,9 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                 match &last_result {
                                     None => writeln!(stdout, "(no result — run a query first)")?,
                                     Some(res) => {
-                                        let n = res.rows.len();
-                                        writeln!(stdout, "{} row{}", n, if n == 1 { "" } else { "s" })?;
+                                        let rows = res.rows.len();
+                                        let cols = res.columns.len();
+                                        writeln!(stdout, "{} row{} × {} col{}", rows, if rows == 1 { "" } else { "s" }, cols, if cols == 1 { "" } else { "s" })?;
                                     }
                                 }
                             } else {
@@ -1449,8 +1450,9 @@ fn run_repl_line(
                     match last_result.as_ref() {
                         None => writeln!(out, "(no result — run a query first)")?,
                         Some(res) => {
-                            let n = res.rows.len();
-                            writeln!(out, "{} row{}", n, if n == 1 { "" } else { "s" })?;
+                            let rows = res.rows.len();
+                            let cols = res.columns.len();
+                            writeln!(out, "{} row{} × {} col{}", rows, if rows == 1 { "" } else { "s" }, cols, if cols == 1 { "" } else { "s" })?;
                         }
                     }
                 } else {
@@ -2405,12 +2407,13 @@ fn handle_sort(
             let sort_label: Vec<String> = specs.iter()
                 .map(|&(ci, desc)| format!("{} {}", res.columns[ci].name, if desc { "desc" } else { "asc" }))
                 .collect();
+            let note = format!("sorted by {}", sort_label.join(", "));
             let sorted_res = QueryResult {
                 columns: res.columns.clone(),
                 rows: sorted.clone(),
                 row_count: sorted.len() as u64,
                 truncated: false,
-                note: None,
+                note: Some(note),
                 error: None,
                 name: res.name.clone(),
                 oql: res.oql.clone(),
@@ -2419,8 +2422,8 @@ fn handle_sort(
             };
             res.rows = sorted;
             res.row_count = sorted_res.row_count;
+            res.note = sorted_res.note.clone();
             print_result(&sorted_res, std::time::Duration::ZERO, max_width, out)?;
-            writeln!(out, "-- sorted by {}", sort_label.join(", "))?;
         }
     }
     Ok(())

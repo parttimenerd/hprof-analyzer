@@ -1593,11 +1593,11 @@ function startTerminal() {
         }
         return 0;
       });
-      renderResult({ columns: lastResult.columns, rows: sorted, row_count: sorted.length });
-      prevResult = lastResult;
-      lastResult = { columns: lastResult.columns, rows: sorted };
       const label = specs.map(s => `${s.name} ${s.desc ? 'desc' : 'asc'}`).join(', ');
-      term.writeln(`\x1b[2mSorted by ${label}\x1b[0m`);
+      const newResult = { columns: lastResult.columns, rows: sorted, row_count: sorted.length, note: `sorted by ${label}` };
+      renderResult(newResult);
+      prevResult = lastResult;
+      lastResult = newResult;
       term.write(PROMPT);
       return;
     }
