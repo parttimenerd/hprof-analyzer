@@ -1365,6 +1365,8 @@ function startTerminal() {
       }
       const sum = vals.reduce((s, v) => s + v, 0);
       const mean = sum / vals.length;
+      const variance = vals.reduce((s, v) => s + (v - mean) ** 2, 0) / vals.length;
+      const stddev = Math.sqrt(variance);
       const p50 = vals[Math.floor(vals.length * 0.5)];
       const p90 = vals[Math.floor(vals.length * 0.9)];
       const p99 = vals[Math.floor(vals.length * 0.99)];
@@ -1377,6 +1379,7 @@ function startTerminal() {
       term.writeln(`  min    \x1b[32m${fmtV(vals[0])}\x1b[0m`);
       term.writeln(`  max    \x1b[32m${fmtV(vals[vals.length - 1])}\x1b[0m`);
       term.writeln(`  mean   \x1b[32m${fmtV(mean)}\x1b[0m`);
+      term.writeln(`  stddev \x1b[32m${fmtV(stddev)}\x1b[0m`);
       term.writeln(`  p50    \x1b[32m${fmtV(p50)}\x1b[0m`);
       term.writeln(`  p90    \x1b[32m${fmtV(p90)}\x1b[0m`);
       term.writeln(`  p99    \x1b[32m${fmtV(p99)}\x1b[0m`);

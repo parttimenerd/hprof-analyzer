@@ -2422,7 +2422,7 @@ fn handle_stats(
 ) -> io::Result<()> {
     if col_arg.is_empty() {
         match last_result {
-            None => { writeln!(out, "usage: !stats <col>  — numeric summary (min/max/mean/p50/p90/p99/sum)")?; return Ok(()); }
+            None => { writeln!(out, "usage: !stats <col>  — numeric summary (min/max/mean/stddev/p50/p90/p99/sum)")?; return Ok(()); }
             Some(res) if !res.columns.is_empty() => {
                 // Auto-select if exactly one numeric column
                 let numeric_cols: Vec<usize> = (0..res.columns.len())
@@ -2438,7 +2438,7 @@ fn handle_stats(
                 let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
                 writeln!(out, "usage: !stats <col>  — available: {}", names.join(", "))?;
             }
-            _ => writeln!(out, "usage: !stats <col>  — numeric summary (min/max/mean/p50/p90/p99/sum)")?,
+            _ => writeln!(out, "usage: !stats <col>  — numeric summary (min/max/mean/stddev/p50/p90/p99/sum)")?,
         }
         return Ok(());
     }
@@ -2480,14 +2480,17 @@ fn handle_stats(
                             }
                         };
                         let null_note = if null_count > 0 { format!("  ({} null)", null_count) } else { String::new() };
+                        let variance: f64 = vals.iter().map(|&v| (v - mean) * (v - mean)).sum::<f64>() / n as f64;
+                        let stddev = variance.sqrt();
                         writeln!(out, "{}  ({} values){}", col_name, n, null_note)?;
-                        writeln!(out, "  min  {}", fv(vals[0]))?;
-                        writeln!(out, "  max  {}", fv(vals[n - 1]))?;
-                        writeln!(out, "  mean {}", fv(mean))?;
-                        writeln!(out, "  p50  {}", fv(p50))?;
-                        writeln!(out, "  p90  {}", fv(p90))?;
-                        writeln!(out, "  p99  {}", fv(p99))?;
-                        writeln!(out, "  sum  {}", fv(sum))?;
+                        writeln!(out, "  min    {}", fv(vals[0]))?;
+                        writeln!(out, "  max    {}", fv(vals[n - 1]))?;
+                        writeln!(out, "  mean   {}", fv(mean))?;
+                        writeln!(out, "  stddev {}", fv(stddev))?;
+                        writeln!(out, "  p50    {}", fv(p50))?;
+                        writeln!(out, "  p90    {}", fv(p90))?;
+                        writeln!(out, "  p99    {}", fv(p99))?;
+                        writeln!(out, "  sum    {}", fv(sum))?;
                         // Mini histogram (10 buckets)
                         if n >= 2 {
                             let lo = vals[0];
@@ -2824,7 +2827,7 @@ fn handle_meta(
             writeln!(out, "  !sample [N]           show N randomly sampled rows from last result (default 10)")?;
             writeln!(out, "  !distinct             remove duplicate rows (!dedup is an alias)")?;
             writeln!(out, "  !sort <col> [desc] [,col2 [desc]…]  sort; prefix - for desc (e.g. !sort -size,name)")?;
-            writeln!(out, "  !stats <col>          numeric summary: min/max/mean/p50/p90/p99/sum")?;
+            writeln!(out, "  !stats <col>          numeric summary: min/max/mean/stddev/p50/p90/p99/sum")?;
             writeln!(out, "  !unique <col> [N]     distinct value counts, sorted by frequency (top N)")?;
             writeln!(out, "  !pivot <col> [N]      group by column → (value, count) table, optional top N (chainable)")?;
             writeln!(out, "  !top [N]  /  !head [N]  show first N rows of last result (default 10)")?;
