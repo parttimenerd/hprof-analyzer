@@ -1434,56 +1434,61 @@ function startTerminal() {
   }
 
   function printHelp() {
-    term.writeln('\r\n\x1b[1mBuilt-in commands:\x1b[0m');
-    term.writeln('  \x1b[36m/help\x1b[0m              — this message');
-    term.writeln('  \x1b[36m/help oql\x1b[0m          — OQL language quick reference');
-    term.writeln('  \x1b[36m/clear\x1b[0m             — clear terminal');
-    term.writeln('  \x1b[36m/q\x1b[0m  \x1b[36m/disconnect\x1b[0m    — back to connect screen');
-    term.writeln('  \x1b[36m/status\x1b[0m            — show analysis status');
-    term.writeln('  \x1b[36m/analyze\x1b[0m           — trigger full heap analysis (enables @retainedHeapSize)');
-    term.writeln('  \x1b[36m/history [N]\x1b[0m       — show last N entries (default 20); use !N to re-run');
-    term.writeln('  \x1b[36m/export [csv]\x1b[0m      — copy last result to clipboard as TSV or CSV');
-    term.writeln('  \x1b[36m/set [key val]\x1b[0m     — view/change display settings (limit, bytes, null)');
-    term.writeln('  \x1b[36m/classes [pat]\x1b[0m     — list class names (optionally filtered by pattern)');
-    term.writeln('  \x1b[36m/describe <cls>\x1b[0m    — show fields of a class');
-    term.writeln('  \x1b[36m/count <cls>\x1b[0m       — count live instances of a class');
-    term.writeln('  \x1b[36m/watch <s> <oql>\x1b[0m   — repeat query every N seconds; /watch stop to cancel');
-    term.writeln('  \x1b[36m/last\x1b[0m              — re-display last query result');
-    term.writeln('  \x1b[36m/bookmark [name]\x1b[0m   — save last query as a named bookmark  (alias: /save)');
-    term.writeln('  \x1b[36m/forget <name>\x1b[0m     — delete a bookmark');
-    term.writeln('  \x1b[36m/filter <text|/re/>\x1b[0m — filter last result rows by substring or regex');
-    term.writeln('  \x1b[36m/sort <col> [desc]\x1b[0m — sort last result by column');
-    term.writeln('  \x1b[36m/unique <col>\x1b[0m      — count distinct values in a column');
-    term.writeln('  \x1b[36m/stats <col>\x1b[0m       — min/max/mean/p50/p90/p99/sum of a numeric column');
-    term.writeln('  \x1b[36m/top <N>\x1b[0m           — show top N rows of last result');
-    term.writeln('  \x1b[36m/run <name>\x1b[0m        — run a named query');
+    const h = (t) => term.writeln(`\r\n\x1b[33m${t}\x1b[0m`);
+    const c = (cmd, desc) => term.writeln(`  \x1b[36m${cmd.padEnd(26)}\x1b[0m ${desc}`);
     term.writeln('');
-    term.writeln('\x1b[1mKeyboard shortcuts:\x1b[0m');
-    term.writeln('  \x1b[36mTab\x1b[0m                — OQL completion');
-    term.writeln('  \x1b[36mUp/Down\x1b[0m            — history');
-    term.writeln('  \x1b[36mCtrl+R\x1b[0m             — incremental history search');
-    term.writeln('  \x1b[36mLeft/Right\x1b[0m         — move cursor (Ctrl/Alt: by word)');
-    term.writeln('  \x1b[36mHome / Ctrl+A\x1b[0m      — beginning of line');
-    term.writeln('  \x1b[36mEnd  / Ctrl+E\x1b[0m      — end of line');
-    term.writeln('  \x1b[36mCtrl+K\x1b[0m             — kill to end of line');
-    term.writeln('  \x1b[36mCtrl+W\x1b[0m             — kill previous word');
-    term.writeln('  \x1b[36mCtrl+U\x1b[0m             — kill to beginning of line');
-    term.writeln('  \x1b[36mCtrl+Y\x1b[0m             — yank (paste) killed text');
-    term.writeln('  \x1b[36mCtrl+C\x1b[0m             — cancel current line / abort query');
-    term.writeln('  \x1b[36mCtrl+D\x1b[0m             — disconnect (on empty line)');
-    term.writeln('  \x1b[36mCtrl+L\x1b[0m             — clear screen');
-    term.writeln('  \x1b[36m\\\\ (backslash) at EOL\x1b[0m — continue query on next line');
+    h('Session');
+    c('/status',                 '— analysis status');
+    c('/analyze',                '— trigger full heap analysis (enables @retainedHeapSize)');
+    c('/q  /disconnect',         '— back to connect screen (Ctrl+D on empty line)');
+    c('/clear',                  '— clear terminal');
+    h('Query');
+    c('/run [name]',             '— run named query; list all if no name');
+    c('/watch <s> <oql>',        '— repeat query every N seconds; /watch stop to cancel');
+    c('/classes [pat]',          '— list class names filtered by pattern');
+    c('/describe <cls>',         '— show fields of a class');
+    c('/count <cls>',            '— count live instances of a class');
+    h('Result post-processing');
+    c('/last',                   '— re-display last result');
+    c('/filter <text|/re/>',     '— filter rows by substring or regex');
+    c('/sort <col> [desc]',      '— sort rows by column');
+    c('/top <N>',                '— first N rows');
+    c('/unique <col>',           '— distinct value counts');
+    c('/stats <col>',            '— min/max/mean/percentiles/sum');
+    c('/export [csv]',           '— copy to clipboard as TSV or CSV');
+    h('History & bookmarks');
+    c('/history [N|clear]',      '— show/clear history; !N to re-run');
+    c('/bookmark  /save [name]', '— save last query as a named bookmark');
+    c('/forget <name>',          '— delete a bookmark');
+    h('Settings');
+    c('/set',                    '— view current settings');
+    c('/set limit <N>',          '— max rows displayed (default 200)');
+    c('/set bytes raw|human',    '— byte column formatting');
+    c('/set color on|off',       '— cell colorization');
+    c('/set null <str>',         '— null display string');
+    h('Help');
+    c('/help',                   '— this message');
+    c('/?',                      '— alias for /help');
+    c('/help oql',               '— OQL language reference');
     term.writeln('');
-    term.writeln('\x1b[1mNamed queries\x1b[0m (/run <name>):');
-    let cur = '';
-    namedQueries.forEach(q => {
-      if (q.group !== cur) {
-        cur = q.group;
-        term.writeln(`\r\n  \x1b[33m${cur}\x1b[0m`);
-      }
-      const lock = q.needs_retained ? '  \x1b[2m[needs analysis]\x1b[0m' : '';
-      term.writeln(`    \x1b[36m${q.name.padEnd(36)}\x1b[0m  \x1b[2m${q.display}\x1b[0m${lock}`);
-    });
+    term.writeln('\x1b[33mKeyboard shortcuts:\x1b[0m');
+    term.writeln('  Tab       complete  ·  Ctrl+R  history search  ·  Up/Down  history');
+    term.writeln('  Ctrl+A/E  line start/end  ·  Alt+←/→  word left/right');
+    term.writeln('  Ctrl+K/W/U  kill  ·  Ctrl+Y  yank  ·  Ctrl+C  abort  ·  Ctrl+L  clear');
+    term.writeln('  \\  at end of line  →  continue query on next line');
+    if (namedQueries.length > 0) {
+      term.writeln('');
+      term.writeln('\x1b[33mNamed queries\x1b[0m  \x1b[2m(use /run <name> or click sidebar)\x1b[0m');
+      let cur = '';
+      namedQueries.forEach(q => {
+        if (q.group !== cur) {
+          cur = q.group;
+          term.writeln(`\r  \x1b[2m${cur}\x1b[0m`);
+        }
+        const lock = q.needs_retained ? '  \x1b[2m[needs analysis]\x1b[0m' : '';
+        term.writeln(`    \x1b[36m${q.name.padEnd(36)}\x1b[0m  \x1b[2m${q.display}\x1b[0m${lock}`);
+      });
+    }
     term.writeln('');
   }
 
