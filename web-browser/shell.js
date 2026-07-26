@@ -2172,7 +2172,7 @@ function startTerminal() {
     c('/sample [N]',             '— N randomly sampled rows from last result (default 10)');
     c('/unique <col> [N]',       '— distinct value counts, optional top N');
     c('/pivot <col> [N]',        '— group by column → (value, count) table, optional top N (chainable)');
-    c('/stats <col>',            '— min/max/mean/percentiles/sum');
+    c('/stats [col]',           '— min/max/mean/stddev/percentiles/sum; no arg = all numeric cols');
     c('/export [csv|tsv|json]',  '— copy/download as CSV (default), TSV, or JSON');
     h('History & bookmarks');
     c('/history [N|clear]',      '— show/clear history; !N to re-run');
