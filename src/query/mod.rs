@@ -13,12 +13,12 @@ pub mod optimize;
 pub mod parse;
 pub mod plan;
 pub mod refwalk;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "native"))]
 pub mod repl;
 pub mod retained_edges;
 pub mod run;
 pub mod runflags;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "native"))]
 pub mod server;
 pub mod stage_runner;
 pub mod stringvals;

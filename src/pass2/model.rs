@@ -757,7 +757,12 @@ impl InboundBuilder {
         // past 2× the true size. Without this the Vec doubles from ~4 GB to an
         // 8 GB capacity, wasting ~4 GB of RSS through Phase 4.
         // Cap at 6 GB so we don't over-commit on small dumps.
-        let inb_data_cap = ((total_inb as usize).saturating_mul(5) / 2).min(6 * 1024 * 1024 * 1024);
+        // On 32-bit targets (wasm32) usize::MAX is the upper bound instead.
+        #[cfg(target_pointer_width = "64")]
+        let six_gb: usize = 6 * 1024 * 1024 * 1024;
+        #[cfg(not(target_pointer_width = "64"))]
+        let six_gb: usize = usize::MAX;
+        let inb_data_cap = ((total_inb as usize).saturating_mul(5) / 2).min(six_gb);
         inb_data.reserve(inb_data_cap);
 
         // CSR is contiguous: start[i] = end of node i-1 = in_cursors[i-1] after fill.

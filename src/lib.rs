@@ -12,6 +12,7 @@ mod md_test;
 pub mod named_queries;
 pub mod opts;
 mod pass1;
+pub use pass1::Pass1;
 mod pass2;
 mod progress;
 pub mod query;

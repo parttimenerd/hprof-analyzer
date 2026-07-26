@@ -1,3 +1,7 @@
+[workspace]
+members = [".", "crates/hprof-wasm"]
+resolver = "2"
+
 [package]
 name = "hprof-analyzer"
 version = "0.1.0"
@@ -26,19 +30,24 @@ crate-type = ["rlib"]
 # No extra deps: the harness shells out to scripts/mat-oracle.sh. Compiled only
 # under `--features mat-oracle`; its tests are #[ignore]d and gated on MAT_HOME.
 mat-oracle = []
+# Native-only dependencies (CLI, server, REPL, HTML scraping, compression).
+# The WASM crate depends on hprof-analyzer with default-features = false to
+# avoid pulling in these non-WASM-compatible crates.
+default = ["native"]
+native = ["dep:reedline", "dep:tiny_http", "dep:clap", "dep:clap_complete", "dep:scraper", "dep:zstd", "dep:zip"]
 
 [dependencies]
 base64 = "0.22"
-tiny_http = "0.12"
-clap = { version = "4", features = ["derive"] }
-clap_complete = "4"
+tiny_http = { version = "0.12", optional = true }
+clap = { version = "4", features = ["derive"], optional = true }
+clap_complete = { version = "4", optional = true }
 flate2 = "1"
 # default-features = false drops legacy/arrays/zdict_builder C extensions; only encode/decode needed
-zstd = { version = "0.13", default-features = false }
+zstd = { version = "0.13", default-features = false, optional = true }
 # Used for reading Eclipse MAT plugin jars (DEFLATE-compressed entries) to
 # detect the installed MAT parser ID. deflate feature only; no bzip2/zstd needed.
-zip = { version = "2", default-features = false, features = ["deflate"] }
-scraper = "0.27"
+zip = { version = "2", default-features = false, features = ["deflate"], optional = true }
+scraper = { version = "0.27", optional = true }
 # pinned to =1.2.1: schemars 1.x had breaking API changes; bump carefully
 schemars = "=1.2.1"
 serde = { version = "1", features = ["derive"] }
@@ -48,7 +57,7 @@ toml = { version = "0.8", default-features = false, features = ["parse"] }
 chumsky = "0.13.0"
 ariadne = "0.6.0"
 logos = "0.16.1"
-reedline = "0.43"
+reedline = { version = "0.43", optional = true }
 # full regex (not regex-lite) for MAT's quoted-FROM Java-Pattern class matching
 regex = "1"
 

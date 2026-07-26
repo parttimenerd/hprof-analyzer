@@ -32,7 +32,7 @@ fn rss_mb() -> u64 {
             Err(_) => 0,
         }
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(all(not(target_os = "linux"), unix))]
     {
         // getrusage RUSAGE_SELF: ru_maxrss is bytes on macOS, KB on Linux.
         let mut ru = unsafe { std::mem::zeroed::<libc::rusage>() };
@@ -42,6 +42,10 @@ fn rss_mb() -> u64 {
         } else {
             0
         }
+    }
+    #[cfg(not(any(target_os = "linux", unix)))]
+    {
+        0
     }
 }
 
@@ -61,9 +65,13 @@ fn peak_mb() -> u64 {
             Err(_) => 0,
         }
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(all(not(target_os = "linux"), unix))]
     {
         rss_mb() // on macOS ru_maxrss is already the peak HWM
+    }
+    #[cfg(not(any(target_os = "linux", unix)))]
+    {
+        0
     }
 }
 
