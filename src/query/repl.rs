@@ -2134,17 +2134,20 @@ fn handle_width(rest: &str, max_width: &mut usize, out: &mut impl Write) -> io::
 /// `!set color on|off` — toggle ANSI colour in table hints.
 /// `!set null <str>` — string shown for null values.
 fn handle_set(rest: &str, out: &mut impl Write) -> io::Result<()> {
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cb, cd, cg, cr) = if color { ("\x1b[1m", "\x1b[2m", "\x1b[32m", "\x1b[0m") } else { ("", "", "", "") };
     if rest.is_empty() {
-        let (limit, bytes_raw, null_str, color) = SESSION_SETTINGS.with(|s| {
+        let (limit, bytes_raw, null_str, _color) = SESSION_SETTINGS.with(|s| {
             let s = s.borrow();
             (s.row_limit, s.bytes_raw, s.null_str.clone(), s.color)
         });
         let limit_str = if limit == 0 { "unlimited".to_string() } else { limit.to_string() };
-        writeln!(out, "  limit  {limit_str}  (rows displayed; 0 = no cap)")?;
-        writeln!(out, "  bytes  {}  (raw = show numbers, human = 4.3 KiB)", if bytes_raw { "raw" } else { "human" })?;
-        writeln!(out, "  color  {}  (ANSI colours in table hints)", if color { "on" } else { "off" })?;
-        writeln!(out, "  null   \"{null_str}\"  (null display string)")?;
-        writeln!(out, "Usage: !set limit N | !set bytes raw|human | !set color on|off | !set null <str>")?;
+        writeln!(out, "{cb}Current settings:{cr}")?;
+        writeln!(out, "  {cb}limit{cr}  {limit_str:<12}  {cd}(rows displayed; 0 = no cap){cr}")?;
+        writeln!(out, "  {cb}bytes{cr}  {:<12}  {cd}(raw = show numbers, human = 4.3 KiB){cr}", if bytes_raw { "raw" } else { "human" })?;
+        writeln!(out, "  {cb}color{cr}  {:<12}  {cd}(ANSI colours in table cells){cr}", if color { "on" } else { "off" })?;
+        writeln!(out, "  {cb}null{cr}   \"{null_str:<11}  {cd}(null display string){cr}")?;
+        writeln!(out, "{cd}Usage: !set limit N | !set bytes raw|human | !set color on|off | !set null <str>{cr}")?;
         return Ok(());
     }
     let (key, val) = match rest.split_once(char::is_whitespace) {
@@ -2158,12 +2161,12 @@ fn handle_set(rest: &str, out: &mut impl Write) -> io::Result<()> {
                 writeln!(out, "limit: {}  (use `!set limit N`, or `!set limit 0` for unlimited)", if cur == 0 { "unlimited".to_string() } else { cur.to_string() })?;
             } else if val == "0" || val == "unlimited" || val == "none" {
                 SESSION_SETTINGS.with(|s| s.borrow_mut().row_limit = 0);
-                writeln!(out, "row limit: unlimited")?;
+                writeln!(out, "{cg}row limit: unlimited{cr}")?;
             } else {
                 match val.parse::<usize>() {
                     Ok(n) if n > 0 => {
                         SESSION_SETTINGS.with(|s| s.borrow_mut().row_limit = n);
-                        writeln!(out, "row limit: {n}")?;
+                        writeln!(out, "{cg}row limit: {n}{cr}")?;
                     }
                     _ => writeln!(out, "usage: !set limit <N>  (positive integer, or 0/unlimited for no cap)")?,
                 }
@@ -2172,11 +2175,11 @@ fn handle_set(rest: &str, out: &mut impl Write) -> io::Result<()> {
         "bytes" => match val {
             "raw" => {
                 SESSION_SETTINGS.with(|s| s.borrow_mut().bytes_raw = true);
-                writeln!(out, "bytes: raw (numbers)")?;
+                writeln!(out, "{cg}bytes: raw (numbers){cr}")?;
             }
             "human" => {
                 SESSION_SETTINGS.with(|s| s.borrow_mut().bytes_raw = false);
-                writeln!(out, "bytes: human (e.g. 4.3 KiB)")?;
+                writeln!(out, "{cg}bytes: human (e.g. 4.3 KiB){cr}")?;
             }
             _ => writeln!(out, "usage: !set bytes raw|human")?,
         },
@@ -2193,7 +2196,7 @@ fn handle_set(rest: &str, out: &mut impl Write) -> io::Result<()> {
         },
         "null" => {
             let s = if val.is_empty() { "null".to_string() } else { val.to_string() };
-            writeln!(out, "null: \"{s}\"")?;
+            writeln!(out, "{cg}null: \"{s}\"{cr}")?;
             SESSION_SETTINGS.with(|ss| ss.borrow_mut().null_str = s);
         }
         _ => writeln!(out, "unknown setting: {key}  (options: limit, bytes, color, null)")?,
@@ -2796,8 +2799,8 @@ fn handle_stats(
                         let variance: f64 = vals.iter().map(|&v| (v - mean) * (v - mean)).sum::<f64>() / n as f64;
                         let stddev = variance.sqrt();
                         let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-                        let (cv, cs, cr) = if color { ("\x1b[32m", "\x1b[33m", "\x1b[0m") } else { ("", "", "") };
-                        writeln!(out, "\x1b[1m{}\x1b[0m  ({} values){}", col_name, n, null_note)?;
+                        let (cb, cv, cs, cd, cr) = if color { ("\x1b[1m", "\x1b[32m", "\x1b[33m", "\x1b[2m", "\x1b[0m") } else { ("", "", "", "", "") };
+                        writeln!(out, "{cb}{}{cr}  ({} values){}", col_name, n, null_note)?;
                         writeln!(out, "  min    {cv}{}{cr}", fv(vals[0]))?;
                         writeln!(out, "  max    {cv}{}{cr}", fv(vals[n - 1]))?;
                         writeln!(out, "  mean   {cv}{}{cr}", fv(mean))?;
@@ -2820,12 +2823,12 @@ fn handle_stats(
                                     buckets[b.min(NBUCKETS - 1)] += 1;
                                 }
                                 let max_b = *buckets.iter().max().unwrap_or(&1);
-                                writeln!(out, "  \x1b[2mdist:\x1b[0m")?;
+                                writeln!(out, "  {cd}dist:{cr}")?;
                                 for (i, &b) in buckets.iter().enumerate() {
                                     let bar_len = if max_b > 0 { b * BAR_MAX / max_b } else { 0 };
                                     let bar: String = "█".repeat(bar_len);
                                     let bucket_lo = lo + i as f64 * range / NBUCKETS as f64;
-                                    writeln!(out, "  \x1b[2m{:>8}\x1b[0m  {cv}{:<bar_w$}{cr}  \x1b[2m{}\x1b[0m", fv(bucket_lo), bar, b, bar_w = BAR_MAX)?;
+                                    writeln!(out, "  {cd}{:>8}{cr}  {cv}{:<bar_w$}{cr}  {cd}{}{cr}", fv(bucket_lo), bar, b, bar_w = BAR_MAX)?;
                                 }
                             }
                         }
@@ -2861,10 +2864,12 @@ fn handle_describe(
             return Ok(());
         }
         Ok(res) => {
+            let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+            let (cb, cd, cr) = if color { ("\x1b[1m", "\x1b[2m", "\x1b[0m") } else { ("", "", "") };
             let count_str = match &count_res {
-                Ok(cr) => {
-                    match cr.rows.first().and_then(|r| r.first()) {
-                        Some(QueryValue::Int(n)) => format!("  \x1b[2m({} instance{})\x1b[0m", fmt_int(*n), if *n == 1 { "" } else { "s" }),
+                Ok(cr_) => {
+                    match cr_.rows.first().and_then(|r| r.first()) {
+                        Some(QueryValue::Int(n)) => format!("  {cd}({} instance{}){cr}", fmt_int(*n), if *n == 1 { "" } else { "s" }),
                         _ => String::new(),
                     }
                 }
@@ -2872,10 +2877,10 @@ fn handle_describe(
             };
             let idx_w = res.columns.len().to_string().len();
             let col_w = res.columns.iter().map(|c| c.name.len()).max().unwrap_or(8);
-            writeln!(out, "Fields of \x1b[1m{}\x1b[0m{}", cls, count_str)?;
+            writeln!(out, "Fields of {cb}{}{cr}{}", cls, count_str)?;
             for (i, col) in res.columns.iter().enumerate() {
                 let type_tag = infer_col_type(i, &res.rows);
-                writeln!(out, "  {:>idx_w$}  {:<col_w$}  \x1b[2m{}\x1b[0m", i + 1, col.name, type_tag)?;
+                writeln!(out, "  {:>idx_w$}  {:<col_w$}  {cd}{}{cr}", i + 1, col.name, type_tag)?;
             }
             writeln!(out, "({} field{})", res.columns.len(), if res.columns.len() == 1 { "" } else { "s" })?;
         }
