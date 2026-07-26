@@ -198,6 +198,10 @@ function showShell() {
   buildSidebar(false);
   startTerminal();
   pollAnalysisStatus();
+  // Fetch class names for tab-completion (non-blocking)
+  fetch(serverUrl + '/help').then(r => r.json()).then(data => {
+    if (Array.isArray(data.classes)) classNames = data.classes;
+  }).catch(() => {});
 }
 
 document.getElementById('btn-disconnect').addEventListener('click', () => {
@@ -520,8 +524,31 @@ function startTerminal() {
       term.write(PROMPT);
       return;
     }
-    if (cmd === '/set' || cmd.startsWith('/set ')) {
-      const args = cmd.slice(4).trim().split(/\s+/);
+    if (cmd === '/classes' || cmd.startsWith('/classes ')) {
+      const pattern = cmd.slice(8).trim().toLowerCase();
+      const all = classNames.length > 0 ? classNames
+        : (await fetch(serverUrl + '/help').then(r => r.json()).then(d => {
+            if (Array.isArray(d.classes)) classNames = d.classes;
+            return classNames;
+          }).catch(() => []));
+      const matches = pattern ? all.filter(c => c.toLowerCase().includes(pattern)) : all;
+      if (matches.length === 0) {
+        term.writeln(pattern
+          ? `\x1b[33mNo classes matching "${pattern}"\x1b[0m`
+          : '\x1b[2m(no classes loaded — server may still be loading)\x1b[0m');
+      } else {
+        const COLS = 2;
+        const colW = Math.floor((term.cols - 4) / COLS);
+        for (let i = 0; i < matches.length; i += COLS) {
+          const row = matches.slice(i, i + COLS);
+          term.writeln('  ' + row.map(c => padTo(c, colW)).join('  '));
+        }
+        term.writeln(`\x1b[2m${matches.length} class${matches.length !== 1 ? 'es' : ''}\x1b[0m`);
+      }
+      term.write(PROMPT);
+      return;
+    }
+    if (cmd === '/set' || cmd.startsWith('/set ')) {      const args = cmd.slice(4).trim().split(/\s+/);
       if (!args[0]) {
         // Print current settings
         term.writeln('\x1b[1mCurrent settings:\x1b[0m');
@@ -748,6 +775,7 @@ function startTerminal() {
     term.writeln('  \x1b[36m/history\x1b[0m           — show recent query history');
     term.writeln('  \x1b[36m/export\x1b[0m            — copy last result to clipboard as TSV');
     term.writeln('  \x1b[36m/set [key val]\x1b[0m     — view/change display settings (limit, bytes, null)');
+    term.writeln('  \x1b[36m/classes [pat]\x1b[0m     — list class names (optionally filtered by pattern)');
     term.writeln('  \x1b[36m/run <name>\x1b[0m        — run a named query');
     term.writeln('');
     term.writeln('\x1b[1mKeyboard shortcuts:\x1b[0m');
