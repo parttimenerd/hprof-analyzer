@@ -1020,8 +1020,24 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             match &last_result {
                                 None => writeln!(stdout, "(no result — run a query first)")?,
                                 Some(res) => {
-                                    let n = res.rows.len();
-                                    writeln!(stdout, "{} row{}", n, if n == 1 { "" } else { "s" })?;
+                                    if rest.is_empty() {
+                                        let n = res.rows.len();
+                                        writeln!(stdout, "{} row{}", n, if n == 1 { "" } else { "s" })?;
+                                    } else {
+                                        match resolve_col(rest, &res.columns) {
+                                            None => {
+                                                let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
+                                                writeln!(stdout, "column {:?} not found — available: {}", rest, names.join(", "))?;
+                                            }
+                                            Some(ci) => {
+                                                let total = res.rows.len();
+                                                let non_null = res.rows.iter()
+                                                    .filter(|row| !matches!(row.get(ci), Some(QueryValue::Null) | None))
+                                                    .count();
+                                                writeln!(stdout, "{} non-null / {} total in {:?}", non_null, total, res.columns[ci].name)?;
+                                            }
+                                        }
+                                    }
                                 }
                             }
                             stdout.flush()?;
@@ -1458,11 +1474,27 @@ fn run_repl_line(
                 return Ok(false);
             }
             "wc" => {
-                match last_result {
+                match last_result.as_ref() {
                     None => writeln!(out, "(no result — run a query first)")?,
                     Some(res) => {
-                        let n = res.rows.len();
-                        writeln!(out, "{} row{}", n, if n == 1 { "" } else { "s" })?;
+                        if rest.is_empty() {
+                            let n = res.rows.len();
+                            writeln!(out, "{} row{}", n, if n == 1 { "" } else { "s" })?;
+                        } else {
+                            match resolve_col(rest, &res.columns) {
+                                None => {
+                                    let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
+                                    writeln!(out, "column {:?} not found — available: {}", rest, names.join(", "))?;
+                                }
+                                Some(ci) => {
+                                    let total = res.rows.len();
+                                    let non_null = res.rows.iter()
+                                        .filter(|row| !matches!(row.get(ci), Some(QueryValue::Null) | None))
+                                        .count();
+                                    writeln!(out, "{} non-null / {} total in {:?}", non_null, total, res.columns[ci].name)?;
+                                }
+                            }
+                        }
                     }
                 }
                 out.flush()?;
@@ -2762,7 +2794,7 @@ fn handle_meta(
             )?;
             writeln!(out, "  !count [<oql>]        print row count of last result, or run <oql> and show count")?;
             writeln!(out, "  !last                 re-run the previous query")?;
-            writeln!(out, "  !wc                   show row count of last result")?;
+            writeln!(out, "  !wc [col]             row count; with col: count non-null values")?;
             writeln!(
                 out,
                 "  !save <file> [oql]    write CSV/TSV/JSON to <file> (format by extension; of <oql>, else last result)"

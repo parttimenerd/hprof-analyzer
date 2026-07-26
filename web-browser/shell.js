@@ -659,9 +659,9 @@ function startTerminal() {
         }
         return;
       }
-      // Single-column commands: /filter /grep /unique /stats /pivot /select /not /exclude /rename /sample
+      // Single-column commands: /filter /grep /unique /stats /pivot /select /not /exclude /rename /sample /wc
       const singleColCmds = ['/filter ', '/grep ', '/unique ', '/stats ', '/pivot ', '/select ',
-                              '/not ', '/exclude ', '/rename ', '/sample '];
+                              '/not ', '/exclude ', '/rename ', '/sample ', '/wc '];
       const matched = singleColCmds.find(p => line.startsWith(p));
       if (matched) {
         const rawArg = line.slice(matched.length);
@@ -985,12 +985,24 @@ function startTerminal() {
       term.write(PROMPT);
       return;
     }
-    if (cmd === '/wc') {
+    if (cmd === '/wc' || cmd.startsWith('/wc ')) {
       if (!lastResult) {
         term.writeln('\x1b[33mNo result — run a query first.\x1b[0m');
       } else {
-        const n = lastResult.rows.length;
-        term.writeln(`\x1b[32m${n.toLocaleString()}\x1b[0m row${n !== 1 ? 's' : ''}`);
+        const colArg = cmd.slice(3).trim();
+        if (!colArg) {
+          const n = lastResult.rows.length;
+          term.writeln(`\x1b[32m${n.toLocaleString()}\x1b[0m row${n !== 1 ? 's' : ''}`);
+        } else {
+          const ci = resolveCol(colArg, lastResult.columns);
+          if (ci < 0) {
+            term.writeln(`\x1b[31mColumn "${colArg}" not found. Available: ${lastResult.columns.join(', ')}\x1b[0m`);
+          } else {
+            const total = lastResult.rows.length;
+            const nonNull = lastResult.rows.filter(row => row[ci] !== null && row[ci] !== undefined && !(typeof row[ci] === 'object' && row[ci]?.kind === 'null')).length;
+            term.writeln(`\x1b[32m${nonNull.toLocaleString()}\x1b[0m non-null / ${total.toLocaleString()} total in "${lastResult.columns[ci]}"`);
+          }
+        }
       }
       term.write(PROMPT);
       return;
@@ -1684,7 +1696,7 @@ function startTerminal() {
         term.write(PROMPT);
         return;
       }
-      const fmt = cmd.slice(7).trim().toLowerCase() || 'tsv';
+      const fmt = cmd.slice(7).trim().toLowerCase() || 'csv';
       let text, mime, ext;
       if (fmt === 'csv') {
         const csvRow = row => row.map(c => {
@@ -2026,7 +2038,7 @@ function startTerminal() {
     c('/obj <cls>#<idx>',        '— inspect a specific object by class + dense index');
     h('Result post-processing');
     c('/last',                   '— re-display last result');
-    c('/wc',                     '— show row count of last result');
+    c('/wc [col]',               '— row count; with col: count non-null values');
     c('/row [N|next|prev|last]', '— show row as key=value pairs; next/prev navigate sequentially');
     c('/undo',                   '— restore last result before the previous manipulation');
     c('/limit <N>',              '— set display row limit and re-display (alias for /set limit N)');
@@ -2043,7 +2055,7 @@ function startTerminal() {
     c('/unique <col> [N]',       '— distinct value counts, optional top N');
     c('/pivot <col>',            '— group by column → (value, count) table (chainable)');
     c('/stats <col>',            '— min/max/mean/percentiles/sum');
-    c('/export [csv|json]',     '— copy to clipboard as TSV, CSV, or JSON');
+    c('/export [csv|tsv|json]',  '— copy/download as CSV (default), TSV, or JSON');
     h('History & bookmarks');
     c('/history [N|clear]',      '— show/clear history; !N to re-run');
     c('/bookmark  /save [name]', '— save last query as a named bookmark');
