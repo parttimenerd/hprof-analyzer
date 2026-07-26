@@ -2710,7 +2710,7 @@ function startTerminal() {
       const matches = pattern ? all.filter(c => c.toLowerCase().includes(pattern)) : all;
       if (matches.length === 0) {
         term.writeln(pattern
-          ? `\x1b[33mNo classes matching "${pattern}"\x1b[0m`
+          ? `\x1b[33m(no classes matching "${pattern}")\x1b[0m`
           : '\x1b[2m(no classes loaded — server may still be loading)\x1b[0m');
       } else {
         const maxLen = matches.reduce((m, c) => Math.max(m, c.length), 0);
@@ -2735,7 +2735,7 @@ function startTerminal() {
       const matches = pattern ? all.filter(f => f.toLowerCase().includes(pattern)) : all;
       if (matches.length === 0) {
         term.writeln(pattern
-          ? `\x1b[33mNo fields matching "${pattern}"\x1b[0m`
+          ? `\x1b[33m(no fields matching "${pattern}")\x1b[0m`
           : '\x1b[2m(no fields loaded — server may still be loading)\x1b[0m');
       } else {
         const maxLen = matches.reduce((m, f) => Math.max(m, f.length), 0);
