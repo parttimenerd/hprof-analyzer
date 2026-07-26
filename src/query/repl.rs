@@ -1049,13 +1049,32 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                     }
                                 }
                             } else {
+                                let is_cls = is_class_name_arg(rest);
                                 let wrapped = wrap_count(rest);
-                                if let Some(res) = run_and_print(
-                                    path, &wrapped, path_depth, reachable_only, max_width,
-                                    &mut cache, &mut stdout,
-                                )? {
-                                    last_query = Some(wrapped);
-                                    last_result = Some(res);
+                                match run_one(path, &wrapped, path_depth, reachable_only, &mut cache, &mut stdout) {
+                                    Ok(res) if is_cls && res.error.is_none() => {
+                                        let n = res.rows.first().and_then(|r| r.first())
+                                            .and_then(|v| if let QueryValue::Int(n) = v { Some(*n) } else { None });
+                                        let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+                                        let (cg, cc, cr) = if color { ("\x1b[32m", "\x1b[36m", "\x1b[0m") } else { ("", "", "") };
+                                        if let Some(n) = n {
+                                            writeln!(stdout, "{cg}{}{cr} instance{} of {cc}{}{cr}", n, if n == 1 { "" } else { "s" }, rest.trim())?;
+                                        } else {
+                                            print_result(&res, std::time::Duration::ZERO, max_width, &mut stdout)?;
+                                        }
+                                        last_query = Some(wrapped);
+                                        last_result = Some(res);
+                                    }
+                                    Ok(res) => {
+                                        print_result(&res, std::time::Duration::ZERO, max_width, &mut stdout)?;
+                                        last_query = Some(wrapped);
+                                        last_result = Some(res);
+                                    }
+                                    Err(e) => {
+                                        let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+                                        if color { writeln!(stdout, "\x1b[31merror: {e}\x1b[0m")?; }
+                                        else { writeln!(stdout, "error: {e}")?; }
+                                    }
                                 }
                             }
                             stdout.flush()?;
@@ -1596,12 +1615,32 @@ fn run_repl_line(
                         }
                     }
                 } else {
+                    let is_cls = is_class_name_arg(rest);
                     let wrapped = wrap_count(rest);
-                    if let Some(res) = run_and_print(
-                        path, &wrapped, path_depth, *reachable_only, *max_width, cache, out,
-                    )? {
-                        *last_query = Some(wrapped);
-                        *last_result = Some(res);
+                    match run_one(path, &wrapped, path_depth, *reachable_only, cache, out) {
+                        Ok(res) if is_cls && res.error.is_none() => {
+                            let n = res.rows.first().and_then(|r| r.first())
+                                .and_then(|v| if let QueryValue::Int(n) = v { Some(*n) } else { None });
+                            let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+                            let (cg, cc, cr) = if color { ("\x1b[32m", "\x1b[36m", "\x1b[0m") } else { ("", "", "") };
+                            if let Some(n) = n {
+                                writeln!(out, "{cg}{}{cr} instance{} of {cc}{}{cr}", n, if n == 1 { "" } else { "s" }, rest.trim())?;
+                            } else {
+                                print_result(&res, std::time::Duration::ZERO, *max_width, out)?;
+                            }
+                            *last_query = Some(wrapped);
+                            *last_result = Some(res);
+                        }
+                        Ok(res) => {
+                            print_result(&res, std::time::Duration::ZERO, *max_width, out)?;
+                            *last_query = Some(wrapped);
+                            *last_result = Some(res);
+                        }
+                        Err(e) => {
+                            let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+                            if color { writeln!(out, "\x1b[31merror: {e}\x1b[0m")?; }
+                            else { writeln!(out, "error: {e}")?; }
+                        }
                     }
                 }
                 out.flush()?;
@@ -2227,6 +2266,13 @@ fn wrap_count(body: &str) -> String {
         return format!("SELECT COUNT(*) FROM INSTANCEOF {}", body.trim());
     }
     format!("SELECT COUNT(*) FROM ( {} )", body.trim())
+}
+
+/// Returns true when `arg` looks like a bare class name (no OQL keywords, no spaces),
+/// meaning `!count arg` should use the compact "N instances of ClassName" display.
+fn is_class_name_arg(arg: &str) -> bool {
+    let lower = arg.trim().to_ascii_lowercase();
+    !lower.starts_with("select") && !lower.starts_with("from") && !lower.contains(' ')
 }
 
 /// `!save <file> [oql]`: write CSV to `file`. With an inline `<oql>` the query is
