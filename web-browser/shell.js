@@ -547,7 +547,7 @@ function startTerminal() {
     if (line.startsWith('/') && !line.includes(' ')) {
       const partial = line.slice(1).toLowerCase();
       const cmds = ['help','clear','status','analyze','history','export','set','classes','plan','explain','filter','grep',
-                    'sort','unique','stats','top','head','tail','cols','columns','select','rename','wc','not','exclude','obj','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
+                    'sort','unique','stats','top','head','tail','sample','cols','columns','select','rename','wc','not','exclude','obj','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
       const matches = cmds.filter(c => c.startsWith(partial));
       if (matches.length === 1) {
         setLine('/' + matches[0] + ' ');
@@ -1323,6 +1323,31 @@ function startTerminal() {
       term.write(PROMPT);
       return;
     }
+    if (cmd.startsWith('/sample ') || cmd === '/sample') {
+      if (!lastResult) {
+        term.writeln('\x1b[33mNo result — run a query first.\x1b[0m');
+      } else {
+        const nStr = cmd.slice(7).trim();
+        const n = parseInt(nStr, 10);
+        if (!nStr || isNaN(n) || n <= 0) {
+          term.writeln('\x1b[33musage: /sample <N>  — show N random rows\x1b[0m');
+        } else {
+          const rows = lastResult.rows;
+          const k = Math.min(n, rows.length);
+          // Fisher-Yates partial shuffle to pick k items
+          const pool = [...Array(rows.length).keys()];
+          for (let i = 0; i < k; i++) {
+            const j = i + Math.floor(Math.random() * (pool.length - i));
+            [pool[i], pool[j]] = [pool[j], pool[i]];
+          }
+          const sampled = pool.slice(0, k).sort((a, b) => a - b).map(i => rows[i]);
+          renderResult({ columns: lastResult.columns, rows: sampled, row_count: sampled.length });
+          term.writeln(`\x1b[2m${k} of ${rows.length} rows (random sample)\x1b[0m`);
+        }
+      }
+      term.write(PROMPT);
+      return;
+    }
     if (cmd === '/classes' || cmd.startsWith('/classes ')) {
       const pattern = cmd.slice(8).trim().toLowerCase();
       const all = classNames.length > 0 ? classNames
@@ -1725,6 +1750,7 @@ function startTerminal() {
     c('/sort <col> [desc]',      '— sort rows by column');
     c('/top <N>  /head <N>',      '— first N rows (updates lastResult for chaining)');
     c('/tail <N>',               '— last N rows');
+    c('/sample <N>',             '— N randomly sampled rows from last result');
     c('/unique <col>',           '— distinct value counts');
     c('/stats <col>',            '— min/max/mean/percentiles/sum');
     c('/export [csv|json]',     '— copy to clipboard as TSV, CSV, or JSON');

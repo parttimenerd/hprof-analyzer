@@ -575,7 +575,7 @@ impl Completer for OqlCompleter {
                     "classes", "fields",
                     "reachable", "all", "mode",
                     "width", "count", "last", "save",
-                    "filter", "grep", "not", "exclude", "sort", "stats", "unique",
+                    "filter", "grep", "not", "exclude", "sample", "sort", "stats", "unique",
                     "top", "head", "tail", "select", "rename", "wc", "cols", "columns",
                     "describe", "obj",
                     "run",
@@ -956,6 +956,11 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             stdout.flush()?;
                             continue;
                         }
+                        "sample" => {
+                            handle_sample(rest, &mut last_result, max_width, &mut stdout)?;
+                            stdout.flush()?;
+                            continue;
+                        }
                         "sort" => {
                             handle_sort(rest, &mut last_result, max_width, &mut stdout)?;
                             stdout.flush()?;
@@ -1324,6 +1329,11 @@ fn run_repl_line(
             }
             "not" | "exclude" => {
                 handle_filter_not(rest, last_result, *max_width, out)?;
+                out.flush()?;
+                return Ok(false);
+            }
+            "sample" => {
+                handle_sample(rest, last_result, *max_width, out)?;
                 out.flush()?;
                 return Ok(false);
             }
@@ -1895,6 +1905,59 @@ fn handle_filter_not(
     Ok(())
 }
 
+/// `!sample <N>` — show N randomly sampled rows from last result.
+fn handle_sample(
+    args: &str,
+    last_result: &mut Option<QueryResult>,
+    max_width: usize,
+    out: &mut impl Write,
+) -> io::Result<()> {
+    let n: usize = match args.trim().parse() {
+        Ok(n) if n > 0 => n,
+        _ => {
+            writeln!(out, "usage: !sample <N>  (N > 0)")?;
+            return Ok(());
+        }
+    };
+    match last_result {
+        None => writeln!(out, "(no result — run a query first)")?,
+        Some(res) => {
+            let total = res.rows.len();
+            let k = n.min(total);
+            // Reservoir / partial Fisher-Yates via index shuffling (no rand dep)
+            let mut indices: Vec<usize> = (0..total).collect();
+            // Use a simple xorshift seeded from current time for determinism-free randomness
+            let mut rng = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos() as u64)
+                .unwrap_or(12345);
+            for i in 0..k {
+                rng ^= rng << 13;
+                rng ^= rng >> 7;
+                rng ^= rng << 17;
+                let j = i + (rng as usize % (total - i));
+                indices.swap(i, j);
+            }
+            indices[..k].sort_unstable();
+            let sampled: Vec<Vec<QueryValue>> = indices[..k].iter().map(|&i| res.rows[i].clone()).collect();
+            let sampled_res = QueryResult {
+                columns: res.columns.clone(),
+                rows: sampled,
+                row_count: k as u64,
+                truncated: false,
+                note: Some(format!("random sample of {k}/{total}")),
+                error: None,
+                name: res.name.clone(),
+                oql: res.oql.clone(),
+                viz: None,
+                elapsed_ms: None,
+            };
+            print_result(&sampled_res, std::time::Duration::ZERO, max_width, out)?;
+        }
+    }
+    Ok(())
+}
+
 /// Sort the last result by a column name (case-insensitive prefix match).
 /// `!sort <col> [desc]`
 fn handle_sort(
@@ -2166,6 +2229,7 @@ fn handle_meta(
             writeln!(out, "  !filter <pattern>     filter rows: substring or /regex/ (/i for case-insensitive)")?;
             writeln!(out, "  !not <pattern>        exclude rows matching pattern (inverse of !filter)")?;
             writeln!(out, "  !grep <pattern>       alias for !filter")?;
+            writeln!(out, "  !sample <N>           show N randomly sampled rows from last result")?;
             writeln!(out, "  !sort <col> [desc]    sort last result by column (prefix match)")?;
             writeln!(out, "  !stats <col>          numeric summary: min/max/mean/p50/p90/p99/sum")?;
             writeln!(out, "  !unique <col>         distinct value counts, sorted by frequency")?;
