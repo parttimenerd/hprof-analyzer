@@ -1210,6 +1210,10 @@ function startTerminal() {
   let isearchQuery = '';
   let isearchMatch = -1;  // index into history of current match
 
+  let inputRowCount = 1;  // terminal rows occupied by current input (for internal tracking)
+  let pendingLines = [];  // lines accumulated for multi-line query (via \ continuation)
+  const CONT_PROMPT = '...> ';  // shown on continuation lines
+
   // Redraw line and reposition cursor; does NOT change histIdx
   function redrawLine() {
     term.write('\r\x1b[K' + PROMPT + line);
@@ -1326,12 +1330,37 @@ function startTerminal() {
 
   async function handleEnter(text) {
     if (!text.trim()) {
+      if (pendingLines.length > 0) {
+        // Empty line on continuation — submit what we have
+        const full = pendingLines.join('\n');
+        pendingLines = [];
+        if (history[0] !== full) {
+          history.unshift(full);
+          if (history.length > 500) history.pop();
+          localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+        }
+        histIdx = -1;
+        await runQuery(full);
+        return;
+      }
       term.write(PROMPT);
       return;
     }
+    // Check for \ continuation
+    if (text.endsWith('\\')) {
+      pendingLines.push(text.slice(0, -1));
+      term.write(CONT_PROMPT);
+      return;
+    }
+    // Merge with any pending lines
+    const full = pendingLines.length > 0
+      ? [...pendingLines, text].join('\n')
+      : text;
+    pendingLines = [];
+
     // Persist history
-    if (history[0] !== text) {
-      history.unshift(text);
+    if (history[0] !== full) {
+      history.unshift(full);
       if (history.length > 500) history.pop();
       localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
     }
@@ -1575,7 +1604,7 @@ function startTerminal() {
       await runQuery(q.oql);
       return;
     }
-    await runQuery(cmd);
+    await runQuery(full.trim());
   }
 
   let currentAbort = null;  // AbortController for in-flight query
@@ -1716,6 +1745,7 @@ function startTerminal() {
     term.writeln('  \x1b[36mCtrl+Y\x1b[0m             — yank (paste) killed text');
     term.writeln('  \x1b[36mCtrl+C\x1b[0m             — cancel current line / abort query');
     term.writeln('  \x1b[36mCtrl+L\x1b[0m             — clear screen');
+    term.writeln('  \x1b[36m\\\\ (backslash) at EOL\x1b[0m — continue query on next line');
     term.writeln('');
     term.writeln('\x1b[1mNamed queries\x1b[0m (/run <name>):');
     let cur = '';
@@ -1893,6 +1923,7 @@ function startTerminal() {
         line = '';
         cursorPos = 0;
         histIdx = -1;
+        pendingLines = [];
         term.write(PROMPT);
       }
       return;
