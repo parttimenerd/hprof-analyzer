@@ -2340,9 +2340,19 @@ function startTerminal() {
           .join('\n');
         mime = 'text/csv'; ext = 'csv';
       } else if (fmt === 'json') {
+        const rawCell = (cell, colName) => {
+          if (cell === null || cell === undefined) return null;
+          if (typeof cell !== 'object') return cell;
+          const kind = cell.kind;
+          if (kind === 'null') return null;
+          if (kind === 'bool') return cell.v;
+          if (kind === 'int' || kind === 'float') return cell.v;
+          if (kind === 'obj_ref') return fmtCell(cell, colName);
+          return fmtCell(cell, colName);
+        };
         const objs = lastResult.rows.map(row => {
           const obj = {};
-          lastResult.columns.forEach((col, i) => { obj[col] = fmtCell(row[i], col); });
+          lastResult.columns.forEach((col, i) => { obj[col] = rawCell(row[i], col); });
           return obj;
         });
         text = JSON.stringify(objs, null, 2);
