@@ -3640,28 +3640,33 @@ fn print_result(
             }
         }
     }
+    // Numeric columns are right-aligned in data rows (headers always left).
+    let numeric: Vec<bool> = (0..ncols)
+        .map(|i| matches!(infer_col_type(i, &res.rows), "int" | "float"))
+        .collect();
     // Render header and separator; bold/dim header when color is on
     let show_row_nums = body.len() >= 2;
     let row_num_w = if show_row_nums { body.len().to_string().len() } else { 0 };
     let gutter_pad = if show_row_nums { " ".repeat(row_num_w + 2) } else { String::new() };
     if color {
         let mut hdr_buf: Vec<u8> = Vec::new();
-        write_row(&headers, &widths, &mut hdr_buf)?;
+        // Headers always left-aligned; pass all-false alignment.
+        write_row(&headers, &widths, &vec![false; ncols], &mut hdr_buf)?;
         let hdr_str = String::from_utf8_lossy(&hdr_buf);
         let hdr_trimmed = hdr_str.trim_end_matches('\n');
         writeln!(out, "{gutter_pad}\x1b[1m{hdr_trimmed}\x1b[0m")?;
         let mut sep_buf: Vec<u8> = Vec::new();
         let sep: Vec<String> = widths.iter().map(|&w| "─".repeat(w)).collect();
-        write_row(&sep, &widths, &mut sep_buf)?;
+        write_row(&sep, &widths, &vec![false; ncols], &mut sep_buf)?;
         let sep_str = String::from_utf8_lossy(&sep_buf);
         let sep_trimmed = sep_str.trim_end_matches('\n');
         writeln!(out, "{gutter_pad}\x1b[2m{sep_trimmed}\x1b[0m")?;
     } else {
         if show_row_nums { write!(out, "{gutter_pad}")?; }
-        write_row(&headers, &widths, out)?;
+        write_row(&headers, &widths, &vec![false; ncols], out)?;
         if show_row_nums { write!(out, "{gutter_pad}")?; }
         let sep: Vec<String> = widths.iter().map(|&w| "─".repeat(w)).collect();
-        write_row(&sep, &widths, out)?;
+        write_row(&sep, &widths, &vec![false; ncols], out)?;
     }
     for (ri, row) in body.iter().enumerate() {
         if show_row_nums {
@@ -3669,9 +3674,9 @@ fn print_result(
         }
         if color {
             let src_row = display_rows.get(ri).map(|r| r.as_slice()).unwrap_or(&[]);
-            write_row_colored(row, src_row, res.columns.as_slice(), bytes_raw, &widths, out)?;
+            write_row_colored(row, src_row, res.columns.as_slice(), bytes_raw, &widths, &numeric, out)?;
         } else {
-            write_row(row, &widths, out)?;
+            write_row(row, &widths, &numeric, out)?;
         }
     }
     if capped {
@@ -3716,9 +3721,15 @@ fn print_result(
     Ok(())
 }
 
-/// Write one table row, each cell left-padded to its column width and joined by
-/// ` | `. The last cell is not padded (trailing whitespace is noise).
-fn write_row(cells: &[String], widths: &[usize], out: &mut impl Write) -> io::Result<()> {
+/// Write one table row joined by ` | `. `right_align[i]` true → right-justify
+/// that cell within its column width; false → left-justify. The last cell is
+/// never padded (trailing whitespace is noise).
+fn write_row(
+    cells: &[String],
+    widths: &[usize],
+    right_align: &[bool],
+    out: &mut impl Write,
+) -> io::Result<()> {
     let last = cells.len().saturating_sub(1);
     for (i, cell) in cells.iter().enumerate() {
         if i > 0 {
@@ -3728,6 +3739,8 @@ fn write_row(cells: &[String], widths: &[usize], out: &mut impl Write) -> io::Re
         let pad = w.saturating_sub(cell.chars().count());
         if i == last {
             write!(out, "{cell}")?;
+        } else if right_align.get(i).copied().unwrap_or(false) {
+            write!(out, "{}{cell}", " ".repeat(pad))?;
         } else {
             write!(out, "{cell}{}", " ".repeat(pad))?;
         }
@@ -3760,12 +3773,14 @@ fn cell_color_prefix(v: &QueryValue, col_name: &str, bytes_raw: bool) -> &'stati
 /// Write a coloured table row. `src_row` provides the original `QueryValue`s
 /// for colour lookup; `cells` provides the already-formatted strings for width
 /// measurement.  Falls back to plain writing when a colour prefix is empty.
+/// `right_align[i]` mirrors the same flag used in `write_row`.
 fn write_row_colored(
     cells: &[String],
     src_row: &[QueryValue],
     columns: &[crate::query::model::QueryColumn],
     bytes_raw: bool,
     widths: &[usize],
+    right_align: &[bool],
     out: &mut impl Write,
 ) -> io::Result<()> {
     let last = cells.len().saturating_sub(1);
@@ -3779,8 +3794,11 @@ fn write_row_colored(
             .map(|v| cell_color_prefix(v, columns.get(i).map(|c| c.name.as_str()).unwrap_or(""), bytes_raw))
             .unwrap_or("");
         let suffix = if prefix.is_empty() { "" } else { "\x1b[0m" };
+        let align_right = right_align.get(i).copied().unwrap_or(false);
         if i == last {
             write!(out, "{prefix}{cell}{suffix}")?;
+        } else if align_right {
+            write!(out, "{}{prefix}{cell}{suffix}", " ".repeat(pad))?;
         } else {
             write!(out, "{prefix}{cell}{suffix}{}", " ".repeat(pad))?;
         }
@@ -4365,11 +4383,11 @@ mod tests {
             elapsed_ms: None,
         };
         let out = print_to_string(&res);
-        // "1,000" is 5 chars wide (widest in col 0); "id" padded to 5.
+        // "1,000" is 5 chars wide (widest in col 0); "id" padded to 5 (left).
         assert!(out.contains("id    | name"), "header not aligned:\n{out}");
-        // First data row: "1" padded to width 5.
-        assert!(out.contains("1     | alice"), "row1 not aligned:\n{out}");
-        // Widest row: "1,000" occupies the full width, no extra pad.
+        // Numeric col 0 is right-aligned: "1" gets 4 leading spaces to fill width 5.
+        assert!(out.contains("    1 | alice"), "row1 not right-aligned:\n{out}");
+        // Widest row: "1,000" right-aligned at width 5 — no leading pad needed.
         assert!(out.contains("1,000 | bob"), "row2 not aligned:\n{out}");
     }
 
