@@ -1789,7 +1789,7 @@ function startTerminal() {
           } else {
             renderResult(r);
           }
-          lastResult = { columns: colNames, rows };
+          lastResult = { columns: colNames, rows, note: r.note, truncated: r.truncated, row_count: r.row_count };
           currentRowIdx = 0;
         }
       } catch (e) {
@@ -3135,7 +3135,7 @@ function startTerminal() {
           const colNames = r.columns.map(c => c.name || String(c));
           const rows = r.rows || [];
           renderResult(r);
-          lastResult = { columns: colNames, rows };
+          lastResult = { columns: colNames, rows, note: r.note, truncated: r.truncated, row_count: r.row_count };
           currentRowIdx = 0;
           const trunc = r.truncated ? `  \x1b[33m[capped at ${r.row_count} rows — add LIMIT N for more]\x1b[0m` : '';
           const elapsedFmt = elapsedMs < 1000 ? `${elapsedMs.toFixed(0)}ms` : `${(elapsedMs / 1000).toFixed(3)}s`;
