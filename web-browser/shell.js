@@ -870,7 +870,7 @@ function startTerminal() {
             }
             term.writeln(`  \x1b[2m${String(i + 1).padStart(idxW)}\x1b[0m  \x1b[36m${n.padEnd(nameW)}\x1b[0m  \x1b[2m${typeTag}\x1b[0m`);
           });
-          term.writeln(`\x1b[2m${colNames.length} field${colNames.length !== 1 ? 's' : ''}\x1b[0m`);
+          term.writeln(`\x1b[2m(${colNames.length} field${colNames.length !== 1 ? 's' : ''})\x1b[0m`);
         }
       } catch (e) {
         term.write('\r\x1b[K');
@@ -1210,7 +1210,7 @@ function startTerminal() {
           const dimSuffix = allNull ? ' \x1b[33m(all null)\x1b[0m' : '';
           term.writeln(`  \x1b[2m${String(i + 1).padStart(idxW)}\x1b[0m  ${nameColor}${f.padEnd(colW)}\x1b[0m  \x1b[2m${typeTag.padEnd(8)}${fill}\x1b[0m${dimSuffix}`);
         });
-        term.writeln(`\x1b[2m${fields.length} column${fields.length !== 1 ? 's' : ''}\x1b[0m`);
+        term.writeln(`\x1b[2m(${fields.length} column${fields.length !== 1 ? 's' : ''})\x1b[0m`);
       }
       term.write(PROMPT);
       return;
