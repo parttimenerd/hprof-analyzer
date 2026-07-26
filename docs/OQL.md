@@ -655,11 +655,11 @@ These constructs produce results matching MAT (modulo the reachability note belo
 
 ### Not yet supported
 
-| Construct | Notes |
-|-----------|-------|
-| `FROM OBJECTS 0x7f3a` / `FROM OBJECTS 123456` | Single object by address or id |
-| Numeric literal suffixes (`100L`, `1.5F`) | Parsed as plain int/float |
-| `${snapshot}.getClasses()` reflection-style FROM | Out of scope |
+| Construct | Example | Notes |
+|-----------|---------|-------|
+| `FROM OBJECTS <decimal-id>` | `FROM OBJECTS 123456` | Hex address (`FROM OBJECTS 0x7f3a`) works; decimal object-id lookup is a small routing fix |
+| `s[0]` / `s[1:3]` array element access | `SELECT s[0] FROM int[]` | Parsed and planned; blocked on scan-time element capture |
+| `${snapshot}.getClasses()` | `FROM ${snapshot}.getClasses()` | Iterating class objects (not instances) — needs new executor path |
 
 ### Query-file parse error format
 
