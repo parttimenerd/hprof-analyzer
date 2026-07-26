@@ -2117,15 +2117,21 @@ fn dispatch_run(
                 .filter(|q| q.name.starts_with(prefix))
                 .map(|q| q.name)
                 .collect();
-            writeln!(out, "error: unknown query name {:?}", name)?;
+            let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+            if color { writeln!(out, "\x1b[31merror: unknown query name {:?}\x1b[0m", name)?; }
+            else { writeln!(out, "error: unknown query name {:?}", name)?; }
             if !candidates.is_empty() {
-                writeln!(out, "  did you mean: {}", candidates.join(", "))?;
+                let cd = if color { "\x1b[2m" } else { "" };
+                let cr = if color { "\x1b[0m" } else { "" };
+                writeln!(out, "{cd}  did you mean: {}{cr}", candidates.join(", "))?;
             } else {
-                writeln!(out, "  run /help to list available queries")?;
+                warn_out("  run !help to list available queries", out)?;
             }
         }
         Some(nq) => {
-            writeln!(out, "↳ {}", nq.oql)?;
+            let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+            let (cd, cr) = if color { ("\x1b[2m", "\x1b[0m") } else { ("", "") };
+            writeln!(out, "{cd}↳ {}{cr}", nq.oql)?;
             if let Some(res) = run_and_print(path, nq.oql, path_depth, reachable_only, max_width, cache, out)? {
                 *last_query = Some(nq.oql.to_string());
                 *last_result = Some(res);
