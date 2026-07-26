@@ -1231,27 +1231,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             continue;
                         }
                         "describe" => {
-                            let cls = rest.trim();
-                            if cls.is_empty() {
-                                writeln!(stdout, "usage: !describe <ClassName>")?;
-                            } else {
-                                let q = format!("SELECT * FROM {cls} LIMIT 1");
-                                match run_and_print(path, &q, path_depth, reachable_only, max_width,
-                                    &mut cache, &mut stdout) {
-                                    Ok(Some(res)) => {
-                                        let idx_w = res.columns.len().to_string().len();
-                                        let col_w = res.columns.iter().map(|c| c.name.len()).max().unwrap_or(8);
-                                        writeln!(stdout, "Fields of {}:", cls)?;
-                                        for (i, col) in res.columns.iter().enumerate() {
-                                            let type_tag = infer_col_type(i, &res.rows);
-                                            writeln!(stdout, "  {:>idx_w$}  {:<col_w$}  \x1b[2m{}\x1b[0m", i + 1, col.name, type_tag)?;
-                                        }
-                                        writeln!(stdout, "({} field{})", res.columns.len(), if res.columns.len() == 1 { "" } else { "s" })?;
-                                    }
-                                    Ok(None) => {}
-                                    Err(e) => writeln!(stdout, "error: {e}")?,
-                                }
-                            }
+                            handle_describe(rest.trim(), path, path_depth, reachable_only, &mut cache, &mut stdout)?;
                             stdout.flush()?;
                             continue;
                         }
@@ -1719,26 +1699,7 @@ fn run_repl_line(
                 return Ok(false);
             }
             "describe" => {
-                let cls = rest.trim();
-                if cls.is_empty() {
-                    writeln!(out, "usage: !describe <ClassName>")?;
-                } else {
-                    let q = format!("SELECT * FROM {cls} LIMIT 1");
-                    match run_and_print(path, &q, path_depth, *reachable_only, *max_width, cache, out) {
-                        Ok(Some(res)) => {
-                            let fields: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                            writeln!(out, "{} field{}:", fields.len(), if fields.len() == 1 { "" } else { "s" })?;
-                            let col_w = fields.iter().map(|f| f.len()).max().unwrap_or(10) + 2;
-                            let cols = (80usize).saturating_div(col_w).max(1);
-                            for chunk in fields.chunks(cols) {
-                                let row: String = chunk.iter().map(|f| format!("  {:<col_w$}", f)).collect();
-                                writeln!(out, "{}", row.trim_end())?;
-                            }
-                        }
-                        Ok(None) => {} // error already printed
-                        Err(e) => writeln!(out, "error: {e}")?,
-                    }
-                }
+                handle_describe(rest.trim(), path, path_depth, *reachable_only, cache, out)?;
                 out.flush()?;
                 return Ok(false);
             }
@@ -2565,6 +2526,52 @@ fn handle_stats(
                     }
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+/// Show fields of a class with type hints and instance count.
+/// `!describe <ClassName>` — runs SELECT * LIMIT 1 + COUNT silently.
+fn handle_describe(
+    cls: &str,
+    path: &str,
+    path_depth: usize,
+    reachable_only: bool,
+    cache: &mut Option<crate::query::run::ReplCache>,
+    out: &mut impl Write,
+) -> io::Result<()> {
+    if cls.is_empty() {
+        writeln!(out, "usage: !describe <ClassName>")?;
+        return Ok(());
+    }
+    // Run SELECT * LIMIT 1 silently to get field names + sample values for type inference.
+    let mut dev_null: Vec<u8> = Vec::new();
+    let fields_res = run_one(path, &format!("SELECT * FROM {cls} LIMIT 1"), path_depth, reachable_only, cache, &mut dev_null);
+    let count_res = run_one(path, &format!("SELECT COUNT(*) FROM INSTANCEOF {cls}"), path_depth, reachable_only, cache, &mut dev_null);
+    match fields_res {
+        Err(e) => {
+            writeln!(out, "error: {e}")?;
+            return Ok(());
+        }
+        Ok(res) => {
+            let count_str = match &count_res {
+                Ok(cr) => {
+                    match cr.rows.first().and_then(|r| r.first()) {
+                        Some(QueryValue::Int(n)) => format!("  \x1b[2m({} instance{})\x1b[0m", fmt_int(*n), if *n == 1 { "" } else { "s" }),
+                        _ => String::new(),
+                    }
+                }
+                Err(_) => String::new(),
+            };
+            let idx_w = res.columns.len().to_string().len();
+            let col_w = res.columns.iter().map(|c| c.name.len()).max().unwrap_or(8);
+            writeln!(out, "Fields of \x1b[1m{}\x1b[0m{}", cls, count_str)?;
+            for (i, col) in res.columns.iter().enumerate() {
+                let type_tag = infer_col_type(i, &res.rows);
+                writeln!(out, "  {:>idx_w$}  {:<col_w$}  \x1b[2m{}\x1b[0m", i + 1, col.name, type_tag)?;
+            }
+            writeln!(out, "({} field{})", res.columns.len(), if res.columns.len() == 1 { "" } else { "s" })?;
         }
     }
     Ok(())
