@@ -13,10 +13,12 @@ pub mod optimize;
 pub mod parse;
 pub mod plan;
 pub mod refwalk;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod repl;
 pub mod retained_edges;
 pub mod run;
 pub mod runflags;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod server;
 pub mod stage_runner;
 pub mod stringvals;
