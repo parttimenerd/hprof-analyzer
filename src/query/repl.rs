@@ -3552,9 +3552,9 @@ fn print_result(
         writeln!(out, "error: {err}")?;
         return Ok(());
     }
-    let (row_limit, color) = SESSION_SETTINGS.with(|s| {
+    let (row_limit, color, bytes_raw) = SESSION_SETTINGS.with(|s| {
         let s = s.borrow();
-        (s.row_limit, s.color)
+        (s.row_limit, s.color, s.bytes_raw)
     });
     // Apply display row cap (0 = unlimited).
     let display_rows: &[Vec<QueryValue>] = if row_limit > 0 && res.rows.len() > row_limit {
@@ -3595,11 +3595,16 @@ fn print_result(
     write_row(&sep, &widths, out)?;
     let show_row_nums = body.len() >= 2;
     let row_num_w = if show_row_nums { body.len().to_string().len() } else { 0 };
-    for (i, row) in body.iter().enumerate() {
+    for (ri, row) in body.iter().enumerate() {
         if show_row_nums {
-            write!(out, "{:>row_num_w$}  ", i + 1)?;
+            write!(out, "{:>row_num_w$}  ", ri + 1)?;
         }
-        write_row(row, &widths, out)?;
+        if color {
+            let src_row = display_rows.get(ri).map(|r| r.as_slice()).unwrap_or(&[]);
+            write_row_colored(row, src_row, res.columns.as_slice(), bytes_raw, &widths, out)?;
+        } else {
+            write_row(row, &widths, out)?;
+        }
     }
     if capped {
         writeln!(out, "-- showing {row_limit} of {} rows (use `!set limit 0` or `!set limit N` to change) --", res.rows.len())?;
@@ -3645,6 +3650,59 @@ fn write_row(cells: &[String], widths: &[usize], out: &mut impl Write) -> io::Re
             write!(out, "{cell}")?;
         } else {
             write!(out, "{cell}{}", " ".repeat(pad))?;
+        }
+    }
+    writeln!(out)
+}
+
+/// Return an ANSI colour prefix for a cell value based on its type and column name.
+/// Returns `""` for plain text (string, null already shown via null_str, etc.)
+fn cell_color_prefix(v: &QueryValue, col_name: &str, bytes_raw: bool) -> &'static str {
+    match v {
+        QueryValue::Null => "\x1b[2m",
+        QueryValue::Bool(b) => if *b { "\x1b[32m" } else { "\x1b[31m" },
+        QueryValue::Int(_) => {
+            let lower = col_name.to_ascii_lowercase();
+            if lower.contains("address") || lower.contains("addr") || lower.contains("ptr") {
+                "\x1b[35m" // magenta for addresses
+            } else if !bytes_raw && (lower.ends_with("bytes") || lower.ends_with("_size") || lower.ends_with("heap_size")) {
+                "\x1b[33m" // yellow for byte-size columns
+            } else {
+                "\x1b[32m" // green for integers
+            }
+        }
+        QueryValue::Float(_) => "\x1b[32m",
+        QueryValue::ObjRef { .. } => "\x1b[36m", // cyan for object refs
+        QueryValue::Str(_) => "",
+    }
+}
+
+/// Write a coloured table row. `src_row` provides the original `QueryValue`s
+/// for colour lookup; `cells` provides the already-formatted strings for width
+/// measurement.  Falls back to plain writing when a colour prefix is empty.
+fn write_row_colored(
+    cells: &[String],
+    src_row: &[QueryValue],
+    columns: &[crate::query::model::QueryColumn],
+    bytes_raw: bool,
+    widths: &[usize],
+    out: &mut impl Write,
+) -> io::Result<()> {
+    let last = cells.len().saturating_sub(1);
+    for (i, cell) in cells.iter().enumerate() {
+        if i > 0 {
+            write!(out, " | ")?;
+        }
+        let w = widths.get(i).copied().unwrap_or(0);
+        let pad = w.saturating_sub(cell.chars().count());
+        let prefix = src_row.get(i)
+            .map(|v| cell_color_prefix(v, columns.get(i).map(|c| c.name.as_str()).unwrap_or(""), bytes_raw))
+            .unwrap_or("");
+        let suffix = if prefix.is_empty() { "" } else { "\x1b[0m" };
+        if i == last {
+            write!(out, "{prefix}{cell}{suffix}")?;
+        } else {
+            write!(out, "{prefix}{cell}{suffix}{}", " ".repeat(pad))?;
         }
     }
     writeln!(out)
@@ -4088,8 +4146,11 @@ mod tests {
     }
 
     fn print_to_string(res: &QueryResult) -> String {
+        // Disable colour so tests produce stable, ANSI-free output.
+        SESSION_SETTINGS.with(|s| s.borrow_mut().color = false);
         let mut buf = Vec::new();
         print_result(res, std::time::Duration::from_millis(0), 0, &mut buf).unwrap();
+        SESSION_SETTINGS.with(|s| s.borrow_mut().color = true);
         String::from_utf8(buf).unwrap()
     }
 
