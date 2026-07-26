@@ -1475,8 +1475,12 @@ function startTerminal() {
     histIdx = -1;
 
     const cmd = text.trim();
-    if (cmd === '/help') {
-      printHelp();
+    if (cmd === '/help' || cmd === '/help oql') {
+      if (cmd === '/help oql') {
+        await printOqlRef();
+      } else {
+        printHelp();
+      }
       term.write(PROMPT);
       return;
     }
@@ -1511,8 +1515,49 @@ function startTerminal() {
       term.write(PROMPT);
       return;
     }
+    if (cmd.startsWith('/describe ') || cmd === '/describe') {
+      const cls = cmd.slice(9).trim();
+      if (!cls) {
+        term.writeln('\x1b[33mUsage: /describe <ClassName>  — show fields by running SELECT * LIMIT 1\x1b[0m');
+        term.write(PROMPT);
+        return;
+      }
+      term.writeln(`\x1b[2mQuerying fields of ${cls}…\x1b[0m`);
+      try {
+        const res = await fetch(serverUrl + '/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: `SELECT * FROM ${cls} LIMIT 1` }),
+          signal: AbortSignal.timeout(10000),
+        });
+        const data = await res.json();
+        term.write('\r\x1b[K');
+        if (!data.ok || !data.result?.columns) {
+          const msg = data.error?.message || 'no result';
+          term.writeln(`\x1b[31m${msg}\x1b[0m`);
+          if (classNames.length > 0) {
+            const lower = cls.toLowerCase();
+            const sugg = classNames.filter(c => c.toLowerCase().includes(lower)).slice(0, 5);
+            if (sugg.length) term.writeln(`\x1b[2mSimilar: ${sugg.map(c => c.split('.').pop()).join(', ')}\x1b[0m`);
+          }
+        } else {
+          const colNames = data.result.columns.map(c => c.name || String(c));
+          term.writeln(`\x1b[1mFields of ${cls}:\x1b[0m`);
+          const COLS = 3;
+          const colW = Math.max(20, Math.floor((term.cols - 4) / COLS));
+          for (let i = 0; i < colNames.length; i += COLS) {
+            term.writeln('  ' + colNames.slice(i, i + COLS).map(n => padTo(n, colW)).join('  '));
+          }
+          term.writeln(`\x1b[2m${colNames.length} field${colNames.length !== 1 ? 's' : ''}\x1b[0m`);
+        }
+      } catch (e) {
+        term.write('\r\x1b[K');
+        term.writeln(`\x1b[31merror: ${e.message}\x1b[0m`);
+      }
+      term.write(PROMPT);
+      return;
+    }
     if (cmd === '/last') {
-      if (!lastResult) {
         term.writeln('\x1b[33mNo result yet — run a query first.\x1b[0m');
       } else {
         renderResult(lastResult);
@@ -1916,6 +1961,7 @@ function startTerminal() {
   function printHelp() {
     term.writeln('\r\n\x1b[1mBuilt-in commands:\x1b[0m');
     term.writeln('  \x1b[36m/help\x1b[0m              — this message');
+    term.writeln('  \x1b[36m/help oql\x1b[0m          — OQL language quick reference');
     term.writeln('  \x1b[36m/clear\x1b[0m             — clear terminal');
     term.writeln('  \x1b[36m/status\x1b[0m            — show analysis status');
     term.writeln('  \x1b[36m/analyze\x1b[0m           — trigger full heap analysis (enables @retainedHeapSize)');
@@ -1923,6 +1969,7 @@ function startTerminal() {
     term.writeln('  \x1b[36m/export\x1b[0m            — copy last result to clipboard as TSV');
     term.writeln('  \x1b[36m/set [key val]\x1b[0m     — view/change display settings (limit, bytes, null)');
     term.writeln('  \x1b[36m/classes [pat]\x1b[0m     — list class names (optionally filtered by pattern)');
+    term.writeln('  \x1b[36m/describe <cls>\x1b[0m    — show fields of a class');
     term.writeln('  \x1b[36m/last\x1b[0m              — re-display last query result');
     term.writeln('  \x1b[36m/bookmark [name]\x1b[0m   — save last query as a named bookmark');
     term.writeln('  \x1b[36m/forget <name>\x1b[0m     — delete a bookmark');
@@ -1956,6 +2003,41 @@ function startTerminal() {
       const lock = q.needs_retained ? '  \x1b[2m[needs analysis]\x1b[0m' : '';
       term.writeln(`    \x1b[36m${q.name.padEnd(36)}\x1b[0m  \x1b[2m${q.display}\x1b[0m${lock}`);
     });
+    term.writeln('');
+  }
+
+  async function printOqlRef() {
+    term.writeln('\r\n\x1b[1mOQL Language Reference\x1b[0m  \x1b[2m(from server /help)\x1b[0m');
+    let ref_;
+    try {
+      ref_ = await fetch(serverUrl + '/help').then(r => r.json());
+    } catch (e) {
+      term.writeln(`\x1b[31mcould not fetch /help: ${e.message}\x1b[0m`);
+      return;
+    }
+    const section = (title, items) => {
+      if (!items || !items.length) return;
+      term.writeln(`\r\n  \x1b[33m${title}\x1b[0m`);
+      const COLS = 4;
+      const colW = Math.max(14, Math.floor((term.cols - 4) / COLS));
+      for (let i = 0; i < items.length; i += COLS) {
+        term.writeln('    ' + items.slice(i, i + COLS).map(s => padTo(String(s), colW)).join(''));
+      }
+    };
+    section('Keywords', ref_.keywords);
+    section('Aggregate functions', ref_.aggregates);
+    section('Functions', ref_.functions);
+    section('Methods (on objects)', ref_.methods);
+    section('Attributes (@ prefix)', ref_.attributes?.map(a => '@' + a));
+    term.writeln('');
+    term.writeln('  \x1b[33mSyntax examples\x1b[0m');
+    term.writeln('    SELECT * FROM java.lang.String');
+    term.writeln('    SELECT s.@objectAddress, s.value FROM java.lang.String s WHERE s.count > 100');
+    term.writeln('    SELECT classof(s).@name, COUNT(*) FROM java.lang.Object s GROUP BY classof(s)');
+    term.writeln('    SELECT * FROM INSTANCEOF java.util.Collection');
+    term.writeln('    SELECT s.@retainedHeapSize FROM java.lang.Thread s ORDER BY s.@retainedHeapSize DESC');
+    term.writeln('');
+    term.writeln('  \x1b[2mTip: /describe <ClassName> to see available fields\x1b[0m');
     term.writeln('');
   }
 
