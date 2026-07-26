@@ -2072,11 +2072,8 @@ fn run_and_print(
         }
         Err(e) => {
             let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-            if color {
-                writeln!(out, "\x1b[31merror: {e}\x1b[0m")?;
-            } else {
-                writeln!(out, "error: {e}")?;
-            }
+            let (ce, cr) = if color { ("\x1b[31m", "\x1b[0m") } else { ("", "") };
+            writeln!(out, "{ce}error: {e}{cr}")?;
             Ok(None)
         }
     }
@@ -2185,7 +2182,7 @@ fn handle_width(rest: &str, max_width: &mut usize, out: &mut impl Write) -> io::
 /// `!set null <str>` — string shown for null values.
 fn handle_set(rest: &str, out: &mut impl Write) -> io::Result<()> {
     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-    let (cb, cd, cg, cr) = if color { ("\x1b[1m", "\x1b[2m", "\x1b[32m", "\x1b[0m") } else { ("", "", "", "") };
+    let (cb, cd, ce, cg, cr) = if color { ("\x1b[1m", "\x1b[2m", "\x1b[31m", "\x1b[32m", "\x1b[0m") } else { ("", "", "", "", "") };
     if rest.is_empty() {
         let (limit, bytes_raw, null_str, _color) = SESSION_SETTINGS.with(|s| {
             let s = s.borrow();
@@ -2208,7 +2205,7 @@ fn handle_set(rest: &str, out: &mut impl Write) -> io::Result<()> {
         "limit" => {
             if val.is_empty() || val == "?" {
                 let cur = SESSION_SETTINGS.with(|s| s.borrow().row_limit);
-                writeln!(out, "limit: {}  (use `!set limit N`, or `!set limit 0` for unlimited)", if cur == 0 { "unlimited".to_string() } else { cur.to_string() })?;
+                writeln!(out, "{cd}limit: {}  (use `!set limit N`, or `!set limit 0` for unlimited){cr}", if cur == 0 { "unlimited".to_string() } else { cur.to_string() })?;
             } else if val == "0" || val == "unlimited" || val == "none" {
                 SESSION_SETTINGS.with(|s| s.borrow_mut().row_limit = 0);
                 writeln!(out, "{cg}row limit: unlimited{cr}")?;
@@ -2236,11 +2233,11 @@ fn handle_set(rest: &str, out: &mut impl Write) -> io::Result<()> {
         "color" | "colour" => match val {
             "on" | "true" | "1" | "" => {
                 SESSION_SETTINGS.with(|s| s.borrow_mut().color = true);
-                writeln!(out, "color: on")?;
+                writeln!(out, "{cg}color: on{cr}")?;
             }
             "off" | "false" | "0" => {
                 SESSION_SETTINGS.with(|s| s.borrow_mut().color = false);
-                writeln!(out, "color: off")?;
+                writeln!(out, "{cd}color: off{cr}")?;
             }
             _ => warn_out("usage: !set color on|off", out)?,
         },
@@ -2249,7 +2246,7 @@ fn handle_set(rest: &str, out: &mut impl Write) -> io::Result<()> {
             writeln!(out, "{cg}null: \"{s}\"{cr}")?;
             SESSION_SETTINGS.with(|ss| ss.borrow_mut().null_str = s);
         }
-        _ => writeln!(out, "unknown setting: {key}  (options: limit, bytes, color, null)")?,
+        _ => writeln!(out, "{ce}unknown setting: {key}{cr}  {cd}(options: limit, bytes, color, null){cr}")?,
     }
     Ok(())
 }
@@ -2294,12 +2291,14 @@ fn handle_save(
     cache: &mut Option<crate::query::run::ReplCache>,
     out: &mut impl Write,
 ) -> io::Result<()> {
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cd, ce, cg, cr) = if color { ("\x1b[2m", "\x1b[31m", "\x1b[32m", "\x1b[0m") } else { ("", "", "", "") };
     let (file, inline_oql) = match rest.split_once(char::is_whitespace) {
         Some((f, q)) => (f.trim(), q.trim()),
         None => (rest.trim(), ""),
     };
     if file.is_empty() {
-        writeln!(out, "usage: !save <file> [oql]  (with no oql, saves the last result)")?;
+        writeln!(out, "{cd}usage: !save <file> [oql]  (with no oql, saves the last result){cr}")?;
         return Ok(());
     }
     // Resolve which result to save: run the inline query if given, else reuse the
@@ -2314,7 +2313,7 @@ fn handle_save(
                 *last_result = Some(res);
             }
             Err(e) => {
-                writeln!(out, "error: {e}")?;
+                writeln!(out, "{ce}error: {e}{cr}")?;
                 return Ok(());
             }
         }
@@ -2336,11 +2335,11 @@ fn handle_save(
     match std::fs::write(file, content.as_bytes()) {
         Ok(()) => writeln!(
             out,
-            "saved {} row{} ({fmt}) to {file}",
+            "{cg}saved {} row{} ({fmt}) to {file}{cr}",
             res.row_count,
             if res.row_count == 1 { "" } else { "s" },
         )?,
-        Err(e) => writeln!(out, "error: could not write {file}: {e}")?,
+        Err(e) => writeln!(out, "{ce}error: could not write {file}: {e}{cr}")?,
     }
     Ok(())
 }
@@ -2928,8 +2927,10 @@ fn handle_describe(
     cache: &mut Option<crate::query::run::ReplCache>,
     out: &mut impl Write,
 ) -> io::Result<()> {
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cd, ce, cr) = if color { ("\x1b[2m", "\x1b[31m", "\x1b[0m") } else { ("", "", "") };
     if cls.is_empty() {
-        writeln!(out, "usage: !describe <ClassName>")?;
+        writeln!(out, "{cd}usage: !describe <ClassName>{cr}")?;
         return Ok(());
     }
     // Run SELECT * LIMIT 1 silently to get field names + sample values for type inference.
@@ -2938,8 +2939,6 @@ fn handle_describe(
     let count_res = run_one(path, &format!("SELECT COUNT(*) FROM INSTANCEOF {cls}"), path_depth, reachable_only, cache, &mut dev_null);
     match fields_res {
         Err(e) => {
-            let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-            let (ce, cr) = if color { ("\x1b[31m", "\x1b[0m") } else { ("", "") };
             writeln!(out, "{ce}error: {e}{cr}")?;
             return Ok(());
         }
@@ -3265,6 +3264,8 @@ fn handle_row(
     current_row: &mut usize,
     out: &mut impl Write,
 ) -> io::Result<()> {
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cd, cc, ce, cr) = if color { ("\x1b[2m", "\x1b[36m", "\x1b[31m", "\x1b[0m") } else { ("", "", "", "") };
     let Some(res) = last_result else {
         warn_out("(no previous result \u{2014} run a query first)", out)?;
         return Ok(());
@@ -3284,18 +3285,16 @@ fn handle_row(
             match other.parse::<usize>() {
                 Ok(n) if n >= 1 && n <= n_rows => { *current_row = n - 1; n }
                 Ok(n) => {
-                    writeln!(out, "row {n} out of range — result has {n_rows} rows")?;
+                    writeln!(out, "{ce}row {n} out of range{cr}  {cd}result has {n_rows} rows{cr}")?;
                     return Ok(());
                 }
                 Err(_) => {
-                    writeln!(out, "usage: !row [N|first|last|next|prev]  — show row as key=value pairs")?;
+                    writeln!(out, "{cd}usage: !row [N|first|last|next|prev]  — show row as key=value pairs{cr}")?;
                     return Ok(());
                 }
             }
         }
     };
-    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-    let (cd, cc, cr) = if color { ("\x1b[2m", "\x1b[36m", "\x1b[0m") } else { ("", "", "") };
     let row = &res.rows[idx - 1];
     let key_w = res.columns.iter().map(|c| c.name.len()).max().unwrap_or(8);
     let idx_w = res.columns.len().to_string().len();
@@ -3356,6 +3355,8 @@ fn handle_meta(
     names: &(Vec<String>, Vec<String>),
     out: &mut impl Write,
 ) -> io::Result<bool> {
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cd, ce, cr) = if color { ("\x1b[2m", "\x1b[31m", "\x1b[0m") } else { ("", "", "") };
     let (verb, rest) = match cmd.split_once(char::is_whitespace) {
         Some((v, r)) => (v, r.trim()),
         None => (cmd, ""),
@@ -3506,23 +3507,17 @@ fn handle_meta(
                         write!(out, "{}", plan.explain())?;
                     }
                     Err(e) => {
-                        let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-                        if color { writeln!(out, "\x1b[31mplan error: {}\x1b[0m", e.0)?; }
-                        else { writeln!(out, "plan error: {}", e.0)?; }
+                        writeln!(out, "{ce}plan error: {}{cr}", e.0)?;
                     }
                 },
                 Err(report) => {
-                    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-                    if color { writeln!(out, "\x1b[31mparse error: {report}\x1b[0m")?; }
-                    else { writeln!(out, "parse error: {report}")?; }
+                    writeln!(out, "{ce}parse error: {report}{cr}")?;
                 }
             }
         }
         other => {
-            let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-            if color { writeln!(out, "\x1b[33munknown command: !{other} (try !help)\x1b[0m")?; }
-            else { writeln!(out, "unknown command: !{other} (try !help)")?; }
-        }
+            let cy = if color { "\x1b[33m" } else { "" };
+            writeln!(out, "{cy}unknown command: !{other} (try !help){cr}")?;        }
     }
     Ok(false)
 }
@@ -3691,11 +3686,8 @@ fn print_result(
 ) -> io::Result<()> {
     if let Some(err) = &res.error {
         let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-        if color {
-            writeln!(out, "\x1b[31merror: {err}\x1b[0m")?;
-        } else {
-            writeln!(out, "error: {err}")?;
-        }
+        let (ce, cr) = if color { ("\x1b[31m", "\x1b[0m") } else { ("", "") };
+        writeln!(out, "{ce}error: {err}{cr}")?;
         return Ok(());
     }
     let (row_limit, color, bytes_raw) = SESSION_SETTINGS.with(|s| {
