@@ -535,6 +535,52 @@ function startTerminal() {
       term.write(PROMPT);
       return;
     }
+    if (cmd.startsWith('/top ') || cmd === '/top') {
+      const n = parseInt(cmd.slice(4).trim(), 10);
+      if (!lastResult) {
+        term.writeln('\x1b[33mNo result to slice — run a query first.\x1b[0m');
+      } else if (!n || n < 1) {
+        term.writeln('\x1b[33mUsage: /top <N>  — show top N rows of last result\x1b[0m');
+      } else {
+        renderResult({ columns: lastResult.columns, rows: lastResult.rows.slice(0, n), row_count: n });
+        term.writeln(`\x1b[2mShowing top ${n} of ${lastResult.rows.length} rows\x1b[0m`);
+      }
+      term.write(PROMPT);
+      return;
+    }
+    if (cmd.startsWith('/sort ') || cmd === '/sort') {
+      const args = cmd.slice(5).trim();
+      if (!lastResult || !args) {
+        if (!lastResult) term.writeln('\x1b[33mNo result to sort — run a query first.\x1b[0m');
+        else term.writeln('\x1b[33mUsage: /sort <col> [desc]  — sort last result by column\x1b[0m');
+        term.write(PROMPT);
+        return;
+      }
+      const parts = args.split(/\s+/);
+      const colArg = parts[0].toLowerCase();
+      const desc = parts[1]?.toLowerCase() === 'desc';
+      const ci = lastResult.columns.findIndex(c => c.toLowerCase() === colArg
+        || c.toLowerCase().includes(colArg));
+      if (ci < 0) {
+        term.writeln(`\x1b[31mColumn "${parts[0]}" not found. Available: ${lastResult.columns.join(', ')}\x1b[0m`);
+        term.write(PROMPT);
+        return;
+      }
+      const colName = lastResult.columns[ci];
+      const sorted = [...lastResult.rows].sort((a, b) => {
+        const av = a[ci], bv = b[ci];
+        const an = av?.v ?? av, bn = bv?.v ?? bv;
+        if (an === null || an === undefined) return 1;
+        if (bn === null || bn === undefined) return -1;
+        const cmp = typeof an === 'number' && typeof bn === 'number'
+          ? an - bn : String(an).localeCompare(String(bn));
+        return desc ? -cmp : cmp;
+      });
+      renderResult({ columns: lastResult.columns, rows: sorted, row_count: sorted.length });
+      term.writeln(`\x1b[2mSorted by ${colName} ${desc ? 'desc' : 'asc'}\x1b[0m`);
+      term.write(PROMPT);
+      return;
+    }
     if (cmd.startsWith('/filter ') || cmd === '/filter') {
       const pattern = cmd.slice(7).trim().toLowerCase();
       if (!lastResult) {
@@ -549,26 +595,7 @@ function startTerminal() {
         if (filtered.length === 0) {
           term.writeln(`\x1b[33mNo rows match "${pattern}"\x1b[0m`);
         } else {
-          const isNumeric = columns.map((_, i) => {
-            const sample = filtered.find(row => row[i] !== null && row[i] !== undefined);
-            return sample ? isNumericKind(sample[i]) : false;
-          });
-          const colW = columns.map((n, i) => {
-            const contentMax = filtered.reduce((m, row) => Math.max(m, fmtCell(row[i], n).length), 0);
-            return Math.max(n.length, contentMax, 4);
-          });
-          const gap = 2;
-          const totalW = colW.reduce((s, w) => s + w + gap, 0) - gap;
-          const maxW = term.cols - 2;
-          const scale = totalW > maxW ? maxW / totalW : 1;
-          const adjW = colW.map(w => Math.max(4, Math.floor(w * scale)));
-          const header = columns.map((n, i) => padTo(n, adjW[i], isNumeric[i])).join('  ');
-          term.writeln('\x1b[1m' + header + '\x1b[0m');
-          term.writeln('\x1b[2m' + '─'.repeat(Math.min(header.length, term.cols - 2)) + '\x1b[0m');
-          filtered.slice(0, settings.rowLimit).forEach(row => {
-            const cells = row.map((cell, i) => padTo(fmtCell(cell, columns[i]), adjW[i], isNumeric[i]));
-            term.writeln(cells.join('  '));
-          });
+          renderResult({ columns, rows: filtered, row_count: filtered.length });
           term.writeln(`\x1b[2m${filtered.length} of ${rows.length} rows match "${pattern}"\x1b[0m`);
         }
       }
@@ -715,6 +742,36 @@ function startTerminal() {
   let currentAbort = null;  // AbortController for in-flight query
   let lastResult = null;    // { columns, rows } of last successful query for /export
 
+  function renderResult(r) {
+    const colNames = r.columns.map(c => c.name || String(c));
+    const rows = r.rows || [];
+    const isNumeric = colNames.map((_, i) => {
+      const sample = rows.find(row => row[i] !== null && row[i] !== undefined);
+      return sample ? isNumericKind(sample[i]) : false;
+    });
+    const colW = colNames.map((n, i) => {
+      const contentMax = rows.slice(0, settings.rowLimit).reduce((m, row) => Math.max(m, fmtCell(row[i], n).length), 0);
+      return Math.max(n.length, contentMax, 4);
+    });
+    const gap = 2;
+    const totalW = colW.reduce((s, w) => s + w + gap, 0) - gap;
+    const maxW = term.cols - 2;
+    const scale = totalW > maxW ? maxW / totalW : 1;
+    const adjW = colW.map(w => Math.max(4, Math.floor(w * scale)));
+    const header = colNames.map((n, i) => padTo(n, adjW[i], isNumeric[i])).join('  ');
+    term.writeln('\x1b[1m' + header + '\x1b[0m');
+    term.writeln('\x1b[2m' + '─'.repeat(Math.min(header.length, term.cols - 2)) + '\x1b[0m');
+    const displayRows = rows.slice(0, settings.rowLimit);
+    displayRows.forEach(row => {
+      const cells = row.map((cell, i) => padTo(fmtCell(cell, colNames[i]), adjW[i], isNumeric[i]));
+      term.writeln(cells.join('  '));
+    });
+    if (rows.length > settings.rowLimit) {
+      term.writeln(`\x1b[2m… ${rows.length - settings.rowLimit} more rows (display limit ${settings.rowLimit} — use /set limit N)\x1b[0m`);
+    }
+    return { colNames, adjW, isNumeric };
+  }
+
   async function runQuery(oql) {
     const t0 = performance.now();
     const abortCtrl = new AbortController();
@@ -766,35 +823,7 @@ function startTerminal() {
         } else if (r.columns && r.columns.length > 0) {
           const colNames = r.columns.map(c => c.name || String(c));
           const rows = r.rows || [];
-          // Detect numeric columns (right-align) by checking first non-null value
-          const isNumeric = colNames.map((_, i) => {
-            const sample = rows.find(row => row[i] !== null && row[i] !== undefined);
-            return sample ? isNumericKind(sample[i]) : false;
-          });
-          // Per-column width: max of header and content, capped so total fits terminal
-          const colW = colNames.map((n, i) => {
-            const contentMax = rows.slice(0, settings.rowLimit).reduce((m, row) => Math.max(m, fmtCell(row[i], n).length), 0);
-            return Math.max(n.length, contentMax, 4);
-          });
-          // Scale down proportionally if total exceeds terminal width
-          const gap = 2;
-          const totalW = colW.reduce((s, w) => s + w + gap, 0) - gap;
-          const maxW = term.cols - 2;
-          const scale = totalW > maxW ? maxW / totalW : 1;
-          const adjW = colW.map(w => Math.max(4, Math.floor(w * scale)));
-
-          const header = colNames.map((n, i) => padTo(n, adjW[i], isNumeric[i])).join('  ');
-          term.writeln('\x1b[1m' + header + '\x1b[0m');
-          term.writeln('\x1b[2m' + '─'.repeat(Math.min(header.length, term.cols - 2)) + '\x1b[0m');
-
-          const displayRows = rows.slice(0, settings.rowLimit);
-          displayRows.forEach(row => {
-            const cells = row.map((cell, i) => padTo(fmtCell(cell, colNames[i]), adjW[i], isNumeric[i]));
-            term.writeln(cells.join('  '));
-          });
-          if (rows.length > settings.rowLimit) {
-            term.writeln(`\x1b[2m… ${rows.length - settings.rowLimit} more rows (display limit ${settings.rowLimit} — use /set limit N)\x1b[0m`);
-          }
+          renderResult(r);
           lastResult = { columns: colNames, rows };
           const note = r.note ? `  \x1b[33m[${r.note}]\x1b[0m` : '';
           const trunc = r.truncated ? '  \x1b[33m[truncated]\x1b[0m' : '';
@@ -831,6 +860,8 @@ function startTerminal() {
     term.writeln('  \x1b[36m/set [key val]\x1b[0m     — view/change display settings (limit, bytes, null)');
     term.writeln('  \x1b[36m/classes [pat]\x1b[0m     — list class names (optionally filtered by pattern)');
     term.writeln('  \x1b[36m/filter <text>\x1b[0m     — filter last result rows by substring');
+    term.writeln('  \x1b[36m/sort <col> [desc]\x1b[0m — sort last result by column');
+    term.writeln('  \x1b[36m/top <N>\x1b[0m           — show top N rows of last result');
     term.writeln('  \x1b[36m/run <name>\x1b[0m        — run a named query');
     term.writeln('');
     term.writeln('\x1b[1mKeyboard shortcuts:\x1b[0m');
