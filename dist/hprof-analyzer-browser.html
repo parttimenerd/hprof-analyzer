@@ -1841,7 +1841,7 @@ function startTerminal() {
         if (watchTimer) {
           clearInterval(watchTimer);
           watchTimer = null;
-          term.writeln('\x1b[33mwatch stopped\x1b[0m');
+          term.writeln('\x1b[32m✓ watch stopped\x1b[0m');
         } else if (args === '') {
           term.writeln('\x1b[2musage: /watch <seconds> <oql>  — refresh query every N seconds; /watch stop\x1b[0m');
         } else {
