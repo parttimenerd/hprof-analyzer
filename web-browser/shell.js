@@ -1782,7 +1782,12 @@ function startTerminal() {
             ? !test(fmtCell(row[colIdx], columns[colIdx]))
             : !row.some((cell, i) => test(fmtCell(cell, columns[i])))
         );
-        const note = `${rows.length - kept.length} of ${rows.length} rows excluded by "${pattern}"`;
+        const excluded = rows.length - kept.length;
+        if (excluded === 0) {
+          term.writeln(`\x1b[33m(no rows match "${pattern}" — nothing excluded)\x1b[0m`);
+          term.write(PROMPT); return;
+        }
+        const note = `${excluded} of ${rows.length} rows excluded by "${pattern}"`;
         const newResult = { columns, rows: kept, row_count: kept.length, note };
         renderResult(newResult);
         prevResult = lastResult;
