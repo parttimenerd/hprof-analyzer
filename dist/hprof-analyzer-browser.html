@@ -943,6 +943,12 @@ function populateOfflineList() {
 }
 
 // ── Format a QueryValue cell for terminal display ─────────────────────────────
+function isNumericKind(cell) {
+  if (cell === null || cell === undefined) return false;
+  if (typeof cell !== 'object') return false;
+  return cell.kind === 'int' || cell.kind === 'float';
+}
+
 function fmtCell(cell) {
   if (cell === null || cell === undefined) return 'null';
   if (typeof cell !== 'object') return String(cell);
@@ -950,7 +956,7 @@ function fmtCell(cell) {
   const v = cell.v;
   if (kind === 'null') return 'null';
   if (kind === 'bool') return v ? 'true' : 'false';
-  if (kind === 'int') return String(v);
+  if (kind === 'int') return typeof v === 'number' ? v.toLocaleString('en-US') : String(v);
   if (kind === 'float') return typeof v === 'number' ? v.toPrecision(6) : String(v);
   if (kind === 'str') return String(v);
   if (kind === 'obj_ref') {
@@ -962,10 +968,10 @@ function fmtCell(cell) {
   return JSON.stringify(cell);
 }
 
-// Pad/truncate a string to a fixed column width
-function padTo(s, w) {
+// Pad/truncate a string to a fixed column width (right-align if numeric)
+function padTo(s, w, rightAlign) {
   if (s.length > w) return s.slice(0, w - 1) + '…';
-  return s.padEnd(w);
+  return rightAlign ? s.padStart(w) : s.padEnd(w);
 }
 
 // ── Connect screen ────────────────────────────────────────────────────────────
@@ -1256,6 +1262,26 @@ function startTerminal() {
       term.write(PROMPT);
       return;
     }
+    if (cmd === '/status') {
+      try {
+        const res = await fetch(serverUrl + '/status');
+        const data = await res.json();
+        const st = data.status;
+        if (st === 'ready') {
+          term.writeln('\x1b[32m● Analysis ready — @retainedHeapSize queries available\x1b[0m');
+        } else if (st === 'analyzing') {
+          term.writeln('\x1b[33m● Analyzing heap… (wait for completion)\x1b[0m');
+        } else if (st === 'failed') {
+          term.writeln(`\x1b[31m● Analysis failed: ${data.error || '(no details)'}\x1b[0m`);
+        } else {
+          term.writeln('\x1b[2m● Analysis not started — use /analyze to begin\x1b[0m');
+        }
+      } catch (e) {
+        term.writeln(`\x1b[31merror: ${e.message}\x1b[0m`);
+      }
+      term.write(PROMPT);
+      return;
+    }
     if (cmd.startsWith('/run ')) {
       const name = cmd.slice(5).trim();
       const q = namedQueries.find(q => q.name === name);
@@ -1282,8 +1308,12 @@ function startTerminal() {
     await runQuery(cmd);
   }
 
+  let currentAbort = null;  // AbortController for in-flight query
+
   async function runQuery(oql) {
     const t0 = performance.now();
+    const abortCtrl = new AbortController();
+    currentAbort = abortCtrl;
     // Animated spinner while waiting for response
     const spinFrames = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
     let spinIdx = 0;
@@ -1297,8 +1327,10 @@ function startTerminal() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query: oql }),
+        signal: abortCtrl.signal,
       });
       clearInterval(spinTimer);
+      currentAbort = null;
       // Erase spinner
       term.write('\r\x1b[K');
       const elapsed = ((performance.now() - t0) / 1000).toFixed(3);
@@ -1322,6 +1354,11 @@ function startTerminal() {
         } else if (r.columns && r.columns.length > 0) {
           const colNames = r.columns.map(c => c.name || String(c));
           const rows = r.rows || [];
+          // Detect numeric columns (right-align) by checking first non-null value
+          const isNumeric = colNames.map((_, i) => {
+            const sample = rows.find(row => row[i] !== null && row[i] !== undefined);
+            return sample ? isNumericKind(sample[i]) : false;
+          });
           // Per-column width: max of header and content, capped so total fits terminal
           const colW = colNames.map((n, i) => {
             const contentMax = rows.slice(0, 200).reduce((m, row) => Math.max(m, fmtCell(row[i]).length), 0);
@@ -1334,13 +1371,13 @@ function startTerminal() {
           const scale = totalW > maxW ? maxW / totalW : 1;
           const adjW = colW.map(w => Math.max(4, Math.floor(w * scale)));
 
-          const header = colNames.map((n, i) => padTo(n, adjW[i])).join('  ');
+          const header = colNames.map((n, i) => padTo(n, adjW[i], isNumeric[i])).join('  ');
           term.writeln('\x1b[1m' + header + '\x1b[0m');
           term.writeln('\x1b[2m' + '─'.repeat(Math.min(header.length, term.cols - 2)) + '\x1b[0m');
 
           const displayRows = rows.slice(0, 200);
           displayRows.forEach(row => {
-            const cells = row.map((cell, i) => padTo(fmtCell(cell), adjW[i]));
+            const cells = row.map((cell, i) => padTo(fmtCell(cell), adjW[i], isNumeric[i]));
             term.writeln(cells.join('  '));
           });
           if (rows.length > 200) {
@@ -1357,8 +1394,13 @@ function startTerminal() {
       }
     } catch (e) {
       clearInterval(spinTimer);
+      currentAbort = null;
       term.write('\r\x1b[K');
-      term.writeln(`\x1b[31merror: ${e.message}\x1b[0m`);
+      if (e.name === 'AbortError') {
+        term.writeln('\x1b[33mcancelled\x1b[0m');
+      } else {
+        term.writeln(`\x1b[31merror: ${e.message}\x1b[0m`);
+      }
     }
     term.write(PROMPT);
   }
@@ -1367,6 +1409,7 @@ function startTerminal() {
     term.writeln('\r\n\x1b[1mBuilt-in commands:\x1b[0m');
     term.writeln('  \x1b[36m/help\x1b[0m              — this message');
     term.writeln('  \x1b[36m/clear\x1b[0m             — clear terminal');
+    term.writeln('  \x1b[36m/status\x1b[0m            — show analysis status');
     term.writeln('  \x1b[36m/analyze\x1b[0m           — trigger full heap analysis (enables @retainedHeapSize)');
     term.writeln('  \x1b[36m/run <name>\x1b[0m        — run a named query');
     term.writeln('');
@@ -1490,11 +1533,16 @@ function startTerminal() {
     }
 
     if (ev.ctrlKey && code === 'c') {
-      term.writeln('^C');
-      line = '';
-      cursorPos = 0;
-      histIdx = -1;
-      term.write(PROMPT);
+      if (currentAbort) {
+        currentAbort.abort();
+        currentAbort = null;
+      } else {
+        term.writeln('^C');
+        line = '';
+        cursorPos = 0;
+        histIdx = -1;
+        term.write(PROMPT);
+      }
       return;
     }
 
