@@ -11,8 +11,27 @@
 </head>
 <body>
 
+<!-- ── Upload screen ─────────────────────────────────────────────────────── -->
+<div id="upload-screen">
+  <h1>hprof-analyzer</h1>
+  <p class="subtitle">Browser UI for Java heap dump analysis</p>
+
+  <div id="drop-zone">
+    <input type="file" id="file-input" accept=".hprof">
+    <label for="file-input">
+      <div id="drop-zone-icon">📂</div>
+      <div id="drop-zone-text">Drop a <strong>.hprof</strong> file here, or click to select</div>
+    </label>
+  </div>
+
+  <div id="mode-buttons" style="display:none">
+    <button id="btn-analyze-report">📊 Analyze &amp; Report</button>
+    <button id="btn-oql-shell">⌨ OQL Shell</button>
+  </div>
+</div>
+
 <!-- ── Connect screen ─────────────────────────────────────────────────────── -->
-<div id="connect-screen">
+<div id="connect-screen" style="display:none">
   <h1>hprof-analyzer</h1>
   <p class="subtitle">Browser UI for Java heap dump analysis</p>
 
@@ -34,6 +53,17 @@
     <h2>Named queries (offline preview)</h2>
     <p>These 20 built-in queries are loaded from the embedded WASM module:</p>
     <div id="offline-query-list"></div>
+  </div>
+</div>
+
+<!-- ── Report screen ─────────────────────────────────────────────────────── -->
+<div id="report-screen" style="display:none">
+  <div id="report-topbar">
+    <button id="btn-new-file">↩ New file</button>
+    <button id="btn-to-shell">⌨ OQL Shell</button>
+  </div>
+  <div id="report-container">
+    <p id="report-message"></p>
   </div>
 </div>
 

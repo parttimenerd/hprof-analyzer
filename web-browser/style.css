@@ -9,6 +9,46 @@ body {
   overflow: hidden;
 }
 
+/* ── Upload screen ──────────────────────────────────────────────────────────── */
+#upload-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  gap: 24px;
+}
+#upload-screen h1 { font-size: 2rem; color: #a0cfff; }
+#drop-zone {
+  border: 2px dashed #4a6fa5;
+  border-radius: 12px;
+  padding: 48px 64px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color .2s;
+  min-width: 360px;
+}
+#drop-zone.drag-over { border-color: #7ab4ff; background: #12152a; }
+#drop-zone:hover { border-color: #7ab4ff; }
+#drop-zone input { display: none; }
+#drop-zone label { cursor: pointer; display: block; }
+#drop-zone-icon { font-size: 2.5rem; margin-bottom: 12px; }
+#drop-zone-text { color: #888; font-size: .95rem; }
+#drop-zone-text strong { color: #a0c4ff; }
+#drop-zone.file-selected { border-color: #5aaf5a; }
+#drop-zone.file-selected #drop-zone-text { color: #7adf7a; }
+#mode-buttons { display: flex; gap: 16px; }
+#mode-buttons button {
+  padding: 12px 28px;
+  border: none;
+  border-radius: 8px;
+  font-size: 1rem;
+  cursor: pointer;
+  background: #4a6fa5;
+  color: #fff;
+}
+#mode-buttons button:hover { background: #5a7fbf; }
+
 /* ── Connect screen ─────────────────────────────────────────────────────────── */
 #connect-screen {
   display: flex;
@@ -167,3 +207,34 @@ button:hover { background: #4a6aaa; }
 #terminal-container { flex: 1; overflow: hidden; position: relative; }
 .xterm { height: 100% !important; padding: 4px 8px; }
 .xterm-viewport { overflow-y: hidden !important; }
+
+/* ── Report screen ──────────────────────────────────────────────────────────── */
+#report-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#report-topbar {
+  padding: 8px 16px;
+  background: #111;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-shrink: 0;
+}
+#report-container {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#report-message {
+  color: #888;
+  font-size: 1rem;
+  text-align: center;
+  max-width: 480px;
+  line-height: 1.6;
+}

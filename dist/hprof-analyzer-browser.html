@@ -17,6 +17,46 @@ body {
   overflow: hidden;
 }
 
+/* ── Upload screen ──────────────────────────────────────────────────────────── */
+#upload-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  gap: 24px;
+}
+#upload-screen h1 { font-size: 2rem; color: #a0cfff; }
+#drop-zone {
+  border: 2px dashed #4a6fa5;
+  border-radius: 12px;
+  padding: 48px 64px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color .2s;
+  min-width: 360px;
+}
+#drop-zone.drag-over { border-color: #7ab4ff; background: #12152a; }
+#drop-zone:hover { border-color: #7ab4ff; }
+#drop-zone input { display: none; }
+#drop-zone label { cursor: pointer; display: block; }
+#drop-zone-icon { font-size: 2.5rem; margin-bottom: 12px; }
+#drop-zone-text { color: #888; font-size: .95rem; }
+#drop-zone-text strong { color: #a0c4ff; }
+#drop-zone.file-selected { border-color: #5aaf5a; }
+#drop-zone.file-selected #drop-zone-text { color: #7adf7a; }
+#mode-buttons { display: flex; gap: 16px; }
+#mode-buttons button {
+  padding: 12px 28px;
+  border: none;
+  border-radius: 8px;
+  font-size: 1rem;
+  cursor: pointer;
+  background: #4a6fa5;
+  color: #fff;
+}
+#mode-buttons button:hover { background: #5a7fbf; }
+
 /* ── Connect screen ─────────────────────────────────────────────────────────── */
 #connect-screen {
   display: flex;
@@ -176,12 +216,62 @@ button:hover { background: #4a6aaa; }
 .xterm { height: 100% !important; padding: 4px 8px; }
 .xterm-viewport { overflow-y: hidden !important; }
 
+/* ── Report screen ──────────────────────────────────────────────────────────── */
+#report-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#report-topbar {
+  padding: 8px 16px;
+  background: #111;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-shrink: 0;
+}
+#report-container {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#report-message {
+  color: #888;
+  font-size: 1rem;
+  text-align: center;
+  max-width: 480px;
+  line-height: 1.6;
+}
+
 </style>
 </head>
 <body>
 
+<!-- ── Upload screen ─────────────────────────────────────────────────────── -->
+<div id="upload-screen">
+  <h1>hprof-analyzer</h1>
+  <p class="subtitle">Browser UI for Java heap dump analysis</p>
+
+  <div id="drop-zone">
+    <input type="file" id="file-input" accept=".hprof">
+    <label for="file-input">
+      <div id="drop-zone-icon">📂</div>
+      <div id="drop-zone-text">Drop a <strong>.hprof</strong> file here, or click to select</div>
+    </label>
+  </div>
+
+  <div id="mode-buttons" style="display:none">
+    <button id="btn-analyze-report">📊 Analyze &amp; Report</button>
+    <button id="btn-oql-shell">⌨ OQL Shell</button>
+  </div>
+</div>
+
 <!-- ── Connect screen ─────────────────────────────────────────────────────── -->
-<div id="connect-screen">
+<div id="connect-screen" style="display:none">
   <h1>hprof-analyzer</h1>
   <p class="subtitle">Browser UI for Java heap dump analysis</p>
 
@@ -203,6 +293,17 @@ button:hover { background: #4a6aaa; }
     <h2>Named queries (offline preview)</h2>
     <p>These 20 built-in queries are loaded from the embedded WASM module:</p>
     <div id="offline-query-list"></div>
+  </div>
+</div>
+
+<!-- ── Report screen ─────────────────────────────────────────────────────── -->
+<div id="report-screen" style="display:none">
+  <div id="report-topbar">
+    <button id="btn-new-file">↩ New file</button>
+    <button id="btn-to-shell">⌨ OQL Shell</button>
+  </div>
+  <div id="report-container">
+    <p id="report-message"></p>
   </div>
 </div>
 
@@ -869,10 +970,79 @@ let serverUrl = null;
 let term = null;
 let classNames = [];  // populated after session loads (server may expose /class-names later)
 let hasRetained = false;
+let selectedFile = null;  // File object selected on the upload screen
+
+// ── Screen helpers ────────────────────────────────────────────────────────────
+function showScreen(id) {
+  for (const sid of ['upload-screen', 'connect-screen', 'report-screen', 'shell-screen']) {
+    const el = document.getElementById(sid);
+    if (el) el.style.display = sid === id ? 'flex' : 'none';
+  }
+}
+
+// ── Upload screen ─────────────────────────────────────────────────────────────
+(function initUploadScreen() {
+  const dropZone = document.getElementById('drop-zone');
+  const fileInput = document.getElementById('file-input');
+  const modeButtons = document.getElementById('mode-buttons');
+
+  function onFileSelected(file) {
+    if (!file) return;
+    if (!file.name.endsWith('.hprof')) {
+      // Accept anyway — the server validates; just warn visually
+    }
+    selectedFile = file;
+    dropZone.classList.add('file-selected');
+    document.getElementById('drop-zone-text').innerHTML =
+      `<strong>${file.name}</strong> (${(file.size / 1024 / 1024).toFixed(1)} MB) — choose a mode below`;
+    modeButtons.style.display = 'flex';
+  }
+
+  fileInput.addEventListener('change', () => {
+    if (fileInput.files.length > 0) onFileSelected(fileInput.files[0]);
+  });
+
+  dropZone.addEventListener('dragover', e => {
+    e.preventDefault();
+    dropZone.classList.add('drag-over');
+  });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (file) onFileSelected(file);
+  });
+
+  document.getElementById('btn-oql-shell').addEventListener('click', () => {
+    showScreen('connect-screen');
+    if (wasmReady) populateOfflineList();
+  });
+
+  document.getElementById('btn-analyze-report').addEventListener('click', () => {
+    const msg = document.getElementById('report-message');
+    msg.textContent =
+      'Browser WASM analysis is not yet supported. ' +
+      'Start the local server and use the OQL Shell mode: ' +
+      'hprof-analyzer query heap.hprof --server';
+    showScreen('report-screen');
+  });
+})();
+
+// ── Report screen ─────────────────────────────────────────────────────────────
+document.getElementById('btn-new-file').addEventListener('click', () => {
+  showScreen('upload-screen');
+});
+
+document.getElementById('btn-to-shell').addEventListener('click', () => {
+  showScreen('connect-screen');
+  if (wasmReady) populateOfflineList();
+});
 
 // ── Populate offline named-query list on connect screen ───────────────────────
 function populateOfflineList() {
   const list = document.getElementById('offline-query-list');
+  if (list.hasChildNodes()) return;  // already populated
   let curGroup = '';
   namedQueries.forEach(q => {
     if (q.group !== curGroup) {
@@ -894,7 +1064,6 @@ function populateOfflineList() {
     list.appendChild(item);
   });
 }
-if (wasmReady) populateOfflineList();
 
 // ── Format a QueryValue cell for terminal display ─────────────────────────────
 function fmtCell(cell) {
@@ -954,8 +1123,7 @@ async function connectToServer() {
 
 // ── Shell screen ──────────────────────────────────────────────────────────────
 function showShell() {
-  document.getElementById('connect-screen').style.display = 'none';
-  document.getElementById('shell-screen').style.display = 'flex';
+  showScreen('shell-screen');
   document.getElementById('server-url-display').textContent = serverUrl;
   buildSidebar(false);
   startTerminal();
@@ -966,13 +1134,12 @@ document.getElementById('btn-disconnect').addEventListener('click', () => {
   serverUrl = null;
   hasRetained = false;
   if (term) { term.dispose(); term = null; }
-  document.getElementById('shell-screen').style.display = 'none';
-  document.getElementById('connect-screen').style.display = 'flex';
   document.getElementById('named-query-list').innerHTML = '';
   document.getElementById('connect-status').textContent = '';
   document.getElementById('connect-status').className = '';
   document.getElementById('btn-analyze').disabled = false;
   document.getElementById('analyze-status').textContent = '';
+  showScreen('upload-screen');
 });
 
 // ── Analysis trigger ──────────────────────────────────────────────────────────

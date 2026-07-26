@@ -8,10 +8,79 @@ let serverUrl = null;
 let term = null;
 let classNames = [];  // populated after session loads (server may expose /class-names later)
 let hasRetained = false;
+let selectedFile = null;  // File object selected on the upload screen
+
+// ── Screen helpers ────────────────────────────────────────────────────────────
+function showScreen(id) {
+  for (const sid of ['upload-screen', 'connect-screen', 'report-screen', 'shell-screen']) {
+    const el = document.getElementById(sid);
+    if (el) el.style.display = sid === id ? 'flex' : 'none';
+  }
+}
+
+// ── Upload screen ─────────────────────────────────────────────────────────────
+(function initUploadScreen() {
+  const dropZone = document.getElementById('drop-zone');
+  const fileInput = document.getElementById('file-input');
+  const modeButtons = document.getElementById('mode-buttons');
+
+  function onFileSelected(file) {
+    if (!file) return;
+    if (!file.name.endsWith('.hprof')) {
+      // Accept anyway — the server validates; just warn visually
+    }
+    selectedFile = file;
+    dropZone.classList.add('file-selected');
+    document.getElementById('drop-zone-text').innerHTML =
+      `<strong>${file.name}</strong> (${(file.size / 1024 / 1024).toFixed(1)} MB) — choose a mode below`;
+    modeButtons.style.display = 'flex';
+  }
+
+  fileInput.addEventListener('change', () => {
+    if (fileInput.files.length > 0) onFileSelected(fileInput.files[0]);
+  });
+
+  dropZone.addEventListener('dragover', e => {
+    e.preventDefault();
+    dropZone.classList.add('drag-over');
+  });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (file) onFileSelected(file);
+  });
+
+  document.getElementById('btn-oql-shell').addEventListener('click', () => {
+    showScreen('connect-screen');
+    if (wasmReady) populateOfflineList();
+  });
+
+  document.getElementById('btn-analyze-report').addEventListener('click', () => {
+    const msg = document.getElementById('report-message');
+    msg.textContent =
+      'Browser WASM analysis is not yet supported. ' +
+      'Start the local server and use the OQL Shell mode: ' +
+      'hprof-analyzer query heap.hprof --server';
+    showScreen('report-screen');
+  });
+})();
+
+// ── Report screen ─────────────────────────────────────────────────────────────
+document.getElementById('btn-new-file').addEventListener('click', () => {
+  showScreen('upload-screen');
+});
+
+document.getElementById('btn-to-shell').addEventListener('click', () => {
+  showScreen('connect-screen');
+  if (wasmReady) populateOfflineList();
+});
 
 // ── Populate offline named-query list on connect screen ───────────────────────
 function populateOfflineList() {
   const list = document.getElementById('offline-query-list');
+  if (list.hasChildNodes()) return;  // already populated
   let curGroup = '';
   namedQueries.forEach(q => {
     if (q.group !== curGroup) {
@@ -33,7 +102,6 @@ function populateOfflineList() {
     list.appendChild(item);
   });
 }
-if (wasmReady) populateOfflineList();
 
 // ── Format a QueryValue cell for terminal display ─────────────────────────────
 function fmtCell(cell) {
@@ -93,8 +161,7 @@ async function connectToServer() {
 
 // ── Shell screen ──────────────────────────────────────────────────────────────
 function showShell() {
-  document.getElementById('connect-screen').style.display = 'none';
-  document.getElementById('shell-screen').style.display = 'flex';
+  showScreen('shell-screen');
   document.getElementById('server-url-display').textContent = serverUrl;
   buildSidebar(false);
   startTerminal();
@@ -105,13 +172,12 @@ document.getElementById('btn-disconnect').addEventListener('click', () => {
   serverUrl = null;
   hasRetained = false;
   if (term) { term.dispose(); term = null; }
-  document.getElementById('shell-screen').style.display = 'none';
-  document.getElementById('connect-screen').style.display = 'flex';
   document.getElementById('named-query-list').innerHTML = '';
   document.getElementById('connect-status').textContent = '';
   document.getElementById('connect-status').className = '';
   document.getElementById('btn-analyze').disabled = false;
   document.getElementById('analyze-status').textContent = '';
+  showScreen('upload-screen');
 });
 
 // ── Analysis trigger ──────────────────────────────────────────────────────────
