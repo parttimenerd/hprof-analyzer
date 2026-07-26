@@ -265,7 +265,8 @@ function buildSidebar(analysisReady) {
     card.appendChild(descEl);
     if (!disabled) {
       card.addEventListener('click', () => {
-        if (term && window._hprofSetLine) window._hprofSetLine(q.oql);
+        if (term && window._hprofRunQuery) window._hprofRunQuery(q.oql);
+        else if (term && window._hprofSetLine) window._hprofSetLine(q.oql);
       });
     }
     list.appendChild(card);
@@ -310,7 +311,7 @@ function startTerminal() {
 
   term.writeln('\x1b[1;36mhprof-analyzer OQL Shell\x1b[0m');
   term.writeln(`Connected to \x1b[32m${serverUrl}\x1b[0m`);
-  term.writeln('\x1b[2mType an OQL query and press Enter. Tab for completions. /help for named queries.\x1b[0m');
+  term.writeln('\x1b[2mType an OQL query and press Enter. Tab for completions. /help for commands.\x1b[0m');
   term.writeln('');
   term.write(PROMPT);
 
@@ -322,8 +323,20 @@ function startTerminal() {
     term.write('\r\x1b[K' + PROMPT + newLine);
     line = newLine;
     histIdx = -1;
+    term.focus();
   }
   window._hprofSetLine = setLine;
+
+  async function runQueryFromSidebar(oql) {
+    term.focus();
+    setLine(oql);
+    const text = line;
+    line = '';
+    histIdx = -1;
+    term.writeln('');
+    await handleEnter(text);
+  }
+  window._hprofRunQuery = runQueryFromSidebar;
 
   function handleTab() {
     if (!wasmReady) return;
@@ -419,12 +432,16 @@ function startTerminal() {
 
   async function runQuery(oql) {
     const t0 = performance.now();
+    // Show spinner — will be erased when result arrives
+    term.write('\x1b[2m(running…)\x1b[0m');
     try {
       const res = await fetch(serverUrl + '/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query: oql }),
       });
+      // Erase spinner
+      term.write('\r\x1b[K');
       const elapsed = ((performance.now() - t0) / 1000).toFixed(3);
       let data;
       try {
@@ -444,17 +461,27 @@ function startTerminal() {
         if (r.error) {
           term.writeln(`\x1b[31merror: ${r.error}\x1b[0m`);
         } else if (r.columns && r.columns.length > 0) {
-          // Print header
           const colNames = r.columns.map(c => c.name || String(c));
-          const colW = Math.max(16, Math.floor((term.cols - 2) / Math.max(1, colNames.length)));
-          const header = colNames.map(n => padTo(n, colW)).join('  ');
+          const rows = r.rows || [];
+          // Per-column width: max of header and content, capped so total fits terminal
+          const colW = colNames.map((n, i) => {
+            const contentMax = rows.slice(0, 200).reduce((m, row) => Math.max(m, fmtCell(row[i]).length), 0);
+            return Math.max(n.length, contentMax, 4);
+          });
+          // Scale down proportionally if total exceeds terminal width
+          const gap = 2;
+          const totalW = colW.reduce((s, w) => s + w + gap, 0) - gap;
+          const maxW = term.cols - 2;
+          const scale = totalW > maxW ? maxW / totalW : 1;
+          const adjW = colW.map(w => Math.max(4, Math.floor(w * scale)));
+
+          const header = colNames.map((n, i) => padTo(n, adjW[i])).join('  ');
           term.writeln('\x1b[1m' + header + '\x1b[0m');
           term.writeln('\x1b[2m' + '─'.repeat(Math.min(header.length, term.cols - 2)) + '\x1b[0m');
 
-          const rows = r.rows || [];
           const displayRows = rows.slice(0, 200);
           displayRows.forEach(row => {
-            const cells = row.map(cell => padTo(fmtCell(cell), colW));
+            const cells = row.map((cell, i) => padTo(fmtCell(cell), adjW[i]));
             term.writeln(cells.join('  '));
           });
           if (rows.length > 200) {
@@ -470,6 +497,7 @@ function startTerminal() {
         }
       }
     } catch (e) {
+      term.write('\r\x1b[K');
       term.writeln(`\x1b[31merror: ${e.message}\x1b[0m`);
     }
     term.write(PROMPT);
