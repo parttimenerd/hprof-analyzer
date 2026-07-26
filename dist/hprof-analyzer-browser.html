@@ -1931,6 +1931,27 @@ function startTerminal() {
       term.writeln(`  p90    \x1b[32m${fmtV(p90)}\x1b[0m`);
       term.writeln(`  p99    \x1b[32m${fmtV(p99)}\x1b[0m`);
       term.writeln(`  sum    \x1b[33m${fmtV(sum)}\x1b[0m`);
+      // Mini distribution histogram (10 buckets)
+      if (vals.length >= 2) {
+        const lo = vals[0], hi = vals[vals.length - 1];
+        if (hi > lo) {
+          const NBUCKETS = 10, BAR_MAX = Math.max(16, Math.floor(term.cols / 3));
+          const buckets = new Array(NBUCKETS).fill(0);
+          const range = hi - lo;
+          vals.forEach(v => {
+            const b = Math.min(NBUCKETS - 1, Math.floor((v - lo) / range * NBUCKETS));
+            buckets[b]++;
+          });
+          const maxB = Math.max(...buckets, 1);
+          term.writeln('  \x1b[2mdist:\x1b[0m');
+          buckets.forEach((b, i) => {
+            const barLen = Math.round(b / maxB * BAR_MAX);
+            const bar = '█'.repeat(barLen);
+            const label = fmtV(lo + i * range / NBUCKETS).padStart(10);
+            term.writeln(`  \x1b[2m${label}\x1b[0m  \x1b[32m${bar.padEnd(BAR_MAX)}\x1b[0m  \x1b[2m${b}\x1b[0m`);
+          });
+        }
+      }
       term.write(PROMPT);
       return;
     }

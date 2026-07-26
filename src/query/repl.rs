@@ -1744,6 +1744,29 @@ fn handle_stats(
                         writeln!(out, "  p90  {}", fv(p90))?;
                         writeln!(out, "  p99  {}", fv(p99))?;
                         writeln!(out, "  sum  {}", fv(sum))?;
+                        // Mini histogram (10 buckets)
+                        if n >= 2 {
+                            let lo = vals[0];
+                            let hi = vals[n - 1];
+                            const NBUCKETS: usize = 10;
+                            const BAR_MAX: usize = 24;
+                            if hi > lo {
+                                let range = hi - lo;
+                                let mut buckets = vec![0usize; NBUCKETS];
+                                for &v in &vals {
+                                    let b = ((v - lo) / range * NBUCKETS as f64).floor() as usize;
+                                    buckets[b.min(NBUCKETS - 1)] += 1;
+                                }
+                                let max_b = *buckets.iter().max().unwrap_or(&1);
+                                writeln!(out, "  dist:")?;
+                                for (i, &b) in buckets.iter().enumerate() {
+                                    let bar_len = if max_b > 0 { b * BAR_MAX / max_b } else { 0 };
+                                    let bar: String = "█".repeat(bar_len);
+                                    let bucket_lo = lo + i as f64 * range / NBUCKETS as f64;
+                                    writeln!(out, "  {:>8}  {:<bar_w$}  {}", fv(bucket_lo), bar, b, bar_w = BAR_MAX)?;
+                                }
+                            }
+                        }
                     }
                 }
             }
