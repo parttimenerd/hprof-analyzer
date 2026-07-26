@@ -5,6 +5,7 @@
 
 pub mod ast;
 pub mod carry;
+pub mod complete;
 pub mod execute;
 pub mod histogram;
 pub mod model;

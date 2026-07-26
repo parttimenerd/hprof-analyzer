@@ -566,6 +566,20 @@ impl Completer for OqlCompleter {
         if let Some(sugg) = viz_directive_suggestions(upto, pos) {
             return sugg;
         }
+        // Delegate /run completion to the WASM-safe free function.
+        if upto.starts_with("/run ") {
+            return crate::query::complete::complete(upto, pos, &self.class_names, &self.field_names)
+                .into_iter()
+                .map(|c| Suggestion {
+                    value: c.value,
+                    description: Some(c.display),
+                    style: None,
+                    extra: c.group.map(|g| vec![g]),
+                    span: Span { start: 5, end: pos },
+                    append_whitespace: true,
+                })
+                .collect();
+        }
         // Delimit the fragment on whitespace, '(' and ',' so `SELECT a,b` and
         // `COUNT(x` complete their trailing word.
         let delim_pos = upto
