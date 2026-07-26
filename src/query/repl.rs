@@ -1041,7 +1041,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                 let color = SESSION_SETTINGS.with(|s| s.borrow().color);
                                 let (cg, cr) = if color { ("\x1b[32m", "\x1b[0m") } else { ("", "") };
                                 match &last_result {
-                                    None => writeln!(stdout, "(no result — run a query first)")?,
+                                    None => warn_out("(no result — run a query first)", &mut stdout)?,
                                     Some(res) => {
                                         let rows = res.rows.len();
                                         let cols = res.columns.len();
@@ -1098,7 +1098,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                         }
                         "wc" => {
                             match &last_result {
-                                None => writeln!(stdout, "(no result — run a query first)")?,
+                                None => warn_out("(no result — run a query first)", &mut stdout)?,
                                 Some(res) => {
                                     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
                                     let (cg, cr) = if color { ("\x1b[32m", "\x1b[0m") } else { ("", "") };
@@ -1128,7 +1128,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                         }
                         "undo" => {
                             match prev_result.take() {
-                                None => writeln!(stdout, "(nothing to undo)")?,
+                                None => warn_out("(nothing to undo)", &mut stdout)?,
                                 Some(prev) => {
                                     print_result(&prev, std::time::Duration::ZERO, max_width, &mut stdout)?;
                                     last_result = Some(prev);
@@ -1206,7 +1206,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             let n = if rest.trim().is_empty() { 10 } else { rest.trim().parse::<usize>().unwrap_or(0) };
                             if n > 0 {
                                 match last_result.as_mut() {
-                                    None => writeln!(stdout, "(no result — run a query first)")?,
+                                    None => warn_out("(no result — run a query first)", &mut stdout)?,
                                     Some(res) => {
                                         let total = res.rows.len();
                                         let shown = n.min(total);
@@ -1229,7 +1229,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             let n = if rest.trim().is_empty() { 10 } else { rest.trim().parse::<usize>().unwrap_or(0) };
                             if n > 0 {
                                 match last_result.as_mut() {
-                                    None => writeln!(stdout, "(no result — run a query first)")?,
+                                    None => warn_out("(no result — run a query first)", &mut stdout)?,
                                     Some(res) => {
                                         let total = res.rows.len();
                                         let skip = total.saturating_sub(n);
@@ -1260,7 +1260,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                 }
                             } else {
                                 match &last_result {
-                                    None => writeln!(stdout, "(no result — run a query first)")?,
+                                    None => warn_out("(no result — run a query first)", &mut stdout)?,
                                     Some(res) => {
                                         let mut indices: Vec<usize> = Vec::new();
                                         let mut ok = true;
@@ -1326,7 +1326,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                         }
                         "cols" | "columns" => {
                             match &last_result {
-                                None => writeln!(stdout, "(no result — run a query first)")?,
+                                None => warn_out("(no result — run a query first)", &mut stdout)?,
                                 Some(res) => {
                                     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
                                     let (cc, cd, cr) = if color { ("\x1b[36m", "\x1b[2m", "\x1b[0m") } else { ("", "", "") };
@@ -1396,7 +1396,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                 let old = parts[0];
                                 let new = parts[1].trim();
                                 match last_result.as_mut() {
-                                    None => writeln!(stdout, "(no result — run a query first)")?,
+                                    None => warn_out("(no result — run a query first)", &mut stdout)?,
                                     Some(res) => {
                                         match resolve_col(old, &res.columns) {
                                             None => {
@@ -1607,7 +1607,7 @@ fn run_repl_line(
                     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
                     let (cg, cr) = if color { ("\x1b[32m", "\x1b[0m") } else { ("", "") };
                     match last_result.as_ref() {
-                        None => writeln!(out, "(no result — run a query first)")?,
+                        None => warn_out("(no result — run a query first)", out)?,
                         Some(res) => {
                             let rows = res.rows.len();
                             let cols = res.columns.len();
@@ -1662,7 +1662,7 @@ fn run_repl_line(
             }
             "wc" => {
                 match last_result.as_ref() {
-                    None => writeln!(out, "(no result — run a query first)")?,
+                    None => warn_out("(no result — run a query first)", out)?,
                     Some(res) => {
                         let color = SESSION_SETTINGS.with(|s| s.borrow().color);
                         let (cg, cr) = if color { ("\x1b[32m", "\x1b[0m") } else { ("", "") };
@@ -1760,7 +1760,7 @@ fn run_repl_line(
                 let n = if rest.trim().is_empty() { 10 } else { rest.trim().parse::<usize>().unwrap_or(0) };
                 if n > 0 {
                     match last_result.as_mut() {
-                        None => writeln!(out, "(no result — run a query first)")?,
+                        None => warn_out("(no result — run a query first)", out)?,
                         Some(res) => {
                             let total = res.rows.len();
                             let shown = n.min(total);
@@ -1783,7 +1783,7 @@ fn run_repl_line(
                 let n = if rest.trim().is_empty() { 10 } else { rest.trim().parse::<usize>().unwrap_or(0) };
                 if n > 0 {
                     match last_result.as_mut() {
-                        None => writeln!(out, "(no result — run a query first)")?,
+                        None => warn_out("(no result — run a query first)", out)?,
                         Some(res) => {
                             let total = res.rows.len();
                             let skip = total.saturating_sub(n);
@@ -1803,7 +1803,7 @@ fn run_repl_line(
             }
             "undo" => {
                 match prev_result.take() {
-                    None => writeln!(out, "(nothing to undo)")?,
+                    None => warn_out("(nothing to undo)", out)?,
                     Some(prev) => {
                         print_result(&prev, std::time::Duration::ZERO, *max_width, out)?;
                         *last_result = Some(prev);
@@ -1821,12 +1821,12 @@ fn run_repl_line(
                             let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
                             writeln!(out, "usage: !select <col1> [col2 ...]  — available: {}", names.join(", "))?;
                         }
-                        _ => writeln!(out, "usage: !select <col1> [col2 ...]  — names, numbers, or ranges (e.g. 1-3)")?,
+                        _ => warn_out("usage: !select <col1> [col2 ...]  — names, numbers, or ranges (e.g. 1-3)", out)?,
                     }
                 } else {
                     *prev_result = last_result.clone();
                     match last_result {
-                        None => writeln!(out, "(no result — run a query first)")?,
+                        None => warn_out("(no result — run a query first)", out)?,
                         Some(res) => {
                             let mut indices: Vec<usize> = Vec::new();
                             let mut ok = true;
@@ -1892,13 +1892,13 @@ fn run_repl_line(
                             let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
                             writeln!(out, "usage: !rename <col> <newname>  — available: {}", names.join(", "))?;
                         }
-                        _ => writeln!(out, "usage: !rename <col> <newname>")?,
+                        _ => warn_out("usage: !rename <col> <newname>", out)?,
                     }
                 } else {
                     let old = parts[0];
                     let new = parts[1].trim();
                     match last_result.as_mut() {
-                        None => writeln!(out, "(no result — run a query first)")?,
+                        None => warn_out("(no result — run a query first)", out)?,
                         Some(res) => {
                             match resolve_col(old, &res.columns) {
                                 None => {
@@ -1936,7 +1936,7 @@ fn run_repl_line(
             }
             "cols" | "columns" => {
                 match last_result {
-                    None => writeln!(out, "(no result — run a query first)")?,
+                    None => warn_out("(no result — run a query first)", out)?,
                     Some(res) => {
                         let color = SESSION_SETTINGS.with(|s| s.borrow().color);
                         let (cc, cd, cr) = if color { ("\x1b[36m", "\x1b[2m", "\x1b[0m") } else { ("", "", "") };
@@ -2168,7 +2168,7 @@ fn handle_width(rest: &str, max_width: &mut usize, out: &mut impl Write) -> io::
                 writeln!(out, "cell width: {n}")?;
             }
         }
-        Err(_) => writeln!(out, "usage: !width <N>  (N is a non-negative integer; 0 = unlimited)")?,
+        Err(_) => warn_out("usage: !width <N>  (N is a non-negative integer; 0 = unlimited)", out)?,
     }
     Ok(())
 }
@@ -2215,7 +2215,7 @@ fn handle_set(rest: &str, out: &mut impl Write) -> io::Result<()> {
                         SESSION_SETTINGS.with(|s| s.borrow_mut().row_limit = n);
                         writeln!(out, "{cg}row limit: {n}{cr}")?;
                     }
-                    _ => writeln!(out, "usage: !set limit <N>  (positive integer, or 0/unlimited for no cap)")?,
+                    _ => warn_out("usage: !set limit <N>  (positive integer, or 0/unlimited for no cap)", out)?,
                 }
             }
         }
@@ -2228,7 +2228,7 @@ fn handle_set(rest: &str, out: &mut impl Write) -> io::Result<()> {
                 SESSION_SETTINGS.with(|s| s.borrow_mut().bytes_raw = false);
                 writeln!(out, "{cg}bytes: human (e.g. 4.3 KiB){cr}")?;
             }
-            _ => writeln!(out, "usage: !set bytes raw|human")?,
+            _ => warn_out("usage: !set bytes raw|human", out)?,
         },
         "color" | "colour" => match val {
             "on" | "true" | "1" | "" => {
@@ -2239,7 +2239,7 @@ fn handle_set(rest: &str, out: &mut impl Write) -> io::Result<()> {
                 SESSION_SETTINGS.with(|s| s.borrow_mut().color = false);
                 writeln!(out, "color: off")?;
             }
-            _ => writeln!(out, "usage: !set color on|off")?,
+            _ => warn_out("usage: !set color on|off", out)?,
         },
         "null" => {
             let s = if val.is_empty() { "null".to_string() } else { val.to_string() };
@@ -2342,6 +2342,16 @@ fn handle_save(
     Ok(())
 }
 
+/// Write a yellow warning line (or plain if color is off).
+#[inline]
+fn warn_out(msg: &str, out: &mut impl Write) -> io::Result<()> {
+    if SESSION_SETTINGS.with(|s| s.borrow().color) {
+        writeln!(out, "\x1b[33m{msg}\x1b[0m")
+    } else {
+        writeln!(out, "{msg}")
+    }
+}
+
 /// Filter rows of the last result by a substring pattern.
 /// `!filter <pattern>` — case-insensitive substring match across all columns.
 fn handle_filter(
@@ -2356,7 +2366,7 @@ fn handle_filter(
         return Ok(());
     }
     match last_result {
-        None => writeln!(out, "(no previous result — run a query first)")?,
+        None => warn_out("(no previous result — run a query first)", out)?,
         Some(res) => {
             // @col pattern — column-specific filter
             let (col_filter_idx, actual_pattern) = if pattern.starts_with('@') {
@@ -2459,7 +2469,7 @@ fn handle_filter_not(
         return Ok(());
     }
     match last_result {
-        None => writeln!(out, "(no previous result — run a query first)")?,
+        None => warn_out("(no previous result — run a query first)", out)?,
         Some(res) => {
             // @col pattern — column-specific filter
             let (col_filter_idx, actual_pattern) = if pattern.starts_with('@') {
@@ -2548,7 +2558,7 @@ fn handle_sample(
         }
     };
     match last_result {
-        None => writeln!(out, "(no result — run a query first)")?,
+        None => warn_out("(no result — run a query first)", out)?,
         Some(res) => {
             let total = res.rows.len();
             let k = n.min(total);
@@ -2594,7 +2604,7 @@ fn handle_distinct(
     out: &mut impl Write,
 ) -> io::Result<()> {
     match last_result {
-        None => writeln!(out, "(no result — run a query first)")?,
+        None => warn_out("(no result — run a query first)", out)?,
         Some(res) => {
             use std::collections::HashSet;
             let mut seen: HashSet<Vec<String>> = HashSet::new();
@@ -2693,12 +2703,12 @@ fn handle_sort(
                 let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
                 writeln!(out, "usage: !sort <col> [desc] [, <col2> [desc] …]  (prefix - for desc)  — available: {}", names.join(", "))?;
             }
-            _ => writeln!(out, "usage: !sort <col> [desc] [, <col2> [desc] …]  (prefix - for desc)")?,
+            _ => warn_out("usage: !sort <col> [desc] [, <col2> [desc] …]  (prefix - for desc)", out)?,
         }
         return Ok(());
     }
     match last_result {
-        None => writeln!(out, "(no previous result — run a query first)")?,
+        None => warn_out("(no previous result — run a query first)", out)?,
         Some(res) => {
             // Parse comma-separated sort keys: "col1 desc, col2 asc, col3, -col4"
             let specs: Vec<(usize, bool)> = {
@@ -2806,12 +2816,12 @@ fn handle_stats(
                 let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
                 writeln!(out, "usage: !stats <col>  — no numeric columns found (available: {})", names.join(", "))?;
             }
-            _ => writeln!(out, "usage: !stats <col>  — numeric summary (min/max/mean/stddev/p50/p90/p99/sum)")?,
+            _ => warn_out("usage: !stats <col>  — numeric summary (min/max/mean/stddev/p50/p90/p99/sum)", out)?,
         }
         return Ok(());
     }
     match last_result {
-        None => writeln!(out, "(no previous result — run a query first)")?,
+        None => warn_out("(no previous result — run a query first)", out)?,
         Some(res) => {
             let col_idx = resolve_col(col_arg, &res.columns);
             match col_idx {
@@ -2917,7 +2927,9 @@ fn handle_describe(
     let count_res = run_one(path, &format!("SELECT COUNT(*) FROM INSTANCEOF {cls}"), path_depth, reachable_only, cache, &mut dev_null);
     match fields_res {
         Err(e) => {
-            writeln!(out, "error: {e}")?;
+            let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+            if color { writeln!(out, "\x1b[31merror: {e}\x1b[0m")?; }
+            else { writeln!(out, "error: {e}")?; }
             return Ok(());
         }
         Ok(res) => {
@@ -2959,12 +2971,12 @@ fn handle_drop(
                 let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
                 writeln!(out, "usage: !drop <col1> [col2 ...]  — available: {}", names.join(", "))?;
             }
-            _ => writeln!(out, "usage: !drop <col1> [col2 ...]  — remove columns from last result")?,
+            _ => warn_out("usage: !drop <col1> [col2 ...]  — remove columns from last result", out)?,
         }
         return Ok(());
     }
     match last_result {
-        None => writeln!(out, "(no previous result — run a query first)")?,
+        None => warn_out("(no previous result — run a query first)", out)?,
         Some(res) => {
             let col_args: Vec<&str> = col_arg.split_whitespace().collect();
             let mut drop_set: std::collections::HashSet<usize> = std::collections::HashSet::new();
@@ -3024,7 +3036,7 @@ fn handle_unique(
                 let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
                 writeln!(out, "usage: !unique <col> [N]  — available: {}", names.join(", "))?;
             }
-            _ => writeln!(out, "usage: !unique <col> [N]  — distinct value counts, optional top N")?,
+            _ => warn_out("usage: !unique <col> [N]  — distinct value counts, optional top N", out)?,
         }
         return Ok(());
     }
@@ -3041,7 +3053,7 @@ fn handle_unique(
         }
     };
     match last_result {
-        None => writeln!(out, "(no previous result — run a query first)")?,
+        None => warn_out("(no previous result — run a query first)", out)?,
         Some(res) => {
             let col_idx = resolve_col(col_spec, &res.columns);
             match col_idx {
@@ -3110,7 +3122,7 @@ fn handle_pivot(
                 let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
                 writeln!(out, "usage: !pivot <col> [N]  — available: {}", names.join(", "))?;
             }
-            _ => writeln!(out, "usage: !pivot <col> [N]  — group by column, produce (value, count) table")?,
+            _ => warn_out("usage: !pivot <col> [N]  — group by column, produce (value, count) table", out)?,
         }
         return Ok(());
     }
@@ -3127,7 +3139,7 @@ fn handle_pivot(
         }
     };
     match last_result {
-        None => writeln!(out, "(no previous result — run a query first)")?,
+        None => warn_out("(no previous result — run a query first)", out)?,
         Some(res) => {
             let col_idx = resolve_col(col_spec, &res.columns);
             match col_idx {
@@ -3194,8 +3206,10 @@ fn handle_export(
     last_result: &Option<QueryResult>,
     out: &mut impl Write,
 ) -> io::Result<()> {
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cy, cg, cd, cr) = if color { ("\x1b[33m", "\x1b[32m", "\x1b[2m", "\x1b[0m") } else { ("", "", "", "") };
     let Some(res) = last_result else {
-        writeln!(out, "(no result — run a query first)")?;
+        writeln!(out, "{cy}(no result — run a query first){cr}")?;
         return Ok(());
     };
     // Parse: "csv myfile.csv" or "json report.json" or just "tsv"
@@ -3212,14 +3226,15 @@ fn handle_export(
         "tsv"  => result_to_tsv(res),
         "json" => result_to_json(res),
         other  => {
-            writeln!(out, "unknown format {:?} — use csv, tsv, or json", other)?;
+            if color { writeln!(out, "\x1b[31munknown format {:?} — use csv, tsv, or json\x1b[0m", other)?; }
+            else { writeln!(out, "unknown format {:?} — use csv, tsv, or json", other)?; }
             return Ok(());
         }
     };
     if let Some(path) = file_arg {
         match std::fs::write(path, &content) {
-            Ok(()) => writeln!(out, "wrote {} rows to {:?}", res.rows.len(), path)?,
-            Err(e) => writeln!(out, "error: could not write {:?}: {e}", path)?,
+            Ok(()) => writeln!(out, "{cg}{}{cr} row{} written to {cd}{:?}{cr}", res.rows.len(), if res.rows.len() == 1 { "" } else { "s" }, path)?,
+            Err(e) => { if color { writeln!(out, "\x1b[31merror: could not write {:?}: {e}\x1b[0m", path)?; } else { writeln!(out, "error: could not write {:?}: {e}", path)?; } }
         }
     } else {
         write!(out, "{}", content)?;
