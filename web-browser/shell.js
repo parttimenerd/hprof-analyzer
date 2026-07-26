@@ -522,7 +522,7 @@ function startTerminal() {
     if (line.startsWith('/') && !line.includes(' ')) {
       const partial = line.slice(1).toLowerCase();
       const cmds = ['help','clear','status','analyze','history','export','set','classes','filter',
-                    'sort','top','run','bookmark','forget','last','describe','count','watch'];
+                    'sort','top','run','bookmark','forget','last','describe','count','watch','q','quit','disconnect'];
       const matches = cmds.filter(c => c.startsWith(partial));
       if (matches.length === 1) {
         setLine('/' + matches[0] + ' ');
@@ -653,7 +653,7 @@ function startTerminal() {
     histIdx = -1;
 
     const cmd = text.trim();
-    if (cmd === '/help' || cmd === '/help oql') {
+    if (cmd === '/help' || cmd === '/help oql' || cmd === '/?') {
       if (cmd === '/help oql') {
         await printOqlRef();
       } else {
@@ -665,6 +665,10 @@ function startTerminal() {
     if (cmd === '/clear') {
       term.clear();
       term.write(PROMPT);
+      return;
+    }
+    if (cmd === '/q' || cmd === '/quit' || cmd === '/disconnect') {
+      document.getElementById('btn-disconnect').click();
       return;
     }
     if (cmd === '/analyze') {
@@ -908,15 +912,24 @@ function startTerminal() {
       return;
     }
     if (cmd.startsWith('/filter ') || cmd === '/filter') {
-      const pattern = cmd.slice(7).trim().toLowerCase();
+      const pattern = cmd.slice(7).trim();
       if (!lastResult) {
         term.writeln('\x1b[33mNo result to filter — run a query first.\x1b[0m');
       } else if (!pattern) {
-        term.writeln('\x1b[33mUsage: /filter <text>  — filter last result rows by substring\x1b[0m');
+        term.writeln('\x1b[33mUsage: /filter <text>  or  /filter /regex/[flags]\x1b[0m');
       } else {
         const { columns, rows } = lastResult;
+        let re;
+        const reMatch = pattern.match(/^\/(.+)\/([gimsvy]*)$/);
+        if (reMatch) {
+          try { re = new RegExp(reMatch[1], reMatch[2] || 'i'); }
+          catch (e) { term.writeln(`\x1b[31mInvalid regex: ${e.message}\x1b[0m`); term.write(PROMPT); return; }
+        }
+        const test = re
+          ? (s) => re.test(s)
+          : (s) => s.toLowerCase().includes(pattern.toLowerCase());
         const filtered = rows.filter(row =>
-          row.some((cell, i) => fmtCell(cell, columns[i]).toLowerCase().includes(pattern))
+          row.some((cell, i) => test(fmtCell(cell, columns[i])))
         );
         if (filtered.length === 0) {
           term.writeln(`\x1b[33mNo rows match "${pattern}"\x1b[0m`);
@@ -1263,6 +1276,7 @@ function startTerminal() {
     term.writeln('  \x1b[36m/help\x1b[0m              — this message');
     term.writeln('  \x1b[36m/help oql\x1b[0m          — OQL language quick reference');
     term.writeln('  \x1b[36m/clear\x1b[0m             — clear terminal');
+    term.writeln('  \x1b[36m/q\x1b[0m  \x1b[36m/disconnect\x1b[0m    — back to connect screen');
     term.writeln('  \x1b[36m/status\x1b[0m            — show analysis status');
     term.writeln('  \x1b[36m/analyze\x1b[0m           — trigger full heap analysis (enables @retainedHeapSize)');
     term.writeln('  \x1b[36m/history [N]\x1b[0m       — show last N entries (default 20); use !N to re-run');
@@ -1275,7 +1289,7 @@ function startTerminal() {
     term.writeln('  \x1b[36m/last\x1b[0m              — re-display last query result');
     term.writeln('  \x1b[36m/bookmark [name]\x1b[0m   — save last query as a named bookmark');
     term.writeln('  \x1b[36m/forget <name>\x1b[0m     — delete a bookmark');
-    term.writeln('  \x1b[36m/filter <text>\x1b[0m     — filter last result rows by substring');
+    term.writeln('  \x1b[36m/filter <text|/re/>\x1b[0m — filter last result rows by substring or regex');
     term.writeln('  \x1b[36m/sort <col> [desc]\x1b[0m — sort last result by column');
     term.writeln('  \x1b[36m/top <N>\x1b[0m           — show top N rows of last result');
     term.writeln('  \x1b[36m/run <name>\x1b[0m        — run a named query');
