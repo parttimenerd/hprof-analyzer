@@ -1997,7 +1997,9 @@ function startTerminal() {
       return;
     }
     if (cmd === '/history' || cmd.startsWith('/history ')) {
-      if (history.length === 0) {
+      // history[0] is the /history command itself; skip it for display
+      const realHistory = history.slice(1);
+      if (realHistory.length === 0) {
         term.writeln('\x1b[2m(no history yet)\x1b[0m');
       } else {
         const args = cmd.slice(8).trim();
@@ -2008,15 +2010,15 @@ function startTerminal() {
           term.write(PROMPT);
           return;
         }
-        const limit = args ? Math.min(parseInt(args, 10) || 20, history.length) : Math.min(20, history.length);
-        const shown = history.slice(0, limit);
+        const limit = args ? Math.min(parseInt(args, 10) || 20, realHistory.length) : Math.min(20, realHistory.length);
+        const shown = realHistory.slice(0, limit);
         shown.forEach((h, i) => {
           const num = String(i + 1).padStart(3);
           const truncated = h.length > term.cols - 8 ? h.slice(0, term.cols - 9) + '…' : h;
           term.writeln(`\x1b[2m${num}\x1b[0m  \x1b[36m!${String(i + 1)}\x1b[0m  ${truncated}`);
         });
-        if (history.length > limit) {
-          term.writeln(`\x1b[2m  … ${history.length - limit} more — /history N to show more\x1b[0m`);
+        if (realHistory.length > limit) {
+          term.writeln(`\x1b[2m  … ${realHistory.length - limit} more — /history N to show more\x1b[0m`);
         }
         term.writeln(`\x1b[2m  Use !N to re-run entry N  ·  /history clear to wipe\x1b[0m`);
       }
@@ -2026,12 +2028,14 @@ function startTerminal() {
     // !N — re-run history entry; !name — run a bookmark
     if (/^!.+$/.test(cmd)) {
       if (/^!\d+$/.test(cmd)) {
+        // history[0] is the "!N" command itself; skip it so !1 = most recent real entry
+        const realHistory = history.slice(1);
         const n = parseInt(cmd.slice(1), 10) - 1;
-        if (n < 0 || n >= history.length) {
-          term.writeln(`\x1b[31mno history entry ${cmd.slice(1)}\x1b[0m  \x1b[2m(have ${history.length})\x1b[0m`);
+        if (n < 0 || n >= realHistory.length) {
+          term.writeln(`\x1b[31mno history entry ${cmd.slice(1)}\x1b[0m  \x1b[2m(have ${realHistory.length})\x1b[0m`);
           term.write(PROMPT);
         } else {
-          const recalled = history[n];
+          const recalled = realHistory[n];
           const echo = recalled.length > term.cols - PROMPT.length - 1
             ? recalled.slice(0, term.cols - PROMPT.length - 2) + '…' : recalled;
           term.writeln(`\x1b[2m↳ ${echo}\x1b[0m`);
