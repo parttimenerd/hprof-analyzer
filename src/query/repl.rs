@@ -622,7 +622,7 @@ impl Completer for OqlCompleter {
             let needs_col = matches!(
                 verb,
                 "sort" | "filter" | "grep" | "not" | "exclude" | "stats" | "unique" | "pivot"
-                | "select" | "rename" | "sample" | "top" | "head" | "tail"
+                | "select" | "rename" | "sample" | "top" | "head" | "tail" | "wc"
             );
             if needs_col {
                 if let Ok(cols) = self.last_cols.lock() {
@@ -2612,36 +2612,47 @@ fn handle_pivot(
         match last_result {
             Some(res) if !res.columns.is_empty() => {
                 let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                writeln!(out, "usage: !pivot <col>  — available: {}", names.join(", "))?;
+                writeln!(out, "usage: !pivot <col> [N]  — available: {}", names.join(", "))?;
             }
-            _ => writeln!(out, "usage: !pivot <col>  — group by column, produce (value, count) table")?,
+            _ => writeln!(out, "usage: !pivot <col> [N]  — group by column, produce (value, count) table")?,
         }
         return Ok(());
     }
+    // Parse optional top-N: "classname 10" or "classname top 10"
+    let (col_spec, top_n): (&str, Option<usize>) = {
+        let parts: Vec<&str> = col_arg.splitn(3, char::is_whitespace).collect();
+        match parts.as_slice() {
+            [col] => (col, None),
+            [col, n] if n.parse::<usize>().is_ok() => (col, n.parse().ok()),
+            [col, kw, n] if kw.eq_ignore_ascii_case("top") && n.parse::<usize>().is_ok() => {
+                (col, n.parse().ok())
+            }
+            _ => (parts[0], None),
+        }
+    };
     match last_result {
         None => writeln!(out, "(no previous result — run a query first)")?,
         Some(res) => {
-            let col_idx = resolve_col(col_arg, &res.columns);
+            let col_idx = resolve_col(col_spec, &res.columns);
             match col_idx {
                 None => {
                     let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                    writeln!(out, "column {:?} not found — available: {}", col_arg, names.join(", "))?;
+                    writeln!(out, "column {:?} not found — available: {}", col_spec, names.join(", "))?;
                 }
                 Some(ci) => {
                     use std::collections::HashMap;
                     use crate::query::model::QueryColumn;
                     let col_name = res.columns[ci].name.clone();
                     let mut counts: HashMap<String, usize> = HashMap::new();
-                    let mut order: Vec<String> = Vec::new();
                     for row in &res.rows {
-                        let key = fmt_value(&row[ci]);
-                        if !counts.contains_key(&key) {
-                            order.push(key.clone());
-                        }
-                        *counts.entry(key).or_insert(0) += 1;
+                        *counts.entry(fmt_value(&row[ci])).or_insert(0) += 1;
                     }
                     let mut entries: Vec<(String, usize)> = counts.into_iter().collect();
                     entries.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                    let total_groups = entries.len();
+                    if let Some(n) = top_n {
+                        entries.truncate(n);
+                    }
                     let rows: Vec<Vec<QueryValue>> = entries
                         .iter()
                         .map(|(v, c)| vec![
@@ -2650,6 +2661,11 @@ fn handle_pivot(
                         ])
                         .collect();
                     let n = rows.len();
+                    let note = if top_n.is_some() && n < total_groups {
+                        Some(format!("top {} of {} groups", n, total_groups))
+                    } else {
+                        None
+                    };
                     let pivoted = QueryResult {
                         columns: vec![
                             QueryColumn { name: col_name.clone() },
@@ -2657,8 +2673,8 @@ fn handle_pivot(
                         ],
                         rows: rows.clone(),
                         row_count: n as u64,
-                        truncated: false,
-                        note: None,
+                        truncated: top_n.is_some() && n < total_groups,
+                        note,
                         error: None,
                         name: String::new(),
                         oql: String::new(),
@@ -2809,7 +2825,7 @@ fn handle_meta(
             writeln!(out, "  !sort <col> [desc] [,col2 [desc]…]  sort; prefix - for desc (e.g. !sort -size,name)")?;
             writeln!(out, "  !stats <col>          numeric summary: min/max/mean/p50/p90/p99/sum")?;
             writeln!(out, "  !unique <col> [N]     distinct value counts, sorted by frequency (top N)")?;
-            writeln!(out, "  !pivot <col>          group by column → (value, count) table (chainable)")?;
+            writeln!(out, "  !pivot <col> [N]      group by column → (value, count) table, optional top N (chainable)")?;
             writeln!(out, "  !top [N]  /  !head [N]  show first N rows of last result (default 10)")?;
             writeln!(out, "  !tail [N]             show last N rows of last result (default 10)")?;
             writeln!(out, "  !row [N|first|last|next|prev]  show a row as key=value pairs; next/prev to navigate")?;

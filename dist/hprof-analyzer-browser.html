@@ -2147,12 +2147,15 @@ function startTerminal() {
         term.write(PROMPT);
         return;
       }
-      const colArg = cmd.slice(6).trim();
-      if (!colArg) {
-        term.writeln(`\x1b[33mUsage: /pivot <col>  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
+      const rawArg = cmd.slice(6).trim();
+      if (!rawArg) {
+        term.writeln(`\x1b[33mUsage: /pivot <col> [N]  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
         term.write(PROMPT);
         return;
       }
+      let colArg = rawArg, topN = null;
+      const topMatch = rawArg.match(/^(\S+)\s+(?:top\s+)?(\d+)$/i);
+      if (topMatch) { colArg = topMatch[1]; topN = parseInt(topMatch[2], 10); }
       const ci = resolveCol(colArg, lastResult.columns);
       if (ci < 0) {
         term.writeln(`\x1b[31mColumn "${colArg}" not found. Available: ${lastResult.columns.join(', ')}\x1b[0m`);
@@ -2165,10 +2168,15 @@ function startTerminal() {
         const key = fmtCell(row[ci], colName);
         counts.set(key, (counts.get(key) || 0) + 1);
       });
-      const entries = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+      let entries = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+      const totalGroups = entries.length;
+      if (topN !== null) entries = entries.slice(0, topN);
       const pivotRows = entries.map(([v, c]) => [v, c]);
-      const pivotResult = { columns: [colName, 'count'], rows: pivotRows, row_count: pivotRows.length };
+      const note = (topN !== null && pivotRows.length < totalGroups)
+        ? `top ${pivotRows.length} of ${totalGroups} groups` : null;
+      const pivotResult = { columns: [colName, 'count'], rows: pivotRows, row_count: pivotRows.length, note };
       renderResult(pivotResult);
+      if (note) term.writeln(`\x1b[2m${note}\x1b[0m`);
       prevResult = lastResult;
       lastResult = pivotResult;
       term.write(PROMPT);
@@ -2914,7 +2922,7 @@ function startTerminal() {
     c('/tail [N]',               '— last N rows, default 10');
     c('/sample [N]',             '— N randomly sampled rows from last result (default 10)');
     c('/unique <col> [N]',       '— distinct value counts, optional top N');
-    c('/pivot <col>',            '— group by column → (value, count) table (chainable)');
+    c('/pivot <col> [N]',        '— group by column → (value, count) table, optional top N (chainable)');
     c('/stats <col>',            '— min/max/mean/percentiles/sum');
     c('/export [csv|tsv|json]',  '— copy/download as CSV (default), TSV, or JSON');
     h('History & bookmarks');
