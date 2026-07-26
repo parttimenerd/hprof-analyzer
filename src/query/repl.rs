@@ -1311,7 +1311,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                 None => writeln!(stdout, "(no result — run a query first)")?,
                                 Some(res) => {
                                     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-                                    let (cd, cr) = if color { ("\x1b[2m", "\x1b[0m") } else { ("", "") };
+                                    let (cc, cd, cr) = if color { ("\x1b[36m", "\x1b[2m", "\x1b[0m") } else { ("", "", "") };
                                     let fields: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
                                     let idx_w = fields.len().to_string().len();
                                     let col_w = fields.iter().map(|f| f.len()).max().unwrap_or(10);
@@ -1326,7 +1326,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                         let (name_color, suffix) = if all_null && color {
                                             ("\x1b[2;33m", format!("  \x1b[33m(all null){cr}"))
                                         } else {
-                                            ("", String::new())
+                                            (cc, String::new())
                                         };
                                         writeln!(stdout, "  {:>idx_w$}  {name_color}{f:<col_w$}{cr}  {cd}{:<8}{}{cr}{suffix}", i + 1, type_tag, fill)?;
                                     }
@@ -1897,7 +1897,7 @@ fn run_repl_line(
                     None => writeln!(out, "(no result — run a query first)")?,
                     Some(res) => {
                         let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-                        let (cd, cr) = if color { ("\x1b[2m", "\x1b[0m") } else { ("", "") };
+                        let (cc, cd, cr) = if color { ("\x1b[36m", "\x1b[2m", "\x1b[0m") } else { ("", "", "") };
                         let fields: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
                         let idx_w = fields.len().to_string().len();
                         let col_w = fields.iter().map(|f| f.len()).max().unwrap_or(10);
@@ -1912,7 +1912,7 @@ fn run_repl_line(
                             let (name_color, suffix) = if all_null && color {
                                 ("\x1b[2;33m", format!("  \x1b[33m(all null){cr}"))
                             } else {
-                                ("", String::new())
+                                (cc, String::new())
                             };
                             writeln!(out, "  {:>idx_w$}  {name_color}{f:<col_w$}{cr}  {cd}{:<8}{}{cr}{suffix}", i + 1, type_tag, fill)?;
                         }
