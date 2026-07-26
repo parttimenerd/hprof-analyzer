@@ -966,8 +966,13 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
     let mut cache: Option<crate::query::run::ReplCache> = None;
     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
     let (cb, cc, cd, cr) = if color { ("\x1b[1m", "\x1b[36m", "\x1b[2m", "\x1b[0m") } else { ("", "", "", "") };
+    let hist_count = history_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|s| s.lines().count())
+        .unwrap_or(0);
+    let hist_note = if hist_count > 0 { format!("  ·  {} history entries", hist_count) } else { String::new() };
     writeln!(stdout, "{cb}{cc}hprof-analyzer{cr}{cc} OQL REPL{cr}")?;
-    writeln!(stdout, "{cd} └─ {} classes, {} field names  ·  !help for commands  ·  !quit to exit{cr}",
+    writeln!(stdout, "{cd} └─ {} classes, {} field names{hist_note}  ·  !help for commands  ·  !quit to exit{cr}",
         names_for_meta.0.len(), names_for_meta.1.len())?;
     writeln!(stdout, "{cd}    Tab = complete  ·  ↑/↓ = history  ·  mode: reachable-only (MAT parity){cr}\n")?;
     let mut buffer_lines: Vec<String> = Vec::new();
