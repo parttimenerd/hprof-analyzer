@@ -547,7 +547,7 @@ function startTerminal() {
     if (line.startsWith('/') && !line.includes(' ')) {
       const partial = line.slice(1).toLowerCase();
       const cmds = ['help','clear','status','analyze','history','export','set','classes','filter','grep',
-                    'sort','unique','stats','top','head','tail','obj','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
+                    'sort','unique','stats','top','head','tail','cols','columns','obj','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
       const matches = cmds.filter(c => c.startsWith(partial));
       if (matches.length === 1) {
         setLine('/' + matches[0] + ' ');
@@ -910,6 +910,21 @@ function startTerminal() {
       term.write(PROMPT);
       return;
     }
+    if (cmd === '/cols' || cmd === '/columns') {
+      if (!lastResult) {
+        term.writeln('\x1b[33mNo result — run a query first.\x1b[0m');
+      } else {
+        const fields = lastResult.columns;
+        const colW = Math.max(...fields.map(f => f.length)) + 2;
+        const cols = Math.max(1, Math.floor((term.cols - 4) / colW));
+        for (let i = 0; i < fields.length; i += cols) {
+          term.writeln('  ' + fields.slice(i, i + cols).map(f => f.padEnd(colW)).join('').trimEnd());
+        }
+        term.writeln(`\x1b[2m${fields.length} column${fields.length !== 1 ? 's' : ''}\x1b[0m`);
+      }
+      term.write(PROMPT);
+      return;
+    }
     if (cmd.startsWith('/bookmark ') || cmd === '/bookmark' ||
         cmd.startsWith('/save ') || cmd === '/save') {
       const bookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '{}');
@@ -1166,11 +1181,12 @@ function startTerminal() {
           ? `\x1b[33mNo classes matching "${pattern}"\x1b[0m`
           : '\x1b[2m(no classes loaded — server may still be loading)\x1b[0m');
       } else {
-        const COLS = 2;
-        const colW = Math.floor((term.cols - 4) / COLS);
-        for (let i = 0; i < matches.length; i += COLS) {
-          const row = matches.slice(i, i + COLS);
-          term.writeln('  ' + row.map(c => padTo(c, colW)).join('  '));
+        const maxLen = matches.reduce((m, c) => Math.max(m, c.length), 0);
+        const colW = maxLen + 2;
+        const cols = Math.max(1, Math.floor((term.cols - 4) / colW));
+        for (let i = 0; i < matches.length; i += cols) {
+          const row = matches.slice(i, i + cols);
+          term.writeln('  ' + row.map(c => c.padEnd(colW)).join('').trimEnd());
         }
         term.writeln(`\x1b[2m${matches.length} class${matches.length !== 1 ? 'es' : ''}\x1b[0m`);
       }
@@ -1536,6 +1552,7 @@ function startTerminal() {
     c('/obj <cls>#<idx>',        '— inspect a specific object by class + dense index');
     h('Result post-processing');
     c('/last',                   '— re-display last result');
+    c('/cols',                   '— list column names of last result');
     c('/filter <text|/re/>',     '— filter rows by substring or regex  (/grep is an alias)');
     c('/sort <col> [desc]',      '— sort rows by column');
     c('/top <N>  /head <N>',      '— first N rows (updates lastResult for chaining)');
