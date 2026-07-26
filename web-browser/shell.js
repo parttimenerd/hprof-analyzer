@@ -133,9 +133,9 @@ function isNumericKind(cell) {
 
 function fmtBytes(n) {
   if (n < 1024) return n + ' B';
-  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
-  if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
-  return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KiB';
+  if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MiB';
+  return (n / 1024 / 1024 / 1024).toFixed(2) + ' GiB';
 }
 
 // Resolve a column specifier (name substring OR 1-based number) to an index.
@@ -917,8 +917,11 @@ function startTerminal() {
             const idxW = String(colNames.length).length;
             term.writeln(`\x1b[2m── ${clsTrimmed}#${idx} ──\x1b[0m`);
             colNames.forEach((col, i) => {
-              const val = fmtCell(rows[0][i], col);
-              term.writeln(`  \x1b[2m${String(i + 1).padStart(idxW)}\x1b[0m  \x1b[36m${col.padEnd(keyW)}\x1b[0m  ${val}`);
+              const cell = rows[0][i];
+              const val = fmtCell(cell, col);
+              const cc = cellColor(cell, col);
+              const valStr = cc ? `${cc}${val}\x1b[0m` : val;
+              term.writeln(`  \x1b[2m${String(i + 1).padStart(idxW)}\x1b[0m  \x1b[36m${col.padEnd(keyW)}\x1b[0m  ${valStr}`);
             });
           } else if (rows.length === 0) {
             term.writeln(`\x1b[33m(no object ${clsTrimmed}#${idx} found)\x1b[0m`);
@@ -1142,8 +1145,11 @@ function startTerminal() {
       term.writeln(`\x1b[2m── row ${n} of ${total} ──\x1b[0m${navHint}`);
       lastResult.columns.forEach((col, i) => {
         const key = col.padEnd(keyW);
-        const val = fmtCell(row[i], col);
-        term.writeln(`  \x1b[2m${String(i + 1).padStart(idxW)}\x1b[0m  \x1b[36m${key}\x1b[0m  ${val}`);
+        const cell = row[i];
+        const val = fmtCell(cell, col);
+        const cc = cellColor(cell, col);
+        const valStr = cc ? `${cc}${val}\x1b[0m` : val;
+        term.writeln(`  \x1b[2m${String(i + 1).padStart(idxW)}\x1b[0m  \x1b[36m${key}\x1b[0m  ${valStr}`);
       });
       term.write(PROMPT);
       return;
