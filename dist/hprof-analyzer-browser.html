@@ -1416,6 +1416,14 @@ function startTerminal() {
       }
       return;
     }
+    // Complete /export csv|tsv
+    if (line.startsWith('/export ')) {
+      const partial = line.slice(8).toLowerCase();
+      const fmts = ['tsv', 'csv'].filter(f => f.startsWith(partial));
+      if (fmts.length === 1) { setLine('/export ' + fmts[0]); }
+      else if (fmts.length > 1) { term.writeln(''); term.writeln('  tsv  csv'); redrawLine(); }
+      return;
+    }
     if (!wasmReady) return;
     try {
       const cs = JSON.parse(wasmComplete(line, cursorPos, classNames));
@@ -1782,40 +1790,60 @@ function startTerminal() {
       term.write(PROMPT);
       return;
     }
-    if (cmd === '/export') {
+    if (cmd === '/export' || cmd.startsWith('/export ')) {
       if (!lastResult) {
         term.writeln('\x1b[33mNo result to export — run a query first.\x1b[0m');
+        term.write(PROMPT);
+        return;
+      }
+      const fmt = cmd.slice(7).trim().toLowerCase() || 'tsv';
+      let text, mime, ext;
+      if (fmt === 'csv') {
+        const csvRow = row => row.map(c => {
+          const s = c == null ? '' : String(c);
+          return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+        }).join(',');
+        text = [lastResult.columns.map(c => /[",\n]/.test(c) ? '"' + c + '"' : c).join(',')]
+          .concat(lastResult.rows.map(row => csvRow(row.map((cell, i) => fmtCell(cell, lastResult.columns[i])))))
+          .join('\n');
+        mime = 'text/csv'; ext = 'csv';
       } else {
-        const tsv = [lastResult.columns.join('\t')]
+        text = [lastResult.columns.join('\t')]
           .concat(lastResult.rows.map(row =>
             row.map((cell, i) => fmtCell(cell, lastResult.columns[i])).join('\t')
           ))
           .join('\n');
-        try {
-          await navigator.clipboard.writeText(tsv);
-          term.writeln(`\x1b[32m✓ Copied ${lastResult.rows.length} rows as TSV to clipboard\x1b[0m`);
-        } catch (_) {
-          // Clipboard API unavailable — offer a download instead
-          const blob = new Blob([tsv], { type: 'text/tab-separated-values' });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url; a.download = 'query-result.tsv'; a.click();
-          URL.revokeObjectURL(url);
-          term.writeln(`\x1b[32m✓ Downloaded result as query-result.tsv (${lastResult.rows.length} rows)\x1b[0m`);
-        }
+        mime = 'text/tab-separated-values'; ext = 'tsv';
+      }
+      try {
+        await navigator.clipboard.writeText(text);
+        term.writeln(`\x1b[32m✓ Copied ${lastResult.rows.length} rows as ${ext.toUpperCase()} to clipboard\x1b[0m`);
+      } catch (_) {
+        const blob = new Blob([text], { type: mime });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = `query-result.${ext}`; a.click();
+        URL.revokeObjectURL(url);
+        term.writeln(`\x1b[32m✓ Downloaded result as query-result.${ext} (${lastResult.rows.length} rows)\x1b[0m`);
       }
       term.write(PROMPT);
       return;
     }
-    if (cmd === '/history') {
-      if (recent.length === 0) {
+    if (cmd === '/history' || cmd.startsWith('/history ')) {
+      if (history.length === 0) {
         term.writeln('\x1b[2m(no history yet)\x1b[0m');
       } else {
-        recent.forEach((h, i) => {
+        const args = cmd.slice(8).trim();
+        const limit = args ? Math.min(parseInt(args, 10) || 20, history.length) : Math.min(20, history.length);
+        const shown = history.slice(0, limit);
+        shown.forEach((h, i) => {
           const num = String(i + 1).padStart(3);
           const truncated = h.length > term.cols - 6 ? h.slice(0, term.cols - 7) + '…' : h;
           term.writeln(`\x1b[2m${num}\x1b[0m  ${truncated}`);
         });
+        if (history.length > limit) {
+          term.writeln(`\x1b[2m  … ${history.length - limit} more — /history N to show more\x1b[0m`);
+        }
         term.writeln(`\x1b[2m  Use !N to re-run entry N\x1b[0m`);
       }
       term.write(PROMPT);
@@ -2012,8 +2040,8 @@ function startTerminal() {
     term.writeln('  \x1b[36m/clear\x1b[0m             — clear terminal');
     term.writeln('  \x1b[36m/status\x1b[0m            — show analysis status');
     term.writeln('  \x1b[36m/analyze\x1b[0m           — trigger full heap analysis (enables @retainedHeapSize)');
-    term.writeln('  \x1b[36m/history\x1b[0m           — show recent query history');
-    term.writeln('  \x1b[36m/export\x1b[0m            — copy last result to clipboard as TSV');
+    term.writeln('  \x1b[36m/history [N]\x1b[0m       — show last N entries (default 20); use !N to re-run');
+    term.writeln('  \x1b[36m/export [csv]\x1b[0m      — copy last result to clipboard as TSV or CSV');
     term.writeln('  \x1b[36m/set [key val]\x1b[0m     — view/change display settings (limit, bytes, null)');
     term.writeln('  \x1b[36m/classes [pat]\x1b[0m     — list class names (optionally filtered by pattern)');
     term.writeln('  \x1b[36m/describe <cls>\x1b[0m    — show fields of a class');
