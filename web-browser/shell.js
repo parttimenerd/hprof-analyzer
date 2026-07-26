@@ -823,12 +823,22 @@ function startTerminal() {
           }
         } else {
           const colNames = data.result.columns.map(c => c.name || String(c));
+          const rows = data.result.rows || [];
           term.writeln(`\x1b[1mFields of ${cls}:\x1b[0m`);
-          const COLS = 3;
-          const colW = Math.max(20, Math.floor((term.cols - 4) / COLS));
-          for (let i = 0; i < colNames.length; i += COLS) {
-            term.writeln('  ' + colNames.slice(i, i + COLS).map(n => padTo(n, colW)).join('  '));
-          }
+          const idxW = String(colNames.length).length;
+          const nameW = Math.max(...colNames.map(c => c.length), 8);
+          colNames.forEach((n, i) => {
+            // Infer type from the single sample row
+            let typeTag = 'null';
+            if (rows.length > 0) {
+              const cell = rows[0][i];
+              if (cell !== null && cell !== undefined) {
+                if (typeof cell !== 'object') typeTag = typeof cell;
+                else if (cell.kind && cell.kind !== 'null') typeTag = cell.kind;
+              }
+            }
+            term.writeln(`  \x1b[2m${String(i + 1).padStart(idxW)}\x1b[0m  \x1b[36m${n.padEnd(nameW)}\x1b[0m  \x1b[2m${typeTag}\x1b[0m`);
+          });
           term.writeln(`\x1b[2m${colNames.length} field${colNames.length !== 1 ? 's' : ''}\x1b[0m`);
         }
       } catch (e) {

@@ -1219,14 +1219,14 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                 match run_and_print(path, &q, path_depth, reachable_only, max_width,
                                     &mut cache, &mut stdout) {
                                     Ok(Some(res)) => {
-                                        let fields: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                                        writeln!(stdout, "{} field{}:", fields.len(), if fields.len() == 1 { "" } else { "s" })?;
-                                        let col_w = fields.iter().map(|f| f.len()).max().unwrap_or(10) + 2;
-                                        let cols = (80usize).saturating_div(col_w).max(1);
-                                        for chunk in fields.chunks(cols) {
-                                            let row: String = chunk.iter().map(|f| format!("  {:<col_w$}", f)).collect();
-                                            writeln!(stdout, "{}", row.trim_end())?;
+                                        let idx_w = res.columns.len().to_string().len();
+                                        let col_w = res.columns.iter().map(|c| c.name.len()).max().unwrap_or(8);
+                                        writeln!(stdout, "Fields of {}:", cls)?;
+                                        for (i, col) in res.columns.iter().enumerate() {
+                                            let type_tag = infer_col_type(i, &res.rows);
+                                            writeln!(stdout, "  {:>idx_w$}  {:<col_w$}  \x1b[2m{}\x1b[0m", i + 1, col.name, type_tag)?;
                                         }
+                                        writeln!(stdout, "({} field{})", res.columns.len(), if res.columns.len() == 1 { "" } else { "s" })?;
                                     }
                                     Ok(None) => {}
                                     Err(e) => writeln!(stdout, "error: {e}")?,
