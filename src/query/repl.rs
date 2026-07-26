@@ -2835,6 +2835,9 @@ fn print_result(
     if res.truncated {
         writeln!(out, "-- results truncated --")?;
     }
+    if body.len() > 20 {
+        writeln!(out, "\x1b[2m  !filter <pattern>  !sort <col>  !select <col>…  !pivot <col>  !row [N]  !save <file>\x1b[0m")?;
+    }
     Ok(())
 }
 
