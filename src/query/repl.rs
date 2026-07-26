@@ -3728,6 +3728,19 @@ fn print_result(
         let s = s.borrow();
         (s.row_limit, s.color, s.bytes_raw)
     });
+    if res.rows.is_empty() && !res.columns.is_empty() {
+        let (cd, cr) = if color { ("\x1b[2m", "\x1b[0m") } else { ("", "") };
+        writeln!(out, "{cd}(no rows){cr}")?;
+        let elapsed_ms = elapsed.as_millis();
+        if color {
+            let time_color = if elapsed_ms > 1000 { "\x1b[31m" } else if elapsed_ms > 300 { "\x1b[33m" } else { "\x1b[2m" };
+            let ts = fmt_time_hms();
+            writeln!(out, "{time_color}0 rows, {}\x1b[0m\x1b[2m  [{ts}]\x1b[0m", fmt_elapsed(elapsed))?;
+        } else {
+            writeln!(out, "(0 rows, {})", fmt_elapsed(elapsed))?;
+        }
+        return Ok(());
+    }
     // Apply display row cap (0 = unlimited).
     let display_rows: &[Vec<QueryValue>] = if row_limit > 0 && res.rows.len() > row_limit {
         &res.rows[..row_limit]
