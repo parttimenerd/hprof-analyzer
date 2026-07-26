@@ -596,7 +596,7 @@ impl Completer for OqlCompleter {
                     "reachable", "all", "mode",
                     "width", "count", "last", "save", "export",
                     "filter", "grep", "not", "exclude", "sample", "distinct", "dedup", "sort", "stats", "unique", "pivot",
-                    "top", "head", "tail", "select", "rename", "wc", "row", "undo", "cols", "columns",
+                    "top", "head", "tail", "select", "drop", "rename", "wc", "row", "undo", "cols", "columns",
                     "describe", "obj", "history",
                     "run",
                 ];
@@ -622,7 +622,7 @@ impl Completer for OqlCompleter {
             let needs_col = matches!(
                 verb,
                 "sort" | "filter" | "grep" | "not" | "exclude" | "stats" | "unique" | "pivot"
-                | "select" | "rename" | "sample" | "top" | "head" | "tail" | "wc"
+                | "select" | "drop" | "rename" | "sample" | "top" | "head" | "tail" | "wc"
             );
             if needs_col {
                 if let Ok(cols) = self.last_cols.lock() {
@@ -1204,6 +1204,12 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             stdout.flush()?;
                             continue;
                         }
+                        "drop" => {
+                            prev_result = last_result.clone();
+                            handle_drop(rest, &mut last_result, max_width, &mut stdout)?;
+                            stdout.flush()?;
+                            continue;
+                        }
                         "run" => {
                             if rest.is_empty() {
                                 // list named queries
@@ -1643,6 +1649,11 @@ fn run_repl_line(
                         }
                     }
                 }
+                out.flush()?;
+                return Ok(false);
+            }
+            "drop" => {
+                handle_drop(rest, last_result, *max_width, out)?;
                 out.flush()?;
                 return Ok(false);
             }
@@ -2531,6 +2542,72 @@ fn handle_stats(
     Ok(())
 }
 
+/// Remove one or more columns from the last result by name, number, or range.
+/// `!drop <col1> [col2 ...]` — complement of `!select`
+fn handle_drop(
+    col_arg: &str,
+    last_result: &mut Option<QueryResult>,
+    max_width: usize,
+    out: &mut impl Write,
+) -> io::Result<()> {
+    if col_arg.is_empty() {
+        match last_result {
+            Some(res) if !res.columns.is_empty() => {
+                let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
+                writeln!(out, "usage: !drop <col1> [col2 ...]  — available: {}", names.join(", "))?;
+            }
+            _ => writeln!(out, "usage: !drop <col1> [col2 ...]  — remove columns from last result")?,
+        }
+        return Ok(());
+    }
+    match last_result {
+        None => writeln!(out, "(no previous result — run a query first)")?,
+        Some(res) => {
+            let col_args: Vec<&str> = col_arg.split_whitespace().collect();
+            let mut drop_set: std::collections::HashSet<usize> = std::collections::HashSet::new();
+            let mut ok = true;
+            for arg in &col_args {
+                match expand_col_spec(arg, &res.columns) {
+                    Ok(v) => { drop_set.extend(v); }
+                    Err(_) => {
+                        let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
+                        writeln!(out, "column {:?} not found — available: {}", arg, names.join(", "))?;
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if ok {
+                if drop_set.len() == res.columns.len() {
+                    writeln!(out, "cannot drop all columns")?;
+                    return Ok(());
+                }
+                use crate::query::model::QueryColumn;
+                let keep: Vec<usize> = (0..res.columns.len()).filter(|i| !drop_set.contains(i)).collect();
+                let new_cols: Vec<QueryColumn> = keep.iter().map(|&i| res.columns[i].clone()).collect();
+                let new_rows: Vec<Vec<QueryValue>> = res.rows.iter()
+                    .map(|row| keep.iter().map(|&i| row[i].clone()).collect())
+                    .collect();
+                let projected = QueryResult {
+                    columns: new_cols,
+                    rows: new_rows.clone(),
+                    row_count: new_rows.len() as u64,
+                    truncated: false,
+                    note: None,
+                    error: None,
+                    name: res.name.clone(),
+                    oql: res.oql.clone(),
+                    viz: None,
+                    elapsed_ms: None,
+                };
+                print_result(&projected, std::time::Duration::ZERO, max_width, out)?;
+                *last_result = Some(projected);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Show distinct value counts for a column of the last result.
 /// `!unique <col>` — sorted by count desc
 fn handle_unique(
@@ -2845,6 +2922,7 @@ fn handle_meta(
             writeln!(out, "  !undo                 restore last result before last manipulation")?;
             writeln!(out, "  !history [N]          show last N queries from history (default 20)")?;
             writeln!(out, "  !select <cols...>     project columns from last result")?;
+            writeln!(out, "  !drop <cols...>       remove columns from last result (inverse of !select)")?;
             writeln!(out, "  !rename <old> <new>   rename a column in last result")?;
             writeln!(out, "  !describe <class>     show all field names of a class")?;
             writeln!(out, "  !cols                 list column names, types, and fill rate of last result")?;

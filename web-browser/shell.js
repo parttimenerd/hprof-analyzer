@@ -556,7 +556,7 @@ function startTerminal() {
     if (line.startsWith('/') && !line.includes(' ')) {
       const partial = line.slice(1).toLowerCase();
       const cmds = ['help','clear','status','analyze','history','export','set','classes','plan','explain','filter','grep',
-                    'sort','unique','pivot','stats','top','head','tail','row','undo','sample','cols','columns','select','rename','wc','limit','not','exclude','distinct','dedup','obj','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
+                    'sort','unique','pivot','stats','top','head','tail','row','undo','sample','cols','columns','select','drop','rename','wc','limit','not','exclude','distinct','dedup','obj','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
       const matches = cmds.filter(c => c.startsWith(partial));
       if (matches.length === 1) {
         setLine('/' + matches[0] + ' ');
@@ -661,7 +661,7 @@ function startTerminal() {
       }
       // Single-column commands: /filter /grep /unique /stats /pivot /select /not /exclude /rename /sample /wc
       const singleColCmds = ['/filter ', '/grep ', '/unique ', '/stats ', '/pivot ', '/select ',
-                              '/not ', '/exclude ', '/rename ', '/sample ', '/wc '];
+                              '/drop ', '/not ', '/exclude ', '/rename ', '/sample ', '/wc '];
       const matched = singleColCmds.find(p => line.startsWith(p));
       if (matched) {
         const rawArg = line.slice(matched.length);
@@ -1149,6 +1149,48 @@ function startTerminal() {
             prevResult = lastResult;
             lastResult = { columns: newCols, rows: newRows };
             renderResult({ columns: lastResult.columns, rows: lastResult.rows, row_count: lastResult.rows.length });
+          }
+        }
+      }
+      term.write(PROMPT);
+      return;
+    }
+    if (cmd.startsWith('/drop ') || cmd === '/drop') {
+      if (!lastResult) {
+        term.writeln('\x1b[33mNo result — run a query first.\x1b[0m');
+      } else {
+        const args = cmd.slice(5).trim().split(/\s+/).filter(Boolean);
+        if (args.length === 0) {
+          term.writeln(`\x1b[33musage: /drop <col1> [col2] …  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
+        } else {
+          const fields = lastResult.columns;
+          const dropSet = new Set();
+          let ok = true;
+          for (const arg of args) {
+            const rangeM = arg.match(/^(\d+)-(\d+)$/);
+            if (rangeM) {
+              const lo = Math.max(1, parseInt(rangeM[1], 10));
+              const hi = Math.min(fields.length, parseInt(rangeM[2], 10));
+              if (lo <= hi) { for (let i = lo; i <= hi; i++) dropSet.add(i - 1); continue; }
+            }
+            const ci = resolveCol(arg, fields);
+            if (ci < 0) {
+              term.writeln(`\x1b[31mcolumn ${JSON.stringify(arg)} not found — available: ${fields.join(', ')}\x1b[0m`);
+              ok = false; break;
+            }
+            dropSet.add(ci);
+          }
+          if (ok) {
+            if (dropSet.size >= fields.length) {
+              term.writeln('\x1b[31mcannot drop all columns\x1b[0m');
+            } else {
+              const keep = fields.map((_, i) => i).filter(i => !dropSet.has(i));
+              const newCols = keep.map(i => fields[i]);
+              const newRows = lastResult.rows.map(r => keep.map(i => r[i]));
+              prevResult = lastResult;
+              lastResult = { columns: newCols, rows: newRows };
+              renderResult({ columns: lastResult.columns, rows: lastResult.rows, row_count: lastResult.rows.length });
+            }
           }
         }
       }
@@ -2061,6 +2103,7 @@ function startTerminal() {
     c('/limit <N>',              '— set display row limit and re-display (alias for /set limit N)');
     c('/cols',                   '— list columns with type and non-null fill rate');
     c('/select <col> …',         '— project (keep) specific columns (names or numbers)');
+    c('/drop <col> …',           '— remove columns from last result (inverse of /select)');
     c('/rename <old> <new>',     '— rename a column in last result');
     c('/filter <text|/re/>',     '— filter rows; /filter @<col> <text> to target one column  (/grep alias)');
     c('/not <text|/re/>',        '— exclude matching rows; /not @<col> <text> to target one column');
