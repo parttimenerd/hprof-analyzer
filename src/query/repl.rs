@@ -1626,11 +1626,16 @@ fn handle_unique(
                     }
                     let mut entries: Vec<(String, usize)> = counts.into_iter().collect();
                     entries.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                    let max_cnt = entries.first().map(|(_, c)| *c).unwrap_or(1);
+                    let cnt_w = fmt_int(max_cnt as i64).len().max(5);
                     let val_w = entries.iter().map(|(v, _)| v.len()).max().unwrap_or(0).max(col_name.len());
-                    writeln!(out, "{:<val_w$}  count", col_name)?;
-                    writeln!(out, "{}", "─".repeat(val_w + 8))?;
+                    const BAR_W: usize = 20;
+                    writeln!(out, "{:<val_w$}  {:>cnt_w$}  bar", col_name, "count")?;
+                    writeln!(out, "{}", "─".repeat(val_w + cnt_w + BAR_W + 4))?;
                     for (val, cnt) in &entries {
-                        writeln!(out, "{:<val_w$}  {}", val, fmt_int(*cnt as i64))?;
+                        let filled = if max_cnt > 0 { (cnt * BAR_W) / max_cnt } else { 0 };
+                        let bar: String = "█".repeat(filled) + &"░".repeat(BAR_W - filled);
+                        writeln!(out, "{:<val_w$}  {:>cnt_w$}  {}", val, fmt_int(*cnt as i64), bar)?;
                     }
                     writeln!(out, "({} distinct)", entries.len())?;
                 }
