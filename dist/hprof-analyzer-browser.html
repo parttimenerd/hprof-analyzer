@@ -3089,7 +3089,7 @@ function startTerminal() {
               .filter(c => c.toLowerCase().includes(lower) || lower.includes(c.split('.').pop().toLowerCase()))
               .slice(0, 3);
             if (suggestions.length > 0) {
-              term.writeln(`\x1b[2mDid you mean: ${suggestions.map(s => s.split('.').pop()).join(', ')}?\x1b[0m`);
+              term.writeln(`\x1b[2mdid you mean: ${suggestions.map(s => s.split('.').pop()).join(', ')}?\x1b[0m`);
             }
           });
         }
