@@ -2994,6 +2994,8 @@ fn handle_unique(
                 }
                 Some(ci) => {
                     use std::collections::HashMap;
+                    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+                    let (cb, cd, cr) = if color { ("\x1b[1m", "\x1b[2m", "\x1b[0m") } else { ("", "", "") };
                     let col_name = &res.columns[ci].name;
                     let mut counts: HashMap<String, usize> = HashMap::new();
                     for row in &res.rows {
@@ -3011,8 +3013,9 @@ fn handle_unique(
                     let pct_w = 6usize; // "100.0%"
                     let val_w = entries.iter().map(|(v, _)| v.len()).max().unwrap_or(0).max(col_name.len());
                     const BAR_W: usize = 20;
-                    writeln!(out, "{:<val_w$}  {:>cnt_w$}  {:>pct_w$}  bar", col_name, "count", "%")?;
-                    writeln!(out, "{}", "─".repeat(val_w + cnt_w + pct_w + BAR_W + 6))?;
+                    let hdr = format!("{:<val_w$}  {:>cnt_w$}  {:>pct_w$}  bar", col_name, "count", "%");
+                    writeln!(out, "{cb}{hdr}{cr}")?;
+                    writeln!(out, "{cd}{}{cr}", "─".repeat(val_w + cnt_w + pct_w + BAR_W + 6))?;
                     for (val, cnt) in entries {
                         let filled = if max_cnt > 0 { (cnt * BAR_W) / max_cnt } else { 0 };
                         let bar: String = "█".repeat(filled) + &"░".repeat(BAR_W - filled);
@@ -3021,7 +3024,7 @@ fn handle_unique(
                         } else {
                             "—".to_string()
                         };
-                        writeln!(out, "{:<val_w$}  {:>cnt_w$}  {:>pct_w$}  {}", val, fmt_int(*cnt as i64), pct, bar)?;
+                        writeln!(out, "{:<val_w$}  {:>cnt_w$}  {:>pct_w$}  {cd}{}{cr}", val, fmt_int(*cnt as i64), pct, bar)?;
                     }
                     if shown < total_distinct {
                         writeln!(out, "({} of {} distinct, showing top {})", shown, total_distinct, show_n)?;
