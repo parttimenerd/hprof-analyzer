@@ -1,5 +1,7 @@
 //! The 20 canonical named OQL queries shared by CLI, REPL, server, and WASM.
 
+#![allow(dead_code)]
+
 pub struct NamedQuery {
     pub name: &'static str,
     pub display: &'static str,
