@@ -1864,7 +1864,7 @@ function startTerminal() {
         return;
       }
       if (watchTimer) { clearInterval(watchTimer); watchTimer = null; }
-      term.writeln(`\x1b[2mWatching every ${secs}s — Ctrl+C or /watch stop to cancel\x1b[0m`);
+      term.writeln(`\x1b[2mwatching every ${secs}s — Ctrl+C or /watch stop to cancel\x1b[0m`);
       const tick = async () => {
         const ts = new Date().toLocaleTimeString('en-GB', { hour12: false });
         term.writeln(`\x1b[2m── ${ts} ──────────────────────────────────────────\x1b[0m`);
@@ -2195,7 +2195,7 @@ function startTerminal() {
         if (entries.length === 0) {
           term.writeln('\x1b[2m(no bookmarks yet — use /bookmark <name> to save last query)\x1b[0m');
         } else {
-          term.writeln('\x1b[1mBookmarks:\x1b[0m');
+          term.writeln('\x1b[1mBookmarks\x1b[0m');
           entries.forEach(([name, oql]) => {
             const truncated = oql.length > term.cols - name.length - 6
               ? oql.slice(0, term.cols - name.length - 7) + '…' : oql;
@@ -2211,7 +2211,7 @@ function startTerminal() {
         } else {
           bookmarks[rest] = toSave;
           localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
-          term.writeln(`\x1b[32m✓ Saved as "${rest}": \x1b[2m${toSave.length > 60 ? toSave.slice(0, 59) + '…' : toSave}\x1b[0m`);
+          term.writeln(`\x1b[32m✓ saved as "${rest}": \x1b[2m${toSave.length > 60 ? toSave.slice(0, 59) + '…' : toSave}\x1b[0m`);
         }
       }
       term.write(PROMPT);
@@ -2223,7 +2223,7 @@ function startTerminal() {
       if (bookmarks[name]) {
         delete bookmarks[name];
         localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
-        term.writeln(`\x1b[32m✓ Removed bookmark "${name}"\x1b[0m`);
+        term.writeln(`\x1b[32m✓ removed bookmark "${name}"\x1b[0m`);
       } else {
         term.writeln(`\x1b[31mno bookmark named "${name}"\x1b[0m`);
       }
@@ -2840,14 +2840,14 @@ function startTerminal() {
       }
       try {
         await navigator.clipboard.writeText(text);
-        term.writeln(`\x1b[32m✓ Copied ${lastResult.rows.length} rows as ${ext.toUpperCase()} to clipboard\x1b[0m`);
+        term.writeln(`\x1b[32m✓ copied ${lastResult.rows.length} rows as ${ext.toUpperCase()} to clipboard\x1b[0m`);
       } catch (_) {
         const blob = new Blob([text], { type: mime });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url; a.download = `query-result.${ext}`; a.click();
         URL.revokeObjectURL(url);
-        term.writeln(`\x1b[32m✓ Downloaded result as query-result.${ext} (${lastResult.rows.length} rows)\x1b[0m`);
+        term.writeln(`\x1b[32m✓ downloaded as query-result.${ext} (${lastResult.rows.length} rows)\x1b[0m`);
       }
       term.write(PROMPT);
       return;
@@ -2860,7 +2860,7 @@ function startTerminal() {
         if (args === 'clear') {
           history.length = 0;
           localStorage.setItem(HISTORY_KEY, '[]');
-          term.writeln('\x1b[32m✓ History cleared\x1b[0m');
+          term.writeln('\x1b[32m✓ history cleared\x1b[0m');
           term.write(PROMPT);
           return;
         }
