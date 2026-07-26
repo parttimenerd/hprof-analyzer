@@ -2612,7 +2612,12 @@ fn handle_stats(
                         let p50 = vals[n * 50 / 100];
                         let p90 = vals[n * 90 / 100];
                         let p99 = vals[n * 99 / 100];
+                        let col_lower = col_name.to_ascii_lowercase();
+                        let is_bytes_col = col_lower.ends_with("bytes") || col_lower.ends_with("_size") || col_lower.ends_with("heap_size");
                         let fv = |v: f64| -> String {
+                            if is_bytes_col && v >= 0.0 {
+                                return fmt_bytes(v as u64);
+                            }
                             if v.fract() == 0.0 && v.abs() < 1e15 {
                                 fmt_int(v as i64)
                             } else {
