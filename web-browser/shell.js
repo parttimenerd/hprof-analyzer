@@ -915,7 +915,7 @@ function startTerminal() {
           if (rows.length === 1) {
             const keyW = Math.max(...colNames.map(n => n.length)) + 2;
             const idxW = String(colNames.length).length;
-            term.writeln(`\x1b[2m── ${clsTrimmed}#${idx} ──\x1b[0m`);
+            term.writeln(`\x1b[1m── ${clsTrimmed}#${idx} ──\x1b[0m`);
             colNames.forEach((col, i) => {
               const cell = rows[0][i];
               const val = fmtCell(cell, col);
@@ -1047,7 +1047,10 @@ function startTerminal() {
         if (data.ok) {
           const cell = data.result?.rows?.[0]?.[0];
           const n = cell == null ? null : (typeof cell === 'object' ? cell.v : cell);
-          term.writeln(`\x1b[32m${n != null ? n.toLocaleString() : '?'}\x1b[0m ${label}`);
+          const nFmt = n != null ? n.toLocaleString() : '?';
+          const dynLabel = isOql ? label
+            : `instance${n === 1 ? '' : 's'} of \x1b[36m${arg}\x1b[0m`;
+          term.writeln(`\x1b[32m${nFmt}\x1b[0m ${dynLabel}`);
         } else {
           const msg = data.error?.message || data.error || 'unknown error';
           term.writeln(`\x1b[31merror: ${msg}\x1b[0m`);
@@ -1081,7 +1084,7 @@ function startTerminal() {
         } else {
           const ci = resolveCol(colArg, lastResult.columns);
           if (ci < 0) {
-            term.writeln(`\x1b[31mColumn "${colArg}" not found. Available: ${lastResult.columns.join(', ')}\x1b[0m`);
+            term.writeln(`\x1b[31mColumn "${colArg}" not found\x1b[0m  \x1b[2mavailable: ${lastResult.columns.join(', ')}\x1b[0m`);
           } else {
             const total = lastResult.rows.length;
             const nonNull = lastResult.rows.filter(row => row[ci] !== null && row[ci] !== undefined && !(typeof row[ci] === 'object' && row[ci]?.kind === 'null')).length;
@@ -1234,7 +1237,7 @@ function startTerminal() {
             }
             const ci = resolveCol(arg, fields);
             if (ci < 0) {
-              term.writeln(`\x1b[31mcolumn ${JSON.stringify(arg)} not found — available: ${fields.join(', ')}\x1b[0m`);
+              term.writeln(`\x1b[31mcolumn ${JSON.stringify(arg)} not found\x1b[0m  \x1b[2mavailable: ${fields.join(', ')}\x1b[0m`);
               ok = false;
               break;
             }
@@ -1272,7 +1275,7 @@ function startTerminal() {
             }
             const ci = resolveCol(arg, fields);
             if (ci < 0) {
-              term.writeln(`\x1b[31mcolumn ${JSON.stringify(arg)} not found — available: ${fields.join(', ')}\x1b[0m`);
+              term.writeln(`\x1b[31mcolumn ${JSON.stringify(arg)} not found\x1b[0m  \x1b[2mavailable: ${fields.join(', ')}\x1b[0m`);
               ok = false; break;
             }
             dropSet.add(ci);
@@ -1305,12 +1308,12 @@ function startTerminal() {
           const [oldArg, newName] = parts;
           const i = resolveCol(oldArg, lastResult.columns);
           if (i < 0) {
-            term.writeln(`\x1b[31mcolumn ${JSON.stringify(oldArg)} not found — available: ${lastResult.columns.join(', ')}\x1b[0m`);
+            term.writeln(`\x1b[31mcolumn ${JSON.stringify(oldArg)} not found\x1b[0m  \x1b[2mavailable: ${lastResult.columns.join(', ')}\x1b[0m`);
           } else {
             const oldName = lastResult.columns[i];
             prevResult = { columns: [...lastResult.columns], rows: lastResult.rows };
             lastResult.columns[i] = newName;
-            term.writeln(`\x1b[2mrenamed column ${JSON.stringify(oldName)} → ${JSON.stringify(newName)}\x1b[0m`);
+            term.writeln(`\x1b[2m${JSON.stringify(oldName)}\x1b[0m → \x1b[32m${JSON.stringify(newName)}\x1b[0m`);
           }
         }
       }
@@ -2001,7 +2004,7 @@ function startTerminal() {
         shown.forEach((h, i) => {
           const num = String(i + 1).padStart(3);
           const truncated = h.length > term.cols - 8 ? h.slice(0, term.cols - 9) + '…' : h;
-          term.writeln(`\x1b[2m${num}\x1b[0m  \x1b[2m!\x1b[0m\x1b[2m${String(i + 1)}\x1b[0m  ${truncated}`);
+          term.writeln(`\x1b[2m${num}\x1b[0m  \x1b[36m!${String(i + 1)}\x1b[0m  ${truncated}`);
         });
         if (history.length > limit) {
           term.writeln(`\x1b[2m  … ${history.length - limit} more — /history N to show more\x1b[0m`);
@@ -2016,7 +2019,7 @@ function startTerminal() {
       if (/^!\d+$/.test(cmd)) {
         const n = parseInt(cmd.slice(1), 10) - 1;
         if (n < 0 || n >= history.length) {
-          term.writeln(`\x1b[31mNo history entry ${cmd.slice(1)}\x1b[0m`);
+          term.writeln(`\x1b[31mno history entry ${cmd.slice(1)}\x1b[0m  \x1b[2m(have ${history.length})\x1b[0m`);
           term.write(PROMPT);
         } else {
           const recalled = history[n];
@@ -2050,7 +2053,7 @@ function startTerminal() {
           let lastGroup = '';
           namedQueries.forEach(q => {
             if (q.group !== lastGroup) { lastGroup = q.group; term.writeln(`\r  \x1b[2m${q.group}\x1b[0m`); }
-            const lock = (q.needs_retained && !hasRetained) ? ' \x1b[2m[needs analysis]\x1b[0m' : '';
+            const lock = (q.needs_retained && !hasRetained) ? ' \x1b[33m[needs full analysis]\x1b[0m' : '';
             term.writeln(`    \x1b[36m${q.name.padEnd(36)}\x1b[0m  \x1b[2m${q.display}\x1b[0m${lock}`);
           });
         }
@@ -2064,9 +2067,10 @@ function startTerminal() {
           .filter(q => q.name.toLowerCase().includes(name.toLowerCase()))
           .slice(0, 3)
           .map(q => q.name);
-        const hint = close.length ? `  Did you mean: ${close.join(', ')}?` : '';
-        term.writeln(`\x1b[31mUnknown query: "${name}".${hint}\x1b[0m`);
-        term.writeln('\x1b[2mUse /help to list named queries.\x1b[0m');
+        term.writeln(`\x1b[31merror: unknown query name ${JSON.stringify(name)}\x1b[0m`);
+        if (close.length) {
+          term.writeln(`\x1b[2m  did you mean: ${close.join(', ')}\x1b[0m`);
+        }
         term.write(PROMPT);
         return;
       }
