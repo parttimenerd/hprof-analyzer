@@ -2113,6 +2113,9 @@ function startTerminal() {
           const elapsedColor = elapsedMs > 1000 ? '\x1b[31m' : elapsedMs > 300 ? '\x1b[33m' : '\x1b[2m';
           const ts = new Date().toLocaleTimeString('en-GB', { hour12: false });
           term.writeln(`${elapsedColor}${r.row_count} row${r.row_count !== 1 ? 's' : ''}, ${elapsedFmt}\x1b[0m\x1b[2m  [${ts}]\x1b[0m${trunc}${note}`);
+          if (rows.length > 20) {
+            term.writeln(`\x1b[2m  /filter <text|/re/>  /sort <col>  /export [csv]\x1b[0m`);
+          }
         } else {
           // No columns — just show the raw result
           term.writeln(JSON.stringify(r, null, 2).split('\n').slice(0, 40).join('\r\n'));
