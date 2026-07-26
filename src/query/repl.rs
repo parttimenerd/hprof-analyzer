@@ -3589,12 +3589,29 @@ fn print_result(
             }
         }
     }
-    write_row(&headers, &widths, out)?;
-    // Separator line under headers
-    let sep: Vec<String> = widths.iter().map(|&w| "─".repeat(w)).collect();
-    write_row(&sep, &widths, out)?;
+    // Render header and separator; bold/dim header when color is on
     let show_row_nums = body.len() >= 2;
     let row_num_w = if show_row_nums { body.len().to_string().len() } else { 0 };
+    let gutter_pad = if show_row_nums { " ".repeat(row_num_w + 2) } else { String::new() };
+    if color {
+        let mut hdr_buf: Vec<u8> = Vec::new();
+        write_row(&headers, &widths, &mut hdr_buf)?;
+        let hdr_str = String::from_utf8_lossy(&hdr_buf);
+        let hdr_trimmed = hdr_str.trim_end_matches('\n');
+        writeln!(out, "{gutter_pad}\x1b[1m{hdr_trimmed}\x1b[0m")?;
+        let mut sep_buf: Vec<u8> = Vec::new();
+        let sep: Vec<String> = widths.iter().map(|&w| "─".repeat(w)).collect();
+        write_row(&sep, &widths, &mut sep_buf)?;
+        let sep_str = String::from_utf8_lossy(&sep_buf);
+        let sep_trimmed = sep_str.trim_end_matches('\n');
+        writeln!(out, "{gutter_pad}\x1b[2m{sep_trimmed}\x1b[0m")?;
+    } else {
+        if show_row_nums { write!(out, "{gutter_pad}")?; }
+        write_row(&headers, &widths, out)?;
+        if show_row_nums { write!(out, "{gutter_pad}")?; }
+        let sep: Vec<String> = widths.iter().map(|&w| "─".repeat(w)).collect();
+        write_row(&sep, &widths, out)?;
+    }
     for (ri, row) in body.iter().enumerate() {
         if show_row_nums {
             write!(out, "{:>row_num_w$}  ", ri + 1)?;
