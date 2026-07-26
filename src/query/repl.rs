@@ -1125,8 +1125,13 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                 match last_result.as_mut() {
                                     None => writeln!(stdout, "(no result — run a query first)")?,
                                     Some(res) => {
-                                        res.rows.truncate(n);
-                                        res.row_count = res.rows.len() as u64;
+                                        let total = res.rows.len();
+                                        let shown = n.min(total);
+                                        res.rows.truncate(shown);
+                                        res.row_count = shown as u64;
+                                        if shown < total {
+                                            res.note = Some(format!("top {} of {}", shown, total));
+                                        }
                                         print_result(res, std::time::Duration::ZERO, max_width, &mut stdout)?;
                                     }
                                 }
@@ -1143,9 +1148,13 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                 match last_result.as_mut() {
                                     None => writeln!(stdout, "(no result — run a query first)")?,
                                     Some(res) => {
-                                        let skip = res.rows.len().saturating_sub(n);
+                                        let total = res.rows.len();
+                                        let skip = total.saturating_sub(n);
                                         res.rows = res.rows.split_off(skip);
                                         res.row_count = res.rows.len() as u64;
+                                        if skip > 0 {
+                                            res.note = Some(format!("last {} of {}", res.rows.len(), total));
+                                        }
                                         print_result(res, std::time::Duration::ZERO, max_width, &mut stdout)?;
                                     }
                                 }
@@ -1574,8 +1583,13 @@ fn run_repl_line(
                     match last_result.as_mut() {
                         None => writeln!(out, "(no result — run a query first)")?,
                         Some(res) => {
-                            res.rows.truncate(n);
-                            res.row_count = res.rows.len() as u64;
+                            let total = res.rows.len();
+                            let shown = n.min(total);
+                            res.rows.truncate(shown);
+                            res.row_count = shown as u64;
+                            if shown < total {
+                                res.note = Some(format!("top {} of {}", shown, total));
+                            }
                             print_result(res, std::time::Duration::ZERO, *max_width, out)?;
                         }
                     }
@@ -1591,9 +1605,13 @@ fn run_repl_line(
                     match last_result.as_mut() {
                         None => writeln!(out, "(no result — run a query first)")?,
                         Some(res) => {
-                            let skip = res.rows.len().saturating_sub(n);
+                            let total = res.rows.len();
+                            let skip = total.saturating_sub(n);
                             res.rows = res.rows.split_off(skip);
                             res.row_count = res.rows.len() as u64;
+                            if skip > 0 {
+                                res.note = Some(format!("last {} of {}", res.rows.len(), total));
+                            }
                             print_result(res, std::time::Duration::ZERO, *max_width, out)?;
                         }
                     }

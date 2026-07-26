@@ -1463,11 +1463,14 @@ function startTerminal() {
       } else if (!n || n < 1) {
         term.writeln('\x1b[33mUsage: /top [N]  (or /head [N]) — show first N rows of last result (default 10)\x1b[0m');
       } else {
+        const total = lastResult.rows.length;
         const sliced = lastResult.rows.slice(0, n);
-        renderResult({ columns: lastResult.columns, rows: sliced, row_count: n });
-        term.writeln(`\x1b[2mShowing top ${n} of ${lastResult.rows.length} rows\x1b[0m`);
+        const shown = sliced.length;
+        const slicedResult = { columns: lastResult.columns, rows: sliced };
+        if (shown < total) slicedResult.note = `top ${shown} of ${total}`;
+        renderResult({ ...slicedResult, row_count: shown });
         prevResult = lastResult;
-        lastResult = { columns: lastResult.columns, rows: sliced };
+        lastResult = slicedResult;
       }
       term.write(PROMPT);
       return;
@@ -1480,11 +1483,14 @@ function startTerminal() {
       } else if (!n || n < 1) {
         term.writeln('\x1b[33mUsage: /tail [N]  — show last N rows of last result (default 10)\x1b[0m');
       } else {
+        const total = lastResult.rows.length;
         const sliced = lastResult.rows.slice(-n);
-        renderResult({ columns: lastResult.columns, rows: sliced, row_count: sliced.length });
-        term.writeln(`\x1b[2mShowing last ${sliced.length} of ${lastResult.rows.length} rows\x1b[0m`);
+        const shown = sliced.length;
+        const slicedResult = { columns: lastResult.columns, rows: sliced };
+        if (shown < total) slicedResult.note = `last ${shown} of ${total}`;
+        renderResult({ ...slicedResult, row_count: shown });
         prevResult = lastResult;
-        lastResult = { columns: lastResult.columns, rows: sliced };
+        lastResult = slicedResult;
       }
       term.write(PROMPT);
       return;
@@ -1968,6 +1974,9 @@ function startTerminal() {
     });
     if (rows.length > settings.rowLimit) {
       term.writeln(`\x1b[2m… ${rows.length - settings.rowLimit} more rows (display limit ${settings.rowLimit} — use /set limit N)\x1b[0m`);
+    }
+    if (r.note) {
+      term.writeln(`\x1b[33m-- ${r.note}\x1b[0m`);
     }
     return { colNames, adjW, isNumeric };
   }
