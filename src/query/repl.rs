@@ -1409,7 +1409,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                             Some(ci) => {
                                                 let prev = res.columns[ci].name.clone();
                                                 res.columns[ci].name = new.to_string();
-                                                writeln!(stdout, "{cd}{:?}{cr} \u{2192} {cg}{:?}{cr}", prev, new)?;
+                                                writeln!(stdout, "{cg}\u{2713}{cr} {cd}{:?}{cr} \u{2192} {cg}{:?}{cr}", prev, new)?;
                                             }
                                         }
                                     }
@@ -1915,7 +1915,7 @@ fn run_repl_line(
                                     });
                                     let prev = res.columns[ci].name.clone();
                                     res.columns[ci].name = new.to_string();
-                                    writeln!(out, "{cd}{:?}{cr} \u{2192} {cg}{:?}{cr}", prev, new)?;
+                                    writeln!(out, "{cg}\u{2713}{cr} {cd}{:?}{cr} \u{2192} {cg}{:?}{cr}", prev, new)?;
                                 }
                             }
                         }
@@ -2163,9 +2163,9 @@ fn handle_width(rest: &str, max_width: &mut usize, out: &mut impl Write) -> io::
         Ok(n) => {
             *max_width = n;
             if n == 0 {
-                writeln!(out, "cell width: {cb}unlimited{cr}")?;
+                writeln!(out, "{cb}\u{2713} cell width: unlimited{cr}")?;
             } else {
-                writeln!(out, "cell width: {cg}{n}{cr}")?;
+                writeln!(out, "{cg}\u{2713} cell width: {n}{cr}")?;
             }
         }
         Err(_) => warn_out("usage: !width <N>  (N is a non-negative integer; 0 = unlimited)", out)?,
@@ -2209,12 +2209,12 @@ fn handle_set(rest: &str, out: &mut impl Write) -> io::Result<()> {
                 writeln!(out, "{cd}limit: {}  (use `!set limit N`, or `!set limit 0` for unlimited){cr}", if cur == 0 { "unlimited".to_string() } else { cur.to_string() })?;
             } else if val == "0" || val == "unlimited" || val == "none" {
                 SESSION_SETTINGS.with(|s| s.borrow_mut().row_limit = 0);
-                writeln!(out, "{cg}row limit: unlimited{cr}")?;
+                writeln!(out, "{cg}\u{2713} row limit: unlimited{cr}")?;
             } else {
                 match val.parse::<usize>() {
                     Ok(n) if n > 0 => {
                         SESSION_SETTINGS.with(|s| s.borrow_mut().row_limit = n);
-                        writeln!(out, "{cg}row limit: {n}{cr}")?;
+                        writeln!(out, "{cg}\u{2713} row limit: {n}{cr}")?;
                     }
                     _ => warn_out("usage: !set limit <N>  (positive integer, or 0/unlimited for no cap)", out)?,
                 }
@@ -2223,28 +2223,28 @@ fn handle_set(rest: &str, out: &mut impl Write) -> io::Result<()> {
         "bytes" => match val {
             "raw" => {
                 SESSION_SETTINGS.with(|s| s.borrow_mut().bytes_raw = true);
-                writeln!(out, "{cg}bytes: raw (numbers){cr}")?;
+                writeln!(out, "{cg}\u{2713} bytes: raw (numbers){cr}")?;
             }
             "human" => {
                 SESSION_SETTINGS.with(|s| s.borrow_mut().bytes_raw = false);
-                writeln!(out, "{cg}bytes: human (e.g. 4.3 KiB){cr}")?;
+                writeln!(out, "{cg}\u{2713} bytes: human (e.g. 4.3 KiB){cr}")?;
             }
             _ => warn_out("usage: !set bytes raw|human", out)?,
         },
         "color" | "colour" => match val {
             "on" | "true" | "1" | "" => {
                 SESSION_SETTINGS.with(|s| s.borrow_mut().color = true);
-                writeln!(out, "{cg}color: on{cr}")?;
+                writeln!(out, "{cg}\u{2713} color: on{cr}")?;
             }
             "off" | "false" | "0" => {
                 SESSION_SETTINGS.with(|s| s.borrow_mut().color = false);
-                writeln!(out, "{cd}color: off{cr}")?;
+                writeln!(out, "\u{2713} color: off")?;
             }
             _ => warn_out("usage: !set color on|off", out)?,
         },
         "null" => {
             let s = if val.is_empty() { "null".to_string() } else { val.to_string() };
-            writeln!(out, "{cg}null: \"{s}\"{cr}")?;
+            writeln!(out, "{cg}\u{2713} null: \"{s}\"{cr}")?;
             SESSION_SETTINGS.with(|ss| ss.borrow_mut().null_str = s);
         }
         _ => writeln!(out, "{ce}unknown setting: {key}{cr}  {cd}(options: limit, bytes, color, null){cr}")?,
@@ -2336,7 +2336,7 @@ fn handle_save(
     match std::fs::write(file, content.as_bytes()) {
         Ok(()) => writeln!(
             out,
-            "{cg}saved {} row{} ({fmt}) to {file}{cr}",
+            "{cg}\u{2713} saved {} row{} ({fmt}) to {file}{cr}",
             res.row_count,
             if res.row_count == 1 { "" } else { "s" },
         )?,
@@ -3250,7 +3250,7 @@ fn handle_export(
     };
     if let Some(path) = file_arg {
         match std::fs::write(path, &content) {
-            Ok(()) => writeln!(out, "{cg}{}{cr} row{} written to {cd}{:?}{cr}", res.rows.len(), if res.rows.len() == 1 { "" } else { "s" }, path)?,
+            Ok(()) => writeln!(out, "{cg}\u{2713} {} row{} written to {cd}{:?}{cr}", res.rows.len(), if res.rows.len() == 1 { "" } else { "s" }, path)?,
             Err(e) => writeln!(out, "{ce}error: could not write {:?}: {e}{cr}", path)?,
         }
     } else {

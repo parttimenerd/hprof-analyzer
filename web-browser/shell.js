@@ -1317,7 +1317,7 @@ function startTerminal() {
             const oldName = lastResult.columns[i];
             prevResult = { columns: [...lastResult.columns], rows: lastResult.rows };
             lastResult.columns[i] = newName;
-            term.writeln(`\x1b[2m${JSON.stringify(oldName)}\x1b[0m → \x1b[32m${JSON.stringify(newName)}\x1b[0m`);
+            term.writeln(`\x1b[32m✓\x1b[0m \x1b[2m${JSON.stringify(oldName)}\x1b[0m → \x1b[32m${JSON.stringify(newName)}\x1b[0m`);
           }
         }
       }
@@ -1906,28 +1906,28 @@ function startTerminal() {
         } else if (n === 0) {
           settings.rowLimit = Infinity;
           localStorage.setItem(SETTINGS_KEY, JSON.stringify({ ...settings, rowLimit: 0 }));
-          term.writeln('\x1b[32mrow limit disabled (showing all rows)\x1b[0m');
+          term.writeln('\x1b[32m✓ row limit: unlimited\x1b[0m');
         } else {
           settings.rowLimit = n;
           localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-          term.writeln(`\x1b[32mrow limit set to ${n}\x1b[0m`);
+          term.writeln(`\x1b[32m✓ row limit: ${n}\x1b[0m`);
         }
       } else if (args[0] === 'bytes') {
         if (args[1] === 'raw') { settings.bytesRaw = true; }
         else if (args[1] === 'human') { settings.bytesRaw = false; }
         else { term.writeln('\x1b[2musage: /set bytes raw|human\x1b[0m'); term.write(PROMPT); return; }
         localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-        term.writeln(`\x1b[32mbytes display: ${settings.bytesRaw ? 'raw numbers' : 'human-readable'}\x1b[0m`);
+        term.writeln(`\x1b[32m✓ bytes: ${settings.bytesRaw ? 'raw numbers' : 'human-readable'}\x1b[0m`);
       } else if (args[0] === 'null') {
         settings.nullStr = args[1] || 'null';
         localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-        term.writeln(`\x1b[32mnull display: "${settings.nullStr}"\x1b[0m`);
+        term.writeln(`\x1b[32m✓ null: "${settings.nullStr}"\x1b[0m`);
       } else if (args[0] === 'color') {
         if (args[1] === 'off' || args[1] === 'false') { settings.color = false; }
         else if (args[1] === 'on' || args[1] === 'true' || !args[1]) { settings.color = true; }
         else { term.writeln('\x1b[2musage: /set color on|off\x1b[0m'); term.write(PROMPT); return; }
         localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-        term.writeln(`\x1b[32mcell color: ${settings.color ? 'on' : 'off'}\x1b[0m`);
+        term.writeln(`\x1b[32m✓ color: ${settings.color ? 'on' : 'off'}\x1b[0m`);
       } else {
         term.writeln(`\x1b[31munknown setting: ${args[0]}\x1b[0m  \x1b[2moptions: limit, bytes, null, color\x1b[0m`);
       }
