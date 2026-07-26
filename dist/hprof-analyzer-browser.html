@@ -3148,7 +3148,7 @@ function startTerminal() {
       currentAbort = null;
       term.write('\r\x1b[K');
       if (e.name === 'AbortError') {
-        term.writeln('\x1b[33mcancelled\x1b[0m');
+        term.writeln('\x1b[2m(cancelled)\x1b[0m');
       } else {
         term.writeln(`\x1b[31merror: ${e.message}\x1b[0m`);
       }
