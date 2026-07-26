@@ -3490,12 +3490,24 @@ fn handle_meta(
                         };
                         write!(out, "{}", plan.explain())?;
                     }
-                    Err(e) => writeln!(out, "plan error: {}", e.0)?,
+                    Err(e) => {
+                        let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+                        if color { writeln!(out, "\x1b[31mplan error: {}\x1b[0m", e.0)?; }
+                        else { writeln!(out, "plan error: {}", e.0)?; }
+                    }
                 },
-                Err(report) => writeln!(out, "parse error: {report}")?,
+                Err(report) => {
+                    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+                    if color { writeln!(out, "\x1b[31mparse error: {report}\x1b[0m")?; }
+                    else { writeln!(out, "parse error: {report}")?; }
+                }
             }
         }
-        other => writeln!(out, "unknown command: !{other} (try !help)")?,
+        other => {
+            let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+            if color { writeln!(out, "\x1b[33munknown command: !{other} (try !help)\x1b[0m")?; }
+            else { writeln!(out, "unknown command: !{other} (try !help)")?; }
+        }
     }
     Ok(false)
 }
