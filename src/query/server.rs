@@ -641,12 +641,22 @@ pub fn run_server(path: &str, path_depth: usize, port: u16) -> io::Result<()> {
                 let url = request.url().to_string();
                 let mut body = String::new();
                 let _ = request.as_reader().read_to_string(&mut body);
+                // OPTIONS preflight for browser CORS
+                if method == "OPTIONS" {
+                    let resp = Response::empty(204)
+                        .with_header("Access-Control-Allow-Origin: *".parse::<tiny_http::Header>().unwrap())
+                        .with_header("Access-Control-Allow-Methods: GET, POST, OPTIONS".parse::<tiny_http::Header>().unwrap())
+                        .with_header("Access-Control-Allow-Headers: Content-Type".parse::<tiny_http::Header>().unwrap());
+                    let _ = request.respond(resp);
+                    continue;
+                }
                 let (status, json, ctype) = state.route_guarded(&method, &url, &body);
                 let resp = Response::from_string(json)
                     .with_status_code(status)
                     .with_header(
                         format!("Content-Type: {ctype}").parse::<tiny_http::Header>().unwrap(),
-                    );
+                    )
+                    .with_header("Access-Control-Allow-Origin: *".parse::<tiny_http::Header>().unwrap());
                 let _ = request.respond(resp);
             }
         }));

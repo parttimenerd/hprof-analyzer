@@ -172,6 +172,7 @@ impl HprofSession {
                     "display": nq.display,
                     "group": nq.group,
                     "needs_retained": nq.needs_retained,
+                    "oql": nq.oql,
                 })
             })
             .collect();
