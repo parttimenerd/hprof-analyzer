@@ -3440,7 +3440,7 @@ fn handle_meta(
                 (&names.1, "field", "fields")
             };
             let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-            let (cd, cr) = if color { ("\x1b[2m", "\x1b[0m") } else { ("", "") };
+            let (cc, cd, cr) = if color { ("\x1b[36m", "\x1b[2m", "\x1b[0m") } else { ("", "", "") };
             let prefix_lower = rest.to_ascii_lowercase();
             let matches: Vec<&String> = list
                 .iter()
@@ -3458,9 +3458,9 @@ fn handle_meta(
                 const CAP: usize = 200;
                 let shown: Vec<&String> = matches.iter().take(CAP).copied().collect();
                 let col_w = shown.iter().map(|n| n.len()).max().unwrap_or(10) + 2;
-                let cols = (80usize).saturating_div(col_w).max(1);
+                let cols = (80usize).saturating_div(col_w.max(1)).max(1);
                 for chunk in shown.chunks(cols) {
-                    let row: String = chunk.iter().map(|n| format!("  {:<col_w$}", n)).collect();
+                    let row: String = chunk.iter().map(|n| format!("  {cc}{}{cr}{}", n, " ".repeat(col_w - n.len()))).collect();
                     writeln!(out, "{}", row.trim_end())?;
                 }
                 if matches.len() > CAP {
