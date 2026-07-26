@@ -1408,7 +1408,7 @@ function startTerminal() {
     if (line.startsWith('/') && !line.includes(' ')) {
       const partial = line.slice(1).toLowerCase();
       const cmds = ['help','clear','status','analyze','history','export','set','classes','plan','explain','filter','grep',
-                    'sort','unique','stats','top','head','tail','cols','columns','select','rename','wc','obj','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
+                    'sort','unique','stats','top','head','tail','cols','columns','select','rename','wc','not','exclude','obj','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
       const matches = cmds.filter(c => c.startsWith(partial));
       if (matches.length === 1) {
         setLine('/' + matches[0] + ' ');
@@ -2155,6 +2155,35 @@ function startTerminal() {
       term.write(PROMPT);
       return;
     }
+    if (cmd.startsWith('/not ') || cmd === '/not' ||
+        cmd.startsWith('/exclude ') || cmd === '/exclude') {
+      const isExclude = cmd.startsWith('/exclude');
+      const pattern = cmd.slice(isExclude ? 8 : 4).trim();
+      if (!lastResult) {
+        term.writeln('\x1b[33mNo result to filter — run a query first.\x1b[0m');
+      } else if (!pattern) {
+        term.writeln('\x1b[33mUsage: /not <text>  or  /not /regex/[flags]  — exclude matching rows\x1b[0m');
+      } else {
+        const { columns, rows } = lastResult;
+        let re;
+        const reMatch = pattern.match(/^\/(.+)\/([gimsvy]*)$/);
+        if (reMatch) {
+          try { re = new RegExp(reMatch[1], reMatch[2] || 'i'); }
+          catch (e) { term.writeln(`\x1b[31mInvalid regex: ${e.message}\x1b[0m`); term.write(PROMPT); return; }
+        }
+        const test = re
+          ? (s) => re.test(s)
+          : (s) => s.toLowerCase().includes(pattern.toLowerCase());
+        const kept = rows.filter(row =>
+          !row.some((cell, i) => test(fmtCell(cell, columns[i])))
+        );
+        renderResult({ columns, rows: kept, row_count: kept.length });
+        term.writeln(`\x1b[2m${rows.length - kept.length} of ${rows.length} rows excluded by "${pattern}"\x1b[0m`);
+        lastResult = { columns, rows: kept };
+      }
+      term.write(PROMPT);
+      return;
+    }
     if (cmd === '/classes' || cmd.startsWith('/classes ')) {
       const pattern = cmd.slice(8).trim().toLowerCase();
       const all = classNames.length > 0 ? classNames
@@ -2553,6 +2582,7 @@ function startTerminal() {
     c('/select <col> …',         '— project (keep) specific columns from last result');
     c('/rename <old> <new>',     '— rename a column in last result');
     c('/filter <text|/re/>',     '— filter rows by substring or regex  (/grep is an alias)');
+    c('/not <text|/re/>',        '— exclude rows matching pattern (inverse of /filter)');
     c('/sort <col> [desc]',      '— sort rows by column');
     c('/top <N>  /head <N>',      '— first N rows (updates lastResult for chaining)');
     c('/tail <N>',               '— last N rows');

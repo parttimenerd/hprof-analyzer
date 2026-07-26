@@ -575,7 +575,7 @@ impl Completer for OqlCompleter {
                     "classes", "fields",
                     "reachable", "all", "mode",
                     "width", "count", "last", "save",
-                    "filter", "grep", "sort", "stats", "unique",
+                    "filter", "grep", "not", "exclude", "sort", "stats", "unique",
                     "top", "head", "tail", "select", "rename", "wc", "cols", "columns",
                     "describe", "obj",
                     "run",
@@ -951,6 +951,11 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             stdout.flush()?;
                             continue;
                         }
+                        "not" | "exclude" => {
+                            handle_filter_not(rest, &mut last_result, max_width, &mut stdout)?;
+                            stdout.flush()?;
+                            continue;
+                        }
                         "sort" => {
                             handle_sort(rest, &mut last_result, max_width, &mut stdout)?;
                             stdout.flush()?;
@@ -1314,6 +1319,11 @@ fn run_repl_line(
             }
             "filter" | "grep" => {
                 handle_filter(rest, last_result, *max_width, out)?;
+                out.flush()?;
+                return Ok(false);
+            }
+            "not" | "exclude" => {
+                handle_filter_not(rest, last_result, *max_width, out)?;
                 out.flush()?;
                 return Ok(false);
             }
@@ -1826,6 +1836,65 @@ fn handle_filter(
     Ok(())
 }
 
+/// `!not <pattern>` — keep only rows that do NOT match pattern (inverse of !filter).
+fn handle_filter_not(
+    pattern: &str,
+    last_result: &mut Option<QueryResult>,
+    max_width: usize,
+    out: &mut impl Write,
+) -> io::Result<()> {
+    if pattern.is_empty() {
+        writeln!(out, "usage: !not <pattern>  — exclude rows matching pattern/regex (inverse of !filter)")?;
+        return Ok(());
+    }
+    match last_result {
+        None => writeln!(out, "(no previous result — run a query first)")?,
+        Some(res) => {
+            let re_opt = if pattern.starts_with('/') && pattern.len() > 2 {
+                let end = pattern.rfind('/').unwrap_or(0);
+                if end > 0 {
+                    let inner = &pattern[1..end];
+                    let flags = &pattern[end + 1..];
+                    let flagged = if flags.contains('i') { format!("(?i){inner}") } else { inner.to_string() };
+                    match regex::Regex::new(&flagged) {
+                        Ok(re) => Some(re),
+                        Err(e) => { writeln!(out, "invalid regex: {e}")?; return Ok(()); }
+                    }
+                } else { None }
+            } else { None };
+            let pat_lower = if re_opt.is_none() { pattern.to_ascii_lowercase() } else { String::new() };
+            let filtered_rows: Vec<Vec<QueryValue>> = res.rows.iter()
+                .filter(|row| !row.iter().any(|v| {
+                    let s = fmt_value(v);
+                    match &re_opt {
+                        Some(re) => re.is_match(&s),
+                        None => s.to_ascii_lowercase().contains(&pat_lower),
+                    }
+                }))
+                .cloned()
+                .collect();
+            let total = res.rows.len();
+            let kept = filtered_rows.len();
+            let filtered_res = QueryResult {
+                columns: res.columns.clone(),
+                rows: filtered_rows,
+                row_count: kept as u64,
+                truncated: false,
+                note: None,
+                error: None,
+                name: res.name.clone(),
+                oql: res.oql.clone(),
+                viz: None,
+                elapsed_ms: None,
+            };
+            print_result(&filtered_res, std::time::Duration::ZERO, max_width, out)?;
+            writeln!(out, "-- {} of {} rows excluded {:?}", total - kept, total, pattern)?;
+            *last_result = Some(filtered_res);
+        }
+    }
+    Ok(())
+}
+
 /// Sort the last result by a column name (case-insensitive prefix match).
 /// `!sort <col> [desc]`
 fn handle_sort(
@@ -2095,6 +2164,7 @@ fn handle_meta(
                 "  !save <file> [oql]    write CSV to <file> (of <oql>, else the last result)"
             )?;
             writeln!(out, "  !filter <pattern>     filter rows: substring or /regex/ (/i for case-insensitive)")?;
+            writeln!(out, "  !not <pattern>        exclude rows matching pattern (inverse of !filter)")?;
             writeln!(out, "  !grep <pattern>       alias for !filter")?;
             writeln!(out, "  !sort <col> [desc]    sort last result by column (prefix match)")?;
             writeln!(out, "  !stats <col>          numeric summary: min/max/mean/p50/p90/p99/sum")?;
