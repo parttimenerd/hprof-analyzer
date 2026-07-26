@@ -3664,20 +3664,32 @@ fn print_result(
         }
     }
     if capped {
-        writeln!(out, "-- showing {row_limit} of {} rows (use `!set limit 0` or `!set limit N` to change) --", res.rows.len())?;
+        if color {
+            writeln!(out, "\x1b[33m-- showing {row_limit} of {} rows (use `!set limit 0` or `!set limit N` to change) --\x1b[0m", res.rows.len())?;
+        } else {
+            writeln!(out, "-- showing {row_limit} of {} rows (use `!set limit 0` or `!set limit N` to change) --", res.rows.len())?;
+        }
     }
     if let Some(note) = &res.note {
-        writeln!(out, "-- {note}")?;
+        if color {
+            writeln!(out, "\x1b[33m-- {note} --\x1b[0m")?;
+        } else {
+            writeln!(out, "-- {note}")?;
+        }
     }
-    writeln!(
-        out,
-        "({} row{}, {})",
-        res.row_count,
-        if res.row_count == 1 { "" } else { "s" },
-        fmt_elapsed(elapsed),
-    )?;
     if res.truncated {
-        writeln!(out, "-- result capped at {} rows (add LIMIT N or increase with LIMIT 0 for all) --", res.row_count)?;
+        if color {
+            writeln!(out, "\x1b[33m-- result capped at {} rows (add LIMIT N or increase with LIMIT 0 for all) --\x1b[0m", res.row_count)?;
+        } else {
+            writeln!(out, "-- result capped at {} rows (add LIMIT N or increase with LIMIT 0 for all) --", res.row_count)?;
+        }
+    }
+    if color {
+        let elapsed_ms = elapsed.as_millis();
+        let time_color = if elapsed_ms > 1000 { "\x1b[31m" } else if elapsed_ms > 300 { "\x1b[33m" } else { "\x1b[2m" };
+        writeln!(out, "{time_color}{} row{}, {}\x1b[0m", res.row_count, if res.row_count == 1 { "" } else { "s" }, fmt_elapsed(elapsed))?;
+    } else {
+        writeln!(out, "({} row{}, {})", res.row_count, if res.row_count == 1 { "" } else { "s" }, fmt_elapsed(elapsed))?;
     }
     if body.len() > 20 {
         let has_numeric = res.columns.iter().enumerate().any(|(i, _)| {
@@ -4178,8 +4190,10 @@ mod tests {
             viz: None,
             elapsed_ms: None,
         };
+        SESSION_SETTINGS.with(|s| s.borrow_mut().color = false);
         let mut buf = Vec::new();
         print_result(&res, std::time::Duration::from_millis(3), 0, &mut buf).unwrap();
+        SESSION_SETTINGS.with(|s| s.borrow_mut().color = true);
         let out = String::from_utf8(buf).unwrap();
         assert!(out.contains("(1 row, 3.0ms)"), "elapsed footer wrong: {out}");
     }
