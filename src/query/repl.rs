@@ -576,7 +576,7 @@ impl Completer for OqlCompleter {
                     "reachable", "all", "mode",
                     "width", "count", "last", "save",
                     "filter", "grep", "sort", "stats", "unique",
-                    "top", "head", "tail", "select", "cols", "columns",
+                    "top", "head", "tail", "select", "rename", "cols", "columns",
                     "describe", "obj",
                     "run",
                 ];
@@ -1095,6 +1095,37 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             stdout.flush()?;
                             continue;
                         }
+                        "rename" => {
+                            let parts: Vec<&str> = rest.splitn(2, char::is_whitespace).collect();
+                            if parts.len() < 2 || parts[0].is_empty() || parts[1].trim().is_empty() {
+                                writeln!(stdout, "usage: !rename <oldcol> <newcol>")?;
+                            } else {
+                                let old = parts[0];
+                                let new = parts[1].trim();
+                                match last_result.as_mut() {
+                                    None => writeln!(stdout, "(no result — run a query first)")?,
+                                    Some(res) => {
+                                        let lower = old.to_ascii_lowercase();
+                                        match res.columns.iter_mut().find(|c|
+                                            c.name.to_ascii_lowercase() == lower
+                                            || c.name.to_ascii_lowercase().contains(&lower))
+                                        {
+                                            None => {
+                                                let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
+                                                writeln!(stdout, "column {:?} not found — available: {}", old, names.join(", "))?;
+                                            }
+                                            Some(col) => {
+                                                let prev = col.name.clone();
+                                                col.name = new.to_string();
+                                                writeln!(stdout, "renamed {:?} → {:?}", prev, new)?;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            stdout.flush()?;
+                            continue;
+                        }
                         "obj" => {
                             let arg = rest.trim();
                             let parsed = arg.split_once('#')
@@ -1370,6 +1401,37 @@ fn run_repl_line(
                 } else {
                     dispatch_run(rest, path, path_depth, *reachable_only, *max_width,
                         last_query, last_result, cache, out)?;
+                }
+                out.flush()?;
+                return Ok(false);
+            }
+            "rename" => {
+                let parts: Vec<&str> = rest.splitn(2, char::is_whitespace).collect();
+                if parts.len() < 2 || parts[0].is_empty() || parts[1].trim().is_empty() {
+                    writeln!(out, "usage: !rename <oldcol> <newcol>")?;
+                } else {
+                    let old = parts[0];
+                    let new = parts[1].trim();
+                    match last_result.as_mut() {
+                        None => writeln!(out, "(no result — run a query first)")?,
+                        Some(res) => {
+                            let lower = old.to_ascii_lowercase();
+                            match res.columns.iter_mut().find(|c|
+                                c.name.to_ascii_lowercase() == lower
+                                || c.name.to_ascii_lowercase().contains(&lower))
+                            {
+                                None => {
+                                    let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
+                                    writeln!(out, "column {:?} not found — available: {}", old, names.join(", "))?;
+                                }
+                                Some(col) => {
+                                    let prev = col.name.clone();
+                                    col.name = new.to_string();
+                                    writeln!(out, "renamed {:?} → {:?}", prev, new)?;
+                                }
+                            }
+                        }
+                    }
                 }
                 out.flush()?;
                 return Ok(false);
@@ -2017,6 +2079,7 @@ fn handle_meta(
             writeln!(out, "  !top <N>  /  !head <N>  show first N rows of last result")?;
             writeln!(out, "  !tail <N>             show last N rows of last result")?;
             writeln!(out, "  !select <cols...>     project columns from last result")?;
+            writeln!(out, "  !rename <old> <new>   rename a column in last result")?;
             writeln!(out, "  !describe <class>     show all field names of a class")?;
             writeln!(out, "  !cols                 list column names of last result")?;
             writeln!(out, "  !obj <class>#<idx>    inspect a specific object (by dense index)")?;

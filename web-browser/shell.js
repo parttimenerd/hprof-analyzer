@@ -547,7 +547,7 @@ function startTerminal() {
     if (line.startsWith('/') && !line.includes(' ')) {
       const partial = line.slice(1).toLowerCase();
       const cmds = ['help','clear','status','analyze','history','export','set','classes','plan','explain','filter','grep',
-                    'sort','unique','stats','top','head','tail','cols','columns','select','obj','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
+                    'sort','unique','stats','top','head','tail','cols','columns','select','rename','obj','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
       const matches = cmds.filter(c => c.startsWith(partial));
       if (matches.length === 1) {
         setLine('/' + matches[0] + ' ');
@@ -988,6 +988,28 @@ function startTerminal() {
             const newRows = lastResult.rows.map(r => indices.map(i => r[i]));
             lastResult = { columns: newCols, rows: newRows };
             renderTable(lastResult.columns, lastResult.rows);
+          }
+        }
+      }
+      term.write(PROMPT);
+      return;
+    }
+    if (cmd.startsWith('/rename ') || cmd === '/rename') {
+      if (!lastResult) {
+        term.writeln('\x1b[33mNo result — run a query first.\x1b[0m');
+      } else {
+        const parts = cmd.slice(7).trim().split(/\s+/);
+        if (parts.length < 2 || !parts[0] || !parts[1]) {
+          term.writeln('\x1b[33musage: /rename <oldcol> <newcol>\x1b[0m');
+        } else {
+          const [oldName, newName] = parts;
+          const lower = lastResult.columns.map(f => f.toLowerCase());
+          const i = lower.findIndex(f => f === oldName.toLowerCase() || f.includes(oldName.toLowerCase()));
+          if (i === -1) {
+            term.writeln(`\x1b[31mcolumn ${JSON.stringify(oldName)} not found — available: ${lastResult.columns.join(', ')}\x1b[0m`);
+          } else {
+            lastResult.columns[i] = newName;
+            term.writeln(`\x1b[2mrenamed column ${JSON.stringify(oldName)} → ${JSON.stringify(newName)}\x1b[0m`);
           }
         }
       }
@@ -1657,6 +1679,7 @@ function startTerminal() {
     c('/last',                   '— re-display last result');
     c('/cols',                   '— list column names of last result');
     c('/select <col> …',         '— project (keep) specific columns from last result');
+    c('/rename <old> <new>',     '— rename a column in last result');
     c('/filter <text|/re/>',     '— filter rows by substring or regex  (/grep is an alias)');
     c('/sort <col> [desc]',      '— sort rows by column');
     c('/top <N>  /head <N>',      '— first N rows (updates lastResult for chaining)');
