@@ -323,7 +323,8 @@ async function pollAnalysisStatus() {
         lastGroupHdr = el;
         groupHasVisible = false;
       } else if (el.classList.contains('nq-card')) {
-        const match = !q || el.textContent.toLowerCase().includes(q);
+        const haystack = (el.textContent + ' ' + (el.dataset.oql || '')).toLowerCase();
+        const match = !q || haystack.includes(q);
         el.classList.toggle('nq-hidden', !match);
         if (match) groupHasVisible = true;
       }
@@ -353,6 +354,7 @@ function buildSidebar(analysisReady) {
     card.title = disabled
       ? `${q.oql}\n\n[Requires full analysis — click "Run Analysis" first]`
       : q.oql;
+    card.dataset.oql = q.oql;  // used by sidebar search to match OQL content
     const nameEl = document.createElement('div');
     nameEl.className = 'nq-name';
     nameEl.textContent = q.name;
