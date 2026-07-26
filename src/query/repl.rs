@@ -2224,6 +2224,7 @@ fn handle_sample(
                 elapsed_ms: None,
             };
             print_result(&sampled_res, std::time::Duration::ZERO, max_width, out)?;
+            *last_result = Some(sampled_res);
         }
     }
     Ok(())

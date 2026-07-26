@@ -2462,8 +2462,11 @@ function startTerminal() {
             [pool[i], pool[j]] = [pool[j], pool[i]];
           }
           const sampled = pool.slice(0, k).sort((a, b) => a - b).map(i => rows[i]);
-          renderResult({ columns: lastResult.columns, rows: sampled, row_count: sampled.length });
+          const sampledResult = { columns: lastResult.columns, rows: sampled, row_count: sampled.length };
+          renderResult(sampledResult);
           term.writeln(`\x1b[2m${k} of ${rows.length} rows (random sample)\x1b[0m`);
+          prevResult = lastResult;
+          lastResult = sampledResult;
         }
       }
       term.write(PROMPT);
