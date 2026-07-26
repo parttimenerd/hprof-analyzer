@@ -971,7 +971,13 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                         }
                         "count" => {
                             if rest.is_empty() {
-                                writeln!(stdout, "usage: !count <oql>")?;
+                                match &last_result {
+                                    None => writeln!(stdout, "(no result — run a query first)")?,
+                                    Some(res) => {
+                                        let n = res.rows.len();
+                                        writeln!(stdout, "{} row{}", n, if n == 1 { "" } else { "s" })?;
+                                    }
+                                }
                             } else {
                                 let wrapped = wrap_count(rest);
                                 if let Some(res) = run_and_print(
@@ -1421,7 +1427,13 @@ fn run_repl_line(
             }
             "count" => {
                 if rest.is_empty() {
-                    writeln!(out, "usage: !count <oql>")?;
+                    match last_result.as_ref() {
+                        None => writeln!(out, "(no result — run a query first)")?,
+                        Some(res) => {
+                            let n = res.rows.len();
+                            writeln!(out, "{} row{}", n, if n == 1 { "" } else { "s" })?;
+                        }
+                    }
                 } else {
                     let wrapped = wrap_count(rest);
                     if let Some(res) = run_and_print(
@@ -2702,7 +2714,7 @@ fn handle_meta(
                 out,
                 "  !width [N]            cap each printed cell to N chars (0/absent = unlimited)"
             )?;
-            writeln!(out, "  !count <oql>          run <oql> and print only its row count")?;
+            writeln!(out, "  !count [<oql>]        print row count of last result, or run <oql> and show count")?;
             writeln!(out, "  !last                 re-run the previous query")?;
             writeln!(out, "  !wc                   show row count of last result")?;
             writeln!(
