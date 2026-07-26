@@ -1084,7 +1084,7 @@ function startTerminal() {
         } else {
           const ci = resolveCol(colArg, lastResult.columns);
           if (ci < 0) {
-            term.writeln(`\x1b[31mColumn "${colArg}" not found\x1b[0m  \x1b[2mavailable: ${lastResult.columns.join(', ')}\x1b[0m`);
+            term.writeln(`\x1b[31mcolumn "${colArg}" not found\x1b[0m  \x1b[2mavailable: ${lastResult.columns.join(', ')}\x1b[0m`);
           } else {
             const total = lastResult.rows.length;
             const nonNull = lastResult.rows.filter(row => row[ci] !== null && row[ci] !== undefined && !(typeof row[ci] === 'object' && row[ci]?.kind === 'null')).length;
@@ -1383,7 +1383,7 @@ function startTerminal() {
       if (topMatch) { colArg = topMatch[1]; topN = parseInt(topMatch[2], 10); }
       const ci = resolveCol(colArg, lastResult.columns);
       if (ci < 0) {
-        term.writeln(`\x1b[31mColumn "${colArg}" not found. Available: ${lastResult.columns.join(', ')}\x1b[0m`);
+        term.writeln(`\x1b[31mcolumn "${colArg}" not found\x1b[0m  \x1b[2mavailable: ${lastResult.columns.join(', ')}\x1b[0m`);
         term.write(PROMPT);
         return;
       }
@@ -1442,7 +1442,7 @@ function startTerminal() {
       if (topMatch) { colArg = topMatch[1]; topN = parseInt(topMatch[2], 10); }
       const ci = resolveCol(colArg, lastResult.columns);
       if (ci < 0) {
-        term.writeln(`\x1b[31mColumn "${colArg}" not found. Available: ${lastResult.columns.join(', ')}\x1b[0m`);
+        term.writeln(`\x1b[31mcolumn "${colArg}" not found\x1b[0m  \x1b[2mavailable: ${lastResult.columns.join(', ')}\x1b[0m`);
         term.write(PROMPT);
         return;
       }
@@ -1538,7 +1538,7 @@ function startTerminal() {
       }
       const ci = resolveCol(colArg, lastResult.columns);
       if (ci < 0) {
-        term.writeln(`\x1b[31mColumn "${colArg}" not found. Available: ${lastResult.columns.join(', ')}\x1b[0m`);
+        term.writeln(`\x1b[31mcolumn "${colArg}" not found\x1b[0m  \x1b[2mavailable: ${lastResult.columns.join(', ')}\x1b[0m`);
         term.write(PROMPT);
         return;
       }
@@ -1668,7 +1668,7 @@ function startTerminal() {
         }
         const ci = resolveCol(colArg, lastResult.columns);
         if (ci < 0) {
-          term.writeln(`\x1b[31mColumn "${colArg}" not found. Available: ${lastResult.columns.join(', ')}\x1b[0m`);
+          term.writeln(`\x1b[31mcolumn "${colArg}" not found\x1b[0m  \x1b[2mavailable: ${lastResult.columns.join(', ')}\x1b[0m`);
           ok = false; break;
         }
         specs.push({ ci, desc, name: lastResult.columns[ci] });
@@ -1711,7 +1711,7 @@ function startTerminal() {
           if (!sp) { term.writeln('\x1b[33mUsage: /filter @<col> <pattern>\x1b[0m'); term.write(PROMPT); return; }
           colIdx = resolveCol(sp[1], columns);
           if (colIdx < 0) {
-            term.writeln(`\x1b[31mColumn "${sp[1]}" not found — available: ${columns.join(', ')}\x1b[0m`);
+            term.writeln(`\x1b[31mcolumn "${sp[1]}" not found\x1b[0m  \x1b[2mavailable: ${columns.join(', ')}\x1b[0m`);
             term.write(PROMPT); return;
           }
           pattern = sp[2];
@@ -1759,7 +1759,7 @@ function startTerminal() {
           if (!sp) { term.writeln('\x1b[33mUsage: /not @<col> <pattern>\x1b[0m'); term.write(PROMPT); return; }
           colIdx = resolveCol(sp[1], columns);
           if (colIdx < 0) {
-            term.writeln(`\x1b[31mColumn "${sp[1]}" not found — available: ${columns.join(', ')}\x1b[0m`);
+            term.writeln(`\x1b[31mcolumn "${sp[1]}" not found\x1b[0m  \x1b[2mavailable: ${columns.join(', ')}\x1b[0m`);
             term.write(PROMPT); return;
           }
           pattern = sp[2];
