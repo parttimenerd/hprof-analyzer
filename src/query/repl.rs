@@ -962,7 +962,13 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                     &mut cache, &mut stdout) {
                                     Ok(Some(res)) => {
                                         let fields: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                                        writeln!(stdout, "{} fields: {}", fields.len(), fields.join(", "))?;
+                                        writeln!(stdout, "{} field{}:", fields.len(), if fields.len() == 1 { "" } else { "s" })?;
+                                        let col_w = fields.iter().map(|f| f.len()).max().unwrap_or(10) + 2;
+                                        let cols = (80usize).saturating_div(col_w).max(1);
+                                        for chunk in fields.chunks(cols) {
+                                            let row: String = chunk.iter().map(|f| format!("  {:<col_w$}", f)).collect();
+                                            writeln!(stdout, "{}", row.trim_end())?;
+                                        }
                                     }
                                     Ok(None) => {}
                                     Err(e) => writeln!(stdout, "error: {e}")?,
@@ -1199,7 +1205,13 @@ fn run_repl_line(
                     match run_and_print(path, &q, path_depth, *reachable_only, *max_width, cache, out) {
                         Ok(Some(res)) => {
                             let fields: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                            writeln!(out, "{} fields: {}", fields.len(), fields.join(", "))?;
+                            writeln!(out, "{} field{}:", fields.len(), if fields.len() == 1 { "" } else { "s" })?;
+                            let col_w = fields.iter().map(|f| f.len()).max().unwrap_or(10) + 2;
+                            let cols = (80usize).saturating_div(col_w).max(1);
+                            for chunk in fields.chunks(cols) {
+                                let row: String = chunk.iter().map(|f| format!("  {:<col_w$}", f)).collect();
+                                writeln!(out, "{}", row.trim_end())?;
+                            }
                         }
                         Ok(None) => {} // error already printed
                         Err(e) => writeln!(out, "error: {e}")?,
