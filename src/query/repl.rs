@@ -1266,18 +1266,27 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             continue;
                         }
                         "history" => {
-                            let n: usize = rest.trim().parse().unwrap_or(20);
-                            let entries = line_editor
-                                .history()
-                                .search(SearchQuery::everything(SearchDirection::Backward, None))
-                                .unwrap_or_default();
-                            let start = entries.len().saturating_sub(n);
-                            for (i, item) in entries[start..].iter().enumerate() {
-                                let idx = start + i + 1;
-                                writeln!(stdout, "  {:>4}  {}", idx, item.command_line)?;
-                            }
-                            if entries.is_empty() {
-                                writeln!(stdout, "(no history yet)")?;
+                            let arg = rest.trim();
+                            if arg == "clear" {
+                                writeln!(stdout, "(clear not supported in reedline mode)")?;
+                            } else {
+                                let n: usize = arg.parse().unwrap_or(20);
+                                let entries = line_editor
+                                    .history()
+                                    .search(SearchQuery::everything(SearchDirection::Backward, None))
+                                    .unwrap_or_default();
+                                let shown = entries.iter().take(n).collect::<Vec<_>>();
+                                for (i, item) in shown.iter().enumerate() {
+                                    writeln!(stdout, "  \x1b[2m{:>3}\x1b[0m  {}", i + 1, item.command_line)?;
+                                }
+                                if entries.is_empty() {
+                                    writeln!(stdout, "(no history yet)")?;
+                                } else {
+                                    if entries.len() > n {
+                                        writeln!(stdout, "\x1b[2m  … {} more — !history N to show more\x1b[0m", entries.len() - n)?;
+                                    }
+                                    writeln!(stdout, "\x1b[2m  Use !N to re-run entry N  (1 = most recent)\x1b[0m")?;
+                                }
                             }
                             stdout.flush()?;
                             continue;
@@ -1335,7 +1344,33 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             stdout.flush()?;
                             continue;
                         }
-                        _ => {}
+                        _ => {
+                            // `!<N>` — re-run history entry N (1 = most recent)
+                            if let Ok(n) = verb.parse::<usize>() {
+                                let entries = line_editor
+                                    .history()
+                                    .search(SearchQuery::everything(SearchDirection::Backward, None))
+                                    .unwrap_or_default();
+                                if n == 0 || n > entries.len() {
+                                    writeln!(stdout, "no history entry {n} (have {})", entries.len())?;
+                                } else {
+                                    // entries[0] = most recent (Backward direction)
+                                    let q = entries[n - 1].command_line.clone();
+                                    writeln!(stdout, "\x1b[2m{q}\x1b[0m")?;
+                                    stdout.flush()?;
+                                    if let Some(res) = run_and_print(
+                                        path, &q, path_depth, reachable_only, max_width,
+                                        &mut cache, &mut stdout,
+                                    )? {
+                                        last_query = Some(q);
+                                        last_result = Some(res);
+                                        current_row = 0;
+                                    }
+                                }
+                                stdout.flush()?;
+                                continue;
+                            }
+                        }
                     }
                     if handle_meta(cmd, path_depth, &mut reachable_only, &names_for_meta, &mut stdout)?
                     {
@@ -2989,7 +3024,7 @@ fn handle_meta(
             writeln!(out, "  !tail [N]             show last N rows of last result (default 10)")?;
             writeln!(out, "  !row [N|first|last|next|prev]  show a row as key=value pairs; next/prev to navigate")?;
             writeln!(out, "  !undo                 restore last result before last manipulation")?;
-            writeln!(out, "  !history [N]          show last N queries from history (default 20)")?;
+            writeln!(out, "  !history [N]          show last N queries (1=most recent); use !N to re-run")?;
             writeln!(out, "  !select <cols...>     project columns from last result")?;
             writeln!(out, "  !drop <cols...>       remove columns from last result (inverse of !select)")?;
             writeln!(out, "  !rename <old> <new>   rename a column in last result")?;
