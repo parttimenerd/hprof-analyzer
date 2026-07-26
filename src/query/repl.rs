@@ -2896,7 +2896,7 @@ fn handle_stats(
                         let stddev = variance.sqrt();
                         let color = SESSION_SETTINGS.with(|s| s.borrow().color);
                         let (cb, cv, cs, cd, cr) = if color { ("\x1b[1m", "\x1b[32m", "\x1b[33m", "\x1b[2m", "\x1b[0m") } else { ("", "", "", "", "") };
-                        writeln!(out, "{cb}{}{cr}  {cd}({} values){cr}{}", col_name, n, null_note)?;
+                        writeln!(out, "{cb}{}{cr}  {cd}({} non-null values){cr}{}", col_name, n, null_note)?;
                         writeln!(out, "  min    {cv}{}{cr}", fv(vals[0]))?;
                         writeln!(out, "  max    {cv}{}{cr}", fv(vals[n - 1]))?;
                         writeln!(out, "  mean   {cv}{}{cr}", fv(mean))?;
