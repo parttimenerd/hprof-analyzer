@@ -2378,7 +2378,7 @@ function startTerminal() {
         let re;
         const reMatch = pattern.match(/^\/(.+)\/([gimsvy]*)$/);
         if (reMatch) {
-          try { re = new RegExp(reMatch[1], reMatch[2] || 'i'); }
+          try { re = new RegExp(reMatch[1], reMatch[2]); }
           catch (e) { term.writeln(`\x1b[31mInvalid regex: ${e.message}\x1b[0m`); term.write(PROMPT); return; }
         }
         const test = re
@@ -2425,7 +2425,7 @@ function startTerminal() {
         let re;
         const reMatch = pattern.match(/^\/(.+)\/([gimsvy]*)$/);
         if (reMatch) {
-          try { re = new RegExp(reMatch[1], reMatch[2] || 'i'); }
+          try { re = new RegExp(reMatch[1], reMatch[2]); }
           catch (e) { term.writeln(`\x1b[31mInvalid regex: ${e.message}\x1b[0m`); term.write(PROMPT); return; }
         }
         const test = re
@@ -2870,7 +2870,7 @@ function startTerminal() {
               return sample ? isNumericKind(sample[i]) : false;
             });
             const statHint = hasNumeric ? '  /stats <col>' : '';
-            term.writeln(`\x1b[2m  /filter <text|/re/>  /sort [-]<col>  /select <col>…  /pivot <col>  /row [N]${statHint}  /export [csv]\x1b[0m`);
+            term.writeln(`\x1b[2m  /filter <text|/re/>  /sort [-]<col>  /select <col>…  /pivot <col>  /row [N]${statHint}  /export [csv|tsv|json]\x1b[0m`);
           }
         } else {
           // No columns — just show the raw result
