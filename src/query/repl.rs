@@ -2538,7 +2538,12 @@ fn print_result(
     // Separator line under headers
     let sep: Vec<String> = widths.iter().map(|&w| "─".repeat(w)).collect();
     write_row(&sep, &widths, out)?;
-    for row in &body {
+    let show_row_nums = body.len() >= 2;
+    let row_num_w = if show_row_nums { body.len().to_string().len() } else { 0 };
+    for (i, row) in body.iter().enumerate() {
+        if show_row_nums {
+            write!(out, "{:>row_num_w$}  ", i + 1)?;
+        }
         write_row(row, &widths, out)?;
     }
     if let Some(note) = &res.note {
