@@ -576,7 +576,7 @@ impl Completer for OqlCompleter {
                     "reachable", "all", "mode",
                     "width", "count", "last", "save",
                     "filter", "grep", "sort", "stats", "unique",
-                    "top", "head", "tail", "cols", "columns",
+                    "top", "head", "tail", "select", "cols", "columns",
                     "describe", "obj",
                     "run",
                 ];
@@ -990,6 +990,58 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             stdout.flush()?;
                             continue;
                         }
+                        "select" => {
+                            let col_args: Vec<&str> = rest.split_whitespace().collect();
+                            if col_args.is_empty() {
+                                writeln!(stdout, "usage: !select <col1> [col2 ...]  — keep only named columns")?;
+                            } else {
+                                match &last_result {
+                                    None => writeln!(stdout, "(no result — run a query first)")?,
+                                    Some(res) => {
+                                        let mut indices = Vec::new();
+                                        let mut ok = true;
+                                        for arg in &col_args {
+                                            let lower = arg.to_ascii_lowercase();
+                                            match res.columns.iter().position(|c|
+                                                c.name.to_ascii_lowercase() == lower
+                                                || c.name.to_ascii_lowercase().contains(&lower))
+                                            {
+                                                Some(i) => indices.push(i),
+                                                None => {
+                                                    let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
+                                                    writeln!(stdout, "column {:?} not found — available: {}", arg, names.join(", "))?;
+                                                    ok = false;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        if ok {
+                                            use crate::query::model::QueryColumn;
+                                            let new_cols: Vec<QueryColumn> = indices.iter().map(|&i| res.columns[i].clone()).collect();
+                                            let new_rows: Vec<Vec<QueryValue>> = res.rows.iter()
+                                                .map(|row| indices.iter().map(|&i| row[i].clone()).collect())
+                                                .collect();
+                                            let projected = QueryResult {
+                                                columns: new_cols,
+                                                rows: new_rows.clone(),
+                                                row_count: new_rows.len() as u64,
+                                                truncated: false,
+                                                note: None,
+                                                error: None,
+                                                name: res.name.clone(),
+                                                oql: res.oql.clone(),
+                                                viz: None,
+                                                elapsed_ms: None,
+                                            };
+                                            print_result(&projected, std::time::Duration::ZERO, max_width, &mut stdout)?;
+                                            last_result = Some(projected);
+                                        }
+                                    }
+                                }
+                            }
+                            stdout.flush()?;
+                            continue;
+                        }
                         "describe" => {
                             let cls = rest.trim();
                             if cls.is_empty() {
@@ -1247,6 +1299,56 @@ fn run_repl_line(
                         }
                     }
                     _ => writeln!(out, "usage: !tail <N>  (N > 0)")?,
+                }
+                out.flush()?;
+                return Ok(false);
+            }
+            "select" => {
+                // !select col1 [col2 ...] — project columns from last result
+                let col_args: Vec<&str> = rest.split_whitespace().collect();
+                if col_args.is_empty() {
+                    writeln!(out, "usage: !select <col1> [col2 ...]  — keep only named columns")?;
+                } else {
+                    match last_result {
+                        None => writeln!(out, "(no result — run a query first)")?,
+                        Some(res) => {
+                            let mut indices = Vec::new();
+                            for arg in &col_args {
+                                let lower = arg.to_ascii_lowercase();
+                                match res.columns.iter().position(|c|
+                                    c.name.to_ascii_lowercase() == lower
+                                    || c.name.to_ascii_lowercase().contains(&lower))
+                                {
+                                    Some(i) => indices.push(i),
+                                    None => {
+                                        let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
+                                        writeln!(out, "column {:?} not found — available: {}", arg, names.join(", "))?;
+                                        out.flush()?;
+                                        return Ok(false);
+                                    }
+                                }
+                            }
+                            use crate::query::model::QueryColumn;
+                            let new_cols: Vec<QueryColumn> = indices.iter().map(|&i| res.columns[i].clone()).collect();
+                            let new_rows: Vec<Vec<QueryValue>> = res.rows.iter()
+                                .map(|row| indices.iter().map(|&i| row[i].clone()).collect())
+                                .collect();
+                            let projected = QueryResult {
+                                columns: new_cols,
+                                rows: new_rows.clone(),
+                                row_count: new_rows.len() as u64,
+                                truncated: false,
+                                note: None,
+                                error: None,
+                                name: res.name.clone(),
+                                oql: res.oql.clone(),
+                                viz: None,
+                                elapsed_ms: None,
+                            };
+                            print_result(&projected, std::time::Duration::ZERO, *max_width, out)?;
+                            *last_result = Some(projected);
+                        }
+                    }
                 }
                 out.flush()?;
                 return Ok(false);
@@ -1893,6 +1995,7 @@ fn handle_meta(
             writeln!(out, "  !unique <col>         distinct value counts, sorted by frequency")?;
             writeln!(out, "  !top <N>  /  !head <N>  show first N rows of last result")?;
             writeln!(out, "  !tail <N>             show last N rows of last result")?;
+            writeln!(out, "  !select <cols...>     project columns from last result")?;
             writeln!(out, "  !describe <class>     show all field names of a class")?;
             writeln!(out, "  !cols                 list column names of last result")?;
             writeln!(out, "  !obj <class>#<idx>    inspect a specific object (by dense index)")?;
