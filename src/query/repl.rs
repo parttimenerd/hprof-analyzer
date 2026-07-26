@@ -1360,7 +1360,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                 writeln!(stdout, "(clear not supported in reedline mode)")?;
                             } else {
                                 let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-                                let (cd, cr) = if color { ("\x1b[2m", "\x1b[0m") } else { ("", "") };
+                                let (cd, cc, cr) = if color { ("\x1b[2m", "\x1b[36m", "\x1b[0m") } else { ("", "", "") };
                                 let n: usize = arg.parse().unwrap_or(20);
                                 let entries = line_editor
                                     .history()
@@ -1368,7 +1368,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                     .unwrap_or_default();
                                 let shown = entries.iter().take(n).collect::<Vec<_>>();
                                 for (i, item) in shown.iter().enumerate() {
-                                    writeln!(stdout, "  {cd}{:>3}{cr}  {}", i + 1, item.command_line)?;
+                                    writeln!(stdout, "  {cd}{:>3}{cr}  {cc}!{}{cr}  {}", i + 1, i + 1, item.command_line)?;
                                 }
                                 if entries.is_empty() {
                                     writeln!(stdout, "(no history yet)")?;
