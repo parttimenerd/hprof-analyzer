@@ -1427,18 +1427,48 @@ fn handle_filter(
     out: &mut impl Write,
 ) -> io::Result<()> {
     if pattern.is_empty() {
-        writeln!(out, "usage: !filter <pattern>  — case-insensitive substring match")?;
+        writeln!(out, "usage: !filter <pattern>  — case-insensitive substring; /regex/ for regex")?;
         return Ok(());
     }
     match last_result {
         None => writeln!(out, "(no previous result — run a query first)")?,
         Some(res) => {
-            let pat_lower = pattern.to_ascii_lowercase();
+            // Check for /regex/ syntax
+            let re_opt = if pattern.starts_with('/') && pattern.len() > 2 {
+                let end = pattern.rfind('/').unwrap_or(0);
+                if end > 0 {
+                    let inner = &pattern[1..end];
+                    let flags = &pattern[end + 1..];
+                    let flagged = if flags.contains('i') {
+                        format!("(?i){inner}")
+                    } else {
+                        inner.to_string()
+                    };
+                    match regex::Regex::new(&flagged) {
+                        Ok(re) => Some(re),
+                        Err(e) => {
+                            writeln!(out, "invalid regex: {e}")?;
+                            return Ok(());
+                        }
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let pat_lower = if re_opt.is_none() { pattern.to_ascii_lowercase() } else { String::new() };
             let filtered_rows: Vec<Vec<QueryValue>> = res
                 .rows
                 .iter()
                 .filter(|row| {
-                    row.iter().any(|v| fmt_value(v).to_ascii_lowercase().contains(&pat_lower))
+                    row.iter().any(|v| {
+                        let s = fmt_value(v);
+                        match &re_opt {
+                            Some(re) => re.is_match(&s),
+                            None => s.to_ascii_lowercase().contains(&pat_lower),
+                        }
+                    })
                 })
                 .cloned()
                 .collect();
@@ -1700,7 +1730,7 @@ fn handle_meta(
                 out,
                 "  !save <file> [oql]    write CSV to <file> (of <oql>, else the last result)"
             )?;
-            writeln!(out, "  !filter <pattern>     show only rows matching pattern (case-insensitive)")?;
+            writeln!(out, "  !filter <pattern>     filter rows: substring or /regex/ (/i for case-insensitive)")?;
             writeln!(out, "  !grep <pattern>       alias for !filter")?;
             writeln!(out, "  !sort <col> [desc]    sort last result by column (prefix match)")?;
             writeln!(out, "  !stats <col>          numeric summary: min/max/mean/p50/p90/p99/sum")?;
