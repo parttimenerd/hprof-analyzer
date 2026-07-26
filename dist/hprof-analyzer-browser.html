@@ -1932,13 +1932,14 @@ function startTerminal() {
       }
       const row = lastResult.rows[n - 1];
       const keyW = Math.max(...lastResult.columns.map(c => c.length)) + 2;
+      const idxW = String(lastResult.columns.length).length;
       const total = lastResult.rows.length;
       const navHint = total > 1 ? `\x1b[2m  (/row next or /row prev to navigate)\x1b[0m` : '';
       term.writeln(`\x1b[2m── row ${n} of ${total} ──\x1b[0m${navHint}`);
       lastResult.columns.forEach((col, i) => {
         const key = col.padEnd(keyW);
         const val = fmtCell(row[i], col);
-        term.writeln(`  \x1b[36m${key}\x1b[0m  ${val}`);
+        term.writeln(`  \x1b[2m${String(i + 1).padStart(idxW)}\x1b[0m  \x1b[36m${key}\x1b[0m  ${val}`);
       });
       term.write(PROMPT);
       return;

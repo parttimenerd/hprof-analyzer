@@ -2909,10 +2909,11 @@ fn handle_row(
     };
     let row = &res.rows[idx - 1];
     let key_w = res.columns.iter().map(|c| c.name.len()).max().unwrap_or(8);
+    let idx_w = res.columns.len().to_string().len();
     let nav = if n_rows > 1 { format!("  \x1b[2m(use !row next / !row prev to navigate)\x1b[0m") } else { String::new() };
     writeln!(out, "── row {idx} of {n_rows} ──{nav}")?;
-    for (col, val) in res.columns.iter().zip(row.iter()) {
-        writeln!(out, "  {:<key_w$}  {}", col.name, fmt_value(val))?;
+    for (i, (col, val)) in res.columns.iter().zip(row.iter()).enumerate() {
+        writeln!(out, "  \x1b[2m{:>idx_w$}\x1b[0m  {:<key_w$}  {}", i + 1, col.name, fmt_value(val))?;
     }
     Ok(())
 }
