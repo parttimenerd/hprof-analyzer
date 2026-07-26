@@ -2365,8 +2365,8 @@ fn handle_filter(
     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
     let (cd, ce, cr) = if color { ("\x1b[2m", "\x1b[31m", "\x1b[0m") } else { ("", "", "") };
     if pattern.is_empty() {
-        writeln!(out, "{cd}usage: !filter <pattern>  — case-insensitive substring; /regex/ for regex")?;
-        writeln!(out, "       !filter @<col> <pattern>  — filter by specific column{cr}")?;
+        writeln!(out, "{cd}usage: !filter <pattern>          — case-insensitive substring; /regex/ for regex{cr}")?;
+        writeln!(out, "{cd}       !filter @<col> <pattern>  — filter by specific column{cr}")?;
         return Ok(());
     }
     match last_result {
@@ -2470,8 +2470,8 @@ fn handle_filter_not(
     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
     let (cd, ce, cr) = if color { ("\x1b[2m", "\x1b[31m", "\x1b[0m") } else { ("", "", "") };
     if pattern.is_empty() {
-        writeln!(out, "{cd}usage: !not <pattern>  — exclude rows matching pattern/regex (inverse of !filter)")?;
-        writeln!(out, "       !not @<col> <pattern>  — exclude by specific column{cr}")?;
+        writeln!(out, "{cd}usage: !not <pattern>          — exclude rows matching pattern/regex (inverse of !filter){cr}")?;
+        writeln!(out, "{cd}       !not @<col> <pattern>  — exclude by specific column{cr}")?;
         return Ok(());
     }
     match last_result {
