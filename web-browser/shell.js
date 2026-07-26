@@ -1680,6 +1680,12 @@ function startTerminal() {
       if (currentAbort) {
         currentAbort.abort();
         currentAbort = null;
+        if (watchTimer) {
+          clearInterval(watchTimer);
+          watchTimer = null;
+          term.writeln('\x1b[33m^C — query aborted, watch stopped\x1b[0m');
+          term.write(PROMPT);
+        }
       } else if (watchTimer) {
         clearInterval(watchTimer);
         watchTimer = null;
