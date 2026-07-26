@@ -203,6 +203,25 @@ button:hover { background: #4a6aaa; }
 }
 .nq-card.needs-analysis .nq-name { color: #607080; }
 
+.sidebar-search-wrap {
+  padding: 0 4px 8px;
+  flex-shrink: 0;
+}
+#sidebar-search {
+  width: 100%;
+  box-sizing: border-box;
+  background: #131320;
+  border: 1px solid #2a2a40;
+  border-radius: 5px;
+  color: #aac;
+  font-size: .76rem;
+  padding: 4px 8px;
+  outline: none;
+}
+#sidebar-search:focus { border-color: #3a5080; }
+#sidebar-search::placeholder { color: #3a3a50; }
+.nq-hidden { display: none; }
+
 /* Terminal */
 #terminal-container { flex: 1; overflow: hidden; position: relative; }
 .xterm { height: 100% !important; padding: 4px 8px; }

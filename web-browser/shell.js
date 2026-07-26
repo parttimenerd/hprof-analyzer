@@ -281,6 +281,33 @@ async function pollAnalysisStatus() {
   }
 }
 
+// ── Sidebar search ────────────────────────────────────────────────────────────
+(function initSidebarSearch() {
+  const input = document.getElementById('sidebar-search');
+  if (!input) return;
+  input.addEventListener('input', () => {
+    const q = input.value.toLowerCase();
+    const list = document.getElementById('named-query-list');
+    if (!list) return;
+    let lastGroupHdr = null;
+    let groupHasVisible = false;
+    for (const el of list.children) {
+      if (el.classList.contains('nq-group-hdr')) {
+        if (lastGroupHdr) lastGroupHdr.classList.toggle('nq-hidden', !groupHasVisible);
+        lastGroupHdr = el;
+        groupHasVisible = false;
+      } else if (el.classList.contains('nq-card')) {
+        const match = !q || el.textContent.toLowerCase().includes(q);
+        el.classList.toggle('nq-hidden', !match);
+        if (match) groupHasVisible = true;
+      }
+    }
+    if (lastGroupHdr) lastGroupHdr.classList.toggle('nq-hidden', !groupHasVisible);
+  });
+  // Prevent sidebar search from grabbing arrow keys / Enter from terminal
+  input.addEventListener('keydown', e => e.stopPropagation());
+})();
+
 // ── Sidebar ───────────────────────────────────────────────────────────────────
 function buildSidebar(analysisReady) {
   const list = document.getElementById('named-query-list');
@@ -453,6 +480,34 @@ function startTerminal() {
   window._hprofRunQuery = runQueryFromSidebar;
 
   function handleTab() {
+    // Complete / commands
+    if (line.startsWith('/') && !line.includes(' ')) {
+      const partial = line.slice(1).toLowerCase();
+      const cmds = ['help','clear','status','analyze','history','export','set','classes','filter',
+                    'sort','top','run'];
+      const matches = cmds.filter(c => c.startsWith(partial));
+      if (matches.length === 1) {
+        setLine('/' + matches[0] + ' ');
+      } else if (matches.length > 1) {
+        term.writeln('');
+        term.writeln('  ' + matches.map(c => '\x1b[36m/' + c + '\x1b[0m').join('  '));
+        redrawLine();
+      }
+      return;
+    }
+    // Complete /run <name>
+    if (line.startsWith('/run ')) {
+      const partial = line.slice(5).toLowerCase();
+      const matches = namedQueries.filter(q => q.name.toLowerCase().startsWith(partial));
+      if (matches.length === 1) {
+        setLine('/run ' + matches[0].name);
+      } else if (matches.length > 1) {
+        term.writeln('');
+        matches.forEach(q => term.writeln(`  \x1b[36m${q.name.padEnd(36)}\x1b[0m  \x1b[2m${q.display}\x1b[0m`));
+        redrawLine();
+      }
+      return;
+    }
     if (!wasmReady) return;
     try {
       const cs = JSON.parse(wasmComplete(line, cursorPos, classNames));
