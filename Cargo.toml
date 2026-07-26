@@ -34,7 +34,7 @@ mat-oracle = []
 # The WASM crate depends on hprof-analyzer with default-features = false to
 # avoid pulling in these non-WASM-compatible crates.
 default = ["native"]
-native = ["dep:reedline", "dep:tiny_http", "dep:clap", "dep:clap_complete", "dep:scraper", "dep:zstd", "dep:zip"]
+native = ["dep:reedline", "dep:crossterm", "dep:tiny_http", "dep:clap", "dep:clap_complete", "dep:scraper", "dep:zstd", "dep:zip"]
 
 [dependencies]
 base64 = "0.22"
@@ -58,6 +58,7 @@ chumsky = "0.13.0"
 ariadne = "0.6.0"
 logos = "0.16.1"
 reedline = { version = "0.43", optional = true }
+crossterm = { version = "0.28", optional = true }
 # full regex (not regex-lite) for MAT's quoted-FROM Java-Pattern class matching
 regex = "1"
 

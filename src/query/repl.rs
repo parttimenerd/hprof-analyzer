@@ -791,6 +791,15 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
     let mut stdout = io::stdout();
     let mut reachable_only = true;
     let mut max_width: usize = 0;
+    // Auto-detect terminal width; use it as default cell cap to avoid wrapping.
+    // Only caps individual cells, not the table itself, so wide multi-column
+    // tables still truncate sensibly. Falls back to 0 (unlimited) on non-tty.
+    #[cfg(feature = "native")]
+    if let Ok((cols, _)) = crossterm::terminal::size() {
+        if cols > 20 {
+            max_width = (cols as usize).saturating_sub(4).min(120);
+        }
+    }
     let mut last_query: Option<String> = None;
     let mut last_result: Option<QueryResult> = None;
     let mut cache: Option<crate::query::run::ReplCache> = None;
