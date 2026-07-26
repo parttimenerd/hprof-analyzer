@@ -3241,9 +3241,9 @@ fn handle_export(
     out: &mut impl Write,
 ) -> io::Result<()> {
     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-    let (cy, cg, cd, ce, cr) = if color { ("\x1b[33m", "\x1b[32m", "\x1b[2m", "\x1b[31m", "\x1b[0m") } else { ("", "", "", "", "") };
+    let (cg, cd, ce, cr) = if color { ("\x1b[32m", "\x1b[2m", "\x1b[31m", "\x1b[0m") } else { ("", "", "", "") };
     let Some(res) = last_result else {
-        writeln!(out, "{cy}(no result — run a query first){cr}")?;
+        warn_out("(no result — run a query first)", out)?;
         return Ok(());
     };
     // Parse: "csv myfile.csv" or "json report.json" or just "tsv"
