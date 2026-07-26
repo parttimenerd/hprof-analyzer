@@ -3284,65 +3284,62 @@ fn handle_meta(
                 print_oql_ref(out)?;
                 return Ok(false);
             }
+            let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+            let (ch, cc, cr) = if color { ("\x1b[1;33m", "\x1b[36m", "\x1b[0m") } else { ("", "", "") };
+            macro_rules! h { ($title:literal) => { writeln!(out, "\n{ch}{}{cr}", $title)?; }; }
+            macro_rules! c { ($cmd:literal, $desc:literal) => {
+                writeln!(out, "  {cc}{:<28}{cr} {}", $cmd, $desc)?;
+            }; }
             writeln!(out, "OQL REPL commands  (prefix: !, e.g. !help oql for language reference)")?;
-            writeln!(out)?;
-            writeln!(out, "  Heap exploration")?;
-            writeln!(out, "    !classes [pat]        list class names (substring-filtered)")?;
-            writeln!(out, "    !fields [pat]         list instance field names")?;
-            writeln!(out, "    !describe <class>     show fields and types of a class")?;
-            writeln!(out, "    !obj <class>#<idx>    inspect a specific object (by dense index)")?;
-            writeln!(out, "    !reachable            show only GC-reachable objects (default; MAT parity)")?;
-            writeln!(out, "    !all                  include unreachable objects (raw heap scan)")?;
-            writeln!(out, "    !mode                 show current reachability mode")?;
-            writeln!(out)?;
-            writeln!(out, "  Running queries")?;
-            writeln!(out, "    <oql>                 run a query (end with `;` or a blank line)")?;
-            writeln!(out, "    !last                 re-run the previous query")?;
-            writeln!(out, "    !count [<oql>]        row count of last result, or count <oql>")?;
-            writeln!(out, "    !plan [--raw] <oql>   show execution plan without scanning")?;
-            writeln!(out, "    !explain [--raw] <oql> alias for !plan")?;
-            writeln!(out, "    !run [<name>]         run a named query (no arg = list all)")?;
-            writeln!(out, "    /run <name>           named query (server-side)")?;
-            writeln!(out, "    /help                 list all named queries")?;
-            writeln!(out)?;
-            writeln!(out, "  Inspecting results")?;
-            writeln!(out, "    !wc [col]             shape (rows × cols); col arg = non-null count")?;
-            writeln!(out, "    !row [N|first|last|next|prev]  show a row as key=value pairs")?;
-            writeln!(out, "    !cols                 list columns with type and fill rate")?;
-            writeln!(out, "    !stats [col]          numeric summary: min/max/mean/stddev/p50/p90/p99; all cols if no arg")?;
-            writeln!(out, "    !history [N]          show last N queries; !N to re-run")?;
-            writeln!(out)?;
-            writeln!(out, "  Shaping results")?;
-            writeln!(out, "    !filter <pat>         keep rows matching substring or /regex/ (/i = case-insensitive)")?;
-            writeln!(out, "    !filter @<col> <pat>  filter on a specific column (alias: !grep)")?;
-            writeln!(out, "    !not <pat>            exclude matching rows (inverse of !filter)")?;
-            writeln!(out, "    !sort <col> [desc]    sort by column; - prefix for desc (e.g. !sort -size,name)")?;
-            writeln!(out, "    !select <col>…        keep only named columns")?;
-            writeln!(out, "    !drop <col>…          remove columns (inverse of !select)")?;
-            writeln!(out, "    !rename <old> <new>   rename a column")?;
-            writeln!(out, "    !distinct             remove duplicate rows (alias: !dedup)")?;
-            writeln!(out, "    !sample [N]           N randomly sampled rows (default 10)")?;
-            writeln!(out, "    !top [N] / !head [N]  first N rows (default 10)")?;
-            writeln!(out, "    !tail [N]             last N rows (default 10)")?;
-            writeln!(out, "    !unique <col> [N]     distinct value counts, top N by frequency")?;
-            writeln!(out, "    !pivot <col> [N]      group by column → (value, count) table")?;
-            writeln!(out, "    !undo                 restore result before last shaping command")?;
-            writeln!(out)?;
-            writeln!(out, "  Exporting")?;
-            writeln!(out, "    !save <file> [oql]    write CSV/TSV/JSON to file (format by extension)")?;
-            writeln!(out, "    !export [csv|tsv|json] [file]  print or save result (default: csv to stdout)")?;
-            writeln!(out)?;
-            writeln!(out, "  Display settings  (!set with no args shows current values)")?;
-            writeln!(out, "    !set limit <N>        cap rows displayed (0 = unlimited, default unlimited)")?;
-            writeln!(out, "    !set bytes raw|human  byte-size columns: numbers or 4.3 KiB (default human)")?;
-            writeln!(out, "    !set color on|off     ANSI colours in table hints (default on)")?;
-            writeln!(out, "    !set null <str>       null display string (default \"null\")")?;
-            writeln!(out, "    !width [N]            cap cell display width (0 = unlimited)")?;
-            writeln!(out)?;
-            writeln!(out, "  Session")?;
-            writeln!(out, "    !help                 show this help")?;
-            writeln!(out, "    !help oql             OQL language reference (keywords, functions, syntax)")?;
-            writeln!(out, "    !quit                 exit")?;
+            h!("Heap exploration");
+            c!("!classes [pat]",         "list class names (substring-filtered)");
+            c!("!fields [pat]",          "list instance field names");
+            c!("!describe <class>",      "show fields and types of a class");
+            c!("!obj <class>#<idx>",     "inspect a specific object (by dense index)");
+            c!("!reachable",             "show only GC-reachable objects (default; MAT parity)");
+            c!("!all",                   "include unreachable objects (raw heap scan)");
+            c!("!mode",                  "show current reachability mode");
+            h!("Running queries");
+            c!("<oql>",                  "run a query (end with `;` or a blank line)");
+            c!("!last",                  "re-run the previous query");
+            c!("!count [<oql>]",         "row count of last result, or count <oql>");
+            c!("!plan [--raw] <oql>",    "show execution plan without scanning");
+            c!("!explain [--raw] <oql>", "alias for !plan");
+            c!("!run [<name>]",          "run a named query (no arg = list all)");
+            h!("Inspecting results");
+            c!("!wc [col]",              "shape (rows × cols); col arg = non-null count");
+            c!("!row [N|first|last|next|prev]", "show a row as key=value pairs");
+            c!("!cols",                  "list columns with type and fill rate");
+            c!("!stats [col]",           "numeric summary: min/max/mean/stddev/p50/p90/p99");
+            c!("!history [N]",           "show last N queries; !N to re-run");
+            h!("Shaping results");
+            c!("!filter <pat>",          "keep rows matching substring or /regex/ (/i = case-insensitive)");
+            c!("!filter @<col> <pat>",   "filter on a specific column (alias: !grep)");
+            c!("!not <pat>",             "exclude matching rows (inverse of !filter)");
+            c!("!sort <col> [desc]",     "sort by column; - prefix for desc (e.g. !sort -size,name)");
+            c!("!select <col>…",         "keep only named columns");
+            c!("!drop <col>…",           "remove columns (inverse of !select)");
+            c!("!rename <old> <new>",    "rename a column");
+            c!("!distinct",              "remove duplicate rows (alias: !dedup)");
+            c!("!sample [N]",            "N randomly sampled rows (default 10)");
+            c!("!top [N] / !head [N]",   "first N rows (default 10)");
+            c!("!tail [N]",              "last N rows (default 10)");
+            c!("!unique <col> [N]",      "distinct value counts, top N by frequency");
+            c!("!pivot <col> [N]",       "group by column → (value, count) table");
+            c!("!undo",                  "restore result before last shaping command");
+            h!("Exporting");
+            c!("!save <file> [oql]",     "write CSV/TSV/JSON to file (format by extension)");
+            c!("!export [csv|tsv|json] [file]", "print or save result (default: csv to stdout)");
+            h!("Display settings  (!set with no args shows current values)");
+            c!("!set limit <N>",         "cap rows displayed (0 = unlimited, default unlimited)");
+            c!("!set bytes raw|human",   "byte-size columns: numbers or 4.3 KiB (default human)");
+            c!("!set color on|off",      "ANSI colours in table cells (default on)");
+            c!("!set null <str>",        "null display string (default \"null\")");
+            c!("!width [N]",             "cap cell display width (0 = unlimited)");
+            h!("Session");
+            c!("!help",                  "show this help");
+            c!("!help oql",              "OQL language reference (keywords, functions, syntax)");
+            c!("!quit",                  "exit");
             writeln!(out)?;
             writeln!(out, "  OQL queries may span multiple lines; end with `;` or a blank line.")?;
         }
@@ -3352,6 +3349,8 @@ fn handle_meta(
             } else {
                 (&names.1, "field", "fields")
             };
+            let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+            let (cd, cr) = if color { ("\x1b[2m", "\x1b[0m") } else { ("", "") };
             let prefix_lower = rest.to_ascii_lowercase();
             let matches: Vec<&String> = list
                 .iter()
@@ -3377,12 +3376,12 @@ fn handle_meta(
                 if matches.len() > CAP {
                     writeln!(
                         out,
-                        "  ... {} more (showing {CAP}; use `!{verb} <pattern>` to narrow)",
+                        "{cd}  ... {} more (showing {CAP}; use `!{verb} <pattern>` to narrow){cr}",
                         matches.len() - CAP
                     )?;
                 }
                 let label = if matches.len() == 1 { kind } else { kind_plural };
-                writeln!(out, "({} {label})", matches.len())?;
+                writeln!(out, "{cd}({} {label}){cr}", matches.len())?;
             }
         }
         "reachable" | "reachable-only" => {
