@@ -787,7 +787,7 @@ function startTerminal() {
     }
     if (cmd === '/analyze') {
       document.getElementById('btn-analyze').click();
-      term.writeln('\x1b[33mAnalysis triggered (watch the toolbar for status).\x1b[0m');
+      term.writeln('\x1b[33manalysis triggered — watch the toolbar for status\x1b[0m');
       term.write(PROMPT);
       return;
     }
@@ -842,7 +842,7 @@ function startTerminal() {
           if (classNames.length > 0) {
             const lower = cls.toLowerCase();
             const sugg = classNames.filter(c => c.toLowerCase().includes(lower)).slice(0, 5);
-            if (sugg.length) term.writeln(`\x1b[2mSimilar: ${sugg.map(c => c.split('.').pop()).join(', ')}\x1b[0m`);
+            if (sugg.length) term.writeln(`\x1b[2msimilar: ${sugg.map(c => c.split('.').pop()).join(', ')}\x1b[0m`);
           }
         } else {
           const colNames = data.result.columns.map(c => c.name || String(c));
@@ -980,7 +980,7 @@ function startTerminal() {
         if (watchTimer) {
           clearInterval(watchTimer);
           watchTimer = null;
-          term.writeln('\x1b[33mWatch stopped.\x1b[0m');
+          term.writeln('\x1b[33mwatch stopped\x1b[0m');
         } else if (args === '') {
           term.writeln('\x1b[2mUsage: /watch <seconds> <oql>  — refresh query every N seconds; /watch stop\x1b[0m');
         } else {
@@ -1064,7 +1064,7 @@ function startTerminal() {
     }
     if (cmd === '/last') {
       if (!lastResult) {
-        term.writeln('\x1b[33mNo result yet — run a query first.\x1b[0m');
+        term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
       } else {
         renderResult(lastResult);
         term.writeln(`\x1b[2m${lastResult.rows.length} rows (re-displayed)\x1b[0m`);
@@ -1074,7 +1074,7 @@ function startTerminal() {
     }
     if (cmd === '/wc' || cmd.startsWith('/wc ')) {
       if (!lastResult) {
-        term.writeln('\x1b[33mNo result — run a query first.\x1b[0m');
+        term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
       } else {
         const colArg = cmd.slice(3).trim();
         if (!colArg) {
@@ -1101,7 +1101,7 @@ function startTerminal() {
       } else {
         lastResult = prevResult;
         prevResult = null;
-        term.writeln(`\x1b[32mUndone — restored ${lastResult.rows.length} row${lastResult.rows.length !== 1 ? 's' : ''}\x1b[0m`);
+        term.writeln(`\x1b[32mundone — restored ${lastResult.rows.length} row${lastResult.rows.length !== 1 ? 's' : ''}\x1b[0m`);
         renderResult({ columns: lastResult.columns, rows: lastResult.rows, row_count: lastResult.rows.length });
       }
       term.write(PROMPT);
@@ -1109,7 +1109,7 @@ function startTerminal() {
     }
     if (cmd.startsWith('/row ') || cmd === '/row') {
       if (!lastResult) {
-        term.writeln('\x1b[33mNo result — run a query first.\x1b[0m');
+        term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
         term.write(PROMPT);
         return;
       }
@@ -1187,7 +1187,7 @@ function startTerminal() {
     }
     if (cmd === '/cols' || cmd === '/columns') {
       if (!lastResult) {
-        term.writeln('\x1b[33mNo result — run a query first.\x1b[0m');
+        term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
       } else {
         const fields = lastResult.columns;
         const total = lastResult.rows.length;
@@ -1217,7 +1217,7 @@ function startTerminal() {
     }
     if (cmd.startsWith('/select ') || cmd === '/select') {
       if (!lastResult) {
-        term.writeln('\x1b[33mNo result — run a query first.\x1b[0m');
+        term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
       } else {
         const args = cmd.slice(7).trim().split(/\s+/).filter(Boolean);
         if (args.length === 0) {
@@ -1261,7 +1261,7 @@ function startTerminal() {
     }
     if (cmd.startsWith('/drop ') || cmd === '/drop') {
       if (!lastResult) {
-        term.writeln('\x1b[33mNo result — run a query first.\x1b[0m');
+        term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
       } else {
         const args = cmd.slice(5).trim().split(/\s+/).filter(Boolean);
         if (args.length === 0) {
@@ -1303,7 +1303,7 @@ function startTerminal() {
     }
     if (cmd.startsWith('/rename ') || cmd === '/rename') {
       if (!lastResult) {
-        term.writeln('\x1b[33mNo result — run a query first.\x1b[0m');
+        term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
       } else {
         const parts = cmd.slice(7).trim().split(/\s+/);
         if (parts.length < 2 || !parts[0] || !parts[1]) {
@@ -1346,7 +1346,7 @@ function startTerminal() {
         // Save last query (or current line) under a name
         const toSave = history[0];
         if (!toSave) {
-          term.writeln('\x1b[33mNo query to bookmark — run a query first.\x1b[0m');
+          term.writeln('\x1b[33m(no query to bookmark — run a query first)\x1b[0m');
         } else {
           bookmarks[rest] = toSave;
           localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
@@ -1371,7 +1371,7 @@ function startTerminal() {
     }
     if (cmd.startsWith('/unique ') || cmd === '/unique') {
       if (!lastResult) {
-        term.writeln('\x1b[33mNo result — run a query first.\x1b[0m');
+        term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
         term.write(PROMPT);
         return;
       }
@@ -1431,7 +1431,7 @@ function startTerminal() {
     }
     if (cmd.startsWith('/pivot ') || cmd === '/pivot') {
       if (!lastResult) {
-        term.writeln('\x1b[33mNo result — run a query first.\x1b[0m');
+        term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
         term.write(PROMPT);
         return;
       }
@@ -1472,7 +1472,7 @@ function startTerminal() {
     }
     if (cmd.startsWith('/stats ') || cmd === '/stats') {
       if (!lastResult) {
-        term.writeln('\x1b[33mNo result — run a query first.\x1b[0m');
+        term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
         term.write(PROMPT);
         return;
       }
@@ -1556,7 +1556,7 @@ function startTerminal() {
       const vals = allVals.filter(v => v !== null).sort((a, b) => a - b);
       const nullCount = allVals.length - vals.length;
       if (vals.length === 0) {
-        term.writeln(`\x1b[33mNo numeric values in column "${colName}"\x1b[0m`);
+        term.writeln(`\x1b[33m(no numeric values in column "${colName}")\x1b[0m`);
         term.write(PROMPT);
         return;
       }
@@ -1611,7 +1611,7 @@ function startTerminal() {
       const arg = cmd.slice(isHead ? 5 : 4).trim();
       const n = arg ? parseInt(arg, 10) : 10;
       if (!lastResult) {
-        term.writeln('\x1b[33mNo result to slice — run a query first.\x1b[0m');
+        term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
       } else if (!n || n < 1) {
         term.writeln('\x1b[2mUsage: /top [N]  (or /head [N]) — show first N rows of last result (default 10)\x1b[0m');
       } else {
@@ -1631,7 +1631,7 @@ function startTerminal() {
       const arg = cmd.slice(5).trim();
       const n = arg ? parseInt(arg, 10) : 10;
       if (!lastResult) {
-        term.writeln('\x1b[33mNo result to slice — run a query first.\x1b[0m');
+        term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
       } else if (!n || n < 1) {
         term.writeln('\x1b[2mUsage: /tail [N]  — show last N rows of last result (default 10)\x1b[0m');
       } else {
@@ -1650,7 +1650,7 @@ function startTerminal() {
     if (cmd.startsWith('/sort ') || cmd === '/sort') {
       const args = cmd.slice(5).trim();
       if (!lastResult || !args) {
-        if (!lastResult) term.writeln('\x1b[33mNo result to sort — run a query first.\x1b[0m');
+        if (!lastResult) term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
         else term.writeln(`\x1b[2mUsage: /sort <col> [desc] [,-col2…]  (-col for desc)  — available: ${lastResult.columns.join(', ')}\x1b[0m`);
         term.write(PROMPT);
         return;
@@ -1704,7 +1704,7 @@ function startTerminal() {
       const isGrep = cmd.startsWith('/grep');
       const rawPattern = cmd.slice(isGrep ? 5 : 7).trim();
       if (!lastResult) {
-        term.writeln('\x1b[33mNo result to filter — run a query first.\x1b[0m');
+        term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
       } else if (!rawPattern) {
         term.writeln('\x1b[2mUsage: /filter <text>  or  /filter /regex/[flags]  or  /filter @<col> <text>\x1b[0m');
       } else {
@@ -1735,7 +1735,7 @@ function startTerminal() {
             : row.some((cell, i) => test(fmtCell(cell, columns[i])))
         );
         if (filtered.length === 0) {
-          term.writeln(`\x1b[33mNo rows match "${pattern}"\x1b[0m`);
+          term.writeln(`\x1b[33m(no rows match "${pattern}")\x1b[0m`);
         } else {
           const note = `${filtered.length} of ${rows.length} rows match "${pattern}"`;
           const newResult = { columns, rows: filtered, row_count: filtered.length, note };
@@ -1752,7 +1752,7 @@ function startTerminal() {
       const isExclude = cmd.startsWith('/exclude');
       const rawPattern = cmd.slice(isExclude ? 8 : 4).trim();
       if (!lastResult) {
-        term.writeln('\x1b[33mNo result to filter — run a query first.\x1b[0m');
+        term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
       } else if (!rawPattern) {
         term.writeln('\x1b[2mUsage: /not <text>  or  /not /regex/[flags]  or  /not @<col> <text>  — exclude matching rows\x1b[0m');
       } else {
@@ -1793,7 +1793,7 @@ function startTerminal() {
     }
     if (cmd.startsWith('/sample ') || cmd === '/sample') {
       if (!lastResult) {
-        term.writeln('\x1b[33mNo result — run a query first.\x1b[0m');
+        term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
       } else {
         const nStr = cmd.slice(7).trim();
         const n = nStr ? parseInt(nStr, 10) : 10;
@@ -1820,7 +1820,7 @@ function startTerminal() {
     }
     if (cmd === '/distinct' || cmd === '/dedup') {
       if (!lastResult) {
-        term.writeln('\x1b[33mNo result — run a query first.\x1b[0m');
+        term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
       } else {
         const seen = new Set();
         const kept = lastResult.rows.filter(row => {
@@ -1936,7 +1936,7 @@ function startTerminal() {
     }
     if (cmd === '/export' || cmd.startsWith('/export ')) {
       if (!lastResult) {
-        term.writeln('\x1b[33mNo result to export — run a query first.\x1b[0m');
+        term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
         term.write(PROMPT);
         return;
       }
@@ -2079,7 +2079,7 @@ function startTerminal() {
         return;
       }
       if (q.needs_retained && !hasRetained) {
-        term.writeln('\x1b[33mThis query requires full analysis. Click "Run Analysis" in the toolbar first.\x1b[0m');
+        term.writeln('\x1b[33mthis query requires full analysis — click \'Run Analysis\' in the toolbar first\x1b[0m');
         term.write(PROMPT);
         return;
       }
@@ -2570,7 +2570,7 @@ function startTerminal() {
         clearInterval(watchTimer);
         watchTimer = null;
         term.writeln('^C');
-        term.writeln('\x1b[33mWatch stopped.\x1b[0m');
+        term.writeln('\x1b[33mwatch stopped\x1b[0m');
         term.write(PROMPT);
       } else {
         term.writeln('^C');
