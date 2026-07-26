@@ -2263,12 +2263,11 @@ function startTerminal() {
           renderResult(r);
           lastResult = { columns: colNames, rows };
           currentRowIdx = 0;
-          const note = r.note ? `  \x1b[33m[${r.note}]\x1b[0m` : '';
           const trunc = r.truncated ? `  \x1b[33m[capped at ${r.row_count} rows — add LIMIT N for more]\x1b[0m` : '';
           const elapsedFmt = elapsedMs < 1000 ? `${elapsedMs.toFixed(0)}ms` : `${(elapsedMs / 1000).toFixed(3)}s`;
           const elapsedColor = elapsedMs > 1000 ? '\x1b[31m' : elapsedMs > 300 ? '\x1b[33m' : '\x1b[2m';
           const ts = new Date().toLocaleTimeString('en-GB', { hour12: false });
-          term.writeln(`${elapsedColor}${r.row_count} row${r.row_count !== 1 ? 's' : ''}, ${elapsedFmt}\x1b[0m\x1b[2m  [${ts}]\x1b[0m${trunc}${note}`);
+          term.writeln(`${elapsedColor}${r.row_count} row${r.row_count !== 1 ? 's' : ''}, ${elapsedFmt}\x1b[0m\x1b[2m  [${ts}]\x1b[0m${trunc}`);
           if (rows.length > 20) {
             const hasNumeric = colNames.some((_, i) => {
               const sample = rows.find(row => row[i] !== null && row[i] !== undefined);
