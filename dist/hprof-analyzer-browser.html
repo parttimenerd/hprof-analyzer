@@ -878,7 +878,7 @@ const BOOKMARKS_KEY = 'hprof-analyzer.bookmarks';
 })();
 
 // Display settings (persisted to localStorage)
-const defaultSettings = { rowLimit: 200, bytesRaw: false, nullStr: 'null' };
+const defaultSettings = { rowLimit: 200, bytesRaw: false, nullStr: 'null', color: true };
 let settings = Object.assign({}, defaultSettings,
   JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'));
 
@@ -1424,6 +1424,14 @@ function startTerminal() {
       else if (fmts.length > 1) { term.writeln(''); term.writeln('  tsv  csv'); redrawLine(); }
       return;
     }
+    // Complete /set <key>
+    if (line.startsWith('/set ')) {
+      const partial = line.slice(5).trim().toLowerCase();
+      const keys = ['limit', 'bytes', 'null', 'color'].filter(k => k.startsWith(partial));
+      if (keys.length === 1) { setLine('/set ' + keys[0] + ' '); }
+      else if (keys.length > 1) { term.writeln(''); term.writeln('  ' + keys.join('  ')); redrawLine(); }
+      return;
+    }
     if (!wasmReady) return;
     try {
       const cs = JSON.parse(wasmComplete(line, cursorPos, classNames));
@@ -1798,14 +1806,16 @@ function startTerminal() {
       term.write(PROMPT);
       return;
     }
-    if (cmd === '/set' || cmd.startsWith('/set ')) {      const args = cmd.slice(4).trim().split(/\s+/);
+    if (cmd === '/set' || cmd.startsWith('/set ')) {
+      const args = cmd.slice(4).trim().split(/\s+/);
       if (!args[0]) {
         // Print current settings
         term.writeln('\x1b[1mCurrent settings:\x1b[0m');
         term.writeln(`  limit    ${settings.rowLimit}  \x1b[2m(rows displayed per query)\x1b[0m`);
         term.writeln(`  bytes    ${settings.bytesRaw ? 'raw' : 'human'}  \x1b[2m(raw = show bytes as numbers)\x1b[0m`);
         term.writeln(`  null     "${settings.nullStr}"  \x1b[2m(how null values display)\x1b[0m`);
-        term.writeln('\x1b[2mUsage: /set limit 500 | /set bytes raw | /set bytes human | /set null ∅\x1b[0m');
+        term.writeln(`  color    ${settings.color ? 'on' : 'off'}  \x1b[2m(colorize table cells)\x1b[0m`);
+        term.writeln('\x1b[2mUsage: /set limit 500 | /set bytes raw | /set bytes human | /set null ∅ | /set color off\x1b[0m');
       } else if (args[0] === 'limit') {
         const n = parseInt(args[1], 10);
         if (!n || n < 1 || n > 10000) {
@@ -1825,8 +1835,14 @@ function startTerminal() {
         settings.nullStr = args[1] || 'null';
         localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
         term.writeln(`\x1b[32mnull display: "${settings.nullStr}"\x1b[0m`);
+      } else if (args[0] === 'color') {
+        if (args[1] === 'off' || args[1] === 'false') { settings.color = false; }
+        else if (args[1] === 'on' || args[1] === 'true' || !args[1]) { settings.color = true; }
+        else { term.writeln('\x1b[31mUsage: /set color on|off\x1b[0m'); term.write(PROMPT); return; }
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+        term.writeln(`\x1b[32mcell color: ${settings.color ? 'on' : 'off'}\x1b[0m`);
       } else {
-        term.writeln(`\x1b[31mUnknown setting: ${args[0]}. Options: limit, bytes, null\x1b[0m`);
+        term.writeln(`\x1b[31mUnknown setting: ${args[0]}. Options: limit, bytes, null, color\x1b[0m`);
       }
       term.write(PROMPT);
       return;
@@ -1951,6 +1967,7 @@ function startTerminal() {
   let watchTimer = null;    // setInterval handle for /watch
 
   function cellColor(cell, colName) {
+    if (!settings.color) return '';
     if (cell === null || cell === undefined) return '\x1b[2m';
     if (typeof cell !== 'object') return '';
     const kind = cell.kind;
