@@ -1076,9 +1076,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                         last_result = Some(res);
                                     }
                                     Err(e) => {
-                                        let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-                                        if color { writeln!(stdout, "\x1b[31merror: {e}\x1b[0m")?; }
-                                        else { writeln!(stdout, "error: {e}")?; }
+                                        writeln!(stdout, "{ce}error: {e}{cr}")?;
                                     }
                                 }
                             }
@@ -1638,8 +1636,7 @@ fn run_repl_line(
                             *last_result = Some(res);
                         }
                         Err(e) => {
-                            if color { writeln!(out, "{ce}error: {e}{cr}")?; }
-                            else { writeln!(out, "error: {e}")?; }
+                            writeln!(out, "{ce}error: {e}{cr}")?;
                         }
                     }
                 }
@@ -2107,11 +2104,9 @@ fn dispatch_run(
                 .map(|q| q.name)
                 .collect();
             let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-            if color { writeln!(out, "\x1b[31merror: unknown query name {:?}\x1b[0m", name)?; }
-            else { writeln!(out, "error: unknown query name {:?}", name)?; }
+            let (cd, ce, cr) = if color { ("\x1b[2m", "\x1b[31m", "\x1b[0m") } else { ("", "", "") };
+            writeln!(out, "{ce}error: unknown query name {:?}{cr}", name)?;
             if !candidates.is_empty() {
-                let cd = if color { "\x1b[2m" } else { "" };
-                let cr = if color { "\x1b[0m" } else { "" };
                 writeln!(out, "{cd}  did you mean: {}{cr}", candidates.join(", "))?;
             } else {
                 warn_out("  run !help to list available queries", out)?;
@@ -2368,9 +2363,11 @@ fn handle_filter(
     max_width: usize,
     out: &mut impl Write,
 ) -> io::Result<()> {
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cd, ce, cr) = if color { ("\x1b[2m", "\x1b[31m", "\x1b[0m") } else { ("", "", "") };
     if pattern.is_empty() {
-        writeln!(out, "usage: !filter <pattern>  — case-insensitive substring; /regex/ for regex")?;
-        writeln!(out, "       !filter @<col> <pattern>  — filter by specific column")?;
+        writeln!(out, "{cd}usage: !filter <pattern>  — case-insensitive substring; /regex/ for regex")?;
+        writeln!(out, "       !filter @<col> <pattern>  — filter by specific column{cr}")?;
         return Ok(());
     }
     match last_result {
@@ -2385,13 +2382,13 @@ fn handle_filter(
                             Some(ci) => (Some(ci), pat.trim()),
                             None => {
                                 let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                                writeln!(out, "column {:?} not found — available: {}", col, names.join(", "))?;
+                                writeln!(out, "{ce}column {:?} not found{cr}  {cd}available: {}{cr}", col, names.join(", "))?;
                                 return Ok(());
                             }
                         }
                     }
                     _ => {
-                        writeln!(out, "usage: !filter @<col> <pattern>  — e.g. !filter @className String")?;
+                        writeln!(out, "{cd}usage: !filter @<col> <pattern>  — e.g. !filter @className String{cr}")?;
                         return Ok(());
                     }
                 }
@@ -2412,7 +2409,7 @@ fn handle_filter(
                     match regex::Regex::new(&flagged) {
                         Ok(re) => Some(re),
                         Err(e) => {
-                            writeln!(out, "invalid regex: {e}")?;
+                            writeln!(out, "{ce}invalid regex: {e}{cr}")?;
                             return Ok(());
                         }
                     }
@@ -2471,9 +2468,11 @@ fn handle_filter_not(
     max_width: usize,
     out: &mut impl Write,
 ) -> io::Result<()> {
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cd, ce, cr) = if color { ("\x1b[2m", "\x1b[31m", "\x1b[0m") } else { ("", "", "") };
     if pattern.is_empty() {
-        writeln!(out, "usage: !not <pattern>  — exclude rows matching pattern/regex (inverse of !filter)")?;
-        writeln!(out, "       !not @<col> <pattern>  — exclude by specific column")?;
+        writeln!(out, "{cd}usage: !not <pattern>  — exclude rows matching pattern/regex (inverse of !filter)")?;
+        writeln!(out, "       !not @<col> <pattern>  — exclude by specific column{cr}")?;
         return Ok(());
     }
     match last_result {
@@ -2488,13 +2487,13 @@ fn handle_filter_not(
                             Some(ci) => (Some(ci), pat.trim()),
                             None => {
                                 let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                                writeln!(out, "column {:?} not found — available: {}", col, names.join(", "))?;
+                                writeln!(out, "{ce}column {:?} not found{cr}  {cd}available: {}{cr}", col, names.join(", "))?;
                                 return Ok(());
                             }
                         }
                     }
                     _ => {
-                        writeln!(out, "usage: !not @<col> <pattern>")?;
+                        writeln!(out, "{cd}usage: !not @<col> <pattern>{cr}")?;
                         return Ok(());
                     }
                 }
@@ -2509,7 +2508,7 @@ fn handle_filter_not(
                     let flagged = if flags.contains('i') { format!("(?i){inner}") } else { inner.to_string() };
                     match regex::Regex::new(&flagged) {
                         Ok(re) => Some(re),
-                        Err(e) => { writeln!(out, "invalid regex: {e}")?; return Ok(()); }
+                        Err(e) => { writeln!(out, "{ce}invalid regex: {e}{cr}")?; return Ok(()); }
                     }
                 } else { None }
             } else { None };
@@ -2561,7 +2560,7 @@ fn handle_sample(
         Ok(n) if n > 0 => n,
         _ if args.trim().is_empty() => 10,
         _ => {
-            writeln!(out, "usage: !sample [N]  (default 10)")?;
+            warn_out("usage: !sample [N]  (default 10)", out)?;
             return Ok(());
         }
     };
@@ -2705,11 +2704,13 @@ fn handle_sort(
     max_width: usize,
     out: &mut impl Write,
 ) -> io::Result<()> {
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cd, ce, cr) = if color { ("\x1b[2m", "\x1b[31m", "\x1b[0m") } else { ("", "", "") };
     if args.is_empty() {
         match last_result {
             Some(res) if !res.columns.is_empty() => {
                 let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                writeln!(out, "usage: !sort <col> [desc] [, <col2> [desc] …]  (prefix - for desc)  — available: {}", names.join(", "))?;
+                writeln!(out, "{cd}usage: !sort <col> [desc] [, <col2> [desc] …]  (prefix - for desc)  — available: {}{cr}", names.join(", "))?;
             }
             _ => warn_out("usage: !sort <col> [desc] [, <col2> [desc] …]  (prefix - for desc)", out)?,
         }
@@ -2736,7 +2737,7 @@ fn handle_sort(
                     match resolve_col(col_spec, &res.columns) {
                         None => {
                             let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                            writeln!(out, "column {:?} not found — available: {}", col_spec, names.join(", "))?;
+                            writeln!(out, "{ce}column {:?} not found{cr}  {cd}available: {}{cr}", col_spec, names.join(", "))?;
                             ok = false;
                             break;
                         }
@@ -2747,7 +2748,7 @@ fn handle_sort(
                 v
             };
             if specs.is_empty() {
-                writeln!(out, "usage: !sort <col> [desc] [, <col2> [desc] …]")?;
+                writeln!(out, "{cd}usage: !sort <col> [desc] [, <col2> [desc] …]{cr}")?;
                 return Ok(());
             }
             let mut sorted = res.rows.clone();
@@ -2936,8 +2937,8 @@ fn handle_describe(
     match fields_res {
         Err(e) => {
             let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-            if color { writeln!(out, "\x1b[31merror: {e}\x1b[0m")?; }
-            else { writeln!(out, "error: {e}")?; }
+            let (ce, cr) = if color { ("\x1b[31m", "\x1b[0m") } else { ("", "") };
+            writeln!(out, "{ce}error: {e}{cr}")?;
             return Ok(());
         }
         Ok(res) => {
