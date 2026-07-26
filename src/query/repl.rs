@@ -2042,7 +2042,12 @@ fn run_and_print(
             Ok(Some(res))
         }
         Err(e) => {
-            writeln!(out, "error: {e}")?;
+            let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+            if color {
+                writeln!(out, "\x1b[31merror: {e}\x1b[0m")?;
+            } else {
+                writeln!(out, "error: {e}")?;
+            }
             Ok(None)
         }
     }
@@ -3596,7 +3601,12 @@ fn print_result(
     out: &mut impl Write,
 ) -> io::Result<()> {
     if let Some(err) = &res.error {
-        writeln!(out, "error: {err}")?;
+        let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+        if color {
+            writeln!(out, "\x1b[31merror: {err}\x1b[0m")?;
+        } else {
+            writeln!(out, "error: {err}")?;
+        }
         return Ok(());
     }
     let (row_limit, color, bytes_raw) = SESSION_SETTINGS.with(|s| {
