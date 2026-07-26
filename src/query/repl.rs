@@ -974,7 +974,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
     writeln!(stdout, "{cb}{cc}hprof-analyzer{cr}{cc} OQL REPL{cr}")?;
     writeln!(stdout, "{cd} └─ {} classes, {} field names{hist_note}  ·  !help for commands  ·  !quit to exit{cr}",
         names_for_meta.0.len(), names_for_meta.1.len())?;
-    writeln!(stdout, "{cd}    Tab = complete  ·  ↑/↓ = history  ·  mode: reachable-only (MAT parity){cr}\n")?;
+    writeln!(stdout, "{cd}    Tab = complete  ·  Ctrl+R = history search  ·  mode: reachable-only (MAT parity){cr}\n")?;
     let mut buffer_lines: Vec<String> = Vec::new();
 
     // When stdin is not a TTY (e.g. piped in tests), skip reedline entirely and
