@@ -964,17 +964,12 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
     let mut prev_result: Option<QueryResult> = None; // single-level undo
     let mut current_row: usize = 0;                   // 0-based cursor for !row next/prev
     let mut cache: Option<crate::query::run::ReplCache> = None;
-    writeln!(
-        stdout,
-        "hprof-analyzer OQL REPL. Type !help for commands, !quit or Ctrl-D to exit."
-    )?;
-    writeln!(
-        stdout,
-        "mode: reachable-only (GC-reachable objects, MAT parity) — !all for raw heap.\n\
-         {} classes, {} field names loaded. End a query with `;` or a blank line.",
-        names_for_meta.0.len(),
-        names_for_meta.1.len(),
-    )?;
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cb, cc, cd, cr) = if color { ("\x1b[1m", "\x1b[36m", "\x1b[2m", "\x1b[0m") } else { ("", "", "", "") };
+    writeln!(stdout, "{cb}{cc}hprof-analyzer{cr}{cc} OQL REPL{cr}")?;
+    writeln!(stdout, "{cd} └─ {} classes, {} field names  ·  !help for commands  ·  !quit to exit{cr}",
+        names_for_meta.0.len(), names_for_meta.1.len())?;
+    writeln!(stdout, "{cd}    Tab = complete  ·  ↑/↓ = history  ·  mode: reachable-only (MAT parity){cr}\n")?;
     let mut buffer_lines: Vec<String> = Vec::new();
 
     // When stdin is not a TTY (e.g. piped in tests), skip reedline entirely and
