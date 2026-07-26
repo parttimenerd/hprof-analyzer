@@ -299,9 +299,8 @@ impl IdMap {
         self.block_base[b] + self.offsets[i] as u64
     }
 
-    /// Compress the sorted addrs into a self-describing blob (same format as the
-    /// prior single-Vec layout: absolute addrs, delta-vbyte then compressed for
-    /// Deflate9/Zstd3, or raw LE u64 for None), returning (blob, element_count).
+    /// Compress the sorted addrs into a self-describing blob (delta-vbyte then
+    /// deflate for Deflate9, or raw LE u64 for None), returning (blob, element_count).
     pub fn compress(&self, codec: Codec) -> io::Result<(Vec<u8>, usize)> {
         let len = self.len();
         match codec {
@@ -312,7 +311,7 @@ impl IdMap {
                 }
                 Ok((out, len))
             }
-            Codec::Deflate9 | Codec::Zstd3 => {
+            Codec::Deflate9 => {
                 // Stream the sorted absolute addrs directly out of the block
                 // structure and delta-vbyte-encode on the fly. Walking the
                 // blocks in order yields the exact same globally-sorted address
@@ -331,14 +330,10 @@ impl IdMap {
                         prev = addr;
                     }
                 }
-                let blob = if codec == Codec::Zstd3 {
-                    zstd::encode_all(&vb[..], 3).map_err(io::Error::other)?
-                } else {
-                    let mut e =
-                        flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());
-                    e.write_all(&vb)?;
-                    e.finish()?
-                };
+                let mut e =
+                    flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());
+                e.write_all(&vb)?;
+                let blob = e.finish()?;
                 Ok((blob, len))
             }
         }
@@ -363,18 +358,13 @@ impl IdMap {
                     m.push_sorted_addr(addr);
                 }
             }
-            Codec::Deflate9 | Codec::Zstd3 => {
+            Codec::Deflate9 => {
                 // The compressed output is the vbyte-delta stream (small relative
                 // to the 4.1GB decoded addresses). Walk it delta-by-delta and
                 // accumulate the running absolute address.
-                let vb = if codec == Codec::Zstd3 {
-                    zstd::decode_all(blob).map_err(io::Error::other)?
-                } else {
-                    let mut d = flate2::read::DeflateDecoder::new(blob);
-                    let mut vb = Vec::new();
-                    d.read_to_end(&mut vb)?;
-                    vb
-                };
+                let mut d = flate2::read::DeflateDecoder::new(blob);
+                let mut vb = Vec::new();
+                d.read_to_end(&mut vb)?;
                 let mut prev = 0u64;
                 let mut i = 0usize;
                 let mut pushed = 0usize;

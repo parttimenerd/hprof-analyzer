@@ -984,7 +984,7 @@ pub fn run_single_dump(
         let (g, .., state, refwalk_csr, string_values, _sv_trunc) = crate::pass2::Pass2::build(
             path,
             p1,
-            crate::cvec::Codec::Zstd3,
+            crate::cvec::Codec::Deflate9,
             &opts,
             &flat,
             &mut empty,
@@ -1026,7 +1026,7 @@ pub fn run_single_dump(
         crate::pass2::Pass2::build(
             path,
             p1_inner,
-            crate::cvec::Codec::Zstd3,
+            crate::cvec::Codec::Deflate9,
             &opts,
             &inner_queries,
             &mut empty,
@@ -1109,7 +1109,7 @@ pub fn run_single_dump(
         crate::pass2::Pass2::build(
             path,
             p1_outer,
-            crate::cvec::Codec::Zstd3,
+            crate::cvec::Codec::Deflate9,
             &opts,
             &flat,
             &mut in_sets_by_slot,
@@ -1574,7 +1574,7 @@ impl ReplCache {
         let (g, _, shallow_c, ..) = crate::pass2::Pass2::build(
             path,
             p1_for_pass2,
-            crate::cvec::Codec::Zstd3,
+            crate::cvec::Codec::Deflate9,
             &opts,
             &flat,
             &mut empty,

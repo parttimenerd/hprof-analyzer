@@ -2,8 +2,7 @@
 //! class_idx) that sit idle in RAM across the rpo -> inbound -> dominator peak
 //! window. Compress right after they are built, hold the small blob across the
 //! peak, and restore the full `Vec<u32>` only when a consumer needs random
-//! access. Zstd level 3 is used by default: on large dumps it frees each ~2 GB
-//! array (blob ~33 MB) in ~5 s; deflate9 (flate2) is kept as a fallback codec.
+//! access. deflate9 (flate2) is used; it is pure-Rust and WASM-compatible.
 
 use std::io::{self, Read, Write};
 
@@ -13,10 +12,7 @@ pub enum Codec {
     /// No compression: keep the live Vec (no RSS win; A/B escape hatch).
     None,
     /// deflate at max level (flate2 Compression::best()).
-    #[allow(dead_code)]
     Deflate9,
-    /// zstd at level 3 — fast compress, good ratio, fast decompress.
-    Zstd3,
 }
 
 impl Codec {
@@ -26,7 +22,6 @@ impl Codec {
         match s {
             "none" => Some(Codec::None),
             "deflate9" | "deflate" => Some(Codec::Deflate9),
-            "zstd" | "zstd3" => Some(Codec::Zstd3),
             _ => None,
         }
     }
@@ -45,44 +40,16 @@ fn deflate_decompress(blob: &[u8], cap: usize) -> io::Result<Vec<u8>> {
     Ok(out)
 }
 
-/// Compress a `&[u32]` slice to zstd without materializing a full-size byte copy.
-/// On little-endian targets (x86_64, aarch64) the u32 memory layout is already
-/// LE bytes, so we reinterpret the slice directly. On big-endian targets we fall
-/// back to an explicit byte copy (rare in practice; correctness preserved).
-fn zstd_compress_u32(v: &[u32]) -> io::Result<Vec<u8>> {
-    #[cfg(target_endian = "little")]
-    {
-        // SAFETY: [u32] and [u8] have no padding or provenance constraints;
-        // reinterpreting u32 memory as bytes is always well-defined.
-        let bytes = unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, v.len() * 4) };
-        zstd::encode_all(bytes, 3).map_err(io::Error::other)
-    }
-    #[cfg(not(target_endian = "little"))]
-    {
-        let mut bytes = Vec::with_capacity(v.len() * 4);
-        for &x in v {
-            bytes.extend_from_slice(&x.to_le_bytes());
-        }
-        zstd::encode_all(&bytes, 3).map_err(io::Error::other)
-    }
-}
-
-fn zstd_decompress(blob: &[u8], cap: usize) -> io::Result<Vec<u8>> {
-    let mut out = Vec::with_capacity(cap);
-    zstd::stream::copy_decode(blob, &mut out).map_err(io::Error::other)?;
-    Ok(out)
-}
-
 /// A `Vec<u32>` held compressed across the peak window, restorable losslessly.
 ///
 /// With `Codec::None` this keeps the live `Vec<u32>` unchanged (no free); with
-/// `Codec::Deflate9`/`Codec::Zstd3` it holds only a compressed blob of the LE
-/// bytes and the original element count.
+/// `Codec::Deflate9` it holds only a compressed blob of the LE bytes and the
+/// original element count.
 pub struct CompressedU32 {
     codec: Codec,
-    /// Compressed blob (Deflate9/Zstd3) or empty (None).
+    /// Compressed blob (Deflate9) or empty (None).
     blob: Vec<u8>,
-    /// Live copy for the None codec (empty for compressed codecs).
+    /// Live copy for the None codec (empty for Deflate9).
     raw: Vec<u32>,
     len: usize,
 }
@@ -98,18 +65,12 @@ impl CompressedU32 {
                 raw: v.to_vec(),
                 len,
             }),
-            Codec::Deflate9 | Codec::Zstd3 => {
-                let blob = if codec == Codec::Zstd3 {
-                    // Avoid materializing a full-size byte copy by reinterpreting
-                    // the u32 slice as bytes directly (LE-native on x86_64/aarch64).
-                    zstd_compress_u32(v)?
-                } else {
-                    let mut bytes = Vec::with_capacity(len * 4);
-                    for &x in v {
-                        bytes.extend_from_slice(&x.to_le_bytes());
-                    }
-                    deflate_compress(&bytes)?
-                };
+            Codec::Deflate9 => {
+                let mut bytes = Vec::with_capacity(len * 4);
+                for &x in v {
+                    bytes.extend_from_slice(&x.to_le_bytes());
+                }
+                let blob = deflate_compress(&bytes)?;
                 Ok(Self {
                     codec,
                     blob,
@@ -126,14 +87,6 @@ impl CompressedU32 {
             Codec::None => Ok(self.raw.clone()),
             Codec::Deflate9 => {
                 let bytes = deflate_decompress(&self.blob, self.len * 4)?;
-                debug_assert_eq!(bytes.len(), self.len * 4);
-                Ok(bytes
-                    .chunks_exact(4)
-                    .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                    .collect())
-            }
-            Codec::Zstd3 => {
-                let bytes = zstd_decompress(&self.blob, self.len * 4)?;
                 debug_assert_eq!(bytes.len(), self.len * 4);
                 Ok(bytes
                     .chunks_exact(4)
@@ -157,19 +110,15 @@ impl CompressedU32 {
             Codec::Deflate9 => {
                 stream_u32s(flate2::read::DeflateDecoder::new(&self.blob[..]), &mut f)
             }
-            Codec::Zstd3 => {
-                let decoder = zstd::stream::Decoder::new(&self.blob[..])?;
-                stream_u32s(decoder, &mut f)
-            }
         }
     }
 
-    /// Bytes currently held (blob for compressed codecs, raw*4 for None).
+    /// Bytes currently held (blob for Deflate9, raw*4 for None).
     #[allow(dead_code)]
     pub fn held_bytes(&self) -> usize {
         match self.codec {
             Codec::None => self.raw.len() * 4,
-            Codec::Deflate9 | Codec::Zstd3 => self.blob.len(),
+            Codec::Deflate9 => self.blob.len(),
         }
     }
 }
@@ -235,19 +184,6 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_repetitive_zstd() {
-        let mut v: Vec<u32> = Vec::new();
-        for k in 0..1000u32 {
-            for _ in 0..500 {
-                v.push(k);
-            }
-        }
-        let c = CompressedU32::compress(&v, Codec::Zstd3).unwrap();
-        assert_eq!(c.restore().unwrap(), v);
-        assert!(c.held_bytes() < v.len() * 4);
-    }
-
-    #[test]
     fn roundtrip_random_deflate() {
         let mut v: Vec<u32> = Vec::with_capacity(10_000);
         let mut state = 0x12345678u32;
@@ -262,20 +198,6 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_random_zstd() {
-        let mut v: Vec<u32> = Vec::with_capacity(10_000);
-        let mut state = 0x12345678u32;
-        for _ in 0..10_000 {
-            state ^= state << 13;
-            state ^= state >> 17;
-            state ^= state << 5;
-            v.push(state);
-        }
-        let c = CompressedU32::compress(&v, Codec::Zstd3).unwrap();
-        assert_eq!(c.restore().unwrap(), v);
-    }
-
-    #[test]
     fn roundtrip_none() {
         let v: Vec<u32> = vec![1, 2, 3, 0, u32::MAX, 42];
         let c = CompressedU32::compress(&v, Codec::None).unwrap();
@@ -286,7 +208,7 @@ mod tests {
     #[test]
     fn empty() {
         let v: Vec<u32> = Vec::new();
-        for codec in [Codec::None, Codec::Deflate9, Codec::Zstd3] {
+        for codec in [Codec::None, Codec::Deflate9] {
             let c = CompressedU32::compress(&v, codec).unwrap();
             assert_eq!(c.restore().unwrap(), v);
         }
@@ -303,7 +225,7 @@ mod tests {
             v.push(state);
         }
         v.extend_from_slice(&[0, u32::MAX, 1, 0]);
-        for codec in [Codec::None, Codec::Deflate9, Codec::Zstd3] {
+        for codec in [Codec::None, Codec::Deflate9] {
             let c = CompressedU32::compress(&v, codec).unwrap();
             let mut got: Vec<u32> = Vec::with_capacity(v.len());
             c.for_each_u32(|x| got.push(x)).unwrap();
@@ -316,7 +238,6 @@ mod tests {
         assert_eq!(Codec::parse("none"), Some(Codec::None));
         assert_eq!(Codec::parse("deflate9"), Some(Codec::Deflate9));
         assert_eq!(Codec::parse("deflate"), Some(Codec::Deflate9));
-        assert_eq!(Codec::parse("zstd"), Some(Codec::Zstd3));
-        assert_eq!(Codec::parse("zstd3"), Some(Codec::Zstd3));
+        assert_eq!(Codec::parse("zstd"), None);
     }
 }

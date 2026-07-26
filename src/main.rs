@@ -680,7 +680,7 @@ fn run_default(cli: Cli) {
             cli.output.as_deref(),
             fmt,
             cli.verbose,
-            cvec::Codec::Zstd3,
+            cvec::Codec::Deflate9,
             opts,
         ) {
             fail(analyze_error_hint(&input, &e));
@@ -766,7 +766,7 @@ fn analyze_to_report_inner(
         ));
     }
 
-    let compress = cvec::Codec::Zstd3;
+    let compress = cvec::Codec::Deflate9;
 
     let mut no_in_sets = std::collections::HashMap::new();
     let mut no_exists_bools = std::collections::HashMap::new();
@@ -1451,7 +1451,7 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
         let mut no_in_sets = std::collections::HashMap::new();
         let mut no_exists_bools = std::collections::HashMap::new();
         let (g, _inbound, _fwd_off_c, _fwd_tgt_c, _in_c, query_state, refwalk_csr, string_values, _sv_trunc) =
-            pass2::Pass2::build(input, p1, cvec::Codec::Zstd3, &opts, &flat, &mut no_in_sets, &mut no_exists_bools)?;
+            pass2::Pass2::build(input, p1, cvec::Codec::Deflate9, &opts, &flat, &mut no_in_sets, &mut no_exists_bools)?;
 
         // Query-only path: retained sizes/dominators are not computed, so cross-phase
         // (@retainedHeapSize) queries resolve to actionable errors here.
