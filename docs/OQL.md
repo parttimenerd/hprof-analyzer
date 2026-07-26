@@ -602,73 +602,64 @@ $ curl -s http://127.0.0.1:7070/stream \
 documents what works identically, what works with known differences, and what is
 not yet supported.
 
-### Fully compatible
+### Extensions beyond MAT
 
-These constructs produce identical results to MAT (modulo the reachability caveat
-below):
+These features are available in `hprof-analyzer` but not in Eclipse MAT's OQL:
+
+| Feature | Example |
+|---------|---------|
+| `MEDIAN(e)`, `PERCENTILE(e, n)` aggregates | `MEDIAN(@usedHeapSize)` |
+| `path(a, b)` bounded forward-reachability walk | `SELECT path(root, target)` |
+| `-- @viz <type> …` visualization directive | `-- @viz histogram label=class value=bytes` |
+| `GROUP BY` / `HAVING` | `GROUP BY classof(x) HAVING COUNT(*) > 100` |
+| Arithmetic expressions in SELECT and WHERE | `@usedHeapSize * 8 AS bits` |
+| System properties snapshot (`@systemProperties`) | `SELECT @systemProperties` |
+| Reachable-only filter (`--reachable-only` flag) | excludes GC-unreachable objects |
+| Interactive REPL with Tab completion and history | `hprof-analyzer query heap.hprof --repl` |
+| Report embedding (`--query` / `--query-file`) | fold OQL results into HTML/MD/JSON report |
+| Named queries library (`/run <name>`) | `/run top-classes-by-count` |
+
+### Compatible with MAT
+
+These constructs produce results matching MAT (modulo the reachability note below):
 
 | Construct | Example |
 |-----------|---------|
-| `SELECT *` / bare alias | `SELECT * FROM java.lang.String` |
-| `FROM <class>` exact match | `FROM java.lang.Thread` |
-| `FROM OBJECTS <class>` (`OBJECTS` is a no-op) | `FROM OBJECTS java.lang.String` |
+| `FROM <class>`, `FROM OBJECTS <class>` | `FROM java.lang.Thread` |
 | `FROM INSTANCEOF <class>` including subclasses | `FROM INSTANCEOF java.util.Map` |
-| `FROM "<regex>"` double-quoted regex | `FROM "java\.util\..*"` |
+| `FROM "<regex>"` double-quoted class-name regex | `FROM "java\.util\..*"` |
 | `FROM (subquery)` semi-join | `FROM (SELECT * FROM java.lang.Thread) t` |
-| `WHERE <field> <op> <value>` | `WHERE s.count > 0` |
-| `WHERE x INSTANCEOF C` | `WHERE t INSTANCEOF java.lang.Thread` |
-| `WHERE … LIKE "<regex>"` / `NOT LIKE` | `WHERE toString(s) LIKE ".*error.*"` |
-| `ORDER BY <expr> [ASC\|DESC]` | `ORDER BY @usedHeapSize DESC` |
-| `LIMIT n` | `LIMIT 20` |
-| `UNION SELECT …` | `SELECT … UNION SELECT …` |
-| Top-level `UNION … LIMIT n` | applies after branch concatenation |
-| `SELECT DISTINCT` | row-level dedup on full tuple |
-| `SELECT OBJECTS <expr>` | no-op projection marker |
-| `SELECT … AS RETAINED SET` | sets retained-set flag |
+| `WHERE`, `ORDER BY`, `LIMIT`, `UNION`, `SELECT DISTINCT` | standard SQL clauses |
+| `LIKE "<regex>"` / `NOT LIKE` | `WHERE toString(s) LIKE ".*error.*"` |
+| `WHERE x INSTANCEOF C` | |
+| `SELECT … AS RETAINED SET`, `SELECT OBJECTS …` | MAT set-operation markers (no-ops here) |
 | `<expr> AS <name>` column alias | `@usedHeapSize AS bytes` |
-| `COUNT(*)`, `SUM`, `MIN`, `MAX`, `AVG` | aggregate functions |
-| `MEDIAN(e)`, `PERCENTILE(e, n)` | hprof-analyzer extension |
-| `classof(x)` | returns class name string |
-| `toString(x)` | decodes `java.lang.String` instances |
-| `dominators(x)`, `dominatorof(x)` | full-analyze path only |
-| `@objectAddress`, `@objectId`, `@usedHeapSize` | object attributes |
-| `@retainedHeapSize`, `@inbounds`, `@outbounds` | full-analyze path only |
-| `@displayName`, `@length`, `@GCRoots`, `@GCRootInfo` | |
+| `COUNT(*)`, `SUM`, `MIN`, `MAX`, `AVG` | |
+| `classof(x)`, `toString(x)` (String only), `dominators(x)`, `dominatorof(x)` | |
+| `@objectAddress`, `@objectId`, `@usedHeapSize`, `@retainedHeapSize`¹, `@displayName`, `@length`, `@GCRoots` | |
 | Field paths: `s.fieldName`, `s.a.b` | |
-| MAT-API name aliases: `getObjectAddress()`, `getUsedHeapSize()`, etc. | method → attr rewrite |
-| `getKey()`, `getValue()` | ref-hop to backing field |
-| Boxed-primitive: `intValue()`, `longValue()`, `size()`, etc. | decodes backing `value` field |
-| Arithmetic: `+`, `-`, `*`, `/`, unary `+`/`-`, parens | `@usedHeapSize * 2` |
+| MAT-API method aliases: `getObjectAddress()`, `getUsedHeapSize()`, `getKey()`, `getValue()`, `intValue()`, `size()`, … | method → attr/field rewrite |
 
-### Intentional differences from MAT
+¹ Requires full analysis (`hprof-analyzer analyze` or `POST /analyze` on the server).
 
-| Area | MAT behaviour | hprof-analyzer behaviour |
-|------|--------------|--------------------------|
-| **Reachability** | Unreachable objects discarded at index time | Raw heap scan includes unreachable objects; MAT ⊆ ours for class queries |
-| **Integer `/0`** | Throws `ArithmeticException` | Returns `NULL` (safe row-level sentinel — analyzer must not crash on one bad row) |
-| **Float `/0.0`** | IEEE 754 `±inf`/`NaN` | Same — IEEE 754 (Java parity) |
-| **Integer overflow** | Java `long` wrapping | Same — `wrapping_*` (Java parity) |
-| **`equals()`** | Java `.equals()` (value equality for strings etc.) | Identity / `QueryValue` value-equality (`qv_value_eq`) — not Java `.equals()` |
-| **`contains()`** | Full Java String.contains | String-only; receiver must be a live `java.lang.String` |
-| **`get(n)` indexed access** | Works on arrays/collections | Rejected with actionable error pointing to backing field |
-| **`toString()` on non-String** | Calls object's `toString()` via JVM reflection | String-only; non-String input returns `NULL` |
-| **`SELECT COUNT(*) FROM (subquery)`** | Returns count | Rejected at plan time with actionable error (aggregate the inner query instead) |
-| **`s.count` / `s.offset` on String** | Works on pre-JDK9 layout | "Unknown field" — modern JDK layout has `value`/`coder`/`hash` |
+### Differences from MAT
+
+| Area | MAT | hprof-analyzer |
+|------|-----|----------------|
+| **Unreachable objects** | Discarded at index time | Included in raw scan; MAT ⊆ ours |
+| **`s.count` / `s.offset` on String** | Works (pre-JDK9 layout) | "Unknown field" — use `s.value`, `s.coder`, `s.hash` (modern JDK) |
+| **Integer `/0`** | Throws `ArithmeticException` | Returns `NULL` — analyzer never crashes on a bad row |
+| **`toString()` on non-String** | Calls JVM `toString()` via reflection | Returns `NULL` — static analysis cannot invoke live JVM methods |
+| **`get(n)` indexed access** | Works on arrays/collections | Rejected — dereference the backing field directly (e.g. `a.elementData`) |
+| **`SELECT COUNT(*) FROM (subquery)`** | Returns count | Rejected — aggregate the inner query instead |
 
 ### Not yet supported
 
-These MAT constructs are recognised by MAT's OQL but are not implemented:
-
-| Construct | MAT example | Status |
-|-----------|-------------|--------|
-| `FROM OBJECTS <address>` | `FROM OBJECTS 0x7f3a` | Single object by id/address — not started |
-| `FROM OBJECTS <decimal-id>` | `FROM OBJECTS 123456` | Same |
-| `${snapshot}.getClasses()` | `FROM ${snapshot}.getClasses()` | Reflection-style FROM — out of scope |
-| `s[1:3]` array slicing | `SELECT s[0] FROM int[]` | Array element / slice access — not started |
-| `get(n)` indexed element | `list.get(0)` | Deferred — no flat-Vec backing |
-| Numeric literal suffixes | `100L`, `1.5F`, `2.0D` | Parsed as plain int/float; suffix ignored or error |
-| Arbitrary `toString()` | `toString(myObj)` on non-String | Non-String returns NULL |
-| `@referenceArray`, `@valueArray` | `s.@referenceArray` | Parsed, currently returns NULL |
+| Construct | Notes |
+|-----------|-------|
+| `FROM OBJECTS 0x7f3a` / `FROM OBJECTS 123456` | Single object by address or id |
+| Numeric literal suffixes (`100L`, `1.5F`) | Parsed as plain int/float |
+| `${snapshot}.getClasses()` reflection-style FROM | Out of scope |
 
 ### Query-file parse error format
 
