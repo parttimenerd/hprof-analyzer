@@ -1553,6 +1553,7 @@ fn handle_stats(
                 }
                 Some(ci) => {
                     let col_name = &res.columns[ci].name;
+                    let total = res.rows.len();
                     let mut vals: Vec<f64> = res.rows.iter().filter_map(|row| {
                         match &row[ci] {
                             QueryValue::Int(i) => Some(*i as f64),
@@ -1565,6 +1566,7 @@ fn handle_stats(
                     } else {
                         vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
                         let n = vals.len();
+                        let null_count = total - n;
                         let sum: f64 = vals.iter().sum();
                         let mean = sum / n as f64;
                         let p50 = vals[n * 50 / 100];
@@ -1577,7 +1579,8 @@ fn handle_stats(
                                 format!("{v:.3}")
                             }
                         };
-                        writeln!(out, "{}  ({} values)", col_name, n)?;
+                        let null_note = if null_count > 0 { format!("  ({} null)", null_count) } else { String::new() };
+                        writeln!(out, "{}  ({} values){}", col_name, n, null_note)?;
                         writeln!(out, "  min  {}", fv(vals[0]))?;
                         writeln!(out, "  max  {}", fv(vals[n - 1]))?;
                         writeln!(out, "  mean {}", fv(mean))?;
