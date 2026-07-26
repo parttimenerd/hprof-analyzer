@@ -842,6 +842,12 @@ try {
 
 const PROMPT = 'oql> ';
 const HISTORY_KEY = 'hprof-analyzer.oql-history';
+const SETTINGS_KEY = 'hprof-analyzer.settings';
+
+// Display settings (persisted to localStorage)
+const defaultSettings = { rowLimit: 200, bytesRaw: false, nullStr: 'null' };
+let settings = Object.assign({}, defaultSettings,
+  JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'));
 
 let serverUrl = null;
 let term = null;
@@ -957,11 +963,11 @@ function fmtBytes(n) {
 }
 
 function fmtCell(cell, colName) {
-  if (cell === null || cell === undefined) return 'null';
+  if (cell === null || cell === undefined) return settings.nullStr;
   if (typeof cell !== 'object') return String(cell);
   const kind = cell.kind;
   const v = cell.v;
-  if (kind === 'null') return 'null';
+  if (kind === 'null') return settings.nullStr;
   if (kind === 'bool') return v ? 'true' : 'false';
   if (kind === 'int') {
     if (typeof v !== 'number') return String(v);
@@ -969,8 +975,8 @@ function fmtCell(cell, colName) {
     if (colName && /address|addr|ptr/i.test(colName)) {
       return '0x' + v.toString(16).toUpperCase().padStart(8, '0');
     }
-    // Byte-size columns shown as human-readable
-    if (colName && /bytes$|_size$|heap_size$/i.test(colName)) {
+    // Byte-size columns shown as human-readable (unless bytesRaw)
+    if (!settings.bytesRaw && colName && /bytes$|_size$|heap_size$/i.test(colName)) {
       return fmtBytes(v);
     }
     return v.toLocaleString('en-US');
@@ -1353,6 +1359,40 @@ function startTerminal() {
       term.write(PROMPT);
       return;
     }
+    if (cmd === '/set' || cmd.startsWith('/set ')) {
+      const args = cmd.slice(4).trim().split(/\s+/);
+      if (!args[0]) {
+        // Print current settings
+        term.writeln('\x1b[1mCurrent settings:\x1b[0m');
+        term.writeln(`  limit    ${settings.rowLimit}  \x1b[2m(rows displayed per query)\x1b[0m`);
+        term.writeln(`  bytes    ${settings.bytesRaw ? 'raw' : 'human'}  \x1b[2m(raw = show bytes as numbers)\x1b[0m`);
+        term.writeln(`  null     "${settings.nullStr}"  \x1b[2m(how null values display)\x1b[0m`);
+        term.writeln('\x1b[2mUsage: /set limit 500 | /set bytes raw | /set bytes human | /set null ∅\x1b[0m');
+      } else if (args[0] === 'limit') {
+        const n = parseInt(args[1], 10);
+        if (!n || n < 1 || n > 10000) {
+          term.writeln('\x1b[31mUsage: /set limit <1–10000>\x1b[0m');
+        } else {
+          settings.rowLimit = n;
+          localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+          term.writeln(`\x1b[32mrow limit set to ${n}\x1b[0m`);
+        }
+      } else if (args[0] === 'bytes') {
+        if (args[1] === 'raw') { settings.bytesRaw = true; }
+        else if (args[1] === 'human') { settings.bytesRaw = false; }
+        else { term.writeln('\x1b[31mUsage: /set bytes raw|human\x1b[0m'); term.write(PROMPT); return; }
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+        term.writeln(`\x1b[32mbytes display: ${settings.bytesRaw ? 'raw numbers' : 'human-readable'}\x1b[0m`);
+      } else if (args[0] === 'null') {
+        settings.nullStr = args[1] || 'null';
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+        term.writeln(`\x1b[32mnull display: "${settings.nullStr}"\x1b[0m`);
+      } else {
+        term.writeln(`\x1b[31mUnknown setting: ${args[0]}. Options: limit, bytes, null\x1b[0m`);
+      }
+      term.write(PROMPT);
+      return;
+    }
     if (cmd === '/export') {
       if (!lastResult) {
         term.writeln('\x1b[33mNo result to export — run a query first.\x1b[0m');
@@ -1487,7 +1527,7 @@ function startTerminal() {
           });
           // Per-column width: max of header and content, capped so total fits terminal
           const colW = colNames.map((n, i) => {
-            const contentMax = rows.slice(0, 200).reduce((m, row) => Math.max(m, fmtCell(row[i], n).length), 0);
+            const contentMax = rows.slice(0, settings.rowLimit).reduce((m, row) => Math.max(m, fmtCell(row[i], n).length), 0);
             return Math.max(n.length, contentMax, 4);
           });
           // Scale down proportionally if total exceeds terminal width
@@ -1501,13 +1541,13 @@ function startTerminal() {
           term.writeln('\x1b[1m' + header + '\x1b[0m');
           term.writeln('\x1b[2m' + '─'.repeat(Math.min(header.length, term.cols - 2)) + '\x1b[0m');
 
-          const displayRows = rows.slice(0, 200);
+          const displayRows = rows.slice(0, settings.rowLimit);
           displayRows.forEach(row => {
             const cells = row.map((cell, i) => padTo(fmtCell(cell, colNames[i]), adjW[i], isNumeric[i]));
             term.writeln(cells.join('  '));
           });
-          if (rows.length > 200) {
-            term.writeln(`\x1b[2m… ${rows.length - 200} more rows (truncated display)\x1b[0m`);
+          if (rows.length > settings.rowLimit) {
+            term.writeln(`\x1b[2m… ${rows.length - settings.rowLimit} more rows (display limit ${settings.rowLimit} — use /set limit N)\x1b[0m`);
           }
           lastResult = { columns: colNames, rows };
           const note = r.note ? `  \x1b[33m[${r.note}]\x1b[0m` : '';
@@ -1540,6 +1580,7 @@ function startTerminal() {
     term.writeln('  \x1b[36m/analyze\x1b[0m           — trigger full heap analysis (enables @retainedHeapSize)');
     term.writeln('  \x1b[36m/history\x1b[0m           — show recent query history');
     term.writeln('  \x1b[36m/export\x1b[0m            — copy last result to clipboard as TSV');
+    term.writeln('  \x1b[36m/set [key val]\x1b[0m     — view/change display settings (limit, bytes, null)');
     term.writeln('  \x1b[36m/run <name>\x1b[0m        — run a named query');
     term.writeln('');
     term.writeln('\x1b[1mKeyboard shortcuts:\x1b[0m');
