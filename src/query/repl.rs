@@ -965,7 +965,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
     let mut current_row: usize = 0;                   // 0-based cursor for !row next/prev
     let mut cache: Option<crate::query::run::ReplCache> = None;
     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-    let (cb, cc, cd, cr) = if color { ("\x1b[1m", "\x1b[36m", "\x1b[2m", "\x1b[0m") } else { ("", "", "", "") };
+    let (cb, cc, cd, cg, ce, cr) = if color { ("\x1b[1m", "\x1b[36m", "\x1b[2m", "\x1b[32m", "\x1b[31m", "\x1b[0m") } else { ("", "", "", "", "", "") };
     let hist_count = history_path()
         .and_then(|p| std::fs::read_to_string(p).ok())
         .map(|s| s.lines().count())
@@ -1115,7 +1115,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                         match resolve_col(rest, &res.columns) {
                                             None => {
                                                 let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                                                writeln!(stdout, "column {:?} not found — available: {}", rest, names.join(", "))?;
+                                                writeln!(stdout, "{ce}column {:?} not found{cr}  {cd}available: {}{cr}", rest, names.join(", "))?;
                                             }
                                             Some(ci) => {
                                                 let total = res.rows.len();
@@ -1224,7 +1224,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                     }
                                 }
                             } else {
-                                writeln!(stdout, "usage: !top [N]  (default 10)")?;
+                                writeln!(stdout, "{cd}usage: !top [N]  (default 10){cr}")?;
                             }
                             stdout.flush()?;
                             continue;
@@ -1247,7 +1247,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                     }
                                 }
                             } else {
-                                writeln!(stdout, "usage: !tail [N]  (default 10)")?;
+                                writeln!(stdout, "{cd}usage: !tail [N]  (default 10){cr}")?;
                             }
                             stdout.flush()?;
                             continue;
@@ -1259,9 +1259,9 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                 match &last_result {
                                     Some(res) if !res.columns.is_empty() => {
                                         let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                                        writeln!(stdout, "usage: !select <col1> [col2 ...]  — available: {}", names.join(", "))?;
+                                        writeln!(stdout, "{cd}usage: !select <col1> [col2 ...]  — available: {}{cr}", names.join(", "))?;
                                     }
-                                    _ => writeln!(stdout, "usage: !select <col1> [col2 ...]  — names, numbers, or ranges (e.g. 1-3)")?,
+                                    _ => writeln!(stdout, "{cd}usage: !select <col1> [col2 ...]  — names, numbers, or ranges (e.g. 1-3){cr}")?,
                                 }
                             } else {
                                 match &last_result {
@@ -1274,7 +1274,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                                 Ok(v) => indices.extend(v),
                                                 Err(_) => {
                                                     let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                                                    writeln!(stdout, "column {:?} not found — available: {}", arg, names.join(", "))?;
+                                                    writeln!(stdout, "{ce}column {:?} not found{cr}  {cd}available: {}{cr}", arg, names.join(", "))?;
                                                     ok = false;
                                                     break;
                                                 }
@@ -1393,9 +1393,9 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                 match &last_result {
                                     Some(res) if !res.columns.is_empty() => {
                                         let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                                        writeln!(stdout, "usage: !rename <col> <newname>  — available: {}", names.join(", "))?;
+                                        writeln!(stdout, "{cd}usage: !rename <col> <newname>  — available: {}{cr}", names.join(", "))?;
                                     }
-                                    _ => writeln!(stdout, "usage: !rename <col> <newname>")?,
+                                    _ => writeln!(stdout, "{cd}usage: !rename <col> <newname>{cr}")?,
                                 }
                             } else {
                                 let old = parts[0];
@@ -1406,12 +1406,12 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                         match resolve_col(old, &res.columns) {
                                             None => {
                                                 let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                                                writeln!(stdout, "column {:?} not found — available: {}", old, names.join(", "))?;
+                                                writeln!(stdout, "{ce}column {:?} not found{cr}  {cd}available: {}{cr}", old, names.join(", "))?;
                                             }
                                             Some(ci) => {
                                                 let prev = res.columns[ci].name.clone();
                                                 res.columns[ci].name = new.to_string();
-                                                writeln!(stdout, "renamed {:?} → {:?}", prev, new)?;
+                                                writeln!(stdout, "{cd}{:?}{cr} \u{2192} {cg}{:?}{cr}", prev, new)?;
                                             }
                                         }
                                     }
@@ -1427,7 +1427,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                 .or_else(|| arg.split_once(char::is_whitespace).map(|(c, n)| (c.trim(), n.trim())));
                             match parsed {
                                 None | Some(("", _)) | Some((_, "")) => {
-                                    writeln!(stdout, "usage: !obj <ClassName>#<idx>  e.g. !obj java.lang.String#42")?;
+                                    writeln!(stdout, "{cd}usage: !obj <ClassName>#<idx>  e.g. !obj java.lang.String#42{cr}")?;
                                 }
                                 Some((cls, idx)) => {
                                     let q = format!("SELECT * FROM {cls} s WHERE s.@objectId = {idx}");
@@ -1435,12 +1435,10 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                     match run_one(path, &q, path_depth, reachable_only, &mut cache, &mut dev_null) {
                                         Ok(res) => {
                                             if res.rows.len() == 1 {
-                                                let color = SESSION_SETTINGS.with(|s| s.borrow().color);
                                                 let bytes_raw = SESSION_SETTINGS.with(|s| s.borrow().bytes_raw);
-                                                let (cd, cc, cr) = if color { ("\x1b[2m", "\x1b[36m", "\x1b[0m") } else { ("", "", "") };
                                                 let key_w = res.columns.iter().map(|c| c.name.len()).max().unwrap_or(8);
                                                 let idx_w = res.columns.len().to_string().len();
-                                                writeln!(stdout, "── {cls}#{idx} ──")?;
+                                                writeln!(stdout, "{cb}\u{2500}\u{2500} {cls}#{idx} \u{2500}\u{2500}{cr}")?;
                                                 for (i, (col, val)) in res.columns.iter().zip(res.rows[0].iter()).enumerate() {
                                                     let val_str = fmt_value_for_col(val, &col.name);
                                                     let (vp, vs) = if color {
@@ -1458,7 +1456,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                             }
                                             last_result = Some(res);
                                         }
-                                        Err(e) => writeln!(stdout, "error: {e}")?,
+                                        Err(e) => writeln!(stdout, "{ce}error: {e}{cr}")?,
                                     }
                                 }
                             }
@@ -1473,7 +1471,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                     .search(SearchQuery::everything(SearchDirection::Backward, None))
                                     .unwrap_or_default();
                                 if n == 0 || n > entries.len() {
-                                    writeln!(stdout, "no history entry {n} (have {})", entries.len())?;
+                                    writeln!(stdout, "{ce}no history entry {n}{cr}  {cd}(have {}){cr}", entries.len())?;
                                 } else {
                                     // entries[0] = most recent (Backward direction)
                                     let q = entries[n - 1].command_line.clone();
@@ -1578,6 +1576,8 @@ fn run_repl_line(
     names_for_meta: &(Vec<String>, Vec<String>),
     out: &mut impl Write,
 ) -> io::Result<bool> {
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cb, cc, cd, cg, ce, cr) = if color { ("\x1b[1m", "\x1b[36m", "\x1b[2m", "\x1b[32m", "\x1b[31m", "\x1b[0m") } else { ("", "", "", "", "", "") };
     let t = line.trim();
     // /run <name> — dispatch a named query
     if buffer_lines.is_empty() && t.starts_with("/run") {
@@ -1609,8 +1609,6 @@ fn run_repl_line(
             }
             "count" => {
                 if rest.is_empty() {
-                    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-                    let (cg, cr) = if color { ("\x1b[32m", "\x1b[0m") } else { ("", "") };
                     match last_result.as_ref() {
                         None => warn_out("(no result — run a query first)", out)?,
                         Some(res) => {
@@ -1626,8 +1624,6 @@ fn run_repl_line(
                         Ok(res) if is_cls && res.error.is_none() => {
                             let n = res.rows.first().and_then(|r| r.first())
                                 .and_then(|v| if let QueryValue::Int(n) = v { Some(*n) } else { None });
-                            let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-                            let (cg, cc, cr) = if color { ("\x1b[32m", "\x1b[36m", "\x1b[0m") } else { ("", "", "") };
                             if let Some(n) = n {
                                 writeln!(out, "{cg}{}{cr} instance{} of {cc}{}{cr}", n, if n == 1 { "" } else { "s" }, rest.trim())?;
                             } else {
@@ -1642,8 +1638,7 @@ fn run_repl_line(
                             *last_result = Some(res);
                         }
                         Err(e) => {
-                            let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-                            if color { writeln!(out, "\x1b[31merror: {e}\x1b[0m")?; }
+                            if color { writeln!(out, "{ce}error: {e}{cr}")?; }
                             else { writeln!(out, "error: {e}")?; }
                         }
                     }
@@ -1669,8 +1664,6 @@ fn run_repl_line(
                 match last_result.as_ref() {
                     None => warn_out("(no result — run a query first)", out)?,
                     Some(res) => {
-                        let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-                        let (cg, cr) = if color { ("\x1b[32m", "\x1b[0m") } else { ("", "") };
                         if rest.is_empty() {
                             let rows = res.rows.len();
                             let cols = res.columns.len();
@@ -1679,7 +1672,7 @@ fn run_repl_line(
                             match resolve_col(rest, &res.columns) {
                                 None => {
                                     let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                                    writeln!(out, "column {:?} not found — available: {}", rest, names.join(", "))?;
+                                    writeln!(out, "{ce}column {:?} not found{cr}  {cd}available: {}{cr}", rest, names.join(", "))?;
                                 }
                                 Some(ci) => {
                                     let total = res.rows.len();
@@ -1778,7 +1771,7 @@ fn run_repl_line(
                         }
                     }
                 } else {
-                    writeln!(out, "usage: !top [N]  (default 10)")?;
+                    writeln!(out, "{cd}usage: !top [N]  (default 10){cr}")?;
                 }
                 out.flush()?;
                 return Ok(false);
@@ -1801,7 +1794,7 @@ fn run_repl_line(
                         }
                     }
                 } else {
-                    writeln!(out, "usage: !tail [N]  (default 10)")?;
+                    writeln!(out, "{cd}usage: !tail [N]  (default 10){cr}")?;
                 }
                 out.flush()?;
                 return Ok(false);
@@ -1824,7 +1817,7 @@ fn run_repl_line(
                     match last_result.as_ref() {
                         Some(res) if !res.columns.is_empty() => {
                             let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                            writeln!(out, "usage: !select <col1> [col2 ...]  — available: {}", names.join(", "))?;
+                            writeln!(out, "{cd}usage: !select <col1> [col2 ...]  — available: {}{cr}", names.join(", "))?;
                         }
                         _ => warn_out("usage: !select <col1> [col2 ...]  — names, numbers, or ranges (e.g. 1-3)", out)?,
                     }
@@ -1840,7 +1833,7 @@ fn run_repl_line(
                                     Ok(v) => indices.extend(v),
                                     Err(_) => {
                                         let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                                        writeln!(out, "column {:?} not found — available: {}", arg, names.join(", "))?;
+                                        writeln!(out, "{ce}column {:?} not found{cr}  {cd}available: {}{cr}", arg, names.join(", "))?;
                                         ok = false;
                                         break;
                                     }
@@ -1895,7 +1888,7 @@ fn run_repl_line(
                     match last_result.as_ref() {
                         Some(res) if !res.columns.is_empty() => {
                             let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                            writeln!(out, "usage: !rename <col> <newname>  — available: {}", names.join(", "))?;
+                            writeln!(out, "{cd}usage: !rename <col> <newname>  — available: {}{cr}", names.join(", "))?;
                         }
                         _ => warn_out("usage: !rename <col> <newname>", out)?,
                     }
@@ -1908,7 +1901,7 @@ fn run_repl_line(
                             match resolve_col(old, &res.columns) {
                                 None => {
                                     let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                                    writeln!(out, "column {:?} not found — available: {}", old, names.join(", "))?;
+                                    writeln!(out, "{ce}column {:?} not found{cr}  {cd}available: {}{cr}", old, names.join(", "))?;
                                 }
                                 Some(ci) => {
                                     *prev_result = Some(QueryResult {
@@ -1925,7 +1918,7 @@ fn run_repl_line(
                                     });
                                     let prev = res.columns[ci].name.clone();
                                     res.columns[ci].name = new.to_string();
-                                    writeln!(out, "renamed {:?} → {:?}", prev, new)?;
+                                    writeln!(out, "{cd}{:?}{cr} \u{2192} {cg}{:?}{cr}", prev, new)?;
                                 }
                             }
                         }
@@ -1943,8 +1936,6 @@ fn run_repl_line(
                 match last_result {
                     None => warn_out("(no result — run a query first)", out)?,
                     Some(res) => {
-                        let color = SESSION_SETTINGS.with(|s| s.borrow().color);
-                        let (cc, cd, cr) = if color { ("\x1b[36m", "\x1b[2m", "\x1b[0m") } else { ("", "", "") };
                         let fields: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
                         let idx_w = fields.len().to_string().len();
                         let col_w = fields.iter().map(|f| f.len()).max().unwrap_or(10);
@@ -1977,7 +1968,7 @@ fn run_repl_line(
                     .or_else(|| arg.split_once(char::is_whitespace).map(|(c, n)| (c.trim(), n.trim())));
                 match parsed {
                     None | Some(("", _)) | Some((_, "")) => {
-                        writeln!(out, "usage: !obj <ClassName>#<idx>  e.g. !obj java.lang.String#42")?;
+                        writeln!(out, "{cd}usage: !obj <ClassName>#<idx>  e.g. !obj java.lang.String#42{cr}")?;
                     }
                     Some((cls, idx)) => {
                         let q = format!("SELECT * FROM {cls} s WHERE s.@objectId = {idx}");
@@ -1985,12 +1976,10 @@ fn run_repl_line(
                         match run_one(path, &q, path_depth, *reachable_only, cache, &mut dev_null) {
                             Ok(res) => {
                                 if res.rows.len() == 1 {
-                                    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
                                     let bytes_raw = SESSION_SETTINGS.with(|s| s.borrow().bytes_raw);
-                                    let (cd, cc, cr) = if color { ("\x1b[2m", "\x1b[36m", "\x1b[0m") } else { ("", "", "") };
                                     let key_w = res.columns.iter().map(|c| c.name.len()).max().unwrap_or(8);
                                     let idx_w = res.columns.len().to_string().len();
-                                    writeln!(out, "── {cls}#{idx} ──")?;
+                                    writeln!(out, "{cb}\u{2500}\u{2500} {cls}#{idx} \u{2500}\u{2500}{cr}")?;
                                     for (i, (col, val)) in res.columns.iter().zip(res.rows[0].iter()).enumerate() {
                                         let val_str = fmt_value_for_col(val, &col.name);
                                         let (vp, vs) = if color {
@@ -2008,7 +1997,7 @@ fn run_repl_line(
                                 }
                                 *last_result = Some(res);
                             }
-                            Err(e) => writeln!(out, "error: {e}")?,
+                            Err(e) => writeln!(out, "{ce}error: {e}{cr}")?,
                         }
                     }
                 }
@@ -2143,15 +2132,25 @@ fn dispatch_run(
 }
 
 fn print_named_queries_help(out: &mut impl Write) -> io::Result<()> {
-    writeln!(out, "Named queries (/run <name>):")?;
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cb, cc, cd, cy, cr) = if color {
+        ("\x1b[1m", "\x1b[36m", "\x1b[2m", "\x1b[33m", "\x1b[0m")
+    } else {
+        ("", "", "", "", "")
+    };
+    writeln!(out, "{cb}Named queries{cr} ({cd}!run <name>{cr}):")?;
     let mut group = "";
     for nq in crate::named_queries::NAMED_QUERIES {
         if nq.group != group {
             group = nq.group;
-            writeln!(out, "\n  {group}:")?;
+            writeln!(out, "\n  {cd}{group}{cr}")?;
         }
-        let suffix = if nq.needs_retained { "  [needs full analysis]" } else { "" };
-        writeln!(out, "    {:40}  {}{}", nq.name, nq.display, suffix)?;
+        let suffix = if nq.needs_retained {
+            format!("  {cy}[needs full analysis]{cr}")
+        } else {
+            String::new()
+        };
+        writeln!(out, "    {cc}{:<40}{cr}  {}{}", nq.name, nq.display, suffix)?;
     }
     Ok(())
 }
@@ -2161,22 +2160,20 @@ fn print_named_queries_help(out: &mut impl Write) -> io::Result<()> {
 /// truncation; `!width N` caps each cell to N display chars. A non-numeric
 /// argument is rejected with a usage line (state left unchanged).
 fn handle_width(rest: &str, max_width: &mut usize, out: &mut impl Write) -> io::Result<()> {
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cb, cd, cg, cr) = if color { ("\x1b[1m", "\x1b[2m", "\x1b[32m", "\x1b[0m") } else { ("", "", "", "") };
     if rest.is_empty() {
-        let cur = if *max_width == 0 {
-            "unlimited".to_string()
-        } else {
-            max_width.to_string()
-        };
-        writeln!(out, "cell width: {cur} (use `!width N`, or `!width 0` for unlimited)")?;
+        let cur = if *max_width == 0 { "unlimited".to_string() } else { max_width.to_string() };
+        writeln!(out, "cell width: {cg}{cur}{cr}  {cd}(use `!width N`, or `!width 0` for unlimited){cr}")?;
         return Ok(());
     }
     match rest.parse::<usize>() {
         Ok(n) => {
             *max_width = n;
             if n == 0 {
-                writeln!(out, "cell width: unlimited")?;
+                writeln!(out, "cell width: {cb}unlimited{cr}")?;
             } else {
-                writeln!(out, "cell width: {n}")?;
+                writeln!(out, "cell width: {cg}{n}{cr}")?;
             }
         }
         Err(_) => warn_out("usage: !width <N>  (N is a non-negative integer; 0 = unlimited)", out)?,
@@ -4623,7 +4620,9 @@ mod tests {
     fn width_out(rest: &str, initial: usize) -> (usize, String) {
         let mut w = initial;
         let mut buf = Vec::new();
+        SESSION_SETTINGS.with(|s| s.borrow_mut().color = false);
         handle_width(rest, &mut w, &mut buf).unwrap();
+        SESSION_SETTINGS.with(|s| s.borrow_mut().color = true);
         (w, String::from_utf8(buf).unwrap())
     }
 
