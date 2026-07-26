@@ -888,6 +888,7 @@ let serverUrl = null;
 let serverVersion = null;  // { name, version } from /version endpoint
 let term = null;
 let classNames = [];  // populated after session loads (server may expose /class-names later)
+let fieldNames = [];  // populated after session loads from /help endpoint
 let hasRetained = false;
 let selectedFile = null;  // File object selected on the upload screen
 
@@ -1107,6 +1108,7 @@ function showShell() {
   // Fetch class names for tab-completion (non-blocking)
   fetch(serverUrl + '/help').then(r => r.json()).then(data => {
     if (Array.isArray(data.classes)) classNames = data.classes;
+    if (Array.isArray(data.fields)) fieldNames = data.fields;
   }).catch(() => {});
 }
 
@@ -1416,7 +1418,7 @@ function startTerminal() {
     // Complete / commands
     if (line.startsWith('/') && !line.includes(' ')) {
       const partial = line.slice(1).toLowerCase();
-      const cmds = ['help','clear','status','analyze','history','export','set','classes','plan','explain','filter','grep',
+      const cmds = ['help','clear','status','analyze','history','export','set','classes','fields','plan','explain','filter','grep',
                     'sort','unique','pivot','stats','top','head','tail','row','undo','sample','cols','columns','select','drop','rename','wc','limit','not','exclude','distinct','dedup','obj','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
       const matches = cmds.filter(c => c.startsWith(partial));
       if (matches.length === 1) {
@@ -1454,6 +1456,19 @@ function startTerminal() {
       } else if (matches.length > 1 && matches.length <= 20) {
         term.writeln('');
         term.writeln('  ' + matches.map(c => `\x1b[36m${c}\x1b[0m`).join('  '));
+        redrawLine();
+      }
+      return;
+    }
+    // Complete /fields <pattern>
+    if (line.startsWith('/fields ') && fieldNames.length > 0) {
+      const partial = line.slice(8).toLowerCase();
+      const matches = fieldNames.filter(f => f.toLowerCase().startsWith(partial));
+      if (matches.length === 1) {
+        setLine('/fields ' + matches[0]);
+      } else if (matches.length > 1 && matches.length <= 20) {
+        term.writeln('');
+        term.writeln('  ' + matches.map(f => `\x1b[36m${f}\x1b[0m`).join('  '));
         redrawLine();
       }
       return;
@@ -2505,7 +2520,7 @@ function startTerminal() {
         }
         const ci = resolveCol(colArg, lastResult.columns);
         if (ci < 0) {
-          term.writeln(`\x1b[31mColumn "${parts[0]}" not found. Available: ${lastResult.columns.join(', ')}\x1b[0m`);
+          term.writeln(`\x1b[31mColumn "${colArg}" not found. Available: ${lastResult.columns.join(', ')}\x1b[0m`);
           ok = false; break;
         }
         specs.push({ ci, desc, name: lastResult.columns[ci] });
@@ -2693,6 +2708,31 @@ function startTerminal() {
           term.writeln('  ' + row.map(c => c.padEnd(colW)).join('').trimEnd());
         }
         term.writeln(`\x1b[2m${matches.length} class${matches.length !== 1 ? 'es' : ''}\x1b[0m`);
+      }
+      term.write(PROMPT);
+      return;
+    }
+    if (cmd === '/fields' || cmd.startsWith('/fields ')) {
+      const pattern = cmd.slice(7).trim().toLowerCase();
+      const all = fieldNames.length > 0 ? fieldNames
+        : (await fetch(serverUrl + '/help').then(r => r.json()).then(d => {
+            if (Array.isArray(d.fields)) fieldNames = d.fields;
+            return fieldNames;
+          }).catch(() => []));
+      const matches = pattern ? all.filter(f => f.toLowerCase().includes(pattern)) : all;
+      if (matches.length === 0) {
+        term.writeln(pattern
+          ? `\x1b[33mNo fields matching "${pattern}"\x1b[0m`
+          : '\x1b[2m(no fields loaded — server may still be loading)\x1b[0m');
+      } else {
+        const maxLen = matches.reduce((m, f) => Math.max(m, f.length), 0);
+        const colW = maxLen + 2;
+        const cols = Math.max(1, Math.floor((term.cols - 4) / colW));
+        for (let i = 0; i < matches.length; i += cols) {
+          const row = matches.slice(i, i + cols);
+          term.writeln('  ' + row.map(f => f.padEnd(colW)).join('').trimEnd());
+        }
+        term.writeln(`\x1b[2m${matches.length} field${matches.length !== 1 ? 's' : ''}\x1b[0m`);
       }
       term.write(PROMPT);
       return;
@@ -3088,6 +3128,7 @@ function startTerminal() {
     c('/watch <s> <oql>',        '— repeat query every N seconds; /watch stop to cancel');
     c('/plan <oql>',             '— show query execution plan without scanning (/explain is an alias)');
     c('/classes [pat]',          '— list class names filtered by pattern');
+    c('/fields [pat]',           '— list instance field names filtered by pattern');
     c('/describe <cls>',         '— show fields of a class');
     c('/count [cls|oql]',        '— count instances (class name) or rows (oql); no arg = last result shape');
     c('/obj <cls>#<idx>',        '— inspect a specific object by class + dense index');
