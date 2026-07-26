@@ -1998,7 +1998,7 @@ function startTerminal() {
           lastResult = { columns: colNames, rows };
           currentRowIdx = 0;
           const note = r.note ? `  \x1b[33m[${r.note}]\x1b[0m` : '';
-          const trunc = r.truncated ? '  \x1b[33m[truncated]\x1b[0m' : '';
+          const trunc = r.truncated ? `  \x1b[33m[capped at ${r.row_count} rows — add LIMIT N for more]\x1b[0m` : '';
           const elapsedFmt = elapsedMs < 1000 ? `${elapsedMs.toFixed(0)}ms` : `${(elapsedMs / 1000).toFixed(3)}s`;
           const elapsedColor = elapsedMs > 1000 ? '\x1b[31m' : elapsedMs > 300 ? '\x1b[33m' : '\x1b[2m';
           const ts = new Date().toLocaleTimeString('en-GB', { hour12: false });

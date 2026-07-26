@@ -3145,7 +3145,7 @@ fn print_result(
         fmt_elapsed(elapsed),
     )?;
     if res.truncated {
-        writeln!(out, "-- results truncated --")?;
+        writeln!(out, "-- result capped at {} rows (add LIMIT N or increase with LIMIT 0 for all) --", res.row_count)?;
     }
     if body.len() > 20 {
         let has_numeric = res.columns.iter().enumerate().any(|(i, _)| {
@@ -3665,7 +3665,7 @@ mod tests {
         };
         let out = print_to_string(&res);
         assert!(
-            out.contains("-- results truncated --"),
+            out.contains("-- result capped at"),
             "truncation notice missing:\n{out}"
         );
     }
