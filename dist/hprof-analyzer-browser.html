@@ -1408,7 +1408,7 @@ function startTerminal() {
     if (line.startsWith('/') && !line.includes(' ')) {
       const partial = line.slice(1).toLowerCase();
       const cmds = ['help','clear','status','analyze','history','export','set','classes','plan','explain','filter','grep',
-                    'sort','unique','stats','top','head','tail','cols','columns','select','rename','obj','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
+                    'sort','unique','stats','top','head','tail','cols','columns','select','rename','wc','obj','run','bookmark','save','forget','last','describe','count','watch','q','quit','disconnect'];
       const matches = cmds.filter(c => c.startsWith(partial));
       if (matches.length === 1) {
         setLine('/' + matches[0] + ' ');
@@ -1807,6 +1807,16 @@ function startTerminal() {
       term.write(PROMPT);
       return;
     }
+    if (cmd === '/wc') {
+      if (!lastResult) {
+        term.writeln('\x1b[33mNo result — run a query first.\x1b[0m');
+      } else {
+        const n = lastResult.rows.length;
+        term.writeln(`\x1b[32m${n.toLocaleString()}\x1b[0m row${n !== 1 ? 's' : ''}`);
+      }
+      term.write(PROMPT);
+      return;
+    }
     if (cmd === '/cols' || cmd === '/columns') {
       if (!lastResult) {
         term.writeln('\x1b[33mNo result — run a query first.\x1b[0m');
@@ -1848,7 +1858,7 @@ function startTerminal() {
             const newCols = indices.map(i => fields[i]);
             const newRows = lastResult.rows.map(r => indices.map(i => r[i]));
             lastResult = { columns: newCols, rows: newRows };
-            renderTable(lastResult.columns, lastResult.rows);
+            renderResult({ columns: lastResult.columns, rows: lastResult.rows, row_count: lastResult.rows.length });
           }
         }
       }
@@ -2538,6 +2548,7 @@ function startTerminal() {
     c('/obj <cls>#<idx>',        '— inspect a specific object by class + dense index');
     h('Result post-processing');
     c('/last',                   '— re-display last result');
+    c('/wc',                     '— show row count of last result');
     c('/cols',                   '— list column names of last result');
     c('/select <col> …',         '— project (keep) specific columns from last result');
     c('/rename <old> <new>',     '— rename a column in last result');

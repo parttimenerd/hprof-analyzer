@@ -576,7 +576,7 @@ impl Completer for OqlCompleter {
                     "reachable", "all", "mode",
                     "width", "count", "last", "save",
                     "filter", "grep", "sort", "stats", "unique",
-                    "top", "head", "tail", "select", "rename", "cols", "columns",
+                    "top", "head", "tail", "select", "rename", "wc", "cols", "columns",
                     "describe", "obj",
                     "run",
                 ];
@@ -922,6 +922,17 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                     )? {
                                         last_result = Some(res);
                                     }
+                                }
+                            }
+                            stdout.flush()?;
+                            continue;
+                        }
+                        "wc" => {
+                            match &last_result {
+                                None => writeln!(stdout, "(no result — run a query first)")?,
+                                Some(res) => {
+                                    let n = res.rows.len();
+                                    writeln!(stdout, "{} row{}", n, if n == 1 { "" } else { "s" })?;
                                 }
                             }
                             stdout.flush()?;
@@ -1277,6 +1288,17 @@ fn run_repl_line(
                         )? {
                             *last_result = Some(res);
                         }
+                    }
+                }
+                out.flush()?;
+                return Ok(false);
+            }
+            "wc" => {
+                match last_result {
+                    None => writeln!(out, "(no result — run a query first)")?,
+                    Some(res) => {
+                        let n = res.rows.len();
+                        writeln!(out, "{} row{}", n, if n == 1 { "" } else { "s" })?;
                     }
                 }
                 out.flush()?;
@@ -2067,6 +2089,7 @@ fn handle_meta(
             )?;
             writeln!(out, "  !count <oql>          run <oql> and print only its row count")?;
             writeln!(out, "  !last                 re-run the previous query")?;
+            writeln!(out, "  !wc                   show row count of last result")?;
             writeln!(
                 out,
                 "  !save <file> [oql]    write CSV to <file> (of <oql>, else the last result)"
