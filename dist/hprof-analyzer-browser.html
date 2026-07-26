@@ -1469,6 +1469,21 @@ function startTerminal() {
       }
       return;
     }
+    // Complete /sort <col> from lastResult columns
+    if (line.startsWith('/sort ') || line.startsWith('/filter ')) {
+      if (lastResult && lastResult.columns.length > 0) {
+        const pfxLen = line.startsWith('/sort ') ? 6 : 8;
+        const partial = line.slice(pfxLen).toLowerCase();
+        const cols = lastResult.columns.filter(c => c.toLowerCase().startsWith(partial));
+        if (cols.length === 1) { setLine(line.slice(0, pfxLen) + cols[0]); }
+        else if (cols.length > 1 && cols.length <= 20) {
+          term.writeln('');
+          term.writeln('  ' + cols.map(c => `\x1b[36m${c}\x1b[0m`).join('  '));
+          redrawLine();
+        }
+        return;
+      }
+    }
     if (!wasmReady) return;
     try {
       const cs = JSON.parse(wasmComplete(line, cursorPos, classNames));
