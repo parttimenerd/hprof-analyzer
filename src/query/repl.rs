@@ -1082,7 +1082,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                         }
                         "last" => {
                             match &last_query {
-                                None => writeln!(stdout, "(no previous query to re-run)")?,
+                                None => warn_out("(no previous query to re-run)", &mut stdout)?,
                                 Some(q) => {
                                     let q = q.clone();
                                     if let Some(res) = run_and_print(
@@ -1648,7 +1648,7 @@ fn run_repl_line(
             }
             "last" => {
                 match last_query.clone() {
-                    None => writeln!(out, "(no previous query to re-run)")?,
+                    None => warn_out("(no previous query to re-run)", out)?,
                     Some(q) => {
                         if let Some(res) = run_and_print(
                             path, &q, path_depth, *reachable_only, *max_width, cache, out,
