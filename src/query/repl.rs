@@ -897,7 +897,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             stdout.flush()?;
                             continue;
                         }
-                        "filter" => {
+                        "filter" | "grep" => {
                             handle_filter(rest, &mut last_result, max_width, &mut stdout)?;
                             stdout.flush()?;
                             continue;
@@ -914,6 +914,41 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                         }
                         "unique" => {
                             handle_unique(rest, &mut last_result, &mut stdout)?;
+                            stdout.flush()?;
+                            continue;
+                        }
+                        "top" | "head" => {
+                            match rest.trim().parse::<usize>() {
+                                Ok(n) if n > 0 => {
+                                    match last_result.as_mut() {
+                                        None => writeln!(stdout, "(no result — run a query first)")?,
+                                        Some(res) => {
+                                            res.rows.truncate(n);
+                                            res.row_count = res.rows.len() as u64;
+                                            print_result(res, std::time::Duration::ZERO, max_width, &mut stdout)?;
+                                        }
+                                    }
+                                }
+                                _ => writeln!(stdout, "usage: !top <N>  (N > 0)")?,
+                            }
+                            stdout.flush()?;
+                            continue;
+                        }
+                        "tail" => {
+                            match rest.trim().parse::<usize>() {
+                                Ok(n) if n > 0 => {
+                                    match last_result.as_mut() {
+                                        None => writeln!(stdout, "(no result — run a query first)")?,
+                                        Some(res) => {
+                                            let skip = res.rows.len().saturating_sub(n);
+                                            res.rows = res.rows.split_off(skip);
+                                            res.row_count = res.rows.len() as u64;
+                                            print_result(res, std::time::Duration::ZERO, max_width, &mut stdout)?;
+                                        }
+                                    }
+                                }
+                                _ => writeln!(stdout, "usage: !tail <N>  (N > 0)")?,
+                            }
                             stdout.flush()?;
                             continue;
                         }
@@ -1080,7 +1115,7 @@ fn run_repl_line(
                 out.flush()?;
                 return Ok(false);
             }
-            "filter" => {
+            "filter" | "grep" => {
                 handle_filter(rest, last_result, *max_width, out)?;
                 out.flush()?;
                 return Ok(false);
@@ -1097,6 +1132,41 @@ fn run_repl_line(
             }
             "unique" => {
                 handle_unique(rest, last_result, out)?;
+                out.flush()?;
+                return Ok(false);
+            }
+            "top" | "head" => {
+                match rest.trim().parse::<usize>() {
+                    Ok(n) if n > 0 => {
+                        match last_result.as_mut() {
+                            None => writeln!(out, "(no result — run a query first)")?,
+                            Some(res) => {
+                                res.rows.truncate(n);
+                                res.row_count = res.rows.len() as u64;
+                                print_result(res, std::time::Duration::ZERO, *max_width, out)?;
+                            }
+                        }
+                    }
+                    _ => writeln!(out, "usage: !top <N>  (N > 0)")?,
+                }
+                out.flush()?;
+                return Ok(false);
+            }
+            "tail" => {
+                match rest.trim().parse::<usize>() {
+                    Ok(n) if n > 0 => {
+                        match last_result.as_mut() {
+                            None => writeln!(out, "(no result — run a query first)")?,
+                            Some(res) => {
+                                let skip = res.rows.len().saturating_sub(n);
+                                res.rows = res.rows.split_off(skip);
+                                res.row_count = res.rows.len() as u64;
+                                print_result(res, std::time::Duration::ZERO, *max_width, out)?;
+                            }
+                        }
+                    }
+                    _ => writeln!(out, "usage: !tail <N>  (N > 0)")?,
+                }
                 out.flush()?;
                 return Ok(false);
             }
@@ -1623,9 +1693,12 @@ fn handle_meta(
                 "  !save <file> [oql]    write CSV to <file> (of <oql>, else the last result)"
             )?;
             writeln!(out, "  !filter <pattern>     show only rows matching pattern (case-insensitive)")?;
+            writeln!(out, "  !grep <pattern>       alias for !filter")?;
             writeln!(out, "  !sort <col> [desc]    sort last result by column (prefix match)")?;
             writeln!(out, "  !stats <col>          numeric summary: min/max/mean/p50/p90/p99/sum")?;
             writeln!(out, "  !unique <col>         distinct value counts, sorted by frequency")?;
+            writeln!(out, "  !top <N>  /  !head <N>  show first N rows of last result")?;
+            writeln!(out, "  !tail <N>             show last N rows of last result")?;
             writeln!(out, "  !describe <class>     show all field names of a class")?;
             writeln!(out, "  !quit                 exit")?;
             writeln!(out, "  <oql>                 run a query and print results")?;
