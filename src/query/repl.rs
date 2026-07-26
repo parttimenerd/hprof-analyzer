@@ -1042,6 +1042,17 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             stdout.flush()?;
                             continue;
                         }
+                        "run" => {
+                            if rest.is_empty() {
+                                // list named queries
+                                print_named_queries_help(&mut stdout)?;
+                            } else {
+                                dispatch_run(rest, path, path_depth, reachable_only, max_width,
+                                    &mut last_query, &mut last_result, &mut cache, &mut stdout)?;
+                            }
+                            stdout.flush()?;
+                            continue;
+                        }
                         "describe" => {
                             let cls = rest.trim();
                             if cls.is_empty() {
@@ -1349,6 +1360,16 @@ fn run_repl_line(
                             *last_result = Some(projected);
                         }
                     }
+                }
+                out.flush()?;
+                return Ok(false);
+            }
+            "run" => {
+                if rest.is_empty() {
+                    print_named_queries_help(out)?;
+                } else {
+                    dispatch_run(rest, path, path_depth, *reachable_only, *max_width,
+                        last_query, last_result, cache, out)?;
                 }
                 out.flush()?;
                 return Ok(false);
@@ -1999,6 +2020,7 @@ fn handle_meta(
             writeln!(out, "  !describe <class>     show all field names of a class")?;
             writeln!(out, "  !cols                 list column names of last result")?;
             writeln!(out, "  !obj <class>#<idx>    inspect a specific object (by dense index)")?;
+            writeln!(out, "  !run [<name>]         run a named query (no arg = list all)")?;
             writeln!(out, "  !quit                 exit")?;
             writeln!(out, "  <oql>                 run a query and print results")?;
             writeln!(
