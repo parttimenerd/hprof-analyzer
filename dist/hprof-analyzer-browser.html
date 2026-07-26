@@ -881,6 +881,8 @@ const BOOKMARKS_KEY = 'hprof-analyzer.bookmarks';
 const defaultSettings = { rowLimit: 200, bytesRaw: false, nullStr: 'null', color: true };
 let settings = Object.assign({}, defaultSettings,
   JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'));
+// rowLimit: 0 stored means "unlimited" — convert to Infinity at runtime
+if (settings.rowLimit === 0) settings.rowLimit = Infinity;
 
 let serverUrl = null;
 let serverVersion = null;  // { name, version } from /version endpoint
@@ -1228,6 +1230,13 @@ function buildSidebar(analysisReady) {
       card.addEventListener('click', () => {
         if (term && window._hprofRunQuery) window._hprofRunQuery(q.oql);
         else if (term && window._hprofSetLine) window._hprofSetLine(q.oql);
+      });
+    } else {
+      card.addEventListener('click', () => {
+        if (term) {
+          term.writeln(`\x1b[33m[${q.name}] requires full analysis — click "Run Analysis" in the toolbar first\x1b[0m`);
+          term.focus();
+        }
       });
     }
     list.appendChild(card);
@@ -2014,15 +2023,19 @@ function startTerminal() {
       if (!args[0]) {
         // Print current settings
         term.writeln('\x1b[1mCurrent settings:\x1b[0m');
-        term.writeln(`  limit    ${settings.rowLimit}  \x1b[2m(rows displayed per query)\x1b[0m`);
+        term.writeln(`  limit    ${settings.rowLimit === Infinity ? 'unlimited' : settings.rowLimit}  \x1b[2m(rows displayed per query; 0 or "unlimited" = no cap)\x1b[0m`);
         term.writeln(`  bytes    ${settings.bytesRaw ? 'raw' : 'human'}  \x1b[2m(raw = show bytes as numbers)\x1b[0m`);
         term.writeln(`  null     "${settings.nullStr}"  \x1b[2m(how null values display)\x1b[0m`);
         term.writeln(`  color    ${settings.color ? 'on' : 'off'}  \x1b[2m(colorize table cells)\x1b[0m`);
         term.writeln('\x1b[2mUsage: /set limit 500 | /set bytes raw | /set bytes human | /set null ∅ | /set color off\x1b[0m');
       } else if (args[0] === 'limit') {
-        const n = parseInt(args[1], 10);
-        if (!n || n < 1 || n > 10000) {
-          term.writeln('\x1b[31mUsage: /set limit <1–10000>\x1b[0m');
+        const n = args[1] === '0' || args[1] === 'unlimited' || args[1] === 'none' ? 0 : parseInt(args[1], 10);
+        if (isNaN(n) || n < 0 || n > 100000) {
+          term.writeln('\x1b[31mUsage: /set limit <N>  (0 or "unlimited" = no cap)\x1b[0m');
+        } else if (n === 0) {
+          settings.rowLimit = Infinity;
+          localStorage.setItem(SETTINGS_KEY, JSON.stringify({ ...settings, rowLimit: 0 }));
+          term.writeln('\x1b[32mrow limit disabled (showing all rows)\x1b[0m');
         } else {
           settings.rowLimit = n;
           localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
