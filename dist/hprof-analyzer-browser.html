@@ -1908,6 +1908,22 @@ function startTerminal() {
   let currentAbort = null;  // AbortController for in-flight query
   let lastResult = null;    // { columns, rows } of last successful query for /export
 
+  function cellColor(cell, colName) {
+    if (cell === null || cell === undefined) return '\x1b[2m';
+    if (typeof cell !== 'object') return '';
+    const kind = cell.kind;
+    if (kind === 'null') return '\x1b[2m';
+    if (kind === 'int') {
+      if (colName && /address|addr|ptr/i.test(colName)) return '\x1b[35m'; // magenta for addresses
+      if (!settings.bytesRaw && colName && /bytes$|_size$|heap_size$/i.test(colName)) return '\x1b[33m'; // yellow for sizes
+      return '\x1b[32m'; // green for numbers
+    }
+    if (kind === 'float') return '\x1b[32m';
+    if (kind === 'bool') return cell.v ? '\x1b[32m' : '\x1b[31m';
+    if (kind === 'obj_ref') return '\x1b[36m'; // cyan for refs
+    return '';
+  }
+
   function renderResult(r) {
     const colNames = r.columns.map(c => c.name || String(c));
     const rows = r.rows || [];
@@ -1929,7 +1945,11 @@ function startTerminal() {
     term.writeln('\x1b[2m' + '─'.repeat(Math.min(header.length, term.cols - 2)) + '\x1b[0m');
     const displayRows = rows.slice(0, settings.rowLimit);
     displayRows.forEach(row => {
-      const cells = row.map((cell, i) => padTo(fmtCell(cell, colNames[i]), adjW[i], isNumeric[i]));
+      const cells = row.map((cell, i) => {
+        const txt = padTo(fmtCell(cell, colNames[i]), adjW[i], isNumeric[i]);
+        const color = cellColor(cell, colNames[i]);
+        return color ? color + txt + '\x1b[0m' : txt;
+      });
       term.writeln(cells.join('  '));
     });
     if (rows.length > settings.rowLimit) {
