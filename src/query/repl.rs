@@ -1310,6 +1310,8 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             match &last_result {
                                 None => writeln!(stdout, "(no result — run a query first)")?,
                                 Some(res) => {
+                                    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+                                    let (cd, cr) = if color { ("\x1b[2m", "\x1b[0m") } else { ("", "") };
                                     let fields: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
                                     let idx_w = fields.len().to_string().len();
                                     let col_w = fields.iter().map(|f| f.len()).max().unwrap_or(10);
@@ -1321,12 +1323,12 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                             format!("  {}/{} ({:.0}%)", non_null, total, non_null as f64 / total as f64 * 100.0)
                                         } else { String::new() };
                                         let all_null = total > 0 && non_null == 0;
-                                        let (name_color, suffix) = if all_null {
-                                            ("\x1b[2;33m", "  \x1b[33m(all null)\x1b[0m")
+                                        let (name_color, suffix) = if all_null && color {
+                                            ("\x1b[2;33m", format!("  \x1b[33m(all null){cr}"))
                                         } else {
-                                            ("", "")
+                                            ("", String::new())
                                         };
-                                        writeln!(stdout, "  {:>idx_w$}  {name_color}{f:<col_w$}\x1b[0m  \x1b[2m{:<8}{}\x1b[0m{suffix}", i + 1, type_tag, fill)?;
+                                        writeln!(stdout, "  {:>idx_w$}  {name_color}{f:<col_w$}{cr}  {cd}{:<8}{}{cr}{suffix}", i + 1, type_tag, fill)?;
                                     }
                                     writeln!(stdout, "({} column{})", fields.len(), if fields.len() == 1 { "" } else { "s" })?;
                                 }
@@ -1339,6 +1341,8 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             if arg == "clear" {
                                 writeln!(stdout, "(clear not supported in reedline mode)")?;
                             } else {
+                                let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+                                let (cd, cr) = if color { ("\x1b[2m", "\x1b[0m") } else { ("", "") };
                                 let n: usize = arg.parse().unwrap_or(20);
                                 let entries = line_editor
                                     .history()
@@ -1346,15 +1350,15 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                     .unwrap_or_default();
                                 let shown = entries.iter().take(n).collect::<Vec<_>>();
                                 for (i, item) in shown.iter().enumerate() {
-                                    writeln!(stdout, "  \x1b[2m{:>3}\x1b[0m  {}", i + 1, item.command_line)?;
+                                    writeln!(stdout, "  {cd}{:>3}{cr}  {}", i + 1, item.command_line)?;
                                 }
                                 if entries.is_empty() {
                                     writeln!(stdout, "(no history yet)")?;
                                 } else {
                                     if entries.len() > n {
-                                        writeln!(stdout, "\x1b[2m  … {} more — !history N to show more\x1b[0m", entries.len() - n)?;
+                                        writeln!(stdout, "{cd}  … {} more — !history N to show more{cr}", entries.len() - n)?;
                                     }
-                                    writeln!(stdout, "\x1b[2m  Use !N to re-run entry N  (1 = most recent)\x1b[0m")?;
+                                    writeln!(stdout, "{cd}  Use !N to re-run entry N  (1 = most recent){cr}")?;
                                 }
                             }
                             stdout.flush()?;
@@ -1408,11 +1412,21 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                     match run_one(path, &q, path_depth, reachable_only, &mut cache, &mut dev_null) {
                                         Ok(res) => {
                                             if res.rows.len() == 1 {
+                                                let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+                                                let bytes_raw = SESSION_SETTINGS.with(|s| s.borrow().bytes_raw);
+                                                let (cd, cc, cr) = if color { ("\x1b[2m", "\x1b[36m", "\x1b[0m") } else { ("", "", "") };
                                                 let key_w = res.columns.iter().map(|c| c.name.len()).max().unwrap_or(8);
                                                 let idx_w = res.columns.len().to_string().len();
                                                 writeln!(stdout, "── {cls}#{idx} ──")?;
                                                 for (i, (col, val)) in res.columns.iter().zip(res.rows[0].iter()).enumerate() {
-                                                    writeln!(stdout, "  \x1b[2m{:>idx_w$}\x1b[0m  {:<key_w$}  {}", i + 1, col.name, fmt_value_for_col(val, &col.name))?;
+                                                    let val_str = fmt_value_for_col(val, &col.name);
+                                                    let (vp, vs) = if color {
+                                                        let p = cell_color_prefix(val, &col.name, bytes_raw);
+                                                        (p, if p.is_empty() { "" } else { "\x1b[0m" })
+                                                    } else {
+                                                        ("", "")
+                                                    };
+                                                    writeln!(stdout, "  {cd}{:>idx_w$}{cr}  {cc}{:<key_w$}{cr}  {vp}{val_str}{vs}", i + 1, col.name)?;
                                                 }
                                             } else if res.rows.is_empty() {
                                                 writeln!(stdout, "(no object {cls}#{idx} found)")?;
@@ -1882,6 +1896,8 @@ fn run_repl_line(
                 match last_result {
                     None => writeln!(out, "(no result — run a query first)")?,
                     Some(res) => {
+                        let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+                        let (cd, cr) = if color { ("\x1b[2m", "\x1b[0m") } else { ("", "") };
                         let fields: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
                         let idx_w = fields.len().to_string().len();
                         let col_w = fields.iter().map(|f| f.len()).max().unwrap_or(10);
@@ -1893,12 +1909,12 @@ fn run_repl_line(
                                 format!("  {}/{} ({:.0}%)", non_null, total, non_null as f64 / total as f64 * 100.0)
                             } else { String::new() };
                             let all_null = total > 0 && non_null == 0;
-                            let (name_color, suffix) = if all_null {
-                                ("\x1b[2;33m", "  \x1b[33m(all null)\x1b[0m")
+                            let (name_color, suffix) = if all_null && color {
+                                ("\x1b[2;33m", format!("  \x1b[33m(all null){cr}"))
                             } else {
-                                ("", "")
+                                ("", String::new())
                             };
-                            writeln!(out, "  {:>idx_w$}  {name_color}{f:<col_w$}\x1b[0m  \x1b[2m{:<8}{}\x1b[0m{suffix}", i + 1, type_tag, fill)?;
+                            writeln!(out, "  {:>idx_w$}  {name_color}{f:<col_w$}{cr}  {cd}{:<8}{}{cr}{suffix}", i + 1, type_tag, fill)?;
                         }
                         writeln!(out, "({} column{})", fields.len(), if fields.len() == 1 { "" } else { "s" })?;
                     }
@@ -1922,11 +1938,21 @@ fn run_repl_line(
                         match run_one(path, &q, path_depth, *reachable_only, cache, &mut dev_null) {
                             Ok(res) => {
                                 if res.rows.len() == 1 {
+                                    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+                                    let bytes_raw = SESSION_SETTINGS.with(|s| s.borrow().bytes_raw);
+                                    let (cd, cc, cr) = if color { ("\x1b[2m", "\x1b[36m", "\x1b[0m") } else { ("", "", "") };
                                     let key_w = res.columns.iter().map(|c| c.name.len()).max().unwrap_or(8);
                                     let idx_w = res.columns.len().to_string().len();
                                     writeln!(out, "── {cls}#{idx} ──")?;
                                     for (i, (col, val)) in res.columns.iter().zip(res.rows[0].iter()).enumerate() {
-                                        writeln!(out, "  \x1b[2m{:>idx_w$}\x1b[0m  {:<key_w$}  {}", i + 1, col.name, fmt_value_for_col(val, &col.name))?;
+                                        let val_str = fmt_value_for_col(val, &col.name);
+                                        let (vp, vs) = if color {
+                                            let p = cell_color_prefix(val, &col.name, bytes_raw);
+                                            (p, if p.is_empty() { "" } else { "\x1b[0m" })
+                                        } else {
+                                            ("", "")
+                                        };
+                                        writeln!(out, "  {cd}{:>idx_w$}{cr}  {cc}{:<key_w$}{cr}  {vp}{val_str}{vs}", i + 1, col.name)?;
                                     }
                                 } else if res.rows.is_empty() {
                                     writeln!(out, "(no object {cls}#{idx} found)")?;
@@ -3173,13 +3199,22 @@ fn handle_row(
             }
         }
     };
+    let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+    let (cd, cc, cr) = if color { ("\x1b[2m", "\x1b[36m", "\x1b[0m") } else { ("", "", "") };
     let row = &res.rows[idx - 1];
     let key_w = res.columns.iter().map(|c| c.name.len()).max().unwrap_or(8);
     let idx_w = res.columns.len().to_string().len();
-    let nav = if n_rows > 1 { format!("  \x1b[2m(use !row next / !row prev to navigate)\x1b[0m") } else { String::new() };
-    writeln!(out, "── row {idx} of {n_rows} ──{nav}")?;
+    let nav = if n_rows > 1 { format!("  {cd}(use !row next / !row prev to navigate){cr}") } else { String::new() };
+    writeln!(out, "{cd}── row {idx} of {n_rows} ──{cr}{nav}")?;
     for (i, (col, val)) in res.columns.iter().zip(row.iter()).enumerate() {
-        writeln!(out, "  \x1b[2m{:>idx_w$}\x1b[0m  {:<key_w$}  {}", i + 1, col.name, fmt_value_for_col(val, &col.name))?;
+        let val_str = fmt_value_for_col(val, &col.name);
+        let (vp, vs) = if color {
+            let p = cell_color_prefix(val, &col.name, SESSION_SETTINGS.with(|s| s.borrow().bytes_raw));
+            (p, if p.is_empty() { "" } else { "\x1b[0m" })
+        } else {
+            ("", "")
+        };
+        writeln!(out, "  {cd}{:>idx_w$}{cr}  {cc}{:<key_w$}{cr}  {vp}{val_str}{vs}", i + 1, col.name)?;
     }
     Ok(())
 }
