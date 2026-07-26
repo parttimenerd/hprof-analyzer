@@ -2850,7 +2850,7 @@ fn handle_stats(
                         }
                     }).collect();
                     if vals.is_empty() {
-                        writeln!(out, "{ce}no numeric values in column {:?}{cr}", col_name)?;
+                        warn_out(&format!("(no numeric values in column {:?})", col_name), out)?;
                     } else {
                         vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
                         let n = vals.len();
@@ -2872,12 +2872,14 @@ fn handle_stats(
                                 format!("{v:.3}")
                             }
                         };
-                        let null_note = if null_count > 0 { format!("  ({} null)", null_count) } else { String::new() };
+                        let null_note = if null_count > 0 {
+                            if color { format!("  \x1b[2m({} null)\x1b[0m", null_count) } else { format!("  ({} null)", null_count) }
+                        } else { String::new() };
                         let variance: f64 = vals.iter().map(|&v| (v - mean) * (v - mean)).sum::<f64>() / n as f64;
                         let stddev = variance.sqrt();
                         let color = SESSION_SETTINGS.with(|s| s.borrow().color);
                         let (cb, cv, cs, cd, cr) = if color { ("\x1b[1m", "\x1b[32m", "\x1b[33m", "\x1b[2m", "\x1b[0m") } else { ("", "", "", "", "") };
-                        writeln!(out, "{cb}{}{cr}  ({} values){}", col_name, n, null_note)?;
+                        writeln!(out, "{cb}{}{cr}  {cd}({} values){cr}{}", col_name, n, null_note)?;
                         writeln!(out, "  min    {cv}{}{cr}", fv(vals[0]))?;
                         writeln!(out, "  max    {cv}{}{cr}", fv(vals[n - 1]))?;
                         writeln!(out, "  mean   {cv}{}{cr}", fv(mean))?;
