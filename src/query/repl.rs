@@ -1252,8 +1252,10 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             continue;
                         }
                         "sort" => {
+                            let before_note = last_result.as_ref().and_then(|r| r.note.clone());
                             if !rest.is_empty() { prev_result = last_result.clone(); }
                             handle_sort(rest, &mut last_result, max_width, &mut stdout)?;
+                            if last_result.as_ref().and_then(|r| r.note.clone()) == before_note { prev_result = None; }
                             stdout.flush()?;
                             continue;
                         }
@@ -1831,8 +1833,10 @@ fn run_repl_line(
                 return Ok(false);
             }
             "sort" => {
+                let before_note = last_result.as_ref().and_then(|r| r.note.clone());
                 if !rest.is_empty() { *prev_result = last_result.clone(); }
                 handle_sort(rest, last_result, *max_width, out)?;
+                if last_result.as_ref().and_then(|r| r.note.clone()) == before_note { *prev_result = None; }
                 out.flush()?;
                 return Ok(false);
             }
