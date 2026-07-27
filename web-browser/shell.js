@@ -1653,7 +1653,7 @@ function startTerminal() {
         const total = lastResult.rows.length;
         const sliced = lastResult.rows.slice(0, n);
         const shown = sliced.length;
-        const slicedResult = { columns: lastResult.columns, rows: sliced };
+        const slicedResult = { columns: [...lastResult.columns], rows: sliced };
         if (shown < total) slicedResult.note = `top ${shown.toLocaleString('en-US')} of ${total.toLocaleString('en-US')}`;
         renderResult({ ...slicedResult, row_count: shown });
         prevResult = lastResult;
@@ -1673,7 +1673,7 @@ function startTerminal() {
         const total = lastResult.rows.length;
         const sliced = lastResult.rows.slice(-n);
         const shown = sliced.length;
-        const slicedResult = { columns: lastResult.columns, rows: sliced };
+        const slicedResult = { columns: [...lastResult.columns], rows: sliced };
         if (shown < total) slicedResult.note = `last ${shown.toLocaleString('en-US')} of ${total.toLocaleString('en-US')}`;
         renderResult({ ...slicedResult, row_count: shown });
         prevResult = lastResult;
@@ -1738,7 +1738,7 @@ function startTerminal() {
         return 0;
       });
       const label = specs.map(s => `${s.name} ${s.desc ? 'desc' : 'asc'}`).join(', ');
-      const newResult = { columns: lastResult.columns, rows: sorted, row_count: sorted.length, note: `sorted by ${label}` };
+      const newResult = { ...lastResult, columns: [...lastResult.columns], rows: sorted, row_count: sorted.length, note: `sorted by ${label}` };
       renderResult(newResult);
       prevResult = lastResult;
       lastResult = newResult;
@@ -1784,7 +1784,7 @@ function startTerminal() {
           term.writeln(`\x1b[33m(no rows match "${pattern}")\x1b[0m`);
         } else {
           const note = `${filtered.length.toLocaleString('en-US')} of ${rows.length.toLocaleString('en-US')} rows match "${pattern}"`;
-          const newResult = { columns, rows: filtered, row_count: filtered.length, note };
+          const newResult = { columns: [...columns], rows: filtered, row_count: filtered.length, note };
           renderResult(newResult);
           prevResult = lastResult;
           lastResult = newResult;
@@ -1834,7 +1834,7 @@ function startTerminal() {
           term.write(PROMPT); return;
         }
         const note = `${excluded.toLocaleString('en-US')} of ${rows.length.toLocaleString('en-US')} rows excluded "${pattern}"`;
-        const newResult = { columns, rows: kept, row_count: kept.length, note };
+        const newResult = { columns: [...columns], rows: kept, row_count: kept.length, note };
         renderResult(newResult);
         prevResult = lastResult;
         lastResult = newResult;
@@ -1860,7 +1860,7 @@ function startTerminal() {
             [pool[i], pool[j]] = [pool[j], pool[i]];
           }
           const sampled = pool.slice(0, k).sort((a, b) => a - b).map(i => rows[i]);
-          const sampledResult = { columns: lastResult.columns, rows: sampled, row_count: sampled.length, note: `random sample of ${k.toLocaleString('en-US')}/${rows.length.toLocaleString('en-US')}` };
+          const sampledResult = { columns: [...lastResult.columns], rows: sampled, row_count: sampled.length, note: `random sample of ${k.toLocaleString('en-US')}/${rows.length.toLocaleString('en-US')}` };
           renderResult(sampledResult);
           prevResult = lastResult;
           lastResult = sampledResult;
@@ -1882,7 +1882,7 @@ function startTerminal() {
         });
         const removed = lastResult.rows.length - kept.length;
         const note = `${kept.length.toLocaleString('en-US')} unique row${kept.length !== 1 ? 's' : ''} (${removed.toLocaleString('en-US')} duplicate${removed !== 1 ? 's' : ''} removed)`;
-        const newResult = { columns: lastResult.columns, rows: kept, row_count: kept.length, note };
+        const newResult = { columns: [...lastResult.columns], rows: kept, row_count: kept.length, note };
         renderResult(newResult);
         if (removed > 0) { prevResult = lastResult; }
         lastResult = newResult;
