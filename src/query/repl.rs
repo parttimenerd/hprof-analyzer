@@ -1802,7 +1802,7 @@ fn run_repl_line(
                     Some(prev) => {
                         let color = SESSION_SETTINGS.with(|s| s.borrow().color);
                         let (cg, cd, cr) = if color { ("\x1b[32m", "\x1b[2m", "\x1b[0m") } else { ("", "", "") };
-                        writeln!(out, "{cg}\u{2713} undone{cr}  {cd}(restored {} row{}){cr}", prev.rows.len(), if prev.rows.len() == 1 { "" } else { "s" })?;
+                        writeln!(out, "{cg}\u{2713} undone{cr}  {cd}(restored {} row{}){cr}", fmt_int(prev.rows.len() as i64), if prev.rows.len() == 1 { "" } else { "s" })?;
                         print_result(&prev, std::time::Duration::ZERO, *max_width, out)?;
                         *last_result = Some(prev);
                     }
@@ -3128,9 +3128,9 @@ fn handle_unique(
                         writeln!(out, "{:<val_w$}  {:>cnt_w$}  {:>pct_w$}  {cd}{}{cr}", val, fmt_int(*cnt as i64), pct, bar)?;
                     }
                     if shown < total_distinct {
-                        writeln!(out, "{cd}({} of {} distinct values, top {} shown  ·  {} total rows){cr}", shown, total_distinct, show_n, total)?;
+                        writeln!(out, "{cd}({} of {} distinct values, top {} shown  ·  {} total rows){cr}", fmt_int(shown as i64), fmt_int(total_distinct as i64), show_n, fmt_int(total as i64))?;
                     } else {
-                        writeln!(out, "{cd}({} distinct value{} in {} rows){cr}", total_distinct, if total_distinct == 1 { "" } else { "s" }, total)?;
+                        writeln!(out, "{cd}({} distinct value{} in {} rows){cr}", fmt_int(total_distinct as i64), if total_distinct == 1 { "" } else { "s" }, fmt_int(total as i64))?;
                     }
                 }
             }
@@ -3266,7 +3266,7 @@ fn handle_export(
     };
     if let Some(path) = file_arg {
         match std::fs::write(path, &content) {
-            Ok(()) => writeln!(out, "{cg}\u{2713} {} row{} written to {cd}{:?}{cr}", res.rows.len(), if res.rows.len() == 1 { "" } else { "s" }, path)?,
+            Ok(()) => writeln!(out, "{cg}\u{2713} {} row{} written to {cd}{:?}{cr}", fmt_int(res.rows.len() as i64), if res.rows.len() == 1 { "" } else { "s" }, path)?,
             Err(e) => writeln!(out, "{ce}error: could not write {:?}: {e}{cr}", path)?,
         }
     } else {
