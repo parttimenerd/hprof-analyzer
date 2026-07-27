@@ -753,6 +753,7 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
             for (acc, item) in accs.iter_mut().zip(q.select.iter()) {
                 if let SelectItem::Aggregate { arg, .. } = item {
                     let v = project_string_row_item(arg, idx, ctx, &like_regexes);
+                    crate::query::execute::fold_agg_acc(acc, v);
                 }
             }
         }
@@ -1439,22 +1440,10 @@ fn qv_ord(a: &QueryValue, b: &QueryValue) -> std::cmp::Ordering {
 /// Only attributes available in the late window are supported; anything else
 /// returns Null (non-resolvable in the retained join).
 fn eval_late_gb_key(expr: &Expr, idx: u32, ret: u64, ctx: &LateCtx) -> QueryValue {
-    match expr {
-        Expr::Attr(Attr::ClassOf) | Expr::Attr(Attr::DisplayName) => {
-            ctx.class_name_of(idx)
-                .map(|s| QueryValue::Str(s.to_string()))
-                .unwrap_or(QueryValue::Null)
-        }
-        Expr::Attr(Attr::ObjectId) => QueryValue::Int(idx as i64),
-        Expr::Attr(Attr::ObjectAddress) => QueryValue::Int(ctx.id_map.to_addr(idx) as i64),
-        Expr::Attr(Attr::RetainedHeapSize) => QueryValue::Int(ret as i64),
-        Expr::Attr(Attr::UsedHeapSize) => ctx
-            .shallow
-            .get(idx as usize)
-            .map(|&s| QueryValue::Int(s as i64))
-            .unwrap_or(QueryValue::Null),
-        _ => QueryValue::Null,
-    }
+    // GROUP BY expressions don't contain LIKE; use an empty regex map.
+    static EMPTY_LIKE: std::sync::LazyLock<std::collections::HashMap<String, regex::Regex>> =
+        std::sync::LazyLock::new(std::collections::HashMap::new);
+    eval_late_expr_multi(expr, idx, ret, ctx, &EMPTY_LIKE)
 }
 
 /// GROUP BY + @retainedHeapSize: re-aggregate in the late phase using real
@@ -1521,6 +1510,7 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
                 SelectItem::Attr(Attr::ObjectAddress) => {
                     QueryValue::Int(ctx.id_map.to_addr(idx) as i64)
                 }
+                SelectItem::Expr(e) => eval_late_expr_multi(e, idx, ret as u64, ctx, &like_regexes),
                 SelectItem::Star => QueryValue::Int(1),
                 _ => QueryValue::Null,
             };

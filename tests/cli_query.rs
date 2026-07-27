@@ -6201,3 +6201,31 @@ fn query_case_expr_in_tostring_path_is_non_null() {
         );
     }
 }
+
+#[test]
+fn query_group_by_expr_key_in_retained_path_is_non_null() {
+    let Some(hprof) = philosophers() else { return };
+    // GROUP BY with an expression key (e.g. classof(x)) in the retained path was returning
+    // Null because eval_late_gb_key only handled plain Attr variants, not arbitrary exprs.
+    let out = Command::new(BIN)
+        .arg("query").arg(&hprof)
+        .args(["--query",
+            "SELECT classof(x), COUNT(*) AS n, SUM(@retainedHeapSize) AS total \
+             FROM java.lang.Object x GROUP BY classof(x) ORDER BY total DESC LIMIT 5"])
+        .output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let data_rows: Vec<&str> = stdout
+        .lines()
+        .filter(|l| l.contains('|') && !l.contains("classof") && !l.contains("---"))
+        .collect();
+    assert!(!data_rows.is_empty(), "expected GROUP BY rows, got:\n{stdout}");
+    for row in &data_rows {
+        let cols: Vec<&str> = row.split('|').collect();
+        let class_col = cols.get(1).map(|s| s.trim()).unwrap_or("");
+        assert!(
+            !class_col.is_empty() && class_col != "null",
+            "GROUP BY classof(x) key was null in retained path: {row}\nfull output:\n{stdout}"
+        );
+    }
+}
