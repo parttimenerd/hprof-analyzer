@@ -1265,8 +1265,10 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             continue;
                         }
                         "pivot" => {
+                            let before_sig = last_result.as_ref().map(|r| (r.rows.len(), r.columns.len()));
                             if !rest.is_empty() { prev_result = last_result.clone(); }
                             handle_pivot(rest, &mut last_result, max_width, &mut stdout)?;
+                            if last_result.as_ref().map(|r| (r.rows.len(), r.columns.len())) == before_sig { prev_result = None; }
                             stdout.flush()?;
                             continue;
                         }
@@ -1831,8 +1833,10 @@ fn run_repl_line(
                 return Ok(false);
             }
             "pivot" => {
+                let before_sig = last_result.as_ref().map(|r| (r.rows.len(), r.columns.len()));
                 if !rest.is_empty() { *prev_result = last_result.clone(); }
                 handle_pivot(rest, last_result, *max_width, out)?;
+                if last_result.as_ref().map(|r| (r.rows.len(), r.columns.len())) == before_sig { *prev_result = None; }
                 out.flush()?;
                 return Ok(false);
             }
