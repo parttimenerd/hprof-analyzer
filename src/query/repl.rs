@@ -1125,11 +1125,13 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                         }
                                         last_query = Some(wrapped);
                                         last_result = Some(res);
+                                        prev_result = None;
                                     }
                                     Ok(res) => {
                                         print_result(&res, std::time::Duration::ZERO, max_width, &mut stdout)?;
                                         last_query = Some(wrapped);
                                         last_result = Some(res);
+                                        prev_result = None;
                                     }
                                     Err(e) => {
                                         writeln!(stdout, "{ce}error: {e}{cr}")?;
@@ -1149,6 +1151,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                         &mut cache, &mut stdout,
                                     )? {
                                         last_result = Some(res);
+                                        prev_result = None;
                                     }
                                 }
                             }
