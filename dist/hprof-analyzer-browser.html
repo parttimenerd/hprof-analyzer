@@ -2365,7 +2365,10 @@ function startTerminal() {
             const p50_2 = vals2[Math.floor(vals2.length * 0.5)];
             const p90_2 = vals2[Math.floor(vals2.length * 0.9)];
             const p99_2 = vals2[Math.floor(vals2.length * 0.99)];
-            const fmtV2 = v => Number.isInteger(v) ? v.toLocaleString('en-US') : parseFloat(v.toPrecision(6)).toLocaleString('en-US');
+            const fmtV2 = v => {
+              if (!settings.bytesRaw && cName && /bytes$|_size$|heap_size$/i.test(cName)) return fmtBytes(v);
+              return v.toLocaleString('en-US');
+            };
             const nullNote2 = nullCount2 > 0 ? `  \x1b[2m(${nullCount2} null)\x1b[0m` : '';
             term.writeln(`\x1b[1m${cName}\x1b[0m  \x1b[2m(${vals2.length} non-null values)\x1b[0m${nullNote2}`);
             term.writeln(`  min    \x1b[32m${fmtV2(vals2[0])}\x1b[0m`);
