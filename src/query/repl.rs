@@ -3123,7 +3123,7 @@ fn handle_unique(
                     let col_name = &res.columns[ci].name;
                     let mut counts: HashMap<String, usize> = HashMap::new();
                     for row in &res.rows {
-                        *counts.entry(fmt_value(&row[ci])).or_insert(0) += 1;
+                        *counts.entry(fmt_value_for_col(&row[ci], col_name)).or_insert(0) += 1;
                     }
                     let total_distinct = counts.len();
                     let mut entries: Vec<(String, usize)> = counts.into_iter().collect();
@@ -3210,7 +3210,7 @@ fn handle_pivot(
                     let col_name = res.columns[ci].name.clone();
                     let mut counts: HashMap<String, usize> = HashMap::new();
                     for row in &res.rows {
-                        *counts.entry(fmt_value(&row[ci])).or_insert(0) += 1;
+                        *counts.entry(fmt_value_for_col(&row[ci], &col_name)).or_insert(0) += 1;
                     }
                     let mut entries: Vec<(String, usize)> = counts.into_iter().collect();
                     entries.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
