@@ -3096,7 +3096,7 @@ fn handle_unique(
                 }
                 Some(ci) => {
                     use std::collections::HashMap;
-                    let (cb, cd, cr) = if color { ("\x1b[1m", "\x1b[2m", "\x1b[0m") } else { ("", "", "") };
+                    let (cb, cd, cg, cr) = if color { ("\x1b[1m", "\x1b[2m", "\x1b[32m", "\x1b[0m") } else { ("", "", "", "") };
                     let col_name = &res.columns[ci].name;
                     let mut counts: HashMap<String, usize> = HashMap::new();
                     for row in &res.rows {
@@ -3125,7 +3125,7 @@ fn handle_unique(
                         } else {
                             "—".to_string()
                         };
-                        writeln!(out, "{:<val_w$}  {:>cnt_w$}  {:>pct_w$}  {cd}{}{cr}", val, fmt_int(*cnt as i64), pct, bar)?;
+                        writeln!(out, "{:<val_w$}  {cg}{:>cnt_w$}{cr}  {cd}{:>pct_w$}{cr}  {cd}{}{cr}", val, fmt_int(*cnt as i64), pct, bar)?;
                     }
                     if shown < total_distinct {
                         writeln!(out, "{cd}({} of {} distinct values, top {} shown  ·  {} total rows){cr}", fmt_int(shown as i64), fmt_int(total_distinct as i64), show_n, fmt_int(total as i64))?;
