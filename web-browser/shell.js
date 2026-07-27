@@ -3063,6 +3063,7 @@ function startTerminal() {
         if (hadPending) {
           term.writeln('\x1b[2m(multi-line input discarded)\x1b[0m');
         }
+        ghostText = '';
         term.write(PROMPT);
       }
       return;
@@ -3087,6 +3088,7 @@ function startTerminal() {
         killRing = line.slice(0, cursorPos);
         line = line.slice(cursorPos);
         cursorPos = 0;
+        ghostText = '';
         redrawLine();
       }
       return;
@@ -3110,6 +3112,8 @@ function startTerminal() {
         killRing = line.slice(p, cursorPos);
         line = line.slice(0, p) + line.slice(cursorPos);
         cursorPos = p;
+        ghostText = '';
+        updateGhost();
         redrawLine();
       }
       return;
@@ -3120,6 +3124,8 @@ function startTerminal() {
       if (killRing) {
         line = line.slice(0, cursorPos) + killRing + line.slice(cursorPos);
         cursorPos += killRing.length;
+        ghostText = '';
+        updateGhost();
         redrawLine();
       }
       return;
