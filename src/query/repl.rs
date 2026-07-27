@@ -3977,24 +3977,54 @@ fn print_result(
         &res.rows
     };
     let capped = row_limit > 0 && res.rows.len() > row_limit;
-    // Materialize headers + truncated cells so widths can be measured once.
-    let headers: Vec<String> = res
-        .columns
-        .iter()
-        .map(|c| truncate_cell(&c.name, max_width))
-        .collect();
-    let body: Vec<Vec<String>> = display_rows
+    // Materialize raw (uncapped) cell strings to measure natural widths.
+    let raw_headers: Vec<String> = res.columns.iter().map(|c| c.name.clone()).collect();
+    let raw_body: Vec<Vec<String>> = display_rows
         .iter()
         .map(|row| {
             row.iter().enumerate().map(|(i, v)| {
                 let col_name = res.columns.get(i).map(|c| c.name.as_str()).unwrap_or("");
-                truncate_cell(&fmt_value_for_col(v, col_name), max_width)
+                fmt_value_for_col(v, col_name)
             }).collect()
         })
         .collect();
-    // Per-column display width = max over header + all cells (char count, since
-    // truncate_cell already bounded each string). Guards against ragged rows.
-    let ncols = headers.len();
+    let ncols = raw_headers.len();
+    // Natural per-column widths (uncapped).
+    let mut natural: Vec<usize> = raw_headers.iter().map(|h| h.chars().count()).collect();
+    for row in &raw_body {
+        for (i, cell) in row.iter().enumerate() {
+            if i < ncols {
+                natural[i] = natural[i].max(cell.chars().count());
+            }
+        }
+    }
+    // Budget = terminal width minus separator overhead and row-number gutter.
+    let show_row_nums = raw_body.len() >= 2;
+    let row_num_w = if show_row_nums { raw_body.len().to_string().len() } else { 0 };
+    let gutter_w = if show_row_nums { row_num_w + 2 } else { 0 };
+    let sep_overhead = if ncols > 1 { 3 * (ncols - 1) } else { 0 };
+    let budget = if max_width > 0 && max_width > gutter_w + sep_overhead {
+        max_width - gutter_w - sep_overhead
+    } else {
+        0 // unlimited
+    };
+    // Per-column caps, distributed so all columns fit the terminal.
+    let col_caps = distribute_col_caps(&natural, budget);
+    // Re-materialize with per-column caps.
+    let headers: Vec<String> = raw_headers
+        .iter()
+        .enumerate()
+        .map(|(i, h)| truncate_cell(h, col_caps[i]))
+        .collect();
+    let body: Vec<Vec<String>> = raw_body
+        .iter()
+        .map(|row| {
+            row.iter().enumerate().map(|(i, cell)| {
+                truncate_cell(cell, col_caps[i])
+            }).collect()
+        })
+        .collect();
+    // Per-column display width = max over header + all cells.
     let mut widths: Vec<usize> = headers.iter().map(|h| h.chars().count()).collect();
     for row in &body {
         for (i, cell) in row.iter().enumerate() {
@@ -4008,8 +4038,6 @@ fn print_result(
         .map(|i| matches!(infer_col_type(i, &res.rows), "int" | "float"))
         .collect();
     // Render header and separator; bold/dim header when color is on
-    let show_row_nums = body.len() >= 2;
-    let row_num_w = if show_row_nums { body.len().to_string().len() } else { 0 };
     let gutter_pad = if show_row_nums { " ".repeat(row_num_w + 2) } else { String::new() };
     if color {
         let mut hdr_buf: Vec<u8> = Vec::new();
@@ -4154,6 +4182,50 @@ fn write_row_colored(
         }
     }
     writeln!(out)
+}
+
+/// Given natural column widths and a total terminal budget (in chars), return
+/// per-column caps so that all columns fit within the budget.
+///
+/// Algorithm: process columns from narrowest to widest. A column that fits in
+/// its equal share of the remaining budget gets its full natural width. The
+/// saved budget is redistributed to the remaining wider columns. This ensures
+/// small (e.g. numeric) columns are never squished while wide string columns
+/// are capped at whatever space is left.
+///
+/// `separator_overhead` is the total chars consumed by inter-column separators
+/// (e.g. `3 * (ncols - 1)` for ` | ` between each pair) plus any row-number
+/// gutter, already subtracted from `budget` by the caller.
+///
+/// Returns a vec of per-column caps. A cap of `0` means unlimited (only happens
+/// when budget is 0, i.e. no terminal width detected).
+fn distribute_col_caps(natural_widths: &[usize], budget: usize) -> Vec<usize> {
+    let n = natural_widths.len();
+    if n == 0 || budget == 0 {
+        return vec![0; n];
+    }
+    // Order columns by natural width so small ones are satisfied first.
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by_key(|&i| natural_widths[i]);
+
+    let mut caps = vec![0usize; n];
+    let mut remaining = budget;
+    let mut cols_left = n;
+    for &col in &order {
+        let equal_share = remaining / cols_left;
+        let w = natural_widths[col];
+        if w <= equal_share {
+            // Column fits in its fair share; give it its full width.
+            caps[col] = w;
+            remaining -= w;
+        } else {
+            // Column is wider than fair share; cap it.
+            caps[col] = equal_share.max(1);
+            remaining -= caps[col];
+        }
+        cols_left -= 1;
+    }
+    caps
 }
 
 /// Truncate `s` to at most `max_width` display chars, appending `…` when cut.
@@ -4814,6 +4886,79 @@ mod tests {
         let t = truncate_cell(s, 4);
         assert_eq!(t.chars().count(), 4, "should keep 3 chars + ellipsis: {t:?}");
         assert!(t.ends_with('…'), "should end with ellipsis: {t:?}");
+    }
+
+    #[test]
+    fn distribute_col_caps_zero_budget_returns_unlimited() {
+        let caps = distribute_col_caps(&[10, 50, 100], 0);
+        assert_eq!(caps, vec![0, 0, 0]);
+    }
+
+    #[test]
+    fn distribute_col_caps_all_fit_unchanged() {
+        // 3 cols, 5+5+5=15 natural, budget=15 → no capping needed.
+        let caps = distribute_col_caps(&[5, 5, 5], 15);
+        assert_eq!(caps, vec![5, 5, 5]);
+    }
+
+    #[test]
+    fn distribute_col_caps_small_cols_protected() {
+        // 2 cols: narrow (5) and very wide (200), budget=50.
+        // Narrow col gets its full 5; wide col gets remaining 45.
+        let caps = distribute_col_caps(&[5, 200], 50);
+        assert_eq!(caps[0], 5, "narrow col should get full natural width");
+        assert_eq!(caps[1], 45, "wide col gets remaining budget");
+    }
+
+    #[test]
+    fn distribute_col_caps_string_numeric_scenario() {
+        // Typical: value col (150 natural) and bytes col (8 natural), budget=80.
+        // bytes gets its fair share first (80/2=40), but natural is only 8,
+        // so it takes 8 and leaves 72 for the string column.
+        let caps = distribute_col_caps(&[150, 8], 80);
+        assert_eq!(caps[1], 8, "numeric col gets full natural width");
+        assert_eq!(caps[0], 72, "string col gets remaining budget");
+    }
+
+    #[test]
+    fn distribute_col_caps_total_fits_no_truncation() {
+        // When natural total fits within budget, all caps == natural widths.
+        let natural = vec![10, 20, 30];
+        let budget = 100;
+        let caps = distribute_col_caps(&natural, budget);
+        assert_eq!(caps, natural);
+    }
+
+    #[test]
+    fn print_result_wide_string_col_doesnt_crowd_out_narrow_col() {
+        // Two columns: a very wide string value and a small numeric. With a
+        // narrow terminal (max_width=40) the numeric column must still be visible.
+        let wide = "x".repeat(200);
+        let res = QueryResult {
+            name: "q".into(),
+            oql: "q".into(),
+            columns: vec![
+                QueryColumn { name: "value".into() },
+                QueryColumn { name: "bytes".into() },
+            ],
+            rows: vec![vec![
+                QueryValue::Str(wide.clone()),
+                QueryValue::Int(12345),
+            ]],
+            row_count: 1,
+            truncated: false,
+            error: None,
+            note: None,
+            viz: None,
+            elapsed_ms: None,
+        };
+        let mut buf = Vec::new();
+        print_result(&res, std::time::Duration::ZERO, 40, &mut buf).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        // The numeric value must appear in the output (formatted as KiB for a bytes column).
+        assert!(out.contains("KiB") || out.contains("12345"), "numeric column disappeared:\n{out}");
+        // The wide string must be truncated.
+        assert!(out.contains('…'), "wide string not truncated:\n{out}");
     }
 
     #[test]
