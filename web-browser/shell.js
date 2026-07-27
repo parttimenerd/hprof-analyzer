@@ -1410,7 +1410,8 @@ function startTerminal() {
       entries = entries.slice(0, shown);
       const total = lastResult.rows.length;
       const maxCnt = entries.length > 0 ? entries[0][1] : 0;
-      const cntW = Math.max(5, String(maxCnt).length);
+      const cntFmt = n => n.toLocaleString('en-US');
+      const cntW = Math.max(5, cntFmt(maxCnt).length);
       const pctW = 6;  // "100.0%"
       const colW = Math.max(colName.length, ...entries.map(([v]) => v.length), 4);
       const barCap = Math.max(0, term.cols - colW - cntW - pctW - 8);
@@ -1425,7 +1426,7 @@ function startTerminal() {
           const filled = Math.round((cnt / maxCnt) * barCap);
           bar = '  \x1b[2m' + '█'.repeat(filled) + '░'.repeat(barCap - filled) + '\x1b[0m';
         }
-        term.writeln(`${val.padEnd(colW)}  \x1b[32m${String(cnt).padStart(cntW)}\x1b[0m  \x1b[2m${pct.padStart(pctW)}\x1b[0m${bar}`);
+        term.writeln(`${val.padEnd(colW)}  \x1b[32m${cntFmt(cnt).padStart(cntW)}\x1b[0m  \x1b[2m${pct.padStart(pctW)}\x1b[0m${bar}`);
       });
       if (shown < totalDistinct) {
         term.writeln(`\x1b[2m(${shown} of ${totalDistinct} distinct values, top ${showN} shown  ·  ${total} total rows)\x1b[0m`);
