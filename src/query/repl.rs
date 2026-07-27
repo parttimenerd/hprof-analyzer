@@ -1612,7 +1612,7 @@ fn run_repl_line(
                         Some(res) => {
                             let rows = res.rows.len();
                             let cols = res.columns.len();
-                            writeln!(out, "{cg}{}{cr} row{} × {cg}{}{cr} col{}", rows, if rows == 1 { "" } else { "s" }, cols, if cols == 1 { "" } else { "s" })?;
+                            writeln!(out, "{cg}{}{cr} row{} × {cg}{}{cr} col{}", fmt_int(rows as i64), if rows == 1 { "" } else { "s" }, cols, if cols == 1 { "" } else { "s" })?;
                         }
                     }
                 } else {
@@ -1623,7 +1623,7 @@ fn run_repl_line(
                             let n = res.rows.first().and_then(|r| r.first())
                                 .and_then(|v| if let QueryValue::Int(n) = v { Some(*n) } else { None });
                             if let Some(n) = n {
-                                writeln!(out, "{cg}{}{cr} instance{} of {cc}{}{cr}", n, if n == 1 { "" } else { "s" }, rest.trim())?;
+                                writeln!(out, "{cg}{}{cr} instance{} of {cc}{}{cr}", fmt_int(n), if n == 1 { "" } else { "s" }, rest.trim())?;
                             } else {
                                 print_result(&res, std::time::Duration::ZERO, *max_width, out)?;
                             }
@@ -1664,7 +1664,7 @@ fn run_repl_line(
                         if rest.is_empty() {
                             let rows = res.rows.len();
                             let cols = res.columns.len();
-                            writeln!(out, "{cg}{}{cr} row{} × {cg}{}{cr} col{}", rows, if rows == 1 { "" } else { "s" }, cols, if cols == 1 { "" } else { "s" })?;
+                            writeln!(out, "{cg}{}{cr} row{} × {cg}{}{cr} col{}", fmt_int(rows as i64), if rows == 1 { "" } else { "s" }, cols, if cols == 1 { "" } else { "s" })?;
                         } else {
                             match resolve_col(rest, &res.columns) {
                                 None => {
@@ -1676,7 +1676,7 @@ fn run_repl_line(
                                     let non_null = res.rows.iter()
                                         .filter(|row| !matches!(row.get(ci), Some(QueryValue::Null) | None))
                                         .count();
-                                    writeln!(out, "{cg}{}{cr} non-null / {cg}{}{cr} total in {:?}", non_null, total, res.columns[ci].name)?;
+                                    writeln!(out, "{cg}{}{cr} non-null / {cg}{}{cr} total in {:?}", fmt_int(non_null as i64), fmt_int(total as i64), res.columns[ci].name)?;
                                 }
                             }
                         }
@@ -3419,7 +3419,7 @@ fn handle_meta(
             c!("!wc [col]",              "shape (rows × cols); col arg = non-null count");
             c!("!row [N|first|last|next|prev]", "show a row as key=value pairs");
             c!("!cols",                  "list columns with type and fill rate");
-            c!("!stats [col]",           "numeric summary: min/max/mean/stddev/p50/p90/p99");
+            c!("!stats [col]",           "numeric summary: min/max/mean/stddev/p50/p90/p99/sum");
             c!("!history [N]",           "show last N queries; !N to re-run");
             h!("Shaping results");
             c!("!filter <pat>",          "keep rows matching substring or /regex/ (/i = case-insensitive)");
