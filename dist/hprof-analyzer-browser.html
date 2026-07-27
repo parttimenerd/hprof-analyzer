@@ -2259,7 +2259,7 @@ function startTerminal() {
         seen.set(key, (seen.get(key) || 0) + 1);
       });
       const totalDistinct = seen.size;
-      let entries = [...seen.entries()].sort((a, b) => b[1] - a[1]);
+      let entries = [...seen.entries()].sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0]));
       const showN = topN !== null ? topN : entries.length;
       const shown = Math.min(entries.length, showN);
       entries = entries.slice(0, shown);
@@ -2317,7 +2317,7 @@ function startTerminal() {
         const key = fmtCell(row[ci], colName);
         counts.set(key, (counts.get(key) || 0) + 1);
       });
-      let entries = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+      let entries = [...counts.entries()].sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0]));
       const totalGroups = entries.length;
       if (topN !== null) entries = entries.slice(0, topN);
       const pivotRows = entries.map(([v, c]) => [v, c]);
