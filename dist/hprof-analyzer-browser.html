@@ -2607,7 +2607,7 @@ function startTerminal() {
         if (filtered.length === 0) {
           term.writeln(`\x1b[33m(no rows match "${pattern}")\x1b[0m`);
         } else {
-          const note = `${filtered.length} of ${rows.length} rows match "${pattern}"`;
+          const note = `${filtered.length.toLocaleString('en-US')} of ${rows.length.toLocaleString('en-US')} rows match "${pattern}"`;
           const newResult = { columns, rows: filtered, row_count: filtered.length, note };
           renderResult(newResult);
           prevResult = lastResult;
@@ -2657,7 +2657,7 @@ function startTerminal() {
           term.writeln(`\x1b[33m(no rows match "${pattern}" — nothing excluded)\x1b[0m`);
           term.write(PROMPT); return;
         }
-        const note = `${excluded} of ${rows.length} rows excluded "${pattern}"`;
+        const note = `${excluded.toLocaleString('en-US')} of ${rows.length.toLocaleString('en-US')} rows excluded "${pattern}"`;
         const newResult = { columns, rows: kept, row_count: kept.length, note };
         renderResult(newResult);
         prevResult = lastResult;
