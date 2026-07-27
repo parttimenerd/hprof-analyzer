@@ -682,7 +682,7 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
                 });
                 for (acc, item) in entry_ref.1.iter_mut().zip(q.select.iter()) {
                     if let SelectItem::Aggregate { arg, .. } = item {
-                        let v = project_string_row_item(arg, idx, ctx);
+                        let v = project_string_row_item(arg, idx, ctx, &like_regexes);
                         crate::query::execute::fold_agg_acc(acc, v);
                     }
                 }
@@ -752,8 +752,7 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
         for &idx in &kept {
             for (acc, item) in accs.iter_mut().zip(q.select.iter()) {
                 if let SelectItem::Aggregate { arg, .. } = item {
-                    let v = project_string_row_item(arg, idx, ctx);
-                    crate::query::execute::fold_agg_acc(acc, v);
+                    let v = project_string_row_item(arg, idx, ctx, &like_regexes);
                 }
             }
         }
@@ -780,7 +779,7 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
         .map(|&idx| {
             q.select
                 .iter()
-                .map(|it| project_string_row_item(it, idx, ctx))
+                .map(|it| project_string_row_item(it, idx, ctx, &like_regexes))
                 .collect()
         })
         .collect();
@@ -1165,7 +1164,12 @@ fn eval_tostring_pred(
 }
 
 /// Project a single SELECT item for a toString(s) result row.
-fn project_string_row_item(it: &SelectItem, dense: u32, ctx: &LateCtx) -> QueryValue {
+fn project_string_row_item(
+    it: &SelectItem,
+    dense: u32,
+    ctx: &LateCtx,
+    like_regexes: &std::collections::HashMap<String, regex::Regex>,
+) -> QueryValue {
     match it {
         SelectItem::ToString(_) | SelectItem::Attr(Attr::ToString(_)) => ctx
             .string_value(dense)
@@ -1184,6 +1188,10 @@ fn project_string_row_item(it: &SelectItem, dense: u32, ctx: &LateCtx) -> QueryV
                 Some(name) => QueryValue::Str(name.to_string()),
                 None => QueryValue::Null,
             }
+        }
+        SelectItem::Expr(e) => {
+            let ret = ctx.retained.get(dense as usize).copied().unwrap_or(0) as u64;
+            eval_late_expr_multi(e, dense, ret, ctx, like_regexes)
         }
         SelectItem::Star => QueryValue::ObjRef {
             // Dense index, matching the scan-path `SELECT *` convention: the late
@@ -1209,6 +1217,7 @@ fn project_array_index_item(
     dense: u32,
     ctx: &LateCtx,
     class_name: &str,
+    like_regexes: &std::collections::HashMap<String, regex::Regex>,
 ) -> QueryValue {
     match it {
         SelectItem::Attr(Attr::ObjectId) => QueryValue::Int(dense as i64),
@@ -1234,6 +1243,10 @@ fn project_array_index_item(
         SelectItem::Attr(Attr::DisplayName) | SelectItem::Attr(Attr::ClassOf) => {
             QueryValue::Str(class_name.to_string())
         }
+        SelectItem::Expr(e) => {
+            let ret = ctx.retained.get(dense as usize).copied().unwrap_or(0) as u64;
+            eval_late_expr_multi(e, dense, ret, ctx, like_regexes)
+        }
         SelectItem::Star => QueryValue::ObjRef {
             index: dense as u64,
             class: class_name.to_string(),
@@ -1250,6 +1263,7 @@ fn project_array_index_item(
 /// from the carried dense indices. Out-of-bounds and non-resolvable bases both
 /// yield `Null` without error, matching the AST contract. Limit is applied.
 fn array_index_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
+    let like_regexes = crate::query::execute::compile_like_regexes(q).unwrap_or_default();
     let seeds: Vec<u32> = entry.carry.indices();
     let columns: Vec<QueryColumn> = crate::query::execute::query_columns(q);
     let class_name = q.from.class_name();
@@ -1264,7 +1278,7 @@ fn array_index_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryR
                 | SelectItem::Attr(Attr::ArraySlice { .. }) => QueryValue::Null,
                 // All other columns: resolve normally from the dense index using
                 // the same late-phase projection as other stage entry functions.
-                _ => project_array_index_item(it, s, ctx, class_name),
+                _ => project_array_index_item(it, s, ctx, class_name, &like_regexes),
             })
             .collect();
         rows.push(row);

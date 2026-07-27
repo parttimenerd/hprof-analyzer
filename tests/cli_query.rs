@@ -6174,3 +6174,30 @@ fn query_classof_in_tostring_path_is_non_null() {
         );
     }
 }
+
+#[test]
+fn query_case_expr_in_tostring_path_is_non_null() {
+    let Some(hprof) = philosophers() else { return };
+    // CASE/arithmetic expressions in SELECT were returning Null in the toString path
+    // because project_string_row_item had no SelectItem::Expr arm.
+    let out = Command::new(BIN)
+        .arg("query").arg(&hprof)
+        .args(["--query",
+            "SELECT CASE WHEN @retainedHeapSize > 0 THEN \"large\" ELSE \"empty\" END, \
+             @retainedHeapSize * 2 \
+             FROM java.lang.String x WHERE toString(x) LIKE \"java.*\" LIMIT 3"])
+        .output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let data_rows: Vec<&str> = stdout
+        .lines()
+        .filter(|l| l.contains('|') && !l.contains("CASE") && !l.contains("---"))
+        .collect();
+    assert!(!data_rows.is_empty(), "expected data rows, got:\n{stdout}");
+    for row in &data_rows {
+        assert!(
+            row.contains("large") || row.contains("empty"),
+            "CASE expr returned null in toString path: {row}\nfull output:\n{stdout}"
+        );
+    }
+}
