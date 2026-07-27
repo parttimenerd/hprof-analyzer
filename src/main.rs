@@ -1590,11 +1590,37 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
             out.push_str(&format!("error: {err}\n\n"));
             continue;
         }
-        let header: Vec<String> = r.columns.iter().map(|c| c.name.clone()).collect();
-        out.push_str(&header.join(" | "));
+        let headers: Vec<String> = r.columns.iter().map(|c| c.name.clone()).collect();
+        let body: Vec<Vec<String>> = r.rows.iter().map(|row| row.iter().map(fmt_query_value).collect()).collect();
+        let ncols = headers.len();
+        // Compute per-column widths (header width vs max cell width).
+        let mut widths: Vec<usize> = headers.iter().map(|h| h.chars().count()).collect();
+        for row in &body {
+            for (i, cell) in row.iter().enumerate() {
+                if i < ncols { widths[i] = widths[i].max(cell.chars().count()); }
+            }
+        }
+        let pad = |s: &str, w: usize| -> String {
+            let n = s.chars().count();
+            if n >= w { s.to_string() } else { format!("{s}{}", " ".repeat(w - n)) }
+        };
+        // Header row — left-aligned.
+        let hdr_cells: Vec<String> = headers.iter().enumerate()
+            .map(|(i, h)| if i + 1 < ncols { pad(h, widths[i]) } else { h.clone() })
+            .collect();
+        out.push_str(&hdr_cells.join(" | "));
         out.push('\n');
-        for row in &r.rows {
-            let cells: Vec<String> = row.iter().map(fmt_query_value).collect();
+        // Separator.
+        let sep: Vec<String> = widths.iter().enumerate()
+            .map(|(i, &w)| "-".repeat(if i + 1 < ncols { w } else { w }))
+            .collect();
+        out.push_str(&sep.join("-+-"));
+        out.push('\n');
+        // Data rows.
+        for row in &body {
+            let cells: Vec<String> = row.iter().enumerate()
+                .map(|(i, cell)| if i + 1 < ncols { pad(cell, widths[i]) } else { cell.clone() })
+                .collect();
             out.push_str(&cells.join(" | "));
             out.push('\n');
         }

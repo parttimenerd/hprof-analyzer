@@ -44,6 +44,11 @@ fn gauss_mix() -> Option<String> {
     }
 }
 
+/// Returns true if `line` is a table separator (only `-`, `+`, and spaces — e.g., `---+-+---`).
+fn is_separator_line(line: &str) -> bool {
+    !line.is_empty() && line.chars().all(|c| c == '-' || c == '+' || c == ' ')
+}
+
 /// `query <dump> --query "SELECT COUNT(*) …"` exits 0 and prints a table with a
 /// count value (the histogram-only aggregate path).
 #[test]
@@ -444,6 +449,7 @@ fn query_subcommand_tostring_where_filters_in_late_phase() {
                 && !l.starts_with("==")
                 && !l.starts_with("SELECT")
                 && !l.starts_with('(')
+                && !is_separator_line(l)
                 && *l != "toString(s)"
         })
         .collect();
@@ -548,6 +554,7 @@ fn object_address_nonzero_in_tostring_carry_mode() {
                 && !l.starts_with("==")
                 && !l.starts_with("SELECT")
                 && !l.starts_with('(')
+                && !is_separator_line(l)
                 && l != "@objectAddress | value"
         })
         .collect();
@@ -4539,8 +4546,8 @@ fn from_objects_single_address_returns_one_row() {
 // ── D2: method dispatch tier-2 — MAT-API name aliases ────────────────────────
 
 /// Extract data value lines from a query result, stripping the section header
-/// (`== … ==`), the echoed SELECT line, the column-name header row, and the
-/// `(N rows)` footer. What remains are the actual data cells.
+/// (`== … ==`), the echoed SELECT line, the column-name header row, the
+/// separator line (`---+-+---`), and the `(N rows)` footer.
 fn extract_data_rows(stdout: &str) -> Vec<&str> {
     stdout
         .lines()
@@ -4550,6 +4557,7 @@ fn extract_data_rows(stdout: &str) -> Vec<&str> {
                 && !l.starts_with("==")
                 && !l.starts_with("SELECT")
                 && !l.starts_with('(')
+                && !is_separator_line(l)
         })
         .skip(1) // skip the column-name header row
         .collect()
@@ -5503,7 +5511,7 @@ fn size_method_works_on_linked_hash_map() {
     // The dump has LinkedHashMaps with non-zero size; SUM must be > 0
     let total: i64 = stdout
         .lines()
-        .find(|l| !l.trim().is_empty() && !l.contains("total_sz") && !l.starts_with("==") && !l.starts_with("  SELECT") && !l.starts_with('('))
+        .find(|l| !l.trim().is_empty() && !l.contains("total_sz") && !l.starts_with("==") && !l.starts_with("  SELECT") && !l.starts_with('(') && !is_separator_line(l.trim()))
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or(0);
     assert!(total > 0, "expected non-zero SUM(size()) for LinkedHashMap, got: {stdout}");
@@ -5531,7 +5539,7 @@ fn size_method_works_on_tree_map() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let total: i64 = stdout
         .lines()
-        .find(|l| !l.trim().is_empty() && !l.contains("total_sz") && !l.starts_with("==") && !l.starts_with("  SELECT") && !l.starts_with('('))
+        .find(|l| !l.trim().is_empty() && !l.contains("total_sz") && !l.starts_with("==") && !l.starts_with("  SELECT") && !l.starts_with('(') && !is_separator_line(l.trim()))
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or(0);
     assert!(total > 0, "expected non-zero SUM(size()) for TreeMap, got: {stdout}");
@@ -5679,7 +5687,7 @@ fn limit_offset_paginates_correctly() {
     // Extract data rows (lines that are not header/separator/status lines)
     let data_rows = |s: &str| -> Vec<String> {
         s.lines()
-            .filter(|l| !l.starts_with("==") && !l.starts_with("  ") && !l.starts_with('(') && !l.is_empty() && !l.contains("class"))
+            .filter(|l| !l.starts_with("==") && !l.starts_with("  ") && !l.starts_with('(') && !l.is_empty() && !l.contains("class") && !l.starts_with('-'))
             .map(|l| l.trim().to_string())
             .collect()
     };
