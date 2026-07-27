@@ -5913,4 +5913,61 @@ fn query_group_by_retained_heap_size_sum_is_non_null() {
     }
 }
 
+#[test]
+fn query_used_heap_size_with_retained_is_non_null() {
+    let Some(hprof) = philosophers() else { return };
+    // @usedHeapSize alongside @retainedHeapSize: both must be non-null in the
+    // retained cross-phase window (project_late_row had no UsedHeapSize arm before).
+    let out = Command::new(BIN)
+        .arg("query").arg(&hprof)
+        .args(["--query",
+            "SELECT @usedHeapSize, @retainedHeapSize FROM java.lang.String x LIMIT 5"])
+        .output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let data_rows: Vec<&str> = stdout
+        .lines()
+        .filter(|l| l.contains('|') && !l.contains("---") && !l.starts_with("@used"))
+        .collect();
+    assert!(!data_rows.is_empty(), "expected data rows, got:\n{stdout}");
+    for row in &data_rows {
+        // Both columns must be numeric (not "null").
+        let cells: Vec<&str> = row.split('|').skip(1).collect();
+        for cell in &cells[..2.min(cells.len())] {
+            let v = cell.trim();
+            assert!(
+                v != "null" && v != "Null" && v.parse::<i64>().is_ok(),
+                "@usedHeapSize or @retainedHeapSize was null/non-numeric: {v:?} in row: {row}"
+            );
+        }
+    }
+}
 
+#[test]
+fn query_group_by_sum_used_heap_size_with_retained_is_non_null() {
+    let Some(hprof) = philosophers() else { return };
+    // GROUP BY classof(x) with SUM(@usedHeapSize) and @retainedHeapSize as
+    // the escalation trigger: SUM(@usedHeapSize) must not be null.
+    let out = Command::new(BIN)
+        .arg("query").arg(&hprof)
+        .args(["--query",
+            "SELECT classof(x) AS c, SUM(@usedHeapSize) AS sh, SUM(@retainedHeapSize) AS ret \
+             FROM INSTANCEOF java.lang.Object x \
+             GROUP BY classof(x) ORDER BY ret DESC LIMIT 5"])
+        .output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let data_rows: Vec<&str> = stdout
+        .lines()
+        .filter(|l| l.contains('|') && !l.starts_with('c') && !l.contains("---"))
+        .collect();
+    assert!(!data_rows.is_empty(), "expected GROUP BY rows, got:\n{stdout}");
+    let first = data_rows[0];
+    let cols: Vec<&str> = first.split('|').map(|s| s.trim()).collect();
+    // cols[1] = c, cols[2] = sh, cols[3] = ret (1-based, 0-indexed shift from leading |)
+    let sh = cols.get(2).copied().unwrap_or("MISSING");
+    assert!(
+        sh != "null" && sh != "Null" && sh.parse::<i64>().is_ok(),
+        "SUM(@usedHeapSize) was null/non-numeric: {sh:?} in first row: {first}\noutput:\n{stdout}"
+    );
+}
