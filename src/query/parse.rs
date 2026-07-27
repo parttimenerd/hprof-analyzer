@@ -124,6 +124,35 @@ pub enum Token {
     Ident(String),
 }
 
+/// Return a human-readable representation of a token for use in error messages.
+/// Punctuation tokens are shown as the literal character(s) (e.g. `'['`);
+/// value-carrying tokens show their payload.
+fn token_display(t: &Token) -> String {
+    match t {
+        Token::LParen => "'('".into(),
+        Token::RParen => "')'".into(),
+        Token::Comma => "','".into(),
+        Token::LBracket => "'['".into(),
+        Token::RBracket => "']'".into(),
+        Token::Colon => "':'".into(),
+        Token::Eq => "'='".into(),
+        Token::Ne => "'!='".into(),
+        Token::Le => "'<='".into(),
+        Token::Lt => "'<'".into(),
+        Token::Ge => "'>='".into(),
+        Token::Gt => "'>'".into(),
+        Token::Star => "'*'".into(),
+        Token::Plus => "'+'".into(),
+        Token::Minus => "'-'".into(),
+        Token::Divide => "'/'".into(),
+        Token::At(s) => format!("'@{s}'"),
+        Token::Str(s) => format!("\"{s}\""),
+        Token::Float(f) => format!("{f}"),
+        Token::Int(i) => format!("{i}"),
+        Token::Ident(s) => format!("'{s}'"),
+    }
+}
+
 /// Tokenize with byte-span tracking, producing the `(Token, SimpleSpan)` stream
 /// consumed by the chumsky parser. On an unrecognized byte the error carries the
 /// offending offset and slice.
@@ -1497,7 +1526,7 @@ fn compact_error(src: &str, e: &Rich<'_, Token>) -> String {
         _ => {
             let found = e
                 .found()
-                .map(|t| format!("{t:?}"))
+                .map(|t| token_display(t))
                 .unwrap_or_else(|| "end of input".to_string());
             // On end-of-input, a `SELECT` with no `FROM` is the likely cause;
             // otherwise fall back to the nearest-keyword hint.
@@ -1586,7 +1615,7 @@ pub fn parse_or_report(src: &str) -> Result<Query, String> {
                     _ => {
                         let found = e
                             .found()
-                            .map(|t| format!("{t:?}"))
+                            .map(|t| token_display(t))
                             .unwrap_or_else(|| "end of input".to_string());
                         // Append the nearest-keyword hint (same as the plain
                         // message path) so the CLI/REPL caret diagnostic also
@@ -4803,5 +4832,12 @@ mod tests {
             )),
             "expected open-end slice, got: {item:?}"
         );
+    }
+
+    #[test]
+    fn parse_error_uses_source_chars_not_debug_names() {
+        let err = parse_or_report("[SELCT * FROM java.lang.String").unwrap_err();
+        assert!(err.contains('['), "expected '[' in error, got: {err}");
+        assert!(!err.contains("LBracket"), "expected no 'LBracket' in error, got: {err}");
     }
 }
