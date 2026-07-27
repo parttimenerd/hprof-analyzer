@@ -1682,8 +1682,8 @@ fn query_subcommand_unknown_field_reports_error() {
         .output()
         .unwrap();
     assert!(
-        out.status.success(),
-        "unknown-field query should exit 0 with an inline error: {}",
+        !out.status.success(),
+        "unknown-field query should exit non-zero: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -1713,8 +1713,8 @@ fn query_subcommand_unknown_alias_field_reports_error() {
         .output()
         .unwrap();
     assert!(
-        out.status.success(),
-        "unknown alias-field query should exit 0 with an inline error: {}",
+        !out.status.success(),
+        "unknown alias-field query should exit non-zero: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);

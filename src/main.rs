@@ -1581,12 +1581,14 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
     attach_viz(&mut query_results, &collected);
 
     let mut out = String::new();
+    let mut had_error = false;
     for r in query_results.iter() {
         out.push_str(&format!("== {} ==\n", r.name));
         if !r.oql.is_empty() {
             out.push_str(&format!("  {}\n", r.oql));
         }
         if let Some(err) = &r.error {
+            had_error = true;
             out.push_str(&format!("error: {err}\n\n"));
             continue;
         }
@@ -1633,6 +1635,12 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
         out.push('\n');
     }
     print!("{out}");
+    if had_error {
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            "one or more queries returned an error (see output above)",
+        ));
+    }
     Ok(())
 }
 
