@@ -1036,9 +1036,9 @@ function fmtCell(cell, colName) {
   }
   if (kind === 'str') return String(v);
   if (kind === 'obj_ref') {
-    const cls = v && v.class ? v.class.split('.').pop() : '?';
+    const cls = v && v.class ? v.class : '?';
     const idx = v && v.index !== undefined ? v.index : '?';
-    return `<${cls}#${idx}>`;
+    return `${cls}@${idx}`;
   }
   // fallback
   return JSON.stringify(cell);
