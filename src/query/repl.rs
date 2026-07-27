@@ -1507,6 +1507,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                     let mut dev_null: Vec<u8> = Vec::new();
                                     match run_one(path, &q, path_depth, reachable_only, &mut cache, &mut dev_null) {
                                         Ok(res) => {
+                                            prev_result = last_result.clone();
                                             if res.rows.len() == 1 {
                                                 let bytes_raw = SESSION_SETTINGS.with(|s| s.borrow().bytes_raw);
                                                 let key_w = res.columns.iter().map(|c| c.name.len()).max().unwrap_or(8);
@@ -2054,6 +2055,7 @@ fn run_repl_line(
                         let mut dev_null: Vec<u8> = Vec::new();
                         match run_one(path, &q, path_depth, *reachable_only, cache, &mut dev_null) {
                             Ok(res) => {
+                                *prev_result = last_result.clone();
                                 if res.rows.len() == 1 {
                                     let bytes_raw = SESSION_SETTINGS.with(|s| s.borrow().bytes_raw);
                                     let key_w = res.columns.iter().map(|c| c.name.len()).max().unwrap_or(8);

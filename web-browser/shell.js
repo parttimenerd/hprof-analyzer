@@ -943,6 +943,7 @@ function startTerminal() {
           } else {
             renderResult(r);
           }
+          prevResult = lastResult;
           lastResult = { columns: colNames, rows, note: r.note, truncated: r.truncated, row_count: r.row_count };
           currentRowIdx = 0;
         }
