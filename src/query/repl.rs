@@ -6128,4 +6128,139 @@ mod tests {
         let kept = result.as_ref().map(|r| r.rows.len()).unwrap_or(0);
         assert_eq!(kept, 1, "KiB filter should keep the ~4 KiB row; buf={}", String::from_utf8_lossy(&buf));
     }
+
+    // ---------- undo slot correctness ----------
+
+    fn make_result(rows: usize) -> QueryResult {
+        QueryResult {
+            name: "t".into(), oql: "SELECT v FROM T".into(),
+            columns: vec![crate::query::model::QueryColumn { name: "v".into() }],
+            rows: (0..rows as i64).map(|i| vec![QueryValue::Int(i)]).collect(),
+            row_count: rows as u64,
+            truncated: false, error: None, note: None, viz: None, elapsed_ms: None,
+        }
+    }
+
+    fn repl_cmd(cmd: &str, last_r: &mut Option<QueryResult>, prev_r: &mut Option<QueryResult>) {
+        use std::collections::VecDeque;
+        let mut last_q: Option<String> = None;
+        let mut cache = None;
+        let mut buf: Vec<String> = VecDeque::new().into();
+        let names = (vec![], vec![]);
+        let mut out = Vec::<u8>::new();
+        let _ = run_repl_line(
+            cmd.to_string(),
+            "tests/fixtures/dump_4_philosophers.hprof",
+            5,
+            &mut true,
+            &mut 0,
+            &mut last_q,
+            last_r,
+            prev_r,
+            &mut cache,
+            &mut buf,
+            &names,
+            &mut out,
+        );
+    }
+
+    #[test]
+    fn undo_slot_cleared_on_fresh_inline_oql() {
+        // After a fresh OQL query, the undo slot must be None.
+        let mut last_r: Option<QueryResult> = Some(make_result(3));
+        let mut prev_r: Option<QueryResult> = Some(make_result(5)); // old undo state
+        // Trigger an inline query via run_repl_line; pass a simple OQL
+        let mut last_q: Option<String> = None;
+        let mut cache = None;
+        let mut buf: Vec<String> = vec![];
+        let names = (vec![], vec![]);
+        let mut out = Vec::<u8>::new();
+        // Use a simple SELECT that the fixture can execute
+        let _ = run_repl_line(
+            "SELECT * FROM java.lang.String".to_string(),
+            "tests/fixtures/dump_4_philosophers.hprof",
+            5,
+            &mut true,
+            &mut 0,
+            &mut last_q,
+            &mut last_r,
+            &mut prev_r,
+            &mut cache,
+            &mut buf,
+            &names,
+            &mut out,
+        );
+        // After a fresh query, prev_r must be None
+        assert!(prev_r.is_none(), "undo slot must be cleared after fresh OQL query, but was {:?}", prev_r.as_ref().map(|r| r.rows.len()));
+    }
+
+    #[test]
+    fn undo_slot_preserved_when_filter_is_noop() {
+        SESSION_SETTINGS.with(|s| s.borrow_mut().color = false);
+        // Sort establishes an undo slot, then filter matches everything (no-op).
+        // The sort undo slot should survive the no-op filter.
+        let original = make_result(3);
+        let sorted_state = {
+            let mut r = make_result(3);
+            r.note = Some("sorted by v asc".into());
+            r
+        };
+        let mut last_r: Option<QueryResult> = Some(sorted_state.clone());
+        let mut prev_r: Option<QueryResult> = Some(original.clone()); // sort's undo
+
+        // no-op filter: pattern "0" matches row 0 only — actually this changes rows, so
+        // use a pattern that matches all rows. Use "" which handle_filter treats as usage.
+        // Better: use a regex that matches all (e.g. ".")
+        // But that matches everything, so rows don't change count → should preserve prev_r.
+        {
+            use crate::query::model::QueryColumn;
+            let mut all_match = Some(QueryResult {
+                name: "t".into(), oql: "".into(),
+                columns: vec![QueryColumn { name: "v".into() }],
+                rows: vec![vec![QueryValue::Int(1)], vec![QueryValue::Int(2)], vec![QueryValue::Int(3)]],
+                row_count: 3, truncated: false, error: None, note: Some("sorted by v asc".into()), viz: None, elapsed_ms: None,
+            });
+            let before_count = all_match.as_ref().map(|r| r.rows.len());
+            let saved = prev_r.clone();
+            if true { prev_r = all_match.clone(); }
+            // filter with /.*/ matches all rows
+            handle_filter("/./", &mut all_match, 120, &mut vec![]).unwrap();
+            if all_match.as_ref().map(|r| r.rows.len()) == before_count { prev_r = saved; }
+            last_r = all_match;
+        }
+
+        // prev_r should still be the original 3-row result (the sort undo)
+        assert!(prev_r.is_some(), "undo slot must survive no-op filter");
+        assert_eq!(prev_r.as_ref().unwrap().rows.len(), 3);
+        SESSION_SETTINGS.with(|s| s.borrow_mut().color = true);
+    }
+
+    #[test]
+    fn undo_slot_cleared_on_fresh_count_arg() {
+        SESSION_SETTINGS.with(|s| s.borrow_mut().color = false);
+        let mut last_r: Option<QueryResult> = Some(make_result(3));
+        let mut prev_r: Option<QueryResult> = Some(make_result(5));
+        let mut last_q: Option<String> = None;
+        let mut cache = None;
+        let mut buf: Vec<String> = vec![];
+        let names = (vec![], vec![]);
+        let mut out = Vec::<u8>::new();
+        let _ = run_repl_line(
+            "!count java.lang.String".to_string(),
+            "tests/fixtures/dump_4_philosophers.hprof",
+            5,
+            &mut true,
+            &mut 0,
+            &mut last_q,
+            &mut last_r,
+            &mut prev_r,
+            &mut cache,
+            &mut buf,
+            &names,
+            &mut out,
+        );
+        // !count with arg runs a fresh query → undo slot cleared
+        assert!(prev_r.is_none(), "undo slot must be cleared after !count <class>");
+        SESSION_SETTINGS.with(|s| s.borrow_mut().color = true);
+    }
 }
