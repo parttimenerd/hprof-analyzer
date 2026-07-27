@@ -238,26 +238,63 @@ async function loadWasmSessionWithReport(file) {
   }
 }
 
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
 function renderWasmReport(report, fileName) {
   const container = document.getElementById('report-container');
+  // Remove all children except report-message, then clear its text
+  while (container.lastChild && container.lastChild.id !== 'report-message') {
+    container.removeChild(container.lastChild);
+  }
+  while (container.firstChild && container.firstChild.id !== 'report-message') {
+    container.removeChild(container.firstChild);
+  }
   const msg = document.getElementById('report-message');
-  msg.textContent = '';
-  // Render a simple summary from the report JSON
+  if (msg) msg.textContent = '';
+
   const overview = report.overview || {};
-  const html = [
-    `<h2>${fileName}</h2>`,
-    `<table class="report-table">`,
-    `<tr><th>Total heap</th><td>${fmtBytes(overview.total_heap_bytes || 0)}</td></tr>`,
-    `<tr><th>Objects</th><td>${(overview.object_count || 0).toLocaleString('en-US')}</td></tr>`,
-    `<tr><th>Classes</th><td>${(overview.class_count || 0).toLocaleString('en-US')}</td></tr>`,
-    `<tr><th>GC roots</th><td>${(overview.gc_root_count || 0).toLocaleString('en-US')}</td></tr>`,
-    `</table>`,
-    `<p><button id="btn-report-to-shell">Open OQL Shell</button></p>`,
-  ].join('');
-  container.insertAdjacentHTML('afterbegin', html);
-  document.getElementById('btn-report-to-shell')?.addEventListener('click', () => {
-    showWasmShell(fileName);
-  });
+  const leaks = (report.leaks && report.leaks.suspects) || [];
+  const histogram = (report.top && report.top.histogram) || [];
+
+  const parts = [];
+
+  // ── Overview ────────────────────────────────────────────────────────────────
+  parts.push(`<div class="rpt-section"><h2 class="rpt-title">${escHtml(fileName)}</h2>`);
+  parts.push(`<table class="rpt-table">`);
+  parts.push(`<tr><th>Total heap</th><td>${fmtBytes(overview.total_shallow || 0)}</td></tr>`);
+  parts.push(`<tr><th>Objects</th><td>${(overview.total_objects || 0).toLocaleString('en-US')}</td></tr>`);
+  parts.push(`<tr><th>Classes</th><td>${(overview.classes_loaded || 0).toLocaleString('en-US')}</td></tr>`);
+  parts.push(`<tr><th>GC roots</th><td>${(overview.gc_roots || 0).toLocaleString('en-US')}</td></tr>`);
+  if (overview.jvm_version) {
+    parts.push(`<tr><th>JVM</th><td>${escHtml(overview.jvm_version)}</td></tr>`);
+  }
+  parts.push(`</table></div>`);
+
+  // ── Leak Suspects ──────────────────────────────────────────────────────────
+  if (leaks.length > 0) {
+    parts.push(`<div class="rpt-section"><h3 class="rpt-subtitle">Leak Suspects</h3>`);
+    parts.push(`<table class="rpt-table rpt-wide">`);
+    parts.push(`<thead><tr><th>Class</th><th class="num">Instances</th><th class="num">Retained</th></tr></thead><tbody>`);
+    leaks.slice(0, 10).forEach(s => {
+      parts.push(`<tr><td class="cls">${escHtml(s.pretty_class || '')}</td><td class="num">${(s.instance_count || 0).toLocaleString('en-US')}</td><td class="num">${fmtBytes(s.retained || 0)}</td></tr>`);
+    });
+    parts.push(`</tbody></table></div>`);
+  }
+
+  // ── Histogram ──────────────────────────────────────────────────────────────
+  if (histogram.length > 0) {
+    parts.push(`<div class="rpt-section"><h3 class="rpt-subtitle">Histogram (top classes by retained)</h3>`);
+    parts.push(`<table class="rpt-table rpt-wide">`);
+    parts.push(`<thead><tr><th>Class</th><th class="num">Instances</th><th class="num">Shallow</th><th class="num">Retained</th></tr></thead><tbody>`);
+    histogram.slice(0, 30).forEach(row => {
+      parts.push(`<tr><td class="cls">${escHtml(row.pretty_class || '')}</td><td class="num">${(row.instances || 0).toLocaleString('en-US')}</td><td class="num">${fmtBytes(row.shallow || 0)}</td><td class="num">${fmtBytes(row.retained || 0)}</td></tr>`);
+    });
+    parts.push(`</tbody></table></div>`);
+  }
+
+  container.insertAdjacentHTML('beforeend', parts.join(''));
 }
 
 function showWasmShell(name) {
@@ -276,14 +313,27 @@ function showWasmShell(name) {
 }
 
 // ── Report screen ─────────────────────────────────────────────────────────────
+let prevScreen = null;  // tracks screen shown before report-screen
+
+function showReport(report, fileName) {
+  prevScreen = wasmSession ? 'shell-screen' : (serverUrl ? 'shell-screen' : null);
+  renderWasmReport(report, fileName);
+  showScreen('report-screen');
+}
+
 document.getElementById('btn-new-file').addEventListener('click', () => {
   if (wasmSession) { wasmSession.free(); wasmSession = null; }
   serverUrl = null; hasRetained = false; classNames = [];
+  prevScreen = null;
   showScreen('upload-screen');
 });
 
 document.getElementById('btn-to-shell').addEventListener('click', () => {
-  if (wasmSession) {
+  if (prevScreen === 'shell-screen' && wasmSession) {
+    showWasmShell(document.getElementById('server-url-display').textContent || 'heap.hprof');
+  } else if (prevScreen === 'shell-screen' && serverUrl) {
+    showScreen('shell-screen');
+  } else if (wasmSession) {
     showWasmShell(document.getElementById('server-url-display').textContent || 'heap.hprof');
   } else {
     showScreen('connect-screen');
@@ -475,8 +525,7 @@ document.getElementById('btn-show-report').addEventListener('click', async () =>
   if (wasmSession) {
     try {
       const reportJson = wasmSession.generate_report();
-      renderWasmReport(JSON.parse(reportJson), wasmSession._fileName || '');
-      showScreen('report-screen');
+      showReport(JSON.parse(reportJson), wasmSession._fileName || '');
     } catch (e) {
       document.getElementById('analyze-status').textContent = `Report failed: ${e}`;
     }
@@ -487,8 +536,7 @@ document.getElementById('btn-show-report').addEventListener('click', async () =>
     const rr = await fetch(serverUrl + '/report');
     if (rr.ok) {
       const reportJson = await rr.text();
-      renderWasmReport(JSON.parse(reportJson), serverUrl || '');
-      showScreen('report-screen');
+      showReport(JSON.parse(reportJson), serverUrl || '');
     } else {
       document.getElementById('analyze-status').textContent = 'Report not ready';
     }
@@ -516,8 +564,7 @@ async function pollAnalysisStatus() {
         const rr = await fetch(serverUrl + '/report');
         if (rr.ok) {
           const reportJson = await rr.text();
-          renderWasmReport(JSON.parse(reportJson), serverUrl || '');
-          showScreen('report-screen');
+          showReport(JSON.parse(reportJson), serverUrl || '');
         }
       } catch (_) {}
     } else if (data.status === 'analyzing') {

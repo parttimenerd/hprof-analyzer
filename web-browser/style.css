@@ -314,8 +314,12 @@ button:hover { background: #4a6aaa; }
   overflow-y: auto;
   padding: 24px;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+  max-width: 900px;
+  margin: 0 auto;
+  width: 100%;
 }
 #report-message {
   color: #888;
@@ -323,4 +327,36 @@ button:hover { background: #4a6aaa; }
   text-align: center;
   max-width: 480px;
   line-height: 1.6;
+  align-self: center;
 }
+#report-message:empty { display: none; }
+.rpt-section {
+  width: 100%;
+  margin-bottom: 28px;
+}
+.rpt-title { font-size: 1.3rem; color: #a0cfff; margin-bottom: 14px; font-weight: 600; }
+.rpt-subtitle { font-size: 1rem; color: #7aafff; margin-bottom: 10px; font-weight: 600; }
+.rpt-table {
+  border-collapse: collapse;
+  font-size: .85rem;
+  width: auto;
+}
+.rpt-table.rpt-wide { width: 100%; }
+.rpt-table th, .rpt-table td {
+  padding: 5px 12px;
+  border-bottom: 1px solid #1e1e36;
+  text-align: left;
+  vertical-align: top;
+}
+.rpt-table thead th {
+  color: #6a8aaa;
+  font-size: .78rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  border-bottom: 1px solid #2a3a5a;
+}
+.rpt-table tr:hover td { background: #12122a; }
+.rpt-table th { color: #6a8aaa; font-weight: 500; }
+.rpt-table td { color: #c8d0e8; }
+.rpt-table td.cls { color: #90c0f8; font-family: 'Cascadia Code', 'Fira Code', Menlo, Consolas, monospace; font-size: .8rem; }
+.rpt-table td.num, .rpt-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
