@@ -1383,9 +1383,10 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             continue;
                         }
                         "drop" => {
-                            let before_cols = last_result.as_ref().map(|r| r.columns.len());
+                            let before = last_result.clone();
+                            let before_cols = before.as_ref().map(|r| r.columns.len());
                             handle_drop(rest, &mut last_result, max_width, &mut stdout)?;
-                            if last_result.as_ref().map(|r| r.columns.len()) != before_cols { prev_result = last_result.clone(); }
+                            if last_result.as_ref().map(|r| r.columns.len()) != before_cols { prev_result = before; }
                             stdout.flush()?;
                             continue;
                         }
@@ -1983,9 +1984,10 @@ fn run_repl_line(
                 return Ok(false);
             }
             "drop" => {
-                let before_cols = last_result.as_ref().map(|r| r.columns.len());
+                let before = last_result.clone();
+                let before_cols = before.as_ref().map(|r| r.columns.len());
                 handle_drop(rest, last_result, *max_width, out)?;
-                if last_result.as_ref().map(|r| r.columns.len()) != before_cols { *prev_result = last_result.clone(); }
+                if last_result.as_ref().map(|r| r.columns.len()) != before_cols { *prev_result = before; }
                 out.flush()?;
                 return Ok(false);
             }
