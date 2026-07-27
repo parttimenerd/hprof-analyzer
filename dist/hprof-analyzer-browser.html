@@ -3149,6 +3149,8 @@ function startTerminal() {
         }
       } else {
         const r = data.result;
+        const queryMs = (r.elapsed_ms != null) ? Number(r.elapsed_ms) : elapsedMs;
+        const fmtElapsed = ms => ms < 1 ? `${(ms * 1000).toFixed(0)}µs` : ms < 1000 ? `${ms.toFixed(1)}ms` : `${(ms / 1000).toFixed(2)}s`;
         if (r.error) {
           term.writeln(`\x1b[31merror: ${r.error}\x1b[0m`);
         } else if (r.columns && r.columns.length > 0) {
@@ -3158,8 +3160,7 @@ function startTerminal() {
           lastResult = { columns: colNames, rows, note: r.note, truncated: r.truncated, row_count: r.row_count };
           currentRowIdx = 0;
           const trunc = r.truncated ? `  \x1b[33m[capped at ${Number(r.row_count).toLocaleString('en-US')} rows — add LIMIT N or increase with LIMIT 0 for all]\x1b[0m` : '';
-          const queryMs = (r.elapsed_ms != null) ? Number(r.elapsed_ms) : elapsedMs;
-          const elapsedFmt = queryMs < 1 ? `${(queryMs * 1000).toFixed(0)}µs` : queryMs < 1000 ? `${queryMs.toFixed(1)}ms` : `${(queryMs / 1000).toFixed(2)}s`;
+          const elapsedFmt = fmtElapsed(queryMs);
           const elapsedColor = queryMs > 1000 ? '\x1b[31m' : queryMs > 300 ? '\x1b[33m' : '\x1b[2m';
           const ts = new Date().toLocaleTimeString('en-GB', { hour12: false });
           term.writeln(`${elapsedColor}${Number(r.row_count).toLocaleString('en-US')} row${r.row_count !== 1 ? 's' : ''}, ${elapsedFmt}\x1b[0m\x1b[2m  [${ts}]\x1b[0m${trunc}`);
@@ -3174,7 +3175,7 @@ function startTerminal() {
         } else {
           // No columns — just show the raw result
           term.writeln(JSON.stringify(r, null, 2).split('\n').slice(0, 40).join('\r\n'));
-          term.writeln(`\x1b[2m${elapsedMs < 1 ? (elapsedMs * 1000).toFixed(0) + 'µs' : elapsedMs < 1000 ? elapsedMs.toFixed(1) + 'ms' : (elapsedMs / 1000).toFixed(2) + 's'}\x1b[0m`);
+          term.writeln(`\x1b[2m${fmtElapsed(queryMs)}\x1b[0m`);
         }
       }
     } catch (e) {
