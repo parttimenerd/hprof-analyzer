@@ -1218,14 +1218,18 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             continue;
                         }
                         "filter" | "grep" => {
+                            let before_len = last_result.as_ref().map(|r| r.rows.len());
                             if !rest.is_empty() { prev_result = last_result.clone(); }
                             handle_filter(rest, &mut last_result, max_width, &mut stdout)?;
+                            if last_result.as_ref().map(|r| r.rows.len()) == before_len { prev_result = None; }
                             stdout.flush()?;
                             continue;
                         }
                         "not" | "exclude" => {
+                            let before_len = last_result.as_ref().map(|r| r.rows.len());
                             if !rest.is_empty() { prev_result = last_result.clone(); }
                             handle_filter_not(rest, &mut last_result, max_width, &mut stdout)?;
+                            if last_result.as_ref().map(|r| r.rows.len()) == before_len { prev_result = None; }
                             stdout.flush()?;
                             continue;
                         }
@@ -1775,14 +1779,18 @@ fn run_repl_line(
                 return Ok(false);
             }
             "filter" | "grep" => {
+                let before_len = last_result.as_ref().map(|r| r.rows.len());
                 if !rest.is_empty() { *prev_result = last_result.clone(); }
                 handle_filter(rest, last_result, *max_width, out)?;
+                if last_result.as_ref().map(|r| r.rows.len()) == before_len { *prev_result = None; }
                 out.flush()?;
                 return Ok(false);
             }
             "not" | "exclude" => {
+                let before_len = last_result.as_ref().map(|r| r.rows.len());
                 if !rest.is_empty() { *prev_result = last_result.clone(); }
                 handle_filter_not(rest, last_result, *max_width, out)?;
+                if last_result.as_ref().map(|r| r.rows.len()) == before_len { *prev_result = None; }
                 out.flush()?;
                 return Ok(false);
             }
