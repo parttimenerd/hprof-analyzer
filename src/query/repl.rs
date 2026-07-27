@@ -1032,7 +1032,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                     };
                     match verb {
                         "set" => {
-                            handle_set(rest, &mut stdout)?;
+                            handle_set(rest, last_result.as_ref(), max_width, &mut stdout)?;
                             stdout.flush()?;
                             continue;
                         }
@@ -1596,7 +1596,7 @@ fn run_repl_line(
         };
         match verb {
             "set" => {
-                handle_set(rest, out)?;
+                handle_set(rest, last_result.as_ref(), *max_width, out)?;
                 out.flush()?;
                 return Ok(false);
             }
@@ -2183,7 +2183,7 @@ fn handle_width(rest: &str, max_width: &mut usize, out: &mut impl Write) -> io::
 /// `!set bytes raw|human` — show byte-size columns as raw integers or human-readable.
 /// `!set color on|off` — toggle ANSI colour in table hints.
 /// `!set null <str>` — string shown for null values.
-fn handle_set(rest: &str, out: &mut impl Write) -> io::Result<()> {
+fn handle_set(rest: &str, last_result: Option<&QueryResult>, max_width: usize, out: &mut impl Write) -> io::Result<()> {
     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
     let (cb, cd, ce, cg, cr) = if color { ("\x1b[1m", "\x1b[2m", "\x1b[31m", "\x1b[32m", "\x1b[0m") } else { ("", "", "", "", "") };
     if rest.is_empty() {
@@ -2213,11 +2213,23 @@ fn handle_set(rest: &str, out: &mut impl Write) -> io::Result<()> {
             } else if val == "0" || val == "unlimited" || val == "none" {
                 SESSION_SETTINGS.with(|s| s.borrow_mut().row_limit = 0);
                 writeln!(out, "{cg}\u{2713} row limit: unlimited{cr}")?;
+                if let Some(res) = last_result {
+                    print_result(res, std::time::Duration::ZERO, max_width, out)?;
+                    let cd2 = if SESSION_SETTINGS.with(|s| s.borrow().color) { "\x1b[2m" } else { "" };
+                    let cr2 = if SESSION_SETTINGS.with(|s| s.borrow().color) { "\x1b[0m" } else { "" };
+                    writeln!(out, "{cd2}{} rows{cr2}", fmt_int(res.rows.len() as i64))?;
+                }
             } else {
                 match val.parse::<usize>() {
                     Ok(n) if n > 0 => {
                         SESSION_SETTINGS.with(|s| s.borrow_mut().row_limit = n);
                         writeln!(out, "{cg}\u{2713} row limit: {n}{cr}")?;
+                        if let Some(res) = last_result {
+                            print_result(res, std::time::Duration::ZERO, max_width, out)?;
+                            let cd2 = if SESSION_SETTINGS.with(|s| s.borrow().color) { "\x1b[2m" } else { "" };
+                            let cr2 = if SESSION_SETTINGS.with(|s| s.borrow().color) { "\x1b[0m" } else { "" };
+                            writeln!(out, "{cd2}{} rows{cr2}", fmt_int(res.rows.len() as i64))?;
+                        }
                     }
                     _ => warn_out("usage: !set limit <N>  (positive integer, or 0/unlimited for no cap)", out)?,
                 }
@@ -4783,6 +4795,20 @@ mod tests {
             _ => None,
         }).collect();
         assert_eq!(vals, vec![Some(3), Some(2), Some(1), None, None], "nulls must sort last desc: {vals:?}");
+    }
+
+    #[test]
+    fn set_limit_rerenders_current_result() {
+        SESSION_SETTINGS.with(|s| s.borrow_mut().row_limit = 5);
+        let res = make_sort_result(vec![Some(1), Some(2), Some(3)]);
+        let mut buf = Vec::new();
+        handle_set("limit 2", Some(&res), 120, &mut buf).unwrap();
+        SESSION_SETTINGS.with(|s| s.borrow_mut().row_limit = 0);
+        let out = String::from_utf8_lossy(&buf);
+        // Confirm header (row limit confirmation) and table both appear
+        assert!(out.contains("row limit: 2"), "expected limit confirm: {out}");
+        // Column "v" appears in the re-render (with or without ANSI codes)
+        assert!(out.contains('\n') && out.len() > 30, "expected re-rendered table: {out}");
     }
 
     // --- reedline completer + editor construction ---
