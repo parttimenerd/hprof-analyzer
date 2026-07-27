@@ -2015,7 +2015,7 @@ function startTerminal() {
         const a = document.createElement('a');
         a.href = url; a.download = `query-result.${ext}`; a.click();
         URL.revokeObjectURL(url);
-        term.writeln(`\x1b[32m✓ downloaded as query-result.${ext} (${lastResult.rows.length} rows)\x1b[0m`);
+        term.writeln(`\x1b[32m✓ downloaded as query-result.${ext} (${lastResult.rows.length.toLocaleString('en-US')} rows)\x1b[0m`);
       }
       term.write(PROMPT);
       return;
