@@ -871,7 +871,7 @@ function startTerminal() {
               const cell = rows[0][i];
               if (cell !== null && cell !== undefined) {
                 if (typeof cell !== 'object') typeTag = typeof cell;
-                else if (cell.kind && cell.kind !== 'null') typeTag = cell.kind;
+                else if (cell.kind && cell.kind !== 'null') typeTag = cell.kind === 'obj_ref' ? 'ref' : cell.kind;
               }
             }
             term.writeln(`  \x1b[2m${String(i + 1).padStart(idxW)}\x1b[0m  \x1b[36m${n.padEnd(nameW)}\x1b[0m  \x1b[2m${typeTag}\x1b[0m`);
@@ -1208,7 +1208,7 @@ function startTerminal() {
             if (typeof cell !== 'object') { nonNull++; if (typeTag === 'null') typeTag = typeof cell; continue; }
             if (cell.kind === 'null') continue;
             nonNull++;
-            if (typeTag === 'null') typeTag = cell.kind || typeof cell;
+            if (typeTag === 'null') typeTag = (cell.kind === 'obj_ref' ? 'ref' : cell.kind) || typeof cell;
           }
           const fill = total > 0 ? `  ${nonNull}/${total} (${Math.round(nonNull / total * 100)}%)` : '';
           const allNull = total > 0 && nonNull === 0;
