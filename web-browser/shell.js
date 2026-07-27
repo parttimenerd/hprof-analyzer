@@ -1471,7 +1471,7 @@ function startTerminal() {
       let entries = [...counts.entries()].sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0]));
       const totalGroups = entries.length;
       if (topN !== null) entries = entries.slice(0, topN);
-      const pivotRows = entries.map(([v, c]) => [v, c]);
+      const pivotRows = entries.map(([v, c]) => [v, { kind: 'int', v: c }]);
       const note = (topN !== null && pivotRows.length < totalGroups)
         ? `top ${pivotRows.length.toLocaleString('en-US')} of ${totalGroups.toLocaleString('en-US')} groups` : null;
       const pivotResult = { columns: [colName, 'count'], rows: pivotRows, row_count: pivotRows.length, note };
