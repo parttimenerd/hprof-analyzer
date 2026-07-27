@@ -1085,7 +1085,6 @@ fn eval_late_pred_multi(
     ctx: &LateCtx,
     like_regexes: &std::collections::HashMap<String, regex::Regex>,
 ) -> bool {
-    use crate::query::ast::CompareOp;
     match p {
         Predicate::And(a, b) => {
             eval_late_pred_multi(a, idx, ret, ctx, like_regexes)
@@ -1692,6 +1691,135 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
         return join_retained_group_by(entry, q, ctx);
     }
     let like_regexes = crate::query::execute::compile_like_regexes(q).unwrap_or_default();
+
+    // Ungrouped aggregate path: SELECT COUNT/SUM/MIN/MAX/AVG over retained attrs
+    // without a GROUP BY clause. Fold all matched objects into a single row.
+    // The scan-time plan correctly carries all indices (StageKind::SingleScan),
+    // but join_retained normally projects 1:1 — aggregation must happen here.
+    let is_aggregate = q.select.iter().any(|it| matches!(it, SelectItem::Aggregate { .. }));
+    if is_aggregate && q.group_by.is_empty() {
+        use crate::query::ast::AggFunc;
+        let columns = crate::query::execute::query_columns(q);
+        let mut accs: Vec<(QueryValue, u64)> = q.select.iter().map(|it| match it {
+            SelectItem::Aggregate { func, .. } => {
+                let start = match func {
+                    AggFunc::Count => QueryValue::Int(0),
+                    AggFunc::Sum => QueryValue::Int(0),
+                    AggFunc::Min | AggFunc::Max => QueryValue::Null,
+                    AggFunc::Avg | AggFunc::Percentile(_) | AggFunc::Median => QueryValue::Int(0),
+                };
+                (start, 0u64)
+            }
+            _ => (QueryValue::Null, 0),
+        }).collect();
+
+        for idx in entry.carry.indices() {
+            let ret = *ctx.retained.get(idx as usize).unwrap_or(&0);
+            if !retained_where_passes(q, ret) {
+                continue;
+            }
+            for (i, it) in q.select.iter().enumerate() {
+                let SelectItem::Aggregate { func, arg } = it else { continue };
+                let val = match arg.as_ref() {
+                    SelectItem::Attr(Attr::RetainedHeapSize) => QueryValue::Int(ret as i64),
+                    SelectItem::Attr(Attr::UsedHeapSize) => QueryValue::Int(
+                        ctx.shallow.get(idx as usize).copied().unwrap_or(0) as i64,
+                    ),
+                    SelectItem::Attr(Attr::ObjectId) => QueryValue::Int(idx as i64),
+                    SelectItem::Expr(e) => eval_late_expr_multi(e, idx, ret as u64, ctx, &like_regexes),
+                    SelectItem::Star => QueryValue::Int(1),
+                    _ => QueryValue::Null,
+                };
+                let (acc, count) = &mut accs[i];
+                match func {
+                    AggFunc::Count => { if let QueryValue::Int(n) = acc { *n += 1; } }
+                    AggFunc::Sum => {
+                        if val != QueryValue::Null {
+                            *acc = match (&*acc, &val) {
+                                (QueryValue::Int(a), QueryValue::Int(b)) => QueryValue::Int(*a + *b),
+                                (QueryValue::Float(a), QueryValue::Float(b)) => QueryValue::Float(*a + *b),
+                                (QueryValue::Int(a), QueryValue::Float(b)) => QueryValue::Float(*a as f64 + *b),
+                                (QueryValue::Float(a), QueryValue::Int(b)) => QueryValue::Float(*a + *b as f64),
+                                _ => acc.clone(),
+                            };
+                        }
+                    }
+                    AggFunc::Min => {
+                        if val != QueryValue::Null {
+                            *acc = if *acc == QueryValue::Null { val.clone() } else {
+                                match qv_ord(&val, acc) {
+                                    std::cmp::Ordering::Less => val.clone(),
+                                    _ => acc.clone(),
+                                }
+                            };
+                        }
+                    }
+                    AggFunc::Max => {
+                        if val != QueryValue::Null {
+                            *acc = if *acc == QueryValue::Null { val.clone() } else {
+                                match qv_ord(&val, acc) {
+                                    std::cmp::Ordering::Greater => val.clone(),
+                                    _ => acc.clone(),
+                                }
+                            };
+                        }
+                    }
+                    AggFunc::Avg => {
+                        if val != QueryValue::Null {
+                            *count += 1;
+                            *acc = match (&*acc, &val) {
+                                (QueryValue::Int(a), QueryValue::Int(b)) => QueryValue::Int(*a + *b),
+                                (QueryValue::Float(a), QueryValue::Float(b)) => QueryValue::Float(*a + *b),
+                                (QueryValue::Int(a), QueryValue::Float(b)) => QueryValue::Float(*a as f64 + *b),
+                                (QueryValue::Float(a), QueryValue::Int(b)) => QueryValue::Float(*a + *b as f64),
+                                _ => acc.clone(),
+                            };
+                        }
+                    }
+                    AggFunc::Percentile(_) | AggFunc::Median => {} // unsupported in late phase
+                }
+            }
+        }
+
+        // Finalize: Count/Sum/Min/Max return acc directly; Avg divides by count.
+        let row: Vec<QueryValue> = q.select.iter().enumerate().map(|(i, it)| match it {
+            SelectItem::Aggregate { func, .. } => {
+                let (acc, count) = &accs[i];
+                match func {
+                    AggFunc::Avg if *count > 0 => match acc {
+                        QueryValue::Int(s) => QueryValue::Float(*s as f64 / *count as f64),
+                        QueryValue::Float(s) => QueryValue::Float(*s / *count as f64),
+                        _ => QueryValue::Null,
+                    },
+                    _ => acc.clone(),
+                }
+            }
+            _ => QueryValue::Null,
+        }).collect();
+
+        // Apply HAVING filter on the single aggregate row.
+        let passes = if entry.plan.having_terms.is_empty() {
+            true
+        } else {
+            entry.plan.having_terms.iter().all(|term| {
+                crate::query::execute::eval_having_term(&term.pred, &row, q, &columns, &like_regexes)
+            })
+        };
+        let (rows, row_count) = if passes { (vec![row], 1u64) } else { (vec![], 0u64) };
+        return QueryResult {
+            name: entry.name.clone(),
+            oql: String::new(),
+            columns,
+            row_count,
+            rows,
+            truncated: entry.carry.truncated(),
+            error: None,
+            note: None,
+            viz: None,
+            elapsed_ms: None,
+        };
+    }
+
     let mut rows: Vec<(u32, u64)> = Vec::new();
     for idx in entry.carry.indices() {
         let ret = *ctx.retained.get(idx as usize).unwrap_or(&0);

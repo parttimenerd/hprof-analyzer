@@ -6262,3 +6262,54 @@ fn query_refpath_with_extra_attrs_is_non_null() {
         );
     }
 }
+
+#[test]
+fn query_ungrouped_aggregate_with_retained_is_single_row() {
+    let Some(hprof) = philosophers() else { return };
+    // AVG/MIN/MAX/SUM of @retainedHeapSize without GROUP BY was returning one row per
+    // object (1:1 projection) instead of a single aggregate row.
+    let out = Command::new(BIN)
+        .arg("query").arg(&hprof)
+        .args(["--query",
+            "SELECT COUNT(*) AS n, AVG(@retainedHeapSize) AS avg_ret, \
+             MIN(@retainedHeapSize) AS min_ret, MAX(@retainedHeapSize) AS max_ret \
+             FROM java.lang.Object x"])
+        .output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let data_rows: Vec<&str> = stdout
+        .lines()
+        .filter(|l| l.contains('|') && !l.contains("avg_ret") && !l.contains("---"))
+        .collect();
+    assert_eq!(data_rows.len(), 1, "expected exactly 1 aggregate row, got:\n{stdout}");
+    let row = data_rows[0];
+    let cols: Vec<&str> = row.split('|').collect();
+    let n = cols.get(0).map(|s| s.trim()).unwrap_or("").parse::<i64>().unwrap_or(-1);
+    let min_ret = cols.get(2).map(|s| s.trim()).unwrap_or("").parse::<i64>().unwrap_or(-1);
+    let max_ret = cols.get(3).map(|s| s.trim()).unwrap_or("").parse::<i64>().unwrap_or(-1);
+    assert!(n > 0, "COUNT(*) was 0 or non-integer: {row}");
+    assert!(min_ret >= 0, "MIN(@retainedHeapSize) was negative: {row}");
+    assert!(max_ret >= min_ret, "MAX < MIN: {row}");
+}
+
+#[test]
+fn query_ungrouped_sum_with_retained_filter_is_single_row() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg("query").arg(&hprof)
+        .args(["--query",
+            "SELECT SUM(@retainedHeapSize) AS total FROM java.lang.Object x \
+             WHERE @retainedHeapSize > 0"])
+        .output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let data_rows: Vec<&str> = stdout
+        .lines()
+        .filter(|l| !l.is_empty() && !l.contains("total") && !l.contains("---")
+            && !l.contains("SUM") && !l.starts_with('(') && !l.starts_with("==")
+            && !l.starts_with("  SELECT"))
+        .collect();
+    assert_eq!(data_rows.len(), 1, "expected exactly 1 aggregate row, got:\n{stdout}");
+    let total = data_rows[0].trim().parse::<i64>().unwrap_or(-1);
+    assert!(total > 0, "SUM(@retainedHeapSize) was non-positive: {stdout}");
+}
