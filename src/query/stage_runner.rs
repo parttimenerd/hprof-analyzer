@@ -559,6 +559,9 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
     // Predicate-critical filter: keep seeds whose resolved tail passes the WHERE
     // comparison. Only the RefPath term is evaluated here (other terms were
     // applied in Phase 1); a seed with no comparison keeps all.
+    // Also apply any @retainedHeapSize WHERE terms that may co-exist on a
+    // cross-phase query (the scan skipped them; we filter here post-retained).
+    let has_retained_pred = q.where_.as_ref().is_some_and(crate::query::plan::pred_uses_retained);
     let kept: Vec<u32> = if let (Some(Attr::RefPath { hops, tail, .. }), Some(pred)) =
         (where_refpath.as_ref(), q.where_.as_ref())
     {
@@ -566,11 +569,26 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
             .iter()
             .copied()
             .filter(|&s| {
+                if has_retained_pred {
+                    let ret = *ctx.retained.get(s as usize).unwrap_or(&0);
+                    if !retained_where_passes(q, ret) {
+                        return false;
+                    }
+                }
                 let resolved = walk_refpath(&[s], hops, ctx);
                 let val = resolved
                     .first()
                     .and_then(|&d| project_tail(tail, d, ctx, &mut note));
                 eval_refpath_pred(pred, val.as_ref(), &like_regexes)
+            })
+            .collect()
+    } else if has_retained_pred {
+        seeds
+            .iter()
+            .copied()
+            .filter(|&s| {
+                let ret = *ctx.retained.get(s as usize).unwrap_or(&0);
+                retained_where_passes(q, ret)
             })
             .collect()
     } else {
@@ -1345,8 +1363,15 @@ fn array_index_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryR
     let seeds: Vec<u32> = entry.carry.indices();
     let columns: Vec<QueryColumn> = crate::query::execute::query_columns(q);
     let class_name = q.from.class_name();
+    let has_retained_pred = q.where_.as_ref().is_some_and(crate::query::plan::pred_uses_retained);
     let mut rows: Vec<Vec<QueryValue>> = Vec::new();
     for &s in &seeds {
+        if has_retained_pred {
+            let ret = *ctx.retained.get(s as usize).unwrap_or(&0);
+            if !retained_where_passes(q, ret) {
+                continue;
+            }
+        }
         let row: Vec<QueryValue> = q
             .select
             .iter()

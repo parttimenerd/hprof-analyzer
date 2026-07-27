@@ -6394,3 +6394,81 @@ fn query_tostring_with_retained_where_applies_both_filters() {
         }
     }
 }
+
+#[test]
+fn query_array_index_with_retained_where_applies_filter() {
+    let Some(hprof) = philosophers() else { return };
+    // Bug: array_index_rows did not apply @retainedHeapSize WHERE predicates.
+    // All seeds were projected regardless, so rows with ret < threshold appeared.
+    let out = Command::new(BIN)
+        .arg("query").arg(&hprof)
+        .args(["--query",
+            "SELECT @objectId, x[0], @retainedHeapSize FROM char[] x \
+             WHERE @retainedHeapSize > 200 ORDER BY @retainedHeapSize DESC LIMIT 10"])
+        .output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let data_rows: Vec<&str> = stdout.lines()
+        .filter(|l| l.contains('|') && !l.contains("@objectId") && !l.contains("---"))
+        .collect();
+    assert!(!data_rows.is_empty(), "expected rows for char[] with ret > 200:\n{stdout}");
+    for row in &data_rows {
+        let cols: Vec<&str> = row.split('|').collect();
+        if let Some(ret_str) = cols.get(2) {
+            let ret: i64 = ret_str.trim().parse().unwrap_or(0);
+            assert!(
+                ret > 200,
+                "@retainedHeapSize filter was not applied in array_index_rows: ret={ret} <= 200\nrow: {row}"
+            );
+        }
+    }
+}
+
+#[test]
+fn query_refpath_with_retained_where_applies_filter() {
+    let Some(hprof) = philosophers() else { return };
+    // Bug: refpath_rows did not apply @retainedHeapSize WHERE terms — the
+    // eval_refpath_pred function passed all non-RefPath comparisons as true.
+    // Use a 2-hop RefPath in SELECT (projection-only) to trigger refpath_rows,
+    // and verify that the @retainedHeapSize WHERE filter is still applied.
+    let loose = Command::new(BIN)
+        .arg("query").arg(&hprof)
+        .args(["--query",
+            "SELECT @objectId, x.table.length, @retainedHeapSize \
+             FROM java.util.HashMap x \
+             WHERE @retainedHeapSize > 0 ORDER BY @retainedHeapSize DESC LIMIT 100"])
+        .output().unwrap();
+    assert!(loose.status.success());
+    let tight = Command::new(BIN)
+        .arg("query").arg(&hprof)
+        .args(["--query",
+            "SELECT @objectId, x.table.length, @retainedHeapSize \
+             FROM java.util.HashMap x \
+             WHERE @retainedHeapSize > 100000 ORDER BY @retainedHeapSize DESC LIMIT 100"])
+        .output().unwrap();
+    assert!(tight.status.success());
+    let loose_stdout = String::from_utf8_lossy(&loose.stdout);
+    let tight_stdout = String::from_utf8_lossy(&tight.stdout);
+    let loose_rows: Vec<&str> = loose_stdout.lines()
+        .filter(|l| l.contains('|') && !l.contains("@objectId") && !l.contains("---"))
+        .collect();
+    let tight_rows: Vec<&str> = tight_stdout.lines()
+        .filter(|l| l.contains('|') && !l.contains("@objectId") && !l.contains("---"))
+        .collect();
+    assert!(
+        loose_rows.len() > tight_rows.len(),
+        "tight filter (>100000) should return fewer rows than loose (>0)\n\
+         loose ({} rows):\n{loose_stdout}\ntight ({} rows):\n{tight_stdout}",
+        loose_rows.len(), tight_rows.len()
+    );
+    for row in &tight_rows {
+        let cols: Vec<&str> = row.split('|').collect();
+        if let Some(ret_str) = cols.get(2) {
+            let ret: i64 = ret_str.trim().parse().unwrap_or(0);
+            assert!(
+                ret > 100000,
+                "@retainedHeapSize filter not applied in refpath_rows: ret={ret} <= 100000\nrow: {row}"
+            );
+        }
+    }
+}
