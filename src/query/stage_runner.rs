@@ -609,6 +609,13 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
                         None => QueryValue::Null,
                     }
                 }
+                SelectItem::Attr(Attr::ToHex(inner)) => {
+                    let ret = ctx.retained.get(s as usize).copied().unwrap_or(0) as u64;
+                    match eval_late_expr_multi(inner, s, ret, ctx, &like_regexes) {
+                        QueryValue::Int(n) => QueryValue::Str(format!("0x{:x}", n as u64)),
+                        _ => QueryValue::Null,
+                    }
+                }
                 SelectItem::Expr(e) => {
                     let ret = ctx.retained.get(s as usize).copied().unwrap_or(0) as u64;
                     eval_late_expr_multi(e, s, ret, ctx, &like_regexes)
@@ -1040,6 +1047,13 @@ fn eval_late_expr_multi(
                 Some(name) => QueryValue::Str(name.to_string()),
                 None => QueryValue::Null,
             },
+            Attr::ToHex(inner) => {
+                let inner_expr: &Expr = inner;
+                match eval_late_expr_multi(inner_expr, idx, ret, ctx, like_regexes) {
+                    QueryValue::Int(n) => QueryValue::Str(format!("0x{:x}", n as u64)),
+                    _ => QueryValue::Null,
+                }
+            }
             _ => QueryValue::Null,
         },
         Expr::Lit(v) => value_to_qv(v),
@@ -1208,6 +1222,13 @@ fn project_string_row_item(
                 None => QueryValue::Null,
             }
         }
+        SelectItem::Attr(Attr::ToHex(inner)) => {
+            let ret = ctx.retained.get(dense as usize).copied().unwrap_or(0) as u64;
+            match eval_late_expr_multi(inner, dense, ret, ctx, like_regexes) {
+                QueryValue::Int(n) => QueryValue::Str(format!("0x{:x}", n as u64)),
+                _ => QueryValue::Null,
+            }
+        }
         SelectItem::Expr(e) => {
             let ret = ctx.retained.get(dense as usize).copied().unwrap_or(0) as u64;
             eval_late_expr_multi(e, dense, ret, ctx, like_regexes)
@@ -1261,6 +1282,13 @@ fn project_array_index_item(
         // how `execute.rs` resolves these attrs for array rows during the scan.
         SelectItem::Attr(Attr::DisplayName) | SelectItem::Attr(Attr::ClassOf) => {
             QueryValue::Str(class_name.to_string())
+        }
+        SelectItem::Attr(Attr::ToHex(inner)) => {
+            let ret = ctx.retained.get(dense as usize).copied().unwrap_or(0) as u64;
+            match eval_late_expr_multi(inner, dense, ret, ctx, like_regexes) {
+                QueryValue::Int(n) => QueryValue::Str(format!("0x{:x}", n as u64)),
+                _ => QueryValue::Null,
+            }
         }
         SelectItem::Expr(e) => {
             let ret = ctx.retained.get(dense as usize).copied().unwrap_or(0) as u64;
@@ -1967,6 +1995,12 @@ fn project_late_row(
                 match ctx.class_name_of(idx) {
                     Some(name) => QueryValue::Str(name.to_string()),
                     None => QueryValue::Null,
+                }
+            }
+            SelectItem::Attr(Attr::ToHex(inner)) => {
+                match eval_late_expr_multi(inner, idx, ret, ctx, like_regexes) {
+                    QueryValue::Int(n) => QueryValue::Str(format!("0x{:x}", n as u64)),
+                    _ => QueryValue::Null,
                 }
             }
             SelectItem::Star => QueryValue::ObjRef {

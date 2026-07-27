@@ -6313,3 +6313,31 @@ fn query_ungrouped_sum_with_retained_filter_is_single_row() {
     let total = data_rows[0].trim().parse::<i64>().unwrap_or(-1);
     assert!(total > 0, "SUM(@retainedHeapSize) was non-positive: {stdout}");
 }
+
+#[test]
+fn query_to_hex_in_retained_path_is_non_null() {
+    let Some(hprof) = philosophers() else { return };
+    // toHex(@objectAddress) in the retained late path was returning null because
+    // project_late_row had no Attr::ToHex arm.
+    let out = Command::new(BIN)
+        .arg("query").arg(&hprof)
+        .args(["--query",
+            "SELECT toHex(@objectId), classof(x) FROM java.lang.String x \
+             ORDER BY @retainedHeapSize DESC LIMIT 3"])
+        .output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let data_rows: Vec<&str> = stdout
+        .lines()
+        .filter(|l| l.contains('|') && !l.contains("toHex") && !l.contains("---"))
+        .collect();
+    assert!(!data_rows.is_empty(), "expected data rows, got:\n{stdout}");
+    for row in &data_rows {
+        let cols: Vec<&str> = row.split('|').collect();
+        let hex_val = cols.get(0).map(|s| s.trim()).unwrap_or("");
+        assert!(
+            hex_val.starts_with("0x"),
+            "toHex(@objectId) did not return hex string in retained path: {row}\nfull output:\n{stdout}"
+        );
+    }
+}
