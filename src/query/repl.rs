@@ -1208,10 +1208,12 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             continue;
                         }
                         "save" => {
+                            let last_query_before = last_query.clone();
                             handle_save(
                                 rest, path, path_depth, reachable_only, max_width,
                                 &mut last_query, &mut last_result, &mut cache, &mut stdout,
                             )?;
+                            if last_query != last_query_before { prev_result = None; }
                             stdout.flush()?;
                             continue;
                         }
@@ -1801,10 +1803,12 @@ fn run_repl_line(
                 return Ok(false);
             }
             "save" => {
+                let last_query_before = last_query.clone();
                 handle_save(
                     rest, path, path_depth, *reachable_only, *max_width,
                     last_query, last_result, cache, out,
                 )?;
+                if *last_query != last_query_before { *prev_result = None; }
                 out.flush()?;
                 return Ok(false);
             }
