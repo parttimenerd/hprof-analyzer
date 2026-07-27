@@ -609,6 +609,12 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
                         None => QueryValue::Null,
                     }
                 }
+                SelectItem::Attr(Attr::GcRootInfo) | SelectItem::Attr(Attr::GcRoots) => {
+                    match ctx.gc_root_tag(s) {
+                        Some(tag) => QueryValue::Str(root_tag_name(tag).into_owned()),
+                        None => QueryValue::Null,
+                    }
+                }
                 SelectItem::Attr(Attr::ToHex(inner)) => {
                     let ret = ctx.retained.get(s as usize).copied().unwrap_or(0) as u64;
                     match eval_late_expr_multi(inner, s, ret, ctx, &like_regexes) {
@@ -1047,6 +1053,10 @@ fn eval_late_expr_multi(
                 Some(name) => QueryValue::Str(name.to_string()),
                 None => QueryValue::Null,
             },
+            Attr::GcRoots | Attr::GcRootInfo => match ctx.gc_root_tag(idx) {
+                Some(tag) => QueryValue::Str(root_tag_name(tag).into_owned()),
+                None => QueryValue::Null,
+            },
             Attr::ToHex(inner) => {
                 let inner_expr: &Expr = inner;
                 match eval_late_expr_multi(inner_expr, idx, ret, ctx, like_regexes) {
@@ -1219,6 +1229,12 @@ fn project_string_row_item(
         SelectItem::Attr(Attr::ClassOf) | SelectItem::Attr(Attr::DisplayName) => {
             match ctx.class_name_of(dense) {
                 Some(name) => QueryValue::Str(name.to_string()),
+                None => QueryValue::Null,
+            }
+        }
+        SelectItem::Attr(Attr::GcRootInfo) | SelectItem::Attr(Attr::GcRoots) => {
+            match ctx.gc_root_tag(dense) {
+                Some(tag) => QueryValue::Str(root_tag_name(tag).into_owned()),
                 None => QueryValue::Null,
             }
         }
