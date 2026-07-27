@@ -1270,9 +1270,9 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             continue;
                         }
                         "top" | "head" => {
-                            prev_result = last_result.clone();
                             let n = if rest.trim().is_empty() { 10 } else { rest.trim().parse::<usize>().unwrap_or(0) };
                             if n > 0 {
+                                prev_result = last_result.clone();
                                 match last_result.as_mut() {
                                     None => warn_out("(no result — run a query first)", &mut stdout)?,
                                     Some(res) => {
@@ -1293,9 +1293,9 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             continue;
                         }
                         "tail" => {
-                            prev_result = last_result.clone();
                             let n = if rest.trim().is_empty() { 10 } else { rest.trim().parse::<usize>().unwrap_or(0) };
                             if n > 0 {
+                                prev_result = last_result.clone();
                                 match last_result.as_mut() {
                                     None => warn_out("(no result — run a query first)", &mut stdout)?,
                                     Some(res) => {
@@ -1836,9 +1836,9 @@ fn run_repl_line(
                 return Ok(false);
             }
             "top" | "head" => {
-                *prev_result = last_result.clone();
                 let n = if rest.trim().is_empty() { 10 } else { rest.trim().parse::<usize>().unwrap_or(0) };
                 if n > 0 {
+                    *prev_result = last_result.clone();
                     match last_result.as_mut() {
                         None => warn_out("(no result — run a query first)", out)?,
                         Some(res) => {
@@ -1859,9 +1859,9 @@ fn run_repl_line(
                 return Ok(false);
             }
             "tail" => {
-                *prev_result = last_result.clone();
                 let n = if rest.trim().is_empty() { 10 } else { rest.trim().parse::<usize>().unwrap_or(0) };
                 if n > 0 {
+                    *prev_result = last_result.clone();
                     match last_result.as_mut() {
                         None => warn_out("(no result — run a query first)", out)?,
                         Some(res) => {
