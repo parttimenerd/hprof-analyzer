@@ -620,16 +620,22 @@ impl<'q, R: ClassResolver> ObjectVisitor for ScanDriver<'q, R> {
 /// result still maps 1:1 to a slot, so the source-index sidecar can be applied
 /// without any UNION-collapse bookkeeping. `None` (the `--all` / default-off
 /// path) prunes nothing and is byte-identical to before.
+/// Flatten a pass1 IdMap into a dense `Vec<u64>` for carry-mode `@objectAddress` lookup.
+/// Call this before moving `p1` into `Pass2::build` when any query uses `toString(s)`.
+pub fn id_map_to_addrs(m: &IdMap) -> Vec<u64> {
+    (0..m.len()).map(|i| m.addr_at(i)).collect()
+}
+
 pub(crate) fn resume_with_string_values(
     mut state: crate::query::execute::QueryExecState,
     flat: &[(Query, QueryPlan)],
     string_values: std::collections::HashMap<u32, String>,
     refwalk_csr: Option<crate::query::refwalk::RefWalkCsr>,
     dfn: Option<&[u32]>,
-    // Optional: supply the real address table and shallow-size array so that
-    // @objectAddress and @usedHeapSize are projected correctly for carry-mode
-    // (toString) entries. Pass None/None on paths that don't need them.
-    id_map_opt: Option<&crate::id_map::IdMap>,
+    // Optional: supply the real address table (pre-built via id_map_to_addrs) and
+    // shallow-size array so that @objectAddress and @usedHeapSize are projected
+    // correctly for carry-mode (toString) entries. Pass empty slice/None when not needed.
+    addr_of: &[u64],
     shallow_opt: Option<&[u32]>,
 ) -> Vec<crate::query::model::QueryResult> {
     use crate::query::plan::StageOp;
@@ -640,19 +646,12 @@ pub(crate) fn resume_with_string_values(
     // armed during the scan.
     let row_src_by_slot = state.take_row_src_by_slot();
 
-    // Build the stage_runner::IdMap wrapper. The stage_runner type takes a flat
-    // &[u64] slice, but pass1::IdMap is a block-encoded structure. We only need
-    // it for carry-mode (toString) entries, so we materialise the flat slice on
-    // demand when id_map_opt is provided.
-    let addr_vec: Vec<u64> = id_map_opt
-        .map(|m| (0..m.len()).map(|i| m.addr_at(i)).collect())
-        .unwrap_or_default();
     let empty_id_map = stage_runner::IdMap::new(&[]);
     let real_id_map;
-    let id_map: &stage_runner::IdMap<'_> = if addr_vec.is_empty() {
+    let id_map: &stage_runner::IdMap<'_> = if addr_of.is_empty() {
         &empty_id_map
     } else {
-        real_id_map = stage_runner::IdMap::new(&addr_vec);
+        real_id_map = stage_runner::IdMap::new(addr_of);
         &real_id_map
     };
     let sv_ref: &std::collections::HashMap<u32, String> = if string_values.is_empty() {
@@ -864,9 +863,10 @@ pub fn run_resident_only(
     } else {
         std::collections::HashMap::new()
     };
+    let addr_vec = if needs_sv { id_map_to_addrs(&cache.p1.id_map) } else { Vec::new() };
     let flat_results = resume_with_string_values(
         state, &flat, sv, None, dfn,
-        Some(&cache.p1.id_map), Some(&cache.shallow),
+        &addr_vec, Some(&cache.shallow),
     );
     Ok(collapse_union_results(flat_results, &groups))
 }
@@ -915,8 +915,9 @@ pub fn run_resident_with_retained(
     } else {
         std::collections::HashMap::new()
     };
+    let addr_vec = if needs_sv { id_map_to_addrs(&cache.p1.id_map) } else { Vec::new() };
     let flat_results = resume_with_retained(
-        state, &flat, retained, &cache.shallow, dfn, sv, Some(&cache.p1.id_map),
+        state, &flat, retained, &cache.shallow, dfn, sv, &addr_vec,
     );
     Ok(collapse_union_results(flat_results, &groups))
 }
@@ -933,7 +934,7 @@ fn resume_with_retained(
     shallow: &[u32],
     dfn: Option<&[u32]>,
     string_values: std::collections::HashMap<u32, String>,
-    id_map_opt: Option<&crate::id_map::IdMap>,
+    addr_of: &[u64],
 ) -> Vec<crate::query::model::QueryResult> {
     use crate::query::plan::StageOp;
     use crate::query::stage_runner::{
@@ -942,15 +943,12 @@ fn resume_with_retained(
 
     let row_src_by_slot = state.take_row_src_by_slot();
     let (finished, pending) = state.into_parts();
-    let addr_vec: Vec<u64> = id_map_opt
-        .map(|m| (0..m.len()).map(|i| m.addr_at(i)).collect())
-        .unwrap_or_default();
     let empty_id_map = IdMap::new(&[]);
     let real_id_map;
-    let id_map: &IdMap<'_> = if addr_vec.is_empty() {
+    let id_map: &IdMap<'_> = if addr_of.is_empty() {
         &empty_id_map
     } else {
-        real_id_map = IdMap::new(&addr_vec);
+        real_id_map = IdMap::new(addr_of);
         &real_id_map
     };
     let ctx = LateCtx {
@@ -1039,6 +1037,8 @@ pub fn run_single_dump(
         // Fast path: no subqueries — one scan, no injection.
         let source = crate::source::HprofSource::from(path);
         let p1 = crate::pass1::Pass1::run(&source, false)?;
+        let needs_sv = flat.iter().any(|(_, p)| p.needs.string_values);
+        let addr_vec = if needs_sv { id_map_to_addrs(&p1.id_map) } else { Vec::new() };
         let mut empty = std::collections::HashMap::new();
         let mut empty_exists = std::collections::HashMap::new();
         let (g, .., state, refwalk_csr, string_values, _sv_trunc) = crate::pass2::Pass2::build(
@@ -1062,7 +1062,7 @@ pub fn run_single_dump(
             string_values,
             refwalk_csr,
             rpo.as_ref().map(|r| r.dfn.as_slice()),
-            None,
+            &addr_vec,
             None,
         );
         let collapsed = collapse_union_results(flat_results, &groups);
@@ -1169,6 +1169,8 @@ pub fn run_single_dump(
     // ── Outer pass: scan again with IN sets injected ─────────────────────────
     let source_outer = crate::source::HprofSource::from(path);
     let p1_outer = crate::pass1::Pass1::run(&source_outer, false)?;
+    let needs_sv = flat.iter().any(|(_, p)| p.needs.string_values);
+    let outer_addr_vec = if needs_sv { id_map_to_addrs(&p1_outer.id_map) } else { Vec::new() };
     let (outer_g, .., outer_state, outer_refwalk_csr, outer_sv, _outer_sv_trunc) =
         crate::pass2::Pass2::build(
             &source_outer,
@@ -1197,7 +1199,7 @@ pub fn run_single_dump(
         outer_sv,
         outer_refwalk_csr,
         outer_rpo.as_ref().map(|r| r.dfn.as_slice()),
-        None,
+        &outer_addr_vec,
         None,
     );
 
@@ -1937,6 +1939,32 @@ mod tests {
         }).collect();
         for w in vals.windows(2) {
             assert!(w[0] >= w[1], "rows not sorted DESC: {} < {}", w[0], w[1]);
+        }
+    }
+
+    #[test]
+    fn object_address_in_carry_mode_is_nonzero() {
+        // Regression: @objectAddress returned 0 for all rows when toString(s) was
+        // present in SELECT, because the file-scan path never passed the addr_vec
+        // to resume_with_string_values.
+        let path = "tests/fixtures/dump_4_philosophers.hprof";
+        let (q, plan) = parse_plan_opt(
+            "SELECT @objectAddress, toString(s) AS value FROM java.lang.String s LIMIT 5",
+        );
+        assert!(plan.needs.string_values, "must be carry mode");
+
+        let results = crate::query::run::run_single_dump(path, &[(q, plan)], false)
+            .expect("run_single_dump");
+        let result = &results[0];
+        assert!(result.error.is_none(), "unexpected error: {:?}", result.error);
+        assert!(result.row_count > 0, "expected rows");
+
+        let addr_col = result.columns.iter().position(|c| c.name == "@objectAddress")
+            .expect("@objectAddress column");
+        for row in &result.rows {
+            if let QueryValue::Int(addr) = row[addr_col] {
+                assert!(addr != 0, "@objectAddress must not be 0 in carry mode");
+            }
         }
     }
 

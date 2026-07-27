@@ -1537,6 +1537,12 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
                 ),
             ));
         }
+        let needs_sv = flat.iter().any(|(_, p)| p.needs.string_values);
+        let addr_vec = if needs_sv {
+            query::run::id_map_to_addrs(&p1.id_map)
+        } else {
+            Vec::new()
+        };
         let mut no_in_sets = std::collections::HashMap::new();
         let mut no_exists_bools = std::collections::HashMap::new();
         let (g, _inbound, _fwd_off_c, _fwd_tgt_c, _in_c, query_state, refwalk_csr, string_values, _sv_trunc) =
@@ -1561,7 +1567,7 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
             string_values,
             refwalk_csr,
             rpo.as_ref().map(|r| r.dfn.as_slice()),
-            None,
+            &addr_vec,
             None,
         );
         let collapsed = query::run::collapse_union_results(flat_results, &union_groups);

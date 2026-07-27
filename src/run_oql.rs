@@ -93,6 +93,8 @@ pub(crate) fn run_oql_escalated(
     // NOTE: pass2 leaves g.shallow / g.class_idx DENSE under Codec::None (it only
     // empties them when compress != None), so we read them directly below.
     let compress = cvec::Codec::None;
+    let needs_sv = flat.iter().any(|(_, p)| p.needs.string_values);
+    let addr_vec = if needs_sv { query::run::id_map_to_addrs(&p1.id_map) } else { Vec::new() };
     let mut no_in_sets = std::collections::HashMap::new();
     let mut no_exists_bools = std::collections::HashMap::new();
     let (
@@ -266,7 +268,14 @@ pub(crate) fn run_oql_escalated(
 
     // Build the LateCtx exactly as run() does and resume the queries.
     let query_asts: Vec<query::ast::Query> = flat.iter().map(|(q, _)| q.clone()).collect();
-    let id_map = query::stage_runner::IdMap::new(&[]);
+    let empty_id_map = query::stage_runner::IdMap::new(&[]);
+    let real_id_map;
+    let id_map: &query::stage_runner::IdMap<'_> = if addr_vec.is_empty() {
+        &empty_id_map
+    } else {
+        real_id_map = query::stage_runner::IdMap::new(&addr_vec);
+        &real_id_map
+    };
     let rw_off: &[u32] = refwalk_csr.as_ref().map_or(&[], |c| &c.fwd_off);
     let rw_tgt: &[u32] = refwalk_csr.as_ref().map_or(&[], |c| &c.fwd_tgt);
     let rw_field: &[u32] = refwalk_csr.as_ref().map_or(&[], |c| &c.fwd_field);

@@ -507,7 +507,38 @@ fn tohex_over_expr_and_multi_column() {
     assert!(multi.contains("0x"), "toHex in multi-column SELECT should format hex, got: {multi}");
 }
 
-/// Wave C: toString on a non-String object renders MAT's fallback display form
+/// Regression: @objectAddress returned 0 for all rows when toString(s) was
+/// in the SELECT (carry mode). The escalated path hardcoded an empty id_map.
+#[test]
+fn object_address_nonzero_in_tostring_carry_mode() {
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_args(
+        &hprof,
+        &["--all"],
+        "SELECT @objectAddress, toString(s) AS value FROM java.lang.String s LIMIT 5",
+    );
+    // Every @objectAddress must be non-zero.
+    let data_lines: Vec<&str> = out
+        .lines()
+        .filter(|l| {
+            let l = l.trim();
+            !l.is_empty()
+                && !l.starts_with("==")
+                && !l.starts_with("SELECT")
+                && !l.starts_with('(')
+                && l != "@objectAddress | value"
+        })
+        .collect();
+    assert!(!data_lines.is_empty(), "expected data rows, got:\n{out}");
+    for line in &data_lines {
+        let addr_str = line.split('|').next().unwrap_or("").trim();
+        let addr: i64 = addr_str.parse().unwrap_or(0);
+        assert!(
+            addr != 0,
+            "@objectAddress must be non-zero in carry mode, got {addr_str:?} in:\n{out}"
+        );
+    }
+}
 /// `<class> @ 0x<addr>` at scan time (no late string decode). A Thread instance
 /// must print `java.lang.Thread @ 0x…`.
 #[test]
