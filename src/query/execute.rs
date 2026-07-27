@@ -434,7 +434,7 @@ pub(crate) fn finalize_agg_acc(acc: AggAcc) -> QueryValue {
 
 /// Evaluate a HAVING predicate against a finalized GROUP BY output row.
 /// `row` is parallel to `columns`; `query` is needed for alias resolution.
-fn eval_having_term(
+pub(crate) fn eval_having_term(
     pred: &crate::query::ast::Predicate,
     row: &[QueryValue],
     query: &Query,

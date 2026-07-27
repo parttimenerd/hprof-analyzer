@@ -682,6 +682,14 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
                         .collect()
                 })
                 .collect();
+            // Apply HAVING filter post-aggregation.
+            if !entry.plan.having_terms.is_empty() {
+                out_rows.retain(|row| {
+                    entry.plan.having_terms.iter().all(|term| {
+                        crate::query::execute::eval_having_term(&term.pred, row, q, &columns)
+                    })
+                });
+            }
             if let Some(ob) = &q.order_by {
                 if let Some(ci) =
                     crate::query::execute::order_by_column_index(q, &columns, &ob.key)
