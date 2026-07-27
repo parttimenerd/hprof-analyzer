@@ -1934,7 +1934,7 @@ function startTerminal() {
         term.writeln('\x1b[33m(no previous query to re-display)\x1b[0m');
       } else {
         renderResult(lastResult);
-        term.writeln(`\x1b[2m${lastResult.rows.length} rows (re-displayed)\x1b[0m`);
+        term.writeln(`\x1b[2m${lastResult.rows.length.toLocaleString('en-US')} rows (re-displayed)\x1b[0m`);
       }
       term.write(PROMPT);
       return;
@@ -1968,7 +1968,7 @@ function startTerminal() {
       } else {
         lastResult = prevResult;
         prevResult = null;
-        term.writeln(`\x1b[32m✓ undone\x1b[0m  \x1b[2m(restored ${lastResult.rows.length} row${lastResult.rows.length !== 1 ? 's' : ''})\x1b[0m`);
+        term.writeln(`\x1b[32m✓ undone\x1b[0m  \x1b[2m(restored ${lastResult.rows.length.toLocaleString('en-US')} row${lastResult.rows.length !== 1 ? 's' : ''})\x1b[0m`);
         renderResult({ columns: lastResult.columns, rows: lastResult.rows, row_count: lastResult.rows.length });
       }
       term.write(PROMPT);
@@ -2001,7 +2001,7 @@ function startTerminal() {
       } else {
         n = parseInt(arg, 10);
         if (!isNaN(n) && (n < 1 || n > lastResult.rows.length)) {
-          term.writeln(`\x1b[31mrow ${n} out of range\x1b[0m  \x1b[2mresult has ${lastResult.rows.length} rows\x1b[0m`);
+          term.writeln(`\x1b[31mrow ${n} out of range\x1b[0m  \x1b[2mresult has ${lastResult.rows.length.toLocaleString('en-US')} rows\x1b[0m`);
           term.write(PROMPT);
           return;
         } else if (isNaN(n)) {
@@ -2047,7 +2047,7 @@ function startTerminal() {
       }
       if (lastResult) {
         renderResult(lastResult);
-        term.writeln(`\x1b[2m${lastResult.rows.length} rows\x1b[0m`);
+        term.writeln(`\x1b[2m${lastResult.rows.length.toLocaleString('en-US')} rows\x1b[0m`);
       }
       term.write(PROMPT);
       return;
@@ -2290,9 +2290,9 @@ function startTerminal() {
         term.writeln(`${val.padEnd(colW)}  \x1b[32m${cntFmt(cnt).padStart(cntW)}\x1b[0m  \x1b[2m${pct.padStart(pctW)}\x1b[0m${bar}`);
       });
       if (shown < totalDistinct) {
-        term.writeln(`\x1b[2m(${shown} of ${totalDistinct} distinct values, top ${showN} shown  ·  ${total} total rows)\x1b[0m`);
+        term.writeln(`\x1b[2m(${shown.toLocaleString('en-US')} of ${totalDistinct.toLocaleString('en-US')} distinct values, top ${showN} shown  ·  ${total.toLocaleString('en-US')} total rows)\x1b[0m`);
       } else {
-        term.writeln(`\x1b[2m(${totalDistinct} distinct value${totalDistinct !== 1 ? 's' : ''} in ${lastResult.rows.length} rows)\x1b[0m`);
+        term.writeln(`\x1b[2m(${totalDistinct.toLocaleString('en-US')} distinct value${totalDistinct !== 1 ? 's' : ''} in ${lastResult.rows.length.toLocaleString('en-US')} rows)\x1b[0m`);
       }
       term.write(PROMPT);
       return;
@@ -2376,8 +2376,8 @@ function startTerminal() {
               if (!settings.bytesRaw && cName && /bytes$|_size$|heap_size$/i.test(cName)) return fmtBytes(v);
               return v.toLocaleString('en-US');
             };
-            const nullNote2 = nullCount2 > 0 ? `  \x1b[2m(${nullCount2} null)\x1b[0m` : '';
-            term.writeln(`\x1b[1m${cName}\x1b[0m  \x1b[2m(${vals2.length} non-null values)\x1b[0m${nullNote2}`);
+            const nullNote2 = nullCount2 > 0 ? `  \x1b[2m(${nullCount2.toLocaleString('en-US')} null)\x1b[0m` : '';
+            term.writeln(`\x1b[1m${cName}\x1b[0m  \x1b[2m(${vals2.length.toLocaleString('en-US')} non-null values)\x1b[0m${nullNote2}`);
             term.writeln(`  min    \x1b[32m${fmtV2(vals2[0])}\x1b[0m`);
             term.writeln(`  max    \x1b[32m${fmtV2(vals2[vals2.length - 1])}\x1b[0m`);
             term.writeln(`  mean   \x1b[32m${fmtV2(mean2)}\x1b[0m`);
@@ -2441,8 +2441,8 @@ function startTerminal() {
         if (!settings.bytesRaw && colName && /bytes$|_size$|heap_size$/i.test(colName)) return fmtBytes(v);
         return v.toLocaleString('en-US');
       };
-      const nullInfo = nullCount > 0 ? `  \x1b[2m(${nullCount} null)\x1b[0m` : '';
-      term.writeln(`\x1b[1m${colName}\x1b[0m  \x1b[2m(${vals.length} non-null values)\x1b[0m${nullInfo}`);
+      const nullInfo = nullCount > 0 ? `  \x1b[2m(${nullCount.toLocaleString('en-US')} null)\x1b[0m` : '';
+      term.writeln(`\x1b[1m${colName}\x1b[0m  \x1b[2m(${vals.length.toLocaleString('en-US')} non-null values)\x1b[0m${nullInfo}`);
       term.writeln(`  min    \x1b[32m${fmtV(vals[0])}\x1b[0m`);
       term.writeln(`  max    \x1b[32m${fmtV(vals[vals.length - 1])}\x1b[0m`);
       term.writeln(`  mean   \x1b[32m${fmtV(mean)}\x1b[0m`);
@@ -2869,7 +2869,7 @@ function startTerminal() {
       }
       try {
         await navigator.clipboard.writeText(text);
-        term.writeln(`\x1b[32m✓ copied ${lastResult.rows.length} rows as ${ext.toUpperCase()} to clipboard\x1b[0m`);
+        term.writeln(`\x1b[32m✓ copied ${lastResult.rows.length.toLocaleString('en-US')} rows as ${ext.toUpperCase()} to clipboard\x1b[0m`);
       } catch (_) {
         const blob = new Blob([text], { type: mime });
         const url = URL.createObjectURL(blob);
@@ -3071,7 +3071,7 @@ function startTerminal() {
       term.writeln(gutter + cells.join('  '));
     });
     if (rows.length > settings.rowLimit) {
-      term.writeln(`\x1b[33m-- showing ${settings.rowLimit} of ${rows.length} rows (use \`/set limit 0\` or \`/set limit N\` to change) --\x1b[0m`);
+      term.writeln(`\x1b[33m-- showing ${settings.rowLimit.toLocaleString('en-US')} of ${rows.length.toLocaleString('en-US')} rows (use \`/set limit 0\` or \`/set limit N\` to change) --\x1b[0m`);
     }
     if (r.note) {
       term.writeln(`\x1b[33m-- ${r.note} --\x1b[0m`);
@@ -3152,11 +3152,11 @@ function startTerminal() {
           renderResult(r);
           lastResult = { columns: colNames, rows, note: r.note, truncated: r.truncated, row_count: r.row_count };
           currentRowIdx = 0;
-          const trunc = r.truncated ? `  \x1b[33m[capped at ${r.row_count} rows — add LIMIT N or increase with LIMIT 0 for all]\x1b[0m` : '';
+          const trunc = r.truncated ? `  \x1b[33m[capped at ${Number(r.row_count).toLocaleString('en-US')} rows — add LIMIT N or increase with LIMIT 0 for all]\x1b[0m` : '';
           const elapsedFmt = elapsedMs < 1 ? `${(elapsedMs * 1000).toFixed(0)}µs` : elapsedMs < 1000 ? `${elapsedMs.toFixed(1)}ms` : `${(elapsedMs / 1000).toFixed(2)}s`;
           const elapsedColor = elapsedMs > 1000 ? '\x1b[31m' : elapsedMs > 300 ? '\x1b[33m' : '\x1b[2m';
           const ts = new Date().toLocaleTimeString('en-GB', { hour12: false });
-          term.writeln(`${elapsedColor}${r.row_count} row${r.row_count !== 1 ? 's' : ''}, ${elapsedFmt}\x1b[0m\x1b[2m  [${ts}]\x1b[0m${trunc}`);
+          term.writeln(`${elapsedColor}${Number(r.row_count).toLocaleString('en-US')} row${r.row_count !== 1 ? 's' : ''}, ${elapsedFmt}\x1b[0m\x1b[2m  [${ts}]\x1b[0m${trunc}`);
           if (rows.length > 20 && showHint) {
             const hasNumeric = colNames.some((_, i) => {
               const sample = rows.find(row => row[i] !== null && row[i] !== undefined);
