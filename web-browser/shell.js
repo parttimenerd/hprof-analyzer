@@ -684,9 +684,26 @@ function startTerminal() {
         }
         return;
       }
-      // Single-column commands: /filter /grep /unique /stats /pivot /select /not /exclude /rename /sample /wc
-      const singleColCmds = ['/filter ', '/grep ', '/unique ', '/stats ', '/pivot ', '/select ',
-                              '/drop ', '/not ', '/exclude ', '/rename ', '/sample ', '/wc '];
+      // Multi-column commands: /select and /drop complete the last space-separated token
+      if (line.startsWith('/select ') || line.startsWith('/drop ')) {
+        const pfxEnd = line.indexOf(' ') + 1;
+        const prefix = line.slice(0, pfxEnd);
+        const afterCmd = line.slice(pfxEnd);
+        const lastSpace = afterCmd.lastIndexOf(' ');
+        const keepPrefix = lastSpace >= 0 ? prefix + afterCmd.slice(0, lastSpace + 1) : prefix;
+        const partial = (lastSpace >= 0 ? afterCmd.slice(lastSpace + 1) : afterCmd).toLowerCase();
+        const cols = lastResult.columns.filter(c => c.toLowerCase().startsWith(partial));
+        if (cols.length === 1) { setLine(keepPrefix + cols[0]); }
+        else if (cols.length > 1 && cols.length <= 20) {
+          term.writeln('');
+          term.writeln('  ' + cols.map(c => `\x1b[36m${c}\x1b[0m`).join('  '));
+          redrawLine();
+        }
+        return;
+      }
+      // Single-column commands: /filter /grep /unique /stats /pivot /not /exclude /rename /sample /wc
+      const singleColCmds = ['/filter ', '/grep ', '/unique ', '/stats ', '/pivot ',
+                              '/not ', '/exclude ', '/rename ', '/sample ', '/wc '];
       const matched = singleColCmds.find(p => line.startsWith(p));
       if (matched) {
         const rawArg = line.slice(matched.length);
