@@ -1512,6 +1512,16 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
         })
         .collect();
 
+    // Apply HAVING filter post-aggregation (mirrors the scan-time GROUP BY path).
+    if !entry.plan.having_terms.is_empty() {
+        let columns = query_columns(q);
+        rows.retain(|row| {
+            entry.plan.having_terms.iter().all(|term| {
+                crate::query::execute::eval_having_term(&term.pred, row, q, &columns)
+            })
+        });
+    }
+
     // ORDER BY: match by ORDER BY attribute or alias name.
     if let Some(ob) = &q.order_by {
         let ob_name = crate::query::execute::attr_name(&ob.key);
@@ -2211,6 +2221,33 @@ mod classof_late_tests {
         let r = &out[0];
         assert_eq!(r.rows.len(), 1, "one group (all Foo)");
         assert_eq!(r.rows[0][1], QueryValue::Int(120), "SUM(@usedHeapSize) = 40+80 = 120");
+    }
+
+    #[test]
+    fn group_by_having_filters_groups_in_late_phase() {
+        // Two objects: String (retained=100, shallow=40) and Object (retained=200, shallow=80).
+        // HAVING SUM(@retainedHeapSize) > 150 should keep only the Object group.
+        let class_names: Vec<String> = vec!["java.lang.String".into(), "java.lang.Object".into()];
+        let class_idx = vec![0u32, 1]; // dense 0=String, dense 1=Object
+        let retained = vec![100u64, 200];
+        let ctx = classof_ctx(&retained, &class_idx, &class_names);
+        let q = crate::query::parse::parse(
+            "SELECT classof(x) AS c, SUM(@retainedHeapSize) AS ret \
+             FROM C GROUP BY classof(x) HAVING ret > 150",
+        ).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        assert_eq!(plan.kind, crate::query::plan::StageKind::GroupBy);
+        let mut carry = crate::query::carry::Carry::index_only(10);
+        carry.push_index(0);
+        carry.push_index(1);
+        let mut st = QueryExecState::new();
+        st.push_cross_phase(0, "q1".into(), plan, carry);
+        let out = resume(st, &[q.clone(), q], &ctx);
+        assert_eq!(out.len(), 1);
+        let r = &out[0];
+        assert_eq!(r.rows.len(), 1, "HAVING should keep only Object group (ret=200 > 150)");
+        assert_eq!(r.rows[0][0], QueryValue::Str("java.lang.Object".into()));
+        assert_eq!(r.rows[0][1], QueryValue::Int(200));
     }
 }
 
