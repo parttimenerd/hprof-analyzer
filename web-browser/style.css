@@ -420,3 +420,38 @@ button:hover { background: #4a6aaa; }
   border-radius: 3px;
   transition: width 0.3s ease;
 }
+
+/* Report nav bar */
+.rpt-nav {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: #0e0e1c;
+  border-bottom: 1px solid #1e1e36;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 6px 0 6px;
+  margin-bottom: 20px;
+}
+.rpt-nav-link {
+  font-size: .76rem;
+  color: #7090b8;
+  text-decoration: none;
+  padding: 3px 10px;
+  border-radius: 4px;
+  white-space: nowrap;
+  transition: background .12s, color .12s;
+}
+.rpt-nav-link:hover { background: #1a2040; color: #a0c4ff; }
+
+/* Sortable table headers */
+th.rpt-sort-hdr {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+th.rpt-sort-hdr:hover { color: #a0c4ff; }
+th.rpt-sort-hdr::after { content: ' ⇕'; opacity: .3; font-size: .75em; }
+th.rpt-sort-asc::after  { content: ' ↑'; opacity: .8; font-size: .75em; }
+th.rpt-sort-desc::after { content: ' ↓'; opacity: .8; font-size: .75em; }

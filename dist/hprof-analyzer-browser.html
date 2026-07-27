@@ -429,6 +429,41 @@ button:hover { background: #4a6aaa; }
   transition: width 0.3s ease;
 }
 
+/* Report nav bar */
+.rpt-nav {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: #0e0e1c;
+  border-bottom: 1px solid #1e1e36;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 6px 0 6px;
+  margin-bottom: 20px;
+}
+.rpt-nav-link {
+  font-size: .76rem;
+  color: #7090b8;
+  text-decoration: none;
+  padding: 3px 10px;
+  border-radius: 4px;
+  white-space: nowrap;
+  transition: background .12s, color .12s;
+}
+.rpt-nav-link:hover { background: #1a2040; color: #a0c4ff; }
+
+/* Sortable table headers */
+th.rpt-sort-hdr {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+th.rpt-sort-hdr:hover { color: #a0c4ff; }
+th.rpt-sort-hdr::after { content: ' ⇕'; opacity: .3; font-size: .75em; }
+th.rpt-sort-asc::after  { content: ' ↑'; opacity: .8; font-size: .75em; }
+th.rpt-sort-desc::after { content: ' ↓'; opacity: .8; font-size: .75em; }
+
 </style>
 </head>
 <body>
@@ -1354,12 +1389,15 @@ function renderWasmReport(report, fileName) {
   // severity badge colors
   const sevColor = { critical: '#ff6b6b', warning: '#ffcc44', info: '#7ab4ff' };
 
-  // section helper
-  const sec = (id, title, subtitle, body) =>
-    `<div class="rpt-section" id="${id}">` +
-    `<h2 class="rpt-title">${escHtml(title)}</h2>` +
-    (subtitle ? `<p class="rpt-subtitle-text">${subtitle}</p>` : '') +
-    body + `</div>`;
+  // section helper — tracks registered sections for nav
+  const navLinks = [];
+  const sec = (id, title, subtitle, body) => {
+    navLinks.push({ id, title });
+    return `<div class="rpt-section" id="${id}">` +
+      `<h2 class="rpt-title">${escHtml(title)}</h2>` +
+      (subtitle ? `<p class="rpt-subtitle-text">${subtitle}</p>` : '') +
+      body + `</div>`;
+  };
 
   // inline code with backtick stripping (matches CLI detail strings)
   const inlineCode = s => escHtml(s)
@@ -1371,6 +1409,10 @@ function renderWasmReport(report, fileName) {
     const w = max > 0 ? Math.round(v / max * 100) : 0;
     return `<td class="num bar-cell"><span class="bar-bg"><span class="bar-fill" style="width:${w}%"></span></span></td>`;
   };
+
+  // sortable table header helper — wraps th content with data-col index
+  const sortTh = (label, col, cls) =>
+    `<th class="rpt-sort-hdr${cls ? ' ' + cls : ''}" data-col="${col}">${escHtml(label)}</th>`;
 
   const parts = [];
 
@@ -1415,10 +1457,12 @@ function renderWasmReport(report, fileName) {
   if (ws && ws.total_bytes > 0) {
     const maxWaste = Math.max(...ws.sources.map(s => s.bytes));
     let wHtml = `<p class="rpt-subtitle-text">Approximately <strong>${fmtBytes(ws.total_bytes)}</strong> looks reclaimable across the sources below.</p>`;
-    wHtml += `<table class="rpt-table rpt-wide"><thead><tr><th>Source</th><th class="num">Reclaimable</th><th></th></tr></thead><tbody>`;
+    wHtml += `<table class="rpt-table rpt-wide rpt-sortable"><thead><tr>` +
+      `${sortTh('Source', 0)}${sortTh('Reclaimable', 1, 'num')}<th></th>` +
+      `</tr></thead><tbody>`;
     ws.sources.forEach(s => {
       const link = s.anchor ? `<a href="#${escHtml(s.anchor)}">${escHtml(s.label)}</a>` : escHtml(s.label);
-      wHtml += `<tr><td>${link}</td><td class="num">${fmtBytes(s.bytes)}</td>${bar(s.bytes, maxWaste)}</tr>`;
+      wHtml += `<tr><td>${link}</td><td class="num" data-val="${s.bytes}">${fmtBytes(s.bytes)}</td>${bar(s.bytes, maxWaste)}</tr>`;
     });
     wHtml += `</tbody></table>`;
     parts.push(sec('waste-summary', 'Waste Summary', '', wHtml));
@@ -1461,13 +1505,15 @@ function renderWasmReport(report, fileName) {
   if (hist.length > 0) {
     const histRows = hist.filter(r => (r.retained || 0) > 0 || (r.shallow || 0) > 0);
     const maxR = Math.max(...histRows.map(r => r.retained || 0));
-    let hHtml = `<table class="rpt-table rpt-wide">`;
-    hHtml += `<thead><tr><th>Class</th><th class="num">Instances</th><th class="num">Shallow</th><th class="num">Retained</th><th></th></tr></thead><tbody>`;
+    let hHtml = `<table class="rpt-table rpt-wide rpt-sortable">`;
+    hHtml += `<thead><tr>` +
+      `${sortTh('Class', 0)}${sortTh('Instances', 1, 'num')}${sortTh('Shallow', 2, 'num')}${sortTh('Retained', 3, 'num')}<th></th>` +
+      `</tr></thead><tbody>`;
     histRows.forEach(row => {
       hHtml += `<tr><td class="cls">${escHtml(row.pretty_class||'')}</td>` +
-        `<td class="num">${n(row.instances)}</td>` +
-        `<td class="num">${fmtBytes(row.shallow||0)}</td>` +
-        `<td class="num">${fmtBytes(row.retained||0)}</td>` +
+        `<td class="num" data-val="${row.instances||0}">${n(row.instances)}</td>` +
+        `<td class="num" data-val="${row.shallow||0}">${fmtBytes(row.shallow||0)}</td>` +
+        `<td class="num" data-val="${row.retained||0}">${fmtBytes(row.retained||0)}</td>` +
         `${bar(row.retained||0, maxR)}</tr>`;
     });
     hHtml += `</tbody></table>`;
@@ -1500,12 +1546,14 @@ function renderWasmReport(report, fileName) {
       // Dominated by class (top dominated classes)
       if (s.dominated_by_class && s.dominated_by_class.length > 0) {
         lHtml += `<h4 class="rpt-suspect-sub">Dominated Objects by Class</h4>`;
-        lHtml += `<table class="rpt-table"><thead><tr><th>Class</th><th class="num">Instances</th><th class="num">Retained</th></tr></thead><tbody>`;
+        lHtml += `<table class="rpt-table rpt-sortable"><thead><tr>` +
+          `${sortTh('Class', 0)}${sortTh('Instances', 1, 'num')}${sortTh('Retained', 2, 'num')}` +
+          `</tr></thead><tbody>`;
         const maxDom = Math.max(...s.dominated_by_class.map(r => r.retained||0));
-        s.dominated_by_class.slice(0, 15).forEach(row => {
+        s.dominated_by_class.filter(r => (r.retained||0) > 0 || (r.instances||0) > 0).slice(0, 15).forEach(row => {
           lHtml += `<tr><td class="cls">${escHtml(row.pretty_class||'')}</td>` +
-            `<td class="num">${n(row.instances)}</td>` +
-            `<td class="num">${fmtBytes(row.retained||0)}</td></tr>`;
+            `<td class="num" data-val="${row.instances||0}">${n(row.instances)}</td>` +
+            `<td class="num" data-val="${row.retained||0}">${fmtBytes(row.retained||0)}</td></tr>`;
         });
         lHtml += `</tbody></table>`;
       }
@@ -1520,43 +1568,55 @@ function renderWasmReport(report, fileName) {
 
     // Biggest objects
     if (bigObjs.length > 0) {
-      const maxO = Math.max(...bigObjs.map(o => o.retained||0));
-      tcHtml += `<h3 class="rpt-subtitle">Biggest Objects</h3>`;
-      tcHtml += `<table class="rpt-table rpt-wide"><thead><tr><th>Class</th><th class="num">Retained</th><th class="num">%</th><th></th></tr></thead><tbody>`;
       const totalShallow = ov.total_shallow || 1;
-      bigObjs.forEach(o => {
-        tcHtml += `<tr><td class="cls">${escHtml(o.display_class||'?')}</td>` +
-          `<td class="num">${fmtBytes(o.retained||0)}</td>` +
-          `<td class="num">${pct(o.retained||0, totalShallow)}</td>` +
-          `${bar(o.retained||0, maxO)}</tr>`;
-      });
-      tcHtml += `</tbody></table>`;
+      const maxO = Math.max(...bigObjs.map(o => o.retained||0));
+      const bigObjsFiltered = bigObjs.filter(o => (o.retained||0) > 0);
+      if (bigObjsFiltered.length > 0) {
+        tcHtml += `<h3 class="rpt-subtitle">Biggest Objects</h3>`;
+        tcHtml += `<table class="rpt-table rpt-wide rpt-sortable"><thead><tr>` +
+          `${sortTh('Class', 0)}${sortTh('Retained', 1, 'num')}${sortTh('%', 2, 'num')}<th></th>` +
+          `</tr></thead><tbody>`;
+        bigObjsFiltered.forEach(o => {
+          tcHtml += `<tr><td class="cls">${escHtml(o.display_class||'?')}</td>` +
+            `<td class="num" data-val="${o.retained||0}">${fmtBytes(o.retained||0)}</td>` +
+            `<td class="num" data-val="${o.retained||0}">${pct(o.retained||0, totalShallow)}</td>` +
+            `${bar(o.retained||0, maxO)}</tr>`;
+        });
+        tcHtml += `</tbody></table>`;
+      }
     }
 
     // Biggest classes
     if (bigCls.length > 0) {
       const maxC = Math.max(...bigCls.map(c => c.retained||0));
-      tcHtml += `<h3 class="rpt-subtitle" style="margin-top:16px">Biggest Classes by Retained</h3>`;
-      tcHtml += `<table class="rpt-table rpt-wide"><thead><tr><th>Class</th><th class="num">Instances</th><th class="num">Retained</th><th></th></tr></thead><tbody>`;
-      bigCls.forEach(c => {
-        tcHtml += `<tr><td class="cls">${escHtml(c.pretty_class||'')}</td>` +
-          `<td class="num">${n(c.instances)}</td>` +
-          `<td class="num">${fmtBytes(c.retained||0)}</td>` +
-          `${bar(c.retained||0, maxC)}</tr>`;
-      });
-      tcHtml += `</tbody></table>`;
+      const bigClsFiltered = bigCls.filter(c => (c.retained||0) > 0);
+      if (bigClsFiltered.length > 0) {
+        tcHtml += `<h3 class="rpt-subtitle" style="margin-top:16px">Biggest Classes by Retained</h3>`;
+        tcHtml += `<table class="rpt-table rpt-wide rpt-sortable"><thead><tr>` +
+          `${sortTh('Class', 0)}${sortTh('Instances', 1, 'num')}${sortTh('Retained', 2, 'num')}<th></th>` +
+          `</tr></thead><tbody>`;
+        bigClsFiltered.forEach(c => {
+          tcHtml += `<tr><td class="cls">${escHtml(c.pretty_class||'')}</td>` +
+            `<td class="num" data-val="${c.instances||0}">${n(c.instances)}</td>` +
+            `<td class="num" data-val="${c.retained||0}">${fmtBytes(c.retained||0)}</td>` +
+            `${bar(c.retained||0, maxC)}</tr>`;
+        });
+        tcHtml += `</tbody></table>`;
+      }
     }
 
     // Package tree (top-level)
     const bp = top.biggest_packages;
     if (bp && bp.children && bp.children.length > 0) {
       tcHtml += `<h3 class="rpt-subtitle" style="margin-top:16px">Biggest Packages by Retained</h3>`;
-      tcHtml += `<table class="rpt-table rpt-wide"><thead><tr><th>Package</th><th class="num">Top dominators</th><th class="num">Retained</th></tr></thead><tbody>`;
+      tcHtml += `<table class="rpt-table rpt-wide rpt-sortable"><thead><tr>` +
+        `${sortTh('Package', 0)}${sortTh('Top dominators', 1, 'num')}${sortTh('Retained', 2, 'num')}` +
+        `</tr></thead><tbody>`;
       const maxP = Math.max(...bp.children.map(c => c.retained_heap||0));
-      bp.children.forEach(c => {
+      bp.children.filter(c => (c.retained_heap||0) > 0).forEach(c => {
         tcHtml += `<tr><td class="cls">${escHtml(c.name||'(root)')}</td>` +
-          `<td class="num">${n(c.top_dominator_count)}</td>` +
-          `<td class="num">${fmtBytes(c.retained_heap||0)}</td></tr>`;
+          `<td class="num" data-val="${c.top_dominator_count||0}">${n(c.top_dominator_count)}</td>` +
+          `<td class="num" data-val="${c.retained_heap||0}">${fmtBytes(c.retained_heap||0)}</td></tr>`;
       });
       tcHtml += `</tbody></table>`;
     }
@@ -1566,15 +1626,17 @@ function renderWasmReport(report, fileName) {
 
   // ── Threads ──────────────────────────────────────────────────────────────────
   if (threads.length > 0) {
-    let tHtml = `<table class="rpt-table rpt-wide"><thead><tr>` +
-      `<th>Name</th><th>State</th><th class="num">Shallow</th><th class="num">Retained</th><th>Daemon</th></tr></thead><tbody>`;
-    threads.forEach(t => {
+    const threadsFiltered = threads.filter(t => (t.shallow||0) > 0 || (t.retained||0) > 0 || t.name);
+    let tHtml = `<table class="rpt-table rpt-wide rpt-sortable"><thead><tr>` +
+      `${sortTh('Name', 0)}${sortTh('State', 1)}${sortTh('Shallow', 2, 'num')}${sortTh('Retained', 3, 'num')}${sortTh('Daemon', 4)}` +
+      `</tr></thead><tbody>`;
+    threadsFiltered.forEach(t => {
       const state = Array.isArray(t.thread_state) ? t.thread_state.join(', ') : (t.thread_state || '—');
       tHtml += `<tr>` +
         `<td>${escHtml(t.name || '?')}</td>` +
         `<td>${escHtml(state)}</td>` +
-        `<td class="num">${fmtBytes(t.shallow || 0)}</td>` +
-        `<td class="num">${fmtBytes(t.retained || 0)}</td>` +
+        `<td class="num" data-val="${t.shallow||0}">${fmtBytes(t.shallow || 0)}</td>` +
+        `<td class="num" data-val="${t.retained||0}">${fmtBytes(t.retained || 0)}</td>` +
         `<td>${t.is_daemon ? 'daemon' : ''}</td></tr>`;
 
       // significant frames
@@ -1588,10 +1650,66 @@ function renderWasmReport(report, fileName) {
       }
     });
     tHtml += `</tbody></table>`;
-    parts.push(sec('threads', 'Threads', `${threads.length} thread(s).`, tHtml));
+    parts.push(sec('threads', 'Threads', `${threadsFiltered.length} thread(s).`, tHtml));
   }
 
-  container.insertAdjacentHTML('beforeend', parts.join(''));
+  // Build nav bar from registered sections
+  const navHtml = navLinks.length > 0
+    ? `<nav class="rpt-nav">${navLinks.map(({ id, title }) =>
+        `<a class="rpt-nav-link" href="#${id}">${escHtml(title)}</a>`).join('')}</nav>`
+    : '';
+
+  container.insertAdjacentHTML('beforeend', navHtml + parts.join(''));
+
+  // Wire sortable tables: click a .rpt-sort-hdr to sort by that column
+  container.querySelectorAll('table.rpt-sortable').forEach(tbl => {
+    tbl.querySelectorAll('th.rpt-sort-hdr').forEach(th => {
+      th.addEventListener('click', () => {
+        const col = parseInt(th.dataset.col, 10);
+        const tbody = tbl.querySelector('tbody');
+        if (!tbody) return;
+        // Determine current sort direction (toggle, default desc first)
+        const wasDesc = th.classList.contains('rpt-sort-desc');
+        // Clear all sort markers in this table
+        tbl.querySelectorAll('th.rpt-sort-hdr').forEach(h => {
+          h.classList.remove('rpt-sort-asc', 'rpt-sort-desc');
+        });
+        const desc = !wasDesc;
+        th.classList.add(desc ? 'rpt-sort-desc' : 'rpt-sort-asc');
+        // Collect sortable rows (skip colspan rows like thread frames)
+        const rows = Array.from(tbody.querySelectorAll('tr')).filter(r =>
+          !r.querySelector('td[colspan]')
+        );
+        // Keep "companion" rows (colspan) paired with their preceding row
+        const allRows = Array.from(tbody.querySelectorAll('tr'));
+        // Build paired groups: [mainRow, ...companionRows]
+        const groups = [];
+        for (let i = 0; i < allRows.length; i++) {
+          if (!allRows[i].querySelector('td[colspan]')) {
+            groups.push([allRows[i]]);
+          } else if (groups.length > 0) {
+            groups[groups.length - 1].push(allRows[i]);
+          }
+        }
+        groups.sort((a, b) => {
+          const aCell = a[0].cells[col];
+          const bCell = b[0].cells[col];
+          const aRaw = aCell ? (aCell.dataset.val !== undefined ? parseFloat(aCell.dataset.val) : aCell.textContent.trim()) : '';
+          const bRaw = bCell ? (bCell.dataset.val !== undefined ? parseFloat(bCell.dataset.val) : bCell.textContent.trim()) : '';
+          const aNum = typeof aRaw === 'number' ? aRaw : NaN;
+          const bNum = typeof bRaw === 'number' ? bRaw : NaN;
+          let cmp;
+          if (!isNaN(aNum) && !isNaN(bNum)) {
+            cmp = aNum - bNum;
+          } else {
+            cmp = String(aRaw).localeCompare(String(bRaw));
+          }
+          return desc ? -cmp : cmp;
+        });
+        groups.forEach(g => g.forEach(r => tbody.appendChild(r)));
+      });
+    });
+  });
 }
 function showWasmShell(name) {
   serverUrl = null;
