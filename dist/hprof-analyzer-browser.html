@@ -2016,7 +2016,7 @@ function startTerminal() {
       const idxW = String(lastResult.columns.length).length;
       const total = lastResult.rows.length;
       const navHint = total > 1 ? `\x1b[2m  (use /row next / /row prev to navigate)\x1b[0m` : '';
-      term.writeln(`\x1b[2m── row ${n} of ${total} ──\x1b[0m${navHint}`);
+      term.writeln(`\x1b[2m── row ${n} of ${total.toLocaleString('en-US')} ──\x1b[0m${navHint}`);
       lastResult.columns.forEach((col, i) => {
         const key = col.padEnd(keyW);
         const cell = row[i];
