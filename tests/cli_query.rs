@@ -6061,3 +6061,60 @@ fn query_having_like_filters_groups_non_retained() {
         );
     }
 }
+
+#[test]
+fn query_case_when_with_retained_heap_size_is_non_null() {
+    let Some(hprof) = philosophers() else { return };
+    // CASE WHEN / arithmetic expressions in SELECT with @retainedHeapSize were returning
+    // Null because project_late_row had no SelectItem::Expr arm.
+    let out = Command::new(BIN)
+        .arg("query").arg(&hprof)
+        .args(["--query",
+            "SELECT classof(x), @retainedHeapSize, \
+             CASE WHEN @retainedHeapSize > 100000 THEN \"large\" ELSE \"small\" END AS size \
+             FROM INSTANCEOF java.lang.Object x ORDER BY @retainedHeapSize DESC LIMIT 5"])
+        .output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let data_rows: Vec<&str> = stdout
+        .lines()
+        .filter(|l| l.contains('|') && !l.contains("classof") && !l.contains("---"))
+        .collect();
+    assert!(!data_rows.is_empty(), "expected data rows, got:\n{stdout}");
+    let first = data_rows[0];
+    assert!(
+        first.contains("large"),
+        "CASE WHEN @retainedHeapSize > 100000 THEN \"large\" returned null or wrong value: {first}"
+    );
+    assert!(
+        !first.contains("null") && !first.contains("Null"),
+        "CASE WHEN returned null in first row: {first}"
+    );
+}
+
+#[test]
+fn query_arithmetic_expr_with_retained_heap_size_is_non_null() {
+    let Some(hprof) = philosophers() else { return };
+    // Arithmetic expressions like @retainedHeapSize * 2 were Null in the late window.
+    let out = Command::new(BIN)
+        .arg("query").arg(&hprof)
+        .args(["--query",
+            "SELECT @retainedHeapSize, @retainedHeapSize * 2 AS double_ret \
+             FROM INSTANCEOF java.lang.Object x ORDER BY @retainedHeapSize DESC LIMIT 3"])
+        .output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let data_rows: Vec<&str> = stdout
+        .lines()
+        .filter(|l| l.contains('|') && !l.contains("@retained") && !l.contains("---"))
+        .collect();
+    assert!(!data_rows.is_empty(), "expected data rows, got:\n{stdout}");
+    let first = data_rows[0];
+    let cols: Vec<&str> = first.split('|').map(|s| s.trim()).collect();
+    let retained = cols.get(0).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+    let double = cols.get(1).and_then(|s| s.parse::<i64>().ok()).unwrap_or(-1);
+    assert_eq!(
+        double, retained * 2,
+        "@retainedHeapSize * 2 should be double the retained size; got {double} vs {retained}*2={}", retained * 2
+    );
+}

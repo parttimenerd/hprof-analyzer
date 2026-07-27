@@ -998,7 +998,95 @@ fn eval_late_pred(
     }
 }
 
-/// Compare two `QueryValue`s using the given operator. For `LIKE`/`NOT LIKE`,
+/// Evaluate an expression in the late window where multiple late attrs are live:
+/// @objectId, @retainedHeapSize, @usedHeapSize, @objectAddress, classof/displayName.
+/// Blob-dependent field attrs (instance scalars, ref paths) remain Null.
+fn eval_late_expr_multi(
+    e: &Expr,
+    idx: u32,
+    ret: u64,
+    ctx: &LateCtx,
+    like_regexes: &std::collections::HashMap<String, regex::Regex>,
+) -> QueryValue {
+    use crate::query::ast::Attr;
+    match e {
+        Expr::Attr(a) => match a {
+            Attr::ObjectId => QueryValue::Int(idx as i64),
+            Attr::RetainedHeapSize => QueryValue::Int(ret as i64),
+            Attr::UsedHeapSize => QueryValue::Int(
+                ctx.shallow.get(idx as usize).copied().unwrap_or(0) as i64,
+            ),
+            Attr::ObjectAddress => QueryValue::Int(ctx.id_map.to_addr(idx) as i64),
+            Attr::ClassOf | Attr::DisplayName => match ctx.class_name_of(idx) {
+                Some(name) => QueryValue::Str(name.to_string()),
+                None => QueryValue::Null,
+            },
+            _ => QueryValue::Null,
+        },
+        Expr::Lit(v) => value_to_qv(v),
+        Expr::Binary { op, lhs, rhs } => arith(
+            &eval_late_expr_multi(lhs, idx, ret, ctx, like_regexes),
+            *op,
+            &eval_late_expr_multi(rhs, idx, ret, ctx, like_regexes),
+        ),
+        Expr::Unary { op, arg } => {
+            unary(*op, &eval_late_expr_multi(arg, idx, ret, ctx, like_regexes))
+        }
+        Expr::Case { branches, else_ } => {
+            for (cond, then_expr) in branches {
+                if eval_late_pred_multi(cond, idx, ret, ctx, like_regexes) {
+                    return eval_late_expr_multi(then_expr, idx, ret, ctx, like_regexes);
+                }
+            }
+            match else_ {
+                Some(e) => eval_late_expr_multi(e, idx, ret, ctx, like_regexes),
+                None => QueryValue::Null,
+            }
+        }
+        Expr::Coalesce(args) => {
+            for arg in args {
+                let v = eval_late_expr_multi(arg, idx, ret, ctx, like_regexes);
+                if !matches!(v, QueryValue::Null) { return v; }
+            }
+            QueryValue::Null
+        }
+        Expr::NullIf { lhs, rhs } => {
+            let lv = eval_late_expr_multi(lhs, idx, ret, ctx, like_regexes);
+            let rv = eval_late_expr_multi(rhs, idx, ret, ctx, like_regexes);
+            if lv == rv { QueryValue::Null } else { lv }
+        }
+        Expr::Aggregate { .. } | Expr::Method { .. } => QueryValue::Null,
+    }
+}
+
+fn eval_late_pred_multi(
+    p: &Predicate,
+    idx: u32,
+    ret: u64,
+    ctx: &LateCtx,
+    like_regexes: &std::collections::HashMap<String, regex::Regex>,
+) -> bool {
+    use crate::query::ast::CompareOp;
+    match p {
+        Predicate::And(a, b) => {
+            eval_late_pred_multi(a, idx, ret, ctx, like_regexes)
+                && eval_late_pred_multi(b, idx, ret, ctx, like_regexes)
+        }
+        Predicate::Or(a, b) => {
+            eval_late_pred_multi(a, idx, ret, ctx, like_regexes)
+                || eval_late_pred_multi(b, idx, ret, ctx, like_regexes)
+        }
+        Predicate::Not(a) => !eval_late_pred_multi(a, idx, ret, ctx, like_regexes),
+        Predicate::Compare { lhs, op, rhs } => {
+            let lv = eval_late_expr_multi(lhs, idx, ret, ctx, like_regexes);
+            let rv = eval_late_expr_multi(rhs, idx, ret, ctx, like_regexes);
+            cmp_late_qv(&lv, *op, &rv, like_regexes)
+        }
+        _ => true,
+    }
+}
+
+
 /// the RHS is expected to be a `QueryValue::Str` containing the pattern, and
 /// `like_regexes` is consulted. Null operands: only `Ne` and `NotLike` are true
 /// (type-mismatch behaviour consistent with `cmp_query_value`).
@@ -1574,6 +1662,7 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
     if entry.plan.kind == crate::query::plan::StageKind::GroupBy {
         return join_retained_group_by(entry, q, ctx);
     }
+    let like_regexes = crate::query::execute::compile_like_regexes(q).unwrap_or_default();
     let mut rows: Vec<(u32, u64)> = Vec::new();
     for idx in entry.carry.indices() {
         let ret = *ctx.retained.get(idx as usize).unwrap_or(&0);
@@ -1599,7 +1688,7 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
     let columns: Vec<QueryColumn> = crate::query::execute::query_columns(q);
     let out_rows: Vec<Vec<QueryValue>> = rows
         .iter()
-        .map(|(idx, ret)| project_late_row(q, *idx, *ret, ctx))
+        .map(|(idx, ret)| project_late_row(q, *idx, *ret, ctx, &like_regexes))
         .collect();
     QueryResult {
         name: entry.name.clone(),
@@ -1654,8 +1743,15 @@ fn eval_retained_pred(p: &Predicate, ret: u64) -> bool {
 /// ctx.shallow), @objectAddress (from ctx.id_map; returns 0 when the id_map was
 /// compressed away on the analyze path), @classOf/@displayName (from ctx.class_idx /
 /// ctx.class_names), @GCRoots/@GCRootInfo/@info (from ctx.gc_root_tags), and SELECT *.
+/// Arithmetic and CASE expressions over late attrs are evaluated via eval_late_expr_multi.
 /// Blob-dependent field attrs need an IndexPlusScalars carry (later step) and are Null.
-fn project_late_row(q: &Query, idx: u32, ret: u64, ctx: &LateCtx) -> Vec<QueryValue> {
+fn project_late_row(
+    q: &Query,
+    idx: u32,
+    ret: u64,
+    ctx: &LateCtx,
+    like_regexes: &std::collections::HashMap<String, regex::Regex>,
+) -> Vec<QueryValue> {
     q.select
         .iter()
         .map(|it| match it {
@@ -1686,6 +1782,7 @@ fn project_late_row(q: &Query, idx: u32, ret: u64, ctx: &LateCtx) -> Vec<QueryVa
                 // resolving an address here would yield a misleading @0.
                 addr: None,
             },
+            SelectItem::Expr(e) => eval_late_expr_multi(e, idx, ret, ctx, like_regexes),
             _ => QueryValue::Null,
         })
         .collect()
