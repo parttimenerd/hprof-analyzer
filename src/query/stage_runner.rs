@@ -634,14 +634,87 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
 
     let columns: Vec<QueryColumn> = crate::query::execute::query_columns(q);
 
-    // Aggregate over the toString-filtered set. When the SELECT is an aggregate
-    // (e.g. `COUNT(*) ... WHERE toString(s) LIKE ...`), the late phase must fold
-    // the kept objects into a single aggregate row rather than emit one row per
-    // object. The per-object argument value is projected from the dense index
-    // via `project_string_row_item` (COUNT(*) ignores it; COUNT(toString(s))
-    // sees the decoded string). Plan-time gating (see plan.rs) restricts this to
-    // aggregate args that are projectable here, so no silent-null folding occurs.
+    // Aggregate over the toString-filtered set.
     if q.select.iter().any(|it| matches!(it, SelectItem::Aggregate { .. })) {
+        let truncated = entry.carry.truncated() || ctx.string_values_truncated;
+
+        // GROUP BY path: group by the toString(s) key, one row per distinct value.
+        if !q.group_by.is_empty() {
+            // Key: string value (None → Null group). Value: (key_val, accs).
+            let mut group_map: std::collections::HashMap<
+                Option<String>,
+                (QueryValue, Vec<crate::query::execute::AggAcc>),
+            > = std::collections::HashMap::new();
+            for &idx in &kept {
+                let key_val: QueryValue = ctx
+                    .string_value(idx)
+                    .map(|s| QueryValue::Str(s.to_string()))
+                    .unwrap_or(QueryValue::Null);
+                let key_opt: Option<String> = ctx.string_value(idx).map(|s| s.to_string());
+                let entry_ref = group_map.entry(key_opt).or_insert_with(|| {
+                    let init: Vec<crate::query::execute::AggAcc> =
+                        q.select.iter().map(crate::query::execute::init_agg_acc).collect();
+                    (key_val.clone(), init)
+                });
+                for (acc, item) in entry_ref.1.iter_mut().zip(q.select.iter()) {
+                    if let SelectItem::Aggregate { arg, .. } = item {
+                        let v = project_string_row_item(arg, idx, ctx);
+                        crate::query::execute::fold_agg_acc(acc, v);
+                    }
+                }
+            }
+            let mut out_rows: Vec<Vec<QueryValue>> = group_map
+                .into_values()
+                .map(|(key_val, accs)| {
+                    let finalized: Vec<QueryValue> =
+                        accs.into_iter().map(crate::query::execute::finalize_agg_acc).collect();
+                    // Build one output row: aggregates from finalized accs, non-aggregates
+                    // (i.e. the toString(s) GROUP BY key projection) from key_val.
+                    q.select
+                        .iter()
+                        .enumerate()
+                        .map(|(i, item)| match item {
+                            SelectItem::Aggregate { .. } => {
+                                finalized.get(i).cloned().unwrap_or(QueryValue::Null)
+                            }
+                            _ => key_val.clone(),
+                        })
+                        .collect()
+                })
+                .collect();
+            if let Some(ob) = &q.order_by {
+                if let Some(ci) =
+                    crate::query::execute::order_by_column_index(q, &columns, &ob.key)
+                {
+                    crate::query::execute::sort_rows_by_column(&mut out_rows, ci, ob.dir);
+                }
+            }
+            let mut truncated = truncated;
+            if let Some(limit) = q.limit {
+                if out_rows.len() as u64 > limit {
+                    out_rows.truncate(limit as usize);
+                    truncated = true;
+                }
+            }
+            return QueryResult {
+                name: entry.name.clone(),
+                oql: String::new(),
+                columns,
+                row_count: out_rows.len() as u64,
+                rows: out_rows,
+                truncated,
+                error: None,
+                note: None,
+                viz: None,
+                elapsed_ms: None,
+            };
+        }
+
+        // No GROUP BY: fold entire filtered set into one aggregate row.
+        // COUNT(*) and COUNT(toString(s)) are the only supported aggregates here
+        // (plan.rs gates everything else). Per-object arg value projected via
+        // `project_string_row_item` (COUNT(*) ignores it; COUNT(toString(s)) sees
+        // the decoded string).
         let mut accs: Vec<crate::query::execute::AggAcc> =
             q.select.iter().map(crate::query::execute::init_agg_acc).collect();
         for &idx in &kept {
@@ -656,7 +729,6 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
             .into_iter()
             .map(crate::query::execute::finalize_agg_acc)
             .collect();
-        let truncated = entry.carry.truncated() || ctx.string_values_truncated;
         return QueryResult {
             name: entry.name.clone(),
             oql: String::new(),

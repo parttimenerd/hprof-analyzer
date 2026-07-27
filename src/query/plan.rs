@@ -1239,6 +1239,7 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             // returning 0/Null. (This gate applies ONLY to the late string-decode
             // path; the scan-time non-String display form has no such constraint.)
             if is_aggregate {
+                let has_group_by = !q.group_by.is_empty();
                 let ok = q.select.iter().all(|it| match it {
                     SelectItem::Aggregate { func, arg } => {
                         matches!(func, AggFunc::Count)
@@ -1249,7 +1250,11 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
                                     | SelectItem::Attr(Attr::ToString(_))
                             )
                     }
-                    _ => false,
+                    // Non-aggregate items are valid GROUP BY key projections when a
+                    // GROUP BY clause is present (e.g. `SELECT toString(s), COUNT(*)`
+                    // with `GROUP BY toString(s)`). Without GROUP BY they are free-
+                    // standing non-aggregates mixed with aggregates — still an error.
+                    _ => has_group_by,
                 });
                 if !ok {
                     return Err(QueryError(

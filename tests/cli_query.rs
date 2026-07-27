@@ -5167,6 +5167,30 @@ fn case_when_in_group_by_key() {
 }
 
 #[test]
+fn group_by_tostring_counts_distinct_values() {
+    // Regression: GROUP BY toString(s) was rejected at plan time because
+    // the planner's aggregate gate treated non-aggregate SELECT items (which
+    // are valid GROUP BY key projections) as errors.
+    let Some(hprof) = philosophers() else { return };
+    let out = run_query_args(
+        &hprof,
+        &["--all"],
+        "SELECT toString(s) AS value, COUNT(*) AS count FROM java.lang.String s \
+         GROUP BY toString(s) ORDER BY count DESC LIMIT 5",
+    );
+    assert!(!out.contains("error"), "unexpected error: {out}");
+    assert!(out.contains("value") && out.contains("count"), "missing columns: {out}");
+    // Should produce multiple rows (distinct string values), not just one null-all row.
+    let data_lines: Vec<_> = out
+        .lines()
+        .skip_while(|l| !l.contains("value"))
+        .skip(1)
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    assert!(data_lines.len() >= 2, "expected multiple distinct groups, got: {out}");
+}
+
+#[test]
 fn coalesce_returns_first_nonnull() {
     let Some(hprof) = philosophers() else { return };
     let out = run_query_stdout(
