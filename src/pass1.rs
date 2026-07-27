@@ -144,9 +144,9 @@ impl Pass1 {
     /// Runs pass 1 over the dump at `path`. Always records each object's
     /// allocation stack-trace serial (for the always-on alloc-sites report);
     /// serials are 0 unless the JVM ran with allocation tracking enabled.
-    pub fn run(path: &str, capture_hprof_offsets: bool) -> io::Result<Self> {
-        let file_size = std::fs::metadata(path)?.len();
-        let mut r = HprofReader::open(path)?;
+    pub fn run(source: &crate::source::HprofSource, capture_hprof_offsets: bool) -> io::Result<Self> {
+        let file_size = source.len()?;
+        let mut r = source.open()?;
         let id_size = r.id_size;
         let format = r.format.clone();
         // Header base timestamp (u8 millis-since-epoch after id_size), read by
@@ -1008,7 +1008,7 @@ mod tests {
         if !std::path::Path::new(DUMP).exists() {
             return;
         }
-        let p = Pass1::run(DUMP, false).unwrap();
+        let p = Pass1::run(&crate::source::HprofSource::from(DUMP), false).unwrap();
         assert_eq!(p.instance_count, EXPECTED_INSTANCES, "instances");
         assert_eq!(p.obj_array_count, EXPECTED_OBJ_ARRAYS, "obj arrays");
         assert_eq!(p.prim_array_count, EXPECTED_PRIM_ARRAYS, "prim arrays");
@@ -1052,7 +1052,7 @@ mod tests {
         if !std::path::Path::new(DUMP).exists() {
             return;
         }
-        let p = Pass1::run(DUMP, false).unwrap();
+        let p = Pass1::run(&crate::source::HprofSource::from(DUMP), false).unwrap();
         // id_map now includes class objects (from CLASS_DUMP records) in addition to instances/arrays
         let expected =
             EXPECTED_INSTANCES + EXPECTED_OBJ_ARRAYS + EXPECTED_PRIM_ARRAYS + p.class_dump_count;
@@ -1069,7 +1069,7 @@ mod tests {
         if !std::path::Path::new(DUMP).exists() {
             return;
         }
-        let p = Pass1::run(DUMP, false).unwrap();
+        let p = Pass1::run(&crate::source::HprofSource::from(DUMP), false).unwrap();
         assert_eq!(p.id_map.len(), p.class_ids.len(), "class_ids len");
     }
 
@@ -1078,7 +1078,7 @@ mod tests {
         if !std::path::Path::new(DUMP).exists() {
             return;
         }
-        let p = Pass1::run(DUMP, false).unwrap();
+        let p = Pass1::run(&crate::source::HprofSource::from(DUMP), false).unwrap();
         assert_eq!(p.id_size, 8);
         assert!(p.format.starts_with("JAVA PROFILE"));
         assert!(p.has_sticky_class_roots);
@@ -1090,7 +1090,7 @@ mod tests {
         if !std::path::Path::new(DUMP).exists() {
             return;
         }
-        let p = Pass1::run(DUMP, false).unwrap();
+        let p = Pass1::run(&crate::source::HprofSource::from(DUMP), false).unwrap();
         // Every class in class_map should have a name_id, and that name_id should be in strings
         let mut resolved = 0usize;
         for ci in p.class_map.values() {

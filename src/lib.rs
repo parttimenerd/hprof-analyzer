@@ -45,7 +45,7 @@ fn analyze_to_report_inner(
 ) -> std::io::Result<(crate::report::Report, Vec<u64>)> {
     use std::io;
 
-    let p1 = pass1::Pass1::run(path, false)?;
+    let p1 = pass1::Pass1::run(&crate::source::HprofSource::from(path), false)?;
 
     if p1.class_ids.len() > u32::MAX as usize {
         return Err(io::Error::new(

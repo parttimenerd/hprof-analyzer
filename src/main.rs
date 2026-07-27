@@ -34,6 +34,7 @@ mod reader;
 mod report;
 mod retained;
 mod run_oql;
+mod source;
 mod rpo_dfs;
 mod serve;
 mod sweep;
@@ -829,7 +830,7 @@ fn analyze_to_report_inner(
     path: &str,
     opts: &AnalyzeOptions,
 ) -> std::io::Result<(crate::report::Report, Vec<u64>)> {
-    let p1 = pass1::Pass1::run(path, false)?;
+    let p1 = pass1::Pass1::run(&crate::source::HprofSource::from(path), false)?;
 
     if p1.class_ids.len() > u32::MAX as usize {
         return Err(io::Error::new(
@@ -1387,7 +1388,7 @@ fn annotate_missing_classes(
     }
     // Resolve the dump's dotted class-name set once (slash-form normalized to
     // dots, matching how FROM names are written and how LiveResolver maps them).
-    let Ok(p1) = Pass1::run(input, false) else { return };
+    let Ok(p1) = Pass1::run(&crate::source::HprofSource::from(input), false) else { return };
     let names: std::collections::HashSet<String> = p1
         .class_map
         .values()
@@ -1522,7 +1523,7 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
     } else if needs_full {
         run_oql_escalated(input, &flat, &union_groups, opts.reachable_only, &opts)?
     } else {
-        let p1 = pass1::Pass1::run(input, false)?;
+        let p1 = pass1::Pass1::run(&crate::source::HprofSource::from(input), false)?;
         if p1.class_ids.len() > u32::MAX as usize {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -1615,7 +1616,7 @@ fn run(
 
     let t = Instant::now();
     progress::phase("scanning dump (pass 1)");
-    let p1 = pass1::Pass1::run(input, mat.is_some())?;
+    let p1 = pass1::Pass1::run(&crate::source::HprofSource::from(input), mat.is_some())?;
     log(verbose, "pass1", t.elapsed().as_secs_f64());
 
     // The entire analysis works in u32 pre-order / node-index space (dfn,
@@ -2770,7 +2771,7 @@ fn run(
 
 /// Emit pass-1 parse stats (counts + class histogram) as JSON to stdout.
 fn dump_pass1_json(path: &str) -> io::Result<()> {
-    let p = Pass1::run(path, false)?;
+    let p = Pass1::run(&crate::source::HprofSource::from(path), false)?;
 
     let mut class_hist: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
     for (i, &cidx) in p.class_ids.iter().enumerate() {
