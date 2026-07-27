@@ -667,6 +667,38 @@ impl Completer for OqlCompleter {
                 }
             }
         }
+        // `!describe <class>`, `!classes <pattern>`, `!fields <pattern>` —
+        // complete against the known class or field names.
+        if upto.starts_with('!') && upto.contains(char::is_whitespace) {
+            let (verb, partial_raw) = upto[1..].split_once(char::is_whitespace).unwrap_or(("", ""));
+            let partial_raw = partial_raw.trim_start();
+            if matches!(verb, "describe" | "classes") && !partial_raw.is_empty() {
+                let lower = partial_raw.to_ascii_lowercase();
+                let name_start = upto.len() - partial_raw.len();
+                let out: Vec<Suggestion> = Self::ranged_suggestions(
+                    &self.class_names,
+                    &self.class_lower,
+                    &lower,
+                    "",
+                    name_start,
+                    pos,
+                );
+                if !out.is_empty() { return out; }
+            }
+            if verb == "fields" && !partial_raw.is_empty() {
+                let lower = partial_raw.to_ascii_lowercase();
+                let name_start = upto.len() - partial_raw.len();
+                let out: Vec<Suggestion> = Self::ranged_suggestions(
+                    &self.field_names,
+                    &self.field_lower,
+                    &lower,
+                    "",
+                    name_start,
+                    pos,
+                );
+                if !out.is_empty() { return out; }
+            }
+        }
         // `!set <key>` — complete setting keys; `!set bytes|color <val>` complete value.
         if upto.starts_with("!set") {
             let after = upto["!set".len()..].trim_start();
