@@ -42,7 +42,7 @@ in any browser, or machine-readable **JSON**.
 A live viewer shows all four output formats side by side, built from the public
 [Renaissance benchmark](https://renaissance.dev/) `scala-doku` dump:
 
-**➡ [Open the sample report viewer](https://parttimenerd.github.io/hprof-analyzer/)**
+**➡ [Open the sample report viewer](https://parttimenerd.github.io/hprof-analyzer/reports/)**
 
 | Format | Default options | All optional features |
 |--------|-----------------|-----------------------|
@@ -50,6 +50,17 @@ A live viewer shows all four output formats side by side, built from the public
 | Markdown with ASCII graphs | [`scala-doku.graphs.md`](docs/samples/scala-doku.graphs.md) | [`scala-doku-full.graphs.md`](docs/samples/scala-doku-full.graphs.md) |
 | Self-contained HTML (opens live) | [`scala-doku.html`](https://parttimenerd.github.io/hprof-analyzer/samples/scala-doku.html) | [`scala-doku-full.html`](https://parttimenerd.github.io/hprof-analyzer/samples/scala-doku-full.html) |
 | Machine-readable JSON | [`scala-doku.json`](docs/samples/scala-doku.json) | [`scala-doku-full.json`](docs/samples/scala-doku-full.json) |
+
+## Try it in the browser
+
+No install, no JVM. Drop a `.hprof` file into the browser REPL and run OQL
+queries against it directly — no server required:
+
+**➡ [Open the browser REPL](https://parttimenerd.github.io/hprof-analyzer/)**
+
+To connect to a running `hprof-analyzer server`, paste the server URL into the
+connect screen. All REPL commands (`!top`, `!sort`, `!stats`, `!obj`, …) and
+the full OQL engine work the same way in the browser and in the CLI.
 
 ## Quick start
 
@@ -202,6 +213,7 @@ hprof-analyzer <INPUT> [OUTPUT] [OPTIONS]
 Named subcommands:
   compare      Compare reports (MAT export vs ours, or two of ours across time)
   completions  Generate a shell completion script
+  mat          Generate Eclipse MAT index cache files (low-RSS alternative to MAT's first parse)
   query        Run OQL queries against a heap dump (no full report needed)
   server       Serve OQL + report sections over HTTP
   dev          Developer / diagnostic commands
@@ -316,6 +328,22 @@ hprof-analyzer heap.hprof report.html \
 The full OQL language reference — grammar, attributes, aggregates, visualization
 directives, worked examples — is in [docs/OQL.md](docs/OQL.md).
 
+#### Visualization directives (`-- @viz`)
+
+Prefix any query with a `-- @viz` comment to request a chart in the report:
+
+```sh
+hprof-analyzer heap.hprof report.html --query="-- @viz histogram label=@displayName value=@retainedHeapSize cap=10
+SELECT @displayName, @retainedHeapSize FROM java.lang.Thread ORDER BY @retainedHeapSize DESC"
+```
+
+Kinds: `table` (default), `histogram`, `piechart`, `treemap`. HTML renders
+interactive charts; Markdown renders ASCII bars. The directive has no effect in
+the `query` subcommand — it applies only to embedded queries in reports.
+
+Use `--query=` (with `=`) to avoid `clap` misinterpreting the leading `--`
+in the directive as a flag.
+
 #### Compatibility with Eclipse MAT OQL
 
 `hprof-analyzer`'s OQL is modelled on Eclipse MAT's dialect and is largely
@@ -392,6 +420,28 @@ curl -s http://127.0.0.1:7070/ -d 'SELECT COUNT(*) FROM java.lang.String'
 See [docs/OQL.md — server subcommand](docs/OQL.md#server-subcommand) for the
 full endpoint reference, body format, `?limit=N`, NDJSON streaming, and error
 response shapes.
+
+## Use with AI agents
+
+`hprof-analyzer` works well as a tool for LLM agents. Start the server on your
+dump, then point an agent at it:
+
+```sh
+hprof-analyzer server heap.hprof   # starts on http://127.0.0.1:7070
+```
+
+A ready-made **Claude Code skill** is included at
+[`skills/hprof-analyzer.md`](skills/hprof-analyzer.md). Load it in Claude Code:
+
+```
+@skills/hprof-analyzer.md
+"Connect to http://127.0.0.1:7070 and identify the top memory consumers"
+```
+
+The skill teaches Claude the server API, OQL syntax, and common heap-triage
+workflows. The OQL guide at
+[parttimenerd.github.io/hprof-analyzer/oql/](https://parttimenerd.github.io/hprof-analyzer/oql/)
+covers grammar, examples, and the full attribute reference.
 
 ## Performance
 
