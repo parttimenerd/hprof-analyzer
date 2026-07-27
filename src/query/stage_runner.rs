@@ -1670,26 +1670,63 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
             rows.push((idx, ret));
         }
     }
-    if let Some(ob) = &q.order_by {
-        if ob.key == Attr::RetainedHeapSize {
-            rows.sort_by_key(|(_, r)| *r);
-            if ob.dir == SortDir::Desc {
-                rows.reverse();
+
+    let order_by_retained = q.order_by.as_ref()
+        .is_some_and(|ob| ob.key == Attr::RetainedHeapSize);
+
+    if order_by_retained {
+        // Fast path: sort (idx,ret) pairs before projection, then cap.
+        let dir = q.order_by.as_ref().unwrap().dir;
+        rows.sort_by_key(|(_, r)| *r);
+        if dir == SortDir::Desc {
+            rows.reverse();
+        }
+        let mut truncated = entry.carry.truncated();
+        if let Some(limit) = stage_limit(q) {
+            if rows.len() as u64 > limit {
+                rows.truncate(limit as usize);
+                truncated = true;
             }
         }
+        let columns: Vec<QueryColumn> = crate::query::execute::query_columns(q);
+        let out_rows: Vec<Vec<QueryValue>> = rows
+            .iter()
+            .map(|(idx, ret)| project_late_row(q, *idx, *ret, ctx, &like_regexes))
+            .collect();
+        return QueryResult {
+            name: entry.name.clone(),
+            oql: String::new(),
+            columns,
+            row_count: out_rows.len() as u64,
+            rows: out_rows,
+            truncated,
+            error: None,
+            note: None,
+            viz: None,
+            elapsed_ms: None,
+        };
     }
-    let mut truncated = entry.carry.truncated();
-    if let Some(limit) = stage_limit(q) {
-        if rows.len() as u64 > limit {
-            rows.truncate(limit as usize);
-            truncated = true;
-        }
-    }
+
+    // Generic path: project all rows, sort by any column alias or attr, then cap.
     let columns: Vec<QueryColumn> = crate::query::execute::query_columns(q);
-    let out_rows: Vec<Vec<QueryValue>> = rows
+    let mut out_rows: Vec<Vec<QueryValue>> = rows
         .iter()
         .map(|(idx, ret)| project_late_row(q, *idx, *ret, ctx, &like_regexes))
         .collect();
+    let mut truncated = entry.carry.truncated();
+    if let Some(ob) = &q.order_by {
+        if let Some(col_idx) =
+            crate::query::execute::order_by_column_index(q, &columns, &ob.key)
+        {
+            crate::query::execute::sort_rows_by_column(&mut out_rows, col_idx, ob.dir);
+        }
+    }
+    if let Some(limit) = stage_limit(q) {
+        if out_rows.len() as u64 > limit {
+            out_rows.truncate(limit as usize);
+            truncated = true;
+        }
+    }
     QueryResult {
         name: entry.name.clone(),
         oql: String::new(),

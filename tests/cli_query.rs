@@ -6118,3 +6118,33 @@ fn query_arithmetic_expr_with_retained_heap_size_is_non_null() {
         "@retainedHeapSize * 2 should be double the retained size; got {double} vs {retained}*2={}", retained * 2
     );
 }
+
+#[test]
+fn query_order_by_classof_in_retained_path_is_sorted() {
+    let Some(hprof) = philosophers() else { return };
+    // ORDER BY on non-@retainedHeapSize columns in the retained path was silently broken
+    // because join_retained only sorted (idx,ret) pairs by RetainedHeapSize before
+    // projecting — other ORDER BY columns were ignored.
+    let out = Command::new(BIN)
+        .arg("query").arg(&hprof)
+        .args(["--query",
+            "SELECT classof(x), @retainedHeapSize FROM INSTANCEOF java.lang.Object x \
+             WHERE @retainedHeapSize > 200000 ORDER BY classof(x) ASC LIMIT 5"])
+        .output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let class_names: Vec<&str> = stdout
+        .lines()
+        .filter(|l| l.contains('|') && !l.contains("classof") && !l.contains("---"))
+        .map(|l| l.split('|').next().unwrap_or("").trim())
+        .collect();
+    assert!(!class_names.is_empty(), "expected data rows, got:\n{stdout}");
+    // Verify ascending order across adjacent pairs.
+    for window in class_names.windows(2) {
+        assert!(
+            window[0] <= window[1],
+            "ORDER BY classof ASC not sorted: {:?} > {:?}\nfull output:\n{stdout}",
+            window[0], window[1]
+        );
+    }
+}
