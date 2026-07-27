@@ -3304,7 +3304,7 @@ fn handle_row(
             match other.parse::<usize>() {
                 Ok(n) if n >= 1 && n <= n_rows => { *current_row = n - 1; n }
                 Ok(n) => {
-                    writeln!(out, "{ce}row {n} out of range{cr}  {cd}result has {n_rows} rows{cr}")?;
+                    writeln!(out, "{ce}row {n} out of range{cr}  {cd}result has {} rows{cr}", fmt_int(n_rows as i64))?;
                     return Ok(());
                 }
                 Err(_) => {
@@ -3318,7 +3318,7 @@ fn handle_row(
     let key_w = res.columns.iter().map(|c| c.name.len()).max().unwrap_or(8);
     let idx_w = res.columns.len().to_string().len();
     let nav = if n_rows > 1 { format!("  {cd}(use !row next / !row prev to navigate){cr}") } else { String::new() };
-    writeln!(out, "{cd}── row {idx} of {n_rows} ──{cr}{nav}")?;
+    writeln!(out, "{cd}── row {idx} of {} ──{cr}{nav}", fmt_int(n_rows as i64))?;
     for (i, (col, val)) in res.columns.iter().zip(row.iter()).enumerate() {
         let val_str = fmt_value_for_col(val, &col.name);
         let (vp, vs) = if color {
@@ -3832,21 +3832,21 @@ fn print_result(
     let cd2 = if color { "\x1b[2m" } else { "" };
     let cr2 = if color { "\x1b[0m" } else { "" };
     if capped {
-        writeln!(out, "{cy}-- showing {row_limit} of {} rows (use `!set limit 0` or `!set limit N` to change) --{cr2}", res.rows.len())?;
+        writeln!(out, "{cy}-- showing {} of {} rows (use `!set limit 0` or `!set limit N` to change) --{cr2}", fmt_int(row_limit as i64), fmt_int(res.rows.len() as i64))?;
     }
     if let Some(note) = &res.note {
         writeln!(out, "{cy}-- {note} --{cr2}")?;
     }
     if res.truncated {
-        writeln!(out, "{cy}-- result capped at {} rows (add LIMIT N or increase with LIMIT 0 for all) --{cr2}", res.row_count)?;
+        writeln!(out, "{cy}-- result capped at {} rows (add LIMIT N or increase with LIMIT 0 for all) --{cr2}", fmt_int(res.row_count as i64))?;
     }
     if color {
         let elapsed_ms = elapsed.as_millis();
         let time_color = if elapsed_ms > 1000 { "\x1b[31m" } else if elapsed_ms > 300 { "\x1b[33m" } else { "\x1b[2m" };
         let ts = fmt_time_hms();
-        writeln!(out, "{time_color}{} row{}, {}\x1b[0m\x1b[2m  [{ts}]\x1b[0m", res.row_count, if res.row_count == 1 { "" } else { "s" }, fmt_elapsed(elapsed))?;
+        writeln!(out, "{time_color}{} row{}, {}\x1b[0m\x1b[2m  [{ts}]\x1b[0m", fmt_int(res.row_count as i64), if res.row_count == 1 { "" } else { "s" }, fmt_elapsed(elapsed))?;
     } else {
-        writeln!(out, "({} row{}, {})", res.row_count, if res.row_count == 1 { "" } else { "s" }, fmt_elapsed(elapsed))?;
+        writeln!(out, "({} row{}, {})", fmt_int(res.row_count as i64), if res.row_count == 1 { "" } else { "s" }, fmt_elapsed(elapsed))?;
     }
     if body.len() > 20 {
         let has_numeric = res.columns.iter().enumerate().any(|(i, _)| {
