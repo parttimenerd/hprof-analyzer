@@ -2770,6 +2770,12 @@ fn handle_sort(
             let mut sorted = res.rows.clone();
             sorted.sort_by(|a, b| {
                 for &(ci, desc) in &specs {
+                    // Nulls always sort last regardless of direction
+                    let a_null = matches!(a[ci], QueryValue::Null);
+                    let b_null = matches!(b[ci], QueryValue::Null);
+                    if a_null && b_null { continue; }
+                    if a_null { return std::cmp::Ordering::Greater; }
+                    if b_null { return std::cmp::Ordering::Less; }
                     let av = fmt_value(&a[ci]);
                     let bv = fmt_value(&b[ci]);
                     let cmp = match (av.replace(',', "").parse::<f64>(), bv.replace(',', "").parse::<f64>()) {
@@ -4731,6 +4737,52 @@ mod tests {
             wrap_count("com.example.Foo"),
             "SELECT COUNT(*) FROM INSTANCEOF com.example.Foo"
         );
+    }
+
+    // ---------- !sort null-last ordering ----------
+
+    fn make_sort_result(vals: Vec<Option<i64>>) -> QueryResult {
+        QueryResult {
+            name: "t".into(),
+            oql: "SELECT v FROM T".into(),
+            columns: vec![crate::query::model::QueryColumn { name: "v".into() }],
+            rows: vals.into_iter().map(|v| vec![match v {
+                Some(n) => QueryValue::Int(n),
+                None => QueryValue::Null,
+            }]).collect(),
+            row_count: 0,
+            truncated: false,
+            error: None,
+            note: None,
+            viz: None,
+            elapsed_ms: None,
+        }
+    }
+
+    #[test]
+    fn sort_nulls_last_ascending() {
+        let mut result = Some(make_sort_result(vec![None, Some(3), None, Some(1), Some(2)]));
+        let mut buf = Vec::new();
+        handle_sort("v", &mut result, 0, &mut buf).unwrap();
+        let rows = &result.unwrap().rows;
+        let vals: Vec<Option<i64>> = rows.iter().map(|r| match &r[0] {
+            QueryValue::Int(n) => Some(*n),
+            _ => None,
+        }).collect();
+        assert_eq!(vals, vec![Some(1), Some(2), Some(3), None, None], "nulls must sort last asc: {vals:?}");
+    }
+
+    #[test]
+    fn sort_nulls_last_descending() {
+        let mut result = Some(make_sort_result(vec![None, Some(3), None, Some(1), Some(2)]));
+        let mut buf = Vec::new();
+        handle_sort("-v", &mut result, 0, &mut buf).unwrap();
+        let rows = &result.unwrap().rows;
+        let vals: Vec<Option<i64>> = rows.iter().map(|r| match &r[0] {
+            QueryValue::Int(n) => Some(*n),
+            _ => None,
+        }).collect();
+        assert_eq!(vals, vec![Some(3), Some(2), Some(1), None, None], "nulls must sort last desc: {vals:?}");
     }
 
     // --- reedline completer + editor construction ---
