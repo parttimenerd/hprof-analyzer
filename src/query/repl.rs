@@ -1721,11 +1721,13 @@ fn run_repl_line(
                             }
                             *last_query = Some(wrapped);
                             *last_result = Some(res);
+                            *prev_result = None;
                         }
                         Ok(res) => {
                             print_result(&res, std::time::Duration::ZERO, *max_width, out)?;
                             *last_query = Some(wrapped);
                             *last_result = Some(res);
+                            *prev_result = None;
                         }
                         Err(e) => {
                             writeln!(out, "{ce}error: {e}{cr}")?;
@@ -1743,6 +1745,7 @@ fn run_repl_line(
                             path, &q, path_depth, *reachable_only, *max_width, cache, out,
                         )? {
                             *last_result = Some(res);
+                            *prev_result = None;
                         }
                     }
                 }
@@ -1977,8 +1980,10 @@ fn run_repl_line(
                 if rest.is_empty() {
                     print_named_queries_help(out)?;
                 } else {
+                    let oql_before = last_query.clone();
                     dispatch_run(rest, path, path_depth, *reachable_only, *max_width,
                         last_query, last_result, cache, out)?;
+                    if *last_query != oql_before { *prev_result = None; }
                 }
                 out.flush()?;
                 return Ok(false);
@@ -2121,6 +2126,7 @@ fn run_repl_line(
             {
                 *last_query = Some(query);
                 *last_result = Some(res);
+                *prev_result = None;
             }
             out.flush()?;
         }
@@ -2137,6 +2143,7 @@ fn run_repl_line(
             )? {
                 *last_query = Some(query_str);
                 *last_result = Some(res);
+                *prev_result = None;
             }
         }
         out.flush()?;
@@ -2148,6 +2155,7 @@ fn run_repl_line(
         {
             *last_query = Some(t.to_string());
             *last_result = Some(res);
+            *prev_result = None;
         }
         out.flush()?;
     } else {
