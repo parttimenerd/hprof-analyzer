@@ -863,8 +863,8 @@ document.getElementById('btn-disconnect').addEventListener('click', () => {
 document.getElementById('btn-show-report').addEventListener('click', async () => {
   if (wasmSession) {
     try {
-      const reportHtml = wasmSession.generate_report_html();
-      openReportTab(reportHtml);
+      const reportJson = wasmSession.generate_report();
+      showReport(JSON.parse(reportJson), wasmSession._fileName || 'heap.hprof');
     } catch (e) {
       document.getElementById('analyze-status').textContent = `Report failed: ${e}`;
     }
