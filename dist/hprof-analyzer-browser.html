@@ -2191,7 +2191,7 @@ function startTerminal() {
             term.writeln(`\x1b[31mcolumn ${JSON.stringify(oldArg)} not found\x1b[0m  \x1b[2mavailable: ${lastResult.columns.join(', ')}\x1b[0m`);
           } else {
             const oldName = lastResult.columns[i];
-            prevResult = { columns: [...lastResult.columns], rows: lastResult.rows };
+            prevResult = { ...lastResult, columns: [...lastResult.columns] };
             lastResult.columns[i] = newName;
             term.writeln(`\x1b[32m✓\x1b[0m \x1b[2m${JSON.stringify(oldName)}\x1b[0m → \x1b[32m${JSON.stringify(newName)}\x1b[0m`);
           }
