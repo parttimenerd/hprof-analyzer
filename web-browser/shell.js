@@ -833,7 +833,7 @@ function startTerminal() {
     const maxEcho = term.cols - PROMPT.length - 1;
     const flat = oql.replace(/\n/g, ' ↵ ').replace(/\s+/g, ' ');
     const echo = flat.length > maxEcho ? flat.slice(0, maxEcho - 1) + '…' : flat;
-    term.write('\r\x1b[K' + PROMPT + echo);
+    term.write('\r\x1b[K' + PROMPT + highlightOql(echo) + '\x1b[0m');
     line = '';
     cursorPos = 0;
     histIdx = -1;
