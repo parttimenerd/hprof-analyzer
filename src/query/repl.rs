@@ -1222,25 +1222,28 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                         }
                         "filter" | "grep" => {
                             let before_len = last_result.as_ref().map(|r| r.rows.len());
+                            let saved_prev = prev_result.clone();
                             if !rest.is_empty() { prev_result = last_result.clone(); }
                             handle_filter(rest, &mut last_result, max_width, &mut stdout)?;
-                            if last_result.as_ref().map(|r| r.rows.len()) == before_len { prev_result = None; }
+                            if last_result.as_ref().map(|r| r.rows.len()) == before_len { prev_result = saved_prev; }
                             stdout.flush()?;
                             continue;
                         }
                         "not" | "exclude" => {
                             let before_len = last_result.as_ref().map(|r| r.rows.len());
+                            let saved_prev = prev_result.clone();
                             if !rest.is_empty() { prev_result = last_result.clone(); }
                             handle_filter_not(rest, &mut last_result, max_width, &mut stdout)?;
-                            if last_result.as_ref().map(|r| r.rows.len()) == before_len { prev_result = None; }
+                            if last_result.as_ref().map(|r| r.rows.len()) == before_len { prev_result = saved_prev; }
                             stdout.flush()?;
                             continue;
                         }
                         "distinct" | "dedup" => {
                             let before_len = last_result.as_ref().map(|r| r.rows.len());
+                            let saved_prev = prev_result.clone();
                             if before_len.is_some() { prev_result = last_result.clone(); }
                             handle_distinct(&mut last_result, max_width, &mut stdout)?;
-                            if last_result.as_ref().map(|r| r.rows.len()) == before_len { prev_result = None; }
+                            if last_result.as_ref().map(|r| r.rows.len()) == before_len { prev_result = saved_prev; }
                             stdout.flush()?;
                             continue;
                         }
@@ -1253,9 +1256,10 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                         }
                         "sort" => {
                             let before_note = last_result.as_ref().and_then(|r| r.note.clone());
+                            let saved_prev = prev_result.clone();
                             if !rest.is_empty() { prev_result = last_result.clone(); }
                             handle_sort(rest, &mut last_result, max_width, &mut stdout)?;
-                            if last_result.as_ref().and_then(|r| r.note.clone()) == before_note { prev_result = None; }
+                            if last_result.as_ref().and_then(|r| r.note.clone()) == before_note { prev_result = saved_prev; }
                             stdout.flush()?;
                             continue;
                         }
@@ -1271,9 +1275,10 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                         }
                         "pivot" => {
                             let before_sig = last_result.as_ref().map(|r| (r.rows.len(), r.columns.len()));
+                            let saved_prev = prev_result.clone();
                             if !rest.is_empty() { prev_result = last_result.clone(); }
                             handle_pivot(rest, &mut last_result, max_width, &mut stdout)?;
-                            if last_result.as_ref().map(|r| (r.rows.len(), r.columns.len())) == before_sig { prev_result = None; }
+                            if last_result.as_ref().map(|r| (r.rows.len(), r.columns.len())) == before_sig { prev_result = saved_prev; }
                             stdout.flush()?;
                             continue;
                         }
@@ -1281,6 +1286,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             let n = if rest.trim().is_empty() { 10 } else { rest.trim().parse::<usize>().unwrap_or(0) };
                             if n > 0 {
                                 let before_len = last_result.as_ref().map(|r| r.rows.len());
+                                let saved_prev = prev_result.clone();
                                 prev_result = last_result.clone();
                                 match last_result.as_mut() {
                                     None => warn_out("(no result — run a query first)", &mut stdout)?,
@@ -1295,7 +1301,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                         print_result(res, std::time::Duration::ZERO, max_width, &mut stdout)?;
                                     }
                                 }
-                                if last_result.as_ref().map(|r| r.rows.len()) == before_len { prev_result = None; }
+                                if last_result.as_ref().map(|r| r.rows.len()) == before_len { prev_result = saved_prev; }
                             } else {
                                 writeln!(stdout, "{cd}usage: !top [N]  (default 10){cr}")?;
                             }
@@ -1306,6 +1312,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             let n = if rest.trim().is_empty() { 10 } else { rest.trim().parse::<usize>().unwrap_or(0) };
                             if n > 0 {
                                 let before_len = last_result.as_ref().map(|r| r.rows.len());
+                                let saved_prev = prev_result.clone();
                                 prev_result = last_result.clone();
                                 match last_result.as_mut() {
                                     None => warn_out("(no result — run a query first)", &mut stdout)?,
@@ -1320,7 +1327,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                         print_result(res, std::time::Duration::ZERO, max_width, &mut stdout)?;
                                     }
                                 }
-                                if last_result.as_ref().map(|r| r.rows.len()) == before_len { prev_result = None; }
+                                if last_result.as_ref().map(|r| r.rows.len()) == before_len { prev_result = saved_prev; }
                             } else {
                                 writeln!(stdout, "{cd}usage: !tail [N]  (default 10){cr}")?;
                             }
@@ -1808,25 +1815,28 @@ fn run_repl_line(
             }
             "filter" | "grep" => {
                 let before_len = last_result.as_ref().map(|r| r.rows.len());
+                let saved_prev = prev_result.clone();
                 if !rest.is_empty() { *prev_result = last_result.clone(); }
                 handle_filter(rest, last_result, *max_width, out)?;
-                if last_result.as_ref().map(|r| r.rows.len()) == before_len { *prev_result = None; }
+                if last_result.as_ref().map(|r| r.rows.len()) == before_len { *prev_result = saved_prev; }
                 out.flush()?;
                 return Ok(false);
             }
             "not" | "exclude" => {
                 let before_len = last_result.as_ref().map(|r| r.rows.len());
+                let saved_prev = prev_result.clone();
                 if !rest.is_empty() { *prev_result = last_result.clone(); }
                 handle_filter_not(rest, last_result, *max_width, out)?;
-                if last_result.as_ref().map(|r| r.rows.len()) == before_len { *prev_result = None; }
+                if last_result.as_ref().map(|r| r.rows.len()) == before_len { *prev_result = saved_prev; }
                 out.flush()?;
                 return Ok(false);
             }
             "distinct" | "dedup" => {
                 let before_len = last_result.as_ref().map(|r| r.rows.len());
+                let saved_prev = prev_result.clone();
                 if before_len.is_some() { *prev_result = last_result.clone(); }
                 handle_distinct(last_result, *max_width, out)?;
-                if last_result.as_ref().map(|r| r.rows.len()) == before_len { *prev_result = None; }
+                if last_result.as_ref().map(|r| r.rows.len()) == before_len { *prev_result = saved_prev; }
                 out.flush()?;
                 return Ok(false);
             }
@@ -1839,9 +1849,10 @@ fn run_repl_line(
             }
             "sort" => {
                 let before_note = last_result.as_ref().and_then(|r| r.note.clone());
+                let saved_prev = prev_result.clone();
                 if !rest.is_empty() { *prev_result = last_result.clone(); }
                 handle_sort(rest, last_result, *max_width, out)?;
-                if last_result.as_ref().and_then(|r| r.note.clone()) == before_note { *prev_result = None; }
+                if last_result.as_ref().and_then(|r| r.note.clone()) == before_note { *prev_result = saved_prev; }
                 out.flush()?;
                 return Ok(false);
             }
@@ -1857,9 +1868,10 @@ fn run_repl_line(
             }
             "pivot" => {
                 let before_sig = last_result.as_ref().map(|r| (r.rows.len(), r.columns.len()));
+                let saved_prev = prev_result.clone();
                 if !rest.is_empty() { *prev_result = last_result.clone(); }
                 handle_pivot(rest, last_result, *max_width, out)?;
-                if last_result.as_ref().map(|r| (r.rows.len(), r.columns.len())) == before_sig { *prev_result = None; }
+                if last_result.as_ref().map(|r| (r.rows.len(), r.columns.len())) == before_sig { *prev_result = saved_prev; }
                 out.flush()?;
                 return Ok(false);
             }
@@ -1867,6 +1879,7 @@ fn run_repl_line(
                 let n = if rest.trim().is_empty() { 10 } else { rest.trim().parse::<usize>().unwrap_or(0) };
                 if n > 0 {
                     let before_len = last_result.as_ref().map(|r| r.rows.len());
+                    let saved_prev = prev_result.clone();
                     *prev_result = last_result.clone();
                     match last_result.as_mut() {
                         None => warn_out("(no result — run a query first)", out)?,
@@ -1881,7 +1894,7 @@ fn run_repl_line(
                             print_result(res, std::time::Duration::ZERO, *max_width, out)?;
                         }
                     }
-                    if last_result.as_ref().map(|r| r.rows.len()) == before_len { *prev_result = None; }
+                    if last_result.as_ref().map(|r| r.rows.len()) == before_len { *prev_result = saved_prev; }
                 } else {
                     writeln!(out, "{cd}usage: !top [N]  (default 10){cr}")?;
                 }
@@ -1892,6 +1905,7 @@ fn run_repl_line(
                 let n = if rest.trim().is_empty() { 10 } else { rest.trim().parse::<usize>().unwrap_or(0) };
                 if n > 0 {
                     let before_len = last_result.as_ref().map(|r| r.rows.len());
+                    let saved_prev = prev_result.clone();
                     *prev_result = last_result.clone();
                     match last_result.as_mut() {
                         None => warn_out("(no result — run a query first)", out)?,
@@ -1906,7 +1920,7 @@ fn run_repl_line(
                             print_result(res, std::time::Duration::ZERO, *max_width, out)?;
                         }
                     }
-                    if last_result.as_ref().map(|r| r.rows.len()) == before_len { *prev_result = None; }
+                    if last_result.as_ref().map(|r| r.rows.len()) == before_len { *prev_result = saved_prev; }
                 } else {
                     writeln!(out, "{cd}usage: !tail [N]  (default 10){cr}")?;
                 }
