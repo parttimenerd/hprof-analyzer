@@ -17,6 +17,8 @@ pub struct Query {
     pub where_: Option<Predicate>,
     pub order_by: Option<OrderBy>,
     pub limit: Option<u64>,
+    /// `OFFSET n` rows to skip after ordering and before applying LIMIT.
+    pub offset: Option<u64>,
     /// `UNION`-separated tail branches, concatenated (UNION ALL semantics).
     /// Each branch is itself a `Query` with an empty `union_branches`.
     pub union_branches: Vec<Query>,

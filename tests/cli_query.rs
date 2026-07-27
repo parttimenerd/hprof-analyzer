@@ -5649,3 +5649,48 @@ fn is_null_and_is_not_null_filter() {
     assert!(stdout2.contains("0"), "IS NULL should return 0 for all-non-null strings: {stdout2}");
 }
 
+#[test]
+fn limit_offset_paginates_correctly() {
+    let Some(hprof) = philosophers() else { return };
+    // Get first 3 rows and next 3 rows; they must be disjoint.
+    let page1 = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query",
+            "SELECT classof(x) AS class FROM INSTANCEOF java.lang.Object x \
+             ORDER BY class ASC LIMIT 3"])
+        .output()
+        .unwrap();
+    assert!(page1.status.success(), "{}", String::from_utf8_lossy(&page1.stderr));
+
+    let page2 = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query",
+            "SELECT classof(x) AS class FROM INSTANCEOF java.lang.Object x \
+             ORDER BY class ASC LIMIT 3 OFFSET 3"])
+        .output()
+        .unwrap();
+    assert!(page2.status.success(), "{}", String::from_utf8_lossy(&page2.stderr));
+
+    let s1 = String::from_utf8_lossy(&page1.stdout);
+    let s2 = String::from_utf8_lossy(&page2.stdout);
+
+    // Extract data rows (lines that are not header/separator/status lines)
+    let data_rows = |s: &str| -> Vec<String> {
+        s.lines()
+            .filter(|l| !l.starts_with("==") && !l.starts_with("  ") && !l.starts_with('(') && !l.is_empty() && !l.contains("class"))
+            .map(|l| l.trim().to_string())
+            .collect()
+    };
+    let rows1 = data_rows(&s1);
+    let rows2 = data_rows(&s2);
+
+    assert_eq!(rows1.len(), 3, "page1 should have 3 rows, got: {s1}");
+    assert_eq!(rows2.len(), 3, "page2 should have 3 rows, got: {s2}");
+    // Pages must not overlap
+    for r in &rows1 {
+        assert!(!rows2.contains(r), "row {r:?} appeared in both pages");
+    }
+}
+

@@ -944,10 +944,18 @@ where
                     )
                     .or_not(),
             )
+            .then(
+                ident_ci("OFFSET")
+                    .ignore_then(
+                        select! { Token::Int(n) if n >= 0 => n as u64 }.labelled("OFFSET count"),
+                    )
+                    .or_not(),
+            )
             .map(
                 |(
-                    (((((((((distinct, leading_retained), (select, select_aliases)), trailing_retained), from), alias), where_), group_by), having), order_by),
-                    limit,
+                    ((((((((((distinct, leading_retained), (select, select_aliases)), trailing_retained), from), alias), where_), group_by), having), order_by),
+                    limit),
+                    offset,
                 )| {
                     let mut q = Query {
                         distinct,
@@ -959,6 +967,7 @@ where
                         where_,
                         order_by,
                         limit,
+                        offset,
                         union_branches: Vec::new(),
                         union_limit: None,
                         group_by,
@@ -1297,6 +1306,7 @@ pub const KEYWORDS: &[&str] = &["SELECT", "DISTINCT", "FROM"];
 pub const RESERVED: &[&str] = &[
     "WHERE",
     "LIMIT",
+    "OFFSET",
     "UNION",
     "AND",
     "OR",
@@ -1829,6 +1839,7 @@ mod tests {
             where_,
             order_by: None,
             limit,
+            offset: None,
             union_branches: Vec::new(),
             union_limit: None,
             group_by: Vec::new(),
@@ -3113,6 +3124,28 @@ mod tests {
         let q = parse("SELECT @objectId FROM C ORDER BY @retainedHeapSize DESC LIMIT 10").unwrap();
         assert!(q.order_by.is_some());
         assert_eq!(q.limit, Some(10));
+        assert_eq!(q.offset, None);
+    }
+
+    #[test]
+    fn limit_with_offset() {
+        let q = parse("SELECT @objectId FROM C LIMIT 5 OFFSET 10").unwrap();
+        assert_eq!(q.limit, Some(5));
+        assert_eq!(q.offset, Some(10));
+    }
+
+    #[test]
+    fn offset_zero_is_accepted() {
+        let q = parse("SELECT @objectId FROM C LIMIT 5 OFFSET 0").unwrap();
+        assert_eq!(q.limit, Some(5));
+        assert_eq!(q.offset, Some(0));
+    }
+
+    #[test]
+    fn limit_without_offset_has_none_offset() {
+        let q = parse("SELECT @objectId FROM C LIMIT 5").unwrap();
+        assert_eq!(q.limit, Some(5));
+        assert_eq!(q.offset, None);
     }
     #[test]
     fn no_order_by_is_none() {

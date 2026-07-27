@@ -1442,6 +1442,8 @@ pub struct UnionGroup {
     pub union_limit: Option<u64>,
     pub distinct: bool,
     pub limit: Option<u64>,
+    /// Rows to skip after sorting/dedup, before applying LIMIT.
+    pub offset: Option<u64>,
     /// Number of INTERSECT branch slots immediately following the UNION slots.
     pub intersect_count: usize,
     /// Number of EXCEPT branch slots immediately following the INTERSECT slots.
@@ -1509,6 +1511,7 @@ pub fn expand_union_queries(
             // The per-query LIMIT was cleared from the scan plan for DISTINCT queries;
             // capture it here from the AST so collapse can apply it post-dedup.
             limit: q.limit,
+            offset: q.offset,
             intersect_count,
             except_count,
             // Capture the head query's ORDER BY so collapse can globally re-sort
@@ -1626,6 +1629,16 @@ pub fn collapse_union_results(
         // Recompute row_count after any set operations.
         if g.intersect_count > 0 || g.except_count > 0 {
             result.row_count = result.rows.len() as u64;
+        }
+
+        // OFFSET: skip the first n rows (applied after all sorting/dedup/set ops).
+        if let Some(n) = g.offset {
+            let n = n as usize;
+            if n > 0 && !result.rows.is_empty() {
+                let drop = n.min(result.rows.len());
+                result.rows.drain(..drop);
+                result.row_count = result.rows.len() as u64;
+            }
         }
 
         out.push(result);
@@ -2314,6 +2327,7 @@ mod tests {
                     union_limit: None,
                     distinct: false,
                     limit: None,
+                offset: None,
                 intersect_count: 0,
                 except_count: 0,
                 order_by: None,
@@ -2324,6 +2338,7 @@ mod tests {
                     union_limit: None,
                     distinct: false,
                     limit: None,
+                offset: None,
                 intersect_count: 0,
                 except_count: 0,
                 order_by: None,
@@ -2350,6 +2365,7 @@ mod tests {
                 union_limit: None,
                 distinct: false,
                 limit: None,
+            offset: None,
             intersect_count: 0,
             except_count: 0,
             order_by: None,
@@ -2360,6 +2376,7 @@ mod tests {
                 union_limit: None,
                 distinct: false,
                 limit: None,
+            offset: None,
             intersect_count: 0,
             except_count: 0,
             order_by: None,
@@ -2385,6 +2402,7 @@ mod tests {
             union_limit: Some(3),
             distinct: false,
             limit: None,
+        offset: None,
         intersect_count: 0,
         except_count: 0,
         order_by: None,
@@ -2409,6 +2427,7 @@ mod tests {
             union_limit: Some(99),
             distinct: false,
             limit: None,
+        offset: None,
         intersect_count: 0,
         except_count: 0,
         order_by: None,
@@ -2428,6 +2447,7 @@ mod tests {
             union_limit: Some(0),
             distinct: false,
             limit: None,
+        offset: None,
         intersect_count: 0,
         except_count: 0,
         order_by: None,
@@ -2448,6 +2468,7 @@ mod tests {
             union_limit: None,
             distinct: false,
             limit: None,
+        offset: None,
         intersect_count: 0,
         except_count: 0,
         order_by: None,
@@ -2468,6 +2489,7 @@ mod tests {
             union_limit: Some(3),
             distinct: false,
             limit: None,
+        offset: None,
         intersect_count: 0,
         except_count: 0,
         order_by: None,
@@ -2519,6 +2541,7 @@ mod tests {
                 union_limit: None,
                 distinct: false,
                 limit: None,
+            offset: None,
             intersect_count: 0,
             except_count: 0,
             order_by: None,
@@ -2529,6 +2552,7 @@ mod tests {
                 union_limit: None,
                 distinct: false,
                 limit: None,
+            offset: None,
             intersect_count: 0,
             except_count: 0,
             order_by: None,
@@ -2551,6 +2575,7 @@ mod tests {
                 union_limit: None,
                 distinct: true,
                 limit: None,
+                offset: None,
                 intersect_count: 0,
                 except_count: 0,
             order_by: None,
@@ -2612,6 +2637,7 @@ mod tests {
             union_limit: None,
             distinct: true,
             limit: None,
+        offset: None,
         intersect_count: 0,
         except_count: 0,
         order_by: None,
@@ -2653,6 +2679,7 @@ mod tests {
             union_limit: None,
             distinct: true,
             limit: None,
+        offset: None,
         intersect_count: 0,
         except_count: 0,
         order_by: None,

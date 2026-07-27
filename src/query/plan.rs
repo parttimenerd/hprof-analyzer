@@ -319,6 +319,18 @@ pub fn plan_query(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> 
     Ok(head)
 }
 
+/// Scan-time row cap for a query with an optional OFFSET.
+/// When OFFSET is present the scan must collect `limit + offset` rows so
+/// the post-scan drain can skip the first `offset` rows and still deliver
+/// `limit` results. Uses saturating_add to avoid overflow.
+fn scan_limit(q: &Query) -> Option<u64> {
+    match (q.limit, q.offset) {
+        (Some(lim), Some(off)) => Some(lim.saturating_add(off)),
+        (Some(lim), None) => Some(lim),
+        (None, _) => None,
+    }
+}
+
 /// True if any projected item is an aggregate (recursively, so `COUNT(SUM(x))`
 /// counts). Used to reject aggregates inside UNION arms.
 fn select_has_aggregate(select: &[SelectItem]) -> bool {
@@ -1000,7 +1012,7 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             late_ops: vec![StageOp::RetainedSet {
                 cap: DEFAULT_RETAINED_CAP,
             }],
-            limit: q.limit,
+            limit: scan_limit(q),
             scan_limit: None,
             order_sensitive: q.order_by.is_some(),
             select_arity,
@@ -1046,7 +1058,7 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             finalize_at: Phase::P3,
             carry: CarryLayout::IndexOnly,
             late_ops: vec![op],
-            limit: q.limit,
+            limit: scan_limit(q),
             scan_limit: None,
             order_sensitive: q.order_by.is_some(),
             select_arity,
@@ -1076,7 +1088,7 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             finalize_at: Phase::P2,
             carry: CarryLayout::IndexOnly,
             late_ops: vec![StageOp::BoundedPath { depth_cap }],
-            limit: q.limit,
+            limit: scan_limit(q),
             scan_limit: None,
             order_sensitive: q.order_by.is_some(),
             select_arity,
@@ -1121,7 +1133,7 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
             finalize_at: Phase::P2,
             carry: CarryLayout::IndexOnly,
             late_ops: vec![StageOp::EdgeLookup { dir }],
-            limit: q.limit,
+            limit: scan_limit(q),
             scan_limit: None,
             order_sensitive: q.order_by.is_some(),
             select_arity,
@@ -1287,7 +1299,7 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
         late_ops,
         // For DISTINCT queries, defer the LIMIT to the dedup choke point so all
         // matching rows flow through for dedup before the cap is applied.
-        limit: if q.distinct { None } else { q.limit },
+        limit: if q.distinct { None } else { scan_limit(q) },
         scan_limit: None,
         order_sensitive: q.order_by.is_some(),
         select_arity,

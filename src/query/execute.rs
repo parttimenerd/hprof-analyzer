@@ -3861,6 +3861,7 @@ mod tests {
             where_: None,
             order_by: None,
             limit: None,
+            offset: None,
             union_branches: Vec::new(),
             union_limit: None,
             group_by: Vec::new(),
