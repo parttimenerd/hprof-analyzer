@@ -2684,7 +2684,7 @@ function startTerminal() {
             [pool[i], pool[j]] = [pool[j], pool[i]];
           }
           const sampled = pool.slice(0, k).sort((a, b) => a - b).map(i => rows[i]);
-          const sampledResult = { columns: lastResult.columns, rows: sampled, row_count: sampled.length, note: `random sample of ${k}/${rows.length}` };
+          const sampledResult = { columns: lastResult.columns, rows: sampled, row_count: sampled.length, note: `random sample of ${k.toLocaleString('en-US')}/${rows.length.toLocaleString('en-US')}` };
           renderResult(sampledResult);
           prevResult = lastResult;
           lastResult = sampledResult;
@@ -2705,7 +2705,7 @@ function startTerminal() {
           return true;
         });
         const removed = lastResult.rows.length - kept.length;
-        const note = `${kept.length} unique row${kept.length !== 1 ? 's' : ''} (${removed} duplicate${removed !== 1 ? 's' : ''} removed)`;
+        const note = `${kept.length.toLocaleString('en-US')} unique row${kept.length !== 1 ? 's' : ''} (${removed.toLocaleString('en-US')} duplicate${removed !== 1 ? 's' : ''} removed)`;
         const newResult = { columns: lastResult.columns, rows: kept, row_count: kept.length, note };
         renderResult(newResult);
         prevResult = lastResult;
