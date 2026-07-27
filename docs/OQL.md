@@ -123,6 +123,22 @@ HAVING COUNT(*) > 100
 ORDER BY n DESC
 ```
 
+`toString(s)` can appear as a GROUP BY key to find duplicate String values:
+
+```sql
+-- Top duplicate String values (the `duplicate-strings` named query)
+SELECT toString(s) AS value, COUNT(*) AS count
+FROM java.lang.String s
+GROUP BY toString(s)
+HAVING COUNT(*) > 1
+ORDER BY count DESC
+LIMIT 30
+```
+
+Only `COUNT(*)` and `COUNT(toString(s))` are supported as aggregates in a
+`toString`-query — `SUM`, `AVG`, `MIN`, `MAX` over an attribute that is only
+available at decode time are rejected with an actionable error.
+
 ---
 
 ## CASE WHEN
