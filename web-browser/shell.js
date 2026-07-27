@@ -1693,11 +1693,22 @@ function startTerminal() {
       }
       if (!ok || specs.length === 0) { term.write(PROMPT); return; }
       const sorted = [...lastResult.rows].sort((a, b) => {
-        for (const { ci, desc } of specs) {
+        for (const { ci, desc, name } of specs) {
           const av = a[ci], bv = b[ci];
-          const an = av?.v ?? av, bn = bv?.v ?? bv;
-          if (an === null || an === undefined) return 1;
-          if (bn === null || bn === undefined) return -1;
+          // Null/undefined sorts last
+          const aNull = av === null || av === undefined || (typeof av === 'object' && av?.kind === 'null');
+          const bNull = bv === null || bv === undefined || (typeof bv === 'object' && bv?.kind === 'null');
+          if (aNull && bNull) continue;
+          if (aNull) return 1;
+          if (bNull) return -1;
+          // Extract numeric value for int/float, formatted string otherwise
+          const toSortKey = cell => {
+            if (typeof cell !== 'object') return cell;
+            const k = cell.kind;
+            if (k === 'int' || k === 'float') return cell.v;
+            return fmtCell(cell, name);
+          };
+          const an = toSortKey(av), bn = toSortKey(bv);
           const cmp = typeof an === 'number' && typeof bn === 'number'
             ? an - bn : String(an).localeCompare(String(bn));
           const ord = desc ? -cmp : cmp;
