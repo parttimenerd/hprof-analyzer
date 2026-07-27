@@ -25,6 +25,7 @@ if (settings.rowLimit === 0) settings.rowLimit = Infinity;
 
 let serverUrl = null;
 let serverVersion = null;  // { name, version } from /version endpoint
+let wasmSession = null;    // HprofSession when running in WASM (no-server) mode
 let term = null;
 let classNames = [];  // populated after session loads (server may expose /class-names later)
 let fieldNames = [];  // populated after session loads from /help endpoint
@@ -47,9 +48,6 @@ function showScreen(id) {
 
   function onFileSelected(file) {
     if (!file) return;
-    if (!file.name.endsWith('.hprof')) {
-      // Accept anyway — the server validates; just warn visually
-    }
     selectedFile = file;
     dropZone.classList.add('file-selected');
     document.getElementById('drop-zone-text').innerHTML =
@@ -74,28 +72,137 @@ function showScreen(id) {
   });
 
   document.getElementById('btn-oql-shell').addEventListener('click', () => {
-    showScreen('connect-screen');
-    if (wasmReady) populateOfflineList();
+    if (wasmReady && selectedFile) {
+      loadWasmSession(selectedFile);
+    } else {
+      showScreen('connect-screen');
+      if (wasmReady) populateOfflineList();
+    }
   });
 
   document.getElementById('btn-analyze-report').addEventListener('click', () => {
-    const msg = document.getElementById('report-message');
-    msg.textContent =
-      'Browser WASM analysis is not yet supported. ' +
-      'Start the local server and use the OQL Shell mode: ' +
-      'hprof-analyzer query heap.hprof --server';
-    showScreen('report-screen');
+    if (wasmReady && selectedFile) {
+      loadWasmSessionWithReport(selectedFile);
+    } else {
+      const msg = document.getElementById('report-message');
+      msg.textContent =
+        'WASM not available. Start the local server and use the OQL Shell mode: ' +
+        'hprof-analyzer query heap.hprof --server';
+      showScreen('report-screen');
+    }
   });
 })();
 
+// ── WASM session loading ───────────────────────────────────────────────────────
+async function loadWasmSession(file) {
+  const statusEl = document.getElementById('wasm-load-status');
+  if (statusEl) { statusEl.textContent = `Loading ${file.name}…`; statusEl.style.display = ''; }
+
+  let bytes;
+  try {
+    const buf = await file.arrayBuffer();
+    bytes = new Uint8Array(buf);
+  } catch (e) {
+    if (statusEl) statusEl.textContent = `Error reading file: ${e.message}`;
+    return;
+  }
+
+  try {
+    if (wasmSession) { wasmSession.free(); wasmSession = null; }
+    wasmSession = HprofSession.load(bytes, file.name);
+  } catch (e) {
+    if (statusEl) { statusEl.textContent = `Failed to parse ${file.name}: ${e}`; }
+    return;
+  }
+
+  classNames = JSON.parse(wasmSession.class_names());
+  hasRetained = false;
+  if (statusEl) statusEl.style.display = 'none';
+  showWasmShell(file.name);
+}
+
+async function loadWasmSessionWithReport(file) {
+  const msg = document.getElementById('report-message');
+  msg.textContent = `Loading ${file.name}…`;
+  showScreen('report-screen');
+
+  let bytes;
+  try {
+    const buf = await file.arrayBuffer();
+    bytes = new Uint8Array(buf);
+  } catch (e) {
+    msg.textContent = `Error reading file: ${e.message}`;
+    return;
+  }
+
+  try {
+    if (wasmSession) { wasmSession.free(); wasmSession = null; }
+    wasmSession = HprofSession.load(bytes, file.name);
+  } catch (e) {
+    msg.textContent = `Failed to parse ${file.name}: ${e}`;
+    return;
+  }
+
+  msg.textContent = 'Running analysis (this may take a while for large dumps)…';
+  try {
+    const reportJson = wasmSession.generate_report();
+    hasRetained = true;
+    classNames = JSON.parse(wasmSession.class_names());
+    renderWasmReport(JSON.parse(reportJson), file.name);
+  } catch (e) {
+    msg.textContent = `Analysis failed: ${e}`;
+  }
+}
+
+function renderWasmReport(report, fileName) {
+  const container = document.getElementById('report-container');
+  const msg = document.getElementById('report-message');
+  msg.textContent = '';
+  // Render a simple summary from the report JSON
+  const overview = report.overview || {};
+  const html = [
+    `<h2>${fileName}</h2>`,
+    `<table class="report-table">`,
+    `<tr><th>Total heap</th><td>${fmtBytes(overview.total_heap_bytes || 0)}</td></tr>`,
+    `<tr><th>Objects</th><td>${(overview.object_count || 0).toLocaleString('en-US')}</td></tr>`,
+    `<tr><th>Classes</th><td>${(overview.class_count || 0).toLocaleString('en-US')}</td></tr>`,
+    `<tr><th>GC roots</th><td>${(overview.gc_root_count || 0).toLocaleString('en-US')}</td></tr>`,
+    `</table>`,
+    `<p><button id="btn-report-to-shell">Open OQL Shell</button></p>`,
+  ].join('');
+  container.insertAdjacentHTML('afterbegin', html);
+  document.getElementById('btn-report-to-shell')?.addEventListener('click', () => {
+    showWasmShell(fileName);
+  });
+}
+
+function showWasmShell(name) {
+  serverUrl = null;
+  showScreen('shell-screen');
+  const badge = document.getElementById('server-badge');
+  if (badge) { badge.textContent = '◉ WASM'; badge.style.color = '#7cb8ff'; }
+  document.getElementById('server-url-display').textContent = name;
+  // Show the Run Analysis button only (no disconnect needed — use New File)
+  document.getElementById('btn-disconnect').textContent = '↩ New file';
+  buildSidebar(hasRetained);
+  startTerminal();
+  // No keepalive or poll needed for WASM mode
+}
+
 // ── Report screen ─────────────────────────────────────────────────────────────
 document.getElementById('btn-new-file').addEventListener('click', () => {
+  if (wasmSession) { wasmSession.free(); wasmSession = null; }
+  serverUrl = null; hasRetained = false; classNames = [];
   showScreen('upload-screen');
 });
 
 document.getElementById('btn-to-shell').addEventListener('click', () => {
-  showScreen('connect-screen');
-  if (wasmReady) populateOfflineList();
+  if (wasmSession) {
+    showWasmShell(document.getElementById('server-url-display').textContent || 'heap.hprof');
+  } else {
+    showScreen('connect-screen');
+    if (wasmReady) populateOfflineList();
+  }
 });
 
 // ── Populate offline named-query list on connect screen ───────────────────────
@@ -245,6 +352,9 @@ function startKeepalive() {
 // ── Shell screen ──────────────────────────────────────────────────────────────
 function showShell() {
   showScreen('shell-screen');
+  const badge = document.getElementById('server-badge');
+  if (badge) { badge.textContent = '● Connected'; badge.style.color = ''; }
+  document.getElementById('btn-disconnect').textContent = '✕ Disconnect';
   document.getElementById('server-url-display').textContent = serverUrl;
   buildSidebar(false);
   startTerminal();
@@ -258,8 +368,10 @@ function showShell() {
 }
 
 document.getElementById('btn-disconnect').addEventListener('click', () => {
+  if (wasmSession) { wasmSession.free(); wasmSession = null; }
   serverUrl = null;
   hasRetained = false;
+  classNames = [];
   if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
   if (keepaliveTimer) { clearInterval(keepaliveTimer); keepaliveTimer = null; }
   if (term) { term.dispose(); term = null; }
@@ -268,6 +380,7 @@ document.getElementById('btn-disconnect').addEventListener('click', () => {
   document.getElementById('connect-status').className = '';
   document.getElementById('btn-analyze').disabled = false;
   document.getElementById('analyze-status').textContent = '';
+  document.getElementById('btn-disconnect').textContent = '✕ Disconnect';
   showScreen('upload-screen');
 });
 
@@ -277,6 +390,24 @@ document.getElementById('btn-analyze').addEventListener('click', async () => {
   const statusEl = document.getElementById('analyze-status');
   btn.disabled = true;
   statusEl.textContent = 'Starting analysis…';
+
+  if (wasmSession) {
+    // WASM mode: run synchronously in a microtask to let the UI update
+    setTimeout(() => {
+      try {
+        wasmSession.run_full_analysis();
+        hasRetained = true;
+        statusEl.textContent = 'Analysis ready';
+        buildSidebar(true);
+        if (term) term.writeln('\r\n\x1b[32m[Analysis complete — @retainedHeapSize queries now available]\x1b[0m');
+      } catch (e) {
+        statusEl.textContent = `Analysis failed: ${e}`;
+        btn.disabled = false;
+      }
+    }, 0);
+    return;
+  }
+
   try {
     const res = await fetch(serverUrl + '/analyze', { method: 'POST' });
     const data = await res.json();
@@ -438,7 +569,10 @@ function startTerminal() {
   const verStr = serverVersion ? ` \x1b[2mv${serverVersion.version || ''}\x1b[0m` : '';
   const histCount = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]').length;
   term.writeln('\x1b[1;36m hprof-analyzer\x1b[0m\x1b[36m OQL Shell\x1b[0m' + verStr);
-  term.writeln(`\x1b[2m └─ ${serverUrl}`
+  const connLabel = wasmSession
+    ? document.getElementById('server-url-display').textContent || 'WASM'
+    : serverUrl || '';
+  term.writeln(`\x1b[2m └─ ${connLabel}`
     + (namedQueries.length ? `  ·  ${namedQueries.length.toLocaleString('en-US')} named queries` : '')
     + (histCount ? `  ·  ${histCount.toLocaleString('en-US')} history entries` : '')
     + '\x1b[0m');
@@ -822,6 +956,12 @@ function startTerminal() {
       return;
     }
     if (cmd === '/status') {
+      if (wasmSession) {
+        const st = hasRetained ? 'ready' : 'not_started';
+        if (st === 'ready') term.writeln('\x1b[32m● Analysis ready — @retainedHeapSize queries available\x1b[0m');
+        else term.writeln('\x1b[33m● Analysis not run yet — click "Run Analysis" in the toolbar\x1b[0m');
+        term.write(PROMPT); return;
+      }
       try {
         const res = await fetch(serverUrl + '/status');
         const data = await res.json();
@@ -2300,6 +2440,63 @@ function startTerminal() {
     return { colNames, adjW, isNumeric };
   }
 
+  function handleQueryResponse(data, elapsedMs, showHint) {
+    const fmtElapsed = ms => ms < 1 ? `${(ms * 1000).toFixed(0)}µs` : ms < 1000 ? `${ms.toFixed(1)}ms` : `${(ms / 1000).toFixed(2)}s`;
+    if (!data.ok) {
+      const msg = data.error?.message || JSON.stringify(data.error) || 'unknown error';
+      const kind = data.error?.kind ? `\x1b[2m[${data.error.kind}]\x1b[0m ` : '';
+      const report = data.error?.report;
+      if (report) {
+        report.split('\n').forEach(l => term.writeln(l));
+      } else {
+        term.writeln(`\x1b[31merror: ${kind}${msg}\x1b[0m`);
+      }
+      if (classNames.length > 0 && /class|type|not found|unknown/i.test(msg)) {
+        const wordMatch = msg.match(/[A-Z][a-zA-Z0-9$.]+/g) || [];
+        wordMatch.forEach(word => {
+          const lower = word.toLowerCase();
+          const suggestions = classNames
+            .filter(c => c.toLowerCase().includes(lower) || lower.includes(c.split('.').pop().toLowerCase()))
+            .slice(0, 3);
+          if (suggestions.length > 0) {
+            term.writeln(`\x1b[2mdid you mean: ${suggestions.map(s => s.split('.').pop()).join(', ')}?\x1b[0m`);
+          }
+        });
+      }
+    } else {
+      const r = data.result;
+      const queryMs = (r.elapsed_ms != null) ? Number(r.elapsed_ms) : elapsedMs;
+      if (r.error) {
+        term.writeln(`\x1b[31merror: ${r.error}\x1b[0m`);
+      } else if (r.columns && r.columns.length > 0) {
+        const colNames = r.columns.map(c => c.name || String(c));
+        const rows = r.rows || [];
+        renderResult(r);
+        prevResult = null;
+        lastResult = { columns: colNames, rows, note: r.note, truncated: r.truncated, row_count: r.row_count };
+        currentRowIdx = 0;
+        const trunc = r.truncated ? `  \x1b[33m[capped at ${Number(r.row_count).toLocaleString('en-US')} rows — add LIMIT N or increase with LIMIT 0 for all]\x1b[0m` : '';
+        const elapsedFmt = fmtElapsed(queryMs);
+        const elapsedColor = queryMs > 1000 ? '\x1b[31m' : queryMs > 300 ? '\x1b[33m' : '\x1b[2m';
+        const ts = new Date().toLocaleTimeString('en-GB', { hour12: false });
+        term.writeln(`${elapsedColor}${Number(r.row_count).toLocaleString('en-US')} row${r.row_count !== 1 ? 's' : ''}, ${elapsedFmt}\x1b[0m\x1b[2m  [${ts}]\x1b[0m${trunc}`);
+        if (rows.length > 20 && showHint) {
+          const hasNumeric = colNames.some((_, i) => {
+            const sample = rows.find(row => row[i] !== null && row[i] !== undefined);
+            return sample ? isNumericKind(sample[i]) : false;
+          });
+          const statHint = hasNumeric ? '  /stats <col>' : '';
+          term.writeln(`\x1b[2m  /filter <text|/re/>  /sort [-]<col>  /select <col>…  /pivot <col>  /row [N]${statHint}  /export [csv|tsv|json]\x1b[0m`);
+        }
+      } else {
+        prevResult = null;
+        term.writeln(JSON.stringify(r, null, 2).split('\n').slice(0, 40).join('\r\n'));
+        term.writeln(`\x1b[2m${fmtElapsed(queryMs)}\x1b[0m`);
+      }
+    }
+    term.write(PROMPT);
+  }
+
   async function runQuery(oql, { showHint = true } = {}) {
     // Soft warning: if query references retained-size attributes but analysis hasn't run
     if (!hasRetained && /@retainedHeapSize|@dominatorClass|dominators\s*\(|retained\s*\(/i.test(oql)) {
@@ -2319,6 +2516,29 @@ function startTerminal() {
       term.write('\r\x1b[K\x1b[2m' + spinFrames[spinIdx] + ' running' + elStr + '\x1b[0m');
     }, 100);
     try {
+      // WASM mode: dispatch directly to HprofSession (no network)
+      if (wasmSession) {
+        await new Promise(resolve => setTimeout(resolve, 0));  // yield to let spinner render
+        const rawJson = wasmSession.query(oql);
+        clearInterval(spinTimer);
+        currentAbort = null;
+        term.write('\r\x1b[K');
+        const elapsedMs = performance.now() - t0;
+        const data = JSON.parse(rawJson);
+        // Normalize to the same shape the server returns
+        if (!data.ok) {
+          data.error = data.error || { message: 'unknown error' };
+        } else {
+          const r = data.result;
+          r.elapsed_ms = elapsedMs;
+          // WASM returns column names as plain strings; wrap for renderResult compat
+          if (r.columns && r.columns.length > 0 && typeof r.columns[0] === 'string') {
+            r.columns = r.columns.map(n => ({ name: n }));
+          }
+        }
+        return handleQueryResponse(data, elapsedMs, showHint);
+      }
+
       const res = await fetch(serverUrl + '/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2329,7 +2549,6 @@ function startTerminal() {
       currentAbort = null;
       // Erase spinner
       term.write('\r\x1b[K');
-      const elapsed = ((performance.now() - t0) / 1000).toFixed(3);
       const elapsedMs = performance.now() - t0;
       let data;
       try {
@@ -2340,62 +2559,7 @@ function startTerminal() {
         return;
       }
 
-      if (!data.ok) {
-        const msg = data.error?.message || JSON.stringify(data.error) || 'unknown error';
-        const kind = data.error?.kind ? `\x1b[2m[${data.error.kind}]\x1b[0m ` : '';
-        const report = data.error?.report;
-        if (report) {
-          // Ariadne caret diagnostic — show each line with proper \r\n
-          report.split('\n').forEach(l => term.writeln(l));
-        } else {
-          term.writeln(`\x1b[31merror: ${kind}${msg}\x1b[0m`);
-        }
-        // Suggest class names when the error looks like "class not found"
-        if (classNames.length > 0 && /class|type|not found|unknown/i.test(msg)) {
-          const wordMatch = msg.match(/[A-Z][a-zA-Z0-9$.]+/g) || [];
-          wordMatch.forEach(word => {
-            const lower = word.toLowerCase();
-            const suggestions = classNames
-              .filter(c => c.toLowerCase().includes(lower) || lower.includes(c.split('.').pop().toLowerCase()))
-              .slice(0, 3);
-            if (suggestions.length > 0) {
-              term.writeln(`\x1b[2mdid you mean: ${suggestions.map(s => s.split('.').pop()).join(', ')}?\x1b[0m`);
-            }
-          });
-        }
-      } else {
-        const r = data.result;
-        const queryMs = (r.elapsed_ms != null) ? Number(r.elapsed_ms) : elapsedMs;
-        const fmtElapsed = ms => ms < 1 ? `${(ms * 1000).toFixed(0)}µs` : ms < 1000 ? `${ms.toFixed(1)}ms` : `${(ms / 1000).toFixed(2)}s`;
-        if (r.error) {
-          term.writeln(`\x1b[31merror: ${r.error}\x1b[0m`);
-        } else if (r.columns && r.columns.length > 0) {
-          const colNames = r.columns.map(c => c.name || String(c));
-          const rows = r.rows || [];
-          renderResult(r);
-          prevResult = null;
-          lastResult = { columns: colNames, rows, note: r.note, truncated: r.truncated, row_count: r.row_count };
-          currentRowIdx = 0;
-          const trunc = r.truncated ? `  \x1b[33m[capped at ${Number(r.row_count).toLocaleString('en-US')} rows — add LIMIT N or increase with LIMIT 0 for all]\x1b[0m` : '';
-          const elapsedFmt = fmtElapsed(queryMs);
-          const elapsedColor = queryMs > 1000 ? '\x1b[31m' : queryMs > 300 ? '\x1b[33m' : '\x1b[2m';
-          const ts = new Date().toLocaleTimeString('en-GB', { hour12: false });
-          term.writeln(`${elapsedColor}${Number(r.row_count).toLocaleString('en-US')} row${r.row_count !== 1 ? 's' : ''}, ${elapsedFmt}\x1b[0m\x1b[2m  [${ts}]\x1b[0m${trunc}`);
-          if (rows.length > 20 && showHint) {
-            const hasNumeric = colNames.some((_, i) => {
-              const sample = rows.find(row => row[i] !== null && row[i] !== undefined);
-              return sample ? isNumericKind(sample[i]) : false;
-            });
-            const statHint = hasNumeric ? '  /stats <col>' : '';
-            term.writeln(`\x1b[2m  /filter <text|/re/>  /sort [-]<col>  /select <col>…  /pivot <col>  /row [N]${statHint}  /export [csv|tsv|json]\x1b[0m`);
-          }
-        } else {
-          // No columns — just show the raw result; still reset undo slot (fresh query ran)
-          prevResult = null;
-          term.writeln(JSON.stringify(r, null, 2).split('\n').slice(0, 40).join('\r\n'));
-          term.writeln(`\x1b[2m${fmtElapsed(queryMs)}\x1b[0m`);
-        }
-      }
+      handleQueryResponse(data, elapsedMs, showHint);
     } catch (e) {
       clearInterval(spinTimer);
       currentAbort = null;
@@ -2405,8 +2569,8 @@ function startTerminal() {
       } else {
         term.writeln(`\x1b[31merror: ${e.message}\x1b[0m`);
       }
+      term.write(PROMPT);
     }
-    term.write(PROMPT);
   }
 
   function printHelp() {
