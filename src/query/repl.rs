@@ -2444,16 +2444,16 @@ fn handle_filter(
                 .rows
                 .iter()
                 .filter(|row| {
-                    let check = |v: &QueryValue| {
-                        let s = fmt_value(v);
+                    let matches = |v: &QueryValue, col_name: &str| {
+                        let s = fmt_value_for_col(v, col_name);
                         match &re_opt {
                             Some(re) => re.is_match(&s),
                             None => s.to_ascii_lowercase().contains(&pat_lower),
                         }
                     };
                     match col_filter_idx {
-                        Some(ci) => row.get(ci).map(check).unwrap_or(false),
-                        None => row.iter().any(check),
+                        Some(ci) => row.get(ci).map(|v| matches(v, &res.columns[ci].name)).unwrap_or(false),
+                        None => row.iter().enumerate().any(|(i, v)| matches(v, &res.columns[i].name)),
                     }
                 })
                 .cloned()
@@ -2539,8 +2539,8 @@ fn handle_filter_not(
                 } else { None }
             } else { None };
             let pat_lower = if re_opt.is_none() { actual_pattern.to_ascii_lowercase() } else { String::new() };
-            let check = |v: &QueryValue| {
-                let s = fmt_value(v);
+            let matches = |v: &QueryValue, col_name: &str| {
+                let s = fmt_value_for_col(v, col_name);
                 match &re_opt {
                     Some(re) => re.is_match(&s),
                     None => s.to_ascii_lowercase().contains(&pat_lower),
@@ -2548,8 +2548,8 @@ fn handle_filter_not(
             };
             let filtered_rows: Vec<Vec<QueryValue>> = res.rows.iter()
                 .filter(|row| match col_filter_idx {
-                    Some(ci) => !row.get(ci).map(check).unwrap_or(false),
-                    None => !row.iter().any(check),
+                    Some(ci) => !row.get(ci).map(|v| matches(v, &res.columns[ci].name)).unwrap_or(false),
+                    None => !row.iter().enumerate().any(|(i, v)| matches(v, &res.columns[i].name)),
                 })
                 .cloned()
                 .collect();
@@ -5890,5 +5890,27 @@ mod tests {
         // `!sort className,-r<Tab>` multi-column with dash
         let v3 = values(&c.complete("!sort className,-r", 18));
         assert!(v3.contains(&"!sort className,-retainedHeap".to_string()), "multi-col dash sort: {v3:?}");
+    }
+
+    #[test]
+    fn filter_matches_formatted_bytes_column() {
+        use crate::query::model::QueryColumn;
+        let res = QueryResult {
+            name: "t".into(), oql: "".into(),
+            columns: vec![QueryColumn { name: "retained_heap_size".into() }],
+            rows: vec![
+                vec![QueryValue::Int(4_300)],     // ~4.2 KiB
+                vec![QueryValue::Int(2_000_000)], // ~1.9 MiB
+            ],
+            row_count: 2, truncated: false, error: None, note: None, viz: None, elapsed_ms: None,
+        };
+        SESSION_SETTINGS.with(|s| { s.borrow_mut().color = false; s.borrow_mut().bytes_raw = false; });
+        let mut result = Some(res);
+        let mut buf = Vec::new();
+        handle_filter("KiB", &mut result, 120, &mut buf).unwrap();
+        SESSION_SETTINGS.with(|s| { s.borrow_mut().color = true; s.borrow_mut().bytes_raw = false; });
+        // 4300 bytes formats as "4.2 KiB"; pattern "KiB" should match it
+        let kept = result.as_ref().map(|r| r.rows.len()).unwrap_or(0);
+        assert_eq!(kept, 1, "KiB filter should keep the ~4 KiB row; buf={}", String::from_utf8_lossy(&buf));
     }
 }
