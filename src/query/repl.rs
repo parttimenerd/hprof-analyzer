@@ -1382,7 +1382,9 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                                 elapsed_ms: None,
                                             };
                                             print_result(&projected, std::time::Duration::ZERO, max_width, &mut stdout)?;
-                                            prev_result = last_result.clone();
+                                            let cols_changed = indices.len() != res.columns.len()
+                                                || indices.iter().enumerate().any(|(i, &ci)| ci != i);
+                                            if cols_changed { prev_result = last_result.clone(); }
                                             last_result = Some(projected);
                                         }
                                     }
@@ -1992,7 +1994,9 @@ fn run_repl_line(
                                     elapsed_ms: None,
                                 };
                                 print_result(&projected, std::time::Duration::ZERO, *max_width, out)?;
-                                *prev_result = last_result.clone();
+                                let cols_changed = indices.len() != res.columns.len()
+                                    || indices.iter().enumerate().any(|(i, &ci)| ci != i);
+                                if cols_changed { *prev_result = last_result.clone(); }
                                 *last_result = Some(projected);
                             }
                         }
