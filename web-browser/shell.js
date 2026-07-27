@@ -175,6 +175,7 @@ async function loadWasmSession(file) {
   try {
     if (wasmSession) { wasmSession.free(); wasmSession = null; }
     wasmSession = HprofSession.load(bytes, file.name);
+    wasmSession._fileName = file.name;
   } catch (e) {
     if (statusEl) { statusEl.textContent = `Failed to load ${file.name}: ${e}`; }
     if (modeButtons) modeButtons.style.display = 'flex';
@@ -183,6 +184,17 @@ async function loadWasmSession(file) {
 
   classNames = JSON.parse(wasmSession.class_names());
   hasRetained = false;
+
+  // Run retained-size analysis so @retainedHeapSize queries work immediately.
+  if (statusEl) statusEl.textContent = `Running retained-size analysis for ${file.name}… (this may take a moment)`;
+  await new Promise(r => setTimeout(r, 20));
+  try {
+    wasmSession.run_full_analysis();
+    hasRetained = true;
+  } catch (_) {
+    // Analysis failed (e.g. OOM on very large dumps) — shell still opens, retained queries unavailable
+  }
+
   if (statusEl) statusEl.style.display = 'none';
   showWasmShell(file.name);
 }
@@ -256,6 +268,11 @@ function showWasmShell(name) {
   document.getElementById('server-url-display').textContent = name;
   // Show the Run Analysis button only (no disconnect needed — use New File)
   document.getElementById('btn-disconnect').textContent = '↩ New file';
+  // If retained analysis already ran, mark the button as done
+  if (hasRetained) {
+    document.getElementById('btn-analyze').disabled = true;
+    document.getElementById('analyze-status').textContent = 'Analysis ready';
+  }
   buildSidebar(hasRetained);
   startTerminal();
   // No keepalive or poll needed for WASM mode
@@ -475,7 +492,7 @@ document.getElementById('btn-analyze').addEventListener('click', async () => {
         // Show the analysis report
         try {
           const reportJson = wasmSession.generate_report();
-          renderReport(reportJson);
+          renderWasmReport(JSON.parse(reportJson), wasmSession._fileName || '');
           showScreen('report-screen');
         } catch (_) {}
       } catch (e) {
@@ -523,7 +540,7 @@ async function pollAnalysisStatus() {
         const rr = await fetch(serverUrl + '/report');
         if (rr.ok) {
           const reportJson = await rr.text();
-          renderReport(reportJson);
+          renderWasmReport(JSON.parse(reportJson), serverUrl || '');
           showScreen('report-screen');
         }
       } catch (_) {}
