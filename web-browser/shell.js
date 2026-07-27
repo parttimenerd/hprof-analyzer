@@ -856,7 +856,7 @@ function startTerminal() {
           const countStr = instanceCount != null
             ? `  \x1b[2m(${instanceCount.toLocaleString()} instance${instanceCount === 1 ? '' : 's'})\x1b[0m`
             : '';
-          term.writeln(`\x1b[1mFields of ${cls}\x1b[0m${countStr}`);
+          term.writeln(`Fields of \x1b[1m${cls}\x1b[0m${countStr}`);
           const idxW = String(colNames.length).length;
           const nameW = Math.max(...colNames.map(c => c.length), 8);
           colNames.forEach((n, i) => {
@@ -2283,7 +2283,7 @@ function startTerminal() {
           renderResult(r);
           lastResult = { columns: colNames, rows, note: r.note, truncated: r.truncated, row_count: r.row_count };
           currentRowIdx = 0;
-          const trunc = r.truncated ? `  \x1b[33m[capped at ${r.row_count} rows — add LIMIT N for more]\x1b[0m` : '';
+          const trunc = r.truncated ? `  \x1b[33m[capped at ${r.row_count} rows — add LIMIT N or LIMIT 0 for all]\x1b[0m` : '';
           const elapsedFmt = elapsedMs < 1000 ? `${elapsedMs.toFixed(0)}ms` : `${(elapsedMs / 1000).toFixed(3)}s`;
           const elapsedColor = elapsedMs > 1000 ? '\x1b[31m' : elapsedMs > 300 ? '\x1b[33m' : '\x1b[2m';
           const ts = new Date().toLocaleTimeString('en-GB', { hour12: false });
