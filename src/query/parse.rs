@@ -693,19 +693,31 @@ where
                     Predicate::Compare { lhs, op, rhs }
                 });
             // `expr BETWEEN a AND b` desugars to `expr >= a AND expr <= b`.
+            // `expr NOT BETWEEN a AND b` desugars to `expr < a OR expr > b`.
             // Must be tried before `compare` so `AND` is not consumed as a
             // boolean AND continuation.
+            let between_kw = ident_ci("NOT")
+                .then_ignore(ident_ci("BETWEEN"))
+                .to(true)
+                .or(ident_ci("BETWEEN").to(false));
             let between_pred = expr
                 .clone()
-                .then_ignore(ident_ci("BETWEEN"))
+                .then(between_kw)
                 .then(expr.clone())
                 .then_ignore(ident_ci("AND"))
                 .then(expr.clone())
-                .map(|((subject, lo), hi)| {
-                    Predicate::And(
-                        Box::new(Predicate::Compare { lhs: subject.clone(), op: CompareOp::Ge, rhs: lo }),
-                        Box::new(Predicate::Compare { lhs: subject, op: CompareOp::Le, rhs: hi }),
-                    )
+                .map(|(((subject, negated), lo), hi)| {
+                    if negated {
+                        Predicate::Or(
+                            Box::new(Predicate::Compare { lhs: subject.clone(), op: CompareOp::Lt, rhs: lo }),
+                            Box::new(Predicate::Compare { lhs: subject, op: CompareOp::Gt, rhs: hi }),
+                        )
+                    } else {
+                        Predicate::And(
+                            Box::new(Predicate::Compare { lhs: subject.clone(), op: CompareOp::Ge, rhs: lo }),
+                            Box::new(Predicate::Compare { lhs: subject, op: CompareOp::Le, rhs: hi }),
+                        )
+                    }
                 });
             // `expr IS NULL` / `expr IS NOT NULL` — SQL-standard null-check sugar.
             // Desugars to `expr = null` / `expr != null`.
@@ -4866,6 +4878,38 @@ mod tests {
             matches!(&q.where_, Some(crate::query::ast::Predicate::And(_, _))),
             "BETWEEN should desugar to And, got: {:?}", q.where_
         );
+    }
+
+    #[test]
+    fn parse_not_between() {
+        let q = super::parse(
+            "SELECT * FROM java.lang.String WHERE @usedHeapSize NOT BETWEEN 10 AND 100",
+        ).unwrap();
+        assert!(
+            matches!(&q.where_, Some(crate::query::ast::Predicate::Or(_, _))),
+            "NOT BETWEEN should desugar to Or(Lt, Gt), got: {:?}", q.where_
+        );
+    }
+
+    #[test]
+    fn parse_not_between_desugars_to_lt_gt() {
+        use crate::query::ast::{CompareOp, Expr, Predicate, Value};
+        let q = super::parse(
+            "SELECT * FROM java.lang.String s WHERE @usedHeapSize NOT BETWEEN 10 AND 100",
+        ).unwrap();
+        // NOT BETWEEN lo AND hi => Or(Lt(subj, lo), Gt(subj, hi))
+        if let Some(Predicate::Or(lhs, rhs)) = &q.where_ {
+            assert!(
+                matches!(lhs.as_ref(), Predicate::Compare { op: CompareOp::Lt, .. }),
+                "left branch should be Lt, got: {lhs:?}"
+            );
+            assert!(
+                matches!(rhs.as_ref(), Predicate::Compare { op: CompareOp::Gt, .. }),
+                "right branch should be Gt, got: {rhs:?}"
+            );
+        } else {
+            panic!("NOT BETWEEN should produce Or, got: {:?}", q.where_);
+        }
     }
 
     #[test]

@@ -5694,3 +5694,44 @@ fn limit_offset_paginates_correctly() {
     }
 }
 
+#[test]
+fn not_between_filters_correctly() {
+    let Some(hprof) = mnemonics() else { return };
+    // All strings in dump_1 have @usedHeapSize=24, so NOT BETWEEN 10 AND 100 → 0 rows.
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query",
+            "SELECT COUNT(*) AS n FROM java.lang.String s \
+             WHERE @usedHeapSize NOT BETWEEN 10 AND 100"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "NOT BETWEEN query failed: {}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Count should be 0 — all strings have @usedHeapSize=24 which IS between 10 and 100.
+    let count: u64 = stdout
+        .lines()
+        .filter_map(|l| l.trim().parse().ok())
+        .next()
+        .unwrap_or(u64::MAX);
+    assert_eq!(count, 0, "NOT BETWEEN 10 AND 100 should return 0 (all strings have @usedHeapSize=24): {stdout}");
+
+    // Complement: BETWEEN 10 AND 100 should return >0.
+    let out2 = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query",
+            "SELECT COUNT(*) AS n FROM java.lang.String s \
+             WHERE @usedHeapSize BETWEEN 10 AND 100"])
+        .output()
+        .unwrap();
+    assert!(out2.status.success(), "BETWEEN query failed: {}", String::from_utf8_lossy(&out2.stderr));
+    let stdout2 = String::from_utf8_lossy(&out2.stdout);
+    let count2: u64 = stdout2
+        .lines()
+        .filter_map(|l| l.trim().parse().ok())
+        .next()
+        .unwrap_or(0);
+    assert!(count2 > 0, "BETWEEN 10 AND 100 should return >0 rows: {stdout2}");
+}
+
