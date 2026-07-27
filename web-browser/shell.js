@@ -654,6 +654,7 @@ function startTerminal() {
 
   let line = '';
   let cursorPos = 0;  // index within line where the cursor sits
+  let ghostText = '';   // current inline suggestion suffix (display only, not in line)
   let histIdx = -1;
   const history = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
   let killRing = '';  // text killed by Ctrl+K/W/U
@@ -729,10 +730,38 @@ function startTerminal() {
   function redrawLine() {
     const prompt = pendingLines.length > 0 ? CONT_PROMPT : PROMPT;
     const highlighted = highlightOql(line);
-    term.write('\r\x1b[K' + prompt + highlighted + '\x1b[0m');
-    if (cursorPos < line.length) {
-      // Move cursor left from end to cursorPos (raw length, not ANSI length)
-      term.write(`\x1b[${line.length - cursorPos}D`);
+    // Draw: prompt + highlighted line + dim ghost suffix (only when cursor is at end)
+    const ghost = (cursorPos === line.length && ghostText)
+      ? '\x1b[2m' + ghostText + '\x1b[0m'
+      : '';
+    term.write('\r\x1b[K' + prompt + highlighted + '\x1b[0m' + ghost);
+    // Reposition cursor: move back over ghost text (raw char count)
+    const moveBack = (line.length - cursorPos) + (ghost ? ghostText.length : 0);
+    if (moveBack > 0) {
+      term.write(`\x1b[${moveBack}D`);
+    }
+  }
+
+  function updateGhost() {
+    if (!wasmReady || !classNames.length) { ghostText = ''; return; }
+    // Only suggest inside OQL, not for / commands or ! bookmarks
+    if (line.startsWith('/') || line.startsWith('!')) { ghostText = ''; return; }
+    try {
+      const cs = JSON.parse(wasmComplete(line, cursorPos, classNames));
+      if (cs.length === 1) {
+        // Single match: show the remaining suffix as ghost text
+        const prefix = line.slice(0, cursorPos);
+        const lastDelim = prefix.search(/[\s,(](?=[^\s,(]*$)/);
+        const typedToken = lastDelim >= 0 ? prefix.slice(lastDelim + 1) : prefix;
+        const suffix = cs[0].value.startsWith(typedToken)
+          ? cs[0].value.slice(typedToken.length)
+          : '';
+        ghostText = suffix;
+      } else {
+        ghostText = '';
+      }
+    } catch (_) {
+      ghostText = '';
     }
   }
 
@@ -813,6 +842,7 @@ function startTerminal() {
   window._hprofRunQuery = runQueryFromSidebar;
 
   function handleTab() {
+    ghostText = '';
     // Complete !<bookmark>
     if (line.startsWith('!') && !line.includes(' ')) {
       const bookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '{}');
@@ -2838,11 +2868,9 @@ function startTerminal() {
     if (!printable) return;
     line = line.slice(0, cursorPos) + printable + line.slice(cursorPos);
     cursorPos += printable.length;
-    if (printable.length === 1 && cursorPos === line.length) {
-      term.write(printable);  // cursor at end: direct write avoids redraw flicker
-    } else {
-      redrawLine();
-    }
+    ghostText = '';       // clear stale ghost before recomputing
+    updateGhost();
+    redrawLine();
   });
 
   // ── Key handler ──────────────────────────────────────────────────────────────
@@ -2891,6 +2919,7 @@ function startTerminal() {
       const text = line;
       line = '';
       cursorPos = 0;
+      ghostText = '';
       histIdx = -1;
       term.writeln('');
       void handleEnter(text);
@@ -2901,6 +2930,8 @@ function startTerminal() {
       if (cursorPos > 0) {
         line = line.slice(0, cursorPos - 1) + line.slice(cursorPos);
         cursorPos--;
+        ghostText = '';
+        updateGhost();
         redrawLine();
       }
       return;
@@ -2954,6 +2985,14 @@ function startTerminal() {
     }
 
     if (code === 'ArrowRight') {
+      // Accept ghost text when at end of line
+      if (!ev.ctrlKey && !ev.altKey && cursorPos === line.length && ghostText) {
+        line += ghostText;
+        cursorPos = line.length;
+        ghostText = '';
+        redrawLine();
+        return;
+      }
       if (ev.ctrlKey || ev.altKey) {
         // Jump to next word boundary
         let p = cursorPos;
@@ -2973,6 +3012,14 @@ function startTerminal() {
     }
 
     if (code === 'End' || (ev.ctrlKey && code === 'e')) {
+      // Accept ghost text when at end of line
+      if (cursorPos === line.length && ghostText) {
+        line += ghostText;
+        cursorPos = line.length;
+        ghostText = '';
+        redrawLine();
+        return;
+      }
       if (cursorPos < line.length) { cursorPos = line.length; redrawLine(); }
       return;
     }
