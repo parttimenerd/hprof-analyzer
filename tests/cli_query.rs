@@ -6229,3 +6229,36 @@ fn query_group_by_expr_key_in_retained_path_is_non_null() {
         );
     }
 }
+
+#[test]
+fn query_refpath_with_extra_attrs_is_non_null() {
+    let Some(hprof) = philosophers() else { return };
+    // classof(x), @usedHeapSize, @retainedHeapSize alongside a RefPath in SELECT
+    // were returning Null because refpath_rows only handled ObjectId, Star, and RefPath.
+    let out = Command::new(BIN)
+        .arg("query").arg(&hprof)
+        .args(["--query",
+            "SELECT x.value.@length, classof(x), @usedHeapSize \
+             FROM java.lang.String x WHERE x.value.@length > 5 LIMIT 3"])
+        .output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let data_rows: Vec<&str> = stdout
+        .lines()
+        .filter(|l| l.contains('|') && !l.contains("value.@length") && !l.contains("---"))
+        .collect();
+    assert!(!data_rows.is_empty(), "expected refpath rows, got:\n{stdout}");
+    for row in &data_rows {
+        let cols: Vec<&str> = row.split('|').collect();
+        let classof = cols.get(1).map(|s| s.trim()).unwrap_or("");
+        let used = cols.get(2).map(|s| s.trim()).unwrap_or("");
+        assert!(
+            classof.contains("java.lang.String"),
+            "classof null in refpath SELECT: {row}\nfull output:\n{stdout}"
+        );
+        assert!(
+            used.parse::<i64>().is_ok(),
+            "@usedHeapSize null/invalid in refpath SELECT: {row}\nfull output:\n{stdout}"
+        );
+    }
+}

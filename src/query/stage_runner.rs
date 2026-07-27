@@ -594,6 +594,25 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
                     }
                 }
                 SelectItem::Attr(Attr::ObjectId) => QueryValue::Int(s as i64),
+                SelectItem::Attr(Attr::ObjectAddress) => {
+                    QueryValue::Int(ctx.id_map.to_addr(s) as i64)
+                }
+                SelectItem::Attr(Attr::UsedHeapSize) => QueryValue::Int(
+                    ctx.shallow.get(s as usize).copied().unwrap_or(0) as i64,
+                ),
+                SelectItem::Attr(Attr::RetainedHeapSize) => QueryValue::Int(
+                    ctx.retained.get(s as usize).copied().unwrap_or(0) as i64,
+                ),
+                SelectItem::Attr(Attr::ClassOf) | SelectItem::Attr(Attr::DisplayName) => {
+                    match ctx.class_name_of(s) {
+                        Some(name) => QueryValue::Str(name.to_string()),
+                        None => QueryValue::Null,
+                    }
+                }
+                SelectItem::Expr(e) => {
+                    let ret = ctx.retained.get(s as usize).copied().unwrap_or(0) as u64;
+                    eval_late_expr_multi(e, s, ret, ctx, &like_regexes)
+                }
                 SelectItem::Star => QueryValue::ObjRef {
                     // Emit the DENSE object index (matching the scan path's
                     // `SELECT *`, execute.rs), not an address: the late id_map is
