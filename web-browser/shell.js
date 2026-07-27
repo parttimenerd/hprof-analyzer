@@ -2225,7 +2225,8 @@ function startTerminal() {
             if (Array.isArray(d.classes)) classNames = d.classes;
             return classNames;
           }).catch(() => []));
-      const matches = pattern ? all.filter(c => c.toLowerCase().includes(pattern)) : all;
+      const filtered = all.filter(c => !c.startsWith('['));
+      const matches = pattern ? filtered.filter(c => c.toLowerCase().includes(pattern)) : filtered;
       if (matches.length === 0) {
         term.writeln(pattern
           ? `\x1b[33m(no class names matching "${pattern}")\x1b[0m`

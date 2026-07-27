@@ -50,7 +50,13 @@ impl HprofSession {
             .p1
             .class_map
             .values()
-            .filter_map(|ci| cache.p1.strings.get(&ci.name_id).map(|s| s.replace('/', ".")))
+            .filter_map(|ci| {
+                let raw = cache.p1.strings.get(&ci.name_id)?;
+                if raw.starts_with('[') {
+                    return None;
+                }
+                Some(raw.replace('/', "."))
+            })
             .collect();
 
         Ok(HprofSession {
