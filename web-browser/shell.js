@@ -2984,6 +2984,7 @@ function startTerminal() {
         if (p !== cursorPos) { cursorPos = p; ghostText = ''; redrawLine(); }
       } else if (cursorPos > 0) {
         cursorPos--;
+        ghostText = '';
         term.write('\x1b[D');
       }
       return;
