@@ -2096,8 +2096,9 @@ function startTerminal() {
         const bookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '{}');
         if (bookmarks[name]) {
           const oql = bookmarks[name];
-          const echo = oql.length > term.cols - PROMPT.length - 1
-            ? oql.slice(0, term.cols - PROMPT.length - 2) + '…' : oql;
+          const oqlFlat = oql.replace(/\n/g, ' ↵ ').replace(/\s+/g, ' ');
+          const echo = oqlFlat.length > term.cols - PROMPT.length - 1
+            ? oqlFlat.slice(0, term.cols - PROMPT.length - 2) + '…' : oqlFlat;
           term.writeln(`\x1b[2m↳ [${name}] ${echo}\x1b[0m`);
           await runQuery(oql);
         } else {
@@ -2142,7 +2143,9 @@ function startTerminal() {
         term.write(PROMPT);
         return;
       }
-      term.writeln(`\x1b[2m↳ ${q.oql.length > 90 ? q.oql.slice(0, 89) + '…' : q.oql}\x1b[0m`);
+      const maxEcho = term.cols - 6;
+      const oqlFlat = q.oql.replace(/\n/g, ' ↵ ').replace(/\s+/g, ' ');
+      term.writeln(`\x1b[2m↳ ${oqlFlat.length > maxEcho ? oqlFlat.slice(0, maxEcho - 1) + '…' : oqlFlat}\x1b[0m`);
       await runQuery(q.oql);
       return;
     }
