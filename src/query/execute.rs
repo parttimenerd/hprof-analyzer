@@ -439,22 +439,30 @@ pub(crate) fn eval_having_term(
     row: &[QueryValue],
     query: &Query,
     columns: &[QueryColumn],
+    like_regexes: &std::collections::HashMap<String, regex::Regex>,
 ) -> bool {
     use crate::query::ast::Predicate as P;
     match pred {
         P::And(a, b) => {
-            eval_having_term(a, row, query, columns)
-                && eval_having_term(b, row, query, columns)
+            eval_having_term(a, row, query, columns, like_regexes)
+                && eval_having_term(b, row, query, columns, like_regexes)
         }
         P::Or(a, b) => {
-            eval_having_term(a, row, query, columns)
-                || eval_having_term(b, row, query, columns)
+            eval_having_term(a, row, query, columns, like_regexes)
+                || eval_having_term(b, row, query, columns, like_regexes)
         }
-        P::Not(inner) => !eval_having_term(inner, row, query, columns),
+        P::Not(inner) => !eval_having_term(inner, row, query, columns, like_regexes),
         P::Compare { lhs, op, rhs } => {
-            let lv = eval_having_expr(lhs, row, query, columns);
-            let rv = eval_having_expr(rhs, row, query, columns);
-            compare_values(&lv, *op, &rv, None)
+            let lv = eval_having_expr(lhs, row, query, columns, like_regexes);
+            let rv = eval_having_expr(rhs, row, query, columns, like_regexes);
+            let like_re = if matches!(op, CompareOp::Like | CompareOp::NotLike) {
+                rhs.as_lit().and_then(|v| {
+                    if let Value::Str(pat) = v { like_regexes.get(pat.as_str()) } else { None }
+                })
+            } else {
+                None
+            };
+            compare_values(&lv, *op, &rv, like_re)
         }
         _ => true,
     }
@@ -469,6 +477,7 @@ fn eval_having_expr(
     row: &[QueryValue],
     query: &Query,
     columns: &[QueryColumn],
+    like_regexes: &std::collections::HashMap<String, regex::Regex>,
 ) -> QueryValue {
     match e {
         Expr::Lit(v) => match v {
@@ -501,33 +510,33 @@ fn eval_having_expr(
                 .unwrap_or(QueryValue::Null)
         }
         Expr::Binary { op, lhs, rhs } => {
-            let l = eval_having_expr(lhs, row, query, columns);
-            let r = eval_having_expr(rhs, row, query, columns);
+            let l = eval_having_expr(lhs, row, query, columns, like_regexes);
+            let r = eval_having_expr(rhs, row, query, columns, like_regexes);
             arith(&l, *op, &r)
         }
-        Expr::Unary { op, arg } => unary(*op, &eval_having_expr(arg, row, query, columns)),
+        Expr::Unary { op, arg } => unary(*op, &eval_having_expr(arg, row, query, columns, like_regexes)),
         Expr::Method { .. } => QueryValue::Null,
         Expr::Case { branches, else_ } => {
             for (pred, then_expr) in branches {
-                if eval_having_term(pred, row, query, columns) {
-                    return eval_having_expr(then_expr, row, query, columns);
+                if eval_having_term(pred, row, query, columns, like_regexes) {
+                    return eval_having_expr(then_expr, row, query, columns, like_regexes);
                 }
             }
             match else_ {
-                Some(e) => eval_having_expr(e, row, query, columns),
+                Some(e) => eval_having_expr(e, row, query, columns, like_regexes),
                 None => QueryValue::Null,
             }
         }
         Expr::Coalesce(args) => {
             for arg in args {
-                let v = eval_having_expr(arg, row, query, columns);
+                let v = eval_having_expr(arg, row, query, columns, like_regexes);
                 if !matches!(v, QueryValue::Null) { return v; }
             }
             QueryValue::Null
         }
         Expr::NullIf { lhs, rhs } => {
-            let lv = eval_having_expr(lhs, row, query, columns);
-            let rv = eval_having_expr(rhs, row, query, columns);
+            let lv = eval_having_expr(lhs, row, query, columns, like_regexes);
+            let rv = eval_having_expr(rhs, row, query, columns, like_regexes);
             if lv == rv { QueryValue::Null } else { lv }
         }
     }
@@ -1420,7 +1429,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                     .collect();
                 // Apply HAVING filter.
                 let having_ok = self.plan.having_terms.iter().all(|term| {
-                    eval_having_term(&term.pred, &row, self.query, &columns)
+                    eval_having_term(&term.pred, &row, self.query, &columns, &self.like_regexes)
                 });
                 if having_ok {
                     rows.push(row);

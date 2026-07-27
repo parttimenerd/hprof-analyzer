@@ -710,7 +710,7 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
             if !entry.plan.having_terms.is_empty() {
                 out_rows.retain(|row| {
                     entry.plan.having_terms.iter().all(|term| {
-                        crate::query::execute::eval_having_term(&term.pred, row, q, &columns)
+                        crate::query::execute::eval_having_term(&term.pred, row, q, &columns, &like_regexes)
                     })
                 });
             }
@@ -1358,6 +1358,8 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
     use crate::query::execute::query_columns;
     use std::collections::HashMap;
 
+    let like_regexes = crate::query::execute::compile_like_regexes(q).unwrap_or_default();
+
     // Per-group state: key_str -> (key_values, per-select-item accumulators).
     // Accumulator is (running: QueryValue, count: u64) for each SELECT aggregate.
     type GroupState = (Vec<QueryValue>, Vec<(QueryValue, u64)>);
@@ -1517,7 +1519,7 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
         let columns = query_columns(q);
         rows.retain(|row| {
             entry.plan.having_terms.iter().all(|term| {
-                crate::query::execute::eval_having_term(&term.pred, row, q, &columns)
+                crate::query::execute::eval_having_term(&term.pred, row, q, &columns, &like_regexes)
             })
         });
     }

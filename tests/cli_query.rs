@@ -5971,3 +5971,93 @@ fn query_group_by_sum_used_heap_size_with_retained_is_non_null() {
         "SUM(@usedHeapSize) was null/non-numeric: {sh:?} in first row: {first}\noutput:\n{stdout}"
     );
 }
+
+#[test]
+fn query_classof_in_retained_path_uses_dotted_format() {
+    let Some(hprof) = philosophers() else { return };
+    // classof(x) in a retained query was returning JVM slash-form ("java/lang/String")
+    // instead of the dotted display form ("java.lang.String") that the scan-time path uses.
+    let out = Command::new(BIN)
+        .arg("query").arg(&hprof)
+        .args(["--query",
+            "SELECT classof(x), @retainedHeapSize FROM java.lang.String x LIMIT 3"])
+        .output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let data_rows: Vec<&str> = stdout
+        .lines()
+        .filter(|l| l.contains('|') && !l.contains("classof") && !l.contains("---"))
+        .collect();
+    assert!(!data_rows.is_empty(), "expected data rows, got:\n{stdout}");
+    for row in &data_rows {
+        assert!(
+            row.contains("java.lang.String"),
+            "classof returned slash form or wrong name in row: {row}\nfull output:\n{stdout}"
+        );
+        assert!(
+            !row.contains("java/lang/String"),
+            "classof returned JVM slash form instead of dotted: {row}"
+        );
+    }
+}
+
+#[test]
+fn query_having_like_filters_groups_in_retained_path() {
+    let Some(hprof) = philosophers() else { return };
+    // HAVING with a LIKE pattern was broken: compare_values received None for like_re
+    // and silently returned false for all LIKE comparisons.
+    let out = Command::new(BIN)
+        .arg("query").arg(&hprof)
+        .args(["--query",
+            "SELECT classof(x), SUM(@retainedHeapSize) AS ret \
+             FROM INSTANCEOF java.lang.Object x \
+             GROUP BY classof(x) HAVING classof(x) LIKE \"java.lang.*\" \
+             ORDER BY ret DESC LIMIT 3"])
+        .output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let data_rows: Vec<&str> = stdout
+        .lines()
+        .filter(|l| l.contains('|') && !l.contains("classof") && !l.contains("---"))
+        .collect();
+    assert!(
+        !data_rows.is_empty(),
+        "HAVING classof LIKE returned 0 rows (LIKE was silently broken):\n{stdout}"
+    );
+    for row in &data_rows {
+        assert!(
+            row.contains("java.lang."),
+            "HAVING LIKE let through a row that doesn't match java.lang.*: {row}"
+        );
+    }
+}
+
+#[test]
+fn query_having_like_filters_groups_non_retained() {
+    let Some(hprof) = philosophers() else { return };
+    // Same HAVING LIKE bug in the scan-time GROUP BY path.
+    let out = Command::new(BIN)
+        .arg("query").arg(&hprof)
+        .args(["--query",
+            "SELECT classof(x), COUNT(*) AS n \
+             FROM INSTANCEOF java.lang.Object x \
+             GROUP BY classof(x) HAVING classof(x) LIKE \"java.lang.*\" \
+             ORDER BY n DESC LIMIT 3"])
+        .output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let data_rows: Vec<&str> = stdout
+        .lines()
+        .filter(|l| l.contains('|') && !l.contains("classof") && !l.contains("---"))
+        .collect();
+    assert!(
+        !data_rows.is_empty(),
+        "HAVING classof LIKE returned 0 rows (LIKE was silently broken):\n{stdout}"
+    );
+    for row in &data_rows {
+        assert!(
+            row.contains("java.lang."),
+            "HAVING LIKE let through a non-matching row: {row}"
+        );
+    }
+}

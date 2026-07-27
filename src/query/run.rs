@@ -1729,7 +1729,9 @@ impl ReplCache {
         // g.shallow / g.class_idx are emptied during build (compressed). Restore.
         let shallow: Vec<u32> = shallow_c.restore()?;
         let class_idx: Vec<u32> = class_idx_c.restore()?;
-        let class_names: Vec<String> = g.class_names;
+        let class_names: Vec<String> = g.class_names.iter()
+            .map(|n| crate::report::format::pretty_class_name(n))
+            .collect();
         let class_ids = p1_owned.class_ids.clone();
         let dfn = if reachable_only {
             Some(

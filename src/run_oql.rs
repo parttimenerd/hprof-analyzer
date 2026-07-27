@@ -109,6 +109,12 @@ pub(crate) fn run_oql_escalated(
         string_values_truncated,
     ) = pass2::Pass2::build(&source, p1, compress, opts, flat, &mut no_in_sets, &mut no_exists_bools)?;
 
+    // Convert raw JVM slash-form class names to dotted display form so the late
+    // window produces classof values consistent with the scan-time path.
+    for name in &mut g.class_names {
+        *name = crate::report::format::pretty_class_name(name);
+    }
+
     // Per-slot source-index sidecar captured during the scan (armed only when
     // `reachable_only`, via `opts.reachable_only` inside pass2). Taken BEFORE the
     // state is consumed by `resume`, so reachable-only pruning keys off the EXACT
