@@ -1564,6 +1564,31 @@ fn double_eq_hint(src: &str, eq_offset: usize) -> Option<&'static str> {
     }
 }
 
+/// Detect `ORDER BY COUNT(` / `ORDER BY SUM(` etc. — aggregate expressions are
+/// not valid ORDER BY keys (use a column alias instead).
+/// Returns an actionable hint when the token before the `(` is an agg function
+/// name and `ORDER BY` appears before it in the source.
+fn order_by_aggregate_hint(src: &str, lparen_offset: usize) -> Option<&'static str> {
+    let before = src[..lparen_offset].trim_end();
+    // Last word before the `(`
+    let last_word = before.split_whitespace().next_back()?;
+    let is_agg = AGG_FUNCS
+        .iter()
+        .any(|&f| f.eq_ignore_ascii_case(last_word));
+    if !is_agg {
+        return None;
+    }
+    // Check that ORDER BY appears somewhere before
+    let upper = src[..lparen_offset].to_ascii_uppercase();
+    if !upper.contains("ORDER") || !upper.contains("BY") {
+        return None;
+    }
+    Some(
+        "aggregate functions are not valid ORDER BY keys; \
+         use a column alias instead (e.g. `COUNT(*) AS n … ORDER BY n DESC`)",
+    )
+}
+
 /// A hint for an error following `ORDER` when the `BY` keyword is missing
 /// (`ORDER <key>` instead of `ORDER BY <key>`). Word-boundary, case-insensitive
 /// so `reorder` doesn't trigger it. Returns `None` when `ORDER` is absent or is
@@ -1618,7 +1643,11 @@ fn compact_error(src: &str, e: &Rich<'_, Token>) -> String {
             }
             // An `unexpected LParen` usually means the preceding word was meant to
             // be a function call but names an unknown function; suggest the nearest.
+            // Special case: `ORDER BY COUNT(*)` etc — suggest using an alias.
             if matches!(e.found(), Some(Token::LParen)) {
+                if let Some(hint) = order_by_aggregate_hint(src, span.start) {
+                    return format!("unexpected {found} at {line}:{col} — {hint}");
+                }
                 if let Some(callee) = unknown_call_hint(src, span.start) {
                     return format!(
                         "unexpected {found} at {line}:{col} — did you mean `{callee}`?"
@@ -1707,11 +1736,15 @@ pub fn parse_or_report(src: &str) -> Result<Query, String> {
                                 double_eq_hint(src, span.start).unwrap()
                             )
                         } else if matches!(e.found(), Some(Token::LParen)) {
-                            match unknown_call_hint(src, span.start) {
-                                Some(callee) => {
-                                    format!("unexpected {found} — did you mean `{callee}`?")
+                            if let Some(hint) = order_by_aggregate_hint(src, span.start) {
+                                format!("unexpected {found} — {hint}")
+                            } else {
+                                match unknown_call_hint(src, span.start) {
+                                    Some(callee) => {
+                                        format!("unexpected {found} — did you mean `{callee}`?")
+                                    }
+                                    None => format!("unexpected {found}"),
                                 }
-                                None => format!("unexpected {found}"),
                             }
                         } else {
                             match suggest_for_found(e.found()) {
@@ -3128,6 +3161,21 @@ mod tests {
     #[test]
     fn report_ok_on_valid_query() {
         assert!(parse_or_report("SELECT * FROM C").is_ok());
+    }
+
+    #[test]
+    fn report_order_by_aggregate_hint_in_caret_diagnostic() {
+        let rep = parse_or_report(
+            "SELECT classof(x) AS class, COUNT(*) AS n \
+             FROM INSTANCEOF java.lang.Object x \
+             GROUP BY classof(x) \
+             ORDER BY COUNT(*) DESC",
+        )
+        .unwrap_err();
+        assert!(
+            rep.contains("aggregate functions are not valid ORDER BY keys"),
+            "expected aggregate hint in caret diagnostic, got:\n{rep}"
+        );
     }
 
     #[test]
