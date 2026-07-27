@@ -707,6 +707,9 @@ function startTerminal() {
       const matched = singleColCmds.find(p => line.startsWith(p));
       if (matched) {
         const rawArg = line.slice(matched.length);
+        // /rename completes only the first argument; once there's a space, the
+        // second arg is a free-form new name — don't try to complete it.
+        if (matched === '/rename ' && rawArg.includes(' ')) { return; }
         const isAtCol = rawArg.startsWith('@') && (matched === '/filter ' || matched === '/grep ' || matched === '/not ' || matched === '/exclude ');
         const partial = (isAtCol ? rawArg.slice(1) : rawArg).toLowerCase();
         const cols = lastResult.columns.filter(c => c.toLowerCase().startsWith(partial));
