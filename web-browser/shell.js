@@ -661,6 +661,130 @@ function startTerminal() {
   let cursorPos = 0;  // index within line where the cursor sits
   let ghostText = '';   // current inline suggestion suffix (display only, not in line)
   let histIdx = -1;
+
+  // ── Completion popover ────────────────────────────────────────────────────
+  const popover = document.createElement('div');
+  popover.id = 'completion-popover';
+  document.body.appendChild(popover);
+
+  let popItems = [];   // [{value, group}]
+  let popSel  = -1;    // selected index (-1 = none)
+
+  function popHide() {
+    popover.classList.remove('visible');
+    popItems = [];
+    popSel = -1;
+  }
+
+  function popShow(items, typedToken) {
+    popItems = items;
+    popSel = -1;
+    popover.innerHTML = '';
+
+    const MAX = 200;
+    const visible = items.slice(0, MAX);
+    visible.forEach((c, i) => {
+      const div = document.createElement('div');
+      div.className = 'cp-item';
+      div.dataset.idx = i;
+
+      // highlight the typed prefix inside value
+      const val = c.value;
+      const lo = typedToken.toLowerCase();
+      const matchStart = val.toLowerCase().indexOf(lo);
+      let valHtml;
+      if (lo && matchStart >= 0) {
+        valHtml = escHtml(val.slice(0, matchStart))
+          + '<span class="cp-match">' + escHtml(val.slice(matchStart, matchStart + lo.length)) + '</span>'
+          + escHtml(val.slice(matchStart + lo.length));
+      } else {
+        valHtml = escHtml(val);
+      }
+
+      const grpHtml = c.group ? `<span class="cp-group">${escHtml(c.group)}</span>` : '';
+      div.innerHTML = `<span class="cp-value">${valHtml}</span>${grpHtml}`;
+      div.addEventListener('mousedown', e => {
+        e.preventDefault();
+        popAccept(i);
+        term.focus();
+      });
+      popover.appendChild(div);
+    });
+
+    if (items.length > MAX) {
+      const more = document.createElement('div');
+      more.className = 'cp-more';
+      more.textContent = `… ${items.length - MAX} more`;
+      popover.appendChild(more);
+    }
+
+    popPosition();
+    popover.classList.add('visible');
+  }
+
+  function escHtml(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  function popPosition() {
+    // Use xterm cell metrics to position below the current cursor column
+    const containerRect = document.getElementById('terminal-container').getBoundingClientRect();
+    let cellW = 8, cellH = 17;
+    try {
+      const core = term._core;
+      cellW = core._renderService.dimensions.css.cell.width;
+      cellH = core._renderService.dimensions.css.cell.height;
+    } catch (_) {}
+
+    const promptLen = PROMPT.replace(/\x1b\[[^m]*m/g, '').length;
+    const col = promptLen + cursorPos;
+    // xterm has a small left padding
+    const xtermPad = 8;
+    const x = containerRect.left + xtermPad + col * cellW;
+    // bottom of last row = containerRect.bottom (terminal fills container)
+    // we want just below cursor row; approximate as 2 rows up from bottom
+    const termRows = term.rows;
+    const cursorRow = termRows - 1; // input is always on last visible line
+    const y = containerRect.top + (cursorRow + 1) * cellH;
+
+    // flip above if not enough space below
+    const below = window.innerHeight - y;
+    const above = y - cellH;
+    const popH = Math.min(280, popItems.length * 25 + 8);
+
+    popover.style.left = Math.min(x, window.innerWidth - 490) + 'px';
+    if (below >= popH || below >= above) {
+      popover.style.top  = y + 'px';
+      popover.style.bottom = '';
+    } else {
+      popover.style.bottom = (window.innerHeight - y + cellH) + 'px';
+      popover.style.top = '';
+    }
+  }
+
+  function popSelect(idx) {
+    const items = popover.querySelectorAll('.cp-item');
+    items.forEach((el, i) => el.classList.toggle('selected', i === idx));
+    if (idx >= 0 && items[idx]) {
+      items[idx].scrollIntoView({ block: 'nearest' });
+    }
+    popSel = idx;
+  }
+
+  function popAccept(idx) {
+    if (idx < 0 || idx >= popItems.length) { popHide(); return; }
+    const c = popItems[idx];
+    // Replace the typed token at cursor with the chosen value
+    const prefix = line.slice(0, cursorPos);
+    const lastDelim = prefix.search(/[\s,(](?=[^\s,(]*$)/);
+    const tokenStart = lastDelim >= 0 ? lastDelim + 1 : 0;
+    const suffix = line.slice(cursorPos);
+    line = line.slice(0, tokenStart) + c.value + suffix;
+    cursorPos = tokenStart + c.value.length;
+    ghostText = '';
+    popHide();
+    redrawLine();
+  }
   const history = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
   let killRing = '';  // text killed by Ctrl+K/W/U
 
@@ -748,13 +872,14 @@ function startTerminal() {
   }
 
   function updateGhost() {
-    if (!wasmReady || !classNames.length) { ghostText = ''; return; }
+    if (!wasmReady || !classNames.length) { ghostText = ''; popHide(); return; }
     // Only suggest inside OQL, not for / commands or ! bookmarks
-    if (line.startsWith('/') || line.startsWith('!')) { ghostText = ''; return; }
+    if (line.startsWith('/') || line.startsWith('!')) { ghostText = ''; popHide(); return; }
     try {
       const cs = JSON.parse(wasmComplete(line, cursorPos, classNames));
       if (cs.length === 1) {
-        // Single match: show the remaining suffix as ghost text
+        // Single match: show ghost text inline, no popover
+        popHide();
         const prefix = line.slice(0, cursorPos);
         const lastDelim = prefix.search(/[\s,(](?=[^\s,(]*$)/);
         const typedToken = lastDelim >= 0 ? prefix.slice(lastDelim + 1) : prefix;
@@ -762,11 +887,20 @@ function startTerminal() {
           ? cs[0].value.slice(typedToken.length)
           : '';
         ghostText = suffix;
+      } else if (cs.length > 1) {
+        // Multiple matches: show popover, no ghost
+        ghostText = '';
+        const prefix = line.slice(0, cursorPos);
+        const lastDelim = prefix.search(/[\s,(](?=[^\s,(]*$)/);
+        const typedToken = lastDelim >= 0 ? prefix.slice(lastDelim + 1) : prefix;
+        popShow(cs, typedToken);
       } else {
         ghostText = '';
+        popHide();
       }
     } catch (_) {
       ghostText = '';
+      popHide();
     }
   }
 
@@ -827,6 +961,7 @@ function startTerminal() {
     cursorPos = newLine.length;
     histIdx = -1;
     ghostText = '';
+    popHide();
     redrawLine();
     term.focus();
   }
@@ -1025,9 +1160,11 @@ function startTerminal() {
     if (!wasmReady) return;
     try {
       const cs = JSON.parse(wasmComplete(line, cursorPos, classNames));
-      if (cs.length === 0) return;
+      if (cs.length === 0) { popHide(); return; }
       if (cs.length === 1) {
         // Complete to the single suggestion at cursor
+        popHide();
+        ghostText = '';
         const current = line.slice(0, cursorPos).trimEnd();
         const tokens = current.split(/[\s,(]+/);
         const lastToken = tokens[tokens.length - 1] || '';
@@ -1038,24 +1175,20 @@ function startTerminal() {
           redrawLine();
         }
       } else {
-        // Show a list of completions below the current line
-        term.writeln('');
-        const COLS = 3;
-        const colW = 26;
-        const limited = cs.slice(0, 30);
-        for (let i = 0; i < limited.length; i += COLS) {
-          const row = limited.slice(i, i + COLS);
-          term.writeln('  ' + row.map(c => {
-            const g = c.group ? `\x1b[2m(${c.group})\x1b[0m` : '';
-            return `\x1b[36m${padTo(c.value, colW)}\x1b[0m ${g}`;
-          }).join('  '));
+        // If popover is visible and has a selection, accept it
+        if (popover.classList.contains('visible') && popSel >= 0) {
+          popAccept(popSel);
+          return;
         }
-        if (cs.length > 30) {
-          term.writeln(`  \x1b[2m… ${cs.length - 30} more\x1b[0m`);
-        }
-        redrawLine();
+        // Show/refresh popover
+        const prefix = line.slice(0, cursorPos);
+        const lastDelim = prefix.search(/[\s,(](?=[^\s,(]*$)/);
+        const typedToken = lastDelim >= 0 ? prefix.slice(lastDelim + 1) : prefix;
+        ghostText = '';
+        popShow(cs, typedToken);
+        popSelect(0);
       }
-    } catch (_) { /* ignore */ }
+    } catch (_) { popHide(); }
   }
 
   async function handleEnter(text) {
@@ -2926,6 +3059,12 @@ function startTerminal() {
     }
 
     if (code === 'Enter') {
+      // Accept popover selection if open
+      if (popover.classList.contains('visible') && popSel >= 0) {
+        popAccept(popSel);
+        return;
+      }
+      popHide();
       const text = line;
       line = '';
       cursorPos = 0;
@@ -2958,6 +3097,11 @@ function startTerminal() {
       return;
     }
 
+    if (code === 'Escape') {
+      if (popover.classList.contains('visible')) { popHide(); return; }
+      return;
+    }
+
     if (code === 'Tab') {
       ev.preventDefault();
       handleTab();
@@ -2965,6 +3109,12 @@ function startTerminal() {
     }
 
     if (code === 'ArrowUp') {
+      // Navigate popover if open
+      if (popover.classList.contains('visible')) {
+        const newSel = popSel <= 0 ? popItems.length - 1 : popSel - 1;
+        popSelect(newSel);
+        return;
+      }
       if (histIdx + 1 < history.length) {
         histIdx++;
         setLine(history[histIdx]);
@@ -2973,6 +3123,12 @@ function startTerminal() {
     }
 
     if (code === 'ArrowDown') {
+      // Navigate popover if open
+      if (popover.classList.contains('visible')) {
+        const newSel = popSel >= popItems.length - 1 ? 0 : popSel + 1;
+        popSelect(newSel);
+        return;
+      }
       if (histIdx > 0) {
         histIdx--;
         setLine(history[histIdx]);
@@ -3073,6 +3229,7 @@ function startTerminal() {
           term.writeln('\x1b[2m(multi-line input discarded)\x1b[0m');
         }
         ghostText = '';
+        popHide();
         term.write(PROMPT);
       }
       return;
@@ -3098,6 +3255,7 @@ function startTerminal() {
         line = line.slice(cursorPos);
         cursorPos = 0;
         ghostText = '';
+        popHide();
         redrawLine();
       }
       return;

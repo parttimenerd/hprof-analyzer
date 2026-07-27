@@ -259,6 +259,41 @@ button:hover { background: #4a6aaa; }
 .xterm { height: 100% !important; padding: 4px 8px; }
 .xterm-viewport { overflow-y: hidden !important; }
 
+/* Completion popover */
+#completion-popover {
+  position: fixed;
+  z-index: 9999;
+  background: #1a1a2e;
+  border: 1px solid #3a4a6a;
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+  min-width: 280px;
+  max-width: 480px;
+  max-height: 280px;
+  overflow-y: auto;
+  display: none;
+  font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Menlo, Consolas, monospace;
+  font-size: 13px;
+}
+#completion-popover.visible { display: block; }
+.cp-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.cp-item:hover, .cp-item.selected {
+  background: #2a3a5a;
+}
+.cp-item.selected { background: #1e3a6e; }
+.cp-value { color: #60c8e0; flex-shrink: 0; }
+.cp-value .cp-match { color: #f0d080; font-weight: bold; }
+.cp-group { color: #5a6a8a; font-size: 11px; flex-shrink: 0; }
+.cp-more { padding: 3px 10px; color: #5a6a8a; font-size: 11px; font-style: italic; }
+
 /* ── Report screen ──────────────────────────────────────────────────────────── */
 #report-screen {
   flex: 1;
