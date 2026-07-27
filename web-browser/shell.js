@@ -1955,6 +1955,10 @@ function startTerminal() {
           localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
           term.writeln(`\x1b[32m✓ row limit: ${n}\x1b[0m`);
         }
+        if (lastResult && !isNaN(n) && n >= 0) {
+          renderResult(lastResult);
+          term.writeln(`\x1b[2m${lastResult.rows.length.toLocaleString('en-US')} rows\x1b[0m`);
+        }
       } else if (args[0] === 'bytes') {
         if (args[1] === 'raw') { settings.bytesRaw = true; }
         else if (args[1] === 'human') { settings.bytesRaw = false; }
