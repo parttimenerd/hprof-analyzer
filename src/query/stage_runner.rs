@@ -1504,7 +1504,7 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
                         });
                         match gb_match {
                             Some((j, _)) => key.get(j).cloned().unwrap_or(QueryValue::Null),
-                            None => key.first().cloned().unwrap_or(QueryValue::Null),
+                            None => QueryValue::Null,
                         }
                     }
                 })
