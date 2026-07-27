@@ -101,7 +101,7 @@ pub fn run_query_json(
         if used_fast_path {
             let ret = retained.unwrap();
             if cache.is_none() {
-                match ReplCache::build(path, reachable_only) {
+                match ReplCache::build(&crate::source::HprofSource::from(path), reachable_only) {
                     Ok(c) => *cache = Some(c),
                     Err(e) => return internal_error(e),
                 }
@@ -124,7 +124,7 @@ pub fn run_query_json(
         let eligible = crate::query::repl::cache_eligible(&q, &plan);
         if eligible {
             if cache.is_none() {
-                match ReplCache::build(path, reachable_only) {
+                match ReplCache::build(&crate::source::HprofSource::from(path), reachable_only) {
                     Ok(c) => *cache = Some(c),
                     Err(e) => return internal_error(e),
                 }
@@ -349,7 +349,7 @@ impl ServerState {
         let this = Arc::clone(self);
         std::thread::spawn(move || {
             let reachable_only = this.reachable_only.load(Ordering::Relaxed);
-            match ReplCache::build(&this.path, reachable_only) {
+            match ReplCache::build(&crate::source::HprofSource::from(this.path.as_str()), reachable_only) {
                 Ok(c) => {
                     let mut guard = this.cache.lock().unwrap_or_else(|e| e.into_inner());
                     // Only store if not already built (a concurrent request may
@@ -399,7 +399,7 @@ impl ServerState {
                 None => return,
             };
             let opts = crate::opts::AnalyzeOptions::default();
-            match crate::analyze_to_report_with_retained(&this.path, &opts) {
+            match crate::analyze_to_report_with_retained(&crate::source::HprofSource::from(this.path.as_str()), &opts) {
                 Ok((_report, retained)) => {
                     this.set_full_analysis_with_retained(Arc::new(retained));
                 }
@@ -1079,7 +1079,7 @@ mod tests {
         use crate::query::run::ReplCache;
 
         // Build a ReplCache to find `n` (object count) and populate retained.
-        let cache = ReplCache::build(FIXTURE, false).expect("ReplCache::build");
+        let cache = ReplCache::build(&crate::source::HprofSource::from(FIXTURE), false).expect("ReplCache::build");
         let n = cache.n;
         // Give every object a fake retained size of 42 bytes.
         let retained: Vec<u64> = vec![42u64; n];
@@ -1102,7 +1102,7 @@ mod tests {
         use crate::query::parse::parse;
         use crate::query::plan::plan_query;
 
-        let mut cache = ReplCache::build(FIXTURE, false).expect("ReplCache::build");
+        let mut cache = ReplCache::build(&crate::source::HprofSource::from(FIXTURE), false).expect("ReplCache::build");
         let n = cache.n;
         let retained: Vec<u64> = (0..n as u64).map(|i| i * 8 + 16).collect();
         let retained_arc = std::sync::Arc::new(retained.clone());

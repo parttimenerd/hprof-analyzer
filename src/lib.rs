@@ -33,19 +33,17 @@ pub use opts::{AnalyzeOptions, DetailLevel, OutputFormat};
 
 /// Run full analysis returning (Report, per-object retained-size vec).
 pub fn analyze_to_report_with_retained(
-    path: &str,
+    source: &crate::source::HprofSource,
     opts: &AnalyzeOptions,
 ) -> std::io::Result<(crate::report::Report, Vec<u64>)> {
-    analyze_to_report_inner(path, opts)
+    analyze_to_report_inner(source, opts)
 }
 
 fn analyze_to_report_inner(
-    path: &str,
+    source: &crate::source::HprofSource,
     opts: &AnalyzeOptions,
 ) -> std::io::Result<(crate::report::Report, Vec<u64>)> {
     use std::io;
-
-    let source = crate::source::HprofSource::from(path);
     let p1 = pass1::Pass1::run(&source, false)?;
 
     if p1.class_ids.len() > u32::MAX as usize {

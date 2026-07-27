@@ -820,10 +820,10 @@ fn run_default(cli: Cli) {
 /// so callers (e.g. the HTTP server) can reuse it for OQL queries without a
 /// full re-scan of the dump.
 pub(crate) fn analyze_to_report_with_retained(
-    path: &str,
+    source: &crate::source::HprofSource,
     opts: &AnalyzeOptions,
 ) -> std::io::Result<(crate::report::Report, Vec<u64>)> {
-    analyze_to_report_inner(path, opts)
+    analyze_to_report_inner(source.file_path(), opts)
 }
 
 fn analyze_to_report_inner(

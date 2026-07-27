@@ -1562,13 +1562,12 @@ pub struct ReplCache {
 }
 
 impl ReplCache {
-    pub fn build(path: &str, reachable_only: bool) -> std::io::Result<ReplCache> {
+    pub fn build(source: &crate::source::HprofSource, reachable_only: bool) -> std::io::Result<ReplCache> {
         let opts = crate::AnalyzeOptions {
             reachable_only,
             ..crate::AnalyzeOptions::default()
         };
-        // Pass1 owned by the cache (resolver source for Task 3's LiveResolver).
-        let source_cache = crate::source::HprofSource::from(path);
+        let source_cache = source.clone();
         let p1_owned = crate::pass1::Pass1::run(&source_cache, false)?;
         let p1_for_pass2 = crate::pass1::Pass1::run(&source_cache, false)?;
         let flat: Vec<(Query, QueryPlan)> = Vec::new();
@@ -1659,7 +1658,7 @@ mod tests {
     #[test]
     fn resident_only_matches_scan_path() {
         let path = "tests/fixtures/dump_4_philosophers.hprof";
-        let cache = ReplCache::build(path, true).expect("cache");
+        let cache = ReplCache::build(&crate::source::HprofSource::from(path), true).expect("cache");
 
         for oql in [
             "SELECT @objectAddress FROM java.lang.Thread",
@@ -1690,7 +1689,7 @@ mod tests {
     #[test]
     fn resident_only_matches_scan_path_more() {
         let path = "tests/fixtures/dump_4_philosophers.hprof";
-        let cache = ReplCache::build(path, true).expect("cache");
+        let cache = ReplCache::build(&crate::source::HprofSource::from(path), true).expect("cache");
 
         for oql in [
             "SELECT * FROM java.lang.Thread",
@@ -1731,7 +1730,7 @@ mod tests {
 
     #[test]
     fn repl_cache_builds_from_fixture() {
-        let cache = ReplCache::build("tests/fixtures/dump_4_philosophers.hprof", true)
+        let cache = ReplCache::build(&crate::source::HprofSource::from("tests/fixtures/dump_4_philosophers.hprof"), true)
             .expect("cache build");
         assert!(cache.n > 0, "some objects");
         assert_eq!(cache.shallow.len(), cache.n, "shallow covers all objects");
@@ -1739,7 +1738,7 @@ mod tests {
         assert!(cache.dfn.is_some(), "reachable-only build computes dfn");
 
         // --all build: no dfn.
-        let raw = ReplCache::build("tests/fixtures/dump_4_philosophers.hprof", false).expect("raw");
+        let raw = ReplCache::build(&crate::source::HprofSource::from("tests/fixtures/dump_4_philosophers.hprof"), false).expect("raw");
         assert!(raw.dfn.is_none(), "raw build has no dfn");
     }
 

@@ -3869,7 +3869,10 @@ fn run_one(
         // (user toggled !all/!reachable), don't rebuild mid-session (v1: avoid
         // churn) — fall back to the scan path for this one query instead.
         if cache.is_none() {
-            *cache = Some(crate::query::run::ReplCache::build(path, reachable_only)?);
+            *cache = Some(crate::query::run::ReplCache::build(
+                &crate::source::HprofSource::from(path),
+                reachable_only,
+            )?);
             writeln!(
                 out,
                 "(warm cache built — resident-only queries now skip the heap scan)"

@@ -58,7 +58,7 @@ impl ServeState {
             let path = self.path.clone();
             let opts = self.opts.clone();
             std::thread::spawn(move || {
-                let result = crate::analyze_to_report_with_retained(&path, &opts);
+                let result = crate::analyze_to_report_with_retained(&crate::source::HprofSource::from(path.as_str()), &opts);
                 let mut g = state_arc.lock().unwrap_or_else(|e| e.into_inner());
                 match result {
                     Ok((r, retained_vec)) => {
