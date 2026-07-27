@@ -1164,13 +1164,13 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             continue;
                         }
                         "filter" | "grep" => {
-                            prev_result = last_result.clone();
+                            if !rest.is_empty() { prev_result = last_result.clone(); }
                             handle_filter(rest, &mut last_result, max_width, &mut stdout)?;
                             stdout.flush()?;
                             continue;
                         }
                         "not" | "exclude" => {
-                            prev_result = last_result.clone();
+                            if !rest.is_empty() { prev_result = last_result.clone(); }
                             handle_filter_not(rest, &mut last_result, max_width, &mut stdout)?;
                             stdout.flush()?;
                             continue;
@@ -1182,13 +1182,13 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             continue;
                         }
                         "sample" => {
-                            prev_result = last_result.clone();
+                            if !rest.is_empty() { prev_result = last_result.clone(); }
                             handle_sample(rest, &mut last_result, max_width, &mut stdout)?;
                             stdout.flush()?;
                             continue;
                         }
                         "sort" => {
-                            prev_result = last_result.clone();
+                            if !rest.is_empty() { prev_result = last_result.clone(); }
                             handle_sort(rest, &mut last_result, max_width, &mut stdout)?;
                             stdout.flush()?;
                             continue;
@@ -1204,7 +1204,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             continue;
                         }
                         "pivot" => {
-                            prev_result = last_result.clone();
+                            if !rest.is_empty() { prev_result = last_result.clone(); }
                             handle_pivot(rest, &mut last_result, max_width, &mut stdout)?;
                             stdout.flush()?;
                             continue;
@@ -1256,7 +1256,6 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             continue;
                         }
                         "select" => {
-                            prev_result = last_result.clone();
                             let col_args: Vec<&str> = rest.split_whitespace().collect();
                             if col_args.is_empty() {
                                 match &last_result {
@@ -1302,6 +1301,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                                 elapsed_ms: None,
                                             };
                                             print_result(&projected, std::time::Duration::ZERO, max_width, &mut stdout)?;
+                                            prev_result = last_result.clone();
                                             last_result = Some(projected);
                                         }
                                     }
@@ -1311,7 +1311,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             continue;
                         }
                         "drop" => {
-                            prev_result = last_result.clone();
+                            if !rest.is_empty() { prev_result = last_result.clone(); }
                             handle_drop(rest, &mut last_result, max_width, &mut stdout)?;
                             stdout.flush()?;
                             continue;
