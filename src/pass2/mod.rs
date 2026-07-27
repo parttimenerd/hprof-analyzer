@@ -57,7 +57,7 @@ impl Pass2 {
     /// keep its ~5.5GB off the rpo peak), and the early-compressed `shallow` /
     /// `class_idx` blobs. `compress` selects the codec for those cold arrays.
     pub fn build(
-        path: &str,
+        source: &crate::source::HprofSource,
         mut p1: Pass1,
         compress: crate::cvec::Codec,
         opts: &crate::AnalyzeOptions,
@@ -93,10 +93,8 @@ impl Pass2 {
         let id_size = p1.id_size;
         let ptr_size = id_size as usize;
 
-        // Opener closure — will become `|| source.open()` once Pass2::build
-        // takes &HprofSource in Task 4. For now wraps the path string.
-        let path_owned = path.to_string();
-        let open = move || HprofReader::open(&path_owned);
+        let source_owned = source.clone();
+        let open = move || source_owned.open();
 
         // ── Phase 0: detect ref_size ─────────────────────────────────────
         // Reuse the object-array (addr, count) data already collected in pass1
@@ -528,7 +526,7 @@ impl Pass2 {
 
         // ── Sub-pass 2a scan ─────────────────────────────────────────────
         {
-            let mut r = HprofReader::open(path)?;
+            let mut r = source.open()?;
             // Scratch buffer reused across INSTANCE_DUMP and OBJ_ARRAY_DUMP reads (fix #6)
             let mut scratch: Vec<u8> = Vec::with_capacity(4096);
 
@@ -1075,7 +1073,7 @@ impl Pass2 {
         // B3: no fwd_cursor clone. fwd_offsets is advanced in place as the
         // write cursor during the fill, then restored by right-shift below.
         {
-            let mut r = HprofReader::open(path)?;
+            let mut r = source.open()?;
             let mut scratch: Vec<u8> = Vec::with_capacity(4096);
             let mut inb_flat_stub = crate::chunkvec::ChunkU32::zeroed(0);
             let mut in_degree_stub: Vec<u32> = Vec::new();
@@ -1158,10 +1156,7 @@ impl Pass2 {
         let in_cursors = in_degree; // renamed for clarity: prefix-summed START cursors
 
         // Precompute source_name before moving p1.id_map into InboundBuilder.
-        let source_name = std::path::Path::new(path)
-            .file_name()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| path.to_string());
+        let source_name = source.display_name().to_string();
 
         let alloc_stack_serial = std::mem::take(&mut p1.alloc_stack_serial);
         let mut gc_root_tag_counts: Vec<(u8, u64)> = p1
@@ -1188,7 +1183,7 @@ impl Pass2 {
             format: p1.format,
             file_size: p1.file_size,
             source_name,
-            file_path: path.to_string(),
+            file_path: source.file_path().to_string(),
             id_size,
             ref_size: ref_size as u8,
             header_timestamp_ms: p1.header_timestamp_ms,
@@ -1244,7 +1239,7 @@ impl Pass2 {
         // class_addrs, field_plans and synthetic_edges out of build (all
         // unused here after the forward fill).
         let inbound = InboundBuilder {
-            path: path.to_string(),
+            source: source.clone(),
             id_size,
             n,
             id_map: Some(p1.id_map),
@@ -1982,7 +1977,7 @@ mod tests {
         }
         let p1 = Pass1::run(&crate::source::HprofSource::from(DUMP), false).unwrap();
         let (g, inbound, _sc, _ci, _as, _q, _rw, _sv, _sv_trunc) = Pass2::build(
-            DUMP,
+            &crate::source::HprofSource::from(DUMP),
             p1,
             crate::cvec::Codec::None,
             &crate::AnalyzeOptions::default(),
@@ -2023,7 +2018,7 @@ mod tests {
         }
         let p1 = Pass1::run(&crate::source::HprofSource::from(DUMP), false).unwrap();
         let (g, _inbound, _sc, _ci, _as, _q, _rw, _sv, _sv_trunc) = Pass2::build(
-            DUMP,
+            &crate::source::HprofSource::from(DUMP),
             p1,
             crate::cvec::Codec::None,
             &crate::AnalyzeOptions::default(),

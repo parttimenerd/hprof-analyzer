@@ -457,7 +457,7 @@ pub struct Graph {
 /// arrays), keeping the ~5.5GB inbound CSR off the rpo-phase RSS peak.
 #[allow(dead_code)]
 pub struct InboundBuilder {
-    pub(crate) path: String,
+    pub(crate) source: crate::source::HprofSource,
     pub(crate) id_size: u8,
     pub(crate) n: usize,
     /// Live id_map as constructed by `build`; taken by `compress_id_map`.
@@ -478,7 +478,7 @@ pub struct InboundBuilder {
 /// so that a post-inbound HPROF rescan can rebuild the forward-edge CSR without
 /// keeping `fwd_targets` alive across the inbound peak window.
 pub struct MatOutboundRescanCtx {
-    pub path: String,
+    pub source: crate::source::HprofSource,
     pub id_size: u8,
     /// Compressed id_map blob + element count + codec.
     pub id_map_c: Option<(Vec<u8>, usize)>,
@@ -494,7 +494,7 @@ impl InboundBuilder {
     /// cloned (cheap: ~1 MB total). The builder retains full copies of all data.
     pub fn take_for_outbound_rescan(&mut self) -> MatOutboundRescanCtx {
         MatOutboundRescanCtx {
-            path: self.path.clone(),
+            source: self.source.clone(),
             id_size: self.id_size,
             id_map_c: self.id_map_c.clone(),
             id_map_codec: self.id_map_codec,
@@ -636,7 +636,7 @@ impl InboundBuilder {
     #[cfg(test)]
     pub fn build(self, dfn: &[u32]) -> io::Result<(Vec<u64>, Vec<u8>)> {
         let InboundBuilder {
-            path,
+            source,
             id_size,
             n,
             id_map,
@@ -677,7 +677,7 @@ impl InboundBuilder {
 
         // -- Sub-pass 2b scan: fill INBOUND edges only --
         {
-            let mut r = HprofReader::open(&path)?;
+            let mut r = source.open()?;
             let mut scratch: Vec<u8> = Vec::with_capacity(4096);
             let mut fwd_t_stub: crate::chunkvec::ChunkU32 = crate::chunkvec::ChunkU32::zeroed(0);
             let mut fwd_offsets_stub: Vec<u32> = Vec::new();
@@ -902,7 +902,7 @@ impl InboundBuilder {
         F: FnMut(usize, Vec<u32>) -> io::Result<()>,
     {
         let InboundBuilder {
-            path,
+            source,
             id_size,
             n,
             id_map,
@@ -937,7 +937,7 @@ impl InboundBuilder {
         // Single HPROF scan: fill inb_flat (inbound) AND collect per-object
         // forward edges for the on_outbound callback.
         {
-            let mut r = HprofReader::open(&path)?;
+            let mut r = source.open()?;
             let mut scratch: Vec<u8> = Vec::with_capacity(4096);
             let ids = id_size as u64;
             let mut cache = crate::id_map::IndexCache::new();
@@ -1195,7 +1195,7 @@ pub fn rescan_outbound(
     let mut scratch: Vec<u8> = Vec::with_capacity(4096);
     let mut cache = crate::id_map::IndexCache::new();
 
-    let mut r = HprofReader::open(&ctx.path)?;
+    let mut r = ctx.source.open()?;
     loop {
         let tag = match r.u1() {
             Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,

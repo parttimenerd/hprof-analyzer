@@ -45,7 +45,8 @@ fn analyze_to_report_inner(
 ) -> std::io::Result<(crate::report::Report, Vec<u64>)> {
     use std::io;
 
-    let p1 = pass1::Pass1::run(&crate::source::HprofSource::from(path), false)?;
+    let source = crate::source::HprofSource::from(path);
+    let p1 = pass1::Pass1::run(&source, false)?;
 
     if p1.class_ids.len() > u32::MAX as usize {
         return Err(io::Error::new(
@@ -73,7 +74,7 @@ fn analyze_to_report_inner(
         _refwalk_csr,
         _string_values,
         _string_values_truncated,
-    ) = pass2::Pass2::build(path, p1, compress, opts, &[], &mut no_in_sets, &mut no_exists_bools)?;
+    ) = pass2::Pass2::build(&source, p1, compress, opts, &[], &mut no_in_sets, &mut no_exists_bools)?;
 
     inbound.compress_id_map(compress)?;
 

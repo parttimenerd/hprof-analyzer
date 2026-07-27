@@ -62,7 +62,8 @@ pub(crate) fn run_oql_escalated(
     reachable_only: bool,
     opts: &AnalyzeOptions,
 ) -> io::Result<Vec<query::model::QueryResult>> {
-    let p1 = pass1::Pass1::run(&crate::source::HprofSource::from(input), false)?;
+    let source = crate::source::HprofSource::from(input);
+    let p1 = pass1::Pass1::run(&source, false)?;
     if p1.class_ids.len() > u32::MAX as usize {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -104,7 +105,7 @@ pub(crate) fn run_oql_escalated(
         refwalk_csr,
         string_values,
         string_values_truncated,
-    ) = pass2::Pass2::build(input, p1, compress, opts, flat, &mut no_in_sets, &mut no_exists_bools)?;
+    ) = pass2::Pass2::build(&source, p1, compress, opts, flat, &mut no_in_sets, &mut no_exists_bools)?;
 
     // Per-slot source-index sidecar captured during the scan (armed only when
     // `reachable_only`, via `opts.reachable_only` inside pass2). Taken BEFORE the

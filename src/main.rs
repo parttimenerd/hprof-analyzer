@@ -830,7 +830,8 @@ fn analyze_to_report_inner(
     path: &str,
     opts: &AnalyzeOptions,
 ) -> std::io::Result<(crate::report::Report, Vec<u64>)> {
-    let p1 = pass1::Pass1::run(&crate::source::HprofSource::from(path), false)?;
+    let source = crate::source::HprofSource::from(path);
+    let p1 = pass1::Pass1::run(&source, false)?;
 
     if p1.class_ids.len() > u32::MAX as usize {
         return Err(io::Error::new(
@@ -858,7 +859,7 @@ fn analyze_to_report_inner(
         _refwalk_csr,
         _string_values,
         _string_values_truncated,
-    ) = pass2::Pass2::build(path, p1, compress, opts, &[], &mut no_in_sets, &mut no_exists_bools)?;
+    ) = pass2::Pass2::build(&source, p1, compress, opts, &[], &mut no_in_sets, &mut no_exists_bools)?;
 
     inbound.compress_id_map(compress)?;
 
@@ -1523,7 +1524,8 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
     } else if needs_full {
         run_oql_escalated(input, &flat, &union_groups, opts.reachable_only, &opts)?
     } else {
-        let p1 = pass1::Pass1::run(&crate::source::HprofSource::from(input), false)?;
+        let source_q = crate::source::HprofSource::from(input);
+        let p1 = pass1::Pass1::run(&source_q, false)?;
         if p1.class_ids.len() > u32::MAX as usize {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -1538,7 +1540,7 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
         let mut no_in_sets = std::collections::HashMap::new();
         let mut no_exists_bools = std::collections::HashMap::new();
         let (g, _inbound, _fwd_off_c, _fwd_tgt_c, _in_c, query_state, refwalk_csr, string_values, _sv_trunc) =
-            pass2::Pass2::build(input, p1, cvec::Codec::Deflate9, &opts, &flat, &mut no_in_sets, &mut no_exists_bools)?;
+            pass2::Pass2::build(&source_q, p1, cvec::Codec::Deflate9, &opts, &flat, &mut no_in_sets, &mut no_exists_bools)?;
 
         // Query-only path: retained sizes/dominators are not computed, so cross-phase
         // (@retainedHeapSize) queries resolve to actionable errors here.
@@ -1616,7 +1618,8 @@ fn run(
 
     let t = Instant::now();
     progress::phase("scanning dump (pass 1)");
-    let p1 = pass1::Pass1::run(&crate::source::HprofSource::from(input), mat.is_some())?;
+    let source = crate::source::HprofSource::from(input);
+    let p1 = pass1::Pass1::run(&source, mat.is_some())?;
     log(verbose, "pass1", t.elapsed().as_secs_f64());
 
     // The entire analysis works in u32 pre-order / node-index space (dfn,
@@ -1716,7 +1719,7 @@ fn run(
         refwalk_csr,
         string_values,
         string_values_truncated,
-    ) = pass2::Pass2::build(input, p1, compress, &opts, &flat_queries, &mut no_in_sets, &mut no_exists_bools)?;
+    ) = pass2::Pass2::build(&source, p1, compress, &opts, &flat_queries, &mut no_in_sets, &mut no_exists_bools)?;
     log(
         verbose,
         &format!("pass2 n={}", g.n),

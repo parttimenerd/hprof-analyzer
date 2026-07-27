@@ -978,11 +978,12 @@ pub fn run_single_dump(
 
     if inners.is_empty() {
         // Fast path: no subqueries — one scan, no injection.
-        let p1 = crate::pass1::Pass1::run(&crate::source::HprofSource::from(path), false)?;
+        let source = crate::source::HprofSource::from(path);
+        let p1 = crate::pass1::Pass1::run(&source, false)?;
         let mut empty = std::collections::HashMap::new();
         let mut empty_exists = std::collections::HashMap::new();
         let (g, .., state, refwalk_csr, string_values, _sv_trunc) = crate::pass2::Pass2::build(
-            path,
+            &source,
             p1,
             crate::cvec::Codec::Deflate9,
             &opts,
@@ -1012,7 +1013,8 @@ pub fn run_single_dump(
         .iter()
         .map(|i| (i.inner.clone(), i.plan.clone()))
         .collect();
-    let p1_inner = crate::pass1::Pass1::run(&crate::source::HprofSource::from(path), false)?;
+    let source_inner = crate::source::HprofSource::from(path);
+    let p1_inner = crate::pass1::Pass1::run(&source_inner, false)?;
     let mut empty = std::collections::HashMap::new();
     let mut empty_exists_inner = std::collections::HashMap::new();
     // Inner subqueries feed only membership/identity sets via
@@ -1024,7 +1026,7 @@ pub fn run_single_dump(
     // rows match against a MAT-invisible object, breaking parity.
     let (inner_g, .., mut inner_state, _inner_refwalk_csr, _inner_sv, _inner_sv_trunc) =
         crate::pass2::Pass2::build(
-            path,
+            &source_inner,
             p1_inner,
             crate::cvec::Codec::Deflate9,
             &opts,
@@ -1104,10 +1106,11 @@ pub fn run_single_dump(
     }
 
     // ── Outer pass: scan again with IN sets injected ─────────────────────────
-    let p1_outer = crate::pass1::Pass1::run(&crate::source::HprofSource::from(path), false)?;
+    let source_outer = crate::source::HprofSource::from(path);
+    let p1_outer = crate::pass1::Pass1::run(&source_outer, false)?;
     let (outer_g, .., outer_state, outer_refwalk_csr, outer_sv, _outer_sv_trunc) =
         crate::pass2::Pass2::build(
-            path,
+            &source_outer,
             p1_outer,
             crate::cvec::Codec::Deflate9,
             &opts,
@@ -1565,14 +1568,14 @@ impl ReplCache {
             ..crate::AnalyzeOptions::default()
         };
         // Pass1 owned by the cache (resolver source for Task 3's LiveResolver).
-        let p1_owned = crate::pass1::Pass1::run(&crate::source::HprofSource::from(path), false)?;
-        // Second Pass1 consumed by Pass2 (it moves id_map). Empty query set.
-        let p1_for_pass2 = crate::pass1::Pass1::run(&crate::source::HprofSource::from(path), false)?;
+        let source_cache = crate::source::HprofSource::from(path);
+        let p1_owned = crate::pass1::Pass1::run(&source_cache, false)?;
+        let p1_for_pass2 = crate::pass1::Pass1::run(&source_cache, false)?;
         let flat: Vec<(Query, QueryPlan)> = Vec::new();
         let mut empty = std::collections::HashMap::new();
         let mut empty_exists = std::collections::HashMap::new();
         let (g, _, shallow_c, ..) = crate::pass2::Pass2::build(
-            path,
+            &source_cache,
             p1_for_pass2,
             crate::cvec::Codec::Deflate9,
             &opts,
