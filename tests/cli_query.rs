@@ -6341,3 +6341,56 @@ fn query_to_hex_in_retained_path_is_non_null() {
         );
     }
 }
+
+#[test]
+fn query_tostring_with_retained_where_applies_both_filters() {
+    let Some(hprof) = philosophers() else { return };
+    // Bug: when both toString(x) LIKE and @retainedHeapSize > N appear in WHERE,
+    // the retained filter was silently ignored — string_values_rows only ran
+    // eval_tostring_pred, which passes non-toString compares as true.
+    let loose = Command::new(BIN)
+        .arg("query").arg(&hprof)
+        .args(["--query",
+            "SELECT toString(x), @retainedHeapSize FROM java.lang.String x \
+             WHERE toString(x) LIKE \".*renaissance.*\" AND @retainedHeapSize > 0 \
+             ORDER BY @retainedHeapSize DESC LIMIT 10"])
+        .output().unwrap();
+    assert!(loose.status.success());
+    let loose_stdout = String::from_utf8_lossy(&loose.stdout);
+
+    let tight = Command::new(BIN)
+        .arg("query").arg(&hprof)
+        .args(["--query",
+            "SELECT toString(x), @retainedHeapSize FROM java.lang.String x \
+             WHERE toString(x) LIKE \".*renaissance.*\" AND @retainedHeapSize > 235 \
+             ORDER BY @retainedHeapSize DESC LIMIT 10"])
+        .output().unwrap();
+    assert!(tight.status.success());
+    let tight_stdout = String::from_utf8_lossy(&tight.stdout);
+
+    // The loose query should return rows with @retainedHeapSize < 236 as well.
+    // The tight query should only return rows with @retainedHeapSize >= 236.
+    let loose_rows: Vec<&str> = loose_stdout.lines()
+        .filter(|l| l.contains('|') && !l.contains("toString") && !l.contains("---"))
+        .collect();
+    let tight_rows: Vec<&str> = tight_stdout.lines()
+        .filter(|l| l.contains('|') && !l.contains("toString") && !l.contains("---"))
+        .collect();
+    assert!(
+        loose_rows.len() > tight_rows.len(),
+        "tight filter (>235) should return fewer rows than loose filter (>0)\n\
+         loose ({} rows):\n{loose_stdout}\ntight ({} rows):\n{tight_stdout}",
+        loose_rows.len(), tight_rows.len()
+    );
+    // Every tight row must have @retainedHeapSize > 235.
+    for row in &tight_rows {
+        let cols: Vec<&str> = row.split('|').collect();
+        if let Some(ret_str) = cols.get(1) {
+            let ret: i64 = ret_str.trim().parse().unwrap_or(0);
+            assert!(
+                ret > 235,
+                "@retainedHeapSize filter was not applied: row has ret={ret} which should be >235\nrow: {row}"
+            );
+        }
+    }
+}

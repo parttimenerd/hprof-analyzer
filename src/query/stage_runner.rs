@@ -677,15 +677,30 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
 
     let seeds: Vec<u32> = entry.carry.indices();
 
-    // Apply toString(s) WHERE predicates.
-    let kept: Vec<u32> = if q.where_.as_ref().is_some_and(has_to_string_pred) {
+    // Apply toString(s) WHERE predicates, then any @retainedHeapSize WHERE terms
+    // that may also be present when this path co-runs with a retained join.
+    // `eval_tostring_pred` passes non-toString comparisons as true (they were
+    // applied at scan time); `retained_where_passes` adds the retained-size filter
+    // that the scan skipped (retained size was unknown during pass2).
+    let kept: Vec<u32> = {
+        let has_ts = q.where_.as_ref().is_some_and(has_to_string_pred);
+        let has_ret = q.where_.as_ref().is_some_and(crate::query::plan::pred_uses_retained);
         seeds
             .iter()
             .copied()
-            .filter(|&s| eval_tostring_pred(q.where_.as_ref().unwrap(), s, ctx, &like_regexes))
+            .filter(|&s| {
+                if has_ts && !eval_tostring_pred(q.where_.as_ref().unwrap(), s, ctx, &like_regexes) {
+                    return false;
+                }
+                if has_ret {
+                    let ret = *ctx.retained.get(s as usize).unwrap_or(&0);
+                    if !retained_where_passes(q, ret) {
+                        return false;
+                    }
+                }
+                true
+            })
             .collect()
-    } else {
-        seeds
     };
 
     let columns: Vec<QueryColumn> = crate::query::execute::query_columns(q);
