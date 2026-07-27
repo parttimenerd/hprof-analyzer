@@ -472,6 +472,12 @@ document.getElementById('btn-analyze').addEventListener('click', async () => {
         statusEl.textContent = 'Analysis ready';
         buildSidebar(true);
         if (term) term.writeln('\r\n\x1b[32m[Analysis complete — @retainedHeapSize queries now available]\x1b[0m');
+        // Show the analysis report
+        try {
+          const reportJson = wasmSession.generate_report();
+          renderReport(reportJson);
+          showScreen('report-screen');
+        } catch (_) {}
       } catch (e) {
         statusEl.textContent = `Analysis failed: ${e}`;
         btn.disabled = false;
@@ -513,6 +519,14 @@ async function pollAnalysisStatus() {
       btn.disabled = true;
       buildSidebar(true);
       if (term) term.writeln('\r\n\x1b[32m[Analysis complete — @retainedHeapSize queries now available]\x1b[0m');
+      try {
+        const rr = await fetch(serverUrl + '/report');
+        if (rr.ok) {
+          const reportJson = await rr.text();
+          renderReport(reportJson);
+          showScreen('report-screen');
+        }
+      } catch (_) {}
     } else if (data.status === 'analyzing') {
       statusEl.textContent = 'Analyzing…';
       btn.disabled = true;
