@@ -2456,18 +2456,23 @@ function startTerminal() {
     term.writeln('');
   }
 
-  // ── Paste handler — xterm fires onData for pasted text ──────────────────────
+  // ── Input handler — handles both paste and normal character input ────────────
+  // onData fires for ALL input (keystrokes and paste). onKey fires only for
+  // keyboard events, NOT for paste. We insert all printable chars here so that
+  // single-char pastes are not silently dropped.
   term.onData(data => {
-    // Filter to printable ASCII range (avoid control sequences from paste)
-    const printable = data.replace(/[^\x20-\x7E -￿]/g, '');
+    // During isearch, onKey handles char input for the search query — skip here.
+    if (isearching) return;
+    // Strip control bytes (0x00-0x1F, 0x7F-0x9F) and ANSI escape sequences.
+    const printable = data.replace(/[\x00-\x1F\x7F-\x9F]|\x1B\[[\x20-\x3F]*[\x40-\x7E]/g, '');
     if (!printable) return;
-    if (printable.length > 1 || printable !== data) {
-      // Multi-char or filtered: it's a paste
-      line = line.slice(0, cursorPos) + printable + line.slice(cursorPos);
-      cursorPos += printable.length;
+    line = line.slice(0, cursorPos) + printable + line.slice(cursorPos);
+    cursorPos += printable.length;
+    if (printable.length === 1 && cursorPos === line.length) {
+      term.write(printable);  // cursor at end: direct write avoids redraw flicker
+    } else {
       redrawLine();
     }
-    // Single printable chars are handled by onKey
   });
 
   // ── Key handler ──────────────────────────────────────────────────────────────
@@ -2697,17 +2702,7 @@ function startTerminal() {
       }
       return;
     }
-
-    // Printable characters only — insert at cursorPos
-    if (key.length === 1 && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
-      line = line.slice(0, cursorPos) + key + line.slice(cursorPos);
-      cursorPos++;
-      if (cursorPos === line.length) {
-        // Cursor at end — just append (no redraw flicker)
-        term.write(key);
-      } else {
-        redrawLine();
-      }
-    }
+    // Printable char insertion is now handled in onData (above), which fires
+    // for both keystrokes and paste. Nothing to do here.
   });
 }
