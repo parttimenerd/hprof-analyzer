@@ -970,10 +970,10 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
         .and_then(|p| std::fs::read_to_string(p).ok())
         .map(|s| s.lines().count())
         .unwrap_or(0);
-    let hist_note = if hist_count > 0 { format!("  ·  {} history entries", hist_count) } else { String::new() };
+    let hist_note = if hist_count > 0 { format!("  ·  {} history entries", fmt_int(hist_count as i64)) } else { String::new() };
     writeln!(stdout, "{cb}{cc}hprof-analyzer{cr}{cc} OQL REPL{cr}")?;
     writeln!(stdout, "{cd} └─ {} classes, {} field names{hist_note}  ·  !help for commands  ·  !quit to exit{cr}",
-        names_for_meta.0.len(), names_for_meta.1.len())?;
+        fmt_int(names_for_meta.0.len() as i64), fmt_int(names_for_meta.1.len() as i64))?;
     writeln!(stdout, "{cd}    Tab = complete  ·  Ctrl+R = history search  ·  mode: reachable-only (MAT parity){cr}\n")?;
     let mut buffer_lines: Vec<String> = Vec::new();
 
@@ -3486,11 +3486,11 @@ fn handle_meta(
                     writeln!(
                         out,
                         "{cd}  ... {} more (showing {CAP}; use `!{verb} <pattern>` to narrow){cr}",
-                        matches.len() - CAP
+                        fmt_int((matches.len() - CAP) as i64)
                     )?;
                 }
                 let label = if matches.len() == 1 { kind } else { kind_plural };
-                writeln!(out, "{cd}({} {label}){cr}", matches.len())?;
+                writeln!(out, "{cd}({} {label}){cr}", fmt_int(matches.len() as i64))?;
             }
         }
         "reachable" | "reachable-only" => {
