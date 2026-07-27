@@ -2940,7 +2940,12 @@ function startTerminal() {
           const echo = recalled.length > term.cols - PROMPT.length - 1
             ? recalled.slice(0, term.cols - PROMPT.length - 2) + '…' : recalled;
           term.writeln(`\x1b[2m↳ ${echo}\x1b[0m`);
-          await runQuery(recalled);
+          if (recalled.trimStart().startsWith('/')) {
+            // History entry is a command — re-dispatch it fully
+            await handleEnter(recalled);
+          } else {
+            await runQuery(recalled);
+          }
         }
       } else {
         const name = cmd.slice(1);
