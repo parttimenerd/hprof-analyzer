@@ -1570,6 +1570,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                     )? {
                                         last_query = Some(q);
                                         last_result = Some(res);
+                                        prev_result = None;
                                         current_row = 0;
                                     }
                                 }
