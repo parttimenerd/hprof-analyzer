@@ -17,35 +17,35 @@ pub const NAMED_QUERIES: &[NamedQuery] = &[
         display: "Top classes by instance count",
         group: "Overview",
         needs_retained: false,
-        oql: "SELECT classof(x) AS class, COUNT(*) AS count FROM java.lang.Object x GROUP BY classof(x) ORDER BY count DESC LIMIT 30",
+        oql: "SELECT classof(x) AS class, COUNT(*) AS count FROM INSTANCEOF java.lang.Object x GROUP BY classof(x) ORDER BY count DESC LIMIT 30",
     },
     NamedQuery {
         name: "top-classes-by-size",
         display: "Top classes by shallow size",
         group: "Overview",
         needs_retained: false,
-        oql: "SELECT classof(x) AS class, SUM(@usedHeapSize) AS bytes FROM java.lang.Object x GROUP BY classof(x) ORDER BY bytes DESC LIMIT 30",
+        oql: "SELECT classof(x) AS class, SUM(@usedHeapSize) AS bytes FROM INSTANCEOF java.lang.Object x GROUP BY classof(x) ORDER BY bytes DESC LIMIT 30",
     },
     NamedQuery {
         name: "largest-objects",
         display: "Largest individual objects",
         group: "Overview",
         needs_retained: false,
-        oql: "SELECT @objectAddress, classof(x) AS class, @usedHeapSize AS bytes FROM java.lang.Object x ORDER BY bytes DESC LIMIT 20",
+        oql: "SELECT @objectAddress, classof(x) AS class, @usedHeapSize AS bytes FROM INSTANCEOF java.lang.Object x ORDER BY bytes DESC LIMIT 20",
     },
     NamedQuery {
         name: "object-count-total",
         display: "Total object count",
         group: "Overview",
         needs_retained: false,
-        oql: "SELECT COUNT(*) AS total_objects FROM java.lang.Object",
+        oql: "SELECT COUNT(*) AS total_objects FROM INSTANCEOF java.lang.Object",
     },
     NamedQuery {
         name: "heap-summary",
         display: "Heap summary by class",
         group: "Overview",
         needs_retained: false,
-        oql: "SELECT classof(x) AS class, COUNT(*) AS count, SUM(@usedHeapSize) AS total_bytes FROM java.lang.Object x GROUP BY classof(x) ORDER BY total_bytes DESC LIMIT 50",
+        oql: "SELECT classof(x) AS class, COUNT(*) AS count, SUM(@usedHeapSize) AS total_bytes FROM INSTANCEOF java.lang.Object x GROUP BY classof(x) ORDER BY total_bytes DESC LIMIT 50",
     },
     // ── Strings ──────────────────────────────────────────────────────────────
     NamedQuery {
@@ -53,14 +53,14 @@ pub const NAMED_QUERIES: &[NamedQuery] = &[
         display: "Duplicate string values",
         group: "Strings",
         needs_retained: false,
-        oql: "SELECT s.value AS value, COUNT(*) AS count FROM java.lang.String s GROUP BY s.value ORDER BY count DESC LIMIT 30",
+        oql: "SELECT toString(s) AS value, COUNT(*) AS count FROM java.lang.String s GROUP BY toString(s) ORDER BY count DESC LIMIT 30",
     },
     NamedQuery {
         name: "largest-strings",
         display: "Largest String objects",
         group: "Strings",
         needs_retained: false,
-        oql: "SELECT @objectAddress, @usedHeapSize AS bytes FROM java.lang.String ORDER BY bytes DESC LIMIT 20",
+        oql: "SELECT @objectAddress, toString(s) AS value, @usedHeapSize AS bytes FROM java.lang.String s ORDER BY bytes DESC LIMIT 20",
     },
     NamedQuery {
         name: "string-count",
@@ -97,14 +97,14 @@ pub const NAMED_QUERIES: &[NamedQuery] = &[
         display: "Large collections (>1000 elements)",
         group: "Collections",
         needs_retained: false,
-        oql: "SELECT @objectAddress, classof(x) AS class, x.size AS size FROM java.util.AbstractCollection x WHERE x.size > 1000 ORDER BY size DESC LIMIT 20",
+        oql: "SELECT @objectAddress, classof(x) AS class, x.size AS size FROM INSTANCEOF java.util.AbstractCollection x WHERE x.size > 1000 ORDER BY size DESC LIMIT 20",
     },
     NamedQuery {
         name: "empty-collections",
         display: "Empty collections",
         group: "Collections",
         needs_retained: false,
-        oql: "SELECT @objectAddress, classof(x) AS class FROM java.util.AbstractCollection x WHERE x.size = 0 LIMIT 50",
+        oql: "SELECT @objectAddress, classof(x) AS class FROM INSTANCEOF java.util.AbstractCollection x WHERE x.size = 0 LIMIT 50",
     },
     // ── Class Loaders ─────────────────────────────────────────────────────────
     NamedQuery {
@@ -112,14 +112,14 @@ pub const NAMED_QUERIES: &[NamedQuery] = &[
         display: "All ClassLoader instances",
         group: "Class Loaders",
         needs_retained: false,
-        oql: "SELECT @objectAddress, classof(x) AS class FROM java.lang.ClassLoader",
+        oql: "SELECT @objectAddress, classof(x) AS class FROM INSTANCEOF java.lang.ClassLoader",
     },
     NamedQuery {
         name: "classes-per-loader",
         display: "Class count per loader",
         group: "Class Loaders",
         needs_retained: false,
-        oql: "SELECT classof(x) AS loader, COUNT(*) AS class_count FROM java.lang.ClassLoader x GROUP BY classof(x) ORDER BY class_count DESC",
+        oql: "SELECT classof(x) AS loader, COUNT(*) AS class_count FROM INSTANCEOF java.lang.ClassLoader x GROUP BY classof(x) ORDER BY class_count DESC",
     },
     // ── Retained ──────────────────────────────────────────────────────────────
     NamedQuery {
@@ -127,21 +127,21 @@ pub const NAMED_QUERIES: &[NamedQuery] = &[
         display: "Top retained size by class",
         group: "Retained",
         needs_retained: true,
-        oql: "SELECT classof(x) AS class, SUM(@retainedHeapSize) AS retained_bytes FROM java.lang.Object x GROUP BY classof(x) ORDER BY retained_bytes DESC LIMIT 30",
+        oql: "SELECT classof(x) AS class, SUM(@retainedHeapSize) AS retained_bytes FROM INSTANCEOF java.lang.Object x GROUP BY classof(x) ORDER BY retained_bytes DESC LIMIT 30",
     },
     NamedQuery {
         name: "largest-retained-objects",
         display: "Largest retained objects",
         group: "Retained",
         needs_retained: true,
-        oql: "SELECT @objectAddress, classof(x) AS class, @retainedHeapSize AS retained_bytes FROM java.lang.Object x ORDER BY retained_bytes DESC LIMIT 20",
+        oql: "SELECT @objectAddress, classof(x) AS class, @retainedHeapSize AS retained_bytes FROM INSTANCEOF java.lang.Object x ORDER BY retained_bytes DESC LIMIT 20",
     },
     NamedQuery {
         name: "leak-suspects",
         display: "Leak suspects (retained >10 MB)",
         group: "Retained",
         needs_retained: true,
-        oql: "SELECT @objectAddress, classof(x) AS class, @retainedHeapSize AS retained_bytes FROM java.lang.Object x WHERE @retainedHeapSize > 10000000 ORDER BY retained_bytes DESC LIMIT 20",
+        oql: "SELECT @objectAddress, classof(x) AS class, @retainedHeapSize AS retained_bytes FROM INSTANCEOF java.lang.Object x WHERE @retainedHeapSize > 10000000 ORDER BY retained_bytes DESC LIMIT 20",
     },
     NamedQuery {
         name: "retained-threads",
@@ -155,7 +155,7 @@ pub const NAMED_QUERIES: &[NamedQuery] = &[
         display: "Shallow vs retained by class",
         group: "Retained",
         needs_retained: true,
-        oql: "SELECT classof(x) AS class, SUM(@usedHeapSize) AS shallow, SUM(@retainedHeapSize) AS retained_bytes FROM java.lang.Object x GROUP BY classof(x) ORDER BY retained_bytes DESC LIMIT 30",
+        oql: "SELECT classof(x) AS class, SUM(@usedHeapSize) AS shallow, SUM(@retainedHeapSize) AS retained_bytes FROM INSTANCEOF java.lang.Object x GROUP BY classof(x) ORDER BY retained_bytes DESC LIMIT 30",
     },
 ];
 

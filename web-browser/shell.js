@@ -41,10 +41,20 @@ function showScreen(id) {
 }
 
 // ── Upload screen ─────────────────────────────────────────────────────────────
+// Sample dumps available when served from the repo root (e.g. python -m http.server)
+// Paths are relative to the HTML file location; dist/ is one level below repo root.
+const SAMPLE_DUMPS = [
+  { name: 'mnemonics',     path: '../tests/fixtures/dump_1_mnemonics.hprof',     sizeMb: 20 },
+  { name: 'scala-doku',    path: '../tests/fixtures/dump_2_scala-doku.hprof',    sizeMb: 51 },
+  { name: 'philosophers',  path: '../tests/fixtures/dump_4_philosophers.hprof',  sizeMb: 23 },
+  { name: 'gauss-mix',     path: '../tests/fixtures/dump_7_gauss-mix.hprof',     sizeMb: 70 },
+];
+
 (function initUploadScreen() {
   const dropZone = document.getElementById('drop-zone');
   const fileInput = document.getElementById('file-input');
   const modeButtons = document.getElementById('mode-buttons');
+  const sampleSection = document.getElementById('sample-section');
 
   function onFileSelected(file) {
     if (!file) return;
@@ -91,12 +101,62 @@ function showScreen(id) {
       showScreen('report-screen');
     }
   });
+
+  // Probe whether sample fixtures are accessible; show list only if they are
+  const sampleList = document.getElementById('sample-list');
+  fetch(SAMPLE_DUMPS[0].path, { method: 'HEAD' })
+    .then(r => {
+      if (!r.ok) return;
+      sampleSection.style.display = '';
+      SAMPLE_DUMPS.forEach(s => {
+        const item = document.createElement('div');
+        item.className = 'sample-item';
+        item.innerHTML =
+          `<span class="sample-name">${s.name}</span>` +
+          `<span class="sample-size">~${s.sizeMb} MB</span>`;
+        item.addEventListener('click', () => loadSampleDump(s));
+        sampleList.appendChild(item);
+      });
+    })
+    .catch(() => {});  // silently hide sample section if not accessible
 })();
 
 // ── WASM session loading ───────────────────────────────────────────────────────
+
+// Fetch a sample fixture by URL and open a mode-selection popup
+async function loadSampleDump(sample) {
+  const statusEl = document.getElementById('wasm-load-status');
+  const modeButtons = document.getElementById('mode-buttons');
+  const dropZone = document.getElementById('drop-zone');
+
+  if (statusEl) { statusEl.textContent = `Fetching ${sample.name}…`; statusEl.style.display = ''; }
+  let bytes;
+  try {
+    const resp = await fetch(sample.path);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const buf = await resp.arrayBuffer();
+    bytes = new Uint8Array(buf);
+  } catch (e) {
+    if (statusEl) { statusEl.textContent = `Failed to fetch ${sample.name}: ${e.message}`; }
+    return;
+  }
+  if (statusEl) statusEl.style.display = 'none';
+
+  // Manufacture a File-like object so the existing flow works
+  const blob = new Blob([bytes]);
+  const file = new File([blob], sample.name + '.hprof', { type: 'application/octet-stream' });
+  selectedFile = file;
+  dropZone.classList.add('file-selected');
+  document.getElementById('drop-zone-text').innerHTML =
+    `<strong>${file.name}</strong> (${(file.size / 1024 / 1024).toFixed(1)} MB) — choose a mode below`;
+  modeButtons.style.display = 'flex';
+}
+
 async function loadWasmSession(file) {
   const statusEl = document.getElementById('wasm-load-status');
-  if (statusEl) { statusEl.textContent = `Loading ${file.name}…`; statusEl.style.display = ''; }
+  const modeButtons = document.getElementById('mode-buttons');
+  if (modeButtons) modeButtons.style.display = 'none';
+  if (statusEl) { statusEl.textContent = `Reading ${file.name}…`; statusEl.style.display = ''; }
 
   let bytes;
   try {
@@ -104,14 +164,20 @@ async function loadWasmSession(file) {
     bytes = new Uint8Array(buf);
   } catch (e) {
     if (statusEl) statusEl.textContent = `Error reading file: ${e.message}`;
+    if (modeButtons) modeButtons.style.display = 'flex';
     return;
   }
+
+  if (statusEl) statusEl.textContent = `Building query index for ${file.name}… (this may take a minute for large dumps)`;
+  // Yield so the browser can repaint the status before the blocking WASM call
+  await new Promise(r => setTimeout(r, 20));
 
   try {
     if (wasmSession) { wasmSession.free(); wasmSession = null; }
     wasmSession = HprofSession.load(bytes, file.name);
   } catch (e) {
-    if (statusEl) { statusEl.textContent = `Failed to parse ${file.name}: ${e}`; }
+    if (statusEl) { statusEl.textContent = `Failed to load ${file.name}: ${e}`; }
+    if (modeButtons) modeButtons.style.display = 'flex';
     return;
   }
 
@@ -123,7 +189,9 @@ async function loadWasmSession(file) {
 
 async function loadWasmSessionWithReport(file) {
   const msg = document.getElementById('report-message');
-  msg.textContent = `Loading ${file.name}…`;
+  const modeButtons = document.getElementById('mode-buttons');
+  if (modeButtons) modeButtons.style.display = 'none';
+  msg.textContent = `Reading ${file.name}…`;
   showScreen('report-screen');
 
   let bytes;
@@ -135,15 +203,19 @@ async function loadWasmSessionWithReport(file) {
     return;
   }
 
+  msg.textContent = `Building query index for ${file.name}… (this may take a minute for large dumps)`;
+  await new Promise(r => setTimeout(r, 20));
+
   try {
     if (wasmSession) { wasmSession.free(); wasmSession = null; }
     wasmSession = HprofSession.load(bytes, file.name);
   } catch (e) {
-    msg.textContent = `Failed to parse ${file.name}: ${e}`;
+    msg.textContent = `Failed to load ${file.name}: ${e}`;
     return;
   }
 
-  msg.textContent = 'Running analysis (this may take a while for large dumps)…';
+  msg.textContent = 'Running retained-size analysis…';
+  await new Promise(r => setTimeout(r, 20));
   try {
     const reportJson = wasmSession.generate_report();
     hasRetained = true;
@@ -595,14 +667,71 @@ function startTerminal() {
   let pendingLines = [];  // lines accumulated for multi-line query (via \ continuation)
   const CONT_PROMPT = '...> ';  // shown on continuation lines
 
+  // OQL keyword syntax highlighting for the input line.
+  // Returns the line with ANSI color codes applied; raw line.length is unchanged
+  // so cursor positioning arithmetic remains correct.
+  const OQL_KEYWORDS = /\b(SELECT|FROM|WHERE|ORDER\s+BY|GROUP\s+BY|LIMIT|OFFSET|AS|INSTANCEOF|UNION\s+ALL|UNION|DISTINCT|ALL|AND|OR|NOT|IN|IS|NULL|TRUE|FALSE|COUNT|SUM|MIN|MAX|AVG|PERCENTILE|MEDIAN|STDDEV)\b/gi;
+  function highlightOql(s) {
+    if (!s || s.startsWith('/') || s.startsWith('!')) return s;
+    // Keywords: bright cyan; class names after FROM: yellow; strings: green; numbers: magenta
+    let result = '';
+    let i = 0;
+    while (i < s.length) {
+      // String literal
+      if (s[i] === '"' || s[i] === "'") {
+        const q = s[i];
+        let j = i + 1;
+        while (j < s.length && s[j] !== q) {
+          if (s[j] === '\\') j++;
+          j++;
+        }
+        result += '\x1b[32m' + s.slice(i, j + 1) + '\x1b[0m';
+        i = j + 1;
+        continue;
+      }
+      // Number
+      if (/[0-9]/.test(s[i]) && (i === 0 || /\W/.test(s[i-1]))) {
+        let j = i;
+        while (j < s.length && /[0-9._]/.test(s[j])) j++;
+        result += '\x1b[35m' + s.slice(i, j) + '\x1b[0m';
+        i = j;
+        continue;
+      }
+      // @ attribute
+      if (s[i] === '@') {
+        let j = i + 1;
+        while (j < s.length && /\w/.test(s[j])) j++;
+        result += '\x1b[33m' + s.slice(i, j) + '\x1b[0m';
+        i = j;
+        continue;
+      }
+      // Word — check if keyword
+      if (/[a-zA-Z_]/.test(s[i])) {
+        let j = i;
+        while (j < s.length && /[\w$.]/.test(s[j])) j++;
+        const word = s.slice(i, j);
+        if (/^(SELECT|FROM|WHERE|ORDER|BY|GROUP|LIMIT|OFFSET|AS|INSTANCEOF|UNION|DISTINCT|ALL|AND|OR|NOT|IN|IS|NULL|TRUE|FALSE|COUNT|SUM|MIN|MAX|AVG|PERCENTILE|MEDIAN|STDDEV)$/i.test(word)) {
+          result += '\x1b[36;1m' + word + '\x1b[0m';
+        } else {
+          result += word;
+        }
+        i = j;
+        continue;
+      }
+      result += s[i++];
+    }
+    return result;
+  }
+
   // Redraw line and reposition cursor; does NOT change histIdx.
   // Uses CONT_PROMPT on continuation lines so editing mid-line doesn't
   // flip the prompt back to PROMPT.
   function redrawLine() {
     const prompt = pendingLines.length > 0 ? CONT_PROMPT : PROMPT;
-    term.write('\r\x1b[K' + prompt + line);
+    const highlighted = highlightOql(line);
+    term.write('\r\x1b[K' + prompt + highlighted + '\x1b[0m');
     if (cursorPos < line.length) {
-      // Move cursor left from end to cursorPos
+      // Move cursor left from end to cursorPos (raw length, not ANSI length)
       term.write(`\x1b[${line.length - cursorPos}D`);
     }
   }
@@ -2444,12 +2573,25 @@ function startTerminal() {
     const fmtElapsed = ms => ms < 1 ? `${(ms * 1000).toFixed(0)}µs` : ms < 1000 ? `${ms.toFixed(1)}ms` : `${(ms / 1000).toFixed(2)}s`;
     if (!data.ok) {
       const msg = data.error?.message || JSON.stringify(data.error) || 'unknown error';
-      const kind = data.error?.kind ? `\x1b[2m[${data.error.kind}]\x1b[0m ` : '';
       const report = data.error?.report;
       if (report) {
         report.split('\n').forEach(l => term.writeln(l));
       } else {
-        term.writeln(`\x1b[31merror: ${kind}${msg}\x1b[0m`);
+        // Try to extract position from "... at 1:COL" pattern and show a pointer
+        const posMatch = msg.match(/\bat\s+\d+:(\d+)/);
+        const col = posMatch ? parseInt(posMatch[1], 10) - 1 : -1;
+        // Split off any "— hint" part after an em-dash
+        const dashIdx = msg.indexOf(' — ');
+        const mainMsg = dashIdx >= 0 ? msg.slice(0, dashIdx) : msg;
+        const hint = dashIdx >= 0 ? msg.slice(dashIdx + 3) : null;
+        term.writeln(`\x1b[31merror:\x1b[0m ${mainMsg}`);
+        if (hint) term.writeln(`\x1b[2m  hint: ${hint}\x1b[0m`);
+        // Show a pointer under the problematic token in the current line
+        if (col >= 0 && line) {
+          const promptLen = PROMPT.replace(/\x1b\[[^m]*m/g, '').length;
+          const pointer = ' '.repeat(promptLen + col) + '\x1b[31m^\x1b[0m';
+          term.writeln(pointer);
+        }
       }
       if (classNames.length > 0 && /class|type|not found|unknown/i.test(msg)) {
         const wordMatch = msg.match(/[A-Z][a-zA-Z0-9$.]+/g) || [];

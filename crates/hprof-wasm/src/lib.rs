@@ -25,11 +25,12 @@ pub struct HprofSession {
     source: hprof_analyzer::HprofSource,
     class_names: Vec<String>,
     retained: Vec<u64>,
+    cache: Option<hprof_analyzer::query::run::ReplCache>,
 }
 
 #[wasm_bindgen]
 impl HprofSession {
-    /// Load a `.hprof` file from its raw bytes.
+    /// Load a `.hprof` file from its raw bytes and build the query cache.
     ///
     /// `name` is used only for display (e.g. `"heap.hprof"`).
     /// Returns a JS error string if parsing fails.
@@ -40,19 +41,23 @@ impl HprofSession {
             name: name.to_string(),
         };
 
-        let p1 = hprof_analyzer::Pass1::run(&source, false)
+        // Build the ReplCache eagerly — Pass1 + Pass2 run once here, and all
+        // subsequent queries reuse it without re-scanning raw bytes.
+        let cache = hprof_analyzer::query::run::ReplCache::build(&source, true)
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
-        let class_names: Vec<String> = p1
+        let class_names: Vec<String> = cache
+            .p1
             .class_map
             .values()
-            .filter_map(|ci| p1.strings.get(&ci.name_id).map(|s| s.replace('/', ".")))
+            .filter_map(|ci| cache.p1.strings.get(&ci.name_id).map(|s| s.replace('/', ".")))
             .collect();
 
         Ok(HprofSession {
             source,
             class_names,
             retained: Vec::new(),
+            cache: Some(cache),
         })
     }
 
@@ -60,15 +65,15 @@ impl HprofSession {
     ///
     /// Success: `{"ok":true,"result":{"columns":[...],"rows":[...],"row_count":N}}`
     /// Error:   `{"ok":false,"error":{"message":"..."}}`
-    pub fn query(&self, oql: &str) -> String {
+    pub fn query(&mut self, oql: &str) -> String {
         use hprof_analyzer::query::{optimize, parse, plan, run};
 
-        let q = match parse::parse(oql) {
+        let q = match parse::parse_or_report(oql) {
             Ok(q) => q,
-            Err(e) => {
+            Err(report) => {
                 return serde_json::json!({
                     "ok": false,
-                    "error": { "message": e.0 }
+                    "error": { "message": report }
                 })
                 .to_string()
             }
@@ -88,16 +93,19 @@ impl HprofSession {
         let optimized = optimize::optimize(plan_result, &q, &optimize::SchemaStats::default());
         let pairs = vec![(q, optimized)];
 
-        let cache = match run::ReplCache::build(&self.source, true) {
-            Ok(c) => c,
-            Err(e) => {
-                return serde_json::json!({
-                    "ok": false,
-                    "error": { "message": e.to_string() }
-                })
-                .to_string()
+        if self.cache.is_none() {
+            match run::ReplCache::build(&self.source, true) {
+                Ok(c) => self.cache = Some(c),
+                Err(e) => {
+                    return serde_json::json!({
+                        "ok": false,
+                        "error": { "message": e.to_string() }
+                    })
+                    .to_string()
+                }
             }
-        };
+        }
+        let cache = self.cache.as_ref().unwrap();
 
         let results = if self.retained.is_empty() {
             run::run_resident_only(&cache, &pairs, true)

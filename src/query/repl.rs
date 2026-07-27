@@ -4186,6 +4186,9 @@ fn fmt_elapsed(d: std::time::Duration) -> String {
 /// Return the current local time as HH:MM:SS (best-effort; falls back to UTC seconds since epoch).
 fn fmt_time_hms() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
+    #[cfg(target_arch = "wasm32")]
+    let secs: u64 = 0;
+    #[cfg(not(target_arch = "wasm32"))]
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())

@@ -25,8 +25,20 @@
   </div>
 
   <div id="mode-buttons" style="display:none">
-    <button id="btn-analyze-report">📊 Analyze &amp; Report</button>
-    <button id="btn-oql-shell">⌨ OQL Shell</button>
+    <button id="btn-analyze-report">
+      <span class="mode-icon">📊</span>
+      <span class="mode-title">Analyze &amp; Report</span>
+      <span class="mode-desc">Full heap analysis: histogram, leak suspects, dominator tree, GC roots, and retained sizes</span>
+    </button>
+    <button id="btn-oql-shell">
+      <span class="mode-icon">🔍</span>
+      <span class="mode-title">OQL Shell</span>
+      <span class="mode-desc">Interactive query shell — run SQL-like OQL queries against the heap with tab-completion</span>
+    </button>
+  </div>
+  <div id="sample-section" style="display:none">
+    <p class="sample-label">— or try a sample dump —</p>
+    <div id="sample-list"></div>
   </div>
   <p id="wasm-load-status" style="display:none"></p>
 </div>
