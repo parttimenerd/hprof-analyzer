@@ -802,11 +802,19 @@ pub fn run_resident_only(
         &cache.p1.id_map,
         &cache.shallow,
     );
-    // Build row-mode executors, one per flat slot (resident-only queries are all
-    // P1 / row-mode — never carry). Mirrors pass2's scan_execs construction.
+    // Build executors: row-mode for most queries, carry-mode for toString(s)
+    // queries. The toString path expects indices in `pending` (cross-phase) so
+    // `resume_with_string_values` can look up each dense index in the string_values
+    // map; row-mode would emit all-Null rows at scan time since blobs are empty.
     let mut entries: Vec<(usize, SingleScanExecutor<'_, LiveResolver<'_>>)> = Vec::new();
     for (slot, (q, plan)) in flat.iter().enumerate() {
-        entries.push((slot, SingleScanExecutor::new(q, plan, &resolver)));
+        let ex = if plan.needs.string_values {
+            use crate::query::carry::Carry;
+            SingleScanExecutor::new_carry(q, plan, &resolver, Carry::index_only(crate::query::carry::DEFAULT_CARRY_CAP))
+        } else {
+            SingleScanExecutor::new(q, plan, &resolver)
+        };
+        entries.push((slot, ex));
     }
     let mut driver = ScanDriver::new(entries).with_src_capture(reachable_only);
 
@@ -829,13 +837,15 @@ pub fn run_resident_only(
     } else {
         None
     };
-    let flat_results = resume_with_string_values(
-        state,
-        &flat,
-        std::collections::HashMap::new(), // no toString(s) — excluded by is_resident_only
-        None,                             // no refwalk CSR — excluded by is_resident_only
-        dfn,
-    );
+    // If any query uses toString(s) the resident path needs real String values —
+    // blobs are empty here so we re-scan the source once on demand.
+    let needs_sv = flat.iter().any(|(_, p)| p.needs.string_values);
+    let sv = if needs_sv {
+        cache.build_string_values().unwrap_or_default()
+    } else {
+        std::collections::HashMap::new()
+    };
+    let flat_results = resume_with_string_values(state, &flat, sv, None, dfn);
     Ok(collapse_union_results(flat_results, &groups))
 }
 
@@ -859,7 +869,13 @@ pub fn run_resident_with_retained(
     );
     let mut entries: Vec<(usize, SingleScanExecutor<'_, LiveResolver<'_>>)> = Vec::new();
     for (slot, (q, plan)) in flat.iter().enumerate() {
-        entries.push((slot, SingleScanExecutor::new(q, plan, &resolver)));
+        let ex = if plan.needs.string_values {
+            use crate::query::carry::Carry;
+            SingleScanExecutor::new_carry(q, plan, &resolver, Carry::index_only(crate::query::carry::DEFAULT_CARRY_CAP))
+        } else {
+            SingleScanExecutor::new(q, plan, &resolver)
+        };
+        entries.push((slot, ex));
     }
     let mut driver = ScanDriver::new(entries).with_src_capture(reachable_only);
     for i in 0..cache.n {
@@ -870,7 +886,14 @@ pub fn run_resident_with_retained(
     }
     let state = driver.finish_state();
     let dfn: Option<&[u32]> = if reachable_only { cache.dfn.as_deref() } else { None };
-    let flat_results = resume_with_retained(state, &flat, retained, &cache.shallow, dfn);
+    // toString(s) needs real String values — blobs are empty in resident path.
+    let needs_sv = flat.iter().any(|(_, p)| p.needs.string_values);
+    let sv = if needs_sv {
+        cache.build_string_values().unwrap_or_default()
+    } else {
+        std::collections::HashMap::new()
+    };
+    let flat_results = resume_with_retained(state, &flat, retained, &cache.shallow, dfn, sv);
     Ok(collapse_union_results(flat_results, &groups))
 }
 
@@ -885,10 +908,11 @@ fn resume_with_retained(
     retained: &[u64],
     shallow: &[u32],
     dfn: Option<&[u32]>,
+    string_values: std::collections::HashMap<u32, String>,
 ) -> Vec<crate::query::model::QueryResult> {
     use crate::query::plan::StageOp;
     use crate::query::stage_runner::{
-        self, IdMap, LateCtx, EMPTY_GC_ROOT_TAGS, EMPTY_REFWALK_TAILS, EMPTY_STRING_VALUES,
+        self, IdMap, LateCtx, EMPTY_GC_ROOT_TAGS, EMPTY_REFWALK_TAILS,
     };
 
     let row_src_by_slot = state.take_row_src_by_slot();
@@ -910,7 +934,7 @@ fn resume_with_retained(
         in_off: &[],
         in_tgt: &[],
         retained_edges: None,
-        string_values: &EMPTY_STRING_VALUES,
+        string_values: &string_values,
         string_values_truncated: false,
         gc_root_tags: &EMPTY_GC_ROOT_TAGS,
     };
@@ -1559,6 +1583,7 @@ pub struct ReplCache {
     pub dfn: Option<Vec<u32>>,
     pub id_size: usize,
     pub reachable_only: bool,
+    pub source: crate::source::HprofSource,
 }
 
 impl ReplCache {
@@ -1609,7 +1634,76 @@ impl ReplCache {
             dfn,
             id_size,
             reachable_only,
+            source: source.clone(),
         })
+    }
+
+    /// Scan the HPROF source and decode all String instance values.
+    /// Used by the resident-only query path when `toString(s)` is requested
+    /// (that path uses empty blobs so can't capture `value` field pointers
+    /// from the cache; this re-scans the file once on demand).
+    pub fn build_string_values(
+        &self,
+    ) -> std::io::Result<std::collections::HashMap<u32, String>> {
+        use crate::query::stringvals::{StringCapture, STRING_VALUES_CAP};
+        use crate::types::HprofType;
+
+        let resolver = LiveResolver::new(
+            &self.p1.class_map,
+            &self.p1.strings,
+            self.id_size,
+            &self.p1.id_map,
+            &self.shallow,
+        );
+        let id_size = self.id_size as u8;
+        let ref_width = resolver.ref_width();
+
+        // Collect (value_off, coder_off) for each String class_id we encounter,
+        // memoized so we compute it at most once per class.
+        let mut off_cache: std::collections::HashMap<u64, Option<(usize, Option<usize>)>> =
+            std::collections::HashMap::new();
+        let mut capture = StringCapture::new(STRING_VALUES_CAP);
+        let id_map = &self.p1.id_map;
+
+        let source = self.source.clone();
+        let open = move || source.open();
+        crate::pass2::scan_all_instances(&open, id_size, |obj_addr, class_id, blob| {
+            let offs = *off_cache.entry(class_id).or_insert_with(|| {
+                let value_off = match resolver.field(class_id, "value") {
+                    Some((off, HprofType::Object)) => off as usize,
+                    _ => return None,
+                };
+                let coder_off = resolver
+                    .field(class_id, "coder")
+                    .filter(|&(_, ty)| ty == HprofType::Byte)
+                    .map(|(off, _)| off as usize);
+                Some((value_off, coder_off))
+            });
+            let Some((value_off, coder_off)) = offs else {
+                return;
+            };
+            if value_off + ref_width > blob.len() {
+                return;
+            }
+            let mut arr_addr: u64 = 0;
+            for &b in &blob[value_off..value_off + ref_width] {
+                arr_addr = (arr_addr << 8) | b as u64;
+            }
+            if arr_addr == 0 {
+                return;
+            }
+            let coder = match coder_off {
+                Some(co) if co < blob.len() => blob[co],
+                _ => 1,
+            };
+            // Look up the dense index for this object address.
+            if let Some(dense_idx) = id_map.index_of(obj_addr) {
+                capture.insert(dense_idx as u32, arr_addr, coder);
+            }
+        })?;
+
+        let source2 = self.source.clone();
+        capture.decode_all(move || source2.open(), id_size)
     }
 }
 
@@ -1740,6 +1834,28 @@ mod tests {
         // --all build: no dfn.
         let raw = ReplCache::build(&crate::source::HprofSource::from("tests/fixtures/dump_4_philosophers.hprof"), false).expect("raw");
         assert!(raw.dfn.is_none(), "raw build has no dfn");
+    }
+
+    #[test]
+    fn resident_only_tostring_returns_non_null() {
+        let path = "tests/fixtures/dump_4_philosophers.hprof";
+        let cache = ReplCache::build(&crate::source::HprofSource::from(path), true).expect("cache");
+
+        // toString(s) needs string_values — resident path must re-scan to get them.
+        let oql = "SELECT toString(s) FROM java.lang.String s LIMIT 10";
+        let (q, plan) = parse_plan_opt(oql);
+
+        assert!(plan.needs.string_values, "plan must need string_values for this query");
+        let sv = cache.build_string_values().expect("build_string_values");
+        assert!(!sv.is_empty(), "build_string_values must return a non-empty map");
+
+        let results = run_resident_only(&cache, &[(q, plan)], true).expect("run");
+        let result = &results[0];
+        // At least some strings must be non-null (not every String has a value array, but most do).
+        let non_null = result.rows.iter().filter(|row| {
+            row.iter().any(|v| !matches!(v, QueryValue::Null))
+        }).count();
+        assert!(non_null > 0, "expected at least some non-null toString values, got 0 out of {}", result.row_count);
     }
 
     /// Minimal `ClassResolver` mapping a couple of class addresses to names;
