@@ -1298,7 +1298,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                         res.rows.truncate(shown);
                                         res.row_count = shown as u64;
                                         if shown < total {
-                                            res.note = Some(format!("top {} of {}", shown, total));
+                                            res.note = Some(format!("top {} of {}", fmt_int(shown as i64), fmt_int(total as i64)));
                                         }
                                         print_result(res, std::time::Duration::ZERO, max_width, &mut stdout)?;
                                     }
@@ -1324,7 +1324,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                         res.rows = res.rows.split_off(skip);
                                         res.row_count = res.rows.len() as u64;
                                         if skip > 0 {
-                                            res.note = Some(format!("last {} of {}", res.rows.len(), total));
+                                            res.note = Some(format!("last {} of {}", fmt_int(res.rows.len() as i64), fmt_int(total as i64)));
                                         }
                                         print_result(res, std::time::Duration::ZERO, max_width, &mut stdout)?;
                                     }
