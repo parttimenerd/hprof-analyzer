@@ -1093,6 +1093,14 @@ function startTerminal() {
           const dynLabel = isOql ? label
             : `instance${n === 1 ? '' : 's'} of \x1b[36m${arg}\x1b[0m`;
           term.writeln(`\x1b[32m${nFmt}\x1b[0m ${dynLabel}`);
+          // Store count result so /filter, /sort etc. can chain on it (mirrors CLI !count behaviour)
+          const r = data.result;
+          if (r?.columns) {
+            const colNames = r.columns.map(c => c.name || String(c));
+            prevResult = null;
+            lastResult = { columns: colNames, rows: r.rows || [], note: r.note, truncated: r.truncated, row_count: r.row_count };
+            currentRowIdx = 0;
+          }
         } else {
           const msg = data.error?.message || data.error || 'unknown error';
           term.writeln(`\x1b[31merror: ${msg}\x1b[0m`);
