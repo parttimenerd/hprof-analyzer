@@ -871,7 +871,14 @@ function startTerminal() {
           term.writeln(`\x1b[31merror: ${msg}\x1b[0m`);
           if (classNames.length > 0) {
             const lower = cls.toLowerCase();
-            const sugg = classNames.filter(c => c.toLowerCase().includes(lower)).slice(0, 5);
+            let sugg = classNames.filter(c => c.toLowerCase().includes(lower)).slice(0, 5);
+            if (sugg.length === 0) {
+              // fallback: simple-name substring match
+              sugg = classNames.filter(c => {
+                const sn = c.split('.').pop() || c;
+                return sn.toLowerCase().includes(lower);
+              }).slice(0, 5);
+            }
             if (sugg.length) term.writeln(`\x1b[2msimilar: ${sugg.map(c => c.split('.').pop()).join(', ')}\x1b[0m`);
           }
         } else {
