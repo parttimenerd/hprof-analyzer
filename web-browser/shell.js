@@ -627,7 +627,7 @@ function startTerminal() {
       if (parts.length <= 1) {
         // completing the key
         const partial = rest.trim().toLowerCase();
-        const keys = ['limit', 'bytes', 'null', 'color'].filter(k => k.startsWith(partial));
+        const keys = ['limit', 'bytes', 'color', 'null'].filter(k => k.startsWith(partial));
         if (keys.length === 1) { setLine('/set ' + keys[0] + ' '); }
         else if (keys.length > 1) { term.writeln(''); term.writeln('  ' + keys.join('  ')); redrawLine(); }
       } else {
