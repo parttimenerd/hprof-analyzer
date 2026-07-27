@@ -1911,14 +1911,15 @@ function startTerminal() {
       if (!args[0]) {
         // Print current settings
         term.writeln('\x1b[1mCurrent settings:\x1b[0m');
-        term.writeln(`  \x1b[1mlimit\x1b[0m    \x1b[32m${settings.rowLimit === Infinity ? 'unlimited' : settings.rowLimit}\x1b[0m  \x1b[2m(rows displayed; 0 = no cap)\x1b[0m`);
-        term.writeln(`  \x1b[1mbytes\x1b[0m    \x1b[32m${settings.bytesRaw ? 'raw' : 'human'}\x1b[0m  \x1b[2m(raw = show numbers, human = 4.3 KiB)\x1b[0m`);
-        term.writeln(`  \x1b[1mcolor\x1b[0m    \x1b[32m${settings.color ? 'on' : 'off'}\x1b[0m  \x1b[2m(ANSI colours in table cells)\x1b[0m`);
-        term.writeln(`  \x1b[1mnull\x1b[0m     \x1b[32m"${settings.nullStr}"\x1b[0m  \x1b[2m(null display string)\x1b[0m`);
+        const limitVal = settings.rowLimit === Infinity ? 'unlimited' : String(settings.rowLimit);
+        term.writeln(`  \x1b[1mlimit\x1b[0m  \x1b[32m${limitVal.padEnd(12)}\x1b[0m  \x1b[2m(rows displayed; 0 = no cap)\x1b[0m`);
+        term.writeln(`  \x1b[1mbytes\x1b[0m  \x1b[32m${(settings.bytesRaw ? 'raw' : 'human').padEnd(12)}\x1b[0m  \x1b[2m(raw = show numbers, human = 4.3 KiB)\x1b[0m`);
+        term.writeln(`  \x1b[1mcolor\x1b[0m  \x1b[32m${(settings.color ? 'on' : 'off').padEnd(12)}\x1b[0m  \x1b[2m(ANSI colours in table cells)\x1b[0m`);
+        term.writeln(`  \x1b[1mnull\x1b[0m   \x1b[32m${('"' + settings.nullStr + '"').padEnd(12)}\x1b[0m  \x1b[2m(null display string)\x1b[0m`);
         term.writeln('\x1b[2musage: /set limit 500 | /set bytes raw | /set bytes human | /set null ∅ | /set color off\x1b[0m');
       } else if (args[0] === 'limit') {
         const n = args[1] === '0' || args[1] === 'unlimited' || args[1] === 'none' ? 0 : parseInt(args[1], 10);
-        if (isNaN(n) || n < 0 || n > 100000) {
+        if (isNaN(n) || n < 0) {
           term.writeln('\x1b[2musage: /set limit <N>  (0 or "unlimited" = no cap)\x1b[0m');
         } else if (n === 0) {
           settings.rowLimit = Infinity;
