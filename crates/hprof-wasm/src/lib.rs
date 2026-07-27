@@ -188,6 +188,25 @@ impl HprofSession {
         serde_json::to_string(&report).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
+    /// Run the full analysis pipeline and return a self-contained HTML document.
+    ///
+    /// The output is identical to `hprof-analyzer analyze --format html`:
+    /// a React-based report with sorting, navigation, charts, and search.
+    pub fn generate_report_html(&mut self) -> Result<String, JsValue> {
+        let opts = hprof_analyzer::AnalyzeOptions::default();
+        let (report, retained) =
+            hprof_analyzer::analyze_to_report_with_retained(&self.source, &opts)
+                .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        self.retained = retained;
+        let source_name = match &self.source {
+            hprof_analyzer::HprofSource::Bytes { name, .. } => name.clone(),
+            hprof_analyzer::HprofSource::Path(p) => p.clone(),
+        };
+        let json = serde_json::to_string(&report)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(hprof_analyzer::render_report_html(&source_name, &json))
+    }
+
     /// Returns a JSON array of all built-in named queries.
     pub fn named_queries() -> String {
         let arr: Vec<serde_json::Value> = hprof_analyzer::named_queries::NAMED_QUERIES

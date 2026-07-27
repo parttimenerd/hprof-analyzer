@@ -258,12 +258,13 @@ async function loadWasmSessionWithReport(file) {
   setStage('Computing dominators and retained sizes…', 55);
   await new Promise(r => setTimeout(r, 20));
   try {
-    const reportJson = wasmSession.generate_report();
-    setStage('Rendering report…', 90);
+    const reportHtml = wasmSession.generate_report_html();
+    setStage('Opening report…', 90);
     await new Promise(r => setTimeout(r, 16));
     hasRetained = true;
     classNames = JSON.parse(wasmSession.class_names());
-    renderWasmReport(JSON.parse(reportJson), file.name);
+    openReportTab(reportHtml);
+    showWasmShell(file.name);
   } catch (e) {
     msg.textContent = `Analysis failed: ${e}`;
   }
@@ -271,6 +272,15 @@ async function loadWasmSessionWithReport(file) {
 
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// Open the full React-based HTML report in a new browser tab via a Blob URL.
+function openReportTab(html) {
+  const blob = new Blob([html], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  window.open(url, '_blank');
+  // Revoke after a short delay so the new tab has time to read the blob.
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
 function renderWasmReport(report, fileName) {
@@ -543,7 +553,6 @@ function renderWasmReport(report, fileName) {
 
   container.insertAdjacentHTML('beforeend', parts.join(''));
 }
-
 function showWasmShell(name) {
   serverUrl = null;
   showScreen('shell-screen');
@@ -771,8 +780,8 @@ document.getElementById('btn-disconnect').addEventListener('click', () => {
 document.getElementById('btn-show-report').addEventListener('click', async () => {
   if (wasmSession) {
     try {
-      const reportJson = wasmSession.generate_report();
-      showReport(JSON.parse(reportJson), wasmSession._fileName || '');
+      const reportHtml = wasmSession.generate_report_html();
+      openReportTab(reportHtml);
     } catch (e) {
       document.getElementById('analyze-status').textContent = `Report failed: ${e}`;
     }
