@@ -2329,7 +2329,7 @@ function startTerminal() {
       if (topN !== null) entries = entries.slice(0, topN);
       const pivotRows = entries.map(([v, c]) => [v, c]);
       const note = (topN !== null && pivotRows.length < totalGroups)
-        ? `top ${pivotRows.length} of ${totalGroups} groups` : null;
+        ? `top ${pivotRows.length.toLocaleString('en-US')} of ${totalGroups.toLocaleString('en-US')} groups` : null;
       const pivotResult = { columns: [colName, 'count'], rows: pivotRows, row_count: pivotRows.length, note };
       renderResult(pivotResult);
       prevResult = lastResult;
@@ -2489,7 +2489,7 @@ function startTerminal() {
         const sliced = lastResult.rows.slice(0, n);
         const shown = sliced.length;
         const slicedResult = { columns: lastResult.columns, rows: sliced };
-        if (shown < total) slicedResult.note = `top ${shown} of ${total}`;
+        if (shown < total) slicedResult.note = `top ${shown.toLocaleString('en-US')} of ${total.toLocaleString('en-US')}`;
         renderResult({ ...slicedResult, row_count: shown });
         prevResult = lastResult;
         lastResult = slicedResult;
@@ -2509,7 +2509,7 @@ function startTerminal() {
         const sliced = lastResult.rows.slice(-n);
         const shown = sliced.length;
         const slicedResult = { columns: lastResult.columns, rows: sliced };
-        if (shown < total) slicedResult.note = `last ${shown} of ${total}`;
+        if (shown < total) slicedResult.note = `last ${shown.toLocaleString('en-US')} of ${total.toLocaleString('en-US')}`;
         renderResult({ ...slicedResult, row_count: shown });
         prevResult = lastResult;
         lastResult = slicedResult;
