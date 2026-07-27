@@ -1807,7 +1807,7 @@ function startTerminal() {
           const note = `${filtered.length.toLocaleString('en-US')} of ${rows.length.toLocaleString('en-US')} rows match "${pattern}"`;
           const newResult = { columns: [...columns], rows: filtered, row_count: filtered.length, note };
           renderResult(newResult);
-          prevResult = lastResult;
+          if (filtered.length !== rows.length) prevResult = lastResult;
           lastResult = newResult;
         }
       }
