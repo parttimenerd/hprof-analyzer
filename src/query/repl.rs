@@ -2071,6 +2071,16 @@ fn run_and_print(
     match run_one(path, query, path_depth, reachable_only, cache, out) {
         Ok(res) => {
             print_result(&res, start.elapsed(), max_width, out)?;
+            // Post-query hint for large results — mirrors web browser shell.js
+            if res.rows.len() > 20 && !res.columns.is_empty() {
+                let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+                let (cd, cr) = if color { ("\x1b[2m", "\x1b[0m") } else { ("", "") };
+                let has_numeric = (0..res.columns.len()).any(|i| {
+                    matches!(infer_col_type(i, &res.rows), "int" | "float")
+                });
+                let stat_hint = if has_numeric { "  !stats <col>" } else { "" };
+                writeln!(out, "{cd}  !filter <text|/re/>  !sort [-]<col>  !select <col>…  !pivot <col>  !row [N]{stat_hint}  !export [csv|tsv|json]{cr}")?;
+            }
             Ok(Some(res))
         }
         Err(e) => {
