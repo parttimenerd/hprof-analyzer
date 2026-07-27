@@ -2110,12 +2110,12 @@ fn dispatch_run(
     let nq = crate::named_queries::NAMED_QUERIES.iter().find(|q| q.name == name);
     match nq {
         None => {
-            let prefix_end = name.char_indices().nth(3).map(|(i, _)| i).unwrap_or(name.len());
-            let prefix = &name[..prefix_end];
+            let name_lower = name.to_ascii_lowercase();
             let candidates: Vec<&str> = crate::named_queries::NAMED_QUERIES
                 .iter()
-                .filter(|q| q.name.starts_with(prefix))
+                .filter(|q| q.name.to_ascii_lowercase().contains(&name_lower))
                 .map(|q| q.name)
+                .take(3)
                 .collect();
             let color = SESSION_SETTINGS.with(|s| s.borrow().color);
             let (cd, ce, cr) = if color { ("\x1b[2m", "\x1b[31m", "\x1b[0m") } else { ("", "", "") };
