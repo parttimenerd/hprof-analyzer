@@ -2209,7 +2209,7 @@ function startTerminal() {
       term.writeln(gutter + cells.join('  '));
     });
     if (rows.length > settings.rowLimit) {
-      term.writeln(`\x1b[33m-- showing ${settings.rowLimit} of ${rows.length} rows (use /set limit 0 or /set limit N to change) --\x1b[0m`);
+      term.writeln(`\x1b[33m-- showing ${settings.rowLimit} of ${rows.length} rows (use \`/set limit 0\` or \`/set limit N\` to change) --\x1b[0m`);
     }
     if (r.note) {
       term.writeln(`\x1b[33m-- ${r.note} --\x1b[0m`);
@@ -2290,7 +2290,7 @@ function startTerminal() {
           renderResult(r);
           lastResult = { columns: colNames, rows, note: r.note, truncated: r.truncated, row_count: r.row_count };
           currentRowIdx = 0;
-          const trunc = r.truncated ? `  \x1b[33m[capped at ${r.row_count} rows — add LIMIT N or LIMIT 0 for all]\x1b[0m` : '';
+          const trunc = r.truncated ? `  \x1b[33m[capped at ${r.row_count} rows — add LIMIT N or use LIMIT 0 for all]\x1b[0m` : '';
           const elapsedFmt = elapsedMs < 1000 ? `${elapsedMs.toFixed(0)}ms` : `${(elapsedMs / 1000).toFixed(3)}s`;
           const elapsedColor = elapsedMs > 1000 ? '\x1b[31m' : elapsedMs > 300 ? '\x1b[33m' : '\x1b[2m';
           const ts = new Date().toLocaleTimeString('en-GB', { hour12: false });
