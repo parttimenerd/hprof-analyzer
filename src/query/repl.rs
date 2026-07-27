@@ -1403,20 +1403,29 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             } else {
                                 let old = parts[0];
                                 let new = parts[1].trim();
-                                match last_result.as_mut() {
-                                    None => warn_out("(no result — run a query first)", &mut stdout)?,
-                                    Some(res) => {
-                                        match resolve_col(old, &res.columns) {
-                                            None => {
-                                                let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
-                                                writeln!(stdout, "{ce}column {:?} not found{cr}  {cd}available: {}{cr}", old, names.join(", "))?;
-                                            }
-                                            Some(ci) => {
-                                                let prev = res.columns[ci].name.clone();
-                                                res.columns[ci].name = new.to_string();
-                                                writeln!(stdout, "{cg}\u{2713}{cr} {cd}{:?}{cr} \u{2192} {cg}{:?}{cr}", prev, new)?;
-                                            }
-                                        }
+                                let col_idx = last_result.as_ref().and_then(|res| resolve_col(old, &res.columns));
+                                match (last_result.as_mut(), col_idx) {
+                                    (None, _) => warn_out("(no result — run a query first)", &mut stdout)?,
+                                    (Some(res), None) => {
+                                        let names: Vec<&str> = res.columns.iter().map(|c| c.name.as_str()).collect();
+                                        writeln!(stdout, "{ce}column {:?} not found{cr}  {cd}available: {}{cr}", old, names.join(", "))?;
+                                    }
+                                    (Some(res), Some(ci)) => {
+                                        prev_result = Some(QueryResult {
+                                            columns: res.columns.clone(),
+                                            rows: res.rows.clone(),
+                                            row_count: res.row_count,
+                                            truncated: res.truncated,
+                                            note: res.note.clone(),
+                                            error: res.error.clone(),
+                                            name: res.name.clone(),
+                                            oql: res.oql.clone(),
+                                            viz: res.viz.clone(),
+                                            elapsed_ms: res.elapsed_ms,
+                                        });
+                                        let col_old = res.columns[ci].name.clone();
+                                        res.columns[ci].name = new.to_string();
+                                        writeln!(stdout, "{cg}\u{2713}{cr} {cd}{:?}{cr} \u{2192} {cg}{:?}{cr}", col_old, new)?;
                                     }
                                 }
                             }
