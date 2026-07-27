@@ -4020,7 +4020,7 @@ fn fmt_value_for_col(v: &QueryValue, col_name: &str) -> String {
             return format!("0x{:016X}", *i as u64);
         }
         let is_bytes_col = lower.ends_with("bytes") || lower.ends_with("_size") || lower.ends_with("heap_size");
-        if is_bytes_col {
+        if is_bytes_col && *i >= 0 {
             let raw = SESSION_SETTINGS.with(|s| s.borrow().bytes_raw);
             if !raw {
                 return fmt_bytes(*i as u64);
