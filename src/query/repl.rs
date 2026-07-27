@@ -1590,6 +1590,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                     {
                         last_query = Some(query);
                         last_result = Some(res);
+                        prev_result = None;
                         current_row = 0;
                     }
                     stdout.flush()?;
@@ -1607,6 +1608,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                         )? {
                             last_query = Some(query.to_string());
                             last_result = Some(res);
+                            prev_result = None;
                             current_row = 0;
                         }
                     }
@@ -1621,6 +1623,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                     {
                         last_query = Some(t.to_string());
                         last_result = Some(res);
+                        prev_result = None;
                         current_row = 0;
                     }
                     stdout.flush()?;

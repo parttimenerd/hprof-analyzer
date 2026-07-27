@@ -2345,6 +2345,7 @@ function startTerminal() {
           const colNames = r.columns.map(c => c.name || String(c));
           const rows = r.rows || [];
           renderResult(r);
+          prevResult = null;
           lastResult = { columns: colNames, rows, note: r.note, truncated: r.truncated, row_count: r.row_count };
           currentRowIdx = 0;
           const trunc = r.truncated ? `  \x1b[33m[capped at ${Number(r.row_count).toLocaleString('en-US')} rows — add LIMIT N or increase with LIMIT 0 for all]\x1b[0m` : '';
