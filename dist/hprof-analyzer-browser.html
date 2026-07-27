@@ -2856,7 +2856,7 @@ function startTerminal() {
           const s = c == null ? '' : String(c);
           return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
         }).join(',');
-        text = [lastResult.columns.map(c => /[",\n]/.test(c) ? '"' + c + '"' : c).join(',')]
+        text = [lastResult.columns.map(c => /[",\n\r]/.test(c) ? '"' + c + '"' : c).join(',')]
           .concat(lastResult.rows.map(row => csvRow(row.map((cell, i) => fmtCell(cell, lastResult.columns[i])))))
           .join('\n');
         mime = 'text/csv'; ext = 'csv';
