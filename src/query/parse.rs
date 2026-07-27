@@ -627,6 +627,54 @@ where
                     lhs,
                     inner: Box::new(inner),
                 });
+            // `expr IN (v1, v2, …)` — value-list form (desugars to OR chain of = compares).
+            // Must be tried before `compare` so `IN` is not parsed as a field name.
+            // Uses `expr` (not just `attr`) so `toString(s) IN (…)` works.
+            // Also handles `NOT IN (…)` (negated IN list).
+            let in_list = {
+                let lit_val = select! {
+                    Token::Int(n) => Value::Int(n),
+                    Token::Float(f) => Value::Float(f),
+                    Token::Str(s) => Value::Str(s),
+                };
+                let null_val = ident_ci("NULL").to(Value::Null);
+                let bool_val = ident_ci("TRUE").to(Value::Bool(true))
+                    .or(ident_ci("FALSE").to(Value::Bool(false)));
+                let val = null_val.or(bool_val).or(lit_val);
+                let not_in = ident_ci("NOT").then_ignore(ident_ci("IN")).to(true);
+                let just_in = ident_ci("IN").to(false);
+                let in_kw = not_in.or(just_in);
+                expr.clone()
+                    .then(in_kw)
+                    .then_ignore(just(Token::LParen))
+                    .then(val.clone().then(just(Token::Comma).ignore_then(val).repeated().collect::<Vec<_>>()).map(|(first, rest)| {
+                        let mut vals = vec![first];
+                        vals.extend(rest);
+                        vals
+                    }))
+                    .then_ignore(just(Token::RParen))
+                    .map(|((lhs, negated), vals): ((Expr, bool), Vec<Value>)| {
+                        if negated {
+                            // NOT IN: desugar to AND chain of != compares
+                            let mut terms = vals.into_iter().map(|v| Predicate::Compare {
+                                lhs: lhs.clone(),
+                                op: CompareOp::Ne,
+                                rhs: Expr::Lit(v),
+                            });
+                            let first = terms.next().unwrap();
+                            terms.fold(first, |acc, t| Predicate::And(Box::new(acc), Box::new(t)))
+                        } else {
+                            // IN: desugar to OR chain of = compares
+                            let mut terms = vals.into_iter().map(|v| Predicate::Compare {
+                                lhs: lhs.clone(),
+                                op: CompareOp::Eq,
+                                rhs: Expr::Lit(v),
+                            });
+                            let first = terms.next().unwrap();
+                            terms.fold(first, |acc, t| Predicate::Or(Box::new(acc), Box::new(t)))
+                        }
+                    })
+            };
             let compare = expr
                 .clone()
                 .then(op)
@@ -659,9 +707,22 @@ where
                         Box::new(Predicate::Compare { lhs: subject, op: CompareOp::Le, rhs: hi }),
                     )
                 });
+            // `expr IS NULL` / `expr IS NOT NULL` — SQL-standard null-check sugar.
+            // Desugars to `expr = null` / `expr != null`.
+            let is_null = expr
+                .clone()
+                .then_ignore(ident_ci("IS"))
+                .then(ident_ci("NOT").or_not().map(|n| n.is_some()))
+                .then_ignore(ident_ci("NULL"))
+                .map(|(lhs, negated)| Predicate::Compare {
+                    lhs,
+                    op: if negated { CompareOp::Ne } else { CompareOp::Eq },
+                    rhs: Expr::Lit(Value::Null),
+                });
             // `in_subquery` before `compare` so `IN` isn't consumed as a bare field.
             // `between_pred` before `compare` so `BETWEEN ... AND` is not split.
             // `exists_pred` (bare EXISTS) before `compare` so EXISTS is not confused with a field.
+            // `is_null` before `compare` so IS is not confused with a field/typo.
             let exists_pred = ident_ci("EXISTS")
                 .ignore_then(just(Token::LParen))
                 .ignore_then(base_query.clone())
@@ -670,7 +731,7 @@ where
                     inner: Box::new(inner),
                     negated: false,
                 });
-            let primary = paren.or(instanceof).or(in_subquery).or(between_pred).or(exists_pred).or(compare);
+            let primary = paren.or(instanceof).or(in_subquery).or(in_list).or(between_pred).or(is_null).or(exists_pred).or(compare);
             let not = recursive(|not| {
                 // `NOT EXISTS (...)` must be tried before the general `NOT <pred>` recursive
                 // arm so the `EXISTS` keyword is not mistakenly parsed as a predicate.
@@ -1269,6 +1330,9 @@ pub const RESERVED: &[&str] = &[
     "NULLIF",
     // Subquery existence predicate.
     "EXISTS",
+    // IS NULL / IS NOT NULL sugar keywords.
+    "IS",
+    "NULL",
     // Set operation keywords.
     "INTERSECT",
     "EXCEPT",
@@ -4732,6 +4796,33 @@ mod tests {
     }
 
     #[test]
+    fn parse_in_value_list() {
+        use crate::query::ast::{CompareOp, Predicate, Value, Expr};
+        let q = super::parse(r#"SELECT * FROM java.lang.String s WHERE toString(s) IN ("MONDAY", "TUESDAY")"#).unwrap();
+        // Should desugar to OR chain of = compares
+        assert!(
+            matches!(&q.where_, Some(Predicate::Or(_, _))),
+            "IN list should desugar to OR chain, got: {:?}", q.where_
+        );
+        // Two-element list → exactly one Or node
+        if let Some(Predicate::Or(left, right)) = &q.where_ {
+            assert!(matches!(left.as_ref(), Predicate::Compare { op: CompareOp::Eq, .. }));
+            assert!(matches!(right.as_ref(), Predicate::Compare { op: CompareOp::Eq, .. }));
+        }
+    }
+
+    #[test]
+    fn parse_not_in_value_list() {
+        use crate::query::ast::Predicate;
+        let q = super::parse(r#"SELECT * FROM java.lang.String s WHERE toString(s) NOT IN ("MONDAY", "TUESDAY")"#).unwrap();
+        // NOT IN desugars to AND chain of != compares
+        assert!(
+            matches!(&q.where_, Some(Predicate::And(_, _))),
+            "NOT IN list should desugar to AND chain, got: {:?}", q.where_
+        );
+    }
+
+    #[test]
     fn parse_exists() {
         let q = super::parse(
             "SELECT COUNT(*) FROM java.lang.String \
@@ -4753,6 +4844,25 @@ mod tests {
             matches!(&q.where_, Some(crate::query::ast::Predicate::Exists { negated: true, .. })),
             "got: {:?}", q.where_
         );
+    }
+
+    #[test]
+    fn parse_is_null_and_is_not_null() {
+        use crate::query::ast::{CompareOp, Predicate, Value, Expr};
+        let q = super::parse("SELECT * FROM java.lang.String s WHERE toString(s) IS NULL").unwrap();
+        match &q.where_ {
+            Some(Predicate::Compare { op: CompareOp::Eq, rhs, .. }) => {
+                assert_eq!(rhs, &Expr::Lit(Value::Null), "IS NULL rhs must be null");
+            }
+            other => panic!("IS NULL should desugar to = null, got: {other:?}"),
+        }
+        let q2 = super::parse("SELECT * FROM java.lang.String s WHERE toString(s) IS NOT NULL").unwrap();
+        match &q2.where_ {
+            Some(Predicate::Compare { op: CompareOp::Ne, rhs, .. }) => {
+                assert_eq!(rhs, &Expr::Lit(Value::Null), "IS NOT NULL rhs must be null");
+            }
+            other => panic!("IS NOT NULL should desugar to != null, got: {other:?}"),
+        }
     }
 
     #[test]

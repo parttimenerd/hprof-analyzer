@@ -2143,6 +2143,19 @@ fn collect_like_regexes(
         } => {
             if let Some(Value::Str(pat)) = rhs.as_lit() {
                 if !out.contains_key(pat) {
+                    // Detect SQL-glob habit: `%` as wildcard, `_` as single-char.
+                    // LIKE uses Java-style full-match regex, not SQL globs.
+                    // Give an actionable hint before the regex compile attempt.
+                    if pat.contains('%') && !pat.contains(".*") && !pat.starts_with('^') {
+                        let suggested = pat
+                            .replace('%', ".*")
+                            .replace('_', ".");
+                        return Err(crate::query::QueryError(format!(
+                            "LIKE \"{pat}\": looks like a SQL glob (`%` wildcard), but LIKE \
+                             uses Java-style regex (full-match). \
+                             Did you mean LIKE \"{suggested}\"?"
+                        )));
+                    }
                     let anchored = format!("^(?:{pat})$");
                     let re = regex::Regex::new(&anchored).map_err(|e| {
                         crate::query::QueryError(format!(

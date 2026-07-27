@@ -5573,3 +5573,79 @@ fn union_order_by_sorts_globally_across_branches() {
     assert!(is_sorted_desc, "UNION result not sorted DESC: {values:?}\nstdout: {stdout}");
 }
 
+#[test]
+fn in_value_list_filters_correctly() {
+    let Some(hprof) = mnemonics() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
+            r#"SELECT toString(s) FROM java.lang.String s WHERE toString(s) IN ("MONDAY", "TUESDAY", "WEDNESDAY")"#,
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "IN value list query failed: {}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Must contain exactly the 3 requested days
+    assert!(stdout.contains("MONDAY"), "MONDAY missing: {stdout}");
+    assert!(stdout.contains("TUESDAY"), "TUESDAY missing: {stdout}");
+    assert!(stdout.contains("WEDNESDAY"), "WEDNESDAY missing: {stdout}");
+    assert!(stdout.contains("(3 rows)"), "expected 3 rows, got: {stdout}");
+}
+
+#[test]
+fn not_in_value_list_excludes_correctly() {
+    let Some(hprof) = mnemonics() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args([
+            "--query",
+            r#"SELECT toString(s) FROM java.lang.String s WHERE toString(s) IN ("MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY") AND toString(s) NOT IN ("SATURDAY", "SUNDAY")"#,
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "NOT IN query failed: {}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Only look at data rows (skip the header echoing the query)
+    let rows: Vec<&str> = stdout.lines()
+        .filter(|l| !l.starts_with("==") && !l.starts_with("  ") && !l.starts_with("(") && !l.trim().is_empty())
+        .collect();
+    let rows_str = rows.join("\n");
+    assert!(!rows_str.contains("SATURDAY"), "SATURDAY should be excluded: {rows_str}");
+    assert!(!rows_str.contains("SUNDAY"), "SUNDAY should be excluded: {rows_str}");
+    assert!(rows_str.contains("MONDAY"), "MONDAY should be included: {rows_str}");
+}
+
+#[test]
+fn is_null_and_is_not_null_filter() {
+    let Some(hprof) = mnemonics() else { return };
+    // All String values are non-null, so IS NOT NULL should return all, IS NULL should return 0
+    let out_not_null = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query", "SELECT COUNT(*) AS n FROM java.lang.String s WHERE toString(s) IS NOT NULL"])
+        .output()
+        .unwrap();
+    assert!(out_not_null.status.success(), "IS NOT NULL failed: {}", String::from_utf8_lossy(&out_not_null.stderr));
+    let stdout = String::from_utf8_lossy(&out_not_null.stdout);
+    // n should be > 0 (all strings have a value)
+    let count: i64 = stdout.lines()
+        .filter(|l| !l.contains("n") && !l.contains("="))
+        .flat_map(|l| l.trim().parse().ok())
+        .next()
+        .unwrap_or(0);
+    assert!(count > 0, "IS NOT NULL returned 0, expected >0: {stdout}");
+
+    let out_null = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query", "SELECT COUNT(*) AS n FROM java.lang.String s WHERE toString(s) IS NULL"])
+        .output()
+        .unwrap();
+    assert!(out_null.status.success(), "IS NULL failed: {}", String::from_utf8_lossy(&out_null.stderr));
+    let stdout2 = String::from_utf8_lossy(&out_null.stdout);
+    assert!(stdout2.contains("0"), "IS NULL should return 0 for all-non-null strings: {stdout2}");
+}
+
