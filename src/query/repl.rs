@@ -1718,13 +1718,13 @@ fn run_repl_line(
                 return Ok(false);
             }
             "filter" | "grep" => {
-                *prev_result = last_result.clone();
+                if !rest.is_empty() { *prev_result = last_result.clone(); }
                 handle_filter(rest, last_result, *max_width, out)?;
                 out.flush()?;
                 return Ok(false);
             }
             "not" | "exclude" => {
-                *prev_result = last_result.clone();
+                if !rest.is_empty() { *prev_result = last_result.clone(); }
                 handle_filter_not(rest, last_result, *max_width, out)?;
                 out.flush()?;
                 return Ok(false);
@@ -1736,13 +1736,13 @@ fn run_repl_line(
                 return Ok(false);
             }
             "sample" => {
-                *prev_result = last_result.clone();
+                if !rest.is_empty() { *prev_result = last_result.clone(); }
                 handle_sample(rest, last_result, *max_width, out)?;
                 out.flush()?;
                 return Ok(false);
             }
             "sort" => {
-                *prev_result = last_result.clone();
+                if !rest.is_empty() { *prev_result = last_result.clone(); }
                 handle_sort(rest, last_result, *max_width, out)?;
                 out.flush()?;
                 return Ok(false);
@@ -1759,7 +1759,7 @@ fn run_repl_line(
                 return Ok(false);
             }
             "pivot" => {
-                *prev_result = last_result.clone();
+                if !rest.is_empty() { *prev_result = last_result.clone(); }
                 handle_pivot(rest, last_result, *max_width, out)?;
                 out.flush()?;
                 return Ok(false);
