@@ -17,6 +17,8 @@ mod pass2;
 mod progress;
 pub mod query;
 mod reader;
+pub mod source;
+pub use source::HprofSource;
 pub mod report;
 mod retained;
 mod rpo_dfs;

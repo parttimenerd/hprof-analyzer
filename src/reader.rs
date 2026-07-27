@@ -60,6 +60,25 @@ impl HprofReader {
         Ok(r)
     }
 
+    /// Construct a reader from any `Read` implementation.
+    /// Used by `HprofSource::open` for the `Bytes` variant. Reads the HPROF
+    /// header before returning.
+    pub(crate) fn from_reader(r: impl Read + 'static) -> io::Result<Self> {
+        let inner: Box<dyn Read> = Box::new(r);
+        let mut reader = HprofReader {
+            format: String::new(),
+            id_size: 4,
+            timestamp_ms: 0,
+            inner,
+            buf: vec![0u8; BUF_CAP],
+            pos: 0,
+            end: 0,
+            bytes_consumed: 0,
+        };
+        reader.read_header()?;
+        Ok(reader)
+    }
+
     fn read_header(&mut self) -> io::Result<()> {
         let mut s = Vec::new();
         loop {
