@@ -1876,9 +1876,9 @@ function startTerminal() {
           term.writeln('  ' + row.map(c => `\x1b[36m${c}\x1b[0m${' '.repeat(colW - c.length)}`).join('').trimEnd());
         }
         if (matches.length > CAP) {
-          term.writeln(`\x1b[2m  ... ${matches.length - CAP} more (showing ${CAP}; use /classes <pattern> to narrow)\x1b[0m`);
+          term.writeln(`\x1b[2m  ... ${(matches.length - CAP).toLocaleString('en-US')} more (showing ${CAP}; use /classes <pattern> to narrow)\x1b[0m`);
         }
-        term.writeln(`\x1b[2m(${matches.length} class${matches.length !== 1 ? 'es' : ''})\x1b[0m`);
+        term.writeln(`\x1b[2m(${matches.length.toLocaleString('en-US')} class${matches.length !== 1 ? 'es' : ''})\x1b[0m`);
       }
       term.write(PROMPT);
       return;
@@ -1906,9 +1906,9 @@ function startTerminal() {
           term.writeln('  ' + row.map(f => `\x1b[36m${f}\x1b[0m${' '.repeat(colW - f.length)}`).join('').trimEnd());
         }
         if (matches.length > CAP) {
-          term.writeln(`\x1b[2m  ... ${matches.length - CAP} more (showing ${CAP}; use /fields <pattern> to narrow)\x1b[0m`);
+          term.writeln(`\x1b[2m  ... ${(matches.length - CAP).toLocaleString('en-US')} more (showing ${CAP}; use /fields <pattern> to narrow)\x1b[0m`);
         }
-        term.writeln(`\x1b[2m(${matches.length} field${matches.length !== 1 ? 's' : ''})\x1b[0m`);
+        term.writeln(`\x1b[2m(${matches.length.toLocaleString('en-US')} field${matches.length !== 1 ? 's' : ''})\x1b[0m`);
       }
       term.write(PROMPT);
       return;
