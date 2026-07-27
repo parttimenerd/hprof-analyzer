@@ -12,6 +12,7 @@ on:
       - "tests/fixtures/dump_2_scala-doku.hprof"
       - "scripts/gen-samples.sh"
       - "scripts/build-browser.sh"
+      - "scripts/build-oql-guide.sh"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 

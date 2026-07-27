@@ -359,7 +359,7 @@ compatible. Key differences:
 **Extensions (not in MAT):** `MEDIAN`/`PERCENTILE` aggregates, `GROUP BY` /
 `HAVING`, `path()` reachability, `-- @viz` directives, arithmetic in `SELECT`
 and `WHERE`, system-properties snapshot (`@systemProperties`), interactive REPL
-with tab-completion, named queries library (`/run <name>`), report embedding
+with tab-completion, named queries library (`!run <name>`), report embedding
 (`--query` / `--query-file`).
 
 **Behavioural differences:** unreachable objects are *included* (MAT discards

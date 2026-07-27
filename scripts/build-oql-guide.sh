@@ -532,8 +532,8 @@ page = f'''<!DOCTYPE html>
   <div class="nav-title">hprof-analyzer OQL</div>
   {nav_html}
   <div class="nav-title" style="margin-top:16px">Links</div>
-  <a href="/">Browser REPL</a>
-  <a href="/reports/">Sample Reports</a>
+  <a href="../">Browser REPL</a>
+  <a href="../reports/">Sample Reports</a>
   <a href="https://github.com/parttimenerd/hprof-analyzer">GitHub</a>
 </nav>
 <main>
