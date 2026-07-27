@@ -2860,6 +2860,7 @@ function startTerminal() {
         else { term.writeln('\x1b[2musage: /set color on|off\x1b[0m'); term.write(PROMPT); return; }
         localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
         term.writeln(`\x1b[32m✓ color: ${settings.color ? 'on' : 'off'}\x1b[0m`);
+        if (lastResult) { renderResult(lastResult); }
       } else {
         term.writeln(`\x1b[31munknown setting: ${args[0]}\x1b[0m  \x1b[2moptions: limit, bytes, color, null\x1b[0m`);
       }

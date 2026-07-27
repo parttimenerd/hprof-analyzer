@@ -2366,10 +2366,16 @@ fn handle_set(rest: &str, last_result: Option<&QueryResult>, max_width: usize, o
             "on" | "true" | "1" | "" => {
                 SESSION_SETTINGS.with(|s| s.borrow_mut().color = true);
                 writeln!(out, "{cg}\u{2713} color: on{cr}")?;
+                if let Some(res) = last_result {
+                    print_result(res, std::time::Duration::ZERO, max_width, out)?;
+                }
             }
             "off" | "false" | "0" => {
                 SESSION_SETTINGS.with(|s| s.borrow_mut().color = false);
                 writeln!(out, "\u{2713} color: off")?;
+                if let Some(res) = last_result {
+                    print_result(res, std::time::Duration::ZERO, max_width, out)?;
+                }
             }
             _ => warn_out("usage: !set color on|off", out)?,
         },
