@@ -1258,10 +1258,10 @@ fn plan_single(q: &Query, depth_cap: usize) -> Result<QueryPlan, QueryError> {
                 });
                 if !ok {
                     return Err(QueryError(
-                        "only COUNT(*) or COUNT(toString(s)) may be combined with a \
-                         toString(s) filter in WHERE; SUM/AVG/MIN/MAX (and COUNT over \
-                         other attributes) over a toString-filtered set are not \
-                         supported in this release"
+                        "only COUNT(*) or COUNT(toString(s)) may appear alongside \
+                         toString(s) in a String query; SUM/AVG/MIN/MAX (and COUNT \
+                         over non-string attributes) over a toString-resolved set are \
+                         not supported in this release"
                             .into(),
                     ));
                 }
