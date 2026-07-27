@@ -1867,7 +1867,7 @@ function startTerminal() {
         const note = `${kept.length.toLocaleString('en-US')} unique row${kept.length !== 1 ? 's' : ''} (${removed.toLocaleString('en-US')} duplicate${removed !== 1 ? 's' : ''} removed)`;
         const newResult = { columns: lastResult.columns, rows: kept, row_count: kept.length, note };
         renderResult(newResult);
-        prevResult = lastResult;
+        if (removed > 0) { prevResult = lastResult; }
         lastResult = newResult;
       }
       term.write(PROMPT);

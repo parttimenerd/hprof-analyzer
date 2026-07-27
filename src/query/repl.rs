@@ -1234,8 +1234,10 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             continue;
                         }
                         "distinct" | "dedup" => {
-                            prev_result = last_result.clone();
+                            let before_len = last_result.as_ref().map(|r| r.rows.len());
+                            if before_len.is_some() { prev_result = last_result.clone(); }
                             handle_distinct(&mut last_result, max_width, &mut stdout)?;
+                            if last_result.as_ref().map(|r| r.rows.len()) == before_len { prev_result = None; }
                             stdout.flush()?;
                             continue;
                         }
@@ -1369,8 +1371,9 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             continue;
                         }
                         "drop" => {
-                            if !rest.is_empty() { prev_result = last_result.clone(); }
+                            let before_cols = last_result.as_ref().map(|r| r.columns.len());
                             handle_drop(rest, &mut last_result, max_width, &mut stdout)?;
+                            if last_result.as_ref().map(|r| r.columns.len()) != before_cols { prev_result = last_result.clone(); }
                             stdout.flush()?;
                             continue;
                         }
@@ -1796,8 +1799,10 @@ fn run_repl_line(
                 return Ok(false);
             }
             "distinct" | "dedup" => {
-                *prev_result = last_result.clone();
+                let before_len = last_result.as_ref().map(|r| r.rows.len());
+                if before_len.is_some() { *prev_result = last_result.clone(); }
                 handle_distinct(last_result, *max_width, out)?;
+                if last_result.as_ref().map(|r| r.rows.len()) == before_len { *prev_result = None; }
                 out.flush()?;
                 return Ok(false);
             }
@@ -1902,7 +1907,6 @@ fn run_repl_line(
                         _ => warn_out("usage: !select <col1> [col2 ...]  — names, numbers, or ranges (e.g. 1-3)", out)?,
                     }
                 } else {
-                    *prev_result = last_result.clone();
                     match last_result {
                         None => warn_out("(no result — run a query first)", out)?,
                         Some(res) => {
@@ -1938,6 +1942,7 @@ fn run_repl_line(
                                     elapsed_ms: None,
                                 };
                                 print_result(&projected, std::time::Duration::ZERO, *max_width, out)?;
+                                *prev_result = last_result.clone();
                                 *last_result = Some(projected);
                             }
                         }
@@ -1947,8 +1952,9 @@ fn run_repl_line(
                 return Ok(false);
             }
             "drop" => {
-                *prev_result = last_result.clone();
+                let before_cols = last_result.as_ref().map(|r| r.columns.len());
                 handle_drop(rest, last_result, *max_width, out)?;
+                if last_result.as_ref().map(|r| r.columns.len()) != before_cols { *prev_result = last_result.clone(); }
                 out.flush()?;
                 return Ok(false);
             }
