@@ -1802,10 +1802,14 @@ fn note_attr_need(item: &SelectItem, needs: &mut QueryNeeds) -> Result<(), Query
         SelectItem::Path { .. } => Err(QueryError(
             "path(a, b) may not be used as an aggregate argument".into(),
         )),
-        // toString(s) cannot be an aggregate argument.
-        SelectItem::ToString(_) => Err(QueryError(
-            "toString(s) may not be used as an aggregate argument".into(),
-        )),
+        // toString(s) as an aggregate argument (COUNT(toString(s))) is supported
+        // in the carry-mode late path for String queries — mark the string-values
+        // table as needed; the aggregate gate in `is_string_from` validates the
+        // combination (SUM/AVG/MIN/MAX over toString are rejected there).
+        SelectItem::ToString(_) => {
+            needs.string_values = true;
+            Ok(())
+        }
         SelectItem::Expr(e) => {
             expr_for_each_attr(e, &mut |a| note_attr_need_attr(a, needs));
             Ok(())
