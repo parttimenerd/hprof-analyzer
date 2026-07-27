@@ -1328,7 +1328,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                             continue;
                         }
                         "describe" => {
-                            handle_describe(rest.trim(), path, path_depth, reachable_only, &mut cache, &mut stdout)?;
+                            handle_describe(rest.trim(), path, path_depth, reachable_only, &mut cache, &names_for_meta.0, &mut stdout)?;
                             stdout.flush()?;
                             continue;
                         }
@@ -1933,7 +1933,7 @@ fn run_repl_line(
                 return Ok(false);
             }
             "describe" => {
-                handle_describe(rest.trim(), path, path_depth, *reachable_only, cache, out)?;
+                handle_describe(rest.trim(), path, path_depth, *reachable_only, cache, &names_for_meta.0, out)?;
                 out.flush()?;
                 return Ok(false);
             }
@@ -2967,6 +2967,7 @@ fn handle_describe(
     path_depth: usize,
     reachable_only: bool,
     cache: &mut Option<crate::query::run::ReplCache>,
+    class_names: &[String],
     out: &mut impl Write,
 ) -> io::Result<()> {
     let color = SESSION_SETTINGS.with(|s| s.borrow().color);
@@ -2982,6 +2983,31 @@ fn handle_describe(
     match fields_res {
         Err(e) => {
             writeln!(out, "{ce}error: {e}{cr}")?;
+            if !class_names.is_empty() {
+                let lower = cls.to_ascii_lowercase();
+                let mut sugg: Vec<&str> = class_names
+                    .iter()
+                    .filter(|c| c.to_ascii_lowercase().contains(lower.as_str()))
+                    .map(|c| c.as_str())
+                    .take(5)
+                    .collect();
+                if sugg.is_empty() {
+                    // fall back to simple-name substring match
+                    sugg = class_names
+                        .iter()
+                        .filter(|c| {
+                            let sn = c.rsplit('.').next().unwrap_or(c);
+                            sn.to_ascii_lowercase().contains(lower.as_str())
+                        })
+                        .map(|c| c.as_str())
+                        .take(5)
+                        .collect();
+                }
+                if !sugg.is_empty() {
+                    let names: Vec<&str> = sugg.iter().map(|c| c.rsplit('.').next().unwrap_or(c)).collect();
+                    writeln!(out, "{cd}similar: {}{cr}", names.join(", "))?;
+                }
+            }
             return Ok(());
         }
         Ok(res) => {
