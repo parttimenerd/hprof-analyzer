@@ -996,7 +996,7 @@ function fmtBytes(n) {
   if (n < 1024) return n + ' B';
   if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KiB';
   if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MiB';
-  return (n / 1024 / 1024 / 1024).toFixed(2) + ' GiB';
+  return (n / 1024 / 1024 / 1024).toFixed(1) + ' GiB';
 }
 
 // Resolve a column specifier (name substring OR 1-based number) to an index.
@@ -1918,7 +1918,7 @@ function startTerminal() {
         }
       } catch (e) {
         term.write('\r\x1b[K');
-        term.writeln(`\x1b[31mrequest failed: ${e.message}\x1b[0m`);
+        term.writeln(`\x1b[31merror: ${e.message}\x1b[0m`);
       }
       term.write(PROMPT);
       return;
