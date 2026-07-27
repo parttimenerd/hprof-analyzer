@@ -1019,7 +1019,6 @@ function startTerminal() {
         const ts = new Date().toLocaleTimeString('en-GB', { hour12: false });
         term.writeln(`\x1b[2m── ${ts} ──────────────────────────────────────────\x1b[0m`);
         await runQuery(watchOql, { showHint: false });
-        term.write(PROMPT);
       };
       await tick();
       watchTimer = setInterval(tick, secs * 1000);
