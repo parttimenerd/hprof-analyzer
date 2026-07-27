@@ -1419,7 +1419,10 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                         "history" => {
                             let arg = rest.trim();
                             if arg == "clear" {
-                                warn_out("(clear not supported in reedline mode)", &mut stdout)?;
+                                let color = SESSION_SETTINGS.with(|s| s.borrow().color);
+                                let (cg, cr) = if color { ("\x1b[32m", "\x1b[0m") } else { ("", "") };
+                                let _ = line_editor.history_mut().clear();
+                                writeln!(stdout, "{cg}\u{2713} history cleared{cr}")?;
                             } else {
                                 let color = SESSION_SETTINGS.with(|s| s.borrow().color);
                                 let (cd, cc, cr) = if color { ("\x1b[2m", "\x1b[36m", "\x1b[0m") } else { ("", "", "") };
