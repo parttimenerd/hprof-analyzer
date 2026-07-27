@@ -2867,7 +2867,9 @@ function startTerminal() {
     // During isearch, onKey handles char input for the search query — skip here.
     if (isearching) return;
     // Strip control bytes (0x00-0x1F, 0x7F-0x9F) and ANSI escape sequences.
-    const printable = data.replace(/[\x00-\x1F\x7F-\x9F]|\x1B\[[\x20-\x3F]*[\x40-\x7E]/g, '');
+    const printable = data
+        .replace(/[\x00-\x1F\x7F-\x9F]|\x1B\[[\x20-\x3F]*[\x40-\x7E]/g, '')
+        .replace(/^\[(?:[ABCDHF]|[0-9]+~)/, '');
     if (!printable) return;
     line = line.slice(0, cursorPos) + printable + line.slice(cursorPos);
     cursorPos += printable.length;
