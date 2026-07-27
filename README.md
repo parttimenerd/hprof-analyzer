@@ -53,14 +53,21 @@ A live viewer shows all four output formats side by side, built from the public
 
 ## Try it in the browser
 
-No install, no JVM. Drop a `.hprof` file into the browser REPL and run OQL
-queries against it directly — no server required:
+A browser-based front-end for the `hprof-analyzer server` — no local install
+needed to view the UI, but you still need the server running locally for query
+execution:
 
 **➡ [Open the browser REPL](https://parttimenerd.github.io/hprof-analyzer/)**
 
-To connect to a running `hprof-analyzer server`, paste the server URL into the
-connect screen. All REPL commands (`!top`, `!sort`, `!stats`, `!obj`, …) and
-the full OQL engine work the same way in the browser and in the CLI.
+Start the server locally, then paste the URL into the connect screen:
+
+```sh
+hprof-analyzer server heap.hprof   # prints http://127.0.0.1:7070
+```
+
+All REPL commands (`!top`, `!sort`, `!stats`, `!obj`, …) and the full OQL
+engine work the same way in the browser and in the CLI. Tab-completion and
+named-query browsing work offline via WASM.
 
 ## Quick start
 
