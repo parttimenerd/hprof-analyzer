@@ -536,9 +536,10 @@ function startTerminal() {
 
   async function runQueryFromSidebar(oql) {
     term.focus();
-    // Show a truncated echo so long queries don't wrap across lines
+    // Show a truncated, flattened echo so multi-line/long queries don't break the line
     const maxEcho = term.cols - PROMPT.length - 1;
-    const echo = oql.length > maxEcho ? oql.slice(0, maxEcho - 1) + '…' : oql;
+    const flat = oql.replace(/\n/g, ' ↵ ').replace(/\s+/g, ' ');
+    const echo = flat.length > maxEcho ? flat.slice(0, maxEcho - 1) + '…' : flat;
     term.write('\r\x1b[K' + PROMPT + echo);
     line = '';
     cursorPos = 0;
