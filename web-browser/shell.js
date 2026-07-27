@@ -818,7 +818,7 @@ function startTerminal() {
         term.write(PROMPT);
         return;
       }
-      term.writeln(`\x1b[2mQuerying fields of ${cls}…\x1b[0m`);
+      term.write('\x1b[2m⠋ describing…\x1b[0m');
       try {
         const [fieldsRes, countRes] = await Promise.allSettled([
           fetch(serverUrl + '/', {
@@ -837,8 +837,8 @@ function startTerminal() {
         term.write('\r\x1b[K');
         const data = fieldsRes.status === 'fulfilled' ? fieldsRes.value : null;
         if (!data?.ok || !data.result?.columns) {
-          const msg = data?.error?.message || 'no result';
-          term.writeln(`\x1b[31m${msg}\x1b[0m`);
+          const msg = data?.error?.message || 'class not found';
+          term.writeln(`\x1b[31merror: ${msg}\x1b[0m`);
           if (classNames.length > 0) {
             const lower = cls.toLowerCase();
             const sugg = classNames.filter(c => c.toLowerCase().includes(lower)).slice(0, 5);
@@ -1910,8 +1910,8 @@ function startTerminal() {
         term.writeln('\x1b[1mCurrent settings:\x1b[0m');
         term.writeln(`  \x1b[1mlimit\x1b[0m    \x1b[32m${settings.rowLimit === Infinity ? 'unlimited' : settings.rowLimit}\x1b[0m  \x1b[2m(rows displayed; 0 = no cap)\x1b[0m`);
         term.writeln(`  \x1b[1mbytes\x1b[0m    \x1b[32m${settings.bytesRaw ? 'raw' : 'human'}\x1b[0m  \x1b[2m(raw = show numbers, human = 4.3 KiB)\x1b[0m`);
-        term.writeln(`  \x1b[1mnull\x1b[0m     \x1b[32m"${settings.nullStr}"\x1b[0m  \x1b[2m(how null values display)\x1b[0m`);
         term.writeln(`  \x1b[1mcolor\x1b[0m    \x1b[32m${settings.color ? 'on' : 'off'}\x1b[0m  \x1b[2m(ANSI colours in table cells)\x1b[0m`);
+        term.writeln(`  \x1b[1mnull\x1b[0m     \x1b[32m"${settings.nullStr}"\x1b[0m  \x1b[2m(null display string)\x1b[0m`);
         term.writeln('\x1b[2musage: /set limit 500 | /set bytes raw | /set bytes human | /set null ∅ | /set color off\x1b[0m');
       } else if (args[0] === 'limit') {
         const n = args[1] === '0' || args[1] === 'unlimited' || args[1] === 'none' ? 0 : parseInt(args[1], 10);
