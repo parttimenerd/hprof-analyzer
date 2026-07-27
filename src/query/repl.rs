@@ -699,6 +699,28 @@ impl Completer for OqlCompleter {
                 if !out.is_empty() { return out; }
             }
         }
+        // `!run <name>` — complete named query names.
+        if upto.starts_with("!run ") {
+            let partial = upto["!run ".len()..].trim_start();
+            let lower = partial.to_ascii_lowercase();
+            let name_start = upto.len() - partial.len();
+            let matches: Vec<Suggestion> = crate::named_queries::NAMED_QUERIES
+                .iter()
+                .filter(|q| q.name.to_ascii_lowercase().starts_with(&lower))
+                .map(|q| Suggestion {
+                    value: format!("!run {}", q.name),
+                    description: Some(q.display.to_string()),
+                    style: None,
+                    extra: None,
+                    span: Span { start: 0, end: pos },
+                    append_whitespace: true,
+                })
+                .collect();
+            if !matches.is_empty() {
+                return matches;
+            }
+            let _ = name_start;
+        }
         // `!set <key>` — complete setting keys; `!set bytes|color <val>` complete value.
         if upto.starts_with("!set") {
             let after = upto["!set".len()..].trim_start();
@@ -5957,6 +5979,46 @@ mod tests {
         // `!sort className,-r<Tab>` multi-column with dash
         let v3 = values(&c.complete("!sort className,-r", 18));
         assert!(v3.contains(&"!sort className,-retainedHeap".to_string()), "multi-col dash sort: {v3:?}");
+    }
+
+    #[test]
+    fn run_completion_prefix_filters_named_queries() {
+        let mut c = completer(&[]);
+        let line = "!run top";
+        let v = values(&c.complete(line, line.len()));
+        assert!(!v.is_empty(), "!run top should complete named queries");
+        assert!(
+            v.iter().all(|s| s.starts_with("!run top")),
+            "all completions should match prefix: {v:?}"
+        );
+        assert!(
+            v.contains(&"!run top-classes-by-count".to_string()),
+            "top-classes-by-count missing: {v:?}"
+        );
+    }
+
+    #[test]
+    fn run_completion_empty_arg_lists_all_queries() {
+        let mut c = completer(&[]);
+        let line = "!run ";
+        let v = values(&c.complete(line, line.len()));
+        let total = crate::named_queries::NAMED_QUERIES.len();
+        assert_eq!(v.len(), total, "!run <space> should offer all {total} named queries, got {}", v.len());
+    }
+
+    #[test]
+    fn describe_completion_suggests_class_names() {
+        let mut c = completer(&["java.lang.String", "java.lang.StringBuilder", "java.util.HashMap"]);
+        let line = "!describe java.lang";
+        let sugg = c.complete(line, line.len());
+        let v = values(&sugg);
+        assert!(!v.is_empty(), "!describe java.lang should suggest class names: {v:?}");
+        assert!(v.contains(&"java.lang.String".to_string()), "String missing: {v:?}");
+        assert!(v.contains(&"java.lang.StringBuilder".to_string()), "StringBuilder missing: {v:?}");
+        assert!(!v.contains(&"java.util.HashMap".to_string()), "HashMap should not match java.lang: {v:?}");
+        // Span start must point to the class-name portion, not the whole line.
+        let span_start = sugg[0].span.start;
+        assert_eq!(&line[span_start..], "java.lang", "span should cover just the partial class name");
     }
 
     #[test]
