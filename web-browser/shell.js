@@ -1285,7 +1285,8 @@ function startTerminal() {
           if (ok) {
             const newCols = indices.map(i => fields[i]);
             const newRows = lastResult.rows.map(r => indices.map(i => r[i]));
-            prevResult = lastResult;
+            const colsChanged = newCols.length !== fields.length || newCols.some((c, i) => c !== fields[i]);
+            if (colsChanged) prevResult = lastResult;
             lastResult = { columns: newCols, rows: newRows };
             renderResult(lastResult);
           }
@@ -1659,7 +1660,7 @@ function startTerminal() {
         const slicedResult = { columns: [...lastResult.columns], rows: sliced };
         if (shown < total) slicedResult.note = `top ${shown.toLocaleString('en-US')} of ${total.toLocaleString('en-US')}`;
         renderResult({ ...slicedResult, row_count: shown });
-        prevResult = lastResult;
+        if (shown < total) prevResult = lastResult;
         lastResult = slicedResult;
       }
       term.write(PROMPT);
@@ -1679,7 +1680,7 @@ function startTerminal() {
         const slicedResult = { columns: [...lastResult.columns], rows: sliced };
         if (shown < total) slicedResult.note = `last ${shown.toLocaleString('en-US')} of ${total.toLocaleString('en-US')}`;
         renderResult({ ...slicedResult, row_count: shown });
-        prevResult = lastResult;
+        if (shown < total) prevResult = lastResult;
         lastResult = slicedResult;
       }
       term.write(PROMPT);
@@ -1742,8 +1743,10 @@ function startTerminal() {
       });
       const label = specs.map(s => `${s.name} ${s.desc ? 'desc' : 'asc'}`).join(', ');
       const newResult = { ...lastResult, columns: [...lastResult.columns], rows: sorted, row_count: sorted.length, note: `sorted by ${label}` };
-      renderResult(newResult);
+      const savedPrev = prevResult;
       prevResult = lastResult;
+      renderResult(newResult);
+      if (newResult.note === lastResult.note) { prevResult = savedPrev; }
       lastResult = newResult;
       term.write(PROMPT);
       return;
