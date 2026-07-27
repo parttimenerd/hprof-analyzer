@@ -2032,7 +2032,7 @@ function startTerminal() {
         if (realHistory.length > limit) {
           term.writeln(`\x1b[2m  … ${realHistory.length - limit} more — /history N to show more\x1b[0m`);
         }
-        term.writeln(`\x1b[2m  Use !N to re-run entry N  ·  /history clear to wipe\x1b[0m`);
+        term.writeln(`\x1b[2m  Use !N to re-run entry N  (1 = most recent)  ·  /history clear to wipe\x1b[0m`);
       }
       term.write(PROMPT);
       return;
