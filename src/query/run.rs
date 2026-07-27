@@ -1897,6 +1897,49 @@ mod tests {
         assert!(non_null > 0, "expected at least some non-null toString values, got 0 out of {}", result.row_count);
     }
 
+    #[test]
+    fn tostring_with_retained_heap_size_non_null_and_sorted() {
+        let path = "tests/fixtures/dump_4_philosophers.hprof";
+        let source = crate::source::HprofSource::from(path);
+        let cache = ReplCache::build(&source, true).expect("cache");
+
+        // Combined carry-mode query: toString needs string_values, @retainedHeapSize needs retained.
+        let oql = "SELECT toString(s) AS value, @retainedHeapSize AS bytes FROM java.lang.String s ORDER BY bytes DESC LIMIT 10";
+        let (q, plan) = parse_plan_opt(oql);
+
+        assert!(plan.needs.string_values, "must need string_values");
+        assert!(plan.needs.retained, "must need retained");
+
+        let retained = {
+            let (_report, ret) = crate::analyze_to_report_with_retained(&source, &crate::AnalyzeOptions::default())
+                .expect("analyze");
+            ret
+        };
+        let results = run_resident_with_retained(&cache, &[(q, plan)], true, &retained).expect("run");
+        let result = &results[0];
+
+        assert!(result.error.is_none(), "unexpected error: {:?}", result.error);
+        assert!(result.row_count > 0, "expected rows");
+
+        // All @retainedHeapSize values must be non-null and non-zero.
+        let bytes_col = result.columns.iter().position(|c| c.name == "bytes").expect("bytes column");
+        for row in &result.rows {
+            let v = &row[bytes_col];
+            assert!(!matches!(v, QueryValue::Null), "bytes must not be null");
+            if let QueryValue::Int(n) = v {
+                assert!(*n > 0, "retained heap size must be positive, got {n}");
+            }
+        }
+
+        // Rows must be sorted descending by bytes.
+        let vals: Vec<i64> = result.rows.iter().map(|r| {
+            if let QueryValue::Int(n) = r[bytes_col] { n } else { 0 }
+        }).collect();
+        for w in vals.windows(2) {
+            assert!(w[0] >= w[1], "rows not sorted DESC: {} < {}", w[0], w[1]);
+        }
+    }
+
     /// Minimal `ClassResolver` mapping a couple of class addresses to names;
     /// fields are unused by these class-only queries.
     struct FakeResolver {

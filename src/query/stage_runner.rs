@@ -683,6 +683,13 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
 
     let mut truncated = entry.carry.truncated() || ctx.string_values_truncated;
     let mut out_rows = out_rows;
+
+    if let Some(ob) = &q.order_by {
+        if let Some(ci) = crate::query::execute::order_by_column_index(q, &columns, &ob.key) {
+            crate::query::execute::sort_rows_by_column(&mut out_rows, ci, ob.dir);
+        }
+    }
+
     if let Some(limit) = q.limit {
         if out_rows.len() as u64 > limit {
             out_rows.truncate(limit as usize);
