@@ -1117,7 +1117,7 @@ function startTerminal() {
         lastResult = prevResult;
         prevResult = null;
         term.writeln(`\x1b[32m✓ undone\x1b[0m  \x1b[2m(restored ${lastResult.rows.length.toLocaleString('en-US')} row${lastResult.rows.length !== 1 ? 's' : ''})\x1b[0m`);
-        renderResult({ columns: lastResult.columns, rows: lastResult.rows, row_count: lastResult.rows.length });
+        renderResult(lastResult);
       }
       term.write(PROMPT);
       return;
@@ -1267,7 +1267,7 @@ function startTerminal() {
             const newRows = lastResult.rows.map(r => indices.map(i => r[i]));
             prevResult = lastResult;
             lastResult = { columns: newCols, rows: newRows };
-            renderResult({ columns: lastResult.columns, rows: lastResult.rows, row_count: lastResult.rows.length });
+            renderResult(lastResult);
           }
         }
       }
@@ -1308,7 +1308,7 @@ function startTerminal() {
               const newRows = lastResult.rows.map(r => keep.map(i => r[i]));
               prevResult = lastResult;
               lastResult = { columns: newCols, rows: newRows };
-              renderResult({ columns: lastResult.columns, rows: lastResult.rows, row_count: lastResult.rows.length });
+              renderResult(lastResult);
             }
           }
         }
