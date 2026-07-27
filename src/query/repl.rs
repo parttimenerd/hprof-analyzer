@@ -1824,7 +1824,6 @@ fn run_repl_line(
                 return Ok(false);
             }
             "unique" => {
-                *prev_result = last_result.clone();
                 handle_unique(rest, last_result, out)?;
                 out.flush()?;
                 return Ok(false);
