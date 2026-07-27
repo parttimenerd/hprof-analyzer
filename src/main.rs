@@ -1561,6 +1561,8 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
             string_values,
             refwalk_csr,
             rpo.as_ref().map(|r| r.dfn.as_slice()),
+            None,
+            None,
         );
         let collapsed = query::run::collapse_union_results(flat_results, &union_groups);
         collapsed

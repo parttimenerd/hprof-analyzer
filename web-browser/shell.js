@@ -749,7 +749,18 @@ function startTerminal() {
       }
 
       const grpHtml = c.group ? `<span class="cp-group">${escHtml(c.group)}</span>` : '';
-      div.innerHTML = `<span class="cp-value">${valHtml}</span>${grpHtml}`;
+      // Per-item syntax highlighting on the value span
+      let valColor;
+      if (c.group === 'field' || val.startsWith('@')) {
+        valColor = '#c0a0ff';  // purple — @fields
+      } else if (c.group === 'keyword') {
+        valColor = '#f0d080';  // yellow — keywords
+      } else if (c.group === 'class' || val.includes('.') || /^[A-Z]/.test(val)) {
+        valColor = '#90c0f8';  // blue  — class names
+      } else {
+        valColor = '#60c8e0';  // cyan  — default
+      }
+      div.innerHTML = `<span class="cp-value" style="color:${valColor}">${valHtml}</span>${grpHtml}`;
       div.addEventListener('mousedown', e => {
         e.preventDefault();
         popAccept(i);
@@ -783,16 +794,15 @@ function startTerminal() {
       cellH = core._renderService.dimensions.css.cell.height;
     } catch (_) {}
 
-    const promptLen = PROMPT.replace(/\x1b\[[^m]*m/g, '').length;
-    const col = promptLen + cursorPos;
-    // xterm has a small left padding
-    const xtermPad = 8;
-    const x = containerRect.left + xtermPad + col * cellW;
-    // bottom of last row = containerRect.bottom (terminal fills container)
-    // we want just below cursor row; approximate as 2 rows up from bottom
-    const termRows = term.rows;
-    const cursorRow = termRows - 1; // input is always on last visible line
-    const y = containerRect.top + (cursorRow + 1) * cellH;
+    // Use the actual xterm buffer cursor position instead of computing from
+    // promptLen + cursorPos, which is wrong when the line wraps.
+    // xterm has a small left/top padding (matches .xterm { padding: 4px 8px })
+    const xtermPadLeft = 8;
+    const xtermPadTop  = 4;
+    const cursorCol = term.buffer.active.cursorX;
+    const cursorRow = term.buffer.active.cursorY;
+    const x = containerRect.left + xtermPadLeft + cursorCol * cellW;
+    const y = containerRect.top  + xtermPadTop  + (cursorRow + 1) * cellH;
 
     // flip above if not enough space below
     const below = window.innerHeight - y;

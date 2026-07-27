@@ -626,6 +626,11 @@ pub(crate) fn resume_with_string_values(
     string_values: std::collections::HashMap<u32, String>,
     refwalk_csr: Option<crate::query::refwalk::RefWalkCsr>,
     dfn: Option<&[u32]>,
+    // Optional: supply the real address table and shallow-size array so that
+    // @objectAddress and @usedHeapSize are projected correctly for carry-mode
+    // (toString) entries. Pass None/None on paths that don't need them.
+    id_map_opt: Option<&crate::id_map::IdMap>,
+    shallow_opt: Option<&[u32]>,
 ) -> Vec<crate::query::model::QueryResult> {
     use crate::query::plan::StageOp;
     use crate::query::stage_runner::{self, EMPTY_REFWALK_TAILS, EMPTY_STRING_VALUES};
@@ -635,7 +640,21 @@ pub(crate) fn resume_with_string_values(
     // armed during the scan.
     let row_src_by_slot = state.take_row_src_by_slot();
 
-    let id_map = stage_runner::IdMap::new(&[]);
+    // Build the stage_runner::IdMap wrapper. The stage_runner type takes a flat
+    // &[u64] slice, but pass1::IdMap is a block-encoded structure. We only need
+    // it for carry-mode (toString) entries, so we materialise the flat slice on
+    // demand when id_map_opt is provided.
+    let addr_vec: Vec<u64> = id_map_opt
+        .map(|m| (0..m.len()).map(|i| m.addr_at(i)).collect())
+        .unwrap_or_default();
+    let empty_id_map = stage_runner::IdMap::new(&[]);
+    let real_id_map;
+    let id_map: &stage_runner::IdMap<'_> = if addr_vec.is_empty() {
+        &empty_id_map
+    } else {
+        real_id_map = stage_runner::IdMap::new(&addr_vec);
+        &real_id_map
+    };
     let sv_ref: &std::collections::HashMap<u32, String> = if string_values.is_empty() {
         &EMPTY_STRING_VALUES
     } else {
@@ -656,8 +675,8 @@ pub(crate) fn resume_with_string_values(
         idom: &[],
         dc_off: &[],
         dc_tgt: &[],
-        shallow: &[],
-        id_map: &id_map,
+        shallow: shallow_opt.unwrap_or(&[]),
+        id_map,
         fwd_off: rw_off,
         fwd_tgt: rw_tgt,
         fwd_field: rw_field,
@@ -845,7 +864,10 @@ pub fn run_resident_only(
     } else {
         std::collections::HashMap::new()
     };
-    let flat_results = resume_with_string_values(state, &flat, sv, None, dfn);
+    let flat_results = resume_with_string_values(
+        state, &flat, sv, None, dfn,
+        Some(&cache.p1.id_map), Some(&cache.shallow),
+    );
     Ok(collapse_union_results(flat_results, &groups))
 }
 
@@ -893,7 +915,9 @@ pub fn run_resident_with_retained(
     } else {
         std::collections::HashMap::new()
     };
-    let flat_results = resume_with_retained(state, &flat, retained, &cache.shallow, dfn, sv);
+    let flat_results = resume_with_retained(
+        state, &flat, retained, &cache.shallow, dfn, sv, Some(&cache.p1.id_map),
+    );
     Ok(collapse_union_results(flat_results, &groups))
 }
 
@@ -909,6 +933,7 @@ fn resume_with_retained(
     shallow: &[u32],
     dfn: Option<&[u32]>,
     string_values: std::collections::HashMap<u32, String>,
+    id_map_opt: Option<&crate::id_map::IdMap>,
 ) -> Vec<crate::query::model::QueryResult> {
     use crate::query::plan::StageOp;
     use crate::query::stage_runner::{
@@ -917,14 +942,24 @@ fn resume_with_retained(
 
     let row_src_by_slot = state.take_row_src_by_slot();
     let (finished, pending) = state.into_parts();
-    let id_map = IdMap::new(&[]);
+    let addr_vec: Vec<u64> = id_map_opt
+        .map(|m| (0..m.len()).map(|i| m.addr_at(i)).collect())
+        .unwrap_or_default();
+    let empty_id_map = IdMap::new(&[]);
+    let real_id_map;
+    let id_map: &IdMap<'_> = if addr_vec.is_empty() {
+        &empty_id_map
+    } else {
+        real_id_map = IdMap::new(&addr_vec);
+        &real_id_map
+    };
     let ctx = LateCtx {
         retained,
         idom: &[],
         dc_off: &[],
         dc_tgt: &[],
         shallow,
-        id_map: &id_map,
+        id_map,
         fwd_off: &[],
         fwd_tgt: &[],
         fwd_field: &[],
@@ -1027,6 +1062,8 @@ pub fn run_single_dump(
             string_values,
             refwalk_csr,
             rpo.as_ref().map(|r| r.dfn.as_slice()),
+            None,
+            None,
         );
         let collapsed = collapse_union_results(flat_results, &groups);
         return Ok(collapsed);
@@ -1160,6 +1197,8 @@ pub fn run_single_dump(
         outer_sv,
         outer_refwalk_csr,
         outer_rpo.as_ref().map(|r| r.dfn.as_slice()),
+        None,
+        None,
     );
 
     // ── FROM-subquery semi-join: keep only outer rows whose dense index is in

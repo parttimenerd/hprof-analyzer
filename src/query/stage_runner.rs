@@ -974,6 +974,9 @@ fn project_string_row_item(it: &SelectItem, dense: u32, ctx: &LateCtx) -> QueryV
             .unwrap_or(QueryValue::Null),
         SelectItem::Attr(Attr::ObjectId) => QueryValue::Int(dense as i64),
         SelectItem::Attr(Attr::ObjectAddress) => QueryValue::Int(ctx.id_map.to_addr(dense) as i64),
+        SelectItem::Attr(Attr::UsedHeapSize) => QueryValue::Int(
+            ctx.shallow.get(dense as usize).copied().unwrap_or(0) as i64,
+        ),
         SelectItem::Star => QueryValue::ObjRef {
             // Dense index, matching the scan-path `SELECT *` convention: the late
             // id_map is empty (address table compressed away), so `to_addr` here
