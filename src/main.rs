@@ -1653,6 +1653,19 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
         let headers: Vec<String> = r.columns.iter().map(|c| c.name.clone()).collect();
         let body: Vec<Vec<String>> = r.rows.iter().map(|row| row.iter().map(fmt_query_value).collect()).collect();
         let ncols = headers.len();
+        // Numeric columns (all non-null values are Int or Float) get right-aligned.
+        let is_numeric: Vec<bool> = (0..ncols).map(|col| {
+            r.rows.iter().all(|row| matches!(
+                row.get(col),
+                Some(query::model::QueryValue::Int(_))
+                    | Some(query::model::QueryValue::Float(_))
+                    | Some(query::model::QueryValue::Null)
+                    | None
+            )) && r.rows.iter().any(|row| matches!(
+                row.get(col),
+                Some(query::model::QueryValue::Int(_)) | Some(query::model::QueryValue::Float(_))
+            ))
+        }).collect();
         // Compute per-column widths (header width vs max cell width).
         let mut widths: Vec<usize> = headers.iter().map(|h| h.chars().count()).collect();
         for row in &body {
@@ -1660,13 +1673,17 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
                 if i < ncols { widths[i] = widths[i].max(cell.chars().count()); }
             }
         }
-        let pad = |s: &str, w: usize| -> String {
+        let pad_left = |s: &str, w: usize| -> String {
             let n = s.chars().count();
             if n >= w { s.to_string() } else { format!("{s}{}", " ".repeat(w - n)) }
         };
-        // Header row — left-aligned.
+        let pad_right = |s: &str, w: usize| -> String {
+            let n = s.chars().count();
+            if n >= w { s.to_string() } else { format!("{}{s}", " ".repeat(w - n)) }
+        };
+        // Header row — left-aligned (even for numeric columns, conventional).
         let hdr_cells: Vec<String> = headers.iter().enumerate()
-            .map(|(i, h)| if i + 1 < ncols { pad(h, widths[i]) } else { h.clone() })
+            .map(|(i, h)| if i + 1 < ncols { pad_left(h, widths[i]) } else { h.clone() })
             .collect();
         out.push_str(&hdr_cells.join(" | "));
         out.push('\n');
@@ -1676,10 +1693,16 @@ fn run_queries(input: &str, opts: AnalyzeOptions) -> io::Result<()> {
             .collect();
         out.push_str(&sep.join("-+-"));
         out.push('\n');
-        // Data rows.
+        // Data rows — numeric columns right-aligned, others left-aligned.
         for row in &body {
             let cells: Vec<String> = row.iter().enumerate()
-                .map(|(i, cell)| if i + 1 < ncols { pad(cell, widths[i]) } else { cell.clone() })
+                .map(|(i, cell)| {
+                    if i + 1 < ncols {
+                        if i < ncols && is_numeric[i] { pad_right(cell, widths[i]) } else { pad_left(cell, widths[i]) }
+                    } else {
+                        cell.clone()
+                    }
+                })
                 .collect();
             out.push_str(&cells.join(" | "));
             out.push('\n');
