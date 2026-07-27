@@ -1310,7 +1310,251 @@ fn eval_refpath_pred(
 }
 // cmp_query_value / cmp_i64 / cmp_f64 removed: callers now use cmp_late_qv.
 
+/// Total ordering for two `QueryValue`s, used in GROUP BY late aggregation for
+/// MIN/MAX and ORDER BY. Null sorts last. Mixed types fall back to Equal.
+fn qv_ord(a: &QueryValue, b: &QueryValue) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (a, b) {
+        (QueryValue::Null, QueryValue::Null) => Ordering::Equal,
+        (QueryValue::Null, _) => Ordering::Greater,
+        (_, QueryValue::Null) => Ordering::Less,
+        (QueryValue::Int(x), QueryValue::Int(y)) => x.cmp(y),
+        (QueryValue::Float(x), QueryValue::Float(y)) => x.partial_cmp(y).unwrap_or(Ordering::Equal),
+        (QueryValue::Int(x), QueryValue::Float(y)) => (*x as f64).partial_cmp(y).unwrap_or(Ordering::Equal),
+        (QueryValue::Float(x), QueryValue::Int(y)) => x.partial_cmp(&(*y as f64)).unwrap_or(Ordering::Equal),
+        (QueryValue::Str(x), QueryValue::Str(y)) => x.cmp(y),
+        _ => Ordering::Equal,
+    }
+}
+
+/// Evaluate a single GROUP BY key expression in the late phase.
+/// Only attributes available in the late window are supported; anything else
+/// returns Null (non-resolvable in the retained join).
+fn eval_late_gb_key(expr: &Expr, idx: u32, ret: u64, ctx: &LateCtx) -> QueryValue {
+    match expr {
+        Expr::Attr(Attr::ClassOf) | Expr::Attr(Attr::DisplayName) => {
+            ctx.class_name_of(idx)
+                .map(|s| QueryValue::Str(s.to_string()))
+                .unwrap_or(QueryValue::Null)
+        }
+        Expr::Attr(Attr::ObjectId) => QueryValue::Int(idx as i64),
+        Expr::Attr(Attr::RetainedHeapSize) => QueryValue::Int(ret as i64),
+        Expr::Attr(Attr::UsedHeapSize) => ctx
+            .shallow
+            .get(idx as usize)
+            .map(|&s| QueryValue::Int(s as i64))
+            .unwrap_or(QueryValue::Null),
+        _ => QueryValue::Null,
+    }
+}
+
+/// GROUP BY + @retainedHeapSize: re-aggregate in the late phase using real
+/// retained sizes and class names now available via `ctx`. The carry holds
+/// individual dense indices (IndexOnly). We iterate them, compute the GROUP BY
+/// key, and accumulate per-group SUM/COUNT/MIN/MAX.
+fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
+    use crate::query::ast::{AggFunc, SortDir};
+    use crate::query::execute::query_columns;
+    use std::collections::HashMap;
+
+    // Per-group state: key_str -> (key_values, per-select-item accumulators).
+    // Accumulator is (running: QueryValue, count: u64) for each SELECT aggregate.
+    type GroupState = (Vec<QueryValue>, Vec<(QueryValue, u64)>);
+    let mut groups: HashMap<String, GroupState> = HashMap::new();
+
+    for idx in entry.carry.indices() {
+        let ret = *ctx.retained.get(idx as usize).unwrap_or(&0);
+        if !retained_where_passes(q, ret) {
+            continue;
+        }
+        // Compute the GROUP BY key vector.
+        let key: Vec<QueryValue> = entry
+            .plan
+            .group_by_exprs
+            .iter()
+            .map(|ge| eval_late_gb_key(ge, idx, ret, ctx))
+            .collect();
+        // Stable string representation for grouping.
+        let key_str = format!("{key:?}");
+        let accs = groups.entry(key_str).or_insert_with(|| {
+            let init: Vec<(QueryValue, u64)> = q
+                .select
+                .iter()
+                .map(|it| match it {
+                    SelectItem::Aggregate { func, .. } => {
+                        let start = match func {
+                            AggFunc::Count => QueryValue::Int(0),
+                            AggFunc::Sum => QueryValue::Int(0),
+                            AggFunc::Min => QueryValue::Null,
+                            AggFunc::Max => QueryValue::Null,
+                            AggFunc::Avg | AggFunc::Percentile(_) | AggFunc::Median => QueryValue::Int(0),
+                        };
+                        (start, 0u64)
+                    }
+                    _ => (QueryValue::Null, 0),
+                })
+                .collect();
+            (key.clone(), init)
+        });
+        // Accumulate each SELECT item's aggregate.
+        for (i, it) in q.select.iter().enumerate() {
+            let SelectItem::Aggregate { func, arg } = it else {
+                continue;
+            };
+            let val = match arg.as_ref() {
+                SelectItem::Attr(Attr::RetainedHeapSize) => QueryValue::Int(ret as i64),
+                SelectItem::Attr(Attr::ObjectId) => QueryValue::Int(idx as i64),
+                SelectItem::Star => QueryValue::Int(1),
+                _ => QueryValue::Null,
+            };
+            let (acc, count) = &mut accs.1[i];
+            match func {
+                AggFunc::Count => {
+                    if let QueryValue::Int(n) = acc { *n += 1; }
+                }
+                AggFunc::Sum => {
+                    if val != QueryValue::Null {
+                        *acc = match (&*acc, &val) {
+                            (QueryValue::Int(a), QueryValue::Int(b)) => QueryValue::Int(*a + *b),
+                            (QueryValue::Float(a), QueryValue::Float(b)) => QueryValue::Float(*a + *b),
+                            (QueryValue::Int(a), QueryValue::Float(b)) => QueryValue::Float(*a as f64 + *b),
+                            (QueryValue::Float(a), QueryValue::Int(b)) => QueryValue::Float(*a + *b as f64),
+                            _ => acc.clone(),
+                        };
+                    }
+                }
+                AggFunc::Min => {
+                    if val != QueryValue::Null {
+                        *acc = if *acc == QueryValue::Null {
+                            val.clone()
+                        } else {
+                            match qv_ord(&val, acc) {
+                                std::cmp::Ordering::Less => val.clone(),
+                                _ => acc.clone(),
+                            }
+                        };
+                    }
+                }
+                AggFunc::Max => {
+                    if val != QueryValue::Null {
+                        *acc = if *acc == QueryValue::Null {
+                            val.clone()
+                        } else {
+                            match qv_ord(&val, acc) {
+                                std::cmp::Ordering::Greater => val.clone(),
+                                _ => acc.clone(),
+                            }
+                        };
+                    }
+                }
+                AggFunc::Avg => {
+                    if val != QueryValue::Null {
+                        *count += 1;
+                        *acc = match (&*acc, &val) {
+                            (QueryValue::Int(a), QueryValue::Int(b)) => QueryValue::Int(*a + *b),
+                            (QueryValue::Float(a), QueryValue::Float(b)) => QueryValue::Float(*a + *b),
+                            (QueryValue::Int(a), QueryValue::Float(b)) => QueryValue::Float(*a as f64 + *b),
+                            (QueryValue::Float(a), QueryValue::Int(b)) => QueryValue::Float(*a + *b as f64),
+                            _ => acc.clone(),
+                        };
+                    }
+                }
+                AggFunc::Percentile(_) | AggFunc::Median => {} // not supported in late phase
+            }
+        }
+    }
+
+    // Finalize: build output rows from group accumulators.
+    let group_by_exprs = &entry.plan.group_by_exprs;
+    let mut rows: Vec<Vec<QueryValue>> = groups
+        .into_values()
+        .map(|(key, accs)| {
+            q.select
+                .iter()
+                .enumerate()
+                .map(|(i, it)| match it {
+                    SelectItem::Aggregate { func, .. } => {
+                        let (acc, count) = &accs[i];
+                        match func {
+                            AggFunc::Avg if *count > 0 => match acc {
+                                QueryValue::Int(s) => QueryValue::Float(*s as f64 / *count as f64),
+                                QueryValue::Float(s) => QueryValue::Float(*s / *count as f64),
+                                _ => QueryValue::Null,
+                            },
+                            _ => acc.clone(),
+                        }
+                    }
+                    _ => {
+                        // Non-aggregate: find this item's position in the GROUP BY keys.
+                        let col_name = crate::query::execute::column_name(it);
+                        let gb_match = group_by_exprs.iter().enumerate().find(|(_, ge)| {
+                            let ge_name = crate::query::execute::expr_name(ge);
+                            ge_name == col_name
+                                || match (ge, it) {
+                                    (Expr::Attr(ga), SelectItem::Attr(a)) => ga == a,
+                                    _ => false,
+                                }
+                        });
+                        match gb_match {
+                            Some((j, _)) => key.get(j).cloned().unwrap_or(QueryValue::Null),
+                            None => key.first().cloned().unwrap_or(QueryValue::Null),
+                        }
+                    }
+                })
+                .collect()
+        })
+        .collect();
+
+    // ORDER BY: match by ORDER BY attribute or alias name.
+    if let Some(ob) = &q.order_by {
+        let ob_name = crate::query::execute::attr_name(&ob.key);
+        let cols = query_columns(q);
+        let col_idx = cols.iter().position(|c| c.name == ob_name)
+            .or_else(|| q.select.iter().position(|it| match it {
+                SelectItem::Attr(a) => *a == ob.key,
+                SelectItem::Aggregate { arg, .. } => matches!(arg.as_ref(), SelectItem::Attr(a) if *a == ob.key),
+                _ => false,
+            }));
+        if let Some(col_idx) = col_idx {
+            rows.sort_by(|a, b| {
+                qv_ord(
+                    a.get(col_idx).unwrap_or(&QueryValue::Null),
+                    b.get(col_idx).unwrap_or(&QueryValue::Null),
+                )
+            });
+            if ob.dir == SortDir::Desc {
+                rows.reverse();
+            }
+        }
+    }
+
+    let mut truncated = entry.carry.truncated();
+    if let Some(limit) = stage_limit(q) {
+        if rows.len() as u64 > limit {
+            rows.truncate(limit as usize);
+            truncated = true;
+        }
+    }
+
+    let row_count = rows.len() as u64;
+    QueryResult {
+        name: entry.name.clone(),
+        oql: String::new(),
+        columns: query_columns(q),
+        row_count,
+        rows,
+        truncated,
+        error: None,
+        note: None,
+        viz: None,
+        elapsed_ms: None,
+    }
+}
+
 fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
+    if entry.plan.kind == crate::query::plan::StageKind::GroupBy {
+        return join_retained_group_by(entry, q, ctx);
+    }
     let mut rows: Vec<(u32, u64)> = Vec::new();
     for idx in entry.carry.indices() {
         let ret = *ctx.retained.get(idx as usize).unwrap_or(&0);
@@ -1823,6 +2067,44 @@ mod classof_late_tests {
         st.push_cross_phase(0, "q1".into(), plan, carry);
         let out = resume(st, &[q.clone(), q], &ctx);
         assert_eq!(out[0].rows[0][0], QueryValue::Null);
+    }
+
+    #[test]
+    fn group_by_classof_sum_retained_aggregates_in_late_phase() {
+        // Two classes; three objects (2 String at 100 each, 1 Object at 200).
+        // GROUP BY classof(x) should yield two groups with correct SUM values.
+        let class_names: Vec<String> = vec!["java.lang.String".into(), "java.lang.Object".into()];
+        let class_idx = vec![0u32, 0, 1]; // dense 0,1 = String; dense 2 = Object
+        let retained = vec![100u64, 100, 200];
+        let ctx = classof_ctx(&retained, &class_idx, &class_names);
+        let q = crate::query::parse::parse(
+            "SELECT classof(x) AS class, SUM(@retainedHeapSize) AS total \
+             FROM C GROUP BY classof(x) ORDER BY total DESC",
+        ).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        assert_eq!(plan.kind, crate::query::plan::StageKind::GroupBy);
+        let mut carry = crate::query::carry::Carry::index_only(10);
+        carry.push_index(0);
+        carry.push_index(1);
+        carry.push_index(2);
+        let mut st = crate::query::execute::QueryExecState::new();
+        st.push_cross_phase(0, "q1".into(), plan, carry);
+        let out = resume(st, &[q.clone(), q], &ctx);
+        assert_eq!(out.len(), 1);
+        let r = &out[0];
+        assert_eq!(r.rows.len(), 2, "should have 2 groups");
+        // First row (DESC) = String with SUM=200; second = Object with SUM=200.
+        // Both SUMs are non-null integers.
+        for row in &r.rows {
+            assert!(matches!(row[1], QueryValue::Int(_)), "SUM should be Int, got {:?}", row[1]);
+            assert!(matches!(row[0], QueryValue::Str(_)), "classof should be Str, got {:?}", row[0]);
+        }
+        // DESC order: total[0] >= total[1]
+        let s0 = if let QueryValue::Int(n) = r.rows[0][1] { n } else { panic!() };
+        let s1 = if let QueryValue::Int(n) = r.rows[1][1] { n } else { panic!() };
+        assert!(s0 >= s1, "should be sorted DESC: {s0} >= {s1}");
+        // Verify the SUM values: String total=200, Object total=200 (equal).
+        assert_eq!(s0 + s1, 400, "total retained should be 400");
     }
 }
 

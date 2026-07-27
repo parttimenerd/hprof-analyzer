@@ -5871,3 +5871,46 @@ fn query_classof_with_retained_heap_size_is_non_null() {
     }
 }
 
+#[test]
+fn query_group_by_retained_heap_size_sum_is_non_null() {
+    let Some(hprof) = philosophers() else { return };
+    // GROUP BY + SUM(@retainedHeapSize) requires late-phase re-aggregation.
+    // Previously this produced null for all SUM values.
+    let out = Command::new(BIN)
+        .arg("query").arg(&hprof)
+        .args(["--query",
+            "SELECT classof(x) AS class, SUM(@retainedHeapSize) AS retained_bytes \
+             FROM INSTANCEOF java.lang.Object x \
+             GROUP BY classof(x) ORDER BY retained_bytes DESC LIMIT 5"])
+        .output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let data_rows: Vec<&str> = stdout
+        .lines()
+        .filter(|l| l.contains('|') && !l.starts_with("class") && !l.contains("---"))
+        .collect();
+    assert!(
+        !data_rows.is_empty(),
+        "expected GROUP BY rows, got:\n{stdout}"
+    );
+    // First row should have the largest retained_bytes (DESC order) — a positive integer.
+    let first_row = data_rows[0];
+    let retained_col = first_row.split('|').nth(1).unwrap_or("").trim();
+    assert!(
+        retained_col != "null" && retained_col != "Null" && retained_col.parse::<i64>().is_ok(),
+        "expected a numeric retained_bytes in first row, got: {retained_col:?}\nfull output:\n{stdout}"
+    );
+    // Verify DESC order: each retained value is >= the next.
+    let values: Vec<i64> = data_rows
+        .iter()
+        .filter_map(|row| row.split('|').nth(1).and_then(|s| s.trim().parse().ok()))
+        .collect();
+    for w in values.windows(2) {
+        assert!(
+            w[0] >= w[1],
+            "ORDER BY retained_bytes DESC is not sorted: {w:?}\nfull output:\n{stdout}"
+        );
+    }
+}
+
+
