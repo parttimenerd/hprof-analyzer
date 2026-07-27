@@ -156,7 +156,23 @@ async function loadWasmSession(file) {
   const statusEl = document.getElementById('wasm-load-status');
   const modeButtons = document.getElementById('mode-buttons');
   if (modeButtons) modeButtons.style.display = 'none';
-  if (statusEl) { statusEl.textContent = `Reading ${file.name}…`; statusEl.style.display = ''; }
+  if (statusEl) {
+    statusEl.innerHTML = `
+      <div class="wasm-progress">
+        <div class="wasm-progress-label" id="wasm-load-label">Reading ${escHtml(file.name)}…</div>
+        <div class="wasm-progress-bar-wrap">
+          <div class="wasm-progress-bar" id="wasm-load-bar"></div>
+        </div>
+      </div>`;
+    statusEl.style.display = '';
+  }
+
+  const setStage = (label, pct) => {
+    const lbl = document.getElementById('wasm-load-label');
+    const bar = document.getElementById('wasm-load-bar');
+    if (lbl) lbl.textContent = label;
+    if (bar) bar.style.width = pct + '%';
+  };
 
   let bytes;
   try {
@@ -168,8 +184,7 @@ async function loadWasmSession(file) {
     return;
   }
 
-  if (statusEl) statusEl.textContent = `Building query index for ${file.name}… (this may take a minute for large dumps)`;
-  // Yield so the browser can repaint the status before the blocking WASM call
+  setStage(`Parsing heap dump (Pass 1 + 2)…`, 15);
   await new Promise(r => setTimeout(r, 20));
 
   try {
@@ -185,8 +200,7 @@ async function loadWasmSession(file) {
   classNames = JSON.parse(wasmSession.class_names());
   hasRetained = false;
 
-  // Run retained-size analysis so @retainedHeapSize queries work immediately.
-  if (statusEl) statusEl.textContent = `Running retained-size analysis for ${file.name}… (this may take a moment)`;
+  setStage('Computing dominators and retained sizes…', 60);
   await new Promise(r => setTimeout(r, 20));
   try {
     wasmSession.run_full_analysis();
@@ -203,8 +217,23 @@ async function loadWasmSessionWithReport(file) {
   const msg = document.getElementById('report-message');
   const modeButtons = document.getElementById('mode-buttons');
   if (modeButtons) modeButtons.style.display = 'none';
-  msg.textContent = `Reading ${file.name}…`;
   showScreen('report-screen');
+
+  // Show animated progress bar while WASM works (all calls are synchronous/blocking)
+  msg.innerHTML = `
+    <div class="wasm-progress">
+      <div class="wasm-progress-label" id="wasm-progress-label">Reading ${escHtml(file.name)}…</div>
+      <div class="wasm-progress-bar-wrap">
+        <div class="wasm-progress-bar" id="wasm-progress-bar"></div>
+      </div>
+    </div>`;
+
+  const setStage = (label, pct) => {
+    const lbl = document.getElementById('wasm-progress-label');
+    const bar = document.getElementById('wasm-progress-bar');
+    if (lbl) lbl.textContent = label;
+    if (bar) bar.style.width = pct + '%';
+  };
 
   let bytes;
   try {
@@ -215,7 +244,7 @@ async function loadWasmSessionWithReport(file) {
     return;
   }
 
-  msg.textContent = `Building query index for ${file.name}… (this may take a minute for large dumps)`;
+  setStage(`Parsing heap dump (Pass 1 + 2)…`, 15);
   await new Promise(r => setTimeout(r, 20));
 
   try {
@@ -226,10 +255,12 @@ async function loadWasmSessionWithReport(file) {
     return;
   }
 
-  msg.textContent = 'Running retained-size analysis…';
+  setStage('Computing dominators and retained sizes…', 55);
   await new Promise(r => setTimeout(r, 20));
   try {
     const reportJson = wasmSession.generate_report();
+    setStage('Rendering report…', 90);
+    await new Promise(r => setTimeout(r, 16));
     hasRetained = true;
     classNames = JSON.parse(wasmSession.class_names());
     renderWasmReport(JSON.parse(reportJson), file.name);
@@ -254,44 +285,260 @@ function renderWasmReport(report, fileName) {
   const msg = document.getElementById('report-message');
   if (msg) msg.textContent = '';
 
-  const overview = report.overview || {};
-  const leaks = (report.leaks && report.leaks.suspects) || [];
-  const histogram = (report.top && report.top.histogram) || [];
+  const ov      = report.overview     || {};
+  const leaks   = report.leaks        || {};
+  const suspects= leaks.suspects      || [];
+  const top     = report.top          || {};
+  const hist    = ov.histogram        || [];
+  const triage  = report.triage       || [];
+  const threads = (report.threads && report.threads.threads) || [];
+  const ws      = report.waste_summary;
+  const bigObjs = top.biggest_objects || [];
+  const bigCls  = top.biggest_classes || [];
+
+  // fmt helpers
+  const n = v => (v || 0).toLocaleString('en-US');
+  const pct = (a, b) => b > 0 ? (a / b * 100).toFixed(1) + '%' : '—';
+  const fmtTs = ms => ms ? new Date(ms).toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' UTC') : '—';
+
+  // severity badge colors
+  const sevColor = { critical: '#ff6b6b', warning: '#ffcc44', info: '#7ab4ff' };
+
+  // section helper
+  const sec = (id, title, subtitle, body) =>
+    `<div class="rpt-section" id="${id}">` +
+    `<h2 class="rpt-title">${escHtml(title)}</h2>` +
+    (subtitle ? `<p class="rpt-subtitle-text">${subtitle}</p>` : '') +
+    body + `</div>`;
+
+  // inline code with backtick stripping (matches CLI detail strings)
+  const inlineCode = s => escHtml(s)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/_([^_]+)_/g, '<em>$1</em>');
+
+  // bar cell helper
+  const bar = (v, max) => {
+    const w = max > 0 ? Math.round(v / max * 100) : 0;
+    return `<td class="num bar-cell"><span class="bar-bg"><span class="bar-fill" style="width:${w}%"></span></span></td>`;
+  };
 
   const parts = [];
 
-  // ── Overview ────────────────────────────────────────────────────────────────
-  parts.push(`<div class="rpt-section"><h2 class="rpt-title">${escHtml(fileName)}</h2>`);
-  parts.push(`<table class="rpt-table">`);
-  parts.push(`<tr><th>Total heap</th><td>${fmtBytes(overview.total_shallow || 0)}</td></tr>`);
-  parts.push(`<tr><th>Objects</th><td>${(overview.total_objects || 0).toLocaleString('en-US')}</td></tr>`);
-  parts.push(`<tr><th>Classes</th><td>${(overview.classes_loaded || 0).toLocaleString('en-US')}</td></tr>`);
-  parts.push(`<tr><th>GC roots</th><td>${(overview.gc_roots || 0).toLocaleString('en-US')}</td></tr>`);
-  if (overview.jvm_version) {
-    parts.push(`<tr><th>JVM</th><td>${escHtml(overview.jvm_version)}</td></tr>`);
-  }
-  parts.push(`</table></div>`);
+  // ── Page header ─────────────────────────────────────────────────────────────
+  parts.push(`<h1 class="rpt-page-title">Heap Dump Analysis: <code>${escHtml(fileName)}</code></h1>`);
+  const genTime = fmtTs(ov.dump_creation);
+  parts.push(`<p class="rpt-page-sub">Generated by hprof-analyzer — ${genTime}</p>`);
+  parts.push(`<p class="rpt-page-sub">All sizes are binary (1 KB = 1024 bytes, 1 MB = 1024 KB, and so on).</p>`);
 
-  // ── Leak Suspects ──────────────────────────────────────────────────────────
-  if (leaks.length > 0) {
-    parts.push(`<div class="rpt-section"><h3 class="rpt-subtitle">Leak Suspects</h3>`);
-    parts.push(`<table class="rpt-table rpt-wide">`);
-    parts.push(`<thead><tr><th>Class</th><th class="num">Instances</th><th class="num">Retained</th></tr></thead><tbody>`);
-    leaks.slice(0, 10).forEach(s => {
-      parts.push(`<tr><td class="cls">${escHtml(s.pretty_class || '')}</td><td class="num">${(s.instance_count || 0).toLocaleString('en-US')}</td><td class="num">${fmtBytes(s.retained || 0)}</td></tr>`);
+  // ── KPI strip ──────────────────────────────────────────────────────────────
+  const topSuspect = suspects[0];
+  const topShare = topSuspect ? pct(topSuspect.retained, leaks.total_shallow || ov.total_shallow) : '—';
+  parts.push(`<div class="rpt-kpi-grid">`);
+  const kpis = [
+    [fmtBytes(ov.total_shallow || 0), 'Total reachable heap'],
+    [n(ov.total_objects), 'Objects'],
+    [n(suspects.length), 'Leak suspects'],
+    [topShare, 'Top suspect share'],
+    [topSuspect ? `<code title="${escHtml(topSuspect.pretty_class||'')}">${escHtml(topSuspect.pretty_class||'—')}</code>` : '—', 'Dominant retainer'],
+    [n(ov.gc_roots), 'GC roots'],
+  ];
+  kpis.forEach(([v, l]) => parts.push(
+    `<div class="rpt-kpi"><div class="rpt-kpi-value">${v}</div><div class="rpt-kpi-label">${escHtml(l)}</div></div>`
+  ));
+  parts.push(`</div>`);
+
+  // ── Memory Triage ───────────────────────────────────────────────────────────
+  if (triage.length > 0) {
+    let triageHtml = `<ul class="rpt-triage-list">`;
+    triage.forEach(t => {
+      const color = sevColor[t.severity] || '#7ab4ff';
+      const anchor = t.anchor ? ` See <a href="#${escHtml(t.anchor)}">${escHtml(t.anchor_label||t.anchor)}</a>.` : '';
+      triageHtml += `<li><span class="rpt-sev-dot" style="background:${color}"></span>` +
+        `<strong>${escHtml(t.title)}:</strong> ${inlineCode(t.detail)}${anchor}</li>`;
     });
-    parts.push(`</tbody></table></div>`);
+    triageHtml += `</ul>`;
+    parts.push(sec('memory-triage', 'Memory Triage',
+      'Where the reachable heap is concentrated, at a glance.', triageHtml));
   }
 
-  // ── Histogram ──────────────────────────────────────────────────────────────
-  if (histogram.length > 0) {
-    parts.push(`<div class="rpt-section"><h3 class="rpt-subtitle">Histogram (top classes by retained)</h3>`);
-    parts.push(`<table class="rpt-table rpt-wide">`);
-    parts.push(`<thead><tr><th>Class</th><th class="num">Instances</th><th class="num">Shallow</th><th class="num">Retained</th></tr></thead><tbody>`);
-    histogram.slice(0, 30).forEach(row => {
-      parts.push(`<tr><td class="cls">${escHtml(row.pretty_class || '')}</td><td class="num">${(row.instances || 0).toLocaleString('en-US')}</td><td class="num">${fmtBytes(row.shallow || 0)}</td><td class="num">${fmtBytes(row.retained || 0)}</td></tr>`);
+  // ── Waste Summary ──────────────────────────────────────────────────────────
+  if (ws && ws.total_bytes > 0) {
+    const maxWaste = Math.max(...ws.sources.map(s => s.bytes));
+    let wHtml = `<p class="rpt-subtitle-text">Approximately <strong>${fmtBytes(ws.total_bytes)}</strong> looks reclaimable across the sources below.</p>`;
+    wHtml += `<table class="rpt-table rpt-wide"><thead><tr><th>Source</th><th class="num">Reclaimable</th><th></th></tr></thead><tbody>`;
+    ws.sources.forEach(s => {
+      const link = s.anchor ? `<a href="#${escHtml(s.anchor)}">${escHtml(s.label)}</a>` : escHtml(s.label);
+      wHtml += `<tr><td>${link}</td><td class="num">${fmtBytes(s.bytes)}</td>${bar(s.bytes, maxWaste)}</tr>`;
     });
-    parts.push(`</tbody></table></div>`);
+    wHtml += `</tbody></table>`;
+    parts.push(sec('waste-summary', 'Waste Summary', '', wHtml));
+  }
+
+  // ── System Overview ──────────────────────────────────────────────────────────
+  {
+    let oHtml = `<table class="rpt-table"><tbody>`;
+    const rows2 = [
+      ['File', escHtml(ov.file_path || fileName)],
+      ['File size', fmtBytes(ov.file_size || 0)],
+      ['Dump created', fmtTs(ov.dump_creation)],
+      ['Total objects', n(ov.total_objects)],
+      ['Total shallow heap', fmtBytes(ov.total_shallow || 0)],
+      ['Classes', n(ov.classes_loaded)],
+      ['Class loaders', n(ov.classloaders_loaded)],
+      ['GC roots', n(ov.gc_roots)],
+      ['Identifier size', `${ov.identifier_size_bits || '?'}-bit`],
+      ['Compressed OOPs', ov.compressed_oops === true ? 'yes' : ov.compressed_oops === false ? 'no' : '—'],
+    ];
+    if (ov.jvm_version) rows2.push(['JVM', escHtml(ov.jvm_version)]);
+    if (ov.unreachable_count) rows2.push(['Unreachable objects', `${n(ov.unreachable_count)} (${fmtBytes(ov.unreachable_shallow || 0)} shallow)`]);
+    rows2.forEach(([k, v]) => oHtml += `<tr><th>${escHtml(k)}</th><td>${v}</td></tr>`);
+    oHtml += `</tbody></table>`;
+
+    // System properties
+    const sp = ov.system_properties;
+    if (sp && typeof sp === 'object' && Object.keys(sp).length > 0) {
+      oHtml += `<h3 class="rpt-subtitle" style="margin-top:16px">System Properties</h3>`;
+      oHtml += `<table class="rpt-table rpt-wide"><tbody>`;
+      Object.entries(sp).forEach(([k, v]) =>
+        oHtml += `<tr><td class="cls">${escHtml(k)}</td><td>${escHtml(String(v))}</td></tr>`
+      );
+      oHtml += `</tbody></table>`;
+    }
+    parts.push(sec('system-overview', 'System Overview', '', oHtml));
+  }
+
+  // ── Histogram (by retained) ──────────────────────────────────────────────────
+  if (hist.length > 0) {
+    const histRows = hist.filter(r => (r.retained || 0) > 0 || (r.shallow || 0) > 0);
+    const maxR = Math.max(...histRows.map(r => r.retained || 0));
+    let hHtml = `<table class="rpt-table rpt-wide">`;
+    hHtml += `<thead><tr><th>Class</th><th class="num">Instances</th><th class="num">Shallow</th><th class="num">Retained</th><th></th></tr></thead><tbody>`;
+    histRows.forEach(row => {
+      hHtml += `<tr><td class="cls">${escHtml(row.pretty_class||'')}</td>` +
+        `<td class="num">${n(row.instances)}</td>` +
+        `<td class="num">${fmtBytes(row.shallow||0)}</td>` +
+        `<td class="num">${fmtBytes(row.retained||0)}</td>` +
+        `${bar(row.retained||0, maxR)}</tr>`;
+    });
+    hHtml += `</tbody></table>`;
+    parts.push(sec('histogram', 'Histogram', `Top ${histRows.length} classes by retained size.`, hHtml));
+  }
+
+  // ── Leak Suspects ───────────────────────────────────────────────────────────
+  if (suspects.length > 0) {
+    let lHtml = '';
+    suspects.forEach((s, idx) => {
+      lHtml += `<div class="rpt-suspect-card">`;
+      lHtml += `<h3 class="rpt-suspect-title">${idx + 1}. ${escHtml(s.pretty_class||'?')}</h3>`;
+      lHtml += `<table class="rpt-table"><tbody>`;
+      lHtml += `<tr><th>Instances</th><td>${n(s.instance_count)}</td></tr>`;
+      lHtml += `<tr><th>Shallow</th><td>${fmtBytes(s.shallow||0)}</td></tr>`;
+      lHtml += `<tr><th>Retained</th><td>${fmtBytes(s.retained||0)}</td></tr>`;
+      if (s.root_type_label) lHtml += `<tr><th>Root type</th><td>${escHtml(s.root_type_label)}</td></tr>`;
+      if (s.accumulation_class) lHtml += `<tr><th>Accumulation point</th><td class="cls">${escHtml(s.accumulation_class)}</td></tr>`;
+      lHtml += `</tbody></table>`;
+
+      // Dominator path
+      if (s.path && s.path.length > 0) {
+        lHtml += `<h4 class="rpt-suspect-sub">Dominator Path</h4><ol class="rpt-path-list">`;
+        s.path.forEach(step => {
+          lHtml += `<li><code>${escHtml(step.display_class||'?')}</code> — retained ${fmtBytes(step.retained||0)}</li>`;
+        });
+        lHtml += `</ol>`;
+      }
+
+      // Dominated by class (top dominated classes)
+      if (s.dominated_by_class && s.dominated_by_class.length > 0) {
+        lHtml += `<h4 class="rpt-suspect-sub">Dominated Objects by Class</h4>`;
+        lHtml += `<table class="rpt-table"><thead><tr><th>Class</th><th class="num">Instances</th><th class="num">Retained</th></tr></thead><tbody>`;
+        const maxDom = Math.max(...s.dominated_by_class.map(r => r.retained||0));
+        s.dominated_by_class.slice(0, 15).forEach(row => {
+          lHtml += `<tr><td class="cls">${escHtml(row.pretty_class||'')}</td>` +
+            `<td class="num">${n(row.instances)}</td>` +
+            `<td class="num">${fmtBytes(row.retained||0)}</td></tr>`;
+        });
+        lHtml += `</tbody></table>`;
+      }
+      lHtml += `</div>`;
+    });
+    parts.push(sec('leak-suspects', 'Leak Suspects', `${suspects.length} suspect(s) identified.`, lHtml));
+  }
+
+  // ── Top Consumers ───────────────────────────────────────────────────────────
+  {
+    let tcHtml = '';
+
+    // Biggest objects
+    if (bigObjs.length > 0) {
+      const maxO = Math.max(...bigObjs.map(o => o.retained||0));
+      tcHtml += `<h3 class="rpt-subtitle">Biggest Objects</h3>`;
+      tcHtml += `<table class="rpt-table rpt-wide"><thead><tr><th>Class</th><th class="num">Retained</th><th class="num">%</th><th></th></tr></thead><tbody>`;
+      const totalShallow = ov.total_shallow || 1;
+      bigObjs.forEach(o => {
+        tcHtml += `<tr><td class="cls">${escHtml(o.display_class||'?')}</td>` +
+          `<td class="num">${fmtBytes(o.retained||0)}</td>` +
+          `<td class="num">${pct(o.retained||0, totalShallow)}</td>` +
+          `${bar(o.retained||0, maxO)}</tr>`;
+      });
+      tcHtml += `</tbody></table>`;
+    }
+
+    // Biggest classes
+    if (bigCls.length > 0) {
+      const maxC = Math.max(...bigCls.map(c => c.retained||0));
+      tcHtml += `<h3 class="rpt-subtitle" style="margin-top:16px">Biggest Classes by Retained</h3>`;
+      tcHtml += `<table class="rpt-table rpt-wide"><thead><tr><th>Class</th><th class="num">Instances</th><th class="num">Retained</th><th></th></tr></thead><tbody>`;
+      bigCls.forEach(c => {
+        tcHtml += `<tr><td class="cls">${escHtml(c.pretty_class||'')}</td>` +
+          `<td class="num">${n(c.instances)}</td>` +
+          `<td class="num">${fmtBytes(c.retained||0)}</td>` +
+          `${bar(c.retained||0, maxC)}</tr>`;
+      });
+      tcHtml += `</tbody></table>`;
+    }
+
+    // Package tree (top-level)
+    const bp = top.biggest_packages;
+    if (bp && bp.children && bp.children.length > 0) {
+      tcHtml += `<h3 class="rpt-subtitle" style="margin-top:16px">Biggest Packages by Retained</h3>`;
+      tcHtml += `<table class="rpt-table rpt-wide"><thead><tr><th>Package</th><th class="num">Top dominators</th><th class="num">Retained</th></tr></thead><tbody>`;
+      const maxP = Math.max(...bp.children.map(c => c.retained_heap||0));
+      bp.children.forEach(c => {
+        tcHtml += `<tr><td class="cls">${escHtml(c.name||'(root)')}</td>` +
+          `<td class="num">${n(c.top_dominator_count)}</td>` +
+          `<td class="num">${fmtBytes(c.retained_heap||0)}</td></tr>`;
+      });
+      tcHtml += `</tbody></table>`;
+    }
+
+    if (tcHtml) parts.push(sec('top-consumers', 'Top Consumers', '', tcHtml));
+  }
+
+  // ── Threads ──────────────────────────────────────────────────────────────────
+  if (threads.length > 0) {
+    let tHtml = `<table class="rpt-table rpt-wide"><thead><tr>` +
+      `<th>Name</th><th>State</th><th class="num">Shallow</th><th class="num">Retained</th><th>Daemon</th></tr></thead><tbody>`;
+    threads.forEach(t => {
+      const state = Array.isArray(t.thread_state) ? t.thread_state.join(', ') : (t.thread_state || '—');
+      tHtml += `<tr>` +
+        `<td>${escHtml(t.name || '?')}</td>` +
+        `<td>${escHtml(state)}</td>` +
+        `<td class="num">${fmtBytes(t.shallow || 0)}</td>` +
+        `<td class="num">${fmtBytes(t.retained || 0)}</td>` +
+        `<td>${t.is_daemon ? 'daemon' : ''}</td></tr>`;
+
+      // significant frames
+      if (t.significant_frames && t.significant_frames.length > 0) {
+        tHtml += `<tr><td colspan="5" class="rpt-thread-frames">`;
+        tHtml += t.significant_frames.slice(0, 5).map(f => {
+          const frameStr = typeof f === 'string' ? f : (f && f.frame) ? f.frame : String(f);
+          return `<code>${escHtml(frameStr)}</code>`;
+        }).join('<br>');
+        tHtml += `</td></tr>`;
+      }
+    });
+    tHtml += `</tbody></table>`;
+    parts.push(sec('threads', 'Threads', `${threads.length} thread(s).`, tHtml));
   }
 
   container.insertAdjacentHTML('beforeend', parts.join(''));
