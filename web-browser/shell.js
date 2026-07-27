@@ -166,7 +166,13 @@ function fmtCell(cell, colName) {
     }
     return v.toLocaleString('en-US');
   }
-  if (kind === 'float') return typeof v === 'number' ? v.toPrecision(6) : String(v);
+  if (kind === 'float') {
+    if (typeof v !== 'number') return String(v);
+    // Match CLI: 6 decimal places, trailing zeros stripped
+    let s = v.toFixed(6);
+    s = s.replace(/\.?0+$/, '');
+    return s || '0';
+  }
   if (kind === 'str') return String(v);
   if (kind === 'obj_ref') {
     const cls = v && v.class ? v.class.split('.').pop() : '?';
@@ -577,7 +583,7 @@ function startTerminal() {
         setLine('/run ' + matches[0].name);
       } else if (matches.length > 1) {
         term.writeln('');
-        matches.forEach(q => term.writeln(`  \x1b[36m${q.name.padEnd(36)}\x1b[0m  \x1b[2m${q.display}\x1b[0m`));
+        matches.forEach(q => term.writeln(`  \x1b[36m${q.name.padEnd(40)}\x1b[0m  \x1b[2m${q.display}\x1b[0m`));
         redrawLine();
       }
       return;
@@ -2079,12 +2085,12 @@ function startTerminal() {
         if (namedQueries.length === 0) {
           term.writeln('\x1b[2m(no named queries loaded)\x1b[0m');
         } else {
-          term.writeln('\x1b[1mNamed queries:\x1b[0m');
+          term.writeln(`\x1b[1mNamed queries\x1b[0m  \x1b[2m(/run <name>)\x1b[0m:`);
           let lastGroup = '';
           namedQueries.forEach(q => {
             if (q.group !== lastGroup) { lastGroup = q.group; term.writeln(`\r  \x1b[2m${q.group}\x1b[0m`); }
-            const lock = (q.needs_retained && !hasRetained) ? ' \x1b[33m[needs full analysis]\x1b[0m' : '';
-            term.writeln(`    \x1b[36m${q.name.padEnd(36)}\x1b[0m  \x1b[2m${q.display}\x1b[0m${lock}`);
+            const lock = (q.needs_retained && !hasRetained) ? '  \x1b[33m[needs full analysis]\x1b[0m' : '';
+            term.writeln(`    \x1b[36m${q.name.padEnd(40)}\x1b[0m  \x1b[2m${q.display}\x1b[0m${lock}`);
           });
         }
         term.write(PROMPT);
@@ -2385,8 +2391,8 @@ function startTerminal() {
           cur = q.group;
           term.writeln(`\r  \x1b[2m${cur}\x1b[0m`);
         }
-        const lock = q.needs_retained ? '  \x1b[2m[needs analysis]\x1b[0m' : '';
-        term.writeln(`    \x1b[36m${q.name.padEnd(36)}\x1b[0m  \x1b[2m${q.display}\x1b[0m${lock}`);
+        const lock = (q.needs_retained && !hasRetained) ? '  \x1b[33m[needs full analysis]\x1b[0m' : '';
+        term.writeln(`    \x1b[36m${q.name.padEnd(40)}\x1b[0m  \x1b[2m${q.display}\x1b[0m${lock}`);
       });
     }
     term.writeln('');
