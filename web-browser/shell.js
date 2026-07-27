@@ -919,7 +919,7 @@ function startTerminal() {
           const colNames = r.columns.map(c => c.name || String(c));
           const rows = r.rows || [];
           if (rows.length === 1) {
-            const keyW = Math.max(...colNames.map(n => n.length)) + 2;
+            const keyW = Math.max(...colNames.map(n => n.length));
             const idxW = String(colNames.length).length;
             term.writeln(`\x1b[1m── ${clsTrimmed}#${idx} ──\x1b[0m`);
             colNames.forEach((col, i) => {
