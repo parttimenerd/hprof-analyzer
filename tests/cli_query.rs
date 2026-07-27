@@ -169,6 +169,25 @@ fn query_from_unknown_class_notes_it_is_absent() {
     );
 }
 
+/// A typo in the class name (e.g. `Stirng` instead of `String`) produces a
+/// "did you mean" suggestion pointing at the real class.
+#[test]
+fn query_from_typo_class_suggests_did_you_mean() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query", "SELECT * FROM java.lang.Stirng"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "typo query should exit 0");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("did you mean") && stdout.contains("java.lang.String"),
+        "expected 'did you mean: java.lang.String' in note:\n{stdout}"
+    );
+}
+
 /// A real class present in the dump must NOT get the "no class" note even when
 /// the query legitimately returns zero rows (WHERE excludes everything).
 #[test]

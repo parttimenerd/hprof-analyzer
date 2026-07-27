@@ -1352,6 +1352,27 @@ fn finalize_query_labels(
 /// array (`[]`) target. Only for such a FROM does "zero rows" unambiguously
 /// mean "no such class" (a glob/regex/instanceof can legitimately match nothing
 /// without any single named class being absent).
+
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let (m, n) = (a.len(), b.len());
+    let mut prev: Vec<usize> = (0..=n).collect();
+    let mut curr = vec![0usize; n + 1];
+    for i in 1..=m {
+        curr[0] = i;
+        for j in 1..=n {
+            curr[j] = if a[i-1] == b[j-1] {
+                prev[j-1]
+            } else {
+                1 + prev[j-1].min(prev[j]).min(curr[j-1])
+            };
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[n]
+}
+
 fn is_plain_class_from(q: &query::ast::Query) -> Option<&str> {
     let spec = q.from.class_spec()?;
     if spec.instanceof || spec.is_regex {
@@ -1401,13 +1422,44 @@ fn annotate_missing_classes(
         }
         if let Some(name) = is_plain_class_from(q) {
             if !names.contains(name) {
-                append_note(
-                    r,
-                    &format!(
+                let simple = name.rsplit('.').next().unwrap_or(name);
+                let lower = name.to_ascii_lowercase();
+                let simple_lower = simple.to_ascii_lowercase();
+                // Match by: simple name equality (case-insensitive), or
+                // the query name is a substring of a real name, or vice-versa,
+                // or the real simple name starts with the query simple name prefix (≥4 chars),
+                // or edit distance ≤ 2 on the simple name (catches typos like Stirng→String).
+                // Exclude JVM array descriptors (names starting with '[') from suggestions.
+                let prefix_len = simple_lower.len().min(6);
+                let dist_threshold = if simple_lower.len() <= 4 { 1 } else { 2 };
+                let mut candidates: Vec<&str> = names
+                    .iter()
+                    .filter(|n| {
+                        if n.starts_with('[') { return false; }
+                        let nl = n.to_ascii_lowercase();
+                        let sn = n.rsplit('.').next().unwrap_or(n.as_str()).to_ascii_lowercase();
+                        sn == simple_lower
+                            || nl.contains(&lower)
+                            || (prefix_len >= 4 && sn.starts_with(&simple_lower[..prefix_len]))
+                            || edit_distance(&sn, &simple_lower) <= dist_threshold
+                    })
+                    .map(|n| n.as_str())
+                    .collect();
+                candidates.sort_unstable();
+                candidates.dedup();
+                candidates.truncate(4);
+                let hint = if candidates.is_empty() {
+                    format!(
                         "no class named `{name}` in this dump \
                          (check the fully-qualified name, or use a `pkg.*` glob)"
-                    ),
-                );
+                    )
+                } else {
+                    format!(
+                        "no class named `{name}` in this dump — did you mean: {}?",
+                        candidates.join(", ")
+                    )
+                };
+                append_note(r, &hint);
             }
         }
     }
