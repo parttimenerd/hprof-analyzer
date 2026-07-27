@@ -1338,6 +1338,7 @@ fn eval_late_gb_key(expr: &Expr, idx: u32, ret: u64, ctx: &LateCtx) -> QueryValu
                 .unwrap_or(QueryValue::Null)
         }
         Expr::Attr(Attr::ObjectId) => QueryValue::Int(idx as i64),
+        Expr::Attr(Attr::ObjectAddress) => QueryValue::Int(ctx.id_map.to_addr(idx) as i64),
         Expr::Attr(Attr::RetainedHeapSize) => QueryValue::Int(ret as i64),
         Expr::Attr(Attr::UsedHeapSize) => ctx
             .shallow
@@ -1403,7 +1404,13 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
             };
             let val = match arg.as_ref() {
                 SelectItem::Attr(Attr::RetainedHeapSize) => QueryValue::Int(ret as i64),
+                SelectItem::Attr(Attr::UsedHeapSize) => QueryValue::Int(
+                    ctx.shallow.get(idx as usize).copied().unwrap_or(0) as i64,
+                ),
                 SelectItem::Attr(Attr::ObjectId) => QueryValue::Int(idx as i64),
+                SelectItem::Attr(Attr::ObjectAddress) => {
+                    QueryValue::Int(ctx.id_map.to_addr(idx) as i64)
+                }
                 SelectItem::Star => QueryValue::Int(1),
                 _ => QueryValue::Null,
             };
@@ -1630,16 +1637,24 @@ fn eval_retained_pred(p: &Predicate, ret: u64) -> bool {
 }
 // cmp_u64 removed: callers now use cmp_late_qv via eval_retained_pred.
 
-/// Project a late row. IndexOnly carries answer only @objectId / @retainedHeapSize;
-/// blob-dependent attrs need an IndexPlusScalars carry (later step) and are Null.
-/// `@GCRoots`/`@GCRootInfo`/`@info` resolve here from the gc-root-tags lookup:
-/// a root object's tag maps to its MAT-style label; a non-root projects `Null`.
+/// Project a late row from a dense index + retained size. Handles attrs that are
+/// available in the late window: @objectId, @retainedHeapSize, @usedHeapSize (from
+/// ctx.shallow), @objectAddress (from ctx.id_map; returns 0 when the id_map was
+/// compressed away on the analyze path), @classOf/@displayName (from ctx.class_idx /
+/// ctx.class_names), @GCRoots/@GCRootInfo/@info (from ctx.gc_root_tags), and SELECT *.
+/// Blob-dependent field attrs need an IndexPlusScalars carry (later step) and are Null.
 fn project_late_row(q: &Query, idx: u32, ret: u64, ctx: &LateCtx) -> Vec<QueryValue> {
     q.select
         .iter()
         .map(|it| match it {
             SelectItem::Attr(Attr::ObjectId) => QueryValue::Int(idx as i64),
             SelectItem::Attr(Attr::RetainedHeapSize) => QueryValue::Int(ret as i64),
+            SelectItem::Attr(Attr::UsedHeapSize) => QueryValue::Int(
+                ctx.shallow.get(idx as usize).copied().unwrap_or(0) as i64,
+            ),
+            SelectItem::Attr(Attr::ObjectAddress) => {
+                QueryValue::Int(ctx.id_map.to_addr(idx) as i64)
+            }
             SelectItem::Attr(Attr::GcRootInfo) | SelectItem::Attr(Attr::GcRoots) => {
                 match ctx.gc_root_tag(idx) {
                     Some(tag) => QueryValue::Str(root_tag_name(tag).into_owned()),
@@ -2105,6 +2120,97 @@ mod classof_late_tests {
         assert!(s0 >= s1, "should be sorted DESC: {s0} >= {s1}");
         // Verify the SUM values: String total=200, Object total=200 (equal).
         assert_eq!(s0 + s1, 400, "total retained should be 400");
+    }
+    #[test]
+    fn used_heap_size_projects_shallow_in_retained_join() {
+        // Three objects: shallow sizes 40, 80, 120.
+        let shallow = vec![40u32, 80, 120];
+        let retained = vec![40u64, 80, 120];
+        let ctx = LateCtx {
+            retained: &retained,
+            shallow: &shallow,
+            idom: &[],
+            dc_off: &[],
+            dc_tgt: &[],
+            id_map: &EMPTY_ID_MAP,
+            fwd_off: &[],
+            fwd_tgt: &[],
+            fwd_field: &[],
+            field_names: &[],
+            refwalk_tails: &EMPTY_REFWALK_TAILS,
+            refwalk_truncated: false,
+            in_off: &[],
+            in_tgt: &[],
+            retained_edges: None,
+            string_values: &EMPTY_STRING_VALUES,
+            string_values_truncated: false,
+            gc_root_tags: &EMPTY_GC_ROOT_TAGS,
+            class_idx: &[],
+            class_names: &[],
+        };
+        let q = crate::query::parse::parse(
+            "SELECT @usedHeapSize, @retainedHeapSize FROM C",
+        ).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        let mut carry = crate::query::carry::Carry::index_only(10);
+        carry.push_index(0);
+        carry.push_index(1);
+        carry.push_index(2);
+        let mut st = QueryExecState::new();
+        st.push_cross_phase(0, "q1".into(), plan, carry);
+        let out = resume(st, &[q.clone(), q], &ctx);
+        assert_eq!(out.len(), 1);
+        let r = &out[0];
+        assert_eq!(r.rows[0][0], QueryValue::Int(40));
+        assert_eq!(r.rows[1][0], QueryValue::Int(80));
+        assert_eq!(r.rows[2][0], QueryValue::Int(120));
+    }
+
+    #[test]
+    fn group_by_sum_used_heap_size_aggregates_in_late_phase() {
+        // Two objects with shallow 40 and 80; GROUP BY @retainedHeapSize bucket,
+        // SUM(@usedHeapSize) should be non-null.
+        let shallow = vec![40u32, 80];
+        let retained = vec![40u64, 80];
+        let class_names: Vec<String> = vec!["Foo".into()];
+        let class_idx = vec![0u32, 0];
+        let ctx = LateCtx {
+            retained: &retained,
+            shallow: &shallow,
+            class_idx: &class_idx,
+            class_names: &class_names,
+            idom: &[],
+            dc_off: &[],
+            dc_tgt: &[],
+            id_map: &EMPTY_ID_MAP,
+            fwd_off: &[],
+            fwd_tgt: &[],
+            fwd_field: &[],
+            field_names: &[],
+            refwalk_tails: &EMPTY_REFWALK_TAILS,
+            refwalk_truncated: false,
+            in_off: &[],
+            in_tgt: &[],
+            retained_edges: None,
+            string_values: &EMPTY_STRING_VALUES,
+            string_values_truncated: false,
+            gc_root_tags: &EMPTY_GC_ROOT_TAGS,
+        };
+        let q = crate::query::parse::parse(
+            "SELECT classof(x) AS c, SUM(@usedHeapSize) AS sh FROM C GROUP BY classof(x) ORDER BY sh DESC",
+        ).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        assert_eq!(plan.kind, crate::query::plan::StageKind::GroupBy);
+        let mut carry = crate::query::carry::Carry::index_only(10);
+        carry.push_index(0);
+        carry.push_index(1);
+        let mut st = QueryExecState::new();
+        st.push_cross_phase(0, "q1".into(), plan, carry);
+        let out = resume(st, &[q.clone(), q], &ctx);
+        assert_eq!(out.len(), 1);
+        let r = &out[0];
+        assert_eq!(r.rows.len(), 1, "one group (all Foo)");
+        assert_eq!(r.rows[0][1], QueryValue::Int(120), "SUM(@usedHeapSize) = 40+80 = 120");
     }
 }
 

@@ -926,6 +926,7 @@ pub fn run_resident_with_retained(
     let addr_vec = if needs_sv { id_map_to_addrs(&cache.p1.id_map) } else { Vec::new() };
     let flat_results = resume_with_retained(
         state, &flat, retained, &cache.shallow, dfn, sv, &addr_vec,
+        &cache.class_idx, &cache.class_names,
     );
     Ok(collapse_union_results(flat_results, &groups))
 }
@@ -943,6 +944,8 @@ fn resume_with_retained(
     dfn: Option<&[u32]>,
     string_values: std::collections::HashMap<u32, String>,
     addr_of: &[u64],
+    class_idx: &[u32],
+    class_names: &[String],
 ) -> Vec<crate::query::model::QueryResult> {
     use crate::query::plan::StageOp;
     use crate::query::stage_runner::{
@@ -978,8 +981,8 @@ fn resume_with_retained(
         string_values: &string_values,
         string_values_truncated: false,
         gc_root_tags: &EMPTY_GC_ROOT_TAGS,
-        class_idx: &[],
-        class_names: &[],
+        class_idx,
+        class_names,
     };
 
     let mut slotted: Vec<(usize, QueryResult)> = finished;
@@ -1694,6 +1697,11 @@ pub struct ReplCache {
     pub id_size: usize,
     pub reachable_only: bool,
     pub source: crate::source::HprofSource,
+    /// Dense-object-index → class-histogram row (same mapping as Pass2.class_idx).
+    /// Used to resolve `@classOf`/`@displayName` in the REPL cached query path.
+    pub class_idx: Vec<u32>,
+    /// Class-histogram row names (indexed by class_idx values).
+    pub class_names: Vec<String>,
 }
 
 impl ReplCache {
@@ -1708,7 +1716,7 @@ impl ReplCache {
         let flat: Vec<(Query, QueryPlan)> = Vec::new();
         let mut empty = std::collections::HashMap::new();
         let mut empty_exists = std::collections::HashMap::new();
-        let (g, _, shallow_c, ..) = crate::pass2::Pass2::build(
+        let (g, _, shallow_c, class_idx_c, ..) = crate::pass2::Pass2::build(
             &source_cache,
             p1_for_pass2,
             crate::cvec::Codec::Deflate9,
@@ -1718,9 +1726,10 @@ impl ReplCache {
             &mut empty_exists,
         )?;
         let n = g.n;
-        // g.shallow is emptied during build (compressed into shallow_c, the 3rd
-        // return element). Restore the full Vec<u32> from the compressed blob.
+        // g.shallow / g.class_idx are emptied during build (compressed). Restore.
         let shallow: Vec<u32> = shallow_c.restore()?;
+        let class_idx: Vec<u32> = class_idx_c.restore()?;
+        let class_names: Vec<String> = g.class_names;
         let class_ids = p1_owned.class_ids.clone();
         let dfn = if reachable_only {
             Some(
@@ -1741,6 +1750,8 @@ impl ReplCache {
             n,
             shallow,
             class_ids,
+            class_idx,
+            class_names,
             dfn,
             id_size,
             reachable_only,
