@@ -1482,7 +1482,7 @@ function startTerminal() {
     // Complete /export csv|tsv|json
     if (line.startsWith('/export ')) {
       const partial = line.slice(8).toLowerCase();
-      const fmts = ['tsv', 'csv', 'json'].filter(f => f.startsWith(partial));
+      const fmts = ['csv', 'tsv', 'json'].filter(f => f.startsWith(partial));
       if (fmts.length === 1) { setLine('/export ' + fmts[0]); }
       else if (fmts.length > 1) { term.writeln(''); term.writeln('  ' + fmts.join('  ')); redrawLine(); }
       return;
