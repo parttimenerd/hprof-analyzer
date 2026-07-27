@@ -1050,7 +1050,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                     Some(res) => {
                                         let rows = res.rows.len();
                                         let cols = res.columns.len();
-                                        writeln!(stdout, "{cg}{}{cr} row{} × {cg}{}{cr} col{}", rows, if rows == 1 { "" } else { "s" }, cols, if cols == 1 { "" } else { "s" })?;
+                                        writeln!(stdout, "{cg}{}{cr} row{} × {cg}{}{cr} col{}", fmt_int(rows as i64), if rows == 1 { "" } else { "s" }, cols, if cols == 1 { "" } else { "s" })?;
                                     }
                                 }
                             } else {
@@ -1063,7 +1063,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                         let color = SESSION_SETTINGS.with(|s| s.borrow().color);
                                         let (cg, cc, cr) = if color { ("\x1b[32m", "\x1b[36m", "\x1b[0m") } else { ("", "", "") };
                                         if let Some(n) = n {
-                                            writeln!(stdout, "{cg}{}{cr} instance{} of {cc}{}{cr}", n, if n == 1 { "" } else { "s" }, rest.trim())?;
+                                            writeln!(stdout, "{cg}{}{cr} instance{} of {cc}{}{cr}", fmt_int(n), if n == 1 { "" } else { "s" }, rest.trim())?;
                                         } else {
                                             print_result(&res, std::time::Duration::ZERO, max_width, &mut stdout)?;
                                         }
@@ -1108,7 +1108,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                     if rest.is_empty() {
                                         let rows = res.rows.len();
                                         let cols = res.columns.len();
-                                        writeln!(stdout, "{cg}{}{cr} row{} × {cg}{}{cr} col{}", rows, if rows == 1 { "" } else { "s" }, cols, if cols == 1 { "" } else { "s" })?;
+                                        writeln!(stdout, "{cg}{}{cr} row{} × {cg}{}{cr} col{}", fmt_int(rows as i64), if rows == 1 { "" } else { "s" }, cols, if cols == 1 { "" } else { "s" })?;
                                     } else {
                                         match resolve_col(rest, &res.columns) {
                                             None => {
@@ -1120,7 +1120,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                                 let non_null = res.rows.iter()
                                                     .filter(|row| !matches!(row.get(ci), Some(QueryValue::Null) | None))
                                                     .count();
-                                                writeln!(stdout, "{cg}{}{cr} non-null / {cg}{}{cr} total in {:?}", non_null, total, res.columns[ci].name)?;
+                                                writeln!(stdout, "{cg}{}{cr} non-null / {cg}{}{cr} total in {:?}", fmt_int(non_null as i64), fmt_int(total as i64), res.columns[ci].name)?;
                                             }
                                         }
                                     }
@@ -2890,13 +2890,13 @@ fn handle_stats(
                             }
                         };
                         let null_note = if null_count > 0 {
-                            if color { format!("  \x1b[2m({} null)\x1b[0m", null_count) } else { format!("  ({} null)", null_count) }
+                            if color { format!("  \x1b[2m({} null)\x1b[0m", fmt_int(null_count as i64)) } else { format!("  ({} null)", fmt_int(null_count as i64)) }
                         } else { String::new() };
                         let variance: f64 = vals.iter().map(|&v| (v - mean) * (v - mean)).sum::<f64>() / n as f64;
                         let stddev = variance.sqrt();
                         let color = SESSION_SETTINGS.with(|s| s.borrow().color);
                         let (cb, cv, cs, cd, cr) = if color { ("\x1b[1m", "\x1b[32m", "\x1b[33m", "\x1b[2m", "\x1b[0m") } else { ("", "", "", "", "") };
-                        writeln!(out, "{cb}{}{cr}  {cd}({} non-null values){cr}{}", col_name, n, null_note)?;
+                        writeln!(out, "{cb}{}{cr}  {cd}({} non-null values){cr}{}", col_name, fmt_int(n as i64), null_note)?;
                         writeln!(out, "  min    {cv}{}{cr}", fv(vals[0]))?;
                         writeln!(out, "  max    {cv}{}{cr}", fv(vals[n - 1]))?;
                         writeln!(out, "  mean   {cv}{}{cr}", fv(mean))?;
