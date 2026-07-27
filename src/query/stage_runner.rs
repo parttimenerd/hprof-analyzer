@@ -1179,6 +1179,12 @@ fn project_string_row_item(it: &SelectItem, dense: u32, ctx: &LateCtx) -> QueryV
         SelectItem::Attr(Attr::RetainedHeapSize) => QueryValue::Int(
             ctx.retained.get(dense as usize).copied().unwrap_or(0) as i64,
         ),
+        SelectItem::Attr(Attr::ClassOf) | SelectItem::Attr(Attr::DisplayName) => {
+            match ctx.class_name_of(dense) {
+                Some(name) => QueryValue::Str(name.to_string()),
+                None => QueryValue::Null,
+            }
+        }
         SelectItem::Star => QueryValue::ObjRef {
             // Dense index, matching the scan-path `SELECT *` convention: the late
             // id_map is empty (address table compressed away), so `to_addr` here

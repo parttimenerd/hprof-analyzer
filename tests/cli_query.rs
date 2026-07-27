@@ -6148,3 +6148,29 @@ fn query_order_by_classof_in_retained_path_is_sorted() {
         );
     }
 }
+
+#[test]
+fn query_classof_in_tostring_path_is_non_null() {
+    let Some(hprof) = philosophers() else { return };
+    // classof(x) was returning Null in the toString late path because project_string_row_item
+    // had no ClassOf arm and fell through to _ => QueryValue::Null.
+    let out = Command::new(BIN)
+        .arg("query").arg(&hprof)
+        .args(["--query",
+            "SELECT classof(x), @retainedHeapSize FROM java.lang.String x \
+             WHERE toString(x) LIKE \"java.*\" ORDER BY @retainedHeapSize DESC LIMIT 3"])
+        .output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let data_rows: Vec<&str> = stdout
+        .lines()
+        .filter(|l| l.contains('|') && !l.contains("classof") && !l.contains("---"))
+        .collect();
+    assert!(!data_rows.is_empty(), "expected data rows, got:\n{stdout}");
+    for row in &data_rows {
+        assert!(
+            row.contains("java.lang.String"),
+            "classof(x) returned null or wrong name in toString path: {row}\nfull output:\n{stdout}"
+        );
+    }
+}
