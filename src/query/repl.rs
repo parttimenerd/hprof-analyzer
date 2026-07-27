@@ -1388,8 +1388,12 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                 // list named queries
                                 print_named_queries_help(&mut stdout)?;
                             } else {
+                                let last_oql_before = last_query.clone();
                                 dispatch_run(rest, path, path_depth, reachable_only, max_width,
                                     &mut last_query, &mut last_result, &mut cache, &mut stdout)?;
+                                // Clear undo slot when dispatch_run ran a new query —
+                                // same rule as inline OQL: fresh result resets undo.
+                                if last_query != last_oql_before { prev_result = None; }
                             }
                             stdout.flush()?;
                             continue;
