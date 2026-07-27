@@ -45,6 +45,30 @@ pub fn complete(
     // On empty input or empty token, suggest basic keywords
     let is_empty = typed_token.is_empty();
 
+    // Detect FROM/INSTANCEOF context: look at what comes before the current token
+    let prefix_before_token = prefix[..delim_pos.saturating_sub(
+        if delim_pos > 0 { 1 } else { 0 }
+    )].trim_end();
+    let upper_before = prefix_before_token.to_ascii_uppercase();
+    let in_from_context = upper_before.ends_with("FROM")
+        || upper_before.ends_with("INSTANCEOF")
+        || upper_before.ends_with("FROM INSTANCEOF");
+
+    // In FROM context with empty token: return all class names, no keywords
+    if is_empty && in_from_context {
+        let mut class_results: Vec<Completion> = class_names
+            .iter()
+            .map(|name| Completion {
+                value: name.clone(),
+                display: name.clone(),
+                group: Some("class".to_string()),
+            })
+            .collect();
+        let mut seen = std::collections::HashSet::new();
+        class_results.retain(|c| seen.insert(c.value.clone()));
+        return class_results;
+    }
+
     // Keywords and builtins (only if there's a non-empty prefix to match)
     if !is_empty {
         for kw in KEYWORDS
@@ -66,8 +90,8 @@ pub fn complete(
         }
     }
 
-    // Class names (only if there's a prefix to narrow them)
-    if !is_empty {
+    // Class names (if there's a prefix to narrow them, or we're in FROM context)
+    if !is_empty || in_from_context {
         for name in class_names {
             if name.to_ascii_lowercase().starts_with(&typed_lower) {
                 results.push(Completion {
@@ -95,8 +119,8 @@ pub fn complete(
         }
     }
 
-    // On empty input, suggest basic keywords
-    if is_empty {
+    // On empty input (but not in FROM context), suggest basic keywords
+    if is_empty && !in_from_context {
         for kw in &["SELECT", "FROM", "WHERE", "ORDER BY", "GROUP BY", "LIMIT"] {
             results.push(Completion {
                 value: kw.to_string(),
@@ -152,5 +176,31 @@ mod tests {
     fn empty_line_no_completions() {
         let cs = complete("", 0, &[], &[]);
         assert!(!cs.is_empty(), "should suggest keywords on empty line");
+    }
+
+    #[test]
+    fn from_space_suggests_classes() {
+        let classes = vec!["java.lang.String".to_string(), "java.lang.Thread".to_string()];
+        let cs = complete("SELECT * FROM ", 14, &classes, &[]);
+        let vals: Vec<&str> = cs.iter().map(|c| c.value.as_str()).collect();
+        assert!(vals.contains(&"java.lang.String"), "expected class in FROM suggestions, got: {vals:?}");
+        assert!(vals.contains(&"java.lang.Thread"), "expected class in FROM suggestions, got: {vals:?}");
+        assert!(!vals.contains(&"SELECT"), "SELECT should not appear after FROM, got: {vals:?}");
+    }
+
+    #[test]
+    fn instanceof_space_suggests_classes() {
+        let classes = vec!["java.util.ArrayList".to_string()];
+        let cs = complete("SELECT * FROM INSTANCEOF ", 25, &classes, &[]);
+        let vals: Vec<&str> = cs.iter().map(|c| c.value.as_str()).collect();
+        assert!(vals.contains(&"java.util.ArrayList"), "expected class after INSTANCEOF, got: {vals:?}");
+    }
+
+    #[test]
+    fn where_space_does_not_suggest_classes() {
+        let classes = vec!["java.lang.String".to_string()];
+        let cs = complete("SELECT * FROM java.lang.String s WHERE ", 38, &classes, &[]);
+        let vals: Vec<&str> = cs.iter().map(|c| c.value.as_str()).collect();
+        assert!(!vals.contains(&"java.lang.String"), "classes should not appear after WHERE, got: {vals:?}");
     }
 }
