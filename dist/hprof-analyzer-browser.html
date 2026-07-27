@@ -1771,10 +1771,15 @@ function startTerminal() {
           body: JSON.stringify({ query: `SELECT * FROM ${clsTrimmed} s WHERE s.@objectId = ${idx}` }),
           signal: AbortSignal.timeout(10000),
         }).then(r => r.json());
-        const r = res.result || res;
-        if (r.error) {
+        if (!res.ok) {
+          const msg = res.error?.message || JSON.stringify(res.error) || 'unknown error';
+          term.writeln(`\x1b[31merror: ${msg}\x1b[0m`);
+          term.write(PROMPT); return;
+        }
+        const r = res.result;
+        if (r?.error) {
           term.writeln(`\x1b[31merror: ${r.error}\x1b[0m`);
-        } else if (!r.columns || r.columns.length === 0) {
+        } else if (!r?.columns || r.columns.length === 0) {
           term.writeln(`\x1b[33m(no object ${clsTrimmed}#${idx} found)\x1b[0m`);
         } else {
           const colNames = r.columns.map(c => c.name || String(c));
