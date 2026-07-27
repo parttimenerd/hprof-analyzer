@@ -2449,7 +2449,7 @@ fn handle_filter(
                 writeln!(out, "{cy}(no rows match {pattern:?}){cr2}")?;
                 return Ok(());
             }
-            let note = format!("{} of {} rows match {:?}", filtered_count, total, pattern);
+            let note = format!("{} of {} rows match {:?}", fmt_int(filtered_count as i64), fmt_int(total as i64), pattern);
             let filtered_res = QueryResult {
                 columns: res.columns.clone(),
                 rows: filtered_rows,
@@ -2545,7 +2545,7 @@ fn handle_filter_not(
                 writeln!(out, "{cy}(no rows match {actual_pattern:?} — nothing excluded){cr2}")?;
                 return Ok(());
             }
-            let note = format!("{} of {} rows excluded {:?}", excluded, total, actual_pattern);
+            let note = format!("{} of {} rows excluded {:?}", fmt_int(excluded as i64), fmt_int(total as i64), actual_pattern);
             let filtered_res = QueryResult {
                 columns: res.columns.clone(),
                 rows: filtered_rows,
