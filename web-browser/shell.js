@@ -2056,7 +2056,9 @@ function startTerminal() {
         const shown = realHistory.slice(0, limit);
         shown.forEach((h, i) => {
           const num = String(i + 1).padStart(3);
-          const truncated = h.length > term.cols - 8 ? h.slice(0, term.cols - 9) + '…' : h;
+          // Flatten multi-line entries to one display line
+          const flat = h.replace(/\n/g, ' ↵ ').replace(/\s+/g, ' ');
+          const truncated = flat.length > term.cols - 8 ? flat.slice(0, term.cols - 9) + '…' : flat;
           term.writeln(`\x1b[2m${num}\x1b[0m  \x1b[36m!${String(i + 1)}\x1b[0m  ${truncated}`);
         });
         if (realHistory.length > limit) {
@@ -2078,8 +2080,9 @@ function startTerminal() {
           term.write(PROMPT);
         } else {
           const recalled = realHistory[n];
-          const echo = recalled.length > term.cols - PROMPT.length - 1
-            ? recalled.slice(0, term.cols - PROMPT.length - 2) + '…' : recalled;
+          const flat = recalled.replace(/\n/g, ' ↵ ').replace(/\s+/g, ' ');
+          const echo = flat.length > term.cols - PROMPT.length - 1
+            ? flat.slice(0, term.cols - PROMPT.length - 2) + '…' : flat;
           term.writeln(`\x1b[2m↳ ${echo}\x1b[0m`);
           if (recalled.trimStart().startsWith('/')) {
             // History entry is a command — re-dispatch it fully
