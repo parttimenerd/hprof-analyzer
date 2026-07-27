@@ -1884,7 +1884,7 @@ function startTerminal() {
           term.writeln(`\x1b[32m${n.toLocaleString()}\x1b[0m row${n !== 1 ? 's' : ''} × \x1b[32m${m}\x1b[0m col${m !== 1 ? 's' : ''}`);
           term.write(PROMPT); return;
         }
-        term.writeln('\x1b[2musage: /count <ClassName|oql>  — count instances or rows\x1b[0m');
+        term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
         term.write(PROMPT);
         return;
       }
@@ -1925,7 +1925,7 @@ function startTerminal() {
     }
     if (cmd === '/last') {
       if (!lastResult) {
-        term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
+        term.writeln('\x1b[33m(no previous query to re-display)\x1b[0m');
       } else {
         renderResult(lastResult);
         term.writeln(`\x1b[2m${lastResult.rows.length} rows (re-displayed)\x1b[0m`);
@@ -2847,13 +2847,17 @@ function startTerminal() {
         });
         text = JSON.stringify(objs, null, 2);
         mime = 'application/json'; ext = 'json';
-      } else {
+      } else if (fmt === 'tsv') {
         text = [lastResult.columns.join('\t')]
           .concat(lastResult.rows.map(row =>
             row.map((cell, i) => fmtCell(cell, lastResult.columns[i])).join('\t')
           ))
           .join('\n');
         mime = 'text/tab-separated-values'; ext = 'tsv';
+      } else {
+        term.writeln(`\x1b[31merror: unknown format "${fmt}" — use csv, tsv, or json\x1b[0m`);
+        term.write(PROMPT);
+        return;
       }
       try {
         await navigator.clipboard.writeText(text);
