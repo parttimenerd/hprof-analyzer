@@ -5411,3 +5411,48 @@ fn query_file_parse_error_includes_line_number() {
         "expected line number in error output:\n{stderr}"
     );
 }
+
+// ── Named query regression tests ──────────────────────────────────────────────
+
+#[test]
+fn named_query_empty_collections_uses_size_method() {
+    // Regression: empty-collections used `x.size` (bare field path → "unknown field"
+    // error). Fixed to `x.size()` (method dispatch via the sized-collection emulator).
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg("--all")
+        .arg(&hprof)
+        .args(["--run", "empty-collections"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "empty-collections named query failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(!stdout.contains("unknown field"), "got unknown field error: {stdout}");
+    assert!(stdout.contains("class"), "missing 'class' column: {stdout}");
+}
+
+#[test]
+fn named_query_large_collections_uses_size_method() {
+    // Regression: large-collections used `x.size` (bare field path → error).
+    // Fixed to `x.size()` — even if no large collection exists, it must not error.
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg("--all")
+        .arg(&hprof)
+        .args(["--run", "large-collections"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "large-collections named query failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(!stdout.contains("unknown field"), "got unknown field error: {stdout}");
+}

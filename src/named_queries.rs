@@ -97,14 +97,14 @@ pub const NAMED_QUERIES: &[NamedQuery] = &[
         display: "Large collections (>1000 elements)",
         group: "Collections",
         needs_retained: false,
-        oql: "SELECT @objectAddress, classof(x) AS class, x.size AS size FROM INSTANCEOF java.util.AbstractCollection x WHERE x.size > 1000 ORDER BY size DESC LIMIT 20",
+        oql: "SELECT @objectAddress, classof(x) AS class, x.size() AS size FROM INSTANCEOF java.util.AbstractCollection x WHERE x.size() > 1000 ORDER BY size DESC LIMIT 20",
     },
     NamedQuery {
         name: "empty-collections",
         display: "Empty collections",
         group: "Collections",
         needs_retained: false,
-        oql: "SELECT @objectAddress, classof(x) AS class FROM INSTANCEOF java.util.AbstractCollection x WHERE x.size = 0 LIMIT 50",
+        oql: "SELECT @objectAddress, classof(x) AS class FROM INSTANCEOF java.util.AbstractCollection x WHERE x.size() = 0 LIMIT 50",
     },
     // ── Class Loaders ─────────────────────────────────────────────────────────
     NamedQuery {
