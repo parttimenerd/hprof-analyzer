@@ -13,8 +13,9 @@
 use std::{
     collections::HashMap,
     io::{self, ErrorKind},
-    time::Instant,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
 
 use crate::{
     pass1::Pass1,
@@ -80,12 +81,16 @@ impl Pass2 {
         // surface `QueryResult.truncated` even when the map is non-empty.
         bool,
     )> {
+        #[cfg(not(target_arch = "wasm32"))]
         let _t_build = Instant::now();
         macro_rules! t_phase {
             ($label:expr) => {
+                #[cfg(not(target_arch = "wasm32"))]
                 if std::env::var_os("HPROF_TIMING").is_some() {
                     eprintln!("[timing] {}: {:.3}s", $label, _t_build.elapsed().as_secs_f64());
                 }
+                #[cfg(target_arch = "wasm32")]
+                let _ = $label;
             };
         }
 
