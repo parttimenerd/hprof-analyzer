@@ -161,7 +161,7 @@ function fmtCell(cell, colName) {
       return '0x' + v.toString(16).toUpperCase().padStart(16, '0');
     }
     // Byte-size columns shown as human-readable (unless bytesRaw)
-    if (!settings.bytesRaw && colName && /bytes$|_size$|heap_size$/i.test(colName)) {
+    if (!settings.bytesRaw && v >= 0 && colName && /bytes$|_size$|heap_size$/i.test(colName)) {
       return fmtBytes(v);
     }
     return v.toLocaleString('en-US');
@@ -1512,7 +1512,7 @@ function startTerminal() {
             const p90_2 = vals2[Math.floor(vals2.length * 0.9)];
             const p99_2 = vals2[Math.floor(vals2.length * 0.99)];
             const fmtV2 = v => {
-              if (!settings.bytesRaw && cName && /bytes$|_size$|heap_size$/i.test(cName)) return fmtBytes(v);
+              if (!settings.bytesRaw && v >= 0 && cName && /bytes$|_size$|heap_size$/i.test(cName)) return fmtBytes(v);
               return v.toLocaleString('en-US');
             };
             const nullNote2 = nullCount2 > 0 ? `  \x1b[2m(${nullCount2.toLocaleString('en-US')} null)\x1b[0m` : '';
@@ -1577,7 +1577,7 @@ function startTerminal() {
       const p90 = vals[Math.floor(vals.length * 0.9)];
       const p99 = vals[Math.floor(vals.length * 0.99)];
       const fmtV = v => {
-        if (!settings.bytesRaw && colName && /bytes$|_size$|heap_size$/i.test(colName)) return fmtBytes(v);
+        if (!settings.bytesRaw && v >= 0 && colName && /bytes$|_size$|heap_size$/i.test(colName)) return fmtBytes(v);
         return v.toLocaleString('en-US');
       };
       const nullInfo = nullCount > 0 ? `  \x1b[2m(${nullCount.toLocaleString('en-US')} null)\x1b[0m` : '';
