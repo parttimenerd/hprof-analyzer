@@ -62,6 +62,9 @@ jobs:
       - name: Install browser REPL as homepage
         run: cp dist/hprof-analyzer-browser.html docs/index.html
 
+      - name: Build OQL guide
+        run: bash scripts/build-oql-guide.sh
+
       - uses: actions/configure-pages@v5
         with:
           enablement: true

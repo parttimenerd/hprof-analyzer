@@ -1,0 +1,966 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OQL Reference — hprof-analyzer</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  background: #0f0f1a;
+  color: #c8c8d8;
+  line-height: 1.6;
+  display: flex;
+  min-height: 100vh;
+}
+nav {
+  width: 240px;
+  flex-shrink: 0;
+  background: #0a0a14;
+  border-right: 1px solid #1e1e38;
+  padding: 24px 12px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+}
+nav a {
+  display: block;
+  padding: 3px 8px;
+  font-size: .78rem;
+  color: #6080a0;
+  text-decoration: none;
+  border-radius: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+nav a:hover { background: #161628; color: #90b0d0; }
+nav .nav-title {
+  font-size: .65rem;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: #3a4a5a;
+  padding: 16px 8px 6px;
+  font-weight: 700;
+}
+main {
+  flex: 1;
+  padding: 40px 48px;
+  max-width: 900px;
+}
+h1 { font-size: 2rem; color: #7ab4ff; margin-bottom: .4rem; }
+h2 { font-size: 1.35rem; color: #a0c4ff; border-bottom: 1px solid #1e1e38; padding-bottom: .3rem; margin: 2.4rem 0 .8rem; }
+h3 { font-size: 1.05rem; color: #80a0cc; margin: 1.6rem 0 .5rem; }
+p { margin: .7rem 0; }
+a { color: #5090d0; }
+a:hover { color: #80b8f0; }
+code {
+  background: #1a1a2e;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-family: 'Cascadia Code', 'Fira Code', Menlo, Consolas, monospace;
+  font-size: .86em;
+  color: #d0d8ff;
+}
+pre {
+  background: #111120;
+  border: 1px solid #1e1e38;
+  border-radius: 6px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  margin: .9rem 0;
+}
+pre code { background: none; padding: 0; font-size: .84rem; color: #c0c8e8; }
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: .9rem 0;
+  font-size: .88rem;
+}
+th, td { border: 1px solid #1e1e38; padding: .35rem .65rem; text-align: left; }
+th { background: #14142a; color: #90b0d0; }
+tr:nth-child(even) td { background: #0e0e1e; }
+ul { padding-left: 1.5rem; margin: .5rem 0; }
+li { margin: .25rem 0; }
+hr { border: 0; border-top: 1px solid #1e1e38; margin: 2rem 0; }
+@media (max-width: 700px) {
+  nav { display: none; }
+  main { padding: 20px 18px; }
+}
+</style>
+</head>
+<body>
+<nav>
+  <div class="nav-title">hprof-analyzer OQL</div>
+  <a href="#quick-start" >Quick start</a>
+<a href="#grammar-surface" >Grammar surface</a>
+<a href="#select-list" style="padding-left:1.2rem">SELECT list</a>
+<a href="#from-source" style="padding-left:1.2rem">FROM source</a>
+<a href="#predicates-where" style="padding-left:1.2rem">Predicates (WHERE)</a>
+<a href="#ordering-limiting-union" style="padding-left:1.2rem">Ordering, limiting, union</a>
+<a href="#not-supported" style="padding-left:1.2rem">Not supported</a>
+<a href="#group-by-and-having" >GROUP BY and HAVING</a>
+<a href="#case-when" >CASE WHEN</a>
+<a href="#coalesce-nullif-between" >COALESCE, NULLIF, BETWEEN</a>
+<a href="#exists-subquery" >EXISTS subquery</a>
+<a href="#intersect-and-except" >INTERSECT and EXCEPT</a>
+<a href="#array-indexing-and-slicing" >Array indexing and slicing</a>
+<a href="#worked-examples" >Worked examples</a>
+<a href="#counting-and-filtering" style="padding-left:1.2rem">Counting and filtering</a>
+<a href="#attributes-ordering-and-limits" style="padding-left:1.2rem">Attributes, ordering, and limits</a>
+<a href="#column-aliases" style="padding-left:1.2rem">Column aliases</a>
+<a href="#distinct" style="padding-left:1.2rem">DISTINCT</a>
+<a href="#aggregates" style="padding-left:1.2rem">Aggregates</a>
+<a href="#membership-with-in" style="padding-left:1.2rem">Membership with IN</a>
+<a href="#union" style="padding-left:1.2rem">UNION</a>
+<a href="#visualization-directives-viz" >Visualization directives (`-- @viz`)</a>
+<a href="#cli-gotcha-use-the-query-equals-form-for-directives" style="padding-left:1.2rem">CLI gotcha: use the `--query=` equals form for directives</a>
+<a href="#two-execution-paths-query-only-vs-full-report" >Two execution paths: query-only vs. full report</a>
+<a href="#query-files-and-config" >Query files and config</a>
+<a href="#server-subcommand" >server subcommand</a>
+<a href="#endpoints" style="padding-left:1.2rem">Endpoints</a>
+<a href="#format-negotiation" style="padding-left:1.2rem">Format negotiation</a>
+<a href="#lazy-analysis" style="padding-left:1.2rem">Lazy analysis</a>
+<a href="#retained-sizes-and-full-analysis-queries" style="padding-left:1.2rem">Retained sizes and full-analysis queries</a>
+<a href="#limiting-result-rows" style="padding-left:1.2rem">Limiting result rows</a>
+<a href="#oql-body-format" style="padding-left:1.2rem">OQL body format</a>
+<a href="#ndjson-streaming-post-stream" style="padding-left:1.2rem">NDJSON streaming (`POST /stream`)</a>
+<a href="#error-responses" style="padding-left:1.2rem">Error responses</a>
+<a href="#example-workflow" style="padding-left:1.2rem">Example workflow</a>
+<a href="#eclipse-mat-oql-compatibility" >Eclipse MAT OQL compatibility</a>
+<a href="#extensions-beyond-mat" style="padding-left:1.2rem">Extensions beyond MAT</a>
+<a href="#compatible-with-mat" style="padding-left:1.2rem">Compatible with MAT</a>
+<a href="#differences-from-mat" style="padding-left:1.2rem">Differences from MAT</a>
+<a href="#not-yet-supported" style="padding-left:1.2rem">Not yet supported</a>
+<a href="#silent-nulls-not-an-error-but-worth-knowing" style="padding-left:1.2rem">Silent NULLs (not an error, but worth knowing)</a>
+<a href="#query-file-parse-error-format" style="padding-left:1.2rem">`--query-file` parse error format</a>
+  <div class="nav-title" style="margin-top:16px">Links</div>
+  <a href="/">Browser REPL</a>
+  <a href="/reports/">Sample Reports</a>
+  <a href="https://github.com/parttimenerd/hprof-analyzer">GitHub</a>
+</nav>
+<main>
+<h1 id="oql-object-query-language">OQL — Object Query Language</h1>
+
+<p><code>hprof-analyzer</code> ships a SQL-flavoured query language, modelled on Eclipse MAT's</p>
+<p>OQL, for interrogating a heap dump. You can run queries three ways:</p>
+
+<p>1. <strong><code>query</code> subcommand</strong> — parse the dump once and print result tables to the</p>
+<p>   terminal (or start an interactive REPL). Fast; no full report is built.</p>
+<p>2. <strong><code>--query</code> / <code>--query-file</code> on the main command</strong> — run queries <em>and</em> fold</p>
+<p>   their results into a full Markdown/HTML/JSON report.</p>
+<p>3. <strong><code>[[query]]</code> entries in a config file</strong> — persist a query set alongside a</p>
+<p>   dump so every report includes the same views.</p>
+
+<p>Every example below was run against <code>tests/fixtures/dump_4_philosophers.hprof</code>.</p>
+
+<hr>
+
+<h2 id="quick-start">Quick start</h2>
+
+<pre><code class="language-console">$ hprof-analyzer query heap.hprof --query &quot;SELECT COUNT(*) FROM java.lang.String&quot;
+COUNT(*)
+24760
+(1 row)</code></pre>
+
+<p>Interactive REPL (tab-completion for keywords, class names, attributes, and the</p>
+<p><code>-- @viz</code> directive):</p>
+
+<pre><code class="language-console">$ hprof-analyzer query heap.hprof --repl
+oql&gt; SELECT @displayName FROM java.lang.Thread LIMIT 3</code></pre>
+
+<p>Multiple queries in one run (repeat <code>--query</code>, or one query per line in a file):</p>
+
+<pre><code class="language-console">$ hprof-analyzer query heap.hprof \
+    --query &quot;SELECT COUNT(*) FROM java.lang.String&quot; \
+    --query &quot;SELECT COUNT(*) FROM java.lang.Thread&quot;</code></pre>
+
+<hr>
+
+<h2 id="grammar-surface">Grammar surface</h2>
+
+<pre><code>SELECT [DISTINCT] [OBJECTS] &lt;select-list&gt; [AS RETAINED SET]
+  FROM [OBJECTS] &lt;class | &quot;regex&quot; | INSTANCEOF class | ( subquery )&gt; [alias]
+  [WHERE &lt;predicate&gt;]
+  [ORDER BY &lt;expr&gt; [ASC|DESC]]
+  [LIMIT &lt;n&gt;]
+[UNION &lt;select&gt; ...]</code></pre>
+
+<h3 id="select-list">SELECT list</h3>
+
+<ul>
+<li><code>*</code> — project the matched object itself.</li>
+<li>A bare alias (<code>s</code>) — projects the object, same as <code>*</code>.</li>
+<li>An attribute: <code>@objectId</code>, <code>@objectAddress</code>, <code>@usedHeapSize</code>,</li>
+</ul>
+<p>  <code>@retainedHeapSize</code>¹, <code>@displayName</code>, <code>@length</code>, <code>@inbounds</code>¹, <code>@outbounds</code>¹.</p>
+<ul>
+<li>A field path: <code>s.fieldName</code>, <code>s.a.b</code>.</li>
+<li>A function: <code>classof(x)</code>, <code>toString(x)</code>, <code>path(a, b)</code>, <code>dominators(x)</code>¹,</li>
+</ul>
+<p>  <code>dominatorof(x)</code>¹.</p>
+<ul>
+<li>An aggregate: <code>COUNT(*)</code>, <code>SUM(e)</code>, <code>MIN(e)</code>, <code>MAX(e)</code>, <code>AVG(e)</code>,</li>
+</ul>
+<p>  <code>MEDIAN(e)</code>, <code>PERCENTILE(e, &lt;int&gt;)</code>.</p>
+<ul>
+<li><code>&lt;expr&gt; AS &lt;name&gt;</code> — rename the output column.</li>
+</ul>
+
+<p>¹ Requires the <strong>full analysis pipeline</strong> — see the caveat below.</p>
+
+<h3 id="from-source">FROM source</h3>
+
+<table>
+<tr><th>Form</th><th>Meaning</th></tr>
+<tr><td><code>FROM java.lang.String</code></td><td>exact class name</td></tr>
+<tr><td><code>FROM OBJECTS java.lang.String</code></td><td>identical to the above (<code>OBJECTS</code> is an optional MAT no-op keyword)</td></tr>
+<tr><td><code>FROM INSTANCEOF java.lang.Object</code></td><td>the class and all subclasses</td></tr>
+<tr><td><code>FROM &quot;java\.lang\..*&quot;</code></td><td>class-name regex (double-quoted)</td></tr>
+<tr><td><code>FROM ( SELECT … ) s</code></td><td>subquery as the row source</td></tr>
+</table>
+
+<h3 id="predicates-where">Predicates (WHERE)</h3>
+
+<ul>
+<li>Comparisons: <code>=</code>, <code>!=</code>, <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code>.</li>
+<li><code>LIKE &quot;regex&quot;</code> / <code>NOT LIKE &quot;regex&quot;</code> — RHS must be a string literal.</li>
+<li><code>&lt;attr&gt; INSTANCEOF &lt;class&gt;</code>.</li>
+<li><code>&lt;attr&gt; IN ( SELECT @objectAddress FROM … )</code> — membership against a subquery</li>
+</ul>
+<p>  that selects a single address-valued column. (<code>IN</code> takes a <strong>subquery</strong>, not a</p>
+<p>  literal value list.)</p>
+<ul>
+<li>Combine with <code>AND</code>, <code>OR</code>, <code>NOT</code>, parentheses.</li>
+</ul>
+
+<h3 id="ordering-limiting-union">Ordering, limiting, union</h3>
+
+<ul>
+<li><code>ORDER BY &lt;expr&gt; [ASC|DESC]</code> sorts the full result before <code>LIMIT</code>.</li>
+<li><code>LIMIT n</code> caps rows. In a <code>UNION</code>, a trailing <code>LIMIT</code> caps the combined result.</li>
+<li><code>UNION</code> concatenates branches. Aggregates are <strong>not</strong> allowed inside a UNION</li>
+</ul>
+<p>  branch.</p>
+
+<h3 id="not-supported">Not supported</h3>
+
+<p><code>eval(...)</code> and <code>${snapshot}</code> reflection are MAT features we do <strong>not</strong></p>
+<p>implement.</p>
+
+<hr>
+
+<h2 id="group-by-and-having">GROUP BY and HAVING</h2>
+
+<p><code>GROUP BY</code> groups rows by one or more expressions and applies aggregate</p>
+<p>functions per group. <code>HAVING</code> filters groups after aggregation (analogous to</p>
+<p><code>WHERE</code> filtering rows before aggregation).</p>
+
+<pre><code class="language-sql">-- Count instances per class
+SELECT @displayName, COUNT(*) AS n
+FROM INSTANCEOF java.lang.Object
+GROUP BY @displayName
+ORDER BY n DESC
+LIMIT 10
+
+-- Only classes with many instances
+SELECT @displayName, COUNT(*) AS n
+FROM INSTANCEOF java.lang.Object
+GROUP BY @displayName
+HAVING COUNT(*) &gt; 100
+ORDER BY n DESC</code></pre>
+
+<hr>
+
+<h2 id="case-when">CASE WHEN</h2>
+
+<p><code>CASE WHEN … THEN … ELSE … END</code> returns different values based on conditions.</p>
+<p>It can be used in <code>SELECT</code> and <code>GROUP BY</code> expressions.</p>
+
+<pre><code class="language-sql">-- Bucket objects by size class
+SELECT
+  CASE
+    WHEN @usedHeapSize &gt; 10000 THEN &#x27;large&#x27;
+    WHEN @usedHeapSize &gt; 1000  THEN &#x27;medium&#x27;
+    ELSE &#x27;small&#x27;
+  END AS size_class,
+  COUNT(*) AS n
+FROM INSTANCEOF java.lang.Object
+GROUP BY
+  CASE
+    WHEN @usedHeapSize &gt; 10000 THEN &#x27;large&#x27;
+    WHEN @usedHeapSize &gt; 1000  THEN &#x27;medium&#x27;
+    ELSE &#x27;small&#x27;
+  END
+ORDER BY n DESC</code></pre>
+
+<hr>
+
+<h2 id="coalesce-nullif-between">COALESCE, NULLIF, BETWEEN</h2>
+
+<p><code>COALESCE(e1, e2, …)</code> returns the first non-null argument.</p>
+<p><code>NULLIF(e1, e2)</code> returns <code>null</code> when <code>e1 = e2</code>, otherwise returns <code>e1</code>.</p>
+<p><code>e BETWEEN a AND b</code> is equivalent to <code>e &gt;= a AND e &lt;= b</code>.</p>
+
+<pre><code class="language-sql">-- Replace null with a default
+SELECT COALESCE(toString(s), &#x27;&lt;null&gt;&#x27;) AS val FROM java.lang.String s
+
+-- Filter to objects of moderate size
+SELECT COUNT(*) FROM java.lang.Object
+WHERE @usedHeapSize BETWEEN 100 AND 1000</code></pre>
+
+<hr>
+
+<h2 id="exists-subquery">EXISTS subquery</h2>
+
+<p><code>EXISTS (SELECT …)</code> is true when the inner query returns at least one row.</p>
+<p>It is non-correlated: the inner query runs once before the outer scan. If</p>
+<p><code>EXISTS</code> evaluates to false, the outer query returns 0 rows immediately.</p>
+<p>Because the subquery is not re-evaluated per outer row, <code>EXISTS</code> cannot filter</p>
+<p>by a per-row condition — it either admits all outer rows or none.</p>
+
+<pre><code class="language-sql">-- Run analysis only when leaked connections exist
+SELECT COUNT(*) FROM java.lang.Object
+WHERE EXISTS (SELECT * FROM com.example.Connection c WHERE c.closed = false)</code></pre>
+
+<hr>
+
+<h2 id="intersect-and-except">INTERSECT and EXCEPT</h2>
+
+<p><code>INTERSECT</code> returns rows present in <strong>both</strong> result sets.</p>
+<p><code>EXCEPT</code> returns rows present in the first set but <strong>not</strong> the second.</p>
+
+<pre><code class="language-sql">-- Class names in both cache and pool namespaces
+SELECT @displayName FROM &quot;com\.example\.cache\..*&quot;
+INTERSECT
+SELECT @displayName FROM &quot;com\.example\.pool\..*&quot;
+
+-- Strings only in the large set, not the small set
+SELECT toString(s) FROM java.lang.String s WHERE s.count &gt; 100
+EXCEPT
+SELECT toString(s) FROM java.lang.String s WHERE s.count &gt; 1000</code></pre>
+
+<hr>
+
+<h2 id="array-indexing-and-slicing">Array indexing and slicing</h2>
+
+<p><code>value[i]</code> returns the element at index <code>i</code> (0-based). <code>value[i:j]</code> returns a</p>
+<p>slice of elements from index <code>i</code> up to (but not including) <code>j</code>. Out-of-bounds</p>
+<p>accesses return <code>null</code>.</p>
+
+<pre><code class="language-sql">-- First element of each array (null if empty or out of bounds)
+SELECT @objectId, value[0] AS first FROM byte[] b LIMIT 10
+
+-- Slice of elements
+SELECT @objectId, value[1:4] AS mid FROM byte[] b LIMIT 10</code></pre>
+
+<hr>
+
+<h2 id="worked-examples">Worked examples</h2>
+
+<h3 id="counting-and-filtering">Counting and filtering</h3>
+
+<pre><code class="language-console">$ hprof-analyzer query heap.hprof --query &quot;SELECT COUNT(*) FROM java.lang.String&quot;
+COUNT(*)
+24760
+
+$ hprof-analyzer query heap.hprof --query &quot;SELECT COUNT(*) FROM INSTANCEOF java.lang.Object&quot;
+COUNT(*)
+134277
+
+$ hprof-analyzer query heap.hprof --query &#x27;SELECT COUNT(*) FROM &quot;java\.lang\..*&quot;&#x27;
+COUNT(*)
+169980</code></pre>
+
+<p><code>FROM OBJECTS &lt;class&gt;</code> is identical to <code>FROM &lt;class&gt;</code>:</p>
+
+<pre><code class="language-console">$ hprof-analyzer query heap.hprof --query &quot;SELECT COUNT(*) FROM OBJECTS java.lang.String&quot;
+COUNT(*)
+24760</code></pre>
+
+<h3 id="attributes-ordering-and-limits">Attributes, ordering, and limits</h3>
+
+<pre><code class="language-console">$ hprof-analyzer query heap.hprof \
+    --query &quot;SELECT @displayName, @usedHeapSize FROM java.lang.Thread ORDER BY @usedHeapSize DESC LIMIT 3&quot;
+@displayName | @usedHeapSize
+java.lang.Thread | 104
+java.lang.Thread | 104
+java.lang.Thread | 104
+(3 rows)</code></pre>
+
+<h3 id="column-aliases">Column aliases</h3>
+
+<pre><code class="language-console">$ hprof-analyzer query heap.hprof \
+    --query &quot;SELECT @usedHeapSize AS bytes FROM java.lang.String LIMIT 1&quot;
+bytes
+24</code></pre>
+
+<h3 id="distinct">DISTINCT</h3>
+
+<p><code>DISTINCT</code> de-duplicates whole result rows (after any <code>UNION</code>, before <code>LIMIT</code>):</p>
+
+<pre><code class="language-console">$ hprof-analyzer query heap.hprof \
+    --query &quot;SELECT DISTINCT @displayName FROM java.lang.Thread&quot;
+@displayName
+java.lang.Thread
+(1 row)</code></pre>
+
+<h3 id="aggregates">Aggregates</h3>
+
+<pre><code class="language-console">$ hprof-analyzer query heap.hprof --query &quot;SELECT MEDIAN(@usedHeapSize) FROM java.lang.String&quot;
+MEDIAN(@usedHeapSize)
+24
+
+$ hprof-analyzer query heap.hprof --query &quot;SELECT PERCENTILE(@usedHeapSize, 95) FROM java.lang.String&quot;
+PERCENTILE(95)(@usedHeapSize)
+24</code></pre>
+
+<p><code>PERCENTILE</code>'s second argument is an <strong>integer</strong> percentile (<code>95</code>), not a</p>
+<p>fraction (<code>0.95</code>).</p>
+
+<h3 id="membership-with-in">Membership with IN</h3>
+
+<pre><code class="language-console">$ hprof-analyzer query heap.hprof \
+    --query &#x27;SELECT COUNT(*) FROM java.lang.String s WHERE s IN (SELECT @objectAddress FROM java.lang.String)&#x27;
+COUNT(*)
+24760</code></pre>
+
+<h3 id="union">UNION</h3>
+
+<pre><code class="language-console">$ hprof-analyzer query heap.hprof \
+    --query &quot;SELECT @displayName FROM java.lang.Thread LIMIT 2 UNION SELECT @displayName FROM java.lang.String LIMIT 2&quot;</code></pre>
+
+<hr>
+
+<h2 id="visualization-directives-viz">Visualization directives (`-- @viz`)</h2>
+
+<p>Prefix a query with a <code>-- @viz</code> comment line to declare how its result should be</p>
+<p>drawn in the <strong>report</strong> (HTML rich charts, Markdown ASCII bars). The directive is</p>
+<p>a stripped comment — it is not part of the OQL grammar and has no effect on the</p>
+<p>plain <code>query</code>-subcommand table output.</p>
+
+<pre><code>-- @viz &lt;kind&gt; [label=&lt;col&gt;] [value=&lt;col&gt;] [cap=&lt;n&gt;] [title=&quot;&lt;text&gt;&quot;] [name=&quot;&lt;text&gt;&quot;]
+SELECT ...</code></pre>
+
+<table>
+<tr><th>Field</th><th>Meaning</th></tr>
+<tr><td><code>&lt;kind&gt;</code></td><td><code>table</code> (default), <code>histogram</code>, <code>piechart</code>, or <code>treemap</code></td></tr>
+<tr><td><code>label=&lt;col&gt;</code></td><td>column supplying slice/bar labels (defaults to first non-numeric column)</td></tr>
+<tr><td><code>value=&lt;col&gt;</code></td><td>column supplying numeric magnitudes (defaults to first numeric column)</td></tr>
+<tr><td><code>cap=&lt;n&gt;</code></td><td>limit the <strong>chart</strong> to the first <code>n</code> rows (the table still shows all)</td></tr>
+<tr><td><code>title=&quot;&lt;text&gt;&quot;</code></td><td>heading rendered above the chart; quote it for multiple words</td></tr>
+<tr><td><code>name=&quot;&lt;text&gt;&quot;</code></td><td>display name for the whole query block, replacing the auto <code>q{N}</code> label</td></tr>
+</table>
+
+<p>Column names may be attributes (<code>@usedHeapSize</code>), aliases, or positional. A</p>
+<p><code>title=</code>/<code>name=</code> value may be a single bare word or a <code>&quot;quoted string&quot;</code> for</p>
+<p>multiple words. A malformed directive or an unchartable result falls back to a</p>
+<p>plain table with a warning — it never hard-fails the query. Note that <code>name=</code></p>
+<p>applies even when the chart itself cannot be drawn (it only labels the block).</p>
+
+<p>Example (as it appears in a <code>--query-file</code> or config entry):</p>
+
+<pre><code>-- @viz histogram title=&quot;Threads by heap&quot; name=threads label=@displayName value=@usedHeapSize cap=10
+SELECT @displayName, @usedHeapSize FROM java.lang.Thread ORDER BY @usedHeapSize DESC</code></pre>
+
+<ul>
+<li><strong>HTML report:</strong> renders a horizontal-bar chart / pie / treemap.</li>
+<li><strong>Markdown report:</strong> renders ASCII bars (treemap degrades to a</li>
+</ul>
+<p>  "chart available in the HTML report" note plus the table).</p>
+
+<h3 id="cli-gotcha-use-the-query-equals-form-for-directives">CLI gotcha: use the `--query=` equals form for directives</h3>
+
+<p><code>clap</code> treats a leading <code>--</code> in an argument value as the start of a flag, so</p>
+<p><code>--query &quot;-- @viz …&quot;</code> is <strong>rejected</strong>:</p>
+
+<pre><code class="language-console">$ hprof-analyzer query heap.hprof --query &quot;-- @viz histogram
+SELECT * FROM java.lang.String LIMIT 1&quot;
+error: unexpected argument &#x27;-- @viz histogram …&#x27; found</code></pre>
+
+<p>Use the attached <code>--query=</code> form (or put the directive in a <code>--query-file</code> /</p>
+<p>config entry, where it is not a shell argument):</p>
+
+<pre><code class="language-console">$ hprof-analyzer query heap.hprof --query=&quot;-- @viz histogram label=@displayName value=@usedHeapSize
+SELECT @displayName, @usedHeapSize FROM java.lang.Thread ORDER BY @usedHeapSize DESC LIMIT 10&quot;</code></pre>
+
+<hr>
+
+<h2 id="two-execution-paths-query-only-vs-full-report">Two execution paths: query-only vs. full report</h2>
+
+<p>The <code>query</code> subcommand runs a <strong>query-only</strong> path: it parses the dump in a few</p>
+<p>streaming passes and answers queries directly, without building the dominator</p>
+<p>tree, retained sizes, or the reference graph. This is fast and low-memory, but</p>
+<p>some attributes and functions are unavailable there:</p>
+
+<table>
+<tr><th>Needs the full pipeline</th><th>query-only error</th></tr>
+<tr><td><code>@retainedHeapSize</code>, <code>AS RETAINED SET</code></td><td>"…requires the full analysis pipeline…"</td></tr>
+<tr><td><code>dominators(x)</code>, <code>dominatorof(x)</code></td><td>"dominator queries … require the full analysis pipeline…"</td></tr>
+<tr><td><code>@inbounds</code>, <code>@outbounds</code>, <code>path(a, b)</code></td><td>reference-graph queries need the full path</td></tr>
+</table>
+
+<p>To use those, run the <strong>full report</strong> command (no <code>query</code> subcommand) and pass</p>
+<p><code>--query</code> / <code>--query-file</code>. The report build produces the retained sizes,</p>
+<p>dominator tree, and reference graph the query then reads:</p>
+
+<pre><code class="language-console">$ hprof-analyzer heap.hprof report.html \
+    --query &quot;SELECT @displayName, @retainedHeapSize FROM java.lang.Thread ORDER BY @retainedHeapSize DESC LIMIT 20&quot;</code></pre>
+
+<hr>
+
+<h2 id="query-files-and-config">Query files and config</h2>
+
+<p><strong><code>--query-file</code></strong> — one query per line; blank lines and <code>#</code> comments are</p>
+<p>skipped. A <code>-- @viz</code> line attaches to the query on the following line:</p>
+
+<pre><code># threads-by-retained.oql
+-- @viz histogram label=@displayName value=@retainedHeapSize cap=15
+SELECT @displayName, @retainedHeapSize FROM java.lang.Thread ORDER BY @retainedHeapSize DESC
+SELECT COUNT(*) FROM java.lang.String</code></pre>
+
+<pre><code class="language-console">$ hprof-analyzer heap.hprof report.html --query-file threads-by-retained.oql</code></pre>
+
+<p><strong>Config <code>[[query]]</code> entries</strong> — a <code>.hprof-analyzer.toml</code> in the working</p>
+<p>directory (or <code>$HOME/.config/hprof-analyzer/collections.toml</code>) is auto-discovered:</p>
+
+<pre><code class="language-toml">[[query]]
+oql = &quot;&quot;&quot;
+-- @viz piechart label=@displayName value=@retainedHeapSize
+SELECT @displayName, @retainedHeapSize FROM java.lang.Thread ORDER BY @retainedHeapSize DESC
+&quot;&quot;&quot;
+
+[[query]]
+oql = &quot;SELECT COUNT(*) FROM INSTANCEOF java.util.Map&quot;</code></pre>
+
+<p>Point at a specific file with <code>--collection-config &lt;path&gt;</code>.</p>
+
+<hr>
+
+<h2 id="server-subcommand">server subcommand</h2>
+
+<pre><code class="language-console">$ hprof-analyzer server heap.hprof [--port 7070]</code></pre>
+
+<p>Starts an HTTP server on <code>127.0.0.1</code> (loopback only, default port 7070) that</p>
+<p>exposes OQL query execution and report sections as JSON/Markdown endpoints.</p>
+<p>The server prints a startup banner listing every available endpoint.</p>
+
+<h3 id="endpoints">Endpoints</h3>
+
+<table>
+<tr><th>Method</th><th>Path</th><th>Description</th></tr>
+<tr><td>GET</td><td><code>/</code></td><td>Welcome + endpoint catalog</td></tr>
+<tr><td>GET</td><td><code>/version</code></td><td><code>{&quot;version&quot;:…,&quot;endpoints&quot;:[…]}</code></td></tr>
+<tr><td>GET</td><td><code>/status</code></td><td>`{"status":"ready"\</td><td>"analyzing"\</td><td>"not_started"}`</td></tr>
+<tr><td>POST</td><td><code>/analyze</code></td><td>Trigger full analysis</td></tr>
+<tr><td>POST</td><td><code>/</code></td><td>Run OQL → JSON <code>QueryResult</code></td></tr>
+<tr><td>POST</td><td><code>/query</code></td><td>Alias of <code>POST /</code></td></tr>
+<tr><td>POST</td><td><code>/stream</code></td><td>Run OQL → NDJSON</td></tr>
+<tr><td>GET</td><td><code>/help</code></td><td>OQL language reference JSON</td></tr>
+<tr><td>GET</td><td><code>/schema</code></td><td>JSON Schema for <code>QueryResult</code></td></tr>
+<tr><td>GET</td><td><code>/report</code></td><td>Full report JSON (or <code>?format=md</code>)</td></tr>
+<tr><td>GET</td><td><code>/report/overview</code></td><td><code>SystemOverview</code> JSON (or <code>?format=md</code>)</td></tr>
+<tr><td>GET</td><td><code>/report/leaks</code></td><td><code>LeakSuspects</code> JSON (or <code>?format=md</code>)</td></tr>
+<tr><td>GET</td><td><code>/report/top</code></td><td><code>TopConsumers</code> JSON (or <code>?format=md</code>)</td></tr>
+<tr><td>GET</td><td><code>/report/threads</code></td><td><code>ThreadOverview</code> JSON (or <code>?format=md</code>)</td></tr>
+</table>
+
+<h3 id="format-negotiation">Format negotiation</h3>
+
+<p>Append <code>?format=md</code> to any <code>/report/…</code> endpoint to receive Markdown instead of</p>
+<p>JSON:</p>
+
+<pre><code class="language-console">$ curl -s &#x27;http://127.0.0.1:7070/report?format=md&#x27;
+$ curl -s &#x27;http://127.0.0.1:7070/report/leaks?format=md&#x27;</code></pre>
+
+<h3 id="lazy-analysis">Lazy analysis</h3>
+
+<p>The first <code>GET /report/…</code> request automatically triggers analysis if it has not</p>
+<p>been started yet. While analysis is running the server returns <code>202 Accepted</code>.</p>
+<p>Use <code>GET /status</code> to poll until the status is <code>&quot;ready&quot;</code>, or trigger analysis</p>
+<p>explicitly with <code>POST /analyze</code> before issuing report requests.</p>
+
+<p><code>POST /analyze</code> always returns 200 with a JSON body describing what happened:</p>
+
+<pre><code class="language-json">{&quot;ok&quot;:true,&quot;status&quot;:&quot;started&quot;}          // analysis kicked off now
+{&quot;ok&quot;:true,&quot;status&quot;:&quot;already_running&quot;}  // already in progress
+{&quot;ok&quot;:true,&quot;status&quot;:&quot;already_done&quot;}     // nothing to do</code></pre>
+
+<h3 id="retained-sizes-and-full-analysis-queries">Retained sizes and full-analysis queries</h3>
+
+<p>At startup the server runs a <strong>query-only parse</strong> (fast, no dominator tree).</p>
+<p>This means <code>@retainedHeapSize</code>, <code>dominators()</code>, <code>dominatorof()</code>, <code>@inbounds</code>,</p>
+<p>and <code>@outbounds</code> are <strong>not available</strong> until the full analysis has been</p>
+<p>completed via <code>POST /analyze</code> (or an implicit trigger from a <code>GET /report/…</code></p>
+<p>request).</p>
+
+<p>Once analysis is done the OQL engine automatically upgrades to the full</p>
+<p>pipeline, and retained-size queries work without restarting the server.</p>
+
+<h3 id="limiting-result-rows">Limiting result rows</h3>
+
+<p>Append <code>?limit=N</code> to any <code>/report/leaks</code>, <code>/report/top</code>, or <code>/report/threads</code></p>
+<p>endpoint to cap the number of rows in the response:</p>
+
+<pre><code class="language-console">$ curl -s &#x27;http://127.0.0.1:7070/report/leaks?limit=5&#x27;
+$ curl -s &#x27;http://127.0.0.1:7070/report/leaks?limit=5&amp;format=md&#x27;</code></pre>
+
+<h3 id="oql-body-format">OQL body format</h3>
+
+<p><code>POST /</code> (and its alias <code>POST /query</code>) accept either a raw SQL string or a JSON</p>
+<p>object in the request body:</p>
+
+<pre><code class="language-console"># Plain SQL string
+$ curl -s http://127.0.0.1:7070/ -d &#x27;SELECT COUNT(*) FROM java.lang.String&#x27;
+
+# JSON body (useful for embedding queries with special characters)
+$ curl -s http://127.0.0.1:7070/ \
+    -H &#x27;Content-Type: application/json&#x27; \
+    -d &#x27;{&quot;query&quot;:&quot;SELECT COUNT(*) FROM java.lang.String&quot;,&quot;limit&quot;:10}&#x27;</code></pre>
+
+<p>The JSON body accepts:</p>
+
+<table>
+<tr><th>Field</th><th>Type</th><th>Description</th></tr>
+<tr><td><code>query</code></td><td>string</td><td>OQL query text (required)</td></tr>
+<tr><td><code>limit</code></td><td>integer</td><td>Cap result rows (optional; overrides <code>LIMIT</code> clause)</td></tr>
+</table>
+
+<p>Request bodies larger than <strong>64 KiB</strong> are rejected with HTTP 413.</p>
+
+<h3 id="ndjson-streaming-post-stream">NDJSON streaming (`POST /stream`)</h3>
+
+<p><code>POST /stream</code> runs an OQL query and returns results as</p>
+<p><a href="https://ndjson.org/">Newline-Delimited JSON</a>: one JSON object per line,</p>
+<p>flushed as rows are produced. This is useful for large result sets or</p>
+<p>streaming to a pipeline.</p>
+
+<pre><code class="language-console">$ curl -s http://127.0.0.1:7070/stream \
+    -d &#x27;SELECT @objectId, @usedHeapSize FROM java.lang.String&#x27; \
+    | head -5
+{&quot;@objectId&quot;:1234,&quot;@usedHeapSize&quot;:24}
+{&quot;@objectId&quot;:1235,&quot;@usedHeapSize&quot;:24}
+...</code></pre>
+
+<h3 id="error-responses">Error responses</h3>
+
+<p>All endpoints return structured JSON errors:</p>
+
+<pre><code class="language-json">{&quot;ok&quot;:false,&quot;error&quot;:{&quot;kind&quot;:&quot;query&quot;,&quot;message&quot;:&quot;&lt;reason&gt;&quot;}}
+{&quot;ok&quot;:false,&quot;error&quot;:{&quot;kind&quot;:&quot;analysis_failed&quot;,&quot;message&quot;:&quot;&lt;reason&gt;&quot;}}
+{&quot;ok&quot;:false,&quot;error&quot;:{&quot;kind&quot;:&quot;not_ready&quot;,&quot;message&quot;:&quot;analysis not started — POST /analyze first&quot;}}
+{&quot;ok&quot;:false,&quot;error&quot;:{&quot;kind&quot;:&quot;body_too_large&quot;,&quot;message&quot;:&quot;request body exceeds 65536 bytes&quot;}}</code></pre>
+
+<p>HTTP status codes: <code>400</code> for bad queries or missing <code>query</code> field, <code>404</code> for</p>
+<p>unknown paths, <code>405</code> for wrong method, <code>413</code> for oversized bodies, <code>503</code> if</p>
+<p>a <code>/report/…</code> section is requested before analysis has been triggered.</p>
+
+<h3 id="example-workflow">Example workflow</h3>
+
+<pre><code class="language-console"># Start the server
+$ hprof-analyzer server heap.hprof --port 7070 &amp;
+
+# Check current status
+$ curl -s http://127.0.0.1:7070/status
+{&quot;status&quot;:&quot;not_started&quot;}
+
+# Trigger full analysis
+$ curl -s -X POST http://127.0.0.1:7070/analyze
+{&quot;ok&quot;:true,&quot;status&quot;:&quot;started&quot;}
+
+# Poll until ready
+$ until curl -sf http://127.0.0.1:7070/status | grep -q &#x27;&quot;ready&quot;&#x27;; do sleep 1; done
+
+# Full report as Markdown
+$ curl -s &#x27;http://127.0.0.1:7070/report?format=md&#x27;
+
+# Leak suspects as JSON (top 5)
+$ curl -s &#x27;http://127.0.0.1:7070/report/leaks?limit=5&#x27; | jq .
+
+# Run an OQL query (plain text)
+$ curl -s http://127.0.0.1:7070/ -d &#x27;SELECT @displayName FROM java.lang.Thread&#x27;
+
+# Run a retained-size query (requires analysis to be done first)
+$ curl -s http://127.0.0.1:7070/ \
+    -d &#x27;SELECT @displayName, @retainedHeapSize FROM java.lang.Thread ORDER BY @retainedHeapSize DESC LIMIT 5&#x27;
+
+# Stream a large result set
+$ curl -s http://127.0.0.1:7070/stream \
+    -d &#x27;SELECT @objectId, @usedHeapSize FROM java.lang.String&#x27; \
+    | wc -l</code></pre>
+
+<hr>
+
+<h2 id="eclipse-mat-oql-compatibility">Eclipse MAT OQL compatibility</h2>
+
+<p><code>hprof-analyzer</code>'s OQL is modelled on Eclipse MAT's OQL dialect. This section</p>
+<p>documents what works identically, what works with known differences, and what is</p>
+<p>not yet supported.</p>
+
+<h3 id="extensions-beyond-mat">Extensions beyond MAT</h3>
+
+<p>These features are available in <code>hprof-analyzer</code> but not in Eclipse MAT's OQL:</p>
+
+<table>
+<tr><th>Feature</th><th>Example</th></tr>
+<tr><td><code>MEDIAN(e)</code>, <code>PERCENTILE(e, n)</code> aggregates</td><td><code>MEDIAN(@usedHeapSize)</code></td></tr>
+<tr><td><code>path(a, b)</code> bounded forward-reachability walk</td><td><code>SELECT path(root, target)</code></td></tr>
+<tr><td><code>-- @viz &lt;type&gt; …</code> visualization directive</td><td><code>-- @viz histogram label=class value=bytes</code></td></tr>
+<tr><td><code>GROUP BY</code> / <code>HAVING</code></td><td><code>GROUP BY classof(x) HAVING COUNT(*) &gt; 100</code></td></tr>
+<tr><td>Arithmetic expressions in SELECT and WHERE</td><td><code>@usedHeapSize * 8 AS bits</code></td></tr>
+<tr><td>System properties snapshot (<code>@systemProperties</code>)</td><td><code>SELECT @systemProperties</code></td></tr>
+<tr><td>Reachable-only filter (<code>--reachable-only</code> flag)</td><td>excludes GC-unreachable objects</td></tr>
+<tr><td>Interactive REPL with Tab completion and history</td><td><code>hprof-analyzer query heap.hprof --repl</code></td></tr>
+<tr><td>Report embedding (<code>--query</code> / <code>--query-file</code>)</td><td>fold OQL results into HTML/MD/JSON report</td></tr>
+<tr><td>Named queries library (<code>/run &lt;name&gt;</code>)</td><td><code>/run top-classes-by-count</code></td></tr>
+</table>
+
+<h3 id="compatible-with-mat">Compatible with MAT</h3>
+
+<p>These constructs produce results matching MAT (modulo the reachability note below):</p>
+
+<table>
+<tr><th>Construct</th><th>Example</th></tr>
+<tr><td><code>FROM &lt;class&gt;</code>, <code>FROM OBJECTS &lt;class&gt;</code></td><td><code>FROM java.lang.Thread</code></td></tr>
+<tr><td><code>FROM INSTANCEOF &lt;class&gt;</code> including subclasses</td><td><code>FROM INSTANCEOF java.util.Map</code></td></tr>
+<tr><td><code>FROM &quot;&lt;regex&gt;&quot;</code> double-quoted class-name regex</td><td><code>FROM &quot;java\.util\..*&quot;</code></td></tr>
+<tr><td><code>FROM (subquery)</code> semi-join</td><td><code>FROM (SELECT * FROM java.lang.Thread) t</code></td></tr>
+<tr><td><code>WHERE</code>, <code>ORDER BY</code>, <code>LIMIT</code>, <code>UNION</code>, <code>SELECT DISTINCT</code></td><td>standard SQL clauses</td></tr>
+<tr><td><code>LIKE &quot;&lt;regex&gt;&quot;</code> / <code>NOT LIKE</code></td><td><code>WHERE toString(s) LIKE &quot;.&lt;em&gt;error.&lt;/em&gt;&quot;</code></td></tr>
+<tr><td><code>WHERE x INSTANCEOF C</code></td></tr>
+<tr><td><code>SELECT … AS RETAINED SET</code>, <code>SELECT OBJECTS …</code></td><td>MAT set-operation markers (no-ops here)</td></tr>
+<tr><td><code>&lt;expr&gt; AS &lt;name&gt;</code> column alias</td><td><code>@usedHeapSize AS bytes</code></td></tr>
+<tr><td><code>COUNT(*)</code>, <code>SUM</code>, <code>MIN</code>, <code>MAX</code>, <code>AVG</code></td></tr>
+<tr><td><code>classof(x)</code>, <code>toString(x)</code> (String only), <code>dominators(x)</code>, <code>dominatorof(x)</code></td></tr>
+<tr><td><code>@objectAddress</code>, <code>@objectId</code>, <code>@usedHeapSize</code>, <code>@retainedHeapSize</code>¹, <code>@displayName</code>, <code>@length</code>, <code>@GCRoots</code></td></tr>
+<tr><td>Field paths: <code>s.fieldName</code>, <code>s.a.b</code></td></tr>
+<tr><td>MAT-API method aliases: <code>getObjectAddress()</code>, <code>getUsedHeapSize()</code>, <code>getKey()</code>, <code>getValue()</code>, <code>intValue()</code>, <code>size()</code>, …</td><td>method → attr/field rewrite</td></tr>
+</table>
+
+<p>¹ Requires full analysis (<code>hprof-analyzer analyze</code> or <code>POST /analyze</code> on the server).</p>
+
+<h3 id="differences-from-mat">Differences from MAT</h3>
+
+<table>
+<tr><th>Area</th><th>MAT</th><th>hprof-analyzer</th></tr>
+<tr><td><strong>Unreachable objects</strong></td><td>Discarded at index time</td><td>Included in raw scan; MAT ⊆ ours</td></tr>
+<tr><td><strong><code>s.count</code> / <code>s.offset</code> on String</strong></td><td>Works (pre-JDK9 layout)</td><td>"Unknown field" — use <code>s.value</code>, <code>s.coder</code>, <code>s.hash</code> (modern JDK)</td></tr>
+<tr><td><strong>Integer <code>/0</code></strong></td><td>Throws <code>ArithmeticException</code></td><td>Returns <code>NULL</code> — analyzer never crashes on a bad row</td></tr>
+<tr><td><strong><code>toString()</code> on non-String</strong></td><td>Calls JVM <code>toString()</code> via reflection</td><td>Returns <code>NULL</code> — static analysis cannot invoke live JVM methods</td></tr>
+<tr><td><strong><code>get(n)</code> indexed access</strong></td><td>Works on arrays/collections</td><td>Rejected — dereference the backing field directly (e.g. <code>a.elementData</code>)</td></tr>
+<tr><td><strong><code>SELECT COUNT(*) FROM (subquery)</code></strong></td><td>Returns count</td><td>Rejected — aggregate the inner query instead</td></tr>
+</table>
+
+<h3 id="not-yet-supported">Not yet supported</h3>
+
+<table>
+<tr><th>Construct</th><th>Example</th><th>Notes</th></tr>
+<tr><td><code>FROM OBJECTS &lt;decimal-id&gt;</code></td><td><code>FROM OBJECTS 123456</code></td><td>Hex address (<code>FROM OBJECTS 0x7f3a</code>) works; decimal object-id lookup requires a new lexer token to distinguish from hex at parse time</td></tr>
+<tr><td><code>s[0]</code> / <code>s[1:3]</code> array element access</td><td><code>SELECT s[0] FROM int[]</code></td><td>Parsed and planned; execution returns <code>NULL</code>; blocked on scan-time element capture (memory-intensive design decision)</td></tr>
+<tr><td><code>${snapshot}.getClasses()</code></td><td><code>FROM ${snapshot}.getClasses()</code></td><td>Iterating class objects (not heap instances) — needs a new executor path</td></tr>
+</table>
+
+<h3 id="silent-nulls-not-an-error-but-worth-knowing">Silent NULLs (not an error, but worth knowing)</h3>
+
+<p>Some field navigations silently return <code>NULL</code> rather than raising an error, because the necessary type information is not available at plan time:</p>
+
+<table>
+<tr><th>Case</th><th>Example</th><th>Workaround</th></tr>
+<tr><td><strong>Object-ref field navigation</strong></td><td><code>x.parent</code> where <code>parent</code> is typed <code>Object</code></td><td>Field names are known but types are not; the engine cannot auto-rewrite to a ref-walk at plan time. Use <code>@objectAddress</code> and a separate query to look up the referent.</td></tr>
+<tr><td><strong>Two-hop collection introspection</strong></td><td><code>x.size</code> on <code>java.util.HashSet</code></td><td><code>HashSet</code> delegates to a backing <code>HashMap</code>; a single-hop field read returns <code>NULL</code>. Use <code>FROM INSTANCEOF java.util.AbstractCollection</code> to reach classes that store size directly.</td></tr>
+</table>
+
+<p>Both limitations require extending the field-type schema (<code>FieldSchema</code> currently provides names only, not types). They are tracked for a future pass.</p>
+
+<h3 id="query-file-parse-error-format">`--query-file` parse error format</h3>
+
+<p>When <code>--query-file</code> contains a syntax error, the error should include the</p>
+<p>filename and 1-based line number so you can jump straight to the offending line:</p>
+
+<pre><code>error: --query-file &#x27;queries.oql&#x27;: parse error on line 3
+  3 | SELEC COUNT(*) FROM java.lang.String
+    | ^^^^^ expected SELECT
+  hint: did you mean SELECT?</code></pre>
+
+<p>> <strong>Note:</strong> Line numbers in <code>--query-file</code> errors are not yet wired up. The</p>
+<p>> current output shows the parse error text but without the filename/line</p>
+<p>> prefix. This will be fixed in a future release.</p>
+
+
+<hr>
+<h2 id="repl-usage">REPL usage</h2>
+
+<p>Start an interactive session with tab-completion and history:</p>
+<pre><code class="language-sh">hprof-analyzer query heap.hprof --repl</code></pre>
+
+<p>The prompt shows <code>oql&gt;</code>. Type a query and press Enter to run it.
+Multi-line queries are supported: press Enter mid-query — the REPL detects an
+incomplete statement and prompts for more input.</p>
+
+<h3 id="repl-tab-completion">Tab completion</h3>
+<p>Tab-complete class names, OQL keywords, <code>@</code> attributes, field names on the most recent
+result, <code>!&lt;cmd&gt;</code> commands, named queries, and the <code>-- @viz</code> directive.</p>
+
+<h3 id="repl-commands">REPL commands</h3>
+<p>Commands that start with <code>!</code> operate on the last query result and never re-run the query.</p>
+<table>
+<tr><th>Command</th><th>What it does</th></tr>
+<tr><td><code>!help</code> / <code>!help oql</code></td><td>Show command reference or OQL reference</td></tr>
+<tr><td><code>!quit</code></td><td>Exit the REPL</td></tr>
+<tr><td><code>!last</code></td><td>Re-run the previous query</td></tr>
+<tr><td><code>!count</code></td><td>Row count of last result</td></tr>
+<tr><td><code>!plan [--raw] &lt;oql&gt;</code></td><td>Show execution plan without scanning the heap</td></tr>
+<tr><td><code>!row [N|first|last|next|prev]</code></td><td>Show one row as key=value pairs; navigate with next/prev</td></tr>
+<tr><td><code>!obj &lt;class&gt;#&lt;idx&gt;</code></td><td>Inspect a specific heap object (dense index)</td></tr>
+<tr><td><code>!top [N]</code> / <code>!tail [N]</code></td><td>First / last N rows (default 10)</td></tr>
+<tr><td><code>!filter &lt;pat&gt;</code></td><td>Keep rows matching a substring or <code>/regex/</code></td></tr>
+<tr><td><code>!sort &lt;col&gt; [desc]</code></td><td>Sort result by column</td></tr>
+<tr><td><code>!select &lt;col&gt;…</code></td><td>Keep only named columns</td></tr>
+<tr><td><code>!stats [col]</code></td><td>Numeric summary: min/max/mean/stddev/p50/p90/p99</td></tr>
+<tr><td><code>!unique &lt;col&gt; [N]</code></td><td>Distinct value counts, top N by frequency</td></tr>
+<tr><td><code>!undo</code></td><td>Restore result before last shaping command</td></tr>
+<tr><td><code>!save &lt;file&gt;</code></td><td>Write result to CSV/TSV/JSON (format by extension)</td></tr>
+<tr><td><code>!set limit N</code></td><td>Cap rows displayed (0 = unlimited)</td></tr>
+<tr><td><code>!classes [pat]</code></td><td>List class names (substring-filtered)</td></tr>
+<tr><td><code>!describe &lt;class&gt;</code></td><td>Show fields and types of a class</td></tr>
+<tr><td><code>!reachable</code> / <code>!all</code></td><td>Restrict to GC-reachable objects only / include all</td></tr>
+<tr><td><code>!run [&lt;name&gt;]</code></td><td>Run a named query (no arg = list all)</td></tr>
+<tr><td><code>!analyze</code></td><td>Run full analysis (enables <code>@retainedHeapSize</code>, dominators)</td></tr>
+</table>
+
+<h3 id="repl-web">Browser REPL</h3>
+<p>An in-browser version of the REPL is available at
+<a href="https://parttimenerd.github.io/hprof-analyzer/">parttimenerd.github.io/hprof-analyzer/</a>.
+In server-connected mode, paste the URL printed by <code>hprof-analyzer server heap.hprof</code>
+and click Connect. All <code>!</code> commands work the same way.</p>
+
+<hr>
+<h2 id="differences-from-eclipse-mat-oql">Differences from Eclipse MAT OQL</h2>
+
+<h3 id="extensions-beyond-mat">Extensions (not in MAT)</h3>
+<table>
+<tr><th>Feature</th><th>Example</th></tr>
+<tr><td><code>MEDIAN(e)</code>, <code>PERCENTILE(e, n)</code> aggregates</td><td><code>MEDIAN(@usedHeapSize)</code></td></tr>
+<tr><td><code>GROUP BY</code> / <code>HAVING</code></td><td><code>GROUP BY @displayName HAVING COUNT(*) &gt; 100</code></td></tr>
+<tr><td><code>CASE WHEN … THEN … ELSE … END</code></td><td><code>CASE WHEN @usedHeapSize &gt; 1000 THEN &#x27;large&#x27; ELSE &#x27;small&#x27; END</code></td></tr>
+<tr><td><code>INTERSECT</code> / <code>EXCEPT</code></td><td>Set operations between result sets</td></tr>
+<tr><td><code>EXISTS (subquery)</code></td><td>Guard outer query on inner result</td></tr>
+<tr><td>Arithmetic in SELECT and WHERE</td><td><code>@usedHeapSize * 8 AS bits</code></td></tr>
+<tr><td><code>-- @viz &lt;kind&gt;</code> visualization directive</td><td><code>-- @viz histogram label=class value=bytes</code></td></tr>
+<tr><td>Interactive REPL with tab-completion</td><td><code>hprof-analyzer query heap.hprof --repl</code></td></tr>
+<tr><td>Named queries library (<code>!run &lt;name&gt;</code>)</td><td><code>!run top-classes-by-count</code></td></tr>
+<tr><td>Report embedding (<code>--query</code> / <code>--query-file</code>)</td><td>Fold OQL results into HTML/MD/JSON report</td></tr>
+</table>
+
+<h3 id="behavioural-differences">Behavioural differences</h3>
+<table>
+<tr><th>Area</th><th>MAT</th><th>hprof-analyzer</th></tr>
+<tr><td>Unreachable objects</td><td>Discarded at index time</td><td>Included in raw scan (MAT ⊆ ours)</td></tr>
+<tr><td><code>s.count</code> / <code>s.offset</code> on String</td><td>Works (pre-JDK 9 layout)</td><td>Unknown field — use <code>s.value</code>, <code>s.coder</code>, <code>s.hash</code></td></tr>
+<tr><td>Integer division by zero</td><td>Throws <code>ArithmeticException</code></td><td>Returns <code>NULL</code> — never crashes</td></tr>
+<tr><td><code>toString()</code> on non-String</td><td>Calls JVM reflection</td><td>Returns <code>NULL</code> — static analysis only</td></tr>
+<tr><td><code>get(n)</code> array/collection access</td><td>Works</td><td>Rejected — navigate the backing field directly</td></tr>
+<tr><td><code>eval(…)</code> / <code>${snapshot}</code></td><td>Works</td><td>Not implemented</td></tr>
+</table>
+
+<h3 id="not-yet-supported">Not yet supported</h3>
+<table>
+<tr><th>Construct</th><th>Notes</th></tr>
+<tr><td><code>FROM OBJECTS &lt;decimal-id&gt;</code></td><td>Hex address (<code>FROM OBJECTS 0x7f3a</code>) works; decimal ID does not yet</td></tr>
+<tr><td><code>s[0]</code> / <code>s[1:3]</code> array element access</td><td>Parsed; execution returns NULL</td></tr>
+<tr><td><code>${snapshot}.getClasses()</code></td><td>Class-object iteration not yet implemented</td></tr>
+</table>
+
+<hr>
+<h2 id="use-with-ai-agents">Use with AI agents</h2>
+
+<p><code>hprof-analyzer</code> exposes an HTTP API via the <code>server</code> subcommand, making it easy to
+use as a tool for LLM agents (Claude, GPT-4, etc.).</p>
+
+<h3 id="starting-the-server">Starting the server</h3>
+<pre><code class="language-sh">hprof-analyzer server heap.hprof         # listens on 127.0.0.1:7070 by default
+hprof-analyzer server heap.hprof --port 8080</code></pre>
+
+<p>The server prints a startup banner with all available endpoints.</p>
+
+<h3 id="claude-code-skill">Claude Code skill</h3>
+<p>A ready-made Claude Code skill is included in the repository at
+<a href="https://github.com/parttimenerd/hprof-analyzer/blob/main/skills/hprof-analyzer.md">skills/hprof-analyzer.md</a>.
+Load it in a Claude Code session with:</p>
+<pre><code>@skills/hprof-analyzer.md</code></pre>
+
+<p>The skill tells Claude how to start the server, write OQL queries, interpret
+results, and produce useful heap analysis narratives.</p>
+
+<h3 id="example-agent-workflow">Example agent workflow</h3>
+<pre><code class="language-sh"># 1. Start the server
+hprof-analyzer server heap.hprof &amp;
+
+# 2. In Claude Code, load the skill and point it at the server
+# @skills/hprof-analyzer.md
+# "Connect to http://127.0.0.1:7070 and identify the top memory consumers"</code></pre>
+
+<p>The agent will POST OQL queries to find large retained sets, walk reference
+chains, and produce a plain-language summary of the heap state.</p>
+
+<h3 id="key-endpoints">Key endpoints</h3>
+<table>
+<tr><th>Method</th><th>Path</th><th>Description</th></tr>
+<tr><td>POST</td><td><code>/</code></td><td>Run OQL query → JSON result</td></tr>
+<tr><td>POST</td><td><code>/stream</code></td><td>Run OQL query → NDJSON (streaming)</td></tr>
+<tr><td>POST</td><td><code>/analyze</code></td><td>Trigger full analysis (enables retained sizes)</td></tr>
+<tr><td>GET</td><td><code>/status</code></td><td><code>{"status":"ready"|"analyzing"|"not_started"}</code></td></tr>
+<tr><td>GET</td><td><code>/report/overview</code></td><td>System overview section</td></tr>
+<tr><td>GET</td><td><code>/report/leaks</code></td><td>Leak suspects section</td></tr>
+<tr><td>GET</td><td><code>/report/top</code></td><td>Top consumers section</td></tr>
+<tr><td>GET</td><td><code>/report/threads</code></td><td>Thread overview section</td></tr>
+</table>
+
+<hr>
+<h2 id="embedding-queries-in-reports">Embedding queries in reports</h2>
+
+<h3 id="embed-via-flag">Via <code>--query</code> / <code>--query-file</code> flags</h3>
+<p>Pass <code>--query</code> or <code>--query-file</code> to the main <code>hprof-analyzer</code> command to run
+queries as part of the full report pipeline. These run <em>after</em> the full analysis,
+so <code>@retainedHeapSize</code> and dominator attributes are available.</p>
+<pre><code class="language-sh">hprof-analyzer heap.hprof report.html     --query "SELECT @displayName, @retainedHeapSize FROM java.lang.Thread ORDER BY @retainedHeapSize DESC LIMIT 20"
+
+# Or put queries in a file (one per line, blank lines ignored, # comments OK)
+hprof-analyzer heap.hprof report.html --query-file queries.oql</code></pre>
+
+<h3 id="embed-via-config">Via <code>[[query]]</code> in a config file</h3>
+<p>Persist a query set alongside a dump in a <code>.toml</code> config file. Every
+subsequent report run includes the same queries automatically.</p>
+<pre><code class="language-toml">[[query]]
+name = "threads-by-retained"
+oql = """
+-- @viz histogram title="Threads by retained heap" label=@displayName value=@retainedHeapSize
+SELECT @displayName, @retainedHeapSize FROM java.lang.Thread ORDER BY @retainedHeapSize DESC LIMIT 20
+"""
+
+[[query]]
+name = "string-count"
+oql = "SELECT COUNT(*) FROM java.lang.String"</code></pre>
+
+<p>Pass the config with <code>--config queries.toml</code>. Named queries also appear in the
+REPL's <code>!run</code> tab-completion.</p>
+
+<h3 id="viz-directives">Visualization directives (<code>-- @viz</code>)</h3>
+<p>Prefix any query with a <code>-- @viz</code> comment to declare how its result is
+rendered in reports:</p>
+<pre><code>-- @viz histogram title="Threads by heap" label=@displayName value=@usedHeapSize cap=10
+SELECT @displayName, @usedHeapSize FROM java.lang.Thread ORDER BY @usedHeapSize DESC</code></pre>
+
+<table>
+<tr><th>Kind</th><th>Description</th></tr>
+<tr><td><code>table</code> (default)</td><td>Plain data table</td></tr>
+<tr><td><code>histogram</code></td><td>Horizontal bar chart (HTML) / ASCII bars (Markdown)</td></tr>
+<tr><td><code>piechart</code></td><td>Pie chart (HTML only; table in Markdown)</td></tr>
+<tr><td><code>treemap</code></td><td>Treemap (HTML only; table in Markdown)</td></tr>
+</table>
+
+</main>
+</body>
+</html>
