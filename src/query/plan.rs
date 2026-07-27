@@ -1594,15 +1594,54 @@ pub fn validate_fields(q: &Query, schema: &dyn FieldSchema) -> Result<(), QueryE
         }
         let bare = strip_alias(&name, q.alias.as_deref());
         if !known.iter().any(|f| f == bare) {
-            return Err(QueryError(format!(
-                "unknown field `{bare}` on {class}; \
-                 known fields: {}",
-                if known.is_empty() {
-                    "(none)".to_string()
-                } else {
-                    known.join(", ")
+            let bare_lower = bare.to_ascii_lowercase();
+            let dist_threshold = if bare_lower.len() <= 4 { 1 } else { 2 };
+            fn edit_dist(a: &str, b: &str) -> usize {
+                let a: Vec<char> = a.chars().collect();
+                let b: Vec<char> = b.chars().collect();
+                let (m, n) = (a.len(), b.len());
+                let mut prev: Vec<usize> = (0..=n).collect();
+                let mut curr = vec![0usize; n + 1];
+                for i in 1..=m {
+                    curr[0] = i;
+                    for j in 1..=n {
+                        curr[j] = if a[i-1] == b[j-1] { prev[j-1] } else { 1 + prev[j-1].min(prev[j]).min(curr[j-1]) };
+                    }
+                    std::mem::swap(&mut prev, &mut curr);
                 }
-            )));
+                prev[n]
+            }
+            let mut suggestions: Vec<&str> = known
+                .iter()
+                .filter(|f| {
+                    let fl = f.to_ascii_lowercase();
+                    fl == bare_lower
+                        || fl.contains(&bare_lower)
+                        || bare_lower.contains(fl.as_str())
+                        || edit_dist(&fl, &bare_lower) <= dist_threshold
+                })
+                .map(|f| f.as_str())
+                .collect();
+            suggestions.sort_unstable();
+            suggestions.dedup();
+            suggestions.truncate(4);
+            let msg = if !suggestions.is_empty() {
+                format!(
+                    "unknown field `{bare}` on {class} — did you mean: {}?",
+                    suggestions.join(", ")
+                )
+            } else {
+                format!(
+                    "unknown field `{bare}` on {class}; \
+                     known fields: {}",
+                    if known.is_empty() {
+                        "(none)".to_string()
+                    } else {
+                        known.join(", ")
+                    }
+                )
+            };
+            return Err(QueryError(msg));
         }
     }
     Ok(())

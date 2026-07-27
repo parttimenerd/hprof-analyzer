@@ -188,7 +188,25 @@ fn query_from_typo_class_suggests_did_you_mean() {
     );
 }
 
-/// A real class present in the dump must NOT get the "no class" note even when
+/// A typo in a field name (e.g. `valu` instead of `value`) produces a "did you
+/// mean" suggestion pointing at the close match.
+#[test]
+fn query_unknown_field_close_match_suggests_did_you_mean() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query", "SELECT s.valu FROM java.lang.String s LIMIT 1"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "bad field should exit non-zero");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("did you mean") && stdout.contains("value"),
+        "expected 'did you mean: value' in output:\n{stdout}"
+    );
+}
+
 /// the query legitimately returns zero rows (WHERE excludes everything).
 #[test]
 fn query_from_known_class_has_no_absent_note() {
