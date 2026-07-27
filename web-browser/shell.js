@@ -461,9 +461,12 @@ function startTerminal() {
   let pendingLines = [];  // lines accumulated for multi-line query (via \ continuation)
   const CONT_PROMPT = '...> ';  // shown on continuation lines
 
-  // Redraw line and reposition cursor; does NOT change histIdx
+  // Redraw line and reposition cursor; does NOT change histIdx.
+  // Uses CONT_PROMPT on continuation lines so editing mid-line doesn't
+  // flip the prompt back to PROMPT.
   function redrawLine() {
-    term.write('\r\x1b[K' + PROMPT + line);
+    const prompt = pendingLines.length > 0 ? CONT_PROMPT : PROMPT;
+    term.write('\r\x1b[K' + prompt + line);
     if (cursorPos < line.length) {
       // Move cursor left from end to cursorPos
       term.write(`\x1b[${line.length - cursorPos}D`);
