@@ -3153,8 +3153,9 @@ function startTerminal() {
           lastResult = { columns: colNames, rows, note: r.note, truncated: r.truncated, row_count: r.row_count };
           currentRowIdx = 0;
           const trunc = r.truncated ? `  \x1b[33m[capped at ${Number(r.row_count).toLocaleString('en-US')} rows — add LIMIT N or increase with LIMIT 0 for all]\x1b[0m` : '';
-          const elapsedFmt = elapsedMs < 1 ? `${(elapsedMs * 1000).toFixed(0)}µs` : elapsedMs < 1000 ? `${elapsedMs.toFixed(1)}ms` : `${(elapsedMs / 1000).toFixed(2)}s`;
-          const elapsedColor = elapsedMs > 1000 ? '\x1b[31m' : elapsedMs > 300 ? '\x1b[33m' : '\x1b[2m';
+          const queryMs = (r.elapsed_ms != null) ? Number(r.elapsed_ms) : elapsedMs;
+          const elapsedFmt = queryMs < 1 ? `${(queryMs * 1000).toFixed(0)}µs` : queryMs < 1000 ? `${queryMs.toFixed(1)}ms` : `${(queryMs / 1000).toFixed(2)}s`;
+          const elapsedColor = queryMs > 1000 ? '\x1b[31m' : queryMs > 300 ? '\x1b[33m' : '\x1b[2m';
           const ts = new Date().toLocaleTimeString('en-GB', { hour12: false });
           term.writeln(`${elapsedColor}${Number(r.row_count).toLocaleString('en-US')} row${r.row_count !== 1 ? 's' : ''}, ${elapsedFmt}\x1b[0m\x1b[2m  [${ts}]\x1b[0m${trunc}`);
           if (rows.length > 20 && showHint) {
