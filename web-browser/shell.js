@@ -2981,7 +2981,7 @@ function startTerminal() {
         let p = cursorPos;
         while (p > 0 && line[p - 1] === ' ') p--;
         while (p > 0 && line[p - 1] !== ' ') p--;
-        if (p !== cursorPos) { cursorPos = p; redrawLine(); }
+        if (p !== cursorPos) { cursorPos = p; ghostText = ''; redrawLine(); }
       } else if (cursorPos > 0) {
         cursorPos--;
         term.write('\x1b[D');
@@ -3003,7 +3003,7 @@ function startTerminal() {
         let p = cursorPos;
         while (p < line.length && line[p] !== ' ') p++;
         while (p < line.length && line[p] === ' ') p++;
-        if (p !== cursorPos) { cursorPos = p; redrawLine(); }
+        if (p !== cursorPos) { cursorPos = p; ghostText = ''; updateGhost(); redrawLine(); }
       } else if (cursorPos < line.length) {
         cursorPos++;
         term.write('\x1b[C');
@@ -3012,7 +3012,7 @@ function startTerminal() {
     }
 
     if (code === 'Home' || (ev.ctrlKey && code === 'a')) {
-      if (cursorPos > 0) { cursorPos = 0; redrawLine(); }
+      if (cursorPos > 0) { cursorPos = 0; ghostText = ''; redrawLine(); }
       return;
     }
 
@@ -3025,7 +3025,7 @@ function startTerminal() {
         redrawLine();
         return;
       }
-      if (cursorPos < line.length) { cursorPos = line.length; redrawLine(); }
+      if (cursorPos < line.length) { cursorPos = line.length; ghostText = ''; updateGhost(); redrawLine(); }
       return;
     }
 
@@ -3098,6 +3098,8 @@ function startTerminal() {
       if (cursorPos < line.length) {
         killRing = line.slice(cursorPos);
         line = line.slice(0, cursorPos);
+        ghostText = '';
+        updateGhost();
         redrawLine();
       }
       return;
