@@ -145,6 +145,12 @@ pub struct LateCtx<'a> {
     /// two are aligned 1:1 by construction — see `pass2::mod` and
     /// `report::build`), so no address→dense re-derivation is needed.
     pub gc_root_tags: &'a std::collections::HashMap<u32, u8>,
+    /// Per-object class histogram row index, 1:1 with dense object indices.
+    /// `class_names[class_idx[dense]]` gives the object's class name. Empty when
+    /// not needed (non-classof queries) — `class_name_of` returns `None`.
+    pub class_idx: &'a [u32],
+    /// Class histogram row names, indexed by the values in `class_idx`.
+    pub class_names: &'a [String],
 }
 
 impl LateCtx<'_> {
@@ -174,6 +180,13 @@ impl LateCtx<'_> {
     /// project the tag's label for a root and `Null` for a non-root.
     pub fn gc_root_tag(&self, dense: u32) -> Option<u8> {
         self.gc_root_tags.get(&dense).copied()
+    }
+
+    /// The class name of the object at `dense`, or `None` when class data is
+    /// not available (empty `class_idx` means not threaded into this window).
+    pub fn class_name_of(&self, dense: u32) -> Option<&str> {
+        let row = *self.class_idx.get(dense as usize)? as usize;
+        self.class_names.get(row).map(String::as_str)
     }
 }
 
@@ -1383,21 +1396,21 @@ fn project_late_row(q: &Query, idx: u32, ret: u64, ctx: &LateCtx) -> Vec<QueryVa
         .map(|it| match it {
             SelectItem::Attr(Attr::ObjectId) => QueryValue::Int(idx as i64),
             SelectItem::Attr(Attr::RetainedHeapSize) => QueryValue::Int(ret as i64),
-            // Both `@GCRootInfo`/`@info` (parsed to `GcRootInfo`) and `@GCRoots`
-            // return the same single root descriptor: the tag's human label for a
-            // root, `Null` for a non-root. We don't model MAT's list-of-GCRootInfo
-            // objects; the root-type name is the achievable static analog and is
-            // non-empty for a root, which is what a user filtering "is this a
-            // root, and how is it rooted?" needs.
             SelectItem::Attr(Attr::GcRootInfo) | SelectItem::Attr(Attr::GcRoots) => {
                 match ctx.gc_root_tag(idx) {
                     Some(tag) => QueryValue::Str(root_tag_name(tag).into_owned()),
                     None => QueryValue::Null,
                 }
             }
+            SelectItem::Attr(Attr::ClassOf) | SelectItem::Attr(Attr::DisplayName) => {
+                match ctx.class_name_of(idx) {
+                    Some(name) => QueryValue::Str(name.to_string()),
+                    None => QueryValue::Null,
+                }
+            }
             SelectItem::Star => QueryValue::ObjRef {
                 index: idx as u64,
-                class: "?".to_string(),
+                class: ctx.class_name_of(idx).unwrap_or("?").to_string(),
                 // Late window: the dense-address table is compressed away, so
                 // resolving an address here would yield a misleading @0.
                 addr: None,
@@ -1506,6 +1519,8 @@ mod tests {
             string_values: &EMPTY_STRING_VALUES,
             string_values_truncated: false,
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
+            class_idx: &[],
+            class_names: &[],
         }
     }
 
@@ -1735,6 +1750,83 @@ mod tests {
 }
 
 #[cfg(test)]
+mod classof_late_tests {
+    use super::*;
+    use crate::query::execute::QueryExecState;
+    use crate::query::model::QueryValue;
+
+    static EMPTY_ID_MAP: IdMap<'static> = IdMap { addr_of: &[] };
+
+    fn classof_ctx<'a>(
+        retained: &'a [u64],
+        class_idx: &'a [u32],
+        class_names: &'a [String],
+    ) -> LateCtx<'a> {
+        LateCtx {
+            retained,
+            idom: &[],
+            dc_off: &[],
+            dc_tgt: &[],
+            shallow: &[],
+            id_map: &EMPTY_ID_MAP,
+            fwd_off: &[],
+            fwd_tgt: &[],
+            fwd_field: &[],
+            field_names: &[],
+            refwalk_tails: &EMPTY_REFWALK_TAILS,
+            refwalk_truncated: false,
+            in_off: &[],
+            in_tgt: &[],
+            retained_edges: None,
+            string_values: &EMPTY_STRING_VALUES,
+            string_values_truncated: false,
+            gc_root_tags: &EMPTY_GC_ROOT_TAGS,
+            class_idx,
+            class_names,
+        }
+    }
+
+    #[test]
+    fn classof_projects_class_name_in_retained_join() {
+        let class_names: Vec<String> = vec!["java.lang.String".into(), "java.lang.Object".into()];
+        // Object at dense 0 is a String (row 0), object at dense 1 is an Object (row 1).
+        let class_idx = vec![0u32, 1];
+        let retained = vec![100u64, 200];
+        let ctx = classof_ctx(&retained, &class_idx, &class_names);
+        let q = crate::query::parse::parse(
+            "SELECT classof(x), @retainedHeapSize FROM C",
+        ).unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        let mut carry = crate::query::carry::Carry::index_only(10);
+        carry.push_index(0);
+        carry.push_index(1);
+        let mut st = QueryExecState::new();
+        st.push_cross_phase(0, "q1".into(), plan, carry);
+        let out = resume(st, &[q.clone(), q], &ctx);
+        assert_eq!(out.len(), 1);
+        let r = &out[0];
+        assert_eq!(r.rows[0][0], QueryValue::Str("java.lang.String".into()));
+        assert_eq!(r.rows[0][1], QueryValue::Int(100));
+        assert_eq!(r.rows[1][0], QueryValue::Str("java.lang.Object".into()));
+        assert_eq!(r.rows[1][1], QueryValue::Int(200));
+    }
+
+    #[test]
+    fn classof_returns_null_when_class_data_absent() {
+        // Empty class_idx: simulates a context without class data threaded in.
+        let ctx = classof_ctx(&[500u64], &[], &[]);
+        let q = crate::query::parse::parse("SELECT classof(x) FROM C").unwrap();
+        let plan = crate::query::plan::plan_query(&q, crate::query::DEFAULT_PATH_DEPTH_CAP).unwrap();
+        let mut carry = crate::query::carry::Carry::index_only(10);
+        carry.push_index(0);
+        let mut st = QueryExecState::new();
+        st.push_cross_phase(0, "q1".into(), plan, carry);
+        let out = resume(st, &[q.clone(), q], &ctx);
+        assert_eq!(out[0].rows[0][0], QueryValue::Null);
+    }
+}
+
+#[cfg(test)]
 mod dom_ctx_tests {
     use super::*;
     /// Dominator tree: 0->{1,2}, 1->{3}. CSR dc_off=[0,2,3,3,3], dc_tgt=[1,2,3].
@@ -1770,6 +1862,8 @@ mod dom_ctx_tests {
             string_values: &EMPTY_STRING_VALUES,
             string_values_truncated: false,
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
+            class_idx: &[],
+            class_names: &[],
         };
         assert_eq!(ctx.dc_off.len(), 5);
         assert_eq!(ctx.id_map.to_addr(0), id_map.to_addr(0));
@@ -1812,6 +1906,8 @@ mod dom_run_tests {
             string_values: &EMPTY_STRING_VALUES,
             string_values_truncated: false,
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
+            class_idx: &[],
+            class_names: &[],
         };
         assert_eq!(
             run_dominator_children(&[0u32], usize::MAX, &ctx),
@@ -1846,6 +1942,8 @@ mod dom_run_tests {
             string_values: &EMPTY_STRING_VALUES,
             string_values_truncated: false,
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
+            class_idx: &[],
+            class_names: &[],
         };
         assert_eq!(run_dominator_children(&[0u32], 1, &ctx).len(), 1);
     }
@@ -1872,6 +1970,8 @@ mod dom_run_tests {
             string_values: &EMPTY_STRING_VALUES,
             string_values_truncated: false,
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
+            class_idx: &[],
+            class_names: &[],
         };
         // idom = [MAX,0,0,1]: node 3's idom is 1, node 1's idom is 0, root 0 yields nothing.
         assert_eq!(run_dominator_of(&[3u32], &ctx), vec![1u32]);
@@ -1901,6 +2001,8 @@ mod dom_run_tests {
             string_values: &EMPTY_STRING_VALUES,
             string_values_truncated: false,
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
+            class_idx: &[],
+            class_names: &[],
         };
         let (mut set, truncated) = run_retained_set(&[0u32], usize::MAX, &ctx);
         set.sort_unstable();
@@ -1930,6 +2032,8 @@ mod dom_run_tests {
             string_values: &EMPTY_STRING_VALUES,
             string_values_truncated: false,
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
+            class_idx: &[],
+            class_names: &[],
         };
         let (set, truncated) = run_retained_set(&[0u32], 2, &ctx);
         assert_eq!(set.len(), 2);
@@ -1958,6 +2062,8 @@ mod dom_run_tests {
             string_values: &EMPTY_STRING_VALUES,
             string_values_truncated: false,
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
+            class_idx: &[],
+            class_names: &[],
         };
         let (mut set, _t) = run_retained_set(&[1u32, 0u32], usize::MAX, &ctx);
         set.sort_unstable();
@@ -1987,6 +2093,8 @@ mod dom_run_tests {
             string_values: &EMPTY_STRING_VALUES,
             string_values_truncated: false,
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
+            class_idx: &[],
+            class_names: &[],
         };
         let q = crate::query::parse::parse("SELECT dominators(s) FROM C s").unwrap();
         let plan = pq(&q);
@@ -2025,6 +2133,8 @@ mod dom_run_tests {
             string_values: &EMPTY_STRING_VALUES,
             string_values_truncated: false,
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
+            class_idx: &[],
+            class_names: &[],
         };
         let q = crate::query::parse::parse("SELECT dominatorof(s) FROM C s").unwrap();
         let plan = pq(&q);
@@ -2060,6 +2170,8 @@ mod dom_run_tests {
             string_values: &EMPTY_STRING_VALUES,
             string_values_truncated: false,
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
+            class_idx: &[],
+            class_names: &[],
         };
         let q = crate::query::parse::parse("SELECT s AS RETAINED SET FROM C s").unwrap();
         let plan = pq(&q);
@@ -2105,6 +2217,8 @@ mod refwalk_tests {
             string_values: &EMPTY_STRING_VALUES,
             string_values_truncated: false,
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
+            class_idx: &[],
+            class_names: &[],
         }
     }
 
@@ -2139,6 +2253,8 @@ mod refwalk_tests {
             string_values: &EMPTY_STRING_VALUES,
             string_values_truncated: false,
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
+            class_idx: &[],
+            class_names: &[],
         }
     }
 
@@ -2471,6 +2587,8 @@ mod edge_tests {
             string_values: &EMPTY_STRING_VALUES,
             string_values_truncated: false,
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
+            class_idx: &[],
+            class_names: &[],
         }
     }
 
@@ -2720,6 +2838,8 @@ mod tostring_tests {
             string_values: sv,
             string_values_truncated: false,
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
+            class_idx: &[],
+            class_names: &[],
         }
     }
 
@@ -2892,6 +3012,8 @@ mod tostring_tests {
             string_values: &sv,
             string_values_truncated: true,
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
+            class_idx: &[],
+            class_names: &[],
         };
 
         let (st, q) = string_state("SELECT toString(s) FROM java.lang.String s", &[0]);
@@ -3221,6 +3343,8 @@ mod arith_late_tests {
             string_values: &EMPTY_STRING_VALUES,
             string_values_truncated: false,
             gc_root_tags: &EMPTY_GC_ROOT_TAGS,
+            class_idx: &[],
+            class_names: &[],
         }
     }
 

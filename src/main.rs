@@ -2699,6 +2699,8 @@ fn run(
             string_values: sv_ref,
             string_values_truncated,
             gc_root_tags: gc_root_tags_ref,
+            class_idx: &g.class_idx,
+            class_names: &g.class_names,
         },
     );
 

@@ -691,6 +691,8 @@ pub(crate) fn resume_with_string_values(
         // `@info` entries route to `resume_without_late_ctx` for an actionable
         // error); the empty map keeps this path byte-identical.
         gc_root_tags: &stage_runner::EMPTY_GC_ROOT_TAGS,
+        class_idx: &[],
+        class_names: &[],
     };
 
     // Split pending entries into three routes. toString-only and refwalk entries
@@ -970,6 +972,8 @@ fn resume_with_retained(
         string_values: &string_values,
         string_values_truncated: false,
         gc_root_tags: &EMPTY_GC_ROOT_TAGS,
+        class_idx: &[],
+        class_names: &[],
     };
 
     let mut slotted: Vec<(usize, QueryResult)> = finished;

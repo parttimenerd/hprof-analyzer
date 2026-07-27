@@ -5842,3 +5842,32 @@ fn limit_offset_with_where_returns_correct_page() {
     }
 }
 
+#[test]
+fn query_classof_with_retained_heap_size_is_non_null() {
+    let Some(hprof) = philosophers() else { return };
+    // classof(x) alongside @retainedHeapSize requires the cross-phase path.
+    // Previously project_late_row had no ClassOf arm and returned Null for it.
+    let out = Command::new(BIN)
+        .arg("query").arg(&hprof)
+        .args(["--query", "SELECT classof(x), @retainedHeapSize FROM java.lang.String x LIMIT 5"])
+        .output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Every data row must have a non-null class name (java.lang.String) in col 0
+    // and a numeric retained size in col 1 — not "null" / "Null".
+    let data_rows: Vec<&str> = stdout
+        .lines()
+        .filter(|l| l.contains("java.lang.String"))
+        .collect();
+    assert!(
+        !data_rows.is_empty(),
+        "expected classof(x) to return java.lang.String rows, got:\n{stdout}"
+    );
+    for row in &data_rows {
+        assert!(
+            !row.contains("null") && !row.contains("Null"),
+            "classof(x) returned null in row: {row}"
+        );
+    }
+}
+
