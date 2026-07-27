@@ -1556,7 +1556,15 @@ pub fn validate_fields(q: &Query, schema: &dyn FieldSchema) -> Result<(), QueryE
     }
     if let Some(ob) = &q.order_by {
         if let Attr::Field(name) = &ob.key {
-            referenced.push(name.clone());
+            // Skip if the name matches a SELECT column alias: ORDER BY foo where
+            // foo is `... AS foo` is a reference to an output column, not a field.
+            let is_alias = q
+                .select_aliases
+                .iter()
+                .any(|a| a.as_deref() == Some(name.as_str()));
+            if !is_alias {
+                referenced.push(name.clone());
+            }
         }
     }
 
@@ -2791,6 +2799,29 @@ mod tests {
         };
         let q = parse("SELECT * FROM java.lang.String ORDER BY count DESC").unwrap();
         assert!(validate_fields(&q, &schema).is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_order_by_select_alias() {
+        // ORDER BY <name> where <name> is a SELECT column alias must not be
+        // rejected as an unknown field — it references an output column, not
+        // a raw heap field.  This covers the common pattern:
+        //   SELECT @retainedHeapSize AS bytes ... ORDER BY bytes DESC
+        let schema = FakeSchema {
+            class: "java.lang.String",
+            fields: vec!["value", "coder", "hash"],
+        };
+        let q =
+            parse("SELECT @retainedHeapSize AS bytes FROM java.lang.String ORDER BY bytes DESC")
+                .unwrap();
+        assert!(validate_fields(&q, &schema).is_ok(), "alias in ORDER BY must be accepted");
+
+        // Also works when combined with toString() (the original failing case).
+        let q = parse(
+            "SELECT toString(s) AS value, @retainedHeapSize AS bytes FROM java.lang.String s ORDER BY bytes DESC LIMIT 5",
+        )
+        .unwrap();
+        assert!(validate_fields(&q, &schema).is_ok(), "toString + alias ORDER BY must be accepted");
     }
 
     #[test]
