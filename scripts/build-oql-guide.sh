@@ -156,13 +156,12 @@ def convert(md):
             out.append(f'<li>{inline(m.group(1))}</li>')
             i += 1
             continue
-        else:
-            if in_olist:
-                out.append('</ol>')
-                in_olist = False
 
         m = re.match(r'^[-*] (.*)', line)
         if m:
+            if in_olist:
+                out.append('</ol>')
+                in_olist = False
             if not in_list:
                 out.append('<ul>')
                 in_list = True
@@ -178,6 +177,20 @@ def convert(md):
                 out.append(f'<li>{inline(line.strip())}</li>')
             i += 1
             continue
+
+        # Ordered list item continuation
+        if in_olist and line.startswith('  ') and line.strip():
+            if out and out[-1].endswith('</li>'):
+                out[-1] = out[-1][:-5] + ' ' + inline(line.strip()) + '</li>'
+            else:
+                out.append(f'<li>{inline(line.strip())}</li>')
+            i += 1
+            continue
+
+        # Close ordered list if we hit a non-matching line
+        if in_olist:
+            out.append('</ol>')
+            in_olist = False
 
         if line.strip() == '':
             if in_list:

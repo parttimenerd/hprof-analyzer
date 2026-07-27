@@ -148,17 +148,10 @@ hr { border: 0; border-top: 1px solid #1e1e38; margin: 2rem 0; }
 <p>OQL, for interrogating a heap dump. You can run queries three ways:</p>
 
 <ol>
-<li><strong><code>query</code> subcommand</strong> — parse the dump once and print result tables to the</li>
+<li><strong><code>query</code> subcommand</strong> — parse the dump once and print result tables to the terminal (or start an interactive REPL). Fast; no full report is built.</li>
+<li><strong><code>--query</code> / <code>--query-file</code> on the main command</strong> — run queries <em>and</em> fold their results into a full Markdown/HTML/JSON report.</li>
+<li><strong><code>[[query]]</code> entries in a config file</strong> — persist a query set alongside a dump so every report includes the same views.</li>
 </ol>
-<p>   terminal (or start an interactive REPL). Fast; no full report is built.</p>
-<ol>
-<li><strong><code>--query</code> / <code>--query-file</code> on the main command</strong> — run queries <em>and</em> fold</li>
-</ol>
-<p>   their results into a full Markdown/HTML/JSON report.</p>
-<ol>
-<li><strong><code>[[query]]</code> entries in a config file</strong> — persist a query set alongside a</li>
-</ol>
-<p>   dump so every report includes the same views.</p>
 
 <p>Every example below was run against <code>tests/fixtures/dump_4_philosophers.hprof</code>.</p>
 
