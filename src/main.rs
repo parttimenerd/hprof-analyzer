@@ -1390,6 +1390,20 @@ fn is_plain_class_from(q: &query::ast::Query) -> Option<&str> {
     Some(name)
 }
 
+/// Same as `is_plain_class_from` but also matches `FROM INSTANCEOF <class>`,
+/// so absent-class annotation works for INSTANCEOF queries too.
+fn is_named_class_from(q: &query::ast::Query) -> Option<&str> {
+    let spec = q.from.class_spec()?;
+    if spec.is_regex {
+        return None;
+    }
+    let name = spec.class_name.as_str();
+    if name.contains('*') || name.ends_with("[]") || name.is_empty() {
+        return None;
+    }
+    Some(name)
+}
+
 /// Annotate each zero-row result whose query selects `FROM <plain class name>`
 /// with a note when that class is absent from the dump, so a typo'd or wrong
 /// class name is not silently reported as an empty-but-valid result. The dump's
@@ -1408,7 +1422,7 @@ fn annotate_missing_classes(
         return;
     }
     let has_candidate = results.iter().zip(queries.iter()).any(|(r, (q, _))| {
-        r.error.is_none() && r.row_count == 0 && is_plain_class_from(q).is_some()
+        r.error.is_none() && r.row_count == 0 && is_named_class_from(q).is_some()
     });
     if !has_candidate {
         return;
@@ -1425,7 +1439,7 @@ fn annotate_missing_classes(
         if r.error.is_some() || r.row_count != 0 {
             continue;
         }
-        if let Some(name) = is_plain_class_from(q) {
+        if let Some(name) = is_named_class_from(q) {
             if !names.contains(name) {
                 let simple = name.rsplit('.').next().unwrap_or(name);
                 let lower = name.to_ascii_lowercase();

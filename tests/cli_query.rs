@@ -188,6 +188,24 @@ fn query_from_typo_class_suggests_did_you_mean() {
     );
 }
 
+/// INSTANCEOF with a typo'd class also gets the did-you-mean note.
+#[test]
+fn query_instanceof_typo_class_suggests_did_you_mean() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query", "SELECT * FROM INSTANCEOF java.lang.Stirng"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "typo instanceof query should exit 0");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("did you mean") && stdout.contains("java.lang.String"),
+        "expected did-you-mean for INSTANCEOF typo:\n{stdout}"
+    );
+}
+
 /// A typo in a field name (e.g. `valu` instead of `value`) produces a "did you
 /// mean" suggestion pointing at the close match.
 #[test]
