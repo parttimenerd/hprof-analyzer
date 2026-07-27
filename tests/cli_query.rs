@@ -22,6 +22,28 @@ fn philosophers() -> Option<String> {
     }
 }
 
+fn mnemonics() -> Option<String> {
+    let p = format!(
+        "{}/tests/fixtures/dump_1_mnemonics.hprof",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    match std::fs::metadata(&p) {
+        Ok(m) if m.len() >= 1024 => Some(p),
+        _ => None,
+    }
+}
+
+fn gauss_mix() -> Option<String> {
+    let p = format!(
+        "{}/tests/fixtures/dump_7_gauss-mix.hprof",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    match std::fs::metadata(&p) {
+        Ok(m) if m.len() >= 1024 => Some(p),
+        _ => None,
+    }
+}
+
 /// `query <dump> --query "SELECT COUNT(*) …"` exits 0 and prints a table with a
 /// count value (the histogram-only aggregate path).
 #[test]
@@ -5455,4 +5477,62 @@ fn named_query_large_collections_uses_size_method() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(!stdout.contains("unknown field"), "got unknown field error: {stdout}");
+}
+
+#[test]
+fn size_method_works_on_linked_hash_map() {
+    // LinkedHashMap inherits a `size` int field from HashMap; previously
+    // is_sized_collection excluded it so x.size() returned Null.
+    let Some(hprof) = mnemonics() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg("--all")
+        .arg(&hprof)
+        .args([
+            "--query",
+            "SELECT SUM(x.size()) AS total_sz FROM java.util.LinkedHashMap x",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "LinkedHashMap size() query failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // The dump has LinkedHashMaps with non-zero size; SUM must be > 0
+    let total: i64 = stdout
+        .lines()
+        .find(|l| !l.trim().is_empty() && !l.contains("total_sz") && !l.starts_with("==") && !l.starts_with("  SELECT") && !l.starts_with('('))
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0);
+    assert!(total > 0, "expected non-zero SUM(size()) for LinkedHashMap, got: {stdout}");
+}
+
+#[test]
+fn size_method_works_on_tree_map() {
+    // TreeMap has its own `size` int field; verify size() is dispatched correctly.
+    let Some(hprof) = gauss_mix() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg("--all")
+        .arg(&hprof)
+        .args([
+            "--query",
+            "SELECT SUM(x.size()) AS total_sz FROM java.util.TreeMap x",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "TreeMap size() query failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let total: i64 = stdout
+        .lines()
+        .find(|l| !l.trim().is_empty() && !l.contains("total_sz") && !l.starts_with("==") && !l.starts_with("  SELECT") && !l.starts_with('('))
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0);
+    assert!(total > 0, "expected non-zero SUM(size()) for TreeMap, got: {stdout}");
 }

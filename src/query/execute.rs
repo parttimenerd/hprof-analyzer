@@ -1126,12 +1126,7 @@ impl<'a, R: ClassResolver> SingleScanExecutor<'a, R> {
                 self.decode_field(class_id, "value", blob)
             }
             ("size", c) if is_sized_collection(c) => {
-                // HashSet.size delegates to its backing `map` (one ref hop) — D4.
-                if c == "java.util.HashSet" {
-                    QueryValue::Null
-                } else {
-                    self.decode_field(class_id, "size", blob)
-                }
+                self.decode_field(class_id, "size", blob)
             }
             ("equals", _) => {
                 let recv = self.eval_expr(receiver, src_idx, class_id, blob);
@@ -2362,13 +2357,21 @@ fn is_boxed_fp(c: &str) -> bool {
 }
 
 fn is_sized_collection(c: &str) -> bool {
+    // Classes that store element count directly in a `size` int field
+    // (either declared on the class or inherited through the super chain).
+    // Classes that compute size via a backing structure (HashSet→map,
+    // TreeSet→m, ArrayDeque→head/tail, ConcurrentHashMap→baseCount+cells)
+    // are deliberately excluded — decode_field would read the wrong bytes.
     matches!(
         c,
         "java.util.ArrayList"
             | "java.util.Vector"
-            | "java.util.HashMap"
             | "java.util.LinkedList"
-            | "java.util.HashSet"
+            | "java.util.HashMap"
+            | "java.util.LinkedHashMap"
+            | "java.util.WeakHashMap"
+            | "java.util.TreeMap"
+            | "java.util.IdentityHashMap"
     )
 }
 
