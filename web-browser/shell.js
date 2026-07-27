@@ -1429,7 +1429,7 @@ function startTerminal() {
         term.writeln(`${val.padEnd(colW)}  \x1b[32m${cntFmt(cnt).padStart(cntW)}\x1b[0m  \x1b[2m${pct.padStart(pctW)}\x1b[0m${bar}`);
       });
       if (shown < totalDistinct) {
-        term.writeln(`\x1b[2m(${shown.toLocaleString('en-US')} of ${totalDistinct.toLocaleString('en-US')} distinct values, top ${showN} shown  ·  ${total.toLocaleString('en-US')} total rows)\x1b[0m`);
+        term.writeln(`\x1b[2m(${shown.toLocaleString('en-US')} of ${totalDistinct.toLocaleString('en-US')} distinct values, top ${showN.toLocaleString('en-US')} shown  ·  ${total.toLocaleString('en-US')} total rows)\x1b[0m`);
       } else {
         term.writeln(`\x1b[2m(${totalDistinct.toLocaleString('en-US')} distinct value${totalDistinct !== 1 ? 's' : ''} in ${lastResult.rows.length.toLocaleString('en-US')} rows)\x1b[0m`);
       }
