@@ -934,6 +934,7 @@ function startTerminal() {
       const [, cls, idx] = m;
       const clsTrimmed = cls.trim();
       // Run the query; if exactly 1 row, show as key=value (nicer than a 1-row table)
+      term.write('\x1b[2m⠋ fetching…\x1b[0m');
       try {
         const res = await fetch(serverUrl + '/', {
           method: 'POST',
@@ -941,6 +942,7 @@ function startTerminal() {
           body: JSON.stringify({ query: `SELECT * FROM ${clsTrimmed} s WHERE s.@objectId = ${idx}` }),
           signal: AbortSignal.timeout(10000),
         }).then(r => r.json());
+        term.write('\r\x1b[K');
         if (!res.ok) {
           const msg = res.error?.message || JSON.stringify(res.error) || 'unknown error';
           term.writeln(`\x1b[31merror: ${msg}\x1b[0m`);
@@ -975,6 +977,7 @@ function startTerminal() {
           currentRowIdx = 0;
         }
       } catch (e) {
+        term.write('\r\x1b[K');
         term.writeln(`\x1b[31merror: ${e.message}\x1b[0m`);
       }
       term.write(PROMPT);
