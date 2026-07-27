@@ -821,6 +821,7 @@ function startTerminal() {
     line = newLine;
     cursorPos = newLine.length;
     histIdx = -1;
+    ghostText = '';
     redrawLine();
     term.focus();
   }
@@ -836,6 +837,7 @@ function startTerminal() {
     line = '';
     cursorPos = 0;
     histIdx = -1;
+    ghostText = '';
     term.writeln('');
     await handleEnter(oql);
   }
@@ -2940,6 +2942,9 @@ function startTerminal() {
     if (code === 'Delete') {
       if (cursorPos < line.length) {
         line = line.slice(0, cursorPos) + line.slice(cursorPos + 1);
+        redrawLine();
+        ghostText = '';
+        updateGhost();
         redrawLine();
       }
       return;
