@@ -37,6 +37,7 @@ def convert(md):
     in_list = False
     in_olist = False
     table_rows = []
+    para_buf = []
 
     def flush_table(rows):
         buf = ['<table>']
@@ -51,6 +52,9 @@ def convert(md):
 
         if re.match(r'^```', line):
             if not in_fence:
+                if para_buf:
+                    out.append(f'<p>{inline(" ".join(para_buf))}</p>')
+                    para_buf = []
                 in_fence = True
                 fence_lang = line[3:].strip()
                 fence_buf = []
@@ -84,6 +88,9 @@ def convert(md):
                 i += 1
                 continue
             if not in_table:
+                if para_buf:
+                    out.append(f'<p>{inline(" ".join(para_buf))}</p>')
+                    para_buf = []
                 if in_list:
                     out.append('</ul>')
                     in_list = False
@@ -103,6 +110,9 @@ def convert(md):
 
         m = re.match(r'^(#{1,6})\s+(.*)', line)
         if m:
+            if para_buf:
+                out.append(f'<p>{inline(" ".join(para_buf))}</p>')
+                para_buf = []
             if in_list:
                 out.append('</ul>')
                 in_list = False
@@ -119,6 +129,9 @@ def convert(md):
         # Blockquote
         m = re.match(r'^> ?(.*)', line)
         if m:
+            if para_buf:
+                out.append(f'<p>{inline(" ".join(para_buf))}</p>')
+                para_buf = []
             if in_list:
                 out.append('</ul>')
                 in_list = False
@@ -134,6 +147,9 @@ def convert(md):
             continue
 
         if re.match(r'^---+$', line.strip()):
+            if para_buf:
+                out.append(f'<p>{inline(" ".join(para_buf))}</p>')
+                para_buf = []
             if in_list:
                 out.append('</ul>')
                 in_list = False
@@ -147,6 +163,9 @@ def convert(md):
         # Ordered list item
         m = re.match(r'^\d+\. (.*)', line)
         if m:
+            if para_buf:
+                out.append(f'<p>{inline(" ".join(para_buf))}</p>')
+                para_buf = []
             if in_list:
                 out.append('</ul>')
                 in_list = False
@@ -163,6 +182,9 @@ def convert(md):
                 out.append('</ol>')
                 in_olist = False
             if not in_list:
+                if para_buf:
+                    out.append(f'<p>{inline(" ".join(para_buf))}</p>')
+                    para_buf = []
                 out.append('<ul>')
                 in_list = True
             out.append(f'<li>{inline(m.group(1))}</li>')
@@ -193,6 +215,9 @@ def convert(md):
             in_olist = False
 
         if line.strip() == '':
+            if para_buf:
+                out.append(f'<p>{inline(" ".join(para_buf))}</p>')
+                para_buf = []
             if in_list:
                 out.append('</ul>')
                 in_list = False
@@ -209,7 +234,7 @@ def convert(md):
         if in_olist:
             out.append('</ol>')
             in_olist = False
-        out.append(f'<p>{inline(line)}</p>')
+        para_buf.append(line)
         i += 1
 
     if in_list:
@@ -218,6 +243,8 @@ def convert(md):
         out.append('</ol>')
     if in_table:
         out.append(flush_table(table_rows))
+    if para_buf:
+        out.append(f'<p>{inline(" ".join(para_buf))}</p>')
 
     return '\n'.join(out)
 
