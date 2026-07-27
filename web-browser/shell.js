@@ -439,8 +439,8 @@ function startTerminal() {
   const histCount = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]').length;
   term.writeln('\x1b[1;36m hprof-analyzer\x1b[0m\x1b[36m OQL Shell\x1b[0m' + verStr);
   term.writeln(`\x1b[2m └─ ${serverUrl}`
-    + (namedQueries.length ? `  ·  ${namedQueries.length} named queries` : '')
-    + (histCount ? `  ·  ${histCount} history entries` : '')
+    + (namedQueries.length ? `  ·  ${namedQueries.length.toLocaleString('en-US')} named queries` : '')
+    + (histCount ? `  ·  ${histCount.toLocaleString('en-US')} history entries` : '')
     + '\x1b[0m');
   term.writeln('\x1b[2m    Tab = complete  ·  Ctrl+R = search history  ·  /help = commands\x1b[0m');
   term.writeln('');
