@@ -266,11 +266,8 @@ function showWasmShell(name) {
   const badge = document.getElementById('server-badge');
   if (badge) { badge.textContent = '◉ WASM'; badge.style.color = '#7cb8ff'; }
   document.getElementById('server-url-display').textContent = name;
-  // Show the Run Analysis button only (no disconnect needed — use New File)
   document.getElementById('btn-disconnect').textContent = '↩ New file';
-  // If retained analysis already ran, mark the button as done
   if (hasRetained) {
-    document.getElementById('btn-analyze').disabled = true;
     document.getElementById('analyze-status').textContent = 'Analysis ready';
   }
   buildSidebar(hasRetained);
@@ -467,55 +464,36 @@ document.getElementById('btn-disconnect').addEventListener('click', () => {
   document.getElementById('named-query-list').innerHTML = '';
   document.getElementById('connect-status').textContent = '';
   document.getElementById('connect-status').className = '';
-  document.getElementById('btn-analyze').disabled = false;
+  document.getElementById('btn-show-report').disabled = false;
   document.getElementById('analyze-status').textContent = '';
   document.getElementById('btn-disconnect').textContent = '✕ Disconnect';
   showScreen('upload-screen');
 });
 
-// ── Analysis trigger ──────────────────────────────────────────────────────────
-document.getElementById('btn-analyze').addEventListener('click', async () => {
-  const btn = document.getElementById('btn-analyze');
-  const statusEl = document.getElementById('analyze-status');
-  btn.disabled = true;
-  statusEl.textContent = 'Starting analysis…';
-
+// ── Show Report button ────────────────────────────────────────────────────────
+document.getElementById('btn-show-report').addEventListener('click', async () => {
   if (wasmSession) {
-    // WASM mode: run synchronously in a microtask to let the UI update
-    setTimeout(() => {
-      try {
-        wasmSession.run_full_analysis();
-        hasRetained = true;
-        statusEl.textContent = 'Analysis ready';
-        buildSidebar(true);
-        if (term) term.writeln('\r\n\x1b[32m[Analysis complete — @retainedHeapSize queries now available]\x1b[0m');
-        // Show the analysis report
-        try {
-          const reportJson = wasmSession.generate_report();
-          renderWasmReport(JSON.parse(reportJson), wasmSession._fileName || '');
-          showScreen('report-screen');
-        } catch (_) {}
-      } catch (e) {
-        statusEl.textContent = `Analysis failed: ${e}`;
-        btn.disabled = false;
-      }
-    }, 0);
+    try {
+      const reportJson = wasmSession.generate_report();
+      renderWasmReport(JSON.parse(reportJson), wasmSession._fileName || '');
+      showScreen('report-screen');
+    } catch (e) {
+      document.getElementById('analyze-status').textContent = `Report failed: ${e}`;
+    }
     return;
   }
-
+  // Server mode: fetch /report
   try {
-    const res = await fetch(serverUrl + '/analyze', { method: 'POST' });
-    const data = await res.json();
-    if (data.ok) {
-      statusEl.textContent = 'Analyzing…';
-      pollAnalysisStatus();
+    const rr = await fetch(serverUrl + '/report');
+    if (rr.ok) {
+      const reportJson = await rr.text();
+      renderWasmReport(JSON.parse(reportJson), serverUrl || '');
+      showScreen('report-screen');
     } else {
-      statusEl.textContent = `Error: ${data.error || 'unknown'}`;
-      btn.disabled = false;
+      document.getElementById('analyze-status').textContent = 'Report not ready';
     }
   } catch (e) {
-    statusEl.textContent = `Error: ${e.message}`;
-    btn.disabled = false;
+    document.getElementById('analyze-status').textContent = `Error: ${e.message}`;
   }
 });
 
@@ -529,11 +507,9 @@ async function pollAnalysisStatus() {
     const res = await fetch(serverUrl + '/status');
     const data = await res.json();
     const statusEl = document.getElementById('analyze-status');
-    const btn = document.getElementById('btn-analyze');
     if (data.status === 'ready') {
       hasRetained = true;
       statusEl.textContent = 'Analysis ready';
-      btn.disabled = true;
       buildSidebar(true);
       if (term) term.writeln('\r\n\x1b[32m[Analysis complete — @retainedHeapSize queries now available]\x1b[0m');
       try {
@@ -546,11 +522,9 @@ async function pollAnalysisStatus() {
       } catch (_) {}
     } else if (data.status === 'analyzing') {
       statusEl.textContent = 'Analyzing…';
-      btn.disabled = true;
       pollTimer = setTimeout(pollAnalysisStatus, 2000);
     } else if (data.status === 'failed') {
       statusEl.textContent = `Analysis failed: ${data.error || ''}`;
-      btn.disabled = false;
     } else {
       // not_started — leave button enabled
       statusEl.textContent = '';
@@ -1142,8 +1116,8 @@ function startTerminal() {
       return;
     }
     if (cmd === '/analyze') {
-      document.getElementById('btn-analyze').click();
-      term.writeln('\x1b[33manalysis triggered — watch the toolbar for status\x1b[0m');
+      document.getElementById('btn-show-report').click();
+      term.writeln('\x1b[33mopening report…\x1b[0m');
       term.write(PROMPT);
       return;
     }
