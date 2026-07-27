@@ -1019,7 +1019,7 @@ function fmtCell(cell, colName) {
     if (typeof v !== 'number') return String(v);
     // Address-like columns shown as hex
     if (colName && /address|addr|ptr/i.test(colName)) {
-      return '0x' + v.toString(16).toUpperCase().padStart(8, '0');
+      return '0x' + v.toString(16).toUpperCase().padStart(16, '0');
     }
     // Byte-size columns shown as human-readable (unless bytesRaw)
     if (!settings.bytesRaw && colName && /bytes$|_size$|heap_size$/i.test(colName)) {
