@@ -3248,7 +3248,8 @@ function startTerminal() {
             term.writeln(`\x1b[2m  /filter <text|/re/>  /sort [-]<col>  /select <col>…  /pivot <col>  /row [N]${statHint}  /export [csv|tsv|json]\x1b[0m`);
           }
         } else {
-          // No columns — just show the raw result
+          // No columns — just show the raw result; still reset undo slot (fresh query ran)
+          prevResult = null;
           term.writeln(JSON.stringify(r, null, 2).split('\n').slice(0, 40).join('\r\n'));
           term.writeln(`\x1b[2m${fmtElapsed(queryMs)}\x1b[0m`);
         }
