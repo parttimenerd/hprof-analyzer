@@ -26,14 +26,18 @@ pub(crate) fn sub_remaining(remaining: &mut u64, n: u64) -> io::Result<()> {
 /// Full-file sequential scan invoking `f(addr, elem_bytes)` for each
 /// PRIM_ARRAY_DUMP whose array address is in `wanted`. Only wanted arrays'
 /// element bytes are materialized; everything else is skipped.
-pub(crate) fn scan_prim_arrays<F: FnMut(u64, &[u8])>(
-    path: &str,
+pub(crate) fn scan_prim_arrays<O, F>(
+    open: O,
     id_size: u8,
     wanted: &std::collections::HashSet<u64>,
     mut f: F,
-) -> io::Result<()> {
+) -> io::Result<()>
+where
+    O: Fn() -> io::Result<HprofReader>,
+    F: FnMut(u64, &[u8]),
+{
     let ids = id_size as u64;
-    let mut r = HprofReader::open(path)?;
+    let mut r = open()?;
     let mut scratch: Vec<u8> = Vec::with_capacity(256);
     loop {
         let tag = match r.u1() {
@@ -153,12 +157,13 @@ pub(crate) enum Record<'a> {
 /// owning collection instance may appear later in the file) must NOT resolve it
 /// inline here; collect the raw per-record data and resolve it in a cheap
 /// in-memory post-pass. HPROF gives no record-ordering guarantee.
-pub(crate) fn scan_all_records<F>(path: &str, id_size: u8, mut f: F) -> io::Result<()>
+pub(crate) fn scan_all_records<O, F>(open: O, id_size: u8, mut f: F) -> io::Result<()>
 where
+    O: Fn() -> io::Result<HprofReader>,
     F: FnMut(Record<'_>),
 {
     let ids = id_size as u64;
-    let mut r = HprofReader::open(path)?;
+    let mut r = open()?;
     // One reused scratch per record kind; only one is live at any instant.
     let mut inst_scratch: Vec<u8> = Vec::with_capacity(256);
     let mut prim_scratch: Vec<u8> = Vec::with_capacity(256);
@@ -255,13 +260,17 @@ where
 /// primitive values are zero-extended into the u64. Only the (bounded) static
 /// header of each class is materialized — instance-field descriptors are
 /// skipped — so RSS stays O(#static-fields-of-one-class) inside the closure.
-pub(crate) fn scan_class_dumps<F: FnMut(u64, &[(u64, u8, u64)])>(
-    path: &str,
+pub(crate) fn scan_class_dumps<O, F>(
+    open: O,
     id_size: u8,
     mut f: F,
-) -> io::Result<()> {
+) -> io::Result<()>
+where
+    O: Fn() -> io::Result<HprofReader>,
+    F: FnMut(u64, &[(u64, u8, u64)]),
+{
     let ids = id_size as u64;
-    let mut r = HprofReader::open(path)?;
+    let mut r = open()?;
     let mut statics: Vec<(u64, u8, u64)> = Vec::new();
     let mut vbuf: Vec<u8> = Vec::with_capacity(8);
     loop {
@@ -524,8 +533,8 @@ mod tests {
 ///   appears as a PRIM_ARRAY_DUMP.
 /// - `obj_blobs`: addr → element-ref bytes, for every addr in `wanted_obj`
 ///   that appears as an OBJ_ARRAY_DUMP.
-pub(crate) fn collect_blobs(
-    path: &str,
+pub(crate) fn collect_blobs<O>(
+    open: O,
     id_size: u8,
     wanted_inst: &std::collections::HashSet<u64>,
     wanted_prim: &std::collections::HashSet<u64>,
@@ -534,7 +543,10 @@ pub(crate) fn collect_blobs(
     std::collections::HashMap<u64, (u64, Vec<u8>)>,
     std::collections::HashMap<u64, Vec<u8>>,
     std::collections::HashMap<u64, Vec<u8>>,
-)> {
+)>
+where
+    O: Fn() -> io::Result<HprofReader>,
+{
     use crate::types::{HprofType, heap, tags};
     let ids = id_size as u64;
     let mut inst_blobs: std::collections::HashMap<u64, (u64, Vec<u8>)> =
@@ -548,7 +560,7 @@ pub(crate) fn collect_blobs(
         return Ok((inst_blobs, prim_blobs, obj_blobs));
     }
 
-    let mut r = crate::reader::HprofReader::open(path)?;
+    let mut r = open()?;
     let mut scratch: Vec<u8> = Vec::with_capacity(256);
     loop {
         let tag = match r.u1() {

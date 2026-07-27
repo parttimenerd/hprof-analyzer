@@ -54,7 +54,10 @@ impl StringCapture {
 
     /// Decode all captured String instances using one `scan_prim_arrays` pass.
     /// Returns `(dense_idx → String)` map. After this call `self` is consumed.
-    pub fn decode_all(self, path: &str, id_size: u8) -> std::io::Result<HashMap<u32, String>> {
+    pub fn decode_all<O>(self, open: O, id_size: u8) -> std::io::Result<HashMap<u32, String>>
+    where
+        O: Fn() -> std::io::Result<crate::reader::HprofReader>,
+    {
         if self.inner.is_empty() {
             return Ok(HashMap::new());
         }
@@ -68,7 +71,7 @@ impl StringCapture {
 
         // One scan_prim_arrays pass decodes each distinct array once.
         let mut arr_text: HashMap<u64, String> = HashMap::new();
-        crate::pass2::scan_prim_arrays(path, id_size, &wanted, |addr, bytes| {
+        crate::pass2::scan_prim_arrays(&open, id_size, &wanted, |addr, bytes| {
             if let Some(&coder) = arr_coder.get(&addr) {
                 let s = crate::pass2::decode_java_string(bytes, coder);
                 arr_text.insert(addr, s);

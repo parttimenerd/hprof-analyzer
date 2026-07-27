@@ -38,13 +38,17 @@ pub(crate) const CHAR_ARRAY_WASTE_TOP: usize = 25;
 /// The skip skeleton for every non-INSTANCE_DUMP sub-record is identical to
 /// `scan_instance_blobs`; only the INSTANCE_DUMP arm differs (it always reads
 /// the blob and calls `f`).
-pub(crate) fn scan_all_instances<F: FnMut(u64, u64, &[u8])>(
-    path: &str,
+pub(crate) fn scan_all_instances<O, F>(
+    open: O,
     id_size: u8,
     mut f: F,
-) -> io::Result<()> {
+) -> io::Result<()>
+where
+    O: Fn() -> io::Result<HprofReader>,
+    F: FnMut(u64, u64, &[u8]),
+{
     let ids = id_size as u64;
-    let mut r = HprofReader::open(path)?;
+    let mut r = open()?;
     let mut scratch: Vec<u8> = Vec::with_capacity(256);
     loop {
         let tag = match r.u1() {
@@ -154,7 +158,10 @@ pub(crate) fn scan_all_instances<F: FnMut(u64, u64, &[u8])>(
 ///     for the most-duplicated values only.
 ///   Pass D (`compute_string_holders`, `scan_all_instances`): credit each
 ///     owning class for every object-field reference to a String instance.
-pub(crate) fn resolve_duplicate_strings(path: &str, p1: &Pass1) -> io::Result<DupStrings> {
+pub(crate) fn resolve_duplicate_strings<O>(open: O, p1: &Pass1) -> io::Result<DupStrings>
+where
+    O: Fn() -> io::Result<HprofReader>,
+{
     use std::collections::hash_map::DefaultHasher;
     use std::collections::HashSet;
     use std::hash::{Hash, Hasher};
@@ -177,7 +184,7 @@ pub(crate) fn resolve_duplicate_strings(path: &str, p1: &Pass1) -> io::Result<Du
     let mut string_addrs: HashSet<u64> = HashSet::new();
     let mut total_string_instances: u64 = 0;
 
-    scan_all_instances(path, id_size, |obj_addr, class_id, blob| {
+    scan_all_instances(&open, id_size, |obj_addr, class_id, blob| {
         let offs = *str_off_cache.entry(class_id).or_insert_with(|| {
             let value_off = match field_offset(
                 class_id,
@@ -250,7 +257,7 @@ pub(crate) fn resolve_duplicate_strings(path: &str, p1: &Pass1) -> io::Result<Du
     // heap root and is evicted first.
     let mut waste_heap: std::collections::BinaryHeap<std::cmp::Reverse<(u64, u64, u64, u64)>> =
         std::collections::BinaryHeap::new();
-    scan_prim_arrays(path, id_size, &wanted_arrays, |addr, bytes| {
+    scan_prim_arrays(&open, id_size, &wanted_arrays, |addr, bytes| {
         let coder = arr_coder.get(&addr).copied().unwrap_or(1);
         let decoded = decode_java_string(bytes, coder);
         let mut h = DefaultHasher::new();
@@ -408,7 +415,7 @@ pub(crate) fn resolve_duplicate_strings(path: &str, p1: &Pass1) -> io::Result<Du
     let mut hash_text: HashMap<u64, String> = HashMap::new();
     if !winner_arr_meta.is_empty() {
         let winner_arrays: HashSet<u64> = winner_arr_meta.keys().copied().collect();
-        scan_prim_arrays(path, id_size, &winner_arrays, |addr, bytes| {
+        scan_prim_arrays(&open, id_size, &winner_arrays, |addr, bytes| {
             let Some(&(hv, _count, _len)) = winner_arr_meta.get(&addr) else {
                 return;
             };
@@ -446,7 +453,7 @@ pub(crate) fn resolve_duplicate_strings(path: &str, p1: &Pass1) -> io::Result<Du
     // credit each owning class for every field ref that points at a String
     // instance. Bounded by #classes (the counter) + string_addrs (already held).
     let top_string_holders =
-        compute_string_holders(path, p1, &string_addrs, id_size, obj_ref_width)?;
+        compute_string_holders(&open, p1, &string_addrs, id_size, obj_ref_width)?;
     drop(string_addrs);
 
     Ok(DupStrings {
@@ -482,20 +489,23 @@ pub(crate) fn truncate_on_char_boundary(s: &mut String, max_bytes: usize) {
 /// the top-N owning classes by String-reference count. RSS is bounded by the
 /// per-class counter (#classes) plus `string_addrs` (already held by the
 /// caller); no per-object state is retained.
-pub(crate) fn compute_string_holders(
-    path: &str,
+pub(crate) fn compute_string_holders<O>(
+    open: O,
     p1: &Pass1,
     string_addrs: &std::collections::HashSet<u64>,
     id_size: u8,
     obj_ref_width: usize,
-) -> io::Result<Vec<StringHolder>> {
+) -> io::Result<Vec<StringHolder>>
+where
+    O: Fn() -> io::Result<HprofReader>,
+{
     let class_map = &p1.class_map;
     let strings = &p1.strings;
     let field_plans = build_field_plans(class_map, strings, id_size as usize);
     // owning class address → count of String-instance references.
     let mut class_counter: HashMap<u64, u64> = HashMap::new();
 
-    scan_all_instances(path, id_size, |_obj_addr, class_id, blob| {
+    scan_all_instances(&open, id_size, |_obj_addr, class_id, blob| {
         let Some(plan) = field_plans.get(&class_id) else {
             return;
         };

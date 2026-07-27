@@ -93,6 +93,11 @@ impl Pass2 {
         let id_size = p1.id_size;
         let ptr_size = id_size as usize;
 
+        // Opener closure — will become `|| source.open()` once Pass2::build
+        // takes &HprofSource in Task 4. For now wraps the path string.
+        let path_owned = path.to_string();
+        let open = move || HprofReader::open(&path_owned);
+
         // ── Phase 0: detect ref_size ─────────────────────────────────────
         // Reuse the object-array (addr, count) data already collected in pass1
         // instead of re-scanning the whole file. Array addresses are the id_map
@@ -610,7 +615,7 @@ impl Pass2 {
         let string_values_truncated = scan_driver.string_capture_truncated();
         let string_values: std::collections::HashMap<u32, String> =
             if let Some(capture) = scan_driver.take_string_capture() {
-                capture.decode_all(path, id_size)?
+                capture.decode_all(&open, id_size)?
             } else {
                 std::collections::HashMap::new()
             };
@@ -845,7 +850,7 @@ impl Pass2 {
         // Decode each thread's java.lang.Thread.name. Thread instance blobs were
         // captured during the 2a scan; remaining hops (String objects, backing
         // arrays) need 2 more targeted collect_blobs calls instead of 3.
-        let thread_props = resolve_thread_names(path, &p1, captured_thread_blobs)?;
+        let thread_props = resolve_thread_names(&open, &p1, captured_thread_blobs)?;
         t_phase!("thread_names done");
 
         // Opt-in approximate duplicate-java.lang.String report. Runs two extra
@@ -854,7 +859,7 @@ impl Pass2 {
         // are still alive (freed just below). `None` on the default path = zero
         // extra work, zero RSS.
         let dup_strings = if opts.find_duplicates {
-            Some(resolve_duplicate_strings(path, &p1)?)
+            Some(resolve_duplicate_strings(&open, &p1)?)
         } else {
             None
         };
@@ -863,12 +868,12 @@ impl Pass2 {
         // alongside --find-duplicates; keeps only a hash→(count,type) map plus
         // an addr→hash map so we can later compute holder classes.
         let dup_prim_arrays: Option<DupPrimArrays> = if opts.find_duplicates {
-            let (mut dpa, dup_addrs) = compute_dup_prim_arrays(path, p1.id_size)?;
+            let (mut dpa, dup_addrs) = compute_dup_prim_arrays(&open, p1.id_size)?;
             // If --collections is also on we have the class_map/strings needed
             // to build FieldPlans and find which classes hold the most dup arrays.
             if opts.collections && !dup_addrs.is_empty() {
                 dpa.top_array_holders =
-                    compute_dup_array_holders(path, &p1, &dup_addrs, p1.id_size)?;
+                    compute_dup_array_holders(&open, &p1, &dup_addrs, p1.id_size)?;
             }
             Some(dpa)
         } else {
@@ -878,7 +883,7 @@ impl Pass2 {
         // Opt-in boxed-number holder scan. Two extra full-file passes (collect
         // boxed-type addresses, then count references) when --collections is on.
         let boxed_number_holders: Vec<crate::report::BoxedNumberHolder> = if opts.collections {
-            compute_boxed_holders(path, &p1, p1.id_size)?
+            compute_boxed_holders(&open, &p1, p1.id_size)?
         } else {
             Vec::new()
         };
@@ -891,7 +896,7 @@ impl Pass2 {
         // version from the decoded properties. Falls back to empty/None (never
         // garbage) if the layout does not match the Hashtable form.
         let (system_properties, jvm_version) =
-            resolve_system_properties(path, &p1, captured_props_addr)?;
+            resolve_system_properties(&open, &p1, captured_props_addr)?;
         t_phase!("system_props done");
 
         // Always-on field-decode views (collections, arrays, references). One
@@ -909,7 +914,7 @@ impl Pass2 {
             fd_dbb_capacity_sum,
             fd_tl_null_key_count,
         ) = fielddecode::build_field_decode_views(
-            path,
+            &open,
             &p1,
             &shallow,
             opts.collections,

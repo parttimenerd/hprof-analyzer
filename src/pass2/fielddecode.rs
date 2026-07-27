@@ -911,13 +911,16 @@ type FieldDecodeViews = (
 /// scans. Returns `(collections, references, reference_referent_idx)`; the
 /// caller computes `only_weakly_retained` later from the referent indices +
 /// `idom`. Must run while `p1.class_map` / `p1.strings` are still alive.
-pub(crate) fn build_field_decode_views(
-    path: &str,
+pub(crate) fn build_field_decode_views<O>(
+    open: O,
     p1: &Pass1,
     shallow: &[u32],
     collect_attribution: bool,
     descs: &[CollDesc],
-) -> std::io::Result<FieldDecodeViews> {
+) -> std::io::Result<FieldDecodeViews>
+where
+    O: Fn() -> std::io::Result<crate::reader::HprofReader>,
+{
     let id_size = p1.id_size;
     // Instance-blob object references are id_size wide (compressed OOPs only
     // narrows object-ARRAY elements). Both instance fields and obj-array
@@ -1056,7 +1059,7 @@ pub(crate) fn build_field_decode_views(
     // post-pass loop). Only one record's bytes are resident at a time, so peak
     // RSS is unchanged.
     let mut ic = IndexCache::new();
-    scan_all_records(path, id_size, |rec| match rec {
+    scan_all_records(&open, id_size, |rec| match rec {
         // ── on_instance: every INSTANCE_DUMP ──────────────────────────────────
         Record::Instance(addr, class_id, blob) => {
             // ── DirectByteBuffer capacity accumulation ────────────────────────

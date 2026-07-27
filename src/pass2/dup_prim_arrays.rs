@@ -87,12 +87,15 @@ fn elem_type_name(code: u8) -> &'static str {
 /// Also returns the set of duplicate array object IDs (addresses of arrays
 /// that appeared in a group of ≥ 2 identical copies) for use by
 /// [`compute_dup_array_holders`].
-pub(crate) fn compute_dup_prim_arrays(
-    path: &str,
+pub(crate) fn compute_dup_prim_arrays<O>(
+    open: O,
     id_size: u8,
-) -> io::Result<(DupPrimArrays, HashSet<u64>)> {
+) -> io::Result<(DupPrimArrays, HashSet<u64>)>
+where
+    O: Fn() -> io::Result<HprofReader>,
+{
     let ids = id_size as u64;
-    let mut r = HprofReader::open(path)?;
+    let mut r = open()?;
     let mut scratch: Vec<u8> = Vec::with_capacity(4096);
 
     // hash → (count, shallow_bytes_per_copy, elem_type_code, first_seen_addr)
@@ -255,12 +258,15 @@ pub(crate) fn compute_dup_prim_arrays(
 ///
 /// Requires a `Pass1` for the class map (FieldPlan building) — only called when
 /// `--collections` is also on.
-pub(crate) fn compute_dup_array_holders(
-    path: &str,
+pub(crate) fn compute_dup_array_holders<O>(
+    open: O,
     p1: &crate::pass1::Pass1,
     dup_addrs: &HashSet<u64>,
     id_size: u8,
-) -> io::Result<Vec<DupArrayHolder>> {
+) -> io::Result<Vec<DupArrayHolder>>
+where
+    O: Fn() -> io::Result<HprofReader>,
+{
     use super::strings::scan_all_instances;
     use super::{build_field_plans, read_ref};
 
@@ -268,7 +274,7 @@ pub(crate) fn compute_dup_array_holders(
     let field_plans = build_field_plans(&p1.class_map, &p1.strings, id_size as usize);
     let mut class_counter: HashMap<u64, u64> = HashMap::new();
 
-    scan_all_instances(path, id_size, |_obj_addr, class_id, blob| {
+    scan_all_instances(&open, id_size, |_obj_addr, class_id, blob| {
         let Some(plan) = field_plans.get(&class_id) else {
             return;
         };

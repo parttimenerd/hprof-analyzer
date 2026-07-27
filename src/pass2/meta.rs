@@ -144,11 +144,14 @@ pub(crate) fn resolve_alloc_frames(p1: &Pass1) -> std::collections::HashMap<u32,
 /// because a heap may hold several loader-distinct class objects named
 /// `java/lang/Thread` / `java/lang/String`, and thread objects are frequently
 /// subclasses whose inherited `name` sits past the subclass's own fields.
-pub(crate) fn resolve_thread_names(
-    path: &str,
+pub(crate) fn resolve_thread_names<O>(
+    open: O,
     p1: &Pass1,
     prefetched_thread_blobs: HashMap<u64, (u64, Vec<u8>)>,
-) -> io::Result<HashMap<u32, ThreadProps>> {
+) -> io::Result<HashMap<u32, ThreadProps>>
+where
+    O: Fn() -> io::Result<crate::reader::HprofReader>,
+{
     let mut props: HashMap<u32, ThreadProps> = HashMap::new();
     if p1.thread_serial_to_obj_id.is_empty() {
         return Ok(props);
@@ -176,7 +179,7 @@ pub(crate) fn resolve_thread_names(
         .collect();
     if !missing_threads.is_empty() {
         let (extra, _, _) = collect_blobs(
-            path,
+            &open,
             id_size,
             &missing_threads,
             &std::collections::HashSet::new(),
@@ -307,7 +310,7 @@ pub(crate) fn resolve_thread_names(
 
     if !wanted_inst_r2.is_empty() {
         let (inst_blobs_r2, _, _) = collect_blobs(
-            path,
+            &open,
             id_size,
             &wanted_inst_r2,
             &std::collections::HashSet::new(),
@@ -429,7 +432,7 @@ pub(crate) fn resolve_thread_names(
     let wanted_arrays: std::collections::HashSet<u64> =
         string_to_arr.values().map(|&(a, _)| a).collect();
     let (_, arr_blobs, _) = collect_blobs(
-        path,
+        &open,
         id_size,
         &std::collections::HashSet::new(),
         &wanted_arrays,
@@ -474,11 +477,14 @@ pub(crate) type SystemProps = (Vec<(String, String)>, Option<String>);
 ///
 /// Returns `(sorted (key,value) pairs, jvm_version)`. Falls back to empty on
 /// any layout mismatch rather than emitting garbage.
-pub(crate) fn resolve_system_properties(
-    path: &str,
+pub(crate) fn resolve_system_properties<O>(
+    open: O,
     p1: &Pass1,
     prefetched_props_addr: u64,
-) -> io::Result<SystemProps> {
+) -> io::Result<SystemProps>
+where
+    O: Fn() -> io::Result<crate::reader::HprofReader>,
+{
     let empty = (Vec::new(), None);
     let id_size = p1.id_size;
     let obj_ref_width = id_size as usize;
@@ -492,7 +498,7 @@ pub(crate) fn resolve_system_properties(
         prefetched_props_addr
     } else {
         let mut found: u64 = 0;
-        scan_class_dumps(path, id_size, |class_obj_id, statics| {
+        scan_class_dumps(&open, id_size, |class_obj_id, statics| {
             if found != 0 {
                 return;
             }
@@ -528,7 +534,7 @@ pub(crate) fn resolve_system_properties(
     // Since props → table is a forward ref with unknown addr, we need the instance
     // first. We collect props instance + (speculatively empty) obj sets here.
     let (inst_blobs_r1, _, _) = collect_blobs(
-        path,
+        &open,
         id_size,
         &wanted_inst_r1,
         &std::collections::HashSet::new(),
@@ -561,7 +567,7 @@ pub(crate) fn resolve_system_properties(
     // ── Round 2a: `table` Object[] → non-null entry slot addresses ───────────
     let wanted_obj_r2: std::collections::HashSet<u64> = std::iter::once(table_addr).collect();
     let (_, _, obj_blobs_r2) = collect_blobs(
-        path,
+        &open,
         id_size,
         &std::collections::HashSet::new(),
         &std::collections::HashSet::new(),
@@ -597,7 +603,7 @@ pub(crate) fn resolve_system_properties(
     //           Round 3   = collect all String blobs + backing arrays in one pass.
     let wanted_entries: std::collections::HashSet<u64> = entry_addrs.iter().copied().collect();
     let (entry_blobs, _, _) = collect_blobs(
-        path,
+        &open,
         id_size,
         &wanted_entries,
         &std::collections::HashSet::new(),
@@ -643,7 +649,7 @@ pub(crate) fn resolve_system_properties(
     while !chained_addrs.is_empty() && all_entry_blobs.len() < MAX_PROP_ENTRIES && depth < 64 {
         depth += 1;
         let (more_blobs, _, _) = collect_blobs(
-            path,
+            &open,
             id_size,
             &chained_addrs,
             &std::collections::HashSet::new(),
@@ -712,7 +718,7 @@ pub(crate) fn resolve_system_properties(
     // only if we also pass wanted_prim. We don't know wanted_prim yet.
     // Solution: collect String blobs first, then collect arrays.
     let (str_blobs, _, _) = collect_blobs(
-        path,
+        &open,
         id_size,
         &wanted_strings,
         &std::collections::HashSet::new(),
@@ -751,7 +757,7 @@ pub(crate) fn resolve_system_properties(
     let wanted_arrays: std::collections::HashSet<u64> =
         string_to_arr.values().map(|&(a, _)| a).collect();
     let (_, arr_blobs, _) = collect_blobs(
-        path,
+        &open,
         id_size,
         &std::collections::HashSet::new(),
         &wanted_arrays,

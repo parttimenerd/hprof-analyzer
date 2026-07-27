@@ -33,11 +33,14 @@ const BOXED_TYPES: &[&str] = &[
 
 /// Compute top holder classes for boxed-number objects.
 /// Performs two full-file scans (collect addrs, then count refs).
-pub(crate) fn compute_boxed_holders(
-    path: &str,
+pub(crate) fn compute_boxed_holders<O>(
+    open: O,
     p1: &Pass1,
     id_size: u8,
-) -> io::Result<Vec<crate::report::BoxedNumberHolder>> {
+) -> io::Result<Vec<crate::report::BoxedNumberHolder>>
+where
+    O: Fn() -> io::Result<crate::reader::HprofReader>,
+{
     let class_map = &p1.class_map;
     let strings = &p1.strings;
 
@@ -59,7 +62,7 @@ pub(crate) fn compute_boxed_holders(
 
     // Pass 1: collect addresses of all live boxed-type instances.
     let mut boxed_addrs: HashSet<u64> = HashSet::new();
-    scan_all_instances(path, id_size, |obj_addr, class_id, _blob| {
+    scan_all_instances(&open, id_size, |obj_addr, class_id, _blob| {
         if boxed_class_addrs.contains(&class_id) {
             boxed_addrs.insert(obj_addr);
         }
@@ -74,7 +77,7 @@ pub(crate) fn compute_boxed_holders(
     let field_plans = build_field_plans(class_map, strings, id_size as usize);
     let mut class_counter: HashMap<u64, u64> = HashMap::new();
 
-    scan_all_instances(path, id_size, |_obj_addr, class_id, blob| {
+    scan_all_instances(&open, id_size, |_obj_addr, class_id, blob| {
         let Some(plan) = field_plans.get(&class_id) else {
             return;
         };
