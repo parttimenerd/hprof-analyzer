@@ -6,9 +6,12 @@ on:
     paths:
       - "docs/**"
       - "web/**"
+      - "web-browser/**"
+      - "crates/hprof-wasm/**"
       - "src/**"
       - "tests/fixtures/dump_2_scala-doku.hprof"
       - "scripts/gen-samples.sh"
+      - "scripts/build-browser.sh"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -49,6 +52,15 @@ jobs:
       # dump so the published gallery always matches the current binary output.
       - name: Generate sample reports
         run: ./scripts/gen-samples.sh
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build browser REPL
+        run: bash scripts/build-browser.sh
+
+      - name: Install browser REPL as homepage
+        run: cp dist/hprof-analyzer-browser.html docs/index.html
 
       - uses: actions/configure-pages@v5
         with:
