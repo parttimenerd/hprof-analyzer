@@ -1828,14 +1828,17 @@ function startTerminal() {
               const valStr = cc ? `${cc}${val}\x1b[0m` : val;
               term.writeln(`  \x1b[2m${String(i + 1).padStart(idxW)}\x1b[0m  \x1b[36m${col.padEnd(keyW)}\x1b[0m  ${valStr}`);
             });
+            prevResult = lastResult;
+            lastResult = { columns: colNames, rows, note: r.note, truncated: r.truncated, row_count: r.row_count };
+            currentRowIdx = 0;
           } else if (rows.length === 0) {
             term.writeln(`\x1b[33m(no object ${clsTrimmed}#${idx} found)\x1b[0m`);
           } else {
             renderResult(r);
+            prevResult = lastResult;
+            lastResult = { columns: colNames, rows, note: r.note, truncated: r.truncated, row_count: r.row_count };
+            currentRowIdx = 0;
           }
-          prevResult = lastResult;
-          lastResult = { columns: colNames, rows, note: r.note, truncated: r.truncated, row_count: r.row_count };
-          currentRowIdx = 0;
         }
       } catch (e) {
         term.write('\r\x1b[K');
