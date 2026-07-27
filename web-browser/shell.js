@@ -860,7 +860,7 @@ function startTerminal() {
             instanceCount = cell == null ? null : (typeof cell === 'object' ? cell.v : cell);
           }
           const countStr = instanceCount != null
-            ? `  \x1b[2m(${instanceCount.toLocaleString()} instance${instanceCount === 1 ? '' : 's'})\x1b[0m`
+            ? `  \x1b[2m(${instanceCount.toLocaleString('en-US')} instance${instanceCount === 1 ? '' : 's'})\x1b[0m`
             : '';
           term.writeln(`Fields of \x1b[1m${cls}\x1b[0m${countStr}`);
           const idxW = String(colNames.length).length;
@@ -1026,7 +1026,7 @@ function startTerminal() {
         if (lastResult) {
           const n = lastResult.rows.length;
           const m = lastResult.columns.length;
-          term.writeln(`\x1b[32m${n.toLocaleString()}\x1b[0m row${n !== 1 ? 's' : ''} × \x1b[32m${m}\x1b[0m col${m !== 1 ? 's' : ''}`);
+          term.writeln(`\x1b[32m${n.toLocaleString('en-US')}\x1b[0m row${n !== 1 ? 's' : ''} × \x1b[32m${m}\x1b[0m col${m !== 1 ? 's' : ''}`);
           term.write(PROMPT); return;
         }
         term.writeln('\x1b[33m(no result — run a query first)\x1b[0m');
@@ -1053,7 +1053,7 @@ function startTerminal() {
         if (data.ok) {
           const cell = data.result?.rows?.[0]?.[0];
           const n = cell == null ? null : (typeof cell === 'object' ? cell.v : cell);
-          const nFmt = n != null ? n.toLocaleString() : '?';
+          const nFmt = n != null ? n.toLocaleString('en-US') : '?';
           const dynLabel = isOql ? label
             : `instance${n === 1 ? '' : 's'} of \x1b[36m${arg}\x1b[0m`;
           term.writeln(`\x1b[32m${nFmt}\x1b[0m ${dynLabel}`);
@@ -1086,7 +1086,7 @@ function startTerminal() {
         if (!colArg) {
           const n = lastResult.rows.length;
           const m = lastResult.columns.length;
-          term.writeln(`\x1b[32m${n.toLocaleString()}\x1b[0m row${n !== 1 ? 's' : ''} × \x1b[32m${m}\x1b[0m col${m !== 1 ? 's' : ''}`);
+          term.writeln(`\x1b[32m${n.toLocaleString('en-US')}\x1b[0m row${n !== 1 ? 's' : ''} × \x1b[32m${m}\x1b[0m col${m !== 1 ? 's' : ''}`);
         } else {
           const ci = resolveCol(colArg, lastResult.columns);
           if (ci < 0) {
@@ -1094,7 +1094,7 @@ function startTerminal() {
           } else {
             const total = lastResult.rows.length;
             const nonNull = lastResult.rows.filter(row => row[ci] !== null && row[ci] !== undefined && !(typeof row[ci] === 'object' && row[ci]?.kind === 'null')).length;
-            term.writeln(`\x1b[32m${nonNull.toLocaleString()}\x1b[0m non-null / \x1b[32m${total.toLocaleString()}\x1b[0m total in "${lastResult.columns[ci]}"`);
+            term.writeln(`\x1b[32m${nonNull.toLocaleString('en-US')}\x1b[0m non-null / \x1b[32m${total.toLocaleString('en-US')}\x1b[0m total in "${lastResult.columns[ci]}"`);
           }
         }
       }
