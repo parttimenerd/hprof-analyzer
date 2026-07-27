@@ -1762,7 +1762,7 @@ fn run_repl_line(
                             res.rows.truncate(shown);
                             res.row_count = shown as u64;
                             if shown < total {
-                                res.note = Some(format!("top {} of {}", shown, total));
+                                res.note = Some(format!("top {} of {}", fmt_int(shown as i64), fmt_int(total as i64)));
                             }
                             print_result(res, std::time::Duration::ZERO, *max_width, out)?;
                         }
@@ -1785,7 +1785,7 @@ fn run_repl_line(
                             res.rows = res.rows.split_off(skip);
                             res.row_count = res.rows.len() as u64;
                             if skip > 0 {
-                                res.note = Some(format!("last {} of {}", res.rows.len(), total));
+                                res.note = Some(format!("last {} of {}", fmt_int(res.rows.len() as i64), fmt_int(total as i64)));
                             }
                             print_result(res, std::time::Duration::ZERO, *max_width, out)?;
                         }
@@ -2606,7 +2606,7 @@ fn handle_sample(
                 rows: sampled,
                 row_count: k as u64,
                 truncated: false,
-                note: Some(format!("random sample of {k}/{total}")),
+                note: Some(format!("random sample of {}/{}", fmt_int(k as i64), fmt_int(total as i64))),
                 error: None,
                 name: res.name.clone(),
                 oql: res.oql.clone(),
@@ -3204,7 +3204,7 @@ fn handle_pivot(
                         .collect();
                     let n = rows.len();
                     let note = if top_n.is_some() && n < total_groups {
-                        Some(format!("top {} of {} groups", n, total_groups))
+                        Some(format!("top {} of {} groups", fmt_int(n as i64), fmt_int(total_groups as i64)))
                     } else {
                         None
                     };
