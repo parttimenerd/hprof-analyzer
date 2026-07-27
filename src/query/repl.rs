@@ -1280,6 +1280,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                         "top" | "head" => {
                             let n = if rest.trim().is_empty() { 10 } else { rest.trim().parse::<usize>().unwrap_or(0) };
                             if n > 0 {
+                                let before_len = last_result.as_ref().map(|r| r.rows.len());
                                 prev_result = last_result.clone();
                                 match last_result.as_mut() {
                                     None => warn_out("(no result — run a query first)", &mut stdout)?,
@@ -1294,6 +1295,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                         print_result(res, std::time::Duration::ZERO, max_width, &mut stdout)?;
                                     }
                                 }
+                                if last_result.as_ref().map(|r| r.rows.len()) == before_len { prev_result = None; }
                             } else {
                                 writeln!(stdout, "{cd}usage: !top [N]  (default 10){cr}")?;
                             }
@@ -1303,6 +1305,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                         "tail" => {
                             let n = if rest.trim().is_empty() { 10 } else { rest.trim().parse::<usize>().unwrap_or(0) };
                             if n > 0 {
+                                let before_len = last_result.as_ref().map(|r| r.rows.len());
                                 prev_result = last_result.clone();
                                 match last_result.as_mut() {
                                     None => warn_out("(no result — run a query first)", &mut stdout)?,
@@ -1317,6 +1320,7 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                         print_result(res, std::time::Duration::ZERO, max_width, &mut stdout)?;
                                     }
                                 }
+                                if last_result.as_ref().map(|r| r.rows.len()) == before_len { prev_result = None; }
                             } else {
                                 writeln!(stdout, "{cd}usage: !tail [N]  (default 10){cr}")?;
                             }
@@ -1861,6 +1865,7 @@ fn run_repl_line(
             "top" | "head" => {
                 let n = if rest.trim().is_empty() { 10 } else { rest.trim().parse::<usize>().unwrap_or(0) };
                 if n > 0 {
+                    let before_len = last_result.as_ref().map(|r| r.rows.len());
                     *prev_result = last_result.clone();
                     match last_result.as_mut() {
                         None => warn_out("(no result — run a query first)", out)?,
@@ -1875,6 +1880,7 @@ fn run_repl_line(
                             print_result(res, std::time::Duration::ZERO, *max_width, out)?;
                         }
                     }
+                    if last_result.as_ref().map(|r| r.rows.len()) == before_len { *prev_result = None; }
                 } else {
                     writeln!(out, "{cd}usage: !top [N]  (default 10){cr}")?;
                 }
@@ -1884,6 +1890,7 @@ fn run_repl_line(
             "tail" => {
                 let n = if rest.trim().is_empty() { 10 } else { rest.trim().parse::<usize>().unwrap_or(0) };
                 if n > 0 {
+                    let before_len = last_result.as_ref().map(|r| r.rows.len());
                     *prev_result = last_result.clone();
                     match last_result.as_mut() {
                         None => warn_out("(no result — run a query first)", out)?,
@@ -1898,6 +1905,7 @@ fn run_repl_line(
                             print_result(res, std::time::Duration::ZERO, *max_width, out)?;
                         }
                     }
+                    if last_result.as_ref().map(|r| r.rows.len()) == before_len { *prev_result = None; }
                 } else {
                     writeln!(out, "{cd}usage: !tail [N]  (default 10){cr}")?;
                 }
