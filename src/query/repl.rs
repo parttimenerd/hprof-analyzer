@@ -633,11 +633,13 @@ impl Completer for OqlCompleter {
                             Some(i) => (&rest[..=i], rest[i + 1..].trim_start()),
                             None => ("", rest),
                         };
-                        // Strip leading `@` for !filter/@col syntax
+                        // Strip leading `@` for !filter/@col syntax, or `-` for !sort -<col> (desc).
                         let (at_prefix, partial) = if partial_raw.starts_with('@')
                             && matches!(verb, "filter" | "grep" | "not" | "exclude")
                         {
                             ("@", &partial_raw[1..])
+                        } else if partial_raw.starts_with('-') && verb == "sort" {
+                            ("-", &partial_raw[1..])
                         } else {
                             ("", partial_raw)
                         };
@@ -5873,5 +5875,20 @@ mod tests {
     fn resolve_col_not_found() {
         let cols = make_columns(&["alpha"]);
         assert_eq!(resolve_col("missing", &cols), None);
+    }
+
+    #[test]
+    fn sort_completion_strips_dash_prefix() {
+        let cols = Arc::new(Mutex::new(vec!["retainedHeap".to_string(), "className".to_string()]));
+        let mut c = OqlCompleter::new_with_cols(vec![], vec![], Arc::clone(&cols));
+        // `!sort -r<Tab>` should complete to `!sort -retainedHeap`
+        let v = values(&c.complete("!sort -r", 8));
+        assert!(v.contains(&"!sort -retainedHeap".to_string()), "dash-prefix sort: {v:?}");
+        // `!sort r<Tab>` (no dash) still works
+        let v2 = values(&c.complete("!sort r", 7));
+        assert!(v2.contains(&"!sort retainedHeap".to_string()), "no-dash sort: {v2:?}");
+        // `!sort className,-r<Tab>` multi-column with dash
+        let v3 = values(&c.complete("!sort className,-r", 18));
+        assert!(v3.contains(&"!sort className,-retainedHeap".to_string()), "multi-col dash sort: {v3:?}");
     }
 }
