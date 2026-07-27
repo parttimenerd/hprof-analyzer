@@ -5536,3 +5536,40 @@ fn size_method_works_on_tree_map() {
         .unwrap_or(0);
     assert!(total > 0, "expected non-zero SUM(size()) for TreeMap, got: {stdout}");
 }
+
+#[test]
+fn union_order_by_sorts_globally_across_branches() {
+    // Regression: UNION ORDER BY only sorted within each branch because the
+    // ORDER BY clause was absorbed by the last branch's base_query parser and
+    // not lifted to the head query. Fixed by lifting it alongside LIMIT.
+    let Some(hprof) = gauss_mix() else { return };
+    let out = Command::new(BIN)
+        .arg("query")
+        .arg("--all")
+        .arg(&hprof)
+        .args([
+            "--query",
+            "SELECT @objectAddress, @usedHeapSize AS bytes FROM byte[] x WHERE @usedHeapSize > 65536 \
+             UNION SELECT @objectAddress, @usedHeapSize AS bytes FROM int[] x WHERE @usedHeapSize > 65536 \
+             ORDER BY bytes DESC LIMIT 5",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "UNION ORDER BY query failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Extract the bytes column values from result rows
+    let values: Vec<i64> = stdout
+        .lines()
+        .filter(|l| l.contains('|') && !l.contains("@objectAddress") && !l.contains("bytes"))
+        .filter_map(|l| l.split('|').nth(1).and_then(|s| s.trim().parse().ok()))
+        .collect();
+    assert!(!values.is_empty(), "expected result rows, got: {stdout}");
+    // Must be sorted descending globally
+    let is_sorted_desc = values.windows(2).all(|w| w[0] >= w[1]);
+    assert!(is_sorted_desc, "UNION result not sorted DESC: {values:?}\nstdout: {stdout}");
+}
+

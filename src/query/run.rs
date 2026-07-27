@@ -1435,7 +1435,7 @@ pub fn in_subquery_contains(set: &std::collections::HashSet<u64>, lhs_addr: u64)
 /// `collapse_union_results` will stable-dedup the result rows before capping.
 /// `limit` is the per-query LIMIT to apply AFTER dedup (only meaningful when
 /// `distinct` is true; for non-distinct queries the scan already caps rows).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnionGroup {
     pub head: usize,
     pub count: usize,
@@ -1446,6 +1446,9 @@ pub struct UnionGroup {
     pub intersect_count: usize,
     /// Number of EXCEPT branch slots immediately following the INTERSECT slots.
     pub except_count: usize,
+    /// ORDER BY column name and direction from the head query — used to re-sort
+    /// the concatenated UNION result so the global ORDER BY is respected.
+    pub order_by: Option<(String, crate::query::ast::SortDir)>,
 }
 
 /// Flatten a caller's query list so every `UNION` branch becomes its own scan
@@ -1508,6 +1511,12 @@ pub fn expand_union_queries(
             limit: q.limit,
             intersect_count,
             except_count,
+            // Capture the head query's ORDER BY so collapse can globally re-sort
+            // the concatenated UNION result — each branch is pre-sorted but the
+            // merged result is not.
+            order_by: q.order_by.as_ref().map(|ob| {
+                (crate::query::execute::attr_name(&ob.key), ob.dir.clone())
+            }),
         });
     }
     (flat, groups)
@@ -1535,16 +1544,40 @@ pub fn collapse_union_results(
         let mut result = if g.count == 1 {
             branch_results.into_iter().next().unwrap()
         } else {
-            // Apply the union-wide trailing LIMIT (MAT gap #6) as the row cap, but
-            // never above OVERALL_UNION_CAP so the memory safety bound still holds:
-            // cap = min(union_limit, OVERALL_UNION_CAP) when a union LIMIT is set,
-            // else just OVERALL_UNION_CAP (old behavior).
-            let cap = match g.union_limit {
-                Some(n) => (n as usize).min(crate::query::OVERALL_UNION_CAP),
-                None => crate::query::OVERALL_UNION_CAP,
+            // Apply the union-wide trailing LIMIT (MAT gap #6) as the row cap.
+            // When ORDER BY is present, collect all rows first so the global sort
+            // can pick the correct top-N after re-ordering; the LIMIT is applied
+            // post-sort below. Otherwise cap early to bound memory.
+            let has_order_by = g.order_by.is_some();
+            let cap = if has_order_by {
+                crate::query::OVERALL_UNION_CAP
+            } else {
+                match g.union_limit {
+                    Some(n) => (n as usize).min(crate::query::OVERALL_UNION_CAP),
+                    None => crate::query::OVERALL_UNION_CAP,
+                }
             };
             concat_union(branch_results, cap)
         };
+        // Re-sort the merged UNION result so the global ORDER BY is honoured.
+        // Each branch was sorted independently; concatenation breaks the global
+        // order. Apply the LIMIT after sorting so the top-N is correct.
+        if g.count > 1 {
+            if let Some((ref col_name, ref dir)) = g.order_by {
+                if let Some(idx) = result.columns.iter().position(|c| &c.name == col_name) {
+                    crate::query::execute::sort_rows_by_column(&mut result.rows, idx, dir.clone());
+                }
+                // Apply the union-wide LIMIT now that rows are globally sorted.
+                if let Some(lim) = g.union_limit {
+                    let lim = lim as usize;
+                    if result.rows.len() > lim {
+                        result.rows.truncate(lim);
+                        result.truncated = true;
+                        result.row_count = result.rows.len() as u64;
+                    }
+                }
+            }
+        }
         // DISTINCT: stable first-occurrence dedup on the full row tuple, then
         // apply the deferred per-query LIMIT. This path is only entered when
         // the query carried SELECT DISTINCT; non-distinct queries are untouched.
@@ -2283,6 +2316,7 @@ mod tests {
                     limit: None,
                 intersect_count: 0,
                 except_count: 0,
+                order_by: None,
                 },
                 UnionGroup {
                     head: 1,
@@ -2292,6 +2326,7 @@ mod tests {
                     limit: None,
                 intersect_count: 0,
                 except_count: 0,
+                order_by: None,
                 },
             ]
         );
@@ -2317,6 +2352,7 @@ mod tests {
                 limit: None,
             intersect_count: 0,
             except_count: 0,
+            order_by: None,
             },
             UnionGroup {
                 head: 1,
@@ -2326,6 +2362,7 @@ mod tests {
                 limit: None,
             intersect_count: 0,
             except_count: 0,
+            order_by: None,
             },
         ];
         let out = collapse_union_results(flat, &groups);
@@ -2350,6 +2387,7 @@ mod tests {
             limit: None,
         intersect_count: 0,
         except_count: 0,
+        order_by: None,
         }];
         let out = collapse_union_results(flat, &groups);
         assert_eq!(out.len(), 1);
@@ -2373,6 +2411,7 @@ mod tests {
             limit: None,
         intersect_count: 0,
         except_count: 0,
+        order_by: None,
         }];
         let out = collapse_union_results(flat, &groups);
         assert_eq!(out[0].rows.len(), 3, "all rows returned");
@@ -2391,6 +2430,7 @@ mod tests {
             limit: None,
         intersect_count: 0,
         except_count: 0,
+        order_by: None,
         }];
         let out = collapse_union_results(flat, &groups);
         assert!(out[0].rows.is_empty(), "LIMIT 0 → no rows");
@@ -2410,6 +2450,7 @@ mod tests {
             limit: None,
         intersect_count: 0,
         except_count: 0,
+        order_by: None,
         }];
         let out = collapse_union_results(flat, &groups);
         assert_eq!(out[0].rows.len(), 5);
@@ -2429,6 +2470,7 @@ mod tests {
             limit: None,
         intersect_count: 0,
         except_count: 0,
+        order_by: None,
         }];
         let out = collapse_union_results(flat, &groups);
         assert_eq!(out[0].rows.len(), 3);
@@ -2479,6 +2521,7 @@ mod tests {
                 limit: None,
             intersect_count: 0,
             except_count: 0,
+            order_by: None,
             },
             UnionGroup {
                 head: 1,
@@ -2488,6 +2531,7 @@ mod tests {
                 limit: None,
             intersect_count: 0,
             except_count: 0,
+            order_by: None,
             },
         ];
         let out = collapse_union_results(flat, &groups);
@@ -2509,6 +2553,7 @@ mod tests {
                 limit: None,
                 intersect_count: 0,
                 except_count: 0,
+            order_by: None,
             }],
         )
     }
@@ -2569,6 +2614,7 @@ mod tests {
             limit: None,
         intersect_count: 0,
         except_count: 0,
+        order_by: None,
         }];
         let out = collapse_union_results(flat, &groups);
         assert_eq!(out[0].row_count, 4, "cross-branch dupes removed: 1,2,3,4");
@@ -2609,6 +2655,7 @@ mod tests {
             limit: None,
         intersect_count: 0,
         except_count: 0,
+        order_by: None,
         }];
         let out = collapse_union_results(flat, &groups);
         // Two NaN rows should also dedup (Debug format is total: "Float(NaN)" == "Float(NaN)").

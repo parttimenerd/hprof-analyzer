@@ -979,10 +979,16 @@ where
                     if let Some(n) = trailing {
                         head.union_limit = Some(n);
                     } else if !last_was_paren {
-                        // Bare-form: lift the last branch's swallowed LIMIT.
+                        // Bare-form: lift the last branch's swallowed LIMIT and ORDER BY
+                        // to the head so they apply to the whole UNION result, not just
+                        // the final branch. (Only lift when the last branch is not
+                        // parenthesized — an ORDER BY inside parens is branch-local.)
                         if let Some(last) = head.union_branches.last_mut() {
                             if let Some(n) = last.limit.take() {
                                 head.union_limit = Some(n);
+                            }
+                            if last.order_by.is_some() {
+                                head.order_by = last.order_by.take();
                             }
                         }
                     }

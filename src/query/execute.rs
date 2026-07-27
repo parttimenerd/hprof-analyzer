@@ -2443,7 +2443,7 @@ pub fn expr_name(e: &Expr) -> String {
     }
 }
 
-fn attr_name(a: &Attr) -> String {
+pub(crate) fn attr_name(a: &Attr) -> String {
     match a {
         Attr::ObjectId => "@objectId".into(),
         Attr::ObjectAddress => "@objectAddress".into(),
