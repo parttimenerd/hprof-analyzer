@@ -1770,6 +1770,9 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
                         ctx.shallow.get(idx as usize).copied().unwrap_or(0) as i64,
                     ),
                     SelectItem::Attr(Attr::ObjectId) => QueryValue::Int(idx as i64),
+                    SelectItem::Attr(Attr::ObjectAddress) => {
+                        QueryValue::Int(ctx.id_map.to_addr(idx) as i64)
+                    }
                     SelectItem::Expr(e) => eval_late_expr_multi(e, idx, ret as u64, ctx, &like_regexes),
                     SelectItem::Star => QueryValue::Int(1),
                     _ => QueryValue::Null,
