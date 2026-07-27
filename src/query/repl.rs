@@ -2645,7 +2645,7 @@ fn handle_distinct(
                 rows: kept,
                 row_count: kept_n,
                 truncated: false,
-                note: Some(format!("{} unique row{} ({} duplicate{} removed)", kept_n, if kept_n == 1 { "" } else { "s" }, removed, if removed == 1 { "" } else { "s" })),
+                note: Some(format!("{} unique row{} ({} duplicate{} removed)", fmt_int(kept_n as i64), if kept_n == 1 { "" } else { "s" }, fmt_int(removed as i64), if removed == 1 { "" } else { "s" })),
                 error: None,
                 name: res.name.clone(),
                 oql: res.oql.clone(),
