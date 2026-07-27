@@ -635,8 +635,8 @@ fn query_subcommand_tostring_where_rejects_unsupported_aggregates() {
             "expected rejection for unsupported aggregate + toString WHERE: {oql}"
         );
         assert!(
-            stderr.contains("toString(s) filter"),
-            "error must explain the toString-filter aggregate restriction, got:\n{stderr}"
+            stderr.contains("toString") && stderr.contains("COUNT"),
+            "error must explain the toString aggregate restriction, got:\n{stderr}"
         );
     }
 }
