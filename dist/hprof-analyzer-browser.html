@@ -2828,10 +2828,12 @@ function startTerminal() {
         else { term.writeln('\x1b[2musage: /set bytes raw|human\x1b[0m'); term.write(PROMPT); return; }
         localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
         term.writeln(`\x1b[32m✓ bytes: ${settings.bytesRaw ? 'raw (numbers)' : 'human (e.g. 4.3 KiB)'}\x1b[0m`);
+        if (lastResult) { renderResult(lastResult); }
       } else if (args[0] === 'null') {
         settings.nullStr = args[1] || 'null';
         localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
         term.writeln(`\x1b[32m✓ null: "${settings.nullStr}"\x1b[0m`);
+        if (lastResult) { renderResult(lastResult); }
       } else if (args[0] === 'color') {
         if (args[1] === 'off' || args[1] === 'false') { settings.color = false; }
         else if (args[1] === 'on' || args[1] === 'true' || !args[1]) { settings.color = true; }

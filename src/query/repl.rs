@@ -2320,10 +2320,16 @@ fn handle_set(rest: &str, last_result: Option<&QueryResult>, max_width: usize, o
             "raw" => {
                 SESSION_SETTINGS.with(|s| s.borrow_mut().bytes_raw = true);
                 writeln!(out, "{cg}\u{2713} bytes: raw (numbers){cr}")?;
+                if let Some(res) = last_result {
+                    print_result(res, std::time::Duration::ZERO, max_width, out)?;
+                }
             }
             "human" => {
                 SESSION_SETTINGS.with(|s| s.borrow_mut().bytes_raw = false);
                 writeln!(out, "{cg}\u{2713} bytes: human (e.g. 4.3 KiB){cr}")?;
+                if let Some(res) = last_result {
+                    print_result(res, std::time::Duration::ZERO, max_width, out)?;
+                }
             }
             _ => warn_out("usage: !set bytes raw|human", out)?,
         },
@@ -2342,6 +2348,9 @@ fn handle_set(rest: &str, last_result: Option<&QueryResult>, max_width: usize, o
             let s = if val.is_empty() { "null".to_string() } else { val.to_string() };
             writeln!(out, "{cg}\u{2713} null: \"{s}\"{cr}")?;
             SESSION_SETTINGS.with(|ss| ss.borrow_mut().null_str = s);
+            if let Some(res) = last_result {
+                print_result(res, std::time::Duration::ZERO, max_width, out)?;
+            }
         }
         _ => writeln!(out, "{ce}unknown setting: {key}{cr}  {cd}(options: limit, bytes, color, null){cr}")?,
     }
