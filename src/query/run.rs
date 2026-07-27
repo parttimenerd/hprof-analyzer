@@ -1641,6 +1641,19 @@ pub fn collapse_union_results(
             }
         }
 
+        // LIMIT: re-apply the user LIMIT after OFFSET (when OFFSET is present the
+        // scan may have collected more rows than limit to account for skipping).
+        if g.offset.is_some() {
+            if let Some(n) = g.limit {
+                let n = n as usize;
+                if result.rows.len() > n {
+                    result.rows.truncate(n);
+                    result.truncated = true;
+                    result.row_count = result.rows.len() as u64;
+                }
+            }
+        }
+
         out.push(result);
     }
     out

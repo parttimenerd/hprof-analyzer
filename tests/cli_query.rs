@@ -5743,3 +5743,47 @@ fn not_between_filters_correctly() {
     assert!(count2 > 0, "BETWEEN 10 AND 100 should return >0 rows: {stdout2}");
 }
 
+#[test]
+fn limit_offset_with_where_returns_correct_page() {
+    // Regression: OFFSET with a late-phase WHERE (toString LIKE) used to return 0
+    // rows because the stage_runner was truncating to LIMIT before OFFSET was applied.
+    let Some(hprof) = mnemonics() else { return };
+    // There are 18 strings matching .*DAY; page 1 (LIMIT 3) and page 2 (LIMIT 3 OFFSET 3)
+    // must each have 3 disjoint rows.
+    let page1 = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query",
+            r#"SELECT toString(s) AS name FROM java.lang.String s WHERE toString(s) LIKE ".*DAY" ORDER BY name ASC LIMIT 3"#])
+        .output()
+        .unwrap();
+    assert!(page1.status.success(), "{}", String::from_utf8_lossy(&page1.stderr));
+
+    let page2 = Command::new(BIN)
+        .arg("query")
+        .arg(&hprof)
+        .args(["--query",
+            r#"SELECT toString(s) AS name FROM java.lang.String s WHERE toString(s) LIKE ".*DAY" ORDER BY name ASC LIMIT 3 OFFSET 3"#])
+        .output()
+        .unwrap();
+    assert!(page2.status.success(), "{}", String::from_utf8_lossy(&page2.stderr));
+
+    let s1 = String::from_utf8_lossy(&page1.stdout);
+    let s2 = String::from_utf8_lossy(&page2.stdout);
+
+    let data_rows = |s: &str| -> Vec<String> {
+        s.lines()
+            .filter(|l| !l.starts_with("==") && !l.starts_with("  ") && !l.starts_with('(') && !l.is_empty() && !l.contains("name") && !is_separator_line(l.trim()))
+            .map(|l| l.trim().to_string())
+            .collect()
+    };
+    let rows1 = data_rows(&s1);
+    let rows2 = data_rows(&s2);
+
+    assert_eq!(rows1.len(), 3, "page1 with WHERE should have 3 rows, got: {s1}");
+    assert_eq!(rows2.len(), 3, "page2 with WHERE+OFFSET should have 3 rows, got: {s2}");
+    for r in &rows1 {
+        assert!(!rows2.contains(r), "row {r:?} appeared in both pages (OFFSET with WHERE broken)");
+    }
+}
+

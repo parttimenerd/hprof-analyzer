@@ -28,6 +28,17 @@ pub(crate) static EMPTY_STRING_VALUES: std::sync::LazyLock<std::collections::Has
 pub static EMPTY_GC_ROOT_TAGS: std::sync::LazyLock<std::collections::HashMap<u32, u8>> =
     std::sync::LazyLock::new(std::collections::HashMap::new);
 
+/// Returns the row cap to use when collecting rows in a late stage.
+/// When OFFSET is set, the stage must collect `limit + offset` rows so
+/// `collapse_union_results` can drain the first `offset` then re-apply LIMIT.
+fn stage_limit(q: &Query) -> Option<u64> {
+    match (q.limit, q.offset) {
+        (Some(lim), Some(off)) => Some(lim.saturating_add(off)),
+        (Some(lim), None) => Some(lim),
+        (None, _) => None,
+    }
+}
+
 /// Human-readable label for an HPROF GC-root sub-tag (`types::heap::ROOT_*`), for
 /// `@GCRoots`/`@GCRootInfo`/`@info` in analyze mode. Labels follow MAT's GC-root
 /// naming (matching `report::format::gc_root_type_label`); an unrecognised code
@@ -469,7 +480,7 @@ fn dominator_rows(
     mut truncated: bool,
 ) -> QueryResult {
     let mut indices = indices.to_vec();
-    if let Some(limit) = q.limit {
+    if let Some(limit) = stage_limit(q) {
         if indices.len() as u64 > limit {
             indices.truncate(limit as usize);
             truncated = true;
@@ -586,7 +597,7 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
     }
 
     let mut truncated = entry.carry.truncated() || ctx.refwalk_truncated;
-    if let Some(limit) = q.limit {
+    if let Some(limit) = stage_limit(q) {
         if rows.len() as u64 > limit {
             rows.truncate(limit as usize);
             truncated = true;
@@ -698,7 +709,7 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
                 }
             }
             let mut truncated = truncated;
-            if let Some(limit) = q.limit {
+            if let Some(limit) = stage_limit(q) {
                 if out_rows.len() as u64 > limit {
                     out_rows.truncate(limit as usize);
                     truncated = true;
@@ -770,7 +781,7 @@ fn string_values_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> Quer
         }
     }
 
-    if let Some(limit) = q.limit {
+    if let Some(limit) = stage_limit(q) {
         if out_rows.len() as u64 > limit {
             out_rows.truncate(limit as usize);
             truncated = true;
@@ -1152,7 +1163,7 @@ fn array_index_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryR
         rows.push(row);
     }
     let mut truncated = entry.carry.truncated();
-    if let Some(limit) = q.limit {
+    if let Some(limit) = stage_limit(q) {
         if rows.len() as u64 > limit {
             rows.truncate(limit as usize);
             truncated = true;
@@ -1303,7 +1314,7 @@ fn join_retained(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResu
         }
     }
     let mut truncated = entry.carry.truncated();
-    if let Some(limit) = q.limit {
+    if let Some(limit) = stage_limit(q) {
         if rows.len() as u64 > limit {
             rows.truncate(limit as usize);
             truncated = true;
