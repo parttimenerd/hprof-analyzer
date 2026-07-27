@@ -1237,9 +1237,14 @@ fn collect_query_texts(opts: &AnalyzeOptions) -> io::Result<Vec<CollectedQuery>>
             let (text, viz, warning) = query::viz::split_directive(&full);
             // Validate parse eagerly so we can attach the line number.
             if let Err(e) = query::parse::parse(&text) {
+                let semi_hint = if e.0.contains(';') || text.contains(';') {
+                    " (each line is one query; semicolons are not supported — put each query on its own line)"
+                } else {
+                    ""
+                };
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    format!("--query-file '{qf}': parse error on line {line_num}: {}", e.0),
+                    format!("--query-file '{qf}': parse error on line {line_num}: {}{semi_hint}", e.0),
                 ));
             }
             collected.push(CollectedQuery {
