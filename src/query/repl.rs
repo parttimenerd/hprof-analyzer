@@ -1538,8 +1538,8 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                     let mut dev_null: Vec<u8> = Vec::new();
                                     match run_one(path, &q, path_depth, reachable_only, &mut cache, &mut dev_null) {
                                         Ok(res) => {
-                                            prev_result = last_result.clone();
                                             if res.rows.len() == 1 {
+                                                prev_result = last_result.clone();
                                                 let bytes_raw = SESSION_SETTINGS.with(|s| s.borrow().bytes_raw);
                                                 let key_w = res.columns.iter().map(|c| c.name.len()).max().unwrap_or(8);
                                                 let idx_w = res.columns.len().to_string().len();
@@ -1554,12 +1554,14 @@ pub fn run_repl(path: &str, path_depth: usize) -> io::Result<()> {
                                                     };
                                                     writeln!(stdout, "  {cd}{:>idx_w$}{cr}  {cc}{:<key_w$}{cr}  {vp}{val_str}{vs}", i + 1, col.name)?;
                                                 }
+                                                last_result = Some(res);
                                             } else if res.rows.is_empty() {
                                                 warn_out(&format!("(no object {cls}#{idx} found)"), &mut stdout)?;
                                             } else {
+                                                prev_result = last_result.clone();
                                                 print_result(&res, std::time::Duration::ZERO, max_width, &mut stdout)?;
+                                                last_result = Some(res);
                                             }
-                                            last_result = Some(res);
                                         }
                                         Err(e) => writeln!(stdout, "{ce}error: {e}{cr}")?,
                                     }
@@ -2118,8 +2120,8 @@ fn run_repl_line(
                         let mut dev_null: Vec<u8> = Vec::new();
                         match run_one(path, &q, path_depth, *reachable_only, cache, &mut dev_null) {
                             Ok(res) => {
-                                *prev_result = last_result.clone();
                                 if res.rows.len() == 1 {
+                                    *prev_result = last_result.clone();
                                     let bytes_raw = SESSION_SETTINGS.with(|s| s.borrow().bytes_raw);
                                     let key_w = res.columns.iter().map(|c| c.name.len()).max().unwrap_or(8);
                                     let idx_w = res.columns.len().to_string().len();
@@ -2134,12 +2136,14 @@ fn run_repl_line(
                                         };
                                         writeln!(out, "  {cd}{:>idx_w$}{cr}  {cc}{:<key_w$}{cr}  {vp}{val_str}{vs}", i + 1, col.name)?;
                                     }
+                                    *last_result = Some(res);
                                 } else if res.rows.is_empty() {
                                     warn_out(&format!("(no object {cls}#{idx} found)"), out)?;
                                 } else {
+                                    *prev_result = last_result.clone();
                                     print_result(&res, std::time::Duration::ZERO, *max_width, out)?;
+                                    *last_result = Some(res);
                                 }
-                                *last_result = Some(res);
                             }
                             Err(e) => writeln!(out, "{ce}error: {e}{cr}")?,
                         }
