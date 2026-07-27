@@ -115,8 +115,8 @@ hr { border: 0; border-top: 1px solid #1e1e38; margin: 2rem 0; }
 <a href="#aggregates" style="padding-left:1.2rem">Aggregates</a>
 <a href="#membership-with-in" style="padding-left:1.2rem">Membership with IN</a>
 <a href="#union" style="padding-left:1.2rem">UNION</a>
-<a href="#visualization-directives-viz" >Visualization directives (`-- @viz`)</a>
-<a href="#cli-gotcha-use-the-query-equals-form-for-directives" style="padding-left:1.2rem">CLI gotcha: use the `--query=` equals form for directives</a>
+<a href="#visualization-directives-viz" >Visualization directives (<code>-- @viz</code>)</a>
+<a href="#cli-gotcha-use-the-query-equals-form-for-directives" style="padding-left:1.2rem">CLI gotcha: use the <code>--query=</code> equals form for directives</a>
 <a href="#two-execution-paths-query-only-vs-full-report" >Two execution paths: query-only vs. full report</a>
 <a href="#query-files-and-config" >Query files and config</a>
 <a href="#server-subcommand" >server subcommand</a>
@@ -126,7 +126,7 @@ hr { border: 0; border-top: 1px solid #1e1e38; margin: 2rem 0; }
 <a href="#retained-sizes-and-full-analysis-queries" style="padding-left:1.2rem">Retained sizes and full-analysis queries</a>
 <a href="#limiting-result-rows" style="padding-left:1.2rem">Limiting result rows</a>
 <a href="#oql-body-format" style="padding-left:1.2rem">OQL body format</a>
-<a href="#ndjson-streaming-post-stream" style="padding-left:1.2rem">NDJSON streaming (`POST /stream`)</a>
+<a href="#ndjson-streaming-post-stream" style="padding-left:1.2rem">NDJSON streaming (<code>POST /stream</code>)</a>
 <a href="#error-responses" style="padding-left:1.2rem">Error responses</a>
 <a href="#example-workflow" style="padding-left:1.2rem">Example workflow</a>
 <a href="#eclipse-mat-oql-compatibility" >Eclipse MAT OQL compatibility</a>
@@ -135,7 +135,7 @@ hr { border: 0; border-top: 1px solid #1e1e38; margin: 2rem 0; }
 <a href="#differences-from-mat" style="padding-left:1.2rem">Differences from MAT</a>
 <a href="#not-yet-supported" style="padding-left:1.2rem">Not yet supported</a>
 <a href="#silent-nulls-not-an-error-but-worth-knowing" style="padding-left:1.2rem">Silent NULLs (not an error, but worth knowing)</a>
-<a href="#query-file-parse-error-format" style="padding-left:1.2rem">`--query-file` parse error format</a>
+<a href="#query-file-parse-error-format" style="padding-left:1.2rem"><code>--query-file</code> parse error format</a>
   <div class="nav-title" style="margin-top:16px">Links</div>
   <a href="/">Browser REPL</a>
   <a href="/reports/">Sample Reports</a>
@@ -144,14 +144,20 @@ hr { border: 0; border-top: 1px solid #1e1e38; margin: 2rem 0; }
 <main>
 <h1 id="oql-object-query-language">OQL — Object Query Language</h1>
 
-<p><code>hprof-analyzer</code> ships a SQL-flavoured query language, modelled on Eclipse MAT's</p>
+<p><code>hprof-analyzer</code> ships a SQL-flavoured query language, modelled on Eclipse MAT&#x27;s</p>
 <p>OQL, for interrogating a heap dump. You can run queries three ways:</p>
 
-<p>1. <strong><code>query</code> subcommand</strong> — parse the dump once and print result tables to the</p>
+<ol>
+<li><strong><code>query</code> subcommand</strong> — parse the dump once and print result tables to the</li>
+</ol>
 <p>   terminal (or start an interactive REPL). Fast; no full report is built.</p>
-<p>2. <strong><code>--query</code> / <code>--query-file</code> on the main command</strong> — run queries <em>and</em> fold</p>
+<ol>
+<li><strong><code>--query</code> / <code>--query-file</code> on the main command</strong> — run queries <em>and</em> fold</li>
+</ol>
 <p>   their results into a full Markdown/HTML/JSON report.</p>
-<p>3. <strong><code>[[query]]</code> entries in a config file</strong> — persist a query set alongside a</p>
+<ol>
+<li><strong><code>[[query]]</code> entries in a config file</strong> — persist a query set alongside a</li>
+</ol>
 <p>   dump so every report includes the same views.</p>
 
 <p>Every example below was run against <code>tests/fixtures/dump_4_philosophers.hprof</code>.</p>
@@ -193,19 +199,10 @@ oql&gt; SELECT @displayName FROM java.lang.Thread LIMIT 3</code></pre>
 <ul>
 <li><code>*</code> — project the matched object itself.</li>
 <li>A bare alias (<code>s</code>) — projects the object, same as <code>*</code>.</li>
-<li>An attribute: <code>@objectId</code>, <code>@objectAddress</code>, <code>@usedHeapSize</code>,</li>
-</ul>
-<p>  <code>@retainedHeapSize</code>¹, <code>@displayName</code>, <code>@length</code>, <code>@inbounds</code>¹, <code>@outbounds</code>¹.</p>
-<ul>
+<li>An attribute: <code>@objectId</code>, <code>@objectAddress</code>, <code>@usedHeapSize</code>, <code>@retainedHeapSize</code>¹, <code>@displayName</code>, <code>@length</code>, <code>@inbounds</code>¹, <code>@outbounds</code>¹.</li>
 <li>A field path: <code>s.fieldName</code>, <code>s.a.b</code>.</li>
-<li>A function: <code>classof(x)</code>, <code>toString(x)</code>, <code>path(a, b)</code>, <code>dominators(x)</code>¹,</li>
-</ul>
-<p>  <code>dominatorof(x)</code>¹.</p>
-<ul>
-<li>An aggregate: <code>COUNT(*)</code>, <code>SUM(e)</code>, <code>MIN(e)</code>, <code>MAX(e)</code>, <code>AVG(e)</code>,</li>
-</ul>
-<p>  <code>MEDIAN(e)</code>, <code>PERCENTILE(e, &lt;int&gt;)</code>.</p>
-<ul>
+<li>A function: <code>classof(x)</code>, <code>toString(x)</code>, <code>path(a, b)</code>, <code>dominators(x)</code>¹, <code>dominatorof(x)</code>¹.</li>
+<li>An aggregate: <code>COUNT(*)</code>, <code>SUM(e)</code>, <code>MIN(e)</code>, <code>MAX(e)</code>, <code>AVG(e)</code>, <code>MEDIAN(e)</code>, <code>PERCENTILE(e, &lt;int&gt;)</code>.</li>
 <li><code>&lt;expr&gt; AS &lt;name&gt;</code> — rename the output column.</li>
 </ul>
 
@@ -228,11 +225,7 @@ oql&gt; SELECT @displayName FROM java.lang.Thread LIMIT 3</code></pre>
 <li>Comparisons: <code>=</code>, <code>!=</code>, <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code>.</li>
 <li><code>LIKE &quot;regex&quot;</code> / <code>NOT LIKE &quot;regex&quot;</code> — RHS must be a string literal.</li>
 <li><code>&lt;attr&gt; INSTANCEOF &lt;class&gt;</code>.</li>
-<li><code>&lt;attr&gt; IN ( SELECT @objectAddress FROM … )</code> — membership against a subquery</li>
-</ul>
-<p>  that selects a single address-valued column. (<code>IN</code> takes a <strong>subquery</strong>, not a</p>
-<p>  literal value list.)</p>
-<ul>
+<li><code>&lt;attr&gt; IN ( SELECT @objectAddress FROM … )</code> — membership against a subquery that selects a single address-valued column. (<code>IN</code> takes a <strong>subquery</strong>, not a literal value list.)</li>
 <li>Combine with <code>AND</code>, <code>OR</code>, <code>NOT</code>, parentheses.</li>
 </ul>
 
@@ -241,9 +234,8 @@ oql&gt; SELECT @displayName FROM java.lang.Thread LIMIT 3</code></pre>
 <ul>
 <li><code>ORDER BY &lt;expr&gt; [ASC|DESC]</code> sorts the full result before <code>LIMIT</code>.</li>
 <li><code>LIMIT n</code> caps rows. In a <code>UNION</code>, a trailing <code>LIMIT</code> caps the combined result.</li>
-<li><code>UNION</code> concatenates branches. Aggregates are <strong>not</strong> allowed inside a UNION</li>
+<li><code>UNION</code> concatenates branches. Aggregates are <strong>not</strong> allowed inside a UNION branch.</li>
 </ul>
-<p>  branch.</p>
 
 <h3 id="not-supported">Not supported</h3>
 
@@ -417,7 +409,7 @@ $ hprof-analyzer query heap.hprof --query &quot;SELECT PERCENTILE(@usedHeapSize,
 PERCENTILE(95)(@usedHeapSize)
 24</code></pre>
 
-<p><code>PERCENTILE</code>'s second argument is an <strong>integer</strong> percentile (<code>95</code>), not a</p>
+<p><code>PERCENTILE</code>&#x27;s second argument is an <strong>integer</strong> percentile (<code>95</code>), not a</p>
 <p>fraction (<code>0.95</code>).</p>
 
 <h3 id="membership-with-in">Membership with IN</h3>
@@ -434,7 +426,7 @@ COUNT(*)
 
 <hr>
 
-<h2 id="visualization-directives-viz">Visualization directives (`-- @viz`)</h2>
+<h2 id="visualization-directives-viz">Visualization directives (<code>-- @viz</code>)</h2>
 
 <p>Prefix a query with a <code>-- @viz</code> comment line to declare how its result should be</p>
 <p>drawn in the <strong>report</strong> (HTML rich charts, Markdown ASCII bars). The directive is</p>
@@ -467,11 +459,10 @@ SELECT @displayName, @usedHeapSize FROM java.lang.Thread ORDER BY @usedHeapSize 
 
 <ul>
 <li><strong>HTML report:</strong> renders a horizontal-bar chart / pie / treemap.</li>
-<li><strong>Markdown report:</strong> renders ASCII bars (treemap degrades to a</li>
+<li><strong>Markdown report:</strong> renders ASCII bars (treemap degrades to a &quot;chart available in the HTML report&quot; note plus the table).</li>
 </ul>
-<p>  "chart available in the HTML report" note plus the table).</p>
 
-<h3 id="cli-gotcha-use-the-query-equals-form-for-directives">CLI gotcha: use the `--query=` equals form for directives</h3>
+<h3 id="cli-gotcha-use-the-query-equals-form-for-directives">CLI gotcha: use the <code>--query=</code> equals form for directives</h3>
 
 <p><code>clap</code> treats a leading <code>--</code> in an argument value as the start of a flag, so</p>
 <p><code>--query &quot;-- @viz …&quot;</code> is <strong>rejected</strong>:</p>
@@ -497,8 +488,8 @@ SELECT @displayName, @usedHeapSize FROM java.lang.Thread ORDER BY @usedHeapSize 
 
 <table>
 <tr><th>Needs the full pipeline</th><th>query-only error</th></tr>
-<tr><td><code>@retainedHeapSize</code>, <code>AS RETAINED SET</code></td><td>"…requires the full analysis pipeline…"</td></tr>
-<tr><td><code>dominators(x)</code>, <code>dominatorof(x)</code></td><td>"dominator queries … require the full analysis pipeline…"</td></tr>
+<tr><td><code>@retainedHeapSize</code>, <code>AS RETAINED SET</code></td><td>&quot;…requires the full analysis pipeline…&quot;</td></tr>
+<tr><td><code>dominators(x)</code>, <code>dominatorof(x)</code></td><td>&quot;dominator queries … require the full analysis pipeline…&quot;</td></tr>
 <tr><td><code>@inbounds</code>, <code>@outbounds</code>, <code>path(a, b)</code></td><td>reference-graph queries need the full path</td></tr>
 </table>
 
@@ -553,7 +544,7 @@ oql = &quot;SELECT COUNT(*) FROM INSTANCEOF java.util.Map&quot;</code></pre>
 <tr><th>Method</th><th>Path</th><th>Description</th></tr>
 <tr><td>GET</td><td><code>/</code></td><td>Welcome + endpoint catalog</td></tr>
 <tr><td>GET</td><td><code>/version</code></td><td><code>{&quot;version&quot;:…,&quot;endpoints&quot;:[…]}</code></td></tr>
-<tr><td>GET</td><td><code>/status</code></td><td>`{"status":"ready"\</td><td>"analyzing"\</td><td>"not_started"}`</td></tr>
+<tr><td>GET</td><td><code>/status</code></td><td>`{&quot;status&quot;:&quot;ready&quot;\</td><td>&quot;analyzing&quot;\</td><td>&quot;not_started&quot;}`</td></tr>
 <tr><td>POST</td><td><code>/analyze</code></td><td>Trigger full analysis</td></tr>
 <tr><td>POST</td><td><code>/</code></td><td>Run OQL → JSON <code>QueryResult</code></td></tr>
 <tr><td>POST</td><td><code>/query</code></td><td>Alias of <code>POST /</code></td></tr>
@@ -630,7 +621,7 @@ $ curl -s http://127.0.0.1:7070/ \
 
 <p>Request bodies larger than <strong>64 KiB</strong> are rejected with HTTP 413.</p>
 
-<h3 id="ndjson-streaming-post-stream">NDJSON streaming (`POST /stream`)</h3>
+<h3 id="ndjson-streaming-post-stream">NDJSON streaming (<code>POST /stream</code>)</h3>
 
 <p><code>POST /stream</code> runs an OQL query and returns results as</p>
 <p><a href="https://ndjson.org/">Newline-Delimited JSON</a>: one JSON object per line,</p>
@@ -695,13 +686,13 @@ $ curl -s http://127.0.0.1:7070/stream \
 
 <h2 id="eclipse-mat-oql-compatibility">Eclipse MAT OQL compatibility</h2>
 
-<p><code>hprof-analyzer</code>'s OQL is modelled on Eclipse MAT's OQL dialect. This section</p>
+<p><code>hprof-analyzer</code>&#x27;s OQL is modelled on Eclipse MAT&#x27;s OQL dialect. This section</p>
 <p>documents what works identically, what works with known differences, and what is</p>
 <p>not yet supported.</p>
 
 <h3 id="extensions-beyond-mat">Extensions beyond MAT</h3>
 
-<p>These features are available in <code>hprof-analyzer</code> but not in Eclipse MAT's OQL:</p>
+<p>These features are available in <code>hprof-analyzer</code> but not in Eclipse MAT&#x27;s OQL:</p>
 
 <table>
 <tr><th>Feature</th><th>Example</th></tr>
@@ -728,7 +719,7 @@ $ curl -s http://127.0.0.1:7070/stream \
 <tr><td><code>FROM &quot;&lt;regex&gt;&quot;</code> double-quoted class-name regex</td><td><code>FROM &quot;java\.util\..*&quot;</code></td></tr>
 <tr><td><code>FROM (subquery)</code> semi-join</td><td><code>FROM (SELECT * FROM java.lang.Thread) t</code></td></tr>
 <tr><td><code>WHERE</code>, <code>ORDER BY</code>, <code>LIMIT</code>, <code>UNION</code>, <code>SELECT DISTINCT</code></td><td>standard SQL clauses</td></tr>
-<tr><td><code>LIKE &quot;&lt;regex&gt;&quot;</code> / <code>NOT LIKE</code></td><td><code>WHERE toString(s) LIKE &quot;.&lt;em&gt;error.&lt;/em&gt;&quot;</code></td></tr>
+<tr><td><code>LIKE &quot;&lt;regex&gt;&quot;</code> / <code>NOT LIKE</code></td><td><code>WHERE toString(s) LIKE &quot;.<em>error.</em>&quot;</code></td></tr>
 <tr><td><code>WHERE x INSTANCEOF C</code></td></tr>
 <tr><td><code>SELECT … AS RETAINED SET</code>, <code>SELECT OBJECTS …</code></td><td>MAT set-operation markers (no-ops here)</td></tr>
 <tr><td><code>&lt;expr&gt; AS &lt;name&gt;</code> column alias</td><td><code>@usedHeapSize AS bytes</code></td></tr>
@@ -746,7 +737,7 @@ $ curl -s http://127.0.0.1:7070/stream \
 <table>
 <tr><th>Area</th><th>MAT</th><th>hprof-analyzer</th></tr>
 <tr><td><strong>Unreachable objects</strong></td><td>Discarded at index time</td><td>Included in raw scan; MAT ⊆ ours</td></tr>
-<tr><td><strong><code>s.count</code> / <code>s.offset</code> on String</strong></td><td>Works (pre-JDK9 layout)</td><td>"Unknown field" — use <code>s.value</code>, <code>s.coder</code>, <code>s.hash</code> (modern JDK)</td></tr>
+<tr><td><strong><code>s.count</code> / <code>s.offset</code> on String</strong></td><td>Works (pre-JDK9 layout)</td><td>&quot;Unknown field&quot; — use <code>s.value</code>, <code>s.coder</code>, <code>s.hash</code> (modern JDK)</td></tr>
 <tr><td><strong>Integer <code>/0</code></strong></td><td>Throws <code>ArithmeticException</code></td><td>Returns <code>NULL</code> — analyzer never crashes on a bad row</td></tr>
 <tr><td><strong><code>toString()</code> on non-String</strong></td><td>Calls JVM <code>toString()</code> via reflection</td><td>Returns <code>NULL</code> — static analysis cannot invoke live JVM methods</td></tr>
 <tr><td><strong><code>get(n)</code> indexed access</strong></td><td>Works on arrays/collections</td><td>Rejected — dereference the backing field directly (e.g. <code>a.elementData</code>)</td></tr>
@@ -774,7 +765,7 @@ $ curl -s http://127.0.0.1:7070/stream \
 
 <p>Both limitations require extending the field-type schema (<code>FieldSchema</code> currently provides names only, not types). They are tracked for a future pass.</p>
 
-<h3 id="query-file-parse-error-format">`--query-file` parse error format</h3>
+<h3 id="query-file-parse-error-format"><code>--query-file</code> parse error format</h3>
 
 <p>When <code>--query-file</code> contains a syntax error, the error should include the</p>
 <p>filename and 1-based line number so you can jump straight to the offending line:</p>
@@ -784,9 +775,9 @@ $ curl -s http://127.0.0.1:7070/stream \
     | ^^^^^ expected SELECT
   hint: did you mean SELECT?</code></pre>
 
-<p>> <strong>Note:</strong> Line numbers in <code>--query-file</code> errors are not yet wired up. The</p>
-<p>> current output shows the parse error text but without the filename/line</p>
-<p>> prefix. This will be fixed in a future release.</p>
+<blockquote><p><strong>Note:</strong> Line numbers in <code>--query-file</code> errors are not yet wired up. The</p></blockquote>
+<blockquote><p>current output shows the parse error text but without the filename/line</p></blockquote>
+<blockquote><p>prefix. This will be fixed in a future release.</p></blockquote>
 
 
 <hr>

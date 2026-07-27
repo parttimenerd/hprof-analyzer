@@ -17,10 +17,13 @@ def esc(s):
     return html_mod.escape(s)
 
 def inline(s):
-    s = re.sub(r'\*\*(.+?)\*\*', lambda m: f'<strong>{esc(m.group(1))}</strong>', s)
-    s = re.sub(r'(?<!\w)\*(.+?)\*(?!\w)', lambda m: f'<em>{esc(m.group(1))}</em>', s)
-    s = re.sub(r'`([^`]+)`', lambda m: f'<code>{esc(m.group(1))}</code>', s)
-    s = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', lambda m: f'<a href="{esc(m.group(2))}">{esc(m.group(1))}</a>', s)
+    # Escape HTML-special chars in the base string first
+    s = esc(s)
+    # Now apply markup patterns (groups are already-escaped or safe literals)
+    s = re.sub(r'\*\*(.+?)\*\*', lambda m: f'<strong>{m.group(1)}</strong>', s)
+    s = re.sub(r'(?<!\w)\*(.+?)\*(?!\w)', lambda m: f'<em>{m.group(1)}</em>', s)
+    s = re.sub(r'`([^`]+)`', lambda m: f'<code>{m.group(1)}</code>', s)
+    s = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', lambda m: f'<a href="{m.group(2)}">{m.group(1)}</a>', s)
     return s
 
 def convert(md):
@@ -32,6 +35,7 @@ def convert(md):
     fence_buf = []
     in_table = False
     in_list = False
+    in_olist = False
     table_rows = []
 
     def flush_table(rows):
@@ -57,6 +61,9 @@ def convert(md):
                 if in_list:
                     out.append('</ul>')
                     in_list = False
+                if in_olist:
+                    out.append('</ol>')
+                    in_olist = False
             else:
                 in_fence = False
                 lang_class = f' class="language-{esc(fence_lang)}"' if fence_lang else ''
@@ -80,6 +87,9 @@ def convert(md):
                 if in_list:
                     out.append('</ul>')
                     in_list = False
+                if in_olist:
+                    out.append('</ol>')
+                    in_olist = False
                 in_table = True
                 table_rows = []
             table_rows.append(cells)
@@ -96,10 +106,30 @@ def convert(md):
             if in_list:
                 out.append('</ul>')
                 in_list = False
+            if in_olist:
+                out.append('</ol>')
+                in_olist = False
             level = len(m.group(1))
             text = m.group(2)
             slug = re.sub(r'[^a-z0-9]+', '-', text.lower()).strip('-')
-            out.append(f'<h{level} id="{slug}">{esc(text)}</h{level}>')
+            out.append(f'<h{level} id="{slug}">{inline(text)}</h{level}>')
+            i += 1
+            continue
+
+        # Blockquote
+        m = re.match(r'^> ?(.*)', line)
+        if m:
+            if in_list:
+                out.append('</ul>')
+                in_list = False
+            if in_olist:
+                out.append('</ol>')
+                in_olist = False
+            if in_table:
+                out.append(flush_table(table_rows))
+                table_rows = []
+                in_table = False
+            out.append(f'<blockquote><p>{inline(m.group(1))}</p></blockquote>')
             i += 1
             continue
 
@@ -107,9 +137,29 @@ def convert(md):
             if in_list:
                 out.append('</ul>')
                 in_list = False
+            if in_olist:
+                out.append('</ol>')
+                in_olist = False
             out.append('<hr>')
             i += 1
             continue
+
+        # Ordered list item
+        m = re.match(r'^\d+\. (.*)', line)
+        if m:
+            if in_list:
+                out.append('</ul>')
+                in_list = False
+            if not in_olist:
+                out.append('<ol>')
+                in_olist = True
+            out.append(f'<li>{inline(m.group(1))}</li>')
+            i += 1
+            continue
+        else:
+            if in_olist:
+                out.append('</ol>')
+                in_olist = False
 
         m = re.match(r'^[-*] (.*)', line)
         if m:
@@ -120,10 +170,22 @@ def convert(md):
             i += 1
             continue
 
+        # List item continuation (indented lines while in_list)
+        if in_list and line.startswith('  ') and line.strip():
+            if out and out[-1].endswith('</li>'):
+                out[-1] = out[-1][:-5] + ' ' + inline(line.strip()) + '</li>'
+            else:
+                out.append(f'<li>{inline(line.strip())}</li>')
+            i += 1
+            continue
+
         if line.strip() == '':
             if in_list:
                 out.append('</ul>')
                 in_list = False
+            if in_olist:
+                out.append('</ol>')
+                in_olist = False
             out.append('')
             i += 1
             continue
@@ -131,11 +193,16 @@ def convert(md):
         if in_list:
             out.append('</ul>')
             in_list = False
+        if in_olist:
+            out.append('</ol>')
+            in_olist = False
         out.append(f'<p>{inline(line)}</p>')
         i += 1
 
     if in_list:
         out.append('</ul>')
+    if in_olist:
+        out.append('</ol>')
     if in_table:
         out.append(flush_table(table_rows))
 
@@ -143,11 +210,11 @@ def convert(md):
 
 body_md = convert(md)
 
-headings = re.findall(r'<h([23]) id="([^"]+)">([^<]+)</h\1>', body_md)
+headings = re.findall(r'<h([23]) id="([^"]+)">(.*?)</h\1>', body_md)
 nav_items = []
 for level, slug, text in headings:
     indent = 'style="padding-left:1.2rem"' if level == '3' else ''
-    nav_items.append(f'<a href="#{slug}" {indent}>{html_mod.escape(text)}</a>')
+    nav_items.append(f'<a href="#{slug}" {indent}>{text}</a>')
 nav_html = '\n'.join(nav_items)
 
 extra_html = '''
