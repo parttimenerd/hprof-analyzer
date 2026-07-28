@@ -76,6 +76,9 @@ impl<'a> IdMap<'a> {
     pub fn to_addr(&self, dense: u32) -> u64 {
         self.addr_of.get(dense as usize).copied().unwrap_or(0)
     }
+    pub fn to_addr_opt(&self, dense: u32) -> Option<u64> {
+        self.addr_of.get(dense as usize).copied()
+    }
     #[cfg(test)]
     pub fn identity(_n: usize) -> Self {
         Self { addr_of: &[] }
@@ -442,18 +445,18 @@ fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
                 let idx = get_filtered_idx(entry);
                 let children = run_dominator_children(&idx, *cap, ctx);
                 let truncated = entry.carry.truncated() || children.len() >= *cap;
-                return dominator_rows(entry, q, &children, truncated);
+                return dominator_rows(entry, q, &children, truncated, ctx);
             }
             StageOp::DominatorOf => {
                 let idx = get_filtered_idx(entry);
                 let idoms = run_dominator_of(&idx, ctx);
-                return dominator_rows(entry, q, &idoms, entry.carry.truncated());
+                return dominator_rows(entry, q, &idoms, entry.carry.truncated(), ctx);
             }
             StageOp::RetainedSet { cap } => {
                 let seeds = get_filtered_idx(entry);
                 let (set, trunc) = run_retained_set(&seeds, *cap, ctx);
                 let truncated = entry.carry.truncated() || trunc;
-                return dominator_rows(entry, q, &set, truncated);
+                return dominator_rows(entry, q, &set, truncated, ctx);
             }
             // The plan emits one RefWalkResolve op per hop, but the whole walk is
             // driven off the query's RefPath AST in one pass here — the first op
@@ -464,7 +467,7 @@ fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
             StageOp::EdgeLookup { dir } => {
                 let idx = get_filtered_idx(entry);
                 let neighbours = edge_lookup(&idx, *dir, ctx);
-                return dominator_rows(entry, q, &neighbours, entry.carry.truncated());
+                return dominator_rows(entry, q, &neighbours, entry.carry.truncated(), ctx);
             }
             StageOp::BoundedPath { depth_cap } => {
                 // Bounded forward walk from each carried seed; concatenate reached
@@ -480,7 +483,7 @@ fn run_entry(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
                     reached.extend(nodes);
                     capped |= c;
                 }
-                return dominator_rows(entry, q, &reached, entry.carry.truncated() || capped);
+                return dominator_rows(entry, q, &reached, entry.carry.truncated() || capped, ctx);
             }
             StageOp::ResolveStringValues => {
                 return string_values_rows(entry, q, ctx);
@@ -518,6 +521,7 @@ fn dominator_rows(
     q: &Query,
     indices: &[u32],
     mut truncated: bool,
+    ctx: &LateCtx,
 ) -> QueryResult {
     let mut indices = indices.to_vec();
     if let Some(limit) = stage_limit(q) {
@@ -541,11 +545,9 @@ fn dominator_rows(
         .iter()
         .map(|&i| {
             vec![QueryValue::ObjRef {
-                // Dense index (see the string/scan `SELECT *` note): the late
-                // id_map is empty, so `to_addr` would render every row as `@0`.
                 index: i as u64,
                 class: "?".to_string(),
-                addr: None,
+                addr: ctx.id_map.to_addr_opt(i),
             }]
         })
         .collect();
@@ -648,13 +650,9 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
                     eval_late_expr_multi(e, s, ret, ctx, &like_regexes)
                 }
                 SelectItem::Star => QueryValue::ObjRef {
-                    // Emit the DENSE object index (matching the scan path's
-                    // `SELECT *`, execute.rs), not an address: the late id_map is
-                    // intentionally empty (the dense address table is compressed
-                    // away to protect the RSS peak), so `to_addr` would yield 0.
                     index: s as u64,
                     class: "?".to_string(),
-                    addr: None,
+                    addr: ctx.id_map.to_addr_opt(s),
                 },
                 _ => QueryValue::Null,
             })
@@ -1145,12 +1143,9 @@ fn project_string_row_item(
             eval_late_expr_multi(e, dense, ret, ctx, like_regexes)
         }
         SelectItem::Star => QueryValue::ObjRef {
-            // Dense index, matching the scan-path `SELECT *` convention: the late
-            // id_map is empty (address table compressed away), so `to_addr` here
-            // would yield a misleading `@0` for every row.
             index: dense as u64,
             class: ctx.class_name_of(dense).unwrap_or("java.lang.String").to_string(),
-            addr: None,
+            addr: ctx.id_map.to_addr_opt(dense),
         },
         _ => QueryValue::Null,
     }
@@ -1208,7 +1203,7 @@ fn project_array_index_item(
         SelectItem::Star => QueryValue::ObjRef {
             index: dense as u64,
             class: class_name.to_string(),
-            addr: None,
+            addr: ctx.id_map.to_addr_opt(dense),
         },
         _ => QueryValue::Null,
     }
@@ -1295,11 +1290,8 @@ fn project_tail(
     match tail {
         Attr::ObjectId => Some(QueryValue::Int(dense as i64)),
         // `@objectAddress` tail (e.g. `e.getKey()` → `RefPath{tail:ObjectAddress}`).
-        // The dense→address table is compressed away before the late window
-        // (`id_map` is empty in both the report and query paths), so the walked-to
-        // object's address is captured at scan time keyed by its own dense index
-        // (see `capture_refwalk`) and read back from the tail table here. Fall back
-        // to `id_map.to_addr` for contexts that do populate it (unit tests).
+        // Prefer the scan-time tail capture (keyed by dense index); fall back to
+        // id_map for callers that populate it (query late window after our fix).
         Attr::ObjectAddress => match ctx.refwalk_tail(dense) {
             Some(v) => Some(v.clone()),
             None => Some(QueryValue::Int(ctx.id_map.to_addr(dense) as i64)),
