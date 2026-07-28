@@ -142,6 +142,291 @@ function FlatTreemap({
 // Export for use outside the bundle (shell.js /viz command and dashboard)
 export { FlatTreemap };
 
+// ── ZoomableTreemap — interactive squarify treemap with drill-down + flame view ──
+// Generic over node type T. Clicking a tile with children zooms into that subtree;
+// a breadcrumb bar lets users navigate back up. A toggle switches to flamegraph view.
+
+function buildColorMap<T>(root: T, getChildren: (n: T) => T[], getLabel: (n: T) => string): Map<string, number> {
+  const map = new Map<string, number>();
+  getChildren(root).forEach((c, i) => map.set(getLabel(c), i));
+  return map;
+}
+
+function findAncestorLabel<T>(
+  node: T,
+  getChildren: (n: T) => T[],
+  getLabel: (n: T) => string,
+  target: T,
+  depth: number,
+): string | null {
+  if (node === target) return getLabel(node);
+  if (depth === 0) return null;
+  for (const c of getChildren(node)) {
+    if (c === target || findDescendant(c, getChildren, target)) {
+      return getLabel(c);
+    }
+  }
+  return null;
+}
+
+function findDescendant<T>(node: T, getChildren: (n: T) => T[], target: T): boolean {
+  for (const c of getChildren(node)) {
+    if (c === target || findDescendant(c, getChildren, target)) return true;
+  }
+  return false;
+}
+
+// For a node in the tree, find the label of the top-level child of `root` that
+// is an ancestor of `node` (or `node` itself if it IS a top-level child).
+function topLevelAncestorLabel<T>(
+  root: T,
+  getChildren: (n: T) => T[],
+  getLabel: (n: T) => string,
+  node: T,
+): string {
+  const topChildren = getChildren(root);
+  for (const c of topChildren) {
+    if (c === node || findDescendant(c, getChildren, node)) return getLabel(c);
+  }
+  return getLabel(node);
+}
+
+// Build flat levels for the flamegraph: each level is an array of { node, pct, color }
+interface FlameCell<T> { node: T; pct: number; colorIdx: number; }
+
+function buildFlameLevels<T>(
+  currentNode: T,
+  getChildren: (n: T) => T[],
+  getValue: (n: T) => number,
+  colorMap: Map<string, number>,
+  getLabel: (n: T) => string,
+  root: T,
+  maxDepth = 8,
+): FlameCell<T>[][] {
+  const levels: FlameCell<T>[][] = [];
+  const totalValue = getValue(currentNode);
+  if (totalValue <= 0) return levels;
+
+  // Level 0: the current node itself (full width)
+  const rootColorIdx = colorMap.get(topLevelAncestorLabel(root, getChildren, getLabel, currentNode)) ?? 0;
+  levels.push([{ node: currentNode, pct: 100, colorIdx: rootColorIdx }]);
+
+  // Subsequent levels: children proportional to their parent's fraction of total
+  // We track segments: { node, startPct, widthPct } then resolve children
+  type Seg = { node: T; startPct: number; widthPct: number };
+  let currentSegs: Seg[] = [{ node: currentNode, startPct: 0, widthPct: 100 }];
+
+  for (let d = 0; d < maxDepth - 1; d++) {
+    const nextSegs: Seg[] = [];
+    const level: FlameCell<T>[] = [];
+    for (const seg of currentSegs) {
+      const kids = [...getChildren(seg.node)].sort((a, b) => getValue(b) - getValue(a));
+      const kidTotal = kids.reduce((s, k) => s + getValue(k), 0);
+      if (kidTotal <= 0 || kids.length === 0) continue;
+      let cursor = seg.startPct;
+      for (const kid of kids) {
+        const kidPct = (getValue(kid) / kidTotal) * seg.widthPct;
+        if (kidPct < 0.1) continue;
+        const ci = colorMap.get(topLevelAncestorLabel(root, getChildren, getLabel, kid)) ?? 0;
+        level.push({ node: kid, pct: kidPct, colorIdx: ci });
+        nextSegs.push({ node: kid, startPct: cursor, widthPct: kidPct });
+        cursor += kidPct;
+      }
+    }
+    if (level.length === 0) break;
+    levels.push(level);
+    currentSegs = nextSegs;
+  }
+  return levels;
+}
+
+export function ZoomableTreemap<T>({
+  root,
+  getChildren,
+  getValue,
+  getLabel,
+  fmt,
+  height = 320,
+}: {
+  root: T;
+  getChildren: (n: T) => T[];
+  getValue: (n: T) => number;
+  getLabel: (n: T) => string;
+  fmt: (n: number) => string;
+  height?: number;
+}) {
+  const [path, setPath] = React.useState<T[]>([]);
+  const [mode, setMode] = React.useState<"treemap" | "flame">("treemap");
+  const ref = React.useRef<HTMLDivElement>(null);
+  const [w, setW] = React.useState(600);
+
+  React.useLayoutEffect(() => {
+    if (!ref.current) return;
+    const ro = new ResizeObserver((entries) => {
+      const bw = entries[0]?.contentRect.width;
+      if (bw && bw > 0) setW(Math.floor(bw));
+    });
+    ro.observe(ref.current);
+    return () => ro.disconnect();
+  }, []);
+
+  // Reset zoom when root changes
+  React.useEffect(() => { setPath([]); }, [root]);
+
+  const currentNode = path.length > 0 ? path[path.length - 1] : root;
+  const children = getChildren(currentNode).filter((c) => getValue(c) > 0);
+
+  // Color map: keyed by top-level-child label of the ORIGINAL root (stable across zooms)
+  const colorMap = React.useMemo(
+    () => buildColorMap(root, getChildren, getLabel),
+    [root],
+  );
+
+  const getColor = (node: T) => {
+    const lbl = topLevelAncestorLabel(root, getChildren, getLabel, node);
+    return PALETTE[(colorMap.get(lbl) ?? 0) % PALETTE.length];
+  };
+
+  // d3 treemap layout for treemap mode
+  const nodes = React.useMemo(() => {
+    if (children.length === 0 || w < 10) return [];
+    type Leaf = { node: T; value: number };
+    const leaves: Leaf[] = children.map((c) => ({ node: c, value: getValue(c) }));
+    const hierarchyRoot = hierarchy<{ node: T | null; value: number; children?: Leaf[] }>(
+      { node: null, value: 0, children: leaves },
+      (d) => d.children,
+    )
+      .sum((d) => (d.children ? 0 : d.value))
+      .sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
+    treemap<{ node: T | null; value: number }>()
+      .tile(treemapSquarify)
+      .size([w, height])
+      .paddingOuter(2)
+      .paddingInner(1)(hierarchyRoot as never);
+    return hierarchyRoot.leaves() as unknown as (ReturnType<typeof hierarchy> & { x0: number; y0: number; x1: number; y1: number; data: Leaf })[];
+  }, [children, w, height]);
+
+  const total = children.reduce((s, c) => s + getValue(c), 0) || 1;
+
+  // Flame levels
+  const flameLevels = React.useMemo(
+    () => mode === "flame" ? buildFlameLevels(currentNode, getChildren, getValue, colorMap, getLabel, root) : [],
+    [mode, currentNode, getChildren, getValue, colorMap, getLabel, root],
+  );
+
+  const zoomTo = (node: T) => {
+    if (getChildren(node).filter((c) => getValue(c) > 0).length === 0) return;
+    setPath((prev) => [...prev, node]);
+  };
+
+  const crumbs = [root, ...path];
+
+  if (children.length === 0 && path.length === 0) return null;
+
+  return (
+    <div className="chart-wrap" ref={ref}>
+      {/* Breadcrumb toolbar */}
+      <div className="zm-toolbar">
+        {crumbs.map((crumb, i) => {
+          const isCurrent = i === crumbs.length - 1;
+          const label = i === 0 ? (getLabel(crumb) || "⬛ root") : getLabel(crumb);
+          return (
+            <React.Fragment key={i}>
+              {i > 0 && <span className="zm-sep">›</span>}
+              {isCurrent ? (
+                <span className="zm-crumb-cur">{label}</span>
+              ) : (
+                <button className="zm-crumb" onClick={() => setPath(path.slice(0, i))}>
+                  {label}
+                </button>
+              )}
+            </React.Fragment>
+          );
+        })}
+        <span className="zm-spacer" />
+        <button className={`zm-mode-btn${mode === "treemap" ? " active" : ""}`} onClick={() => setMode("treemap")} title="Squarify treemap view">
+          ⬛ Treemap
+        </button>
+        <button className={`zm-mode-btn${mode === "flame" ? " active" : ""}`} onClick={() => setMode("flame")} title="Flamegraph (icicle) view">
+          🔥 Flame
+        </button>
+      </div>
+
+      {/* Treemap mode */}
+      {mode === "treemap" && (
+        <div style={{ position: "relative", width: "100%", height, overflow: "hidden" }}>
+          {nodes.map((leaf, i) => {
+            const { x0, y0, x1, y1, data: ld } = leaf;
+            const lw = x1 - x0;
+            const lh = y1 - y0;
+            if (lw < 1 || lh < 1) return null;
+            const node = ld.node as T;
+            const val = ld.value;
+            const pct = ((val / total) * 100).toFixed(1);
+            const hasKids = getChildren(node).filter((c) => getValue(c) > 0).length > 0;
+            const bg = getColor(node);
+            return (
+              <div
+                key={i}
+                title={`${getLabel(node)}: ${fmt(val)} (${pct}%)${hasKids ? " — click to drill in" : ""}`}
+                onClick={hasKids ? () => zoomTo(node) : undefined}
+                style={{
+                  position: "absolute", left: x0, top: y0, width: lw, height: lh,
+                  background: bg, opacity: 0.87, boxSizing: "border-box", overflow: "hidden",
+                  cursor: hasKids ? "zoom-in" : "default",
+                  border: hasKids ? "1px solid rgba(255,255,255,0.25)" : "none",
+                }}
+              >
+                {lw > 44 && lh > 22 && (
+                  <span style={{ display: "block", padding: "2px 4px", fontSize: Math.min(12, lw / 7), color: "#fff", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {getLabel(node)}{hasKids ? " ›" : ""}
+                  </span>
+                )}
+                {lw > 44 && lh > 38 && (
+                  <span style={{ display: "block", padding: "0 4px", fontSize: Math.min(11, lw / 8), color: "rgba(255,255,255,0.8)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {fmt(val)} ({pct}%)
+                  </span>
+                )}
+              </div>
+            );
+          })}
+          {children.length === 0 && (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "var(--muted)", fontSize: "0.9rem" }}>
+              No children to display
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Flamegraph (icicle) mode */}
+      {mode === "flame" && (
+        <div className="flame-container" style={{ maxHeight: height + 40 }}>
+          {flameLevels.map((level, lvl) => (
+            <div key={lvl} className="flame-level">
+              {level.map((cell, ci) => {
+                const hasKids = getChildren(cell.node).filter((c) => getValue(c) > 0).length > 0;
+                const val = getValue(cell.node);
+                const pct = ((val / getValue(currentNode)) * 100).toFixed(1);
+                return (
+                  <div
+                    key={ci}
+                    className={`flame-cell${!hasKids || lvl === 0 ? " flame-cell-leaf" : ""}`}
+                    style={{ width: `${cell.pct}%`, background: PALETTE[cell.colorIdx % PALETTE.length] }}
+                    title={`${getLabel(cell.node)}: ${fmt(val)} (${pct}%)${hasKids && lvl > 0 ? " — click to drill in" : ""}`}
+                    onClick={hasKids && lvl > 0 ? () => zoomTo(cell.node) : undefined}
+                  >
+                    <span className="flame-label">{getLabel(cell.node)}</span>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 interface Slice {
   name: string;

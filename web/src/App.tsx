@@ -15,8 +15,7 @@ import {
   LoaderRollupChart,
   QueryViz,
   TopClassesChart,
-  TreemapBar,
-  RetainedTreemap,
+  ZoomableTreemap,
 } from "./charts";
 import { UnreachableDomTreeSection, DomSubtreeSvg } from "./domTree";
 
@@ -1735,17 +1734,17 @@ function TopConsumersSection({ report }: { report: Report }) {
             dominators retaining at least {fmtPct(t.threshold_bp / 100)} of the
             heap are included (smaller ones are pruned, MAT-style).
           </p>
-          <TreemapBar
+          <ZoomableTreemap
             root={pkgRoot}
-            onSelect={(idx) => document.getElementById(`pkg-${idx}`)?.scrollIntoView({ behavior: "smooth", block: "center" })}
+            getChildren={(n) => n.children}
+            getValue={(n) => n.retained_heap}
+            getLabel={(n) => n.name || "(default)"}
+            fmt={formatBytes}
+            height={320}
           />
           <details style={{ marginBottom: "1rem" }}>
-            <summary style={{ cursor: "pointer", userSelect: "none" }}>Retained-heap treemap</summary>
-            <div style={{ marginTop: "0.5rem", overflowX: "auto" }}>
-              <RetainedTreemap root={pkgRoot} />
-            </div>
-          </details>
-          <table className="tree-table">
+            <summary style={{ cursor: "pointer", userSelect: "none" }}>Package tree detail</summary>
+          <table className="tree-table" style={{ marginTop: "0.5rem" }}>
             <thead>
               <tr>
                 <th>Package</th>
@@ -1760,6 +1759,7 @@ function TopConsumersSection({ report }: { report: Report }) {
               ))}
             </tbody>
           </table>
+          </details>
         </>
       )}
     </section>
@@ -2788,7 +2788,17 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
             <UnreachableCompositionTable comp={data.unreachable_composition} />
           )}
           {data?.unreachable_garbage_roots && data.unreachable_garbage_roots.length > 0 && (
-            <UnreachableDomTreeSection roots={data.unreachable_garbage_roots} />
+            <>
+              <ZoomableTreemap
+                root={{ pretty_class: "(unreachable)", retained: data.unreachable_retained ?? 0, objects: data.unreachable_count ?? 0, children: data.unreachable_garbage_roots }}
+                getChildren={(n) => n.children}
+                getValue={(n) => n.retained}
+                getLabel={(n) => n.pretty_class}
+                fmt={formatBytes}
+                height={240}
+              />
+              <UnreachableDomTreeSection roots={data.unreachable_garbage_roots} />
+            </>
           )}
           <details open>
             <summary>Unreachable objects by class ({fmtCount(rows.length)} rows)</summary>
