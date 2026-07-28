@@ -13,14 +13,30 @@
 
 <!-- ── Upload screen ─────────────────────────────────────────────────────── -->
 <div id="upload-screen">
-  <h1>hprof-analyzer</h1>
-  <p class="subtitle">Browser UI for Java heap dump analysis — runs entirely in your browser, no server needed. Supports heap dumps up to <strong>3 GB</strong>.</p>
+  <div id="landing-hero">
+    <div id="landing-logo">⚙</div>
+    <h1 id="landing-title">hprof-analyzer</h1>
+    <p id="landing-tagline">Java heap dump analysis — in your browser</p>
+    <p id="landing-desc">
+      The web edition of <a href="https://github.com/parttimenerd/hprof-analyzer" target="_blank" rel="noopener">hprof-analyzer</a>,
+      a fast Rust-based tool for investigating Java OutOfMemoryErrors and memory leaks.
+      Your heap dump never leaves your machine — everything runs locally via WebAssembly.
+    </p>
+    <ul id="landing-features">
+      <li><span class="feat-icon">🔍</span> Leak suspects, dominator tree &amp; retained sizes</li>
+      <li><span class="feat-icon">📊</span> Class histogram, GC roots, allocation sites</li>
+      <li><span class="feat-icon">🧵</span> Thread stacks, locals, and per-thread objects</li>
+      <li><span class="feat-icon">💬</span> SQL-like OQL query shell with tab-completion</li>
+      <li><span class="feat-icon">🔒</span> Fully private — no upload, no server, no telemetry</li>
+    </ul>
+  </div>
 
   <div id="drop-zone">
     <input type="file" id="file-input" accept=".hprof">
     <label for="file-input">
       <div id="drop-zone-icon">📂</div>
       <div id="drop-zone-text">Drop a <strong>.hprof</strong> file here, or click to select</div>
+      <div id="drop-zone-hint">Supports up to <strong>3 GB</strong> · gzip-compressed dumps accepted</div>
     </label>
   </div>
 
@@ -33,12 +49,12 @@
     <button id="btn-full-analysis">
       <span class="mode-icon">🔬</span>
       <span class="mode-title">Full Analysis</span>
-      <span class="mode-desc">Same as Analysis plus duplicate string/array detection and collection fill-ratio analysis</span>
+      <span class="mode-desc">Analysis + duplicate string/array detection and collection fill-ratio</span>
     </button>
     <button id="btn-oql-shell">
-      <span class="mode-icon">🔍</span>
+      <span class="mode-icon">💬</span>
       <span class="mode-title">OQL Shell</span>
-      <span class="mode-desc">Interactive query shell — run SQL-like OQL queries against the heap with tab-completion</span>
+      <span class="mode-desc">Interactive query shell with tab-completion and named built-in queries</span>
     </button>
   </div>
   <div id="sample-section" style="display:none">
@@ -46,6 +62,14 @@
     <div id="sample-list"></div>
   </div>
   <p id="wasm-load-status" style="display:none"></p>
+
+  <div id="landing-footer">
+    <a href="https://github.com/parttimenerd/hprof-analyzer" target="_blank" rel="noopener">GitHub</a>
+    <span class="sep">·</span>
+    <span>MIT License</span>
+    <span class="sep">·</span>
+    <span>CLI: <code>cargo install hprof-analyzer</code></span>
+  </div>
 </div>
 
 <!-- ── Connect screen ─────────────────────────────────────────────────────── -->
