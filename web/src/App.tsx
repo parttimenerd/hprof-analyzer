@@ -995,7 +995,7 @@ function DupArrayHoldersTable({ rows }: { rows: DupArrayHolder[] }) {
 
 // ── Duplicate Strings (approximate) ────────────────────────────────────────────
 function DuplicateStringsSection({ report }: { report: Report }) {
-  const [fmtB, kbBtn, useKB] = useFmtBytes();
+  const [fmtB] = useFmtBytes();
   const d = report.overview.duplicate_strings;
   if (!d) {
     const wasRun = report.analysis_flags?.find_duplicates ?? false;
@@ -1075,7 +1075,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
 }
 
 function DuplicatePrimArraysSection({ report }: { report: Report }) {
-  const [fmtB, kbBtn, useKB] = useFmtBytes();
+  const [fmtB] = useFmtBytes();
   const d = report.overview.duplicate_prim_arrays;
   if (!d) {
     const wasRun = report.analysis_flags?.find_duplicates ?? false;
@@ -1416,7 +1416,7 @@ function DuplicateClassesTable({ rows }: { rows: DuplicateClass[] }) {
 // Renders the accumulation "shortest path" (MAT's signature view) plus the
 // per-class breakdown of what piles up at the accumulation point.
 function AccumulationPath({ s }: { s: Suspect }) {
-  const [fmtB, kbBtn, useKB] = useFmtBytes();
+  const [fmtB] = useFmtBytes();
   if (s.path.length === 0) return null;
   return (
     <details open>
@@ -1466,7 +1466,7 @@ function SysPropsTable({ rows }: { rows: { key: string; value: string }[] }) {
 // (first) up to its GC root (last), as a numbered list. The final step is annotated
 // with the GC-root type when known. Mirrors report.rs::render_root_path.
 function RootPathList({ steps }: { steps: RootPathStep[] }) {
-  const [fmtB, kbBtn, useKB] = useFmtBytes();
+  const [fmtB] = useFmtBytes();
   if (steps.length === 0) return null;
   const last = steps.length - 1;
   return (
@@ -1494,7 +1494,7 @@ function RootPathList({ steps }: { steps: RootPathStep[] }) {
 // many member chains pass through it, and the aggregate retained heap; a
 // terminal GC-root node carries its root-type label.
 function MergedPathsNode({ node, depth }: { node: MergedPathNode; depth: number }) {
-  const [fmtB, kbBtn, useKB] = useFmtBytes();
+  const [fmtB] = useFmtBytes();
   const hasChildren = node.children.length > 0;
   const label = (
     <>

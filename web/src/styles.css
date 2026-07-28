@@ -157,8 +157,11 @@ th.sortable.active { color: var(--accent); }
 .mat-exact { color: var(--muted); font-size: 0.8rem; font-variant-numeric: tabular-nums; }
 .label { color: var(--muted); font-weight: 600; font-size: 0.85rem; }
 
-/* Expandable package tree. */
-.tree-table td { vertical-align: middle; }
+/* Expandable package tree — aligned to DataTable visual style. */
+.tree-table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+.tree-table th { font-size: 0.82rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; padding: 3px 5px; border-bottom: 1px solid var(--border); }
+.tree-table td { vertical-align: middle; padding: 3px 5px; border-bottom: 1px solid var(--border); }
+.tree-table tr:hover td { background: var(--hover); }
 .tree-toggle { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 0.8rem; padding: 0 0.35rem 0 0; width: 1.2rem; }
 .tree-leaf { color: var(--muted); display: inline-block; width: 1.2rem; text-align: left; padding-right: 0.35rem; }
 .bar-cell { position: relative; }
@@ -170,11 +173,6 @@ th.sortable.active { color: var(--accent); }
 .dom-subtree li { padding: 0.15rem 0; font-size: 0.85rem; }
 .dom-subtree summary { cursor: pointer; font-size: 0.85rem; }
 
-/* System properties: bounded key/value table in a scrollable container. */
-.sysprops { max-height: 22rem; overflow: auto; border: 1px solid var(--border); border-radius: 6px; margin: 0.35rem 0 0.75rem; }
-.sysprops table { margin: 0; }
-.sysprops th { position: sticky; top: 0; background: var(--card); }
-.sysprop-val { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.82rem; word-break: break-word; }
 
 .copy-cell { display: inline-flex; align-items: center; gap: 0.3rem; max-width: 100%; }
 .copy-cell code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
