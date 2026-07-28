@@ -94,7 +94,15 @@ pub(crate) fn run_oql_escalated(
     // empties them when compress != None), so we read them directly below.
     let compress = cvec::Codec::None;
     let needs_sv = flat.iter().any(|(_, p)| p.needs.string_values);
-    let addr_vec = if needs_sv { query::run::id_map_to_addrs(&p1.id_map) } else { Vec::new() };
+    // Populate the dense-address table whenever any late-phase query needs it.
+    // This covers the string-values path (needs_sv) AND any query that SELECT-projects
+    // @objectAddress in a retained/refwalk/cross-phase context. Without this, late-window
+    // @objectAddress would read from an empty id_map and return 0 for every object.
+    let needs_addr = needs_sv
+        || flat.iter().any(|(_, p)| {
+            p.finalize_at != crate::query::plan::Phase::P1
+        });
+    let addr_vec = if needs_addr { query::run::id_map_to_addrs(&p1.id_map) } else { Vec::new() };
     let mut no_in_sets = std::collections::HashMap::new();
     let mut no_exists_bools = std::collections::HashMap::new();
     let (

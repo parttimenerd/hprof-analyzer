@@ -6576,3 +6576,32 @@ fn query_or_predicate_with_retained_and_used_heap_filters_correctly() {
         "OR filter returned 0 rows — retained arm should return some rows"
     );
 }
+
+/// `@objectAddress` in a late-phase (retained) query must return real non-zero
+/// heap addresses. Previously the id_map was only built for string-values queries,
+/// leaving retained queries with an empty map that returned 0 for every object.
+#[test]
+fn query_object_address_in_retained_path_is_non_zero() {
+    let Some(hprof) = philosophers() else { return };
+    let out = Command::new(BIN)
+        .arg("query").arg(&hprof)
+        .args(["--query",
+            "SELECT @objectAddress, @retainedHeapSize FROM java.lang.String \
+             ORDER BY @retainedHeapSize DESC LIMIT 5"])
+        .output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let data_rows: Vec<&str> = stdout
+        .lines()
+        .filter(|l| l.contains('|') && !l.contains("@objectAddress") && !l.contains("---"))
+        .collect();
+    assert!(!data_rows.is_empty(), "expected data rows:\n{stdout}");
+    for row in &data_rows {
+        let cols: Vec<&str> = row.split('|').collect();
+        let addr: u64 = cols.get(0).map(|s| s.trim()).unwrap_or("0").parse().unwrap_or(0);
+        assert!(
+            addr > 0,
+            "@objectAddress was 0 in retained path — id_map not populated: {row}\nfull output:\n{stdout}"
+        );
+    }
+}
