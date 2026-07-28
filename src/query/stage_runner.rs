@@ -689,6 +689,11 @@ fn refpath_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResul
     }
 
     let mut truncated = entry.carry.truncated() || ctx.refwalk_truncated;
+    if let Some(ob) = &q.order_by {
+        if let Some(col_idx) = crate::query::execute::order_by_column_index(q, &columns, &ob.key) {
+            crate::query::execute::sort_rows_by_column(&mut rows, col_idx, ob.dir);
+        }
+    }
     if let Some(limit) = stage_limit(q) {
         if rows.len() as u64 > limit {
             rows.truncate(limit as usize);
@@ -1388,6 +1393,11 @@ fn array_index_rows(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryR
             .collect();
         rows.push(row);
     }
+    if let Some(ob) = &q.order_by {
+        if let Some(col_idx) = crate::query::execute::order_by_column_index(q, &columns, &ob.key) {
+            crate::query::execute::sort_rows_by_column(&mut rows, col_idx, ob.dir);
+        }
+    }
     let mut truncated = entry.carry.truncated();
     if let Some(limit) = stage_limit(q) {
         if rows.len() as u64 > limit {
@@ -1555,7 +1565,7 @@ fn eval_late_gb_key(expr: &Expr, idx: u32, ret: u64, ctx: &LateCtx) -> QueryValu
 /// individual dense indices (IndexOnly). We iterate them, compute the GROUP BY
 /// key, and accumulate per-group SUM/COUNT/MIN/MAX.
 fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> QueryResult {
-    use crate::query::ast::{AggFunc, SortDir};
+    use crate::query::ast::AggFunc;
     use crate::query::execute::query_columns;
     use std::collections::HashMap;
 
@@ -1726,26 +1736,11 @@ fn join_retained_group_by(entry: &CrossPhaseEntry, q: &Query, ctx: &LateCtx) -> 
         });
     }
 
-    // ORDER BY: match by ORDER BY attribute or alias name.
+    // ORDER BY: use the standard resolver (handles alias-stripped names).
     if let Some(ob) = &q.order_by {
-        let ob_name = crate::query::execute::attr_name(&ob.key);
         let cols = query_columns(q);
-        let col_idx = cols.iter().position(|c| c.name == ob_name)
-            .or_else(|| q.select.iter().position(|it| match it {
-                SelectItem::Attr(a) => *a == ob.key,
-                SelectItem::Aggregate { arg, .. } => matches!(arg.as_ref(), SelectItem::Attr(a) if *a == ob.key),
-                _ => false,
-            }));
-        if let Some(col_idx) = col_idx {
-            rows.sort_by(|a, b| {
-                qv_ord(
-                    a.get(col_idx).unwrap_or(&QueryValue::Null),
-                    b.get(col_idx).unwrap_or(&QueryValue::Null),
-                )
-            });
-            if ob.dir == SortDir::Desc {
-                rows.reverse();
-            }
+        if let Some(col_idx) = crate::query::execute::order_by_column_index(q, &cols, &ob.key) {
+            crate::query::execute::sort_rows_by_column(&mut rows, col_idx, ob.dir);
         }
     }
 
