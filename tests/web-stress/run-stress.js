@@ -15,7 +15,7 @@ const DUMPS = join(ROOT, 'tests', 'web-stress', 'dumps');
 const OUT   = join(ROOT, 'tests', 'web-stress', 'results.md');
 
 const QUERIES = [
-  { name: 'top-classes',  oql: 'SELECT classof(x), COUNT(*) FROM java.lang.Object x GROUP BY classof(x) ORDER BY COUNT(*) DESC LIMIT 10' },
+  { name: 'top-classes',  oql: 'SELECT classof(x), COUNT(*) AS n FROM java.lang.Object x GROUP BY classof(x) ORDER BY n DESC LIMIT 10' },
   { name: 'string-count', oql: 'SELECT COUNT(*) FROM java.lang.String' },
 ];
 
