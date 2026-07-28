@@ -64,7 +64,8 @@ async function testDump(browser, dumpPath) {
     await page.goto('file://' + HTML);
 
     // Wait for WASM to initialise — window._hprofWasmReady() is our exposed shim
-    await page.waitForFunction(() => typeof window._hprofWasmReady === 'function' && window._hprofWasmReady() === true, { timeout: 30_000 });
+    // Playwright 1.x: waitForFunction(fn, arg, options) — timeout must be the 3rd arg
+    await page.waitForFunction(() => typeof window._hprofWasmReady === 'function' && window._hprofWasmReady() === true, undefined, { timeout: 30_000 });
 
     const t0 = performance.now();
     await page.setInputFiles('#file-input', dumpPath);
@@ -73,11 +74,13 @@ async function testDump(browser, dumpPath) {
     await page.click('#btn-oql-shell');
 
     // Wait until window._hprofQueryDirect is callable (set when shell initialises with a session)
+    // Playwright 1.x: waitForFunction(fn, arg, options) — timeout must be the 3rd arg
     await page.waitForFunction(
       () => typeof window._hprofQueryDirect === 'function' &&
             window._hprofQueryDirect !== null &&
             document.getElementById('shell-screen') &&
             !document.getElementById('shell-screen').classList.contains('hidden'),
+      undefined,
       { timeout: LOAD_TIMEOUT_MS }
     );
     result.loadMs = Math.round(performance.now() - t0);
@@ -103,7 +106,7 @@ async function testDump(browser, dumpPath) {
         if (!data.ok) {
           qResult.error = data.error?.message || 'query error';
         } else {
-          qResult.rows = data.result?.rows?.length ?? null;
+          qResult.rows = data.result?.row_count ?? data.result?.rows?.length ?? null;
         }
         console.log(`  Query [${q.name}]: ${qResult.elapsedMs} ms, rows=${qResult.rows}, err=${qResult.error}`);
       } catch (e) {
@@ -176,14 +179,12 @@ async function main() {
   }
   console.log(`Testing ${dumps.length} dumps against ${HTML}`);
 
-  // Use Chrome (system install) with flags for large WASM heaps and file:// access
+  // Use Chrome with default settings (no extra memory or security flags)
+  // to reflect real-world browser constraints.
   const browser = await chromium.launch({
     channel: 'chrome',
     args: [
       '--enable-precise-memory-info',
-      '--js-flags=--max-old-space-size=8192',
-      '--disable-web-security',
-      '--allow-file-access-from-files',
     ],
   });
 

@@ -92,15 +92,28 @@ pub fn analyze_to_report_with_retained(
     source: &crate::source::HprofSource,
     opts: &AnalyzeOptions,
 ) -> std::io::Result<(crate::report::Report, Vec<u64>)> {
-    analyze_to_report_inner(source, opts)
+    analyze_to_report_inner(source, opts, &mut |_, _| {})
+}
+
+/// Like `analyze_to_report_with_retained` but fires `progress(phase, fraction)`
+/// at key boundaries so callers can update a progress indicator.
+/// Phases fired: "pass1", "pass2", "rpo", "inbound", "dominators", "retained".
+pub fn analyze_to_report_with_progress(
+    source: &crate::source::HprofSource,
+    opts: &AnalyzeOptions,
+    progress: &mut dyn FnMut(&str, f32),
+) -> std::io::Result<(crate::report::Report, Vec<u64>)> {
+    analyze_to_report_inner(source, opts, progress)
 }
 
 fn analyze_to_report_inner(
     source: &crate::source::HprofSource,
     opts: &AnalyzeOptions,
+    progress: &mut dyn FnMut(&str, f32),
 ) -> std::io::Result<(crate::report::Report, Vec<u64>)> {
     use std::io;
     let p1 = pass1::Pass1::run(&source, false)?;
+    progress("pass1", 1.0);
 
     if p1.class_ids.len() > u32::MAX as usize {
         return Err(io::Error::new(
@@ -129,10 +142,12 @@ fn analyze_to_report_inner(
         _string_values,
         _string_values_truncated,
     ) = pass2::Pass2::build(&source, p1, compress, opts, &[], &mut no_in_sets, &mut no_exists_bools)?;
+    progress("pass2", 1.0);
 
     inbound.compress_id_map(compress)?;
 
     let rpo = rpo_dfs::rpo_dfs(g.n, &g.gc_root_indices, &g.fwd_offsets, &g.fwd_targets);
+    progress("rpo", 1.0);
 
     {
         g.unreachable_retained = unreachable_retained::compute_unreachable_retained(
@@ -164,6 +179,7 @@ fn analyze_to_report_inner(
         std::mem::take(&mut g.fwd_targets),
         &rpo.dfn,
     )?;
+    progress("inbound", 1.0);
 
     // Rebuild vertex while dfn is still live; then free dfn.
     let count = parent_pre_count;
@@ -176,6 +192,7 @@ fn analyze_to_report_inner(
 
     g.idom =
         dominator::compute_dominators(g.n, rpo, &g.gc_root_indices, &inb_block_off, &inb_data)?;
+    progress("dominators", 1.0);
     drop(inb_block_off);
     drop(inb_data);
 
@@ -199,6 +216,7 @@ fn analyze_to_report_inner(
         &dc_off,
         &dc_tgt,
     );
+    progress("retained", 1.0);
     g.retained = retained;
     g.has_same_class_ancestor = has_same;
 

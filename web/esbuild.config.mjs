@@ -10,9 +10,9 @@
 import { build } from "esbuild";
 import { readFileSync, statSync } from "node:fs";
 
-// ≤ 660 KB minified bundle budget (raised from 600 KB to accommodate d3-hierarchy
-// for the retained-heap treemap visualization).
-const BUDGET_BYTES = 660 * 1024;
+// ≤ 720 KB minified bundle budget (raised from 660 KB to accommodate
+// react-data-table-component for the sortable/resizable histogram table).
+const BUDGET_BYTES = 720 * 1024;
 
 await build({
   entryPoints: ["src/index.tsx"],

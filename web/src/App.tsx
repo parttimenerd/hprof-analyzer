@@ -1,6 +1,8 @@
 import React from "react";
+import DataTable from "react-data-table-component";
+import type { TableColumn } from "react-data-table-component";
 import type { AllocSites, ArraysBySize, BiggestCollectionRow, BiggestCollections, ClassRow, CollectionAttribution, CollectionContents, CollectionsAnalysis, Component, DominatorAnalysis, DuplicateClass, FieldsBySize, FillRatioBucket, HeapComposition, HistRow, KindStat, LeakIndicators, LoaderRollup, MergedPathNode, ObjRow, PackageNode, QueryResult, QueryValue, ReferencesAnalysis, ReferenceStats, RefStatClassRow, Report, RootPathStep, SeriesClassRow, SeriesDiffResult, SeriesSuspectRow, Suspect, SystemOverview, ThreadInfo, ThreadLocalObj, TopArrays, TopComponents, UnreachableClassRow } from "./types";
-import { fmtCount, fmtExactBytes, fmtPct, formatBytes, formatEpochMs, pctOf, shortLoader } from "./format";
+import { fmtCount, fmtExactBytes, fmtPct, formatBytes, formatBytesKB, formatEpochMs, pctOf, shortLoader } from "./format";
 import {
   CompositionStackedBar,
   ConcentrationChart,
@@ -64,6 +66,22 @@ function ThemeToggle() {
 // ── Table expansion context ───────────────────────────────────────────────────
 // A global toggle that makes every capped table expand all its rows at once.
 const TableExpansionCtx = React.createContext(false);
+
+// ── Per-table KB toggle ───────────────────────────────────────────────────────
+// Returns [fmtB, toggleBtn] — the byte formatter and a button that switches
+// between auto-scaled (1.2 MB) and always-KB (1,229 KB) display.
+function useFmtBytes(): [(n: number) => string, React.ReactNode] {
+  const [useKB, setUseKB] = React.useState(false);
+  const fmtB = useKB ? formatBytesKB : formatBytes;
+  const kbBtn = null; // DiffApp has its own KB toggle in the header
+  const btn = (
+    <button className="show-more-btn" onClick={() => setUseKB(v => !v)}
+      title="Toggle byte display: auto-scaled vs always-KB">
+      {useKB ? "Show as B, KB, …" : "Show as KB"}
+    </button>
+  );
+  return [fmtB, btn];
+}
 
 const TABLE_CAP = 20;
 
@@ -292,47 +310,49 @@ function OomTriage({ report }: { report: Report }) {
 // Sources are approximate and may overlap slightly. Mirrors the Rust md/graphs
 // "Waste Summary" section (same order, same values).
 function WasteSummarySection({ report }: { report: Report }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   const w = report.waste_summary;
   if (!w || w.total_bytes <= 0) return null;
   const max = w.sources.reduce((m, s) => Math.max(m, s.bytes), 0);
+  // Anchors the Rust side omits (subsections without a dedicated section id).
+  const wasteAnchorFallback: Record<string, string> = {
+    "Duplicate primitive arrays": "duplicate-prim-arrays",
+  };
+  type WasteSource = (typeof w.sources)[0];
+  const wasteCols: TableColumn<WasteSource>[] = [
+    {
+      id: "source", name: "Source", grow: 1,
+      cell: (s) => {
+        const anchor = s.anchor ?? wasteAnchorFallback[s.label];
+        return anchor ? <a href={`#${anchor}`}>{s.label}</a> : s.label;
+      },
+    },
+    { id: "reclaimable", name: "Reclaimable", right: true, width: "120px", format: (s) => fmtB(s.bytes), selector: (s) => s.bytes },
+    {
+      id: "bar", name: "", width: "100px",
+      cell: (s) => (
+        <span className="bar-bg">
+          <span className="bar-fill" style={{ width: `${max > 0 ? (s.bytes / max) * 100 : 0}%` }} />
+        </span>
+      ),
+    },
+  ];
   return (
     <section className="section" id="waste-summary" tabIndex={-1}>
       <h2>Waste Summary</h2>
+      {kbBtn && <div className="tools">{kbBtn}</div>}
       <p className="subtitle">
-        Approximately <strong>{formatBytes(w.total_bytes)}</strong> looks reclaimable across the
+        Approximately <strong>{fmtB(w.total_bytes)}</strong> looks reclaimable across the
         sources below. Figures are approximate and may overlap slightly.
       </p>
-      <table>
-        <thead>
-          <tr>
-            <th>Source</th>
-            <th className="num">Reclaimable</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {w.sources.map((s, i) => (
-            <tr key={i}>
-              <td>{s.anchor ? <a href={`#${s.anchor}`}>{s.label}</a> : s.label}</td>
-              <td className="num">{formatBytes(s.bytes)}</td>
-              <td className="num bar-cell">
-                <span className="bar-bg">
-                  <span
-                    className="bar-fill"
-                    style={{ width: `${max > 0 ? (s.bytes / max) * 100 : 0}%` }}
-                  />
-                </span>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <DataTable columns={wasteCols} data={w.sources} customStyles={histogramTableStyles} dense highlightOnHover />
     </section>
   );
 }
 
 // ── KPI card strip ──────────────────────────────────────────────────────────
 function KpiStrip({ report }: { report: Report }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   const suspects = report.leaks.suspects;
   const top = suspects[0];
   const topShare = top
@@ -369,7 +389,7 @@ function KpiStrip({ report }: { report: Report }) {
     <>
       <div className="kpi-grid">
       <div className="kpi">
-        <div className="kpi-value">{formatBytes(report.overview.total_shallow)}</div>
+        <div className="kpi-value">{fmtB(report.overview.total_shallow)}</div>
         <div className="kpi-label">Total reachable heap</div>
       </div>
       <div className="kpi">
@@ -401,97 +421,6 @@ function KpiStrip({ report }: { report: Report }) {
 }
 
 // ── Column-resize hook ───────────────────────────────────────────────────────
-// Provides draggable resize handles on <th> cells. Only applied to larger data
-// tables; small summary tables are left alone.
-function useColumnResize(cols: number, initialWidths?: number[], minWidth = 60): {
-  widths: number[];
-  onMouseDown: (colIndex: number) => (e: React.MouseEvent) => void;
-} {
-  const [widths, setWidths] = React.useState<number[]>(() =>
-    initialWidths && initialWidths.length === cols
-      ? initialWidths
-      : Array(cols).fill(0),
-  );
-  const dragging = React.useRef<{ col: number; startX: number; startWidth: number } | null>(null);
-
-  const onMouseDown = React.useCallback(
-    (colIndex: number) => (e: React.MouseEvent) => {
-      e.preventDefault();
-      const startWidth = widths[colIndex] || minWidth;
-      dragging.current = { col: colIndex, startX: e.clientX, startWidth };
-
-      const onMove = (ev: MouseEvent) => {
-        if (!dragging.current) return;
-        const { col, startX, startWidth: sw } = dragging.current;
-        const delta = ev.clientX - startX;
-        const newW = Math.max(minWidth, sw + delta);
-        setWidths((prev) => {
-          const next = [...prev];
-          next[col] = newW;
-          return next;
-        });
-      };
-      const onUp = () => {
-        dragging.current = null;
-        document.removeEventListener("mousemove", onMove);
-        document.removeEventListener("mouseup", onUp);
-      };
-      document.addEventListener("mousemove", onMove);
-      document.addEventListener("mouseup", onUp);
-    },
-    [widths, minWidth],
-  );
-
-  return { widths, onMouseDown };
-}
-
-// ResizableTable: wraps a table's <colgroup> with resize-handle <th> support.
-// `headers` is a list of { label, className?, width? } for <th> cells.
-// `children` is just the <tbody> (and optional <tfoot>).
-function ResizableTable({
-  headers,
-  children,
-  className,
-}: {
-  headers: { label: React.ReactNode; className?: string; initialWidth?: number }[];
-  children: React.ReactNode;
-  className?: string;
-}) {
-  const { widths, onMouseDown } = useColumnResize(
-    headers.length,
-    headers.map((h) => h.initialWidth ?? 0),
-  );
-  const anySet = widths.some((w) => w > 0);
-
-  return (
-    <div className="resizable-table-wrap">
-    <table className={"resizable-table " + (className ?? "")}>
-      {anySet && (
-        <colgroup>
-          {widths.map((w, i) => (
-            <col key={i} style={w > 0 ? { width: w } : undefined} />
-          ))}
-        </colgroup>
-      )}
-      <thead>
-        <tr>
-          {headers.map((h, i) => (
-            <th key={i} className={"resizable " + (h.className ?? "")}>
-              {h.label}
-              <span
-                className={"col-resize-handle"}
-                onMouseDown={onMouseDown(i)}
-              />
-            </th>
-          ))}
-        </tr>
-      </thead>
-      {children}
-    </table>
-    </div>
-  );
-}
-
 // ── Reusable sort primitives ─────────────────────────────────────────────────
 function useSortedRows<T>(rows: T[], initialKey: keyof T) {
   const [sortKey, setSortKey] = React.useState<keyof T>(initialKey);
@@ -525,40 +454,124 @@ function SortableTh<T>({ label, colKey, sortKey, setSortKey }: {
 }
 
 // ── Sortable / filterable class histogram ────────────────────────────────────
-type HistKey = "instances" | "shallow" | "max_instance_shallow" | "retained";
-const HIST_COLS: { key: HistKey; label: string }[] = [
-  { key: "instances", label: "Instances" },
-  { key: "shallow", label: "Shallow" },
-  { key: "max_instance_shallow", label: "Largest" },
-  { key: "retained", label: "Retained" },
-];
+const HIST_MIN_PCT = 0.1; // skip rows < 0.1% of heap
 
 function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalShallow: number }) {
-  const [sortKey, setSortKey] = React.useState<HistKey>("retained");
+  const [fmtB, kbBtn] = useFmtBytes();
   const [filter, setFilter] = React.useState("");
+  const [showAll, setShowAll] = React.useState(false);
+  const [showLoader, setShowLoader] = React.useState(false);
 
-  // Show the class-loader column only when at least one class was loaded by a
-  // non-boot loader — otherwise every cell would read "<boot>" and add noise.
-  const showLoader = React.useMemo(
+  // Only offer the loader toggle if at least one non-boot loader exists
+  const hasNonBootLoader = React.useMemo(
     () => rows.some((r) => r.loader_label != null && r.loader_label !== "<boot>"),
     [rows],
   );
 
-  const view = React.useMemo(() => {
-    const needle = filter.trim().toLowerCase();
-    const filtered = needle
-      ? rows.filter((r) => r.pretty_class.toLowerCase().includes(needle))
-      : rows;
-    // Stable sort descending by the chosen numeric column. Copy first so we
-    // never mutate the report model.
-    return [...filtered].sort((a, b) => b[sortKey] - a[sortKey]);
-  }, [rows, sortKey, filter]);
+  // Filter by class name text + optionally skip tiny rows
+  const filtered = React.useMemo(() => {
+    const lc = filter.toLowerCase();
+    return rows.filter((r) => {
+      if (lc && !r.pretty_class.toLowerCase().includes(lc)) return false;
+      if (!showAll && pctOf(r.retained, totalShallow) < HIST_MIN_PCT) return false;
+      return true;
+    });
+  }, [rows, filter, showAll, totalShallow]);
 
-  const CAP = 500;
-  const { visible: shown, extra, showAll, setShowAll } = useCapped(view, CAP);
-  // Column count: # + Class + (Loader?) + 4 data cols + % Heap
-  const histColCount = 2 + (showLoader ? 1 : 0) + HIST_COLS.length + 1;
-  const histResize = useColumnResize(histColCount);
+  const columns: TableColumn<HistRow>[] = React.useMemo(() => {
+    const cols: TableColumn<HistRow>[] = [
+      {
+        id: "rank",
+        name: "#",
+        width: "52px",
+        grow: 0,
+        style: { color: "var(--muted)", fontSize: "0.8rem", justifyContent: "flex-end" },
+        cell: (_row, idx) => idx + 1,
+        sortable: false,
+      },
+      {
+        id: "pretty_class",
+        name: "Class",
+        minWidth: "100px",
+        grow: 1,
+        selector: (r) => r.pretty_class,
+        cell: (r) => (
+          <span title={r.pretty_class} style={{ display: "flex", alignItems: "center", gap: 4, overflow: "hidden", width: "100%" }}>
+            <code style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0, background: "none", padding: 0 }}>{r.pretty_class}</code>
+            <CopyBtn text={r.pretty_class} />
+          </span>
+        ),
+        sortable: false,
+      },
+      ...(showLoader ? [{
+        id: "loader_label",
+        name: "Loader",
+        width: "130px",
+        grow: 0,
+        selector: (r: HistRow) => r.loader_label ?? "",
+        cell: (r: HistRow) => (
+          <span title={r.loader_label ?? undefined} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block", width: "100%" }}>
+            <LoaderCell label={r.loader_label} />
+          </span>
+        ),
+        sortable: false,
+      }] : []),
+      {
+        id: "instances",
+        name: "Instances",
+        width: "116px",
+        grow: 0,
+        right: true,
+        selector: (r) => r.instances,
+        format: (r) => fmtCount(r.instances),
+        sortable: true,
+      },
+      {
+        id: "shallow",
+        name: "Shallow",
+        width: "104px",
+        grow: 0,
+        right: true,
+        selector: (r) => r.shallow,
+        format: (r) => fmtB(r.shallow),
+        sortable: true,
+      },
+      {
+        id: "max_instance_shallow",
+        name: "Largest",
+        width: "104px",
+        grow: 0,
+        right: true,
+        selector: (r) => r.max_instance_shallow,
+        format: (r) => fmtB(r.max_instance_shallow),
+        sortable: true,
+      },
+      {
+        id: "retained",
+        name: "Retained",
+        width: "112px",
+        grow: 0,
+        right: true,
+        selector: (r) => r.retained,
+        format: (r) => fmtB(r.retained),
+        sortable: true,
+      },
+      {
+        id: "pct",
+        name: "% Heap",
+        width: "104px",
+        grow: 0,
+        right: true,
+        selector: (r) => r.retained,
+        format: (r) => fmtPct(pctOf(r.retained, totalShallow)),
+        sortable: true,
+        sortFunction: (a, b) => a.retained - b.retained,
+      },
+    ];
+    return cols;
+  }, [showLoader, totalShallow, fmtB]);
+
+  const hiddenSmall = !showAll && !filter ? rows.filter(r => pctOf(r.retained, totalShallow) < HIST_MIN_PCT).length : 0;
 
   return (
     <details open>
@@ -572,58 +585,49 @@ function ClassHistogramTable({ rows, totalShallow }: { rows: HistRow[]; totalSha
           onChange={(e) => setFilter(e.target.value)}
           aria-label="Filter histogram by class name"
         />
-        <span className="hint">
-          {fmtCount(view.length)} match{view.length === 1 ? "" : "es"}
-          {view.length > CAP ? ` (showing first ${CAP})` : ""} — click a column to sort
-        </span>
-      </div>
-      <div className="resizable-table-wrap">
-      <table className="resizable-table">
-        {histResize.widths.some((w) => w > 0) && (
-          <colgroup>
-            {histResize.widths.map((w, i) => <col key={i} style={w > 0 ? { width: w } : undefined} />)}
-          </colgroup>
+        <span className="hint">{fmtCount(filtered.length)} shown</span>
+        {hasNonBootLoader && (
+          <button className="show-more-btn" onClick={() => setShowLoader(v => !v)}>
+            {showLoader ? "Hide Loader" : "Show Loader"}
+          </button>
         )}
-        <thead>
-          <tr>
-            <th className="resizable">#<span className="col-resize-handle" onMouseDown={histResize.onMouseDown(0)} /></th>
-            <th className="resizable">Class<span className="col-resize-handle" onMouseDown={histResize.onMouseDown(1)} /></th>
-            {showLoader && <th className="resizable">Loader<span className="col-resize-handle" onMouseDown={histResize.onMouseDown(2)} /></th>}
-            {HIST_COLS.map((c) => (
-              <SortableTh<HistRow> key={c.key} label={c.label} colKey={c.key} sortKey={sortKey} setSortKey={setSortKey} />
-            ))}
-            <th className="num resizable">% Heap<span className="col-resize-handle" onMouseDown={histResize.onMouseDown(histColCount - 1)} /></th>
-          </tr>
-        </thead>
-        <tbody>
-          {shown.map((h, i) => (
-            <tr key={i}>
-              <td className="num">{i + 1}</td>
-              <td>
-                <span className="copy-cell">
-                  <code>{h.pretty_class}</code>
-                  <CopyBtn text={h.pretty_class} />
-                </span>
-              </td>
-              {showLoader && (
-                <td>
-                  <LoaderCell label={h.loader_label} />
-                </td>
-              )}
-              <td className="num">{fmtCount(h.instances)}</td>
-              <td className="num">{formatBytes(h.shallow)}</td>
-              <td className="num">{formatBytes(h.max_instance_shallow)}</td>
-              <td className="num">{formatBytes(h.retained)}</td>
-              <td className="num">{fmtPct(pctOf(h.retained, totalShallow))}</td>
-            </tr>
-          ))}
-          <ShowMoreRow extra={extra} cols={99} showAll={showAll} setShowAll={setShowAll} />
-        </tbody>
-      </table>
+        {hiddenSmall > 0 && (
+          <button className="show-more-btn" onClick={() => setShowAll(true)}>
+            + {fmtCount(hiddenSmall)} rows &lt;0.1%
+          </button>
+        )}
+        {showAll && !filter && (
+          <button className="show-more-btn" onClick={() => setShowAll(false)}>
+            Hide &lt;0.1% rows
+          </button>
+        )}
+        {kbBtn}
       </div>
+      <DataTable
+        columns={columns}
+        data={filtered}
+        keyField="pretty_class"
+        defaultSortFieldId="retained"
+        defaultSortAsc={false}
+        dense
+        highlightOnHover
+        resizable
+        responsive
+        initialColumnWidths={{ rank: 52, instances: 116, shallow: 104, max_instance_shallow: 104, retained: 112, pct: 104, loader_label: 130 }}
+        customStyles={histogramTableStyles}
+      />
     </details>
   );
 }
+
+const histogramTableStyles = {
+  headRow: { style: { borderBottomWidth: "1px", borderBottomColor: "var(--border)", fontWeight: 600, fontSize: "0.82rem", color: "var(--muted)", background: "var(--card)" } },
+  headCells: { style: { paddingLeft: "5px", paddingRight: "5px", whiteSpace: "nowrap" as const } },
+  rows: { style: { fontSize: "0.86rem", borderBottomColor: "var(--border)", background: "transparent", minHeight: "unset" }, highlightOnHoverStyle: { background: "var(--card)" } },
+  cells: { style: { paddingTop: "3px", paddingBottom: "3px", paddingLeft: "5px", paddingRight: "5px", whiteSpace: "nowrap" as const, overflow: "hidden", fontVariantNumeric: "tabular-nums" } },
+  table: { style: { background: "transparent" } },
+  tableWrapper: { style: { overflow: "auto" } },
+};
 
 // Renders a class-loader label compactly: the loader's simple class name, with
 // the full JVM-internal name as a tooltip. The boot loader is shown muted.
@@ -680,17 +684,21 @@ function gcRootTagLabel(tag: number): string {
 
 function RecordCensusSection({ report }: { report: Report }) {
   const c = report.overview.record_census;
-  const rows: [string, number][] = [
-    ["UTF8 strings", c.utf8_records],
-    ["Load class", c.load_class_records],
-    ["Unload class", c.unload_class_records],
-    ["Stack frames", c.stack_frame_records],
-    ["Stack traces", c.stack_trace_records],
-    ["Heap dump segments", c.heap_dump_segments],
-    ["Instance dumps", c.instance_dumps],
-    ["Object-array dumps", c.obj_array_dumps],
-    ["Primitive-array dumps", c.prim_array_dumps],
-    ["Class dumps", c.class_dumps],
+  const rows: { label: string; count: number }[] = [
+    { label: "UTF8 strings", count: c.utf8_records },
+    { label: "Load class", count: c.load_class_records },
+    { label: "Unload class", count: c.unload_class_records },
+    { label: "Stack frames", count: c.stack_frame_records },
+    { label: "Stack traces", count: c.stack_trace_records },
+    { label: "Heap dump segments", count: c.heap_dump_segments },
+    { label: "Instance dumps", count: c.instance_dumps },
+    { label: "Object-array dumps", count: c.obj_array_dumps },
+    { label: "Primitive-array dumps", count: c.prim_array_dumps },
+    { label: "Class dumps", count: c.class_dumps },
+  ];
+  const censusCols: TableColumn<{ label: string; count: number }>[] = [
+    { id: "label", name: "Record Type", grow: 1, selector: (r) => r.label },
+    { id: "count", name: "Count", right: true, width: "120px", format: (r) => fmtCount(r.count), selector: (r) => r.count },
   ];
   return (
     <section id="hprof-record-census">
@@ -698,275 +706,184 @@ function RecordCensusSection({ report }: { report: Report }) {
       <p className="subtitle">
         Raw HPROF record-type composition of the dump (pass-1 counts); additive, not parity-compared.
       </p>
-      <table>
-        <thead>
-          <tr>
-            <th>Record Type</th>
-            <th className="num">Count</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(([label, count], i) => (
-            <tr key={i}>
-              <td>{label}</td>
-              <td className="num">{fmtCount(count)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {c.gc_root_tag_counts.length > 0 && (
-        <>
-          <h3>GC Root Records by Tag</h3>
-          <table>
-            <thead>
-              <tr>
-                <th>Root Tag</th>
-                <th className="num">Count</th>
-              </tr>
-            </thead>
-            <tbody>
-              {c.gc_root_tag_counts.map(([tag, count], i) => (
-                <tr key={i}>
-                  <td>{gcRootTagLabel(tag)}</td>
-                  <td className="num">{fmtCount(count)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </>
-      )}
+      <DataTable columns={censusCols} data={rows} customStyles={histogramTableStyles} dense highlightOnHover />
     </section>
   );
 }
 
 // ── Top-Dominator Size Distribution ───────────────────────────────────────────
 function SizeDistributionSection({ report }: { report: Report }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   const d = report.top.size_distribution;
   if (d.count <= 0) return null;
+  type SizeBucket = (typeof d.buckets)[0];
+  const sizeCols: TableColumn<SizeBucket>[] = [
+    { id: "upper", name: "Size ≤", right: true, width: "120px", format: (b) => fmtB(b.upper_bytes), selector: (b) => b.upper_bytes },
+    { id: "count", name: "Count", right: true, width: "100px", format: (b) => fmtCount(b.count), selector: (b) => b.count },
+    { id: "pct", name: "% of Dom.", right: true, width: "100px", format: (b) => d.count > 0 ? fmtPct(b.count / d.count * 100) : "—", selector: (b) => b.count },
+  ];
   return (
     <section id="size-distribution">
       <h2>Top-Dominator Size Distribution</h2>
+      {kbBtn && <div className="tools">{kbBtn}</div>}
       <p className="subtitle">
         Retained-size spread across all {fmtCount(d.count)} top-level dominators (the biggest memory contributors).
       </p>
       <ul>
         <li>Dominators: {fmtCount(d.count)}</li>
-        <li>Smallest / largest retained: {formatBytes(d.min)} / {formatBytes(d.max)}</li>
-        <li>Median retained: {formatBytes(d.median)}</li>
-        <li>Total retained (top-level): {formatBytes(d.total)}</li>
+        <li>Smallest / largest retained: {fmtB(d.min)} / {fmtB(d.max)}</li>
+        <li>Median retained: {fmtB(d.median)}</li>
+        <li>Total retained (top-level): {fmtB(d.total)}</li>
       </ul>
-      <table>
-        <thead>
-          <tr>
-            <th className="num">Size ≤</th>
-            <th className="num">Count</th>
-            <th className="num">% of Dom.</th>
-          </tr>
-        </thead>
-        <tbody>
-          {d.buckets.map((b, i) => (
-            <tr key={i}>
-              <td className="num">{formatBytes(b.upper_bytes)}</td>
-              <td className="num">{fmtCount(b.count)}</td>
-              <td className="num">{d.count > 0 ? fmtPct(b.count / d.count * 100) : "—"}</td>
-            </tr>
-          ))}
-        </tbody>
-        <tfoot>
-          <tr>
-            <td className="num"><strong>Total</strong></td>
-            <td className="num"><strong>{fmtCount(d.count)}</strong></td>
-            <td className="num"><strong>100.0%</strong></td>
-          </tr>
-        </tfoot>
-      </table>
+      <DataTable columns={sizeCols} data={d.buckets} customStyles={histogramTableStyles} dense highlightOnHover />
+      <div style={{ display: "flex", gap: "2rem", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
+        <span style={{ flex: 1 }}>Total</span>
+        <span style={{ width: "100px", textAlign: "right" }}>{fmtCount(d.count)}</span>
+        <span style={{ width: "100px", textAlign: "right" }}>100.0%</span>
+      </div>
     </section>
   );
 }
 
 // ── Small capped sub-tables for Duplicate Strings section ────────────────────
 function TopDuplicatedTable({ rows }: { rows: DupStringSample[] }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   const { visible, extra, showAll, setShowAll } = useCapped(rows);
+  const cols: TableColumn<DupStringSample>[] = [
+    { id: "rank", name: "#", right: true, width: "52px", cell: (_r, i) => (i ?? 0) + 1 },
+    { id: "count", name: "Count", right: true, width: "100px", format: (s) => fmtCount(s.count), selector: (s) => s.count },
+    { id: "wasted", name: "Wasted", right: true, width: "100px", format: (s) => fmtB(s.wasted_bytes), selector: (s) => s.wasted_bytes },
+    { id: "value", name: "Value", grow: 1, cell: (s) => <code>{s.text}</code> },
+  ];
   return (
     <>
       <h3>Most-Duplicated Values</h3>
-      <table>
-        <thead>
-          <tr>
-            <th className="num">#</th>
-            <th className="num">Count</th>
-            <th className="num">Wasted</th>
-            <th>Value</th>
-          </tr>
-        </thead>
-        <tbody>
-          {visible.map((s, i) => (
-            <tr key={i}>
-              <td className="num">{i + 1}</td>
-              <td className="num">{fmtCount(s.count)}</td>
-              <td className="num">{formatBytes(s.wasted_bytes)}</td>
-              <td><code>{s.text}</code></td>
-            </tr>
-          ))}
-          <ShowMoreRow extra={extra} cols={4} showAll={showAll} setShowAll={setShowAll} />
-        </tbody>
-      </table>
+      <DataTable columns={cols} data={visible} customStyles={histogramTableStyles} dense highlightOnHover />
+      {extra > 0 && (
+        <button className="show-more-btn" onClick={() => setShowAll(!showAll)}>
+          {showAll ? "Collapse" : `Show ${fmtCount(extra)} more`}
+        </button>
+      )}
     </>
   );
 }
 
 function TopByLengthTable({ rows }: { rows: DupStringSample[] }) {
   const { visible, extra, showAll, setShowAll } = useCapped(rows);
+  const cols: TableColumn<DupStringSample>[] = [
+    { id: "rank", name: "#", right: true, width: "52px", cell: (_r, i) => (i ?? 0) + 1 },
+    { id: "len", name: "Length", right: true, width: "100px", format: (s) => fmtCount(s.len), selector: (s) => s.len },
+    { id: "count", name: "Count", right: true, width: "100px", format: (s) => fmtCount(s.count), selector: (s) => s.count },
+    { id: "value", name: "Value", grow: 1, cell: (s) => <code>{s.text}</code> },
+  ];
   return (
     <>
       <h3>Longest Values</h3>
-      <table>
-        <thead>
-          <tr>
-            <th className="num">#</th>
-            <th className="num">Length</th>
-            <th className="num">Count</th>
-            <th>Value</th>
-          </tr>
-        </thead>
-        <tbody>
-          {visible.map((s, i) => (
-            <tr key={i}>
-              <td className="num">{i + 1}</td>
-              <td className="num">{fmtCount(s.len)}</td>
-              <td className="num">{fmtCount(s.count)}</td>
-              <td><code>{s.text}</code></td>
-            </tr>
-          ))}
-          <ShowMoreRow extra={extra} cols={4} showAll={showAll} setShowAll={setShowAll} />
-        </tbody>
-      </table>
+      <DataTable columns={cols} data={visible} customStyles={histogramTableStyles} dense highlightOnHover />
+      {extra > 0 && (
+        <button className="show-more-btn" onClick={() => setShowAll(!showAll)}>
+          {showAll ? "Collapse" : `Show ${fmtCount(extra)} more`}
+        </button>
+      )}
     </>
   );
 }
 
 function StringHoldersTable({ rows }: { rows: StringHolder[] }) {
   const { visible, extra, showAll, setShowAll } = useCapped(rows);
+  const cols: TableColumn<StringHolder>[] = [
+    { id: "class", name: "Class", grow: 1, cell: (h) => <code>{h.class_name}</code> },
+    { id: "refs", name: "String refs", right: true, width: "120px", format: (h) => fmtCount(h.string_refs), selector: (h) => h.string_refs },
+  ];
   return (
     <>
       <h3>Classes Holding the Most Strings</h3>
       <p className="subtitle">
         Number of <code>java.lang.String</code> instances referenced by each class's instances.
       </p>
-      <table>
-        <thead>
-          <tr>
-            <th>Class</th>
-            <th className="num">String refs</th>
-          </tr>
-        </thead>
-        <tbody>
-          {visible.map((h, i) => (
-            <tr key={i}>
-              <td><code>{h.class_name}</code></td>
-              <td className="num">{fmtCount(h.string_refs)}</td>
-            </tr>
-          ))}
-          <ShowMoreRow extra={extra} cols={2} showAll={showAll} setShowAll={setShowAll} />
-        </tbody>
-      </table>
+      <DataTable columns={cols} data={visible} customStyles={histogramTableStyles} dense highlightOnHover />
+      {extra > 0 && (
+        <button className="show-more-btn" onClick={() => setShowAll(!showAll)}>
+          {showAll ? "Collapse" : `Show ${fmtCount(extra)} more`}
+        </button>
+      )}
     </>
   );
 }
 
 function CharArrayWasteTopTable({ rows }: { rows: CharArrayWasteRow[] }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   const { visible, extra, showAll, setShowAll } = useCapped(rows);
+  const cols: TableColumn<CharArrayWasteRow>[] = [
+    { id: "array", name: "Array #", right: true, width: "100px", format: (r) => fmtCount(r.array_obj_1based), selector: (r) => r.array_obj_1based },
+    { id: "length", name: "Length", right: true, width: "100px", format: (r) => fmtCount(r.length), selector: (r) => r.length },
+    { id: "used", name: "Used", right: true, width: "100px", format: (r) => fmtB(r.used), selector: (r) => r.used },
+    { id: "wasted", name: "Wasted", right: true, width: "100px", format: (r) => fmtB(r.wasted_bytes), selector: (r) => r.wasted_bytes },
+  ];
   return (
-    <table>
-      <thead>
-        <tr>
-          <th className="num">Array #</th>
-          <th className="num">Length</th>
-          <th className="num">Used</th>
-          <th className="num">Wasted</th>
-        </tr>
-      </thead>
-      <tbody>
-        {visible.map((r, i) => (
-          <tr key={i}>
-            <td className="num">{fmtCount(r.array_obj_1based)}</td>
-            <td className="num">{fmtCount(r.length)}</td>
-            <td className="num">{formatBytes(r.used)}</td>
-            <td className="num">{formatBytes(r.wasted_bytes)}</td>
-          </tr>
-        ))}
-        <ShowMoreRow extra={extra} cols={4} showAll={showAll} setShowAll={setShowAll} />
-      </tbody>
-    </table>
+    <>
+      <DataTable columns={cols} data={visible} customStyles={histogramTableStyles} dense highlightOnHover />
+      {extra > 0 && (
+        <button className="show-more-btn" onClick={() => setShowAll(!showAll)}>
+          {showAll ? "Collapse" : `Show ${fmtCount(extra)} more`}
+        </button>
+      )}
+    </>
   );
 }
 
 // ── Small capped sub-tables for Duplicate Prim Arrays section ─────────────────
 function DupPrimArrayRowsTable({ rows }: { rows: DupPrimArrayRow[] }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   const { visible, extra, showAll, setShowAll } = useCapped(rows);
+  const cols: TableColumn<DupPrimArrayRow>[] = [
+    { id: "rank", name: "#", right: true, width: "52px", cell: (_r, i) => (i ?? 0) + 1 },
+    { id: "type", name: "Array type", grow: 1, cell: (r) => <code>{r.array_class}</code> },
+    { id: "groups", name: "Dup groups", right: true, width: "120px", format: (r) => fmtCount(r.duplicated_groups), selector: (r) => r.duplicated_groups },
+    { id: "wasted", name: "Wasted", right: true, width: "100px", format: (r) => fmtB(r.wasted_bytes), selector: (r) => r.wasted_bytes },
+  ];
   return (
     <>
       <h3>Waste by Array Element Type</h3>
-      <table>
-        <thead>
-          <tr>
-            <th className="num">#</th>
-            <th>Array type</th>
-            <th className="num">Dup groups</th>
-            <th className="num">Wasted</th>
-          </tr>
-        </thead>
-        <tbody>
-          {visible.map((row, i) => (
-            <tr key={i}>
-              <td className="num">{i + 1}</td>
-              <td><code>{row.array_class}</code></td>
-              <td className="num">{fmtCount(row.duplicated_groups)}</td>
-              <td className="num">{formatBytes(row.wasted_bytes)}</td>
-            </tr>
-          ))}
-          <ShowMoreRow extra={extra} cols={4} showAll={showAll} setShowAll={setShowAll} />
-        </tbody>
-      </table>
+      <DataTable columns={cols} data={visible} customStyles={histogramTableStyles} dense highlightOnHover />
+      {extra > 0 && (
+        <button className="show-more-btn" onClick={() => setShowAll(!showAll)}>
+          {showAll ? "Collapse" : `Show ${fmtCount(extra)} more`}
+        </button>
+      )}
     </>
   );
 }
 
 function DupArrayHoldersTable({ rows }: { rows: DupArrayHolder[] }) {
   const { visible, extra, showAll, setShowAll } = useCapped(rows);
+  const cols: TableColumn<DupArrayHolder>[] = [
+    { id: "rank", name: "#", right: true, width: "52px", cell: (_r, i) => (i ?? 0) + 1 },
+    { id: "class", name: "Class", grow: 1, cell: (h) => <code>{h.class_name}</code> },
+    { id: "refs", name: "Array refs", right: true, width: "120px", format: (h) => fmtCount(h.array_refs), selector: (h) => h.array_refs },
+  ];
   return (
     <>
       <h3>Classes Holding the Most Duplicate Arrays</h3>
-      <table>
-        <thead>
-          <tr>
-            <th className="num">#</th>
-            <th>Class</th>
-            <th className="num">Array refs</th>
-          </tr>
-        </thead>
-        <tbody>
-          {visible.map((h, i) => (
-            <tr key={i}>
-              <td className="num">{i + 1}</td>
-              <td><code>{h.class_name}</code></td>
-              <td className="num">{fmtCount(h.array_refs)}</td>
-            </tr>
-          ))}
-          <ShowMoreRow extra={extra} cols={3} showAll={showAll} setShowAll={setShowAll} />
-        </tbody>
-      </table>
+      <DataTable columns={cols} data={visible} customStyles={histogramTableStyles} dense highlightOnHover />
+      {extra > 0 && (
+        <button className="show-more-btn" onClick={() => setShowAll(!showAll)}>
+          {showAll ? "Collapse" : `Show ${fmtCount(extra)} more`}
+        </button>
+      )}
     </>
   );
 }
 
 // ── Duplicate Strings (approximate) ────────────────────────────────────────────
 function DuplicateStringsSection({ report }: { report: Report }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   const d = report.overview.duplicate_strings;
   if (!d) {
     return (
       <section id="duplicate-strings-approximate">
         <h2>Duplicate Strings (approximate)</h2>
+        {kbBtn && <div className="tools">{kbBtn}</div>}
         <p className="subtitle">
           Duplicate-string analysis not run (pass <code>--find-duplicates</code>).
         </p>
@@ -984,7 +901,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
         <li>Total String instances: {fmtCount(d.total_string_instances)}</li>
         <li>Distinct values: {fmtCount(d.distinct_values)}</li>
         <li>Duplicated values: {fmtCount(d.duplicated_values)}</li>
-        <li>Approx wasted bytes: {formatBytes(d.approx_wasted_bytes)}</li>
+        <li>Approx wasted bytes: {fmtB(d.approx_wasted_bytes)}</li>
       </ul>
 
       {d.top_duplicated.length > 0 && (
@@ -995,31 +912,23 @@ function DuplicateStringsSection({ report }: { report: Report }) {
         <TopByLengthTable rows={d.top_by_length} />
       )}
 
-      {d.length_histogram.length > 0 && (
-        <>
-          <h3>String Length Distribution</h3>
-          <p className="subtitle">
-            Distinct-value lengths (bytes): min {fmtCount(d.length_stats.min)}, median {fmtCount(d.length_stats.median)},
-            max {fmtCount(d.length_stats.max)}; total {formatBytes(d.length_stats.total)}.
-          </p>
-          <table>
-            <thead>
-              <tr>
-                <th className="num">Length ≤</th>
-                <th className="num">Values</th>
-              </tr>
-            </thead>
-            <tbody>
-              {d.length_histogram.map((b, i) => (
-                <tr key={i}>
-                  <td className="num">{fmtCount(b.upper_len)}</td>
-                  <td className="num">{fmtCount(b.count)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </>
-      )}
+      {d.length_histogram.length > 0 && (() => {
+        type LenBucket = (typeof d.length_histogram)[0];
+        const lenCols: TableColumn<LenBucket>[] = [
+          { id: "upper", name: "Length ≤", right: true, width: "120px", format: (b) => fmtCount(b.upper_len), selector: (b) => b.upper_len },
+          { id: "values", name: "Values", right: true, width: "120px", format: (b) => fmtCount(b.count), selector: (b) => b.count },
+        ];
+        return (
+          <>
+            <h3>String Length Distribution</h3>
+            <p className="subtitle">
+              Distinct-value lengths (bytes): min {fmtCount(d.length_stats.min)}, median {fmtCount(d.length_stats.median)},
+              max {fmtCount(d.length_stats.max)}; total {fmtB(d.length_stats.total)}.
+            </p>
+            <DataTable columns={lenCols} data={d.length_histogram} customStyles={histogramTableStyles} dense highlightOnHover />
+          </>
+        );
+      })()}
 
       {d.top_string_holders.length > 0 && (
         <StringHoldersTable rows={d.top_string_holders} />
@@ -1030,7 +939,7 @@ function DuplicateStringsSection({ report }: { report: Report }) {
           <h3><code>char[]</code> Waste</h3>
           <p className="subtitle">
             {fmtCount(w.arrays_examined)} arrays examined, {fmtCount(w.wasteful_arrays)} wasteful,{" "}
-            {formatBytes(w.total_wasted_bytes)} total wasted.
+            {fmtB(w.total_wasted_bytes)} total wasted.
           </p>
           {w.top.length > 0 && (
             <CharArrayWasteTopTable rows={w.top} />
@@ -1042,11 +951,13 @@ function DuplicateStringsSection({ report }: { report: Report }) {
 }
 
 function DuplicatePrimArraysSection({ report }: { report: Report }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   const d = report.overview.duplicate_prim_arrays;
   if (!d) {
     return (
       <section id="duplicate-prim-arrays">
         <h2>Duplicate Primitive Arrays (approximate)</h2>
+        {kbBtn && <div className="tools">{kbBtn}</div>}
         <p className="subtitle">
           Duplicate primitive-array analysis not run (pass <code>--find-duplicates</code>).
         </p>
@@ -1061,7 +972,7 @@ function DuplicatePrimArraysSection({ report }: { report: Report }) {
         content and element type; collisions accepted as approximation.
       </p>
       <ul>
-        <li>Approx wasted bytes: {formatBytes(d.total_wasted_bytes)}</li>
+        <li>Approx wasted bytes: {fmtB(d.total_wasted_bytes)}</li>
       </ul>
       {d.rows.length > 0 && (
         <DupPrimArrayRowsTable rows={d.rows} />
@@ -1074,75 +985,48 @@ function DuplicatePrimArraysSection({ report }: { report: Report }) {
 }
 
 function BoxedNumbersSection({ report }: { report: Report }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   const rows = report.overview.boxed_numbers;
   if (!rows?.length) return null;
   const total = report.overview.total_shallow;
   const holders = report.overview.boxed_number_holders ?? [];
   const boxedCap = useCapped(rows);
   const holdersCap = useCapped(holders);
+  const boxedCols: TableColumn<import("./types").BoxedNumberRow>[] = [
+    { id: "rank", name: "#", right: true, width: "52px", cell: (_r, i) => (i ?? 0) + 1 },
+    { id: "class", name: "Class", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /></span> },
+    { id: "instances", name: "Instances", right: true, width: "110px", format: (r) => fmtCount(r.instances), selector: (r) => r.instances },
+    { id: "shallow", name: "Total Shallow", right: true, width: "120px", format: (r) => fmtB(r.total_shallow), selector: (r) => r.total_shallow },
+    { id: "pct", name: "% of Heap", right: true, width: "100px", format: (r) => total > 0 ? fmtPct(r.pct_of_heap_bp / 100) : "—", selector: (r) => r.pct_of_heap_bp },
+    { id: "avg", name: "Avg Size", right: true, width: "100px", format: (r) => fmtB(r.avg_shallow), selector: (r) => r.avg_shallow },
+  ];
+  const holderCols: TableColumn<import("./types").BoxedNumberHolder>[] = [
+    { id: "rank", name: "#", right: true, width: "52px", cell: (_r, i) => (i ?? 0) + 1 },
+    { id: "class", name: "Class", grow: 1, cell: (h) => <span className="copy-cell"><code>{h.class_name}</code><CopyBtn text={h.class_name} /></span> },
+    { id: "refs", name: "Boxed refs", right: true, width: "120px", format: (h) => fmtCount(h.boxed_refs), selector: (h) => h.boxed_refs },
+  ];
   return (
     <section id="boxed-numbers">
       <h2>Boxed Numbers</h2>
+      {kbBtn && <div className="tools">{kbBtn}</div>}
       <p className="subtitle">
         Wrapper types whose instances occupy heap that could be replaced with primitives.
       </p>
-      <table>
-        <thead>
-          <tr>
-            <th className="num">#</th>
-            <th>Class</th>
-            <th className="num">Instances</th>
-            <th className="num">Total Shallow</th>
-            <th className="num">% of Heap</th>
-            <th className="num">Avg Size</th>
-          </tr>
-        </thead>
-        <tbody>
-          {boxedCap.visible.map((row, i) => (
-            <tr key={i}>
-              <td className="num">{i + 1}</td>
-              <td>
-                <span className="copy-cell">
-                  <code>{row.pretty_class}</code>
-                  <CopyBtn text={row.pretty_class} />
-                </span>
-              </td>
-              <td className="num">{fmtCount(row.instances)}</td>
-              <td className="num">{formatBytes(row.total_shallow)}</td>
-              <td className="num">{total > 0 ? fmtPct(row.pct_of_heap_bp / 100) : "—"}</td>
-              <td className="num">{formatBytes(row.avg_shallow)}</td>
-            </tr>
-          ))}
-          <ShowMoreRow extra={boxedCap.extra} cols={6} showAll={boxedCap.showAll} setShowAll={boxedCap.setShowAll} />
-        </tbody>
-      </table>
+      <DataTable columns={boxedCols} data={boxedCap.visible} customStyles={histogramTableStyles} dense highlightOnHover />
+      {boxedCap.extra > 0 && (
+        <button className="show-more-btn" onClick={() => boxedCap.setShowAll(!boxedCap.showAll)}>
+          {boxedCap.showAll ? "Collapse" : `Show ${fmtCount(boxedCap.extra)} more`}
+        </button>
+      )}
       {holders.length > 0 && (
         <>
           <h3>Classes Holding the Most Boxed-Number References</h3>
-          <table>
-            <thead>
-              <tr>
-                <th className="num">#</th>
-                <th>Class</th>
-                <th className="num">Boxed refs</th>
-              </tr>
-            </thead>
-            <tbody>
-              {holdersCap.visible.map((h, i) => (
-                <tr key={i}>
-                  <td className="num">{i + 1}</td>
-                  <td>
-                    <span className="copy-cell">
-                      <code>{h.class_name}</code>
-                      <CopyBtn text={h.class_name} />
-                    </span>
-                  </td>
-                  <td className="num">{fmtCount(h.boxed_refs)}</td>
-                </tr>
-              ))}
-              <ShowMoreRow extra={holdersCap.extra} cols={3} showAll={holdersCap.showAll} setShowAll={holdersCap.setShowAll} />
-            </tbody>
-          </table>
+          <DataTable columns={holderCols} data={holdersCap.visible} customStyles={histogramTableStyles} dense highlightOnHover />
+          {holdersCap.extra > 0 && (
+            <button className="show-more-btn" onClick={() => holdersCap.setShowAll(!holdersCap.showAll)}>
+              {holdersCap.showAll ? "Collapse" : `Show ${fmtCount(holdersCap.extra)} more`}
+            </button>
+          )}
         </>
       )}
     </section>
@@ -1150,52 +1034,38 @@ function BoxedNumbersSection({ report }: { report: Report }) {
 }
 
 function HeaderOverheadSection({ report }: { report: Report }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   const rows = report.overview.header_overhead;
   if (!rows?.length) return null;
   const { visible, extra, showAll, setShowAll } = useCapped(rows);
+  const cols: TableColumn<import("./types").HeaderOverheadRow>[] = [
+    { id: "rank", name: "#", right: true, width: "52px", cell: (_r, i) => (i ?? 0) + 1 },
+    { id: "class", name: "Class", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.pretty_class}</code><CopyBtn text={r.pretty_class} /></span> },
+    { id: "instances", name: "Instances", right: true, width: "110px", format: (r) => fmtCount(r.instances), selector: (r) => r.instances },
+    { id: "hdr", name: "Hdr/obj", right: true, width: "90px", format: (r) => `${r.header_bytes} B`, selector: (r) => r.header_bytes },
+    { id: "total_hdr", name: "Total Headers", right: true, width: "120px", format: (r) => fmtB(r.total_header_bytes), selector: (r) => r.total_header_bytes },
+    { id: "pct", name: "Hdr %", right: true, width: "90px", format: (r) => fmtPct(r.header_pct_of_shallow_bp / 100), selector: (r) => r.header_pct_of_shallow_bp },
+    { id: "avg", name: "Avg Size", right: true, width: "100px", format: (r) => fmtB(r.avg_shallow), selector: (r) => r.avg_shallow },
+  ];
   return (
     <section id="object-header-overhead">
       <h2>Object Header Overhead</h2>
+      {kbBtn && <div className="tools">{kbBtn}</div>}
       <p className="subtitle">
         Classes where object headers consume a large share of shallow heap
         (candidates for value-type / record optimisation).
       </p>
-      <table>
-        <thead>
-          <tr>
-            <th className="num">#</th>
-            <th>Class</th>
-            <th className="num">Instances</th>
-            <th className="num">Hdr/obj</th>
-            <th className="num">Total Headers</th>
-            <th className="num">Hdr %</th>
-            <th className="num">Avg Size</th>
-          </tr>
-        </thead>
-        <tbody>
-          {visible.map((row, i) => (
-            <tr key={i}>
-              <td className="num">{i + 1}</td>
-              <td>
-                <span className="copy-cell">
-                  <code>{row.pretty_class}</code>
-                  <CopyBtn text={row.pretty_class} />
-                </span>
-              </td>
-              <td className="num">{fmtCount(row.instances)}</td>
-              <td className="num">{row.header_bytes} B</td>
-              <td className="num">{formatBytes(row.total_header_bytes)}</td>
-              <td className="num">{fmtPct(row.header_pct_of_shallow_bp / 100)}</td>
-              <td className="num">{formatBytes(row.avg_shallow)}</td>
-            </tr>
-          ))}
-          <ShowMoreRow extra={extra} cols={7} showAll={showAll} setShowAll={setShowAll} />
-        </tbody>
-      </table>
+      <DataTable columns={cols} data={visible} customStyles={histogramTableStyles} dense highlightOnHover />
+      {extra > 0 && (
+        <button className="show-more-btn" onClick={() => setShowAll(!showAll)}>
+          {showAll ? "Collapse" : `Show ${fmtCount(extra)} more`}
+        </button>
+      )}
     </section>
   );
 }
 function SystemOverviewSection({ report }: { report: Report }) {
+  const fmtB = formatBytes;
   const o = report.overview;
   const threadCount = report.threads?.threads?.length ?? 0;
   return (
@@ -1225,7 +1095,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
             </>
           )}
           <dt>File size</dt>
-          <dd>{formatBytes(o.file_size)}</dd>
+          <dd>{fmtB(o.file_size)}</dd>
           <dt>Identifier size</dt>
           <dd>{o.identifier_size_bits}-bit</dd>
           {o.compressed_oops !== null && (
@@ -1243,7 +1113,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
           <dt>Total objects</dt>
           <dd>{fmtCount(o.total_objects)}</dd>
           <dt>Total reachable heap</dt>
-          <dd>{formatBytes(o.total_shallow)}</dd>
+          <dd>{fmtB(o.total_shallow)}</dd>
           <dt>GC roots</dt>
           <dd>{fmtCount(o.gc_roots)}</dd>
           <dt>Classes loaded</dt>
@@ -1262,7 +1132,7 @@ function SystemOverviewSection({ report }: { report: Report }) {
             <>
               <dt>Unreachable (excluded)</dt>
               <dd>
-                {fmtCount(o.unreachable_count)} ({formatBytes(o.unreachable_shallow)})
+                {fmtCount(o.unreachable_count)} ({fmtB(o.unreachable_shallow)})
               </dd>
             </>
           )}
@@ -1307,82 +1177,60 @@ function SystemOverviewSection({ report }: { report: Report }) {
         <p className="subtitle">System properties not captured in this dump.</p>
       )}
 
-      {o.heap_composition.by_kind.length > 0 && (
-        <>
-          <h3>Heap Composition</h3>
-          <ChartOrNote hasData={o.heap_composition.by_kind.length >= 2} note="Composition chart needs at least two kinds; showing the table only.">
-            <HeapCompositionChart data={o.heap_composition.by_kind} />
-            <CompositionStackedBar data={o.heap_composition.by_kind} />
-          </ChartOrNote>
-          <table>
-            <thead>
-              <tr>
-                <th>Kind</th>
-                <th className="num">Objects</th>
-                <th className="num">Shallow Heap</th>
-              </tr>
-            </thead>
-            <tbody>
-              {o.heap_composition.by_kind.map((k, i) => (
-                <tr key={i}>
-                  <td>{k.kind}</td>
-                  <td className="num">{fmtCount(k.objects)}</td>
-                  <td className="num">{formatBytes(k.shallow_heap)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </>
-      )}
+      {o.heap_composition.by_kind.length > 0 && (() => {
+        const compCols: TableColumn<KindStat>[] = [
+          { id: "kind", name: "Kind", grow: 1, selector: (k) => k.kind },
+          { id: "objects", name: "Objects", right: true, width: "120px", format: (k) => fmtCount(k.objects), selector: (k) => k.objects },
+          { id: "shallow", name: "Shallow Heap", right: true, width: "120px", format: (k) => fmtB(k.shallow_heap), selector: (k) => k.shallow_heap },
+        ];
+        return (
+          <>
+            <h3>Heap Composition</h3>
+            <ChartOrNote hasData={o.heap_composition.by_kind.length >= 2} note="Composition chart needs at least two kinds; showing the table only.">
+              <HeapCompositionChart data={o.heap_composition.by_kind} />
+              <CompositionStackedBar data={o.heap_composition.by_kind} />
+            </ChartOrNote>
+            <DataTable columns={compCols} data={o.heap_composition.by_kind} customStyles={histogramTableStyles} dense highlightOnHover />
+          </>
+        );
+      })()}
 
-      {o.gc_roots_by_type.length > 0 && (
-        <>
-          <h3>GC Roots by Type</h3>
-          <ChartOrNote hasData={o.gc_roots_by_type.length >= 2} note="Too few root types to chart; showing the table only.">
-            <GcRootsChart data={o.gc_roots_by_type} />
-          </ChartOrNote>
-          {(() => {
-            const maxCount = Math.max(...o.gc_roots_by_type.map((r) => r.count), 1);
-            const total = o.gc_roots_by_type.reduce((s, r) => s + r.count, 0);
-            return (
-              <table>
-                <thead>
-                  <tr>
-                    <th>Root Type</th>
-                    <th className="num">Count</th>
-                    <th className="num">%</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {o.gc_roots_by_type.map((r, i) => {
-                    const pct = total > 0 ? (r.count / total) * 100 : 0;
-                    const barPct = (r.count / maxCount) * 100;
-                    return (
-                      <tr key={i}>
-                        <td>
-                          <span className="bar-bg" style={{ width: 80 }}>
-                            <span className="bar-fill" style={{ width: `${barPct}%` }} />
-                          </span>
-                          {r.root_type}
-                        </td>
-                        <td className="num">{fmtCount(r.count)}</td>
-                        <td className="num">{fmtPct(pct)}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-                <tfoot>
-                  <tr>
-                    <td><strong>Total</strong></td>
-                    <td className="num"><strong>{fmtCount(total)}</strong></td>
-                    <td className="num"><strong>100%</strong></td>
-                  </tr>
-                </tfoot>
-              </table>
-            );
-          })()}
-        </>
-      )}
+      {(o.gc_roots_retained_by_type?.length ?? o.gc_roots_by_type.length) > 0 && (() => {
+        const gcRows = o.gc_roots_retained_by_type?.length
+          ? o.gc_roots_retained_by_type
+          : o.gc_roots_by_type.map((r) => ({ ...r, retained: 0 }));
+        const maxCount = Math.max(...gcRows.map((r) => r.count), 1);
+        const totalCount = gcRows.reduce((s, r) => s + r.count, 0);
+        const totalRetained = gcRows.reduce((s, r) => s + r.retained, 0);
+        type GcRow = (typeof gcRows)[0];
+        const gcCols: TableColumn<GcRow>[] = [
+          {
+            id: "bar", name: "", width: "90px", grow: 0,
+            cell: (r) => (
+              <span className="bar-bg" style={{ width: 80 }}>
+                <span className="bar-fill" style={{ width: `${(r.count / maxCount) * 100}%` }} />
+              </span>
+            ),
+          },
+          { id: "type", name: "Root Type", grow: 1, selector: (r) => r.root_type },
+          { id: "count", name: "Count", right: true, width: "100px", format: (r) => fmtCount(r.count), selector: (r) => r.count },
+          { id: "pct", name: "%", right: true, width: "80px", format: (r) => fmtPct(totalCount > 0 ? (r.count / totalCount) * 100 : 0), selector: (r) => r.count },
+          { id: "retained", name: "Retained", right: true, width: "120px", format: (r: GcRow) => fmtB(r.retained), selector: (r: GcRow) => r.retained },
+        ];
+        return (
+          <>
+            <h3>GC Roots by Type</h3>
+            <DataTable columns={gcCols} data={gcRows} customStyles={histogramTableStyles} dense highlightOnHover />
+            <div style={{ display: "flex", gap: "2rem", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
+              <span style={{ width: "90px" }} />
+              <span style={{ flex: 1 }}>Total</span>
+              <span style={{ width: "100px", textAlign: "right" }}>{fmtCount(totalCount)}</span>
+              <span style={{ width: "80px", textAlign: "right" }}>100%</span>
+              <span style={{ width: "120px", textAlign: "right" }}>{fmtB(totalRetained)}</span>
+            </div>
+          </>
+        );
+      })()}
 
       <h3>Class Histogram (by Retained Heap)</h3>
       {o.histogram_truncated_to != null && (
@@ -1423,98 +1271,89 @@ function SystemOverviewSection({ report }: { report: Report }) {
 
 // ── Leak Suspects ───────────────────────────────────────────────────────────
 function ClassLoadersTable({ rows }: { rows: LoaderRollup[] }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   const { visible, extra, showAll, setShowAll } = useCapped(rows);
+  const cols: TableColumn<LoaderRollup>[] = [
+    { id: "loader", name: "Loader", grow: 1, cell: (r) => <code title={r.loader_label ?? undefined}>{r.loader_label ? fmtLoader(r.loader_label) : `loader@${r.loader_id}`}</code> },
+    { id: "classes", name: "Classes", right: true, width: "90px", format: (r) => fmtCount(r.class_count), selector: (r) => r.class_count },
+    { id: "instances", name: "Instances", right: true, width: "110px", format: (r) => fmtCount(r.instances), selector: (r) => r.instances },
+    { id: "shallow", name: "Shallow", right: true, width: "110px", format: (r) => fmtB(r.shallow), selector: (r) => r.shallow },
+    { id: "retained", name: "Retained", right: true, width: "110px", format: (r) => fmtB(r.retained), selector: (r) => r.retained },
+  ];
   return (
-    <table>
-      <thead>
-        <tr>
-          <th>Loader</th>
-          <th className="num">Classes</th>
-          <th className="num">Instances</th>
-          <th className="num">Shallow</th>
-          <th className="num">Retained</th>
-        </tr>
-      </thead>
-      <tbody>
-        {visible.map((r, i) => (
-          <tr key={i}>
-            <td><code title={r.loader_label ?? undefined}>{r.loader_label ? fmtLoader(r.loader_label) : `loader@${r.loader_id}`}</code></td>
-            <td className="num">{fmtCount(r.class_count)}</td>
-            <td className="num">{fmtCount(r.instances)}</td>
-            <td className="num">{formatBytes(r.shallow)}</td>
-            <td className="num">{formatBytes(r.retained)}</td>
-          </tr>
-        ))}
-        <ShowMoreRow extra={extra} cols={5} showAll={showAll} setShowAll={setShowAll} />
-      </tbody>
-    </table>
+    <>
+      <DataTable columns={cols} data={visible} customStyles={histogramTableStyles} dense highlightOnHover />
+      {extra > 0 && (
+        <button className="show-more-btn" onClick={() => setShowAll(!showAll)}>
+          {showAll ? "Collapse" : `Show ${fmtCount(extra)} more`}
+        </button>
+      )}
+    </>
   );
 }
 
 function DuplicateClassesTable({ rows }: { rows: DuplicateClass[] }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   const { visible, extra, showAll, setShowAll } = useCapped(rows);
+  const cols: TableColumn<DuplicateClass>[] = [
+    {
+      id: "class", name: "Class", grow: 1,
+      cell: (d) => (
+        <span title={d.loaders.join(", ")}>
+          {d.per_loader && d.per_loader.length > 0 ? (
+            <details>
+              <summary>
+                <code>{d.pretty_class}</code>
+              </summary>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Loader</th>
+                    <th className="num">Instances</th>
+                    <th className="num">Shallow</th>
+                    <th className="num">Retained</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {d.per_loader.map((pl, j) => (
+                    <tr key={j}>
+                      <td>
+                        <code title={pl.loader_label ?? undefined}>{pl.loader_label ? fmtLoader(pl.loader_label) : "—"}</code>
+                      </td>
+                      <td className="num">{fmtCount(pl.instances)}</td>
+                      <td className="num">{fmtB(pl.shallow)}</td>
+                      <td className="num">{fmtB(pl.retained)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </details>
+          ) : (
+            <code>{d.pretty_class}</code>
+          )}
+        </span>
+      ),
+    },
+    { id: "loaders", name: "#Loaders", right: true, width: "90px", format: (d) => fmtCount(d.loader_count), selector: (d) => d.loader_count },
+    { id: "instances", name: "Instances", right: true, width: "110px", format: (d) => fmtCount(d.total_instances), selector: (d) => d.total_instances },
+    { id: "retained", name: "Retained", right: true, width: "110px", format: (d) => fmtB(d.total_retained), selector: (d) => d.total_retained },
+  ];
   return (
-    <table>
-      <thead>
-        <tr>
-          <th>Class</th>
-          <th className="num">#Loaders</th>
-          <th className="num">Instances</th>
-          <th className="num">Retained</th>
-        </tr>
-      </thead>
-      <tbody>
-        {visible.map((d, i) => (
-          <React.Fragment key={i}>
-            <tr>
-              <td title={d.loaders.join(", ")}>
-                {d.per_loader && d.per_loader.length > 0 ? (
-                  <details>
-                    <summary>
-                      <code>{d.pretty_class}</code>
-                    </summary>
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Loader</th>
-                          <th className="num">Instances</th>
-                          <th className="num">Shallow</th>
-                          <th className="num">Retained</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {d.per_loader.map((pl, j) => (
-                          <tr key={j}>
-                            <td>
-                              <code title={pl.loader_label ?? undefined}>{pl.loader_label ? fmtLoader(pl.loader_label) : "—"}</code>
-                            </td>
-                            <td className="num">{fmtCount(pl.instances)}</td>
-                            <td className="num">{formatBytes(pl.shallow)}</td>
-                            <td className="num">{formatBytes(pl.retained)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </details>
-                ) : (
-                  <code>{d.pretty_class}</code>
-                )}
-              </td>
-              <td className="num">{fmtCount(d.loader_count)}</td>
-              <td className="num">{fmtCount(d.total_instances)}</td>
-              <td className="num">{formatBytes(d.total_retained)}</td>
-            </tr>
-          </React.Fragment>
-        ))}
-        <ShowMoreRow extra={extra} cols={4} showAll={showAll} setShowAll={setShowAll} />
-      </tbody>
-    </table>
+    <>
+      <DataTable columns={cols} data={visible} customStyles={histogramTableStyles} dense highlightOnHover />
+      {extra > 0 && (
+        <button className="show-more-btn" onClick={() => setShowAll(!showAll)}>
+          {showAll ? "Collapse" : `Show ${fmtCount(extra)} more`}
+        </button>
+      )}
+    </>
   );
 }
 
 // Renders the accumulation "shortest path" (MAT's signature view) plus the
 // per-class breakdown of what piles up at the accumulation point.
 function AccumulationPath({ s }: { s: Suspect }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   if (s.path.length === 0) return null;
   return (
     <details open>
@@ -1523,7 +1362,7 @@ function AccumulationPath({ s }: { s: Suspect }) {
         {s.path.map((p, i) => (
           <li key={i}>
             <code>{p.display_class}</code>{" "}
-            <span className="path-ret">retains {formatBytes(p.retained)}</span>
+            <span className="path-ret">retains {fmtB(p.retained)}</span>
           </li>
         ))}
       </ol>
@@ -1532,36 +1371,25 @@ function AccumulationPath({ s }: { s: Suspect }) {
 }
 
 function DominatedByClass({ rows, suspectRetained }: { rows: HistRow[]; suspectRetained: number }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   if (rows.length === 0) return null;
   const { visible, extra, showAll, setShowAll } = useCapped(rows);
+  const cols: TableColumn<HistRow>[] = [
+    { id: "class", name: "Class", grow: 1, cell: (r) => <code>{r.pretty_class}</code> },
+    { id: "instances", name: "Instances", right: true, width: "110px", format: (r) => fmtCount(r.instances), selector: (r) => r.instances },
+    { id: "shallow", name: "Shallow", right: true, width: "110px", format: (r) => fmtB(r.shallow), selector: (r) => r.shallow },
+    { id: "retained", name: "Retained", right: true, width: "110px", format: (r) => fmtB(r.retained), selector: (r) => r.retained },
+    { id: "pct", name: "% of suspect", right: true, width: "120px", format: (r) => suspectRetained > 0 ? fmtPct(pctOf(r.retained, suspectRetained)) : "—", selector: (r) => r.retained },
+  ];
   return (
     <details open>
       <summary>Accumulated objects by class ({rows.length})</summary>
-      <table>
-        <thead>
-          <tr>
-            <th>Class</th>
-            <th className="num">Instances</th>
-            <th className="num">Shallow</th>
-            <th className="num">Retained</th>
-            <th className="num">% of suspect</th>
-          </tr>
-        </thead>
-        <tbody>
-          {visible.map((r, i) => (
-            <tr key={i}>
-              <td>
-                <code>{r.pretty_class}</code>
-              </td>
-              <td className="num">{fmtCount(r.instances)}</td>
-              <td className="num">{formatBytes(r.shallow)}</td>
-              <td className="num">{formatBytes(r.retained)}</td>
-              <td className="num">{suspectRetained > 0 ? fmtPct(pctOf(r.retained, suspectRetained)) : "—"}</td>
-            </tr>
-          ))}
-          <ShowMoreRow extra={extra} cols={5} showAll={showAll} setShowAll={setShowAll} />
-        </tbody>
-      </table>
+      <DataTable columns={cols} data={visible} customStyles={histogramTableStyles} dense highlightOnHover />
+      {extra > 0 && (
+        <button className="show-more-btn" onClick={() => setShowAll(!showAll)}>
+          {showAll ? "Collapse" : `Show ${fmtCount(extra)} more`}
+        </button>
+      )}
     </details>
   );
 }
@@ -1570,6 +1398,7 @@ function DominatedByClass({ rows, suspectRetained }: { rows: HistRow[]; suspectR
 // (first) up to its GC root (last), as a numbered list. The final step is annotated
 // with the GC-root type when known. Mirrors report.rs::render_root_path.
 function RootPathList({ steps }: { steps: RootPathStep[] }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   if (steps.length === 0) return null;
   const last = steps.length - 1;
   return (
@@ -1580,7 +1409,7 @@ function RootPathList({ steps }: { steps: RootPathStep[] }) {
           <li key={i}>
             {p.field_edge && <span className="path-field">.{p.field_edge} → </span>}
             <code>{p.display_class}</code>{" "}
-            <span className="path-ret">retains {formatBytes(p.retained)}</span>
+            <span className="path-ret">retains {fmtB(p.retained)}</span>
             {i === last && p.root_type_label && (
               <> — <strong>GC root: {p.root_type_label}</strong></>
             )}
@@ -1597,13 +1426,14 @@ function RootPathList({ steps }: { steps: RootPathStep[] }) {
 // many member chains pass through it, and the aggregate retained heap; a
 // terminal GC-root node carries its root-type label.
 function MergedPathsNode({ node, depth }: { node: MergedPathNode; depth: number }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   const hasChildren = node.children.length > 0;
   const label = (
     <>
       {node.field_edge && <span className="path-field">.{node.field_edge} → </span>}
       <code>{node.display_class}</code>{" "}
       <span className="path-ret">
-        {fmtCount(node.object_count)} object{node.object_count === 1 ? "" : "s"} · retained {formatBytes(node.retained)}
+        {fmtCount(node.object_count)} object{node.object_count === 1 ? "" : "s"} · retained {fmtB(node.retained)}
       </span>
       {node.root_type_label && (
         <> — <strong>GC root: {node.root_type_label}</strong></>
@@ -1643,6 +1473,7 @@ function MergedPaths({ node }: { node: MergedPathNode }) {
 }
 
 function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: number }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   const share = pctOf(s.retained, total);
   const dom = useCapped(s.dominated);
   return (
@@ -1652,11 +1483,11 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
         <span className="pill">{s.is_single ? "single object" : `class group ×${fmtCount(s.instance_count)}`}</span>
       </h3>
       <p style={{ margin: "0.25rem 0" }}>
-        Retains <strong title={fmtExactBytes(s.retained)}>{formatBytes(s.retained)}</strong>{" "}
+        Retains <strong title={fmtExactBytes(s.retained)}>{fmtB(s.retained)}</strong>{" "}
         <span className="mat-exact">
           {fmtExactBytes(s.retained)} ({fmtPct(share)})
         </span>
-        {s.shallow > 0 && <> · shallow {formatBytes(s.shallow)}</>}.
+        {s.shallow > 0 && <> · shallow {fmtB(s.shallow)}</>}.
       </p>
       <p style={{ margin: "0.25rem 0" }}>
         <span className="label">Held by:</span>{" "}
@@ -1681,42 +1512,34 @@ function SuspectCard({ s, total, rank }: { s: Suspect; total: number; rank: numb
       {s.accumulation_class && (
         <p style={{ margin: "0.25rem 0", color: "var(--muted)", fontSize: "0.86rem" }}>
           Accumulation point: <code>{s.accumulation_class}</code>
-          {s.accumulation_retained != null && <> retaining {formatBytes(s.accumulation_retained)}</>}.
+          {s.accumulation_retained != null && <> retaining {fmtB(s.accumulation_retained)}</>}.
         </p>
       )}
       <DominatedByClass rows={s.dominated_by_class} suspectRetained={s.retained} />
       <AccumulationPath s={s} />
-      {s.dominated.length > 0 && (
-        <details>
-          <summary>
-            Accumulated objects in dominator tree{" "}
-            {s.dominated_total_count > s.dominated_shown
-              ? `(directly dominates ${fmtCount(s.dominated_total_count)}, showing top ${fmtCount(s.dominated_shown)})`
-              : `(directly dominates ${fmtCount(s.dominated_total_count)})`}
-          </summary>
-          <table>
-            <thead>
-              <tr>
-                <th>Class</th>
-                <th className="num">Shallow</th>
-                <th className="num">Retained</th>
-              </tr>
-            </thead>
-            <tbody>
-              {dom.visible.map((d, i) => (
-                <tr key={i}>
-                  <td>
-                    <code>{d.display_class}</code>
-                  </td>
-                  <td className="num">{formatBytes(d.shallow)}</td>
-                  <td className="num">{formatBytes(d.retained)}</td>
-                </tr>
-              ))}
-              <ShowMoreRow extra={dom.extra} cols={3} showAll={dom.showAll} setShowAll={dom.setShowAll} />
-            </tbody>
-          </table>
-        </details>
-      )}
+      {s.dominated.length > 0 && (() => {
+        const domCols: TableColumn<import("./types").DominatedRow>[] = [
+          { id: "class", name: "Class", grow: 1, cell: (d) => <code>{d.display_class}</code> },
+          { id: "shallow", name: "Shallow", right: true, width: "110px", format: (d) => fmtB(d.shallow), selector: (d) => d.shallow },
+          { id: "retained", name: "Retained", right: true, width: "110px", format: (d) => fmtB(d.retained), selector: (d) => d.retained },
+        ];
+        return (
+          <details>
+            <summary>
+              Accumulated objects in dominator tree{" "}
+              {s.dominated_total_count > s.dominated_shown
+                ? `(directly dominates ${fmtCount(s.dominated_total_count)}, showing top ${fmtCount(s.dominated_shown)})`
+                : `(directly dominates ${fmtCount(s.dominated_total_count)})`}
+            </summary>
+            <DataTable columns={domCols} data={dom.visible} customStyles={histogramTableStyles} dense highlightOnHover />
+            {dom.extra > 0 && (
+              <button className="show-more-btn" onClick={() => dom.setShowAll(!dom.showAll)}>
+                {dom.showAll ? "Collapse" : `Show ${fmtCount(dom.extra)} more`}
+              </button>
+            )}
+          </details>
+        );
+      })()}
       {s.root_path && <RootPathList steps={s.root_path} />}
       {s.dominator_tree && <DomSubtreeSvg node={s.dominator_tree} />}
       {!s.is_single && s.merged_paths && <MergedPaths node={s.merged_paths} />}
@@ -1755,6 +1578,7 @@ function LeakSuspectsSection({ report }: { report: Report }) {
 // A recursive, expandable package tree (MAT PackageTreeResult drill-down). Each
 // node shows cumulative # objects / shallow / retained over its subtree.
 function PackageTreeRow({ node, depth, maxRetained, rowId }: { node: PackageNode; depth: number; maxRetained: number; rowId?: string }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   const [open, setOpen] = React.useState(depth < 1);
   const hasChildren = node.children.length > 0;
   const label = node.name || "(default package)";
@@ -1775,12 +1599,12 @@ function PackageTreeRow({ node, depth, maxRetained, rowId }: { node: PackageNode
           </span>
         </td>
         <td className="num">{fmtCount(node.top_dominator_count)}</td>
-        <td className="num">{formatBytes(node.shallow_heap)}</td>
+        <td className="num">{fmtB(node.shallow_heap)}</td>
         <td className="num bar-cell">
           <span className="bar-bg">
             <span className="bar-fill" style={{ width: `${pct}%` }} />
           </span>
-          {formatBytes(node.retained_heap)}
+          {fmtB(node.retained_heap)}
         </td>
       </tr>
       {open &&
@@ -1792,27 +1616,36 @@ function PackageTreeRow({ node, depth, maxRetained, rowId }: { node: PackageNode
 }
 
 function TopConsumersSection({ report }: { report: Report }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   const t = report.top;
   const total = report.leaks.total_shallow;
   const pkgRoot = t.biggest_packages;
   const maxPkgRetained = pkgRoot.children.reduce((m, c) => Math.max(m, c.retained_heap), 0);
 
-  const objSort = useSortedRows<ObjRow>(t.biggest_objects, "retained");
-  const clsSort = useSortedRows<ClassRow>(t.biggest_classes, "retained");
-  const objCap = useCapped(objSort.sorted);
-  const clsCap = useCapped(clsSort.sorted);
-  // "Held via" shows the dominant Class#field owner OR the holding stack frame;
-  // the column is shown only when at least one row has either.
+  const objCap = useCapped(t.biggest_objects);
+  const clsCap = useCapped(t.biggest_classes);
   const objHasOwner = t.biggest_objects.some((o) => !!o.owner || !!o.held_via);
-  const objCols = objHasOwner ? 6 : 5;
 
-  // Column resize hooks for the two main tables.
-  const objResize = useColumnResize(objCols);
-  const clsResize = useColumnResize(4);
+  const objTableCols: TableColumn<ObjRow>[] = [
+    { id: "rank", name: "#", right: true, width: "52px", cell: (_r, i) => (i ?? 0) + 1 },
+    { id: "class", name: "Class", grow: 1, cell: (o) => <code title={o.display_class}>{o.display_class}</code> },
+    { id: "shallow", name: "Shallow", right: true, width: "110px", format: (o) => fmtB(o.shallow), selector: (o) => o.shallow, sortable: true },
+    { id: "retained", name: "Retained", right: true, width: "110px", cell: (o) => <span title={fmtExactBytes(o.retained)}>{fmtB(o.retained)}</span>, selector: (o) => o.retained, sortable: true },
+    { id: "pct", name: "% Heap", right: true, width: "90px", format: (o) => fmtPct(pctOf(o.retained, total)), selector: (o) => o.pct_bp, sortable: true },
+    ...(objHasOwner ? [{ id: "held_via", name: "Held via (Class#field)", grow: 1, cell: (o: ObjRow) => o.owner ? <code>{o.owner}</code> : o.held_via ? <><code>{o.held_via}</code> <span className="muted">(stack)</span></> : <span>—</span> } as TableColumn<ObjRow>] : []),
+  ];
+
+  const clsTableCols: TableColumn<ClassRow>[] = [
+    { id: "class", name: "Class", grow: 1, cell: (c) => <span className="copy-cell"><code title={c.pretty_class}>{c.pretty_class}</code><CopyBtn text={c.pretty_class} /></span> },
+    { id: "instances", name: "Instances", right: true, width: "110px", format: (c) => fmtCount(c.instances), selector: (c) => c.instances, sortable: true },
+    { id: "retained", name: "Retained", right: true, width: "110px", cell: (c) => <span title={fmtExactBytes(c.retained)}>{fmtB(c.retained)}</span>, selector: (c) => c.retained, sortable: true },
+    { id: "pct", name: "% Heap", right: true, width: "90px", format: (c) => fmtPct(pctOf(c.retained, total)), selector: (c) => c.retained },
+  ];
 
   return (
     <section id="top-consumers">
       <h2>Top Consumers</h2>
+      {kbBtn && <div className="tools">{kbBtn}</div>}
       <p className="subtitle">Biggest individual objects, classes, and packages by retained heap.</p>
 
       <h3>Biggest Objects</h3>
@@ -1822,89 +1655,20 @@ function TopConsumersSection({ report }: { report: Report }) {
           reference that holds each object (the primary referrer; an object may have several).
         </p>
       )}
-      <div className="resizable-table-wrap">
-      <table className="resizable-table">
-        {objResize.widths.some((w) => w > 0) && (
-          <colgroup>
-            {objResize.widths.map((w, i) => <col key={i} style={w > 0 ? { width: w } : undefined} />)}
-          </colgroup>
-        )}
-        <thead>
-          <tr>
-            <th className="resizable">#<span className="col-resize-handle" onMouseDown={objResize.onMouseDown(0)} /></th>
-            <th className="resizable">Class<span className="col-resize-handle" onMouseDown={objResize.onMouseDown(1)} /></th>
-            <SortableTh<ObjRow> label="Shallow" colKey="shallow" sortKey={objSort.sortKey} setSortKey={objSort.setSortKey} />
-            <SortableTh<ObjRow> label="Retained" colKey="retained" sortKey={objSort.sortKey} setSortKey={objSort.setSortKey} />
-            <SortableTh<ObjRow> label="% Heap" colKey="pct_bp" sortKey={objSort.sortKey} setSortKey={objSort.setSortKey} />
-            {objHasOwner && (
-              <th className="resizable">Held via (Class#field)<span className="col-resize-handle" onMouseDown={objResize.onMouseDown(5)} /></th>
-            )}
-          </tr>
-        </thead>
-        <tbody>
-          {objCap.visible.map((o, i) => (
-            <tr key={i}>
-              <td className="num">{i + 1}</td>
-              <td>
-                <code>{o.display_class}</code>{" "}
-              </td>
-              <td className="num">{formatBytes(o.shallow)}</td>
-              <td className="num" title={fmtExactBytes(o.retained)}>
-                {formatBytes(o.retained)}
-              </td>
-              <td className="num">{fmtPct(pctOf(o.retained, total))}</td>
-              {objHasOwner && (
-                <td>
-                  {o.owner ? (
-                    <code>{o.owner}</code>
-                  ) : o.held_via ? (
-                    <><code>{o.held_via}</code> <span className="muted">(stack)</span></>
-                  ) : "—"}
-                </td>
-              )}
-            </tr>
-          ))}
-          <ShowMoreRow extra={objCap.extra} cols={objCols} showAll={objCap.showAll} setShowAll={objCap.setShowAll} />
-        </tbody>
-      </table>
-      </div>
+      <DataTable columns={objTableCols} data={objCap.visible} customStyles={histogramTableStyles} highlightOnHover dense defaultSortFieldId="retained" defaultSortAsc={false} />
+      {objCap.extra > 0 && (
+        <button className="show-more-btn" onClick={() => objCap.setShowAll((v) => !v)}>
+          {objCap.showAll ? "Collapse" : `Show ${fmtCount(objCap.extra)} more`}
+        </button>
+      )}
 
       <h3>Biggest Classes</h3>
-      <div className="resizable-table-wrap">
-      <table className="resizable-table">
-        {clsResize.widths.some((w) => w > 0) && (
-          <colgroup>
-            {clsResize.widths.map((w, i) => <col key={i} style={w > 0 ? { width: w } : undefined} />)}
-          </colgroup>
-        )}
-        <thead>
-          <tr>
-            <th className="resizable">Class<span className="col-resize-handle" onMouseDown={clsResize.onMouseDown(0)} /></th>
-            <SortableTh<ClassRow> label="Instances" colKey="instances" sortKey={clsSort.sortKey} setSortKey={clsSort.setSortKey} />
-            <SortableTh<ClassRow> label="Retained" colKey="retained" sortKey={clsSort.sortKey} setSortKey={clsSort.setSortKey} />
-            <th className="num resizable">% Heap<span className="col-resize-handle" onMouseDown={clsResize.onMouseDown(3)} /></th>
-          </tr>
-        </thead>
-        <tbody>
-          {clsCap.visible.map((c, i) => (
-            <tr key={i}>
-              <td>
-                <span className="copy-cell">
-                  <code>{c.pretty_class}</code>
-                  <CopyBtn text={c.pretty_class} />
-                </span>
-              </td>
-              <td className="num">{fmtCount(c.instances)}</td>
-              <td className="num" title={fmtExactBytes(c.retained)}>
-                {formatBytes(c.retained)}
-              </td>
-              <td className="num">{fmtPct(pctOf(c.retained, total))}</td>
-            </tr>
-          ))}
-          <ShowMoreRow extra={clsCap.extra} cols={4} showAll={clsCap.showAll} setShowAll={clsCap.setShowAll} />
-        </tbody>
-      </table>
-      </div>
+      <DataTable columns={clsTableCols} data={clsCap.visible} customStyles={histogramTableStyles} highlightOnHover dense defaultSortFieldId="retained" defaultSortAsc={false} />
+      {clsCap.extra > 0 && (
+        <button className="show-more-btn" onClick={() => clsCap.setShowAll((v) => !v)}>
+          {clsCap.showAll ? "Collapse" : `Show ${fmtCount(clsCap.extra)} more`}
+        </button>
+      )}
 
       {pkgRoot.children.length > 0 && (
         <>
@@ -1952,33 +1716,25 @@ function TopConsumersSection({ report }: { report: Report }) {
 // a small table of a thread's GC-thread-local root
 // objects. Renders nothing for an empty list. Mirrors report.rs::render_thread_locals.
 function ThreadLocalsTable({ objs, totalCount }: { objs: ThreadLocalObj[]; totalCount: number }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   if (objs.length === 0) return null;
+  const { visible, extra, showAll, setShowAll } = useCapped(objs);
+  const cols: TableColumn<ThreadLocalObj>[] = [
+    { id: "obj", name: "Object", grow: 1, cell: (o) => <span className="copy-cell"><code>{o.display_class}</code><CopyBtn text={o.display_class} /></span> },
+    { id: "shallow", name: "Shallow", right: true, width: "110px", format: (o) => fmtB(o.shallow), selector: (o) => o.shallow },
+    { id: "retained", name: "Retained", right: true, width: "110px", format: (o) => fmtB(o.retained), selector: (o) => o.retained },
+  ];
   return (
     <div className="thread-locals-inline">
       <p className="thread-locals-label">Local root objects ({fmtCount(objs.length)}
         {objs.length < totalCount && ` — showing top ${fmtCount(objs.length)} of ${fmtCount(totalCount)}; sizes overlap and do not sum to thread total`}
       )</p>
-      <table>
-        <thead>
-          <tr>
-            <th>Object</th>
-            <th className="num">Shallow</th>
-            <th className="num">Retained</th>
-          </tr>
-        </thead>
-        <CappedTbody rows={objs} cols={3} renderRow={(o: ThreadLocalObj, i: number) => (
-            <tr key={i}>
-              <td>
-                <span className="copy-cell">
-                  <code>{o.display_class}</code>
-                  <CopyBtn text={o.display_class} />
-                </span>
-              </td>
-              <td className="num">{formatBytes(o.shallow)}</td>
-              <td className="num">{formatBytes(o.retained)}</td>
-            </tr>
-          )} />
-      </table>
+      <DataTable columns={cols} data={visible} customStyles={histogramTableStyles} dense highlightOnHover />
+      {extra > 0 && (
+        <button className="show-more-btn" onClick={() => setShowAll(!showAll)}>
+          {showAll ? "Collapse" : `Show ${fmtCount(extra)} more`}
+        </button>
+      )}
     </div>
   );
 }
@@ -1996,6 +1752,7 @@ function fmtLoader(raw: string): string {
 }
 
 function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   const name = t.name?.trim();
   const cls = (t.class_name ?? "<unresolved>").replaceAll("/", ".");
   const sig = t.significant_frames ?? [];
@@ -2006,7 +1763,7 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
         <span className="thread-name">{name ? `"${name}"` : `Thread ${t.thread_serial}`}</span>
         {name && <span className="thread-serial"> · Thread {t.thread_serial}</span>}
         {" "}<span className="thread-meta-inline">
-          {formatBytes(t.retained)} retained
+          {fmtB(t.retained)} retained
           {stateLabel && <span className="thread-state-badge">{stateLabel}</span>}
           {t.is_daemon && <span className="thread-daemon-badge">daemon</span>}
         </span>
@@ -2014,9 +1771,9 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
       <div className="thread-body">
         <div className="thread-meta-row">
           <span className="thread-meta-item"><span className="thread-meta-label">class</span><code>{cls}</code></span>
-          <span className="thread-meta-item"><span className="thread-meta-label">shallow</span>{formatBytes(t.shallow)}</span>
-          <span className="thread-meta-item"><span className="thread-meta-label">retained</span>{formatBytes(t.retained)}</span>
-          <span className="thread-meta-item"><span className="thread-meta-label">max local retained</span>{formatBytes(t.max_local_retained)}</span>
+          <span className="thread-meta-item"><span className="thread-meta-label">shallow</span>{fmtB(t.shallow)}</span>
+          <span className="thread-meta-item"><span className="thread-meta-label">retained</span>{fmtB(t.retained)}</span>
+          <span className="thread-meta-item"><span className="thread-meta-label">max local retained</span>{fmtB(t.max_local_retained)}</span>
           <span className="thread-meta-item"><span className="thread-meta-label">priority</span>{t.priority}</span>
           {t.context_class_loader && (
             <span className="thread-meta-item"><span className="thread-meta-label">loader</span><code>{fmtLoader(t.context_class_loader)}</code></span>
@@ -2028,7 +1785,7 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
         {t.local_objects && <ThreadLocalsTable objs={t.local_objects} totalCount={t.local_root_count} />}
         {sig.length > 0 ? (
           <>
-            <p className="subtitle"><em>Frame percentages are of this thread's {formatBytes(t.retained)} retained heap.</em></p>
+            <p className="subtitle"><em>Frame percentages are of this thread's {fmtB(t.retained)} retained heap.</em></p>
           <ul className="sig-frames">
             {sig.map((sf, i) => (
               <li key={i}>
@@ -2038,7 +1795,7 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
                     {sf.locals.map((loc, j) => (
                       <li key={j}>
                         <code>{loc.display_class}</code>{" "}
-                        <span className="path-ret">retains {formatBytes(loc.retained)} ({fmtPct(loc.pct)} of thread retained)</span>
+                        <span className="path-ret">retains {fmtB(loc.retained)} ({fmtPct(loc.pct)} of thread retained)</span>
                       </li>
                     ))}
                   </ul>
@@ -2057,40 +1814,28 @@ function ThreadCard({ t, open }: { t: ThreadInfo; open?: boolean }) {
 
 // ── Thread Overview table (always-on properties, mirrors MAT columns) ──────────
 function ThreadOverviewTable({ threads }: { threads: ThreadInfo[] }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   const { visible, extra, showAll, setShowAll } = useCapped(threads);
   if (threads.length === 0) return null;
+  const cols: TableColumn<ThreadInfo>[] = [
+    { id: "name", name: "Name", grow: 1, cell: (t) => <a href={`#thread-${t.thread_serial}`}>{t.name?.trim() || `<thread ${t.thread_serial}>`}</a> },
+    { id: "shallow", name: "Shallow", right: true, width: "110px", format: (t) => fmtB(t.shallow), selector: (t) => t.shallow },
+    { id: "retained", name: "Retained", right: true, width: "110px", format: (t) => fmtB(t.retained), selector: (t) => t.retained },
+    { id: "max_local", name: "Max. Locals' Retained", right: true, width: "160px", format: (t) => fmtB(t.max_local_retained), selector: (t) => t.max_local_retained },
+    { id: "loader", name: "Context Class Loader", grow: 1, cell: (t) => t.context_class_loader ? <code>{fmtLoader(t.context_class_loader)}</code> : <span>—</span> },
+    { id: "daemon", name: "Daemon", width: "80px", format: (t) => t.is_daemon ? "yes" : "no" },
+    { id: "priority", name: "Priority", right: true, width: "80px", format: (t) => String(t.priority), selector: (t) => t.priority },
+    { id: "state", name: "State", grow: 1, format: (t) => t.thread_state || "—" },
+  ];
   return (
     <details className="thread-overview-detail">
       <summary>Thread Overview ({fmtCount(threads.length)})</summary>
-      <table>
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th className="num">Shallow</th>
-            <th className="num">Retained</th>
-            <th className="num">Max. Locals' Retained</th>
-            <th>Context Class Loader</th>
-            <th>Daemon</th>
-            <th className="num">Priority</th>
-            <th>State</th>
-          </tr>
-        </thead>
-        <tbody>
-          {visible.map((t, i) => (
-            <tr key={i}>
-              <td><a href={`#thread-${t.thread_serial}`}>{t.name?.trim() || `<thread ${t.thread_serial}>`}</a></td>
-              <td className="num">{formatBytes(t.shallow)}</td>
-              <td className="num">{formatBytes(t.retained)}</td>
-              <td className="num">{formatBytes(t.max_local_retained)}</td>
-              <td>{t.context_class_loader ? <code>{fmtLoader(t.context_class_loader)}</code> : "—"}</td>
-              <td>{t.is_daemon ? "yes" : "no"}</td>
-              <td className="num">{t.priority}</td>
-              <td>{t.thread_state || "—"}</td>
-            </tr>
-          ))}
-          <ShowMoreRow extra={extra} cols={8} showAll={showAll} setShowAll={setShowAll} />
-        </tbody>
-      </table>
+      <DataTable columns={cols} data={visible} customStyles={histogramTableStyles} dense highlightOnHover />
+      {extra > 0 && (
+        <button className="show-more-btn" onClick={() => setShowAll(!showAll)}>
+          {showAll ? "Collapse" : `Show ${fmtCount(extra)} more`}
+        </button>
+      )}
     </details>
   );
 }
@@ -2177,53 +1922,43 @@ const COMPONENT_COLS: { key: ComponentKey; label: string }[] = [
 ];
 
 function TopComponentsSection({ data }: { data: TopComponents }) {
-  const [sortKey, setSortKey] = React.useState<ComponentKey>("retained");
+  const [fmtB, kbBtn] = useFmtBytes();
   const components = data?.components ?? [];
-  const sorted = React.useMemo(
-    () => [...components].sort((a, b) => b[sortKey] - a[sortKey]),
-    [components, sortKey],
-  );
-  const { visible, extra, showAll, setShowAll } = useCapped(sorted);
+  const { visible, extra, showAll, setShowAll } = useCapped(components);
   if (components.length === 0) return null;
+  const cols: TableColumn<Component>[] = [
+    { id: "component", name: "Component", grow: 1, cell: (c) => <code title={c.loader_label ?? undefined}>{fmtLoader(c.loader_label ?? "")}</code> },
+    { id: "retained", name: "Retained", right: true, width: "120px", sortable: true, format: (c) => fmtB(c.retained), selector: (c) => c.retained },
+    { id: "pct", name: "% Heap", right: true, width: "100px", sortable: true, format: (c) => fmtPct(c.pct), selector: (c) => c.pct },
+    {
+      id: "top_classes", name: "Top classes", grow: 2,
+      cell: (c) => (
+        <>
+          {c.top_classes.map((cc, j) => (
+            <span key={j}>
+              {j > 0 ? ", " : ""}
+              <code>{cc.pretty_class}</code> ({fmtB(cc.retained)})
+            </span>
+          ))}
+        </>
+      ),
+    },
+  ];
   return (
     <section id="top-components">
       <h2>Top Components</h2>
+      {kbBtn && <div className="tools">{kbBtn}</div>}
       <p className="subtitle">
         Retained heap grouped by class loader (component); % Heap is the share of total reachable heap.
       </p>
       <details open>
         <summary>Components by retained heap ({fmtCount(components.length)} rows)</summary>
-        <table>
-          <thead>
-            <tr>
-              <th>Component</th>
-              {COMPONENT_COLS.map((c) => (
-                <SortableTh<Component> key={c.key} label={c.label} colKey={c.key} sortKey={sortKey} setSortKey={setSortKey} />
-              ))}
-              <th>Top classes</th>
-            </tr>
-          </thead>
-          <tbody>
-            {visible.map((c, i) => (
-              <tr key={i}>
-                <td>
-                  <code title={c.loader_label ?? undefined}>{fmtLoader(c.loader_label ?? "")}</code>
-                </td>
-                <td className="num">{formatBytes(c.retained)}</td>
-                <td className="num">{fmtPct(c.pct)}</td>
-                <td>
-                  {c.top_classes.map((cc, j) => (
-                    <span key={j}>
-                      {j > 0 ? ", " : ""}
-                      <code>{cc.pretty_class}</code> ({formatBytes(cc.retained)})
-                    </span>
-                  ))}
-                </td>
-              </tr>
-            ))}
-            <ShowMoreRow extra={extra} cols={4} showAll={showAll} setShowAll={setShowAll} />
-          </tbody>
-        </table>
+        <DataTable columns={cols} data={visible} customStyles={histogramTableStyles} dense highlightOnHover defaultSortFieldId="retained" defaultSortAsc={false} />
+        {extra > 0 && (
+          <button className="show-more-btn" onClick={() => setShowAll(!showAll)}>
+            {showAll ? "Collapse" : `Show ${fmtCount(extra)} more`}
+          </button>
+        )}
       </details>
     </section>
   );
@@ -2233,6 +1968,7 @@ function TopComponentsSection({ data }: { data: TopComponents }) {
 // Power-of-two array-length histogram (object vs primitive arrays). Always-on;
 // mirrors render_md.rs::render_arrays_by_size.
 function ArraysBySizeSection({ data, totalShallow }: { data?: ArraysBySize; totalShallow: number }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   const obj = data?.obj_array_buckets ?? [];
   const prim = data?.prim_array_buckets ?? [];
   const zero = data?.zero_length_count ?? 0;
@@ -2241,40 +1977,28 @@ function ArraysBySizeSection({ data, totalShallow }: { data?: ArraysBySize; tota
   const bucketTable = (title: string, buckets: ArraysBySize["obj_array_buckets"]) => {
     const totalObjects = buckets.reduce((s, b) => s + b.objects, 0);
     const totalBytes = buckets.reduce((s, b) => s + b.shallow, 0);
+    type Bucket = (typeof buckets)[0];
+    const cols: TableColumn<Bucket>[] = [
+      { id: "len", name: "Max length", right: true, width: "120px", format: (b) => `≤ ${fmtCount(b.upper_len)}`, selector: (b) => b.upper_len },
+      { id: "objects", name: "Objects", right: true, width: "110px", format: (b) => fmtCount(b.objects), selector: (b) => b.objects },
+      { id: "shallow", name: "Shallow", right: true, width: "110px", format: (b) => fmtB(b.shallow), selector: (b) => b.shallow },
+      { id: "pct", name: "% Heap", right: true, width: "90px", format: (b) => totalShallow > 0 ? fmtPct(b.shallow / totalShallow * 100) : "—", selector: (b) => b.shallow },
+    ];
     return (
       <>
         <h3>{title}</h3>
         {buckets.length === 0 ? (
           <p className="subtitle">None.</p>
         ) : (
-          <table>
-            <thead>
-              <tr>
-                <th className="num">Max length</th>
-                <th className="num">Objects</th>
-                <th className="num">Shallow</th>
-                <th className="num">% Heap</th>
-              </tr>
-            </thead>
-            <tbody>
-              {buckets.map((b, i) => (
-                <tr key={i}>
-                  <td className="num">&le; {fmtCount(b.upper_len)}</td>
-                  <td className="num">{fmtCount(b.objects)}</td>
-                  <td className="num">{formatBytes(b.shallow)}</td>
-                  <td className="num">{totalShallow > 0 ? fmtPct(b.shallow / totalShallow * 100) : "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr>
-                <td className="num"><strong>Total</strong></td>
-                <td className="num"><strong>{fmtCount(totalObjects)}</strong></td>
-                <td className="num"><strong>{formatBytes(totalBytes)}</strong></td>
-                <td className="num"><strong>{totalShallow > 0 ? fmtPct(totalBytes / totalShallow * 100) : "—"}</strong></td>
-              </tr>
-            </tfoot>
-          </table>
+          <>
+            <DataTable columns={cols} data={buckets} customStyles={histogramTableStyles} dense highlightOnHover />
+            <div style={{ display: "flex", gap: "2rem", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
+              <span style={{ flex: 1 }}>Total</span>
+              <span style={{ width: "110px", textAlign: "right" }}>{fmtCount(totalObjects)}</span>
+              <span style={{ width: "110px", textAlign: "right" }}>{fmtB(totalBytes)}</span>
+              <span style={{ width: "90px", textAlign: "right" }}>{totalShallow > 0 ? fmtPct(totalBytes / totalShallow * 100) : "—"}</span>
+            </div>
+          </>
         )}
       </>
     );
@@ -2283,6 +2007,7 @@ function ArraysBySizeSection({ data, totalShallow }: { data?: ArraysBySize; tota
   return (
     <section id="arrays-by-size">
       <h2>Arrays by Size</h2>
+      {kbBtn && <div className="tools">{kbBtn}</div>}
       <p className="subtitle">
         Array-length distribution bucketed by power-of-two element length; Max length is the inclusive upper bound of
         each bucket.
@@ -2305,6 +2030,7 @@ function ArraysBySizeSection({ data, totalShallow }: { data?: ArraysBySize; tota
 // (load) ratio, and constant primitive arrays. Always-on; mirrors
 // render_md.rs::render_collections.
 function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   const cfr = data?.collection_fill_ratio;
   const cbs = data?.collections_by_size;
   const afr = data?.array_fill_ratio;
@@ -2321,7 +2047,21 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
     const byClass = t?.top_by_class ?? [];
     const hasFill = individual.some((r) => r.non_null != null);
     const hasOwner = individual.some((r) => r.owner != null);
-    const colCount = 2 + (hasFill ? 1 : 0) + 1 + (hasOwner ? 1 : 0);
+    const totalIndivShallow = individual.reduce((s, r) => s + r.shallow, 0);
+    const indivCols: TableColumn<import("./types").TopArrayRow>[] = [
+      { id: "class", name: "Array class", grow: 1, cell: (r) => <code>{r.array_class}</code> },
+      { id: "length", name: "Length", right: true, width: "100px", format: (r) => fmtCount(r.length), selector: (r) => r.length },
+      ...(hasFill ? [{ id: "fill", name: "Used/Length", right: true, width: "120px", format: (r: import("./types").TopArrayRow) => r.non_null != null ? `${fmtCount(r.non_null)}/${fmtCount(r.length)}` : "—" } as TableColumn<import("./types").TopArrayRow>] : []),
+      { id: "shallow", name: "Shallow", right: true, width: "110px", format: (r) => fmtB(r.shallow), selector: (r) => r.shallow },
+      ...(hasOwner ? [{ id: "owner", name: "Owner (Class#field)", grow: 1, cell: (r: import("./types").TopArrayRow) => r.owner ? <code>{r.owner}</code> : <span>—</span> } as TableColumn<import("./types").TopArrayRow>] : []),
+    ];
+    const { visible: indivVis, extra: indivExtra, showAll: indivShowAll, setShowAll: setIndivShowAll } = useCapped(individual);
+    const { visible: byClassVis, extra: byClassExtra, showAll: byClassShowAll, setShowAll: setByClassShowAll } = useCapped(byClass);
+    const byClassCols: TableColumn<import("./types").TopArrayClassRow>[] = [
+      { id: "class", name: "Array class", grow: 1, cell: (r) => <code>{r.array_class}</code> },
+      { id: "instances", name: "Instances", right: true, width: "110px", format: (r) => fmtCount(r.objects), selector: (r) => r.objects },
+      { id: "shallow", name: "Shallow", right: true, width: "110px", format: (r) => fmtB(r.shallow), selector: (r) => r.shallow },
+    ];
     return (
       <>
         <h3>Top Arrays ({kind})</h3>
@@ -2331,63 +2071,39 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
         {individual.length === 0 ? (
           <p className="subtitle">None.</p>
         ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Array class</th>
-                <th className="num">Length</th>
-                {hasFill && <th className="num">Used/Length</th>}
-                <th className="num">Shallow</th>
-                {hasOwner && <th>Owner (Class#field)</th>}
-              </tr>
-            </thead>
-            <CappedTbody rows={individual} cols={colCount} renderRow={(r, i) => (
-                <tr key={i}>
-                  <td><code>{r.array_class}</code></td>
-                  <td className="num">{fmtCount(r.length)}</td>
-                  {hasFill && <td className="num">{r.non_null != null ? `${fmtCount(r.non_null)}/${fmtCount(r.length)}` : "—"}</td>}
-                  <td className="num">{formatBytes(r.shallow)}</td>
-                  {hasOwner && <td>{r.owner ? <code>{r.owner}</code> : "—"}</td>}
-                </tr>
-              )} />
-            <tfoot>
-              <tr>
-                <td className="num"><strong>Total</strong></td>
-                <td className="num"></td>
-                {hasFill && <td className="num"></td>}
-                <td className="num"><strong>{formatBytes(individual.reduce((s, r) => s + r.shallow, 0))}</strong></td>
-                {hasOwner && <td></td>}
-              </tr>
-            </tfoot>
-          </table>
+          <>
+            <DataTable columns={indivCols} data={indivVis} customStyles={histogramTableStyles} dense highlightOnHover />
+            {indivExtra > 0 && (
+              <button className="show-more-btn" onClick={() => setIndivShowAll(!indivShowAll)}>
+                {indivShowAll ? "Collapse" : `Show ${fmtCount(indivExtra)} more`}
+              </button>
+            )}
+            <div style={{ display: "flex", gap: "2rem", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
+              <span style={{ flex: 1 }}>Total</span>
+              <span style={{ width: "100px", textAlign: "right" }}></span>
+              {hasFill && <span style={{ width: "120px", textAlign: "right" }}></span>}
+              <span style={{ width: "110px", textAlign: "right" }}>{fmtB(totalIndivShallow)}</span>
+              {hasOwner && <span style={{ flex: 1 }}></span>}
+            </div>
+          </>
         )}
         <h4>Top Array Classes ({kind})</h4>
         {byClass.length === 0 ? (
           <p className="subtitle">None.</p>
         ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Array class</th>
-                <th className="num">Instances</th>
-                <th className="num">Shallow</th>
-              </tr>
-            </thead>
-            <CappedTbody rows={byClass} cols={3} renderRow={(r, i) => (
-                <tr key={i}>
-                  <td><code>{r.array_class}</code></td>
-                  <td className="num">{fmtCount(r.objects)}</td>
-                  <td className="num">{formatBytes(r.shallow)}</td>
-                </tr>
-              )} />
-            <tfoot>
-              <tr>
-                <td className="num"><strong>Total</strong></td>
-                <td className="num"><strong>{fmtCount(byClass.reduce((s, r) => s + r.objects, 0))}</strong></td>
-                <td className="num"><strong>{formatBytes(byClass.reduce((s, r) => s + r.shallow, 0))}</strong></td>
-              </tr>
-            </tfoot>
-          </table>
+          <>
+            <DataTable columns={byClassCols} data={byClassVis} customStyles={histogramTableStyles} dense highlightOnHover />
+            {byClassExtra > 0 && (
+              <button className="show-more-btn" onClick={() => setByClassShowAll(!byClassShowAll)}>
+                {byClassShowAll ? "Collapse" : `Show ${fmtCount(byClassExtra)} more`}
+              </button>
+            )}
+            <div style={{ display: "flex", gap: "2rem", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
+              <span style={{ flex: 1 }}>Total</span>
+              <span style={{ width: "110px", textAlign: "right" }}>{fmtCount(byClass.reduce((s, r) => s + r.objects, 0))}</span>
+              <span style={{ width: "110px", textAlign: "right" }}>{fmtB(byClass.reduce((s, r) => s + r.shallow, 0))}</span>
+            </div>
+          </>
         )}
       </>
     );
@@ -2402,37 +2118,24 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
   // A fill/wasted table (Collection Fill Ratio, Array Fill Ratio) sharing 4 cols.
   const fillTable = (label: string, itemsHeader: string, buckets: FillRatioBucket[]) => {
     const totalItems = buckets.reduce((s, b) => s + b.objects, 0);
-    const totalShallow = buckets.reduce((s, b) => s + b.shallow, 0);
+    const totalShallowFill = buckets.reduce((s, b) => s + b.shallow, 0);
     const totalWasted = buckets.reduce((s, b) => s + b.wasted, 0);
+    const fillCols: TableColumn<FillRatioBucket>[] = [
+      { id: "ratio", name: label, right: true, width: "130px", format: (b) => ratioLabel(b), selector: (b) => b.lower_ratio_bp },
+      { id: "items", name: itemsHeader, right: true, width: "110px", format: (b) => fmtCount(b.objects), selector: (b) => b.objects },
+      { id: "shallow", name: "Shallow", right: true, width: "110px", format: (b) => fmtB(b.shallow), selector: (b) => b.shallow },
+      { id: "wasted", name: "Wasted", right: true, width: "110px", format: (b) => fmtB(b.wasted), selector: (b) => b.wasted },
+    ];
     return (
-      <table>
-        <thead>
-          <tr>
-            <th className="num">{label}</th>
-            <th className="num">{itemsHeader}</th>
-            <th className="num">Shallow</th>
-            <th className="num">Wasted</th>
-          </tr>
-        </thead>
-        <tbody>
-          {buckets.map((b, i) => (
-            <tr key={i}>
-              <td className="num">{ratioLabel(b)}</td>
-              <td className="num">{fmtCount(b.objects)}</td>
-              <td className="num">{formatBytes(b.shallow)}</td>
-              <td className="num">{formatBytes(b.wasted)}</td>
-            </tr>
-          ))}
-        </tbody>
-        <tfoot>
-          <tr>
-            <td className="num"><strong>Total</strong></td>
-            <td className="num"><strong>{fmtCount(totalItems)}</strong></td>
-            <td className="num"><strong>{formatBytes(totalShallow)}</strong></td>
-            <td className="num"><strong>{formatBytes(totalWasted)}</strong></td>
-          </tr>
-        </tfoot>
-      </table>
+      <>
+        <DataTable columns={fillCols} data={buckets} customStyles={histogramTableStyles} dense highlightOnHover />
+        <div style={{ display: "flex", gap: "2rem", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
+          <span style={{ flex: 1 }}>Total</span>
+          <span style={{ width: "110px", textAlign: "right" }}>{fmtCount(totalItems)}</span>
+          <span style={{ width: "110px", textAlign: "right" }}>{fmtB(totalShallowFill)}</span>
+          <span style={{ width: "110px", textAlign: "right" }}>{fmtB(totalWasted)}</span>
+        </div>
+      </>
     );
   };
 
@@ -2447,6 +2150,7 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
   return (
     <section id="collections">
       <h2>Collections</h2>
+      {kbBtn && <div className="tools">{kbBtn}</div>}
       <p className="subtitle">
         Collection and array occupancy: how full collections are, how big they get, and constant primitive arrays.
       </p>
@@ -2454,39 +2158,27 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
       <h3>Collections by Kind</h3>
       {kindRows.length === 0 ? (
         <p className="subtitle">None.</p>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Kind</th>
-              <th className="num">Count</th>
-              <th className="num">Total Elements</th>
-              <th className="num">Max Elements</th>
-              <th className="num">Total Shallow</th>
-            </tr>
-          </thead>
-          <tbody>
-            {kindRows.map((s, i) => (
-              <tr key={i}>
-                <td>{s.kind}</td>
-                <td className="num">{fmtCount(s.count)}</td>
-                <td className="num">{fmtCount(s.total_elements)}</td>
-                <td className="num">{fmtCount(s.max_elements)}</td>
-                <td className="num">{formatBytes(s.total_shallow)}</td>
-              </tr>
-            ))}
-          </tbody>
-          <tfoot>
-            <tr>
-              <td className="num"><strong>Total</strong></td>
-              <td className="num"><strong>{fmtCount(kindRows.reduce((s, r) => s + r.count, 0))}</strong></td>
-              <td className="num"><strong>{fmtCount(kindRows.reduce((s, r) => s + r.total_elements, 0))}</strong></td>
-              <td className="num"></td>
-              <td className="num"><strong>{formatBytes(kindRows.reduce((s, r) => s + r.total_shallow, 0))}</strong></td>
-            </tr>
-          </tfoot>
-        </table>
-      )}
+      ) : (() => {
+        const kindCols: TableColumn<import("./types").CollectionKindStat>[] = [
+          { id: "kind", name: "Kind", grow: 1, selector: (s) => s.kind },
+          { id: "count", name: "Count", right: true, width: "100px", format: (s) => fmtCount(s.count), selector: (s) => s.count },
+          { id: "total_el", name: "Total Elements", right: true, width: "130px", format: (s) => fmtCount(s.total_elements), selector: (s) => s.total_elements },
+          { id: "max_el", name: "Max Elements", right: true, width: "120px", format: (s) => fmtCount(s.max_elements), selector: (s) => s.max_elements },
+          { id: "shallow", name: "Total Shallow", right: true, width: "120px", format: (s) => fmtB(s.total_shallow), selector: (s) => s.total_shallow },
+        ];
+        return (
+          <>
+            <DataTable columns={kindCols} data={kindRows} customStyles={histogramTableStyles} dense highlightOnHover />
+            <div style={{ display: "flex", gap: "2rem", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
+              <span style={{ flex: 1 }}>Total</span>
+              <span style={{ width: "100px", textAlign: "right" }}>{fmtCount(kindRows.reduce((s, r) => s + r.count, 0))}</span>
+              <span style={{ width: "130px", textAlign: "right" }}>{fmtCount(kindRows.reduce((s, r) => s + r.total_elements, 0))}</span>
+              <span style={{ width: "120px", textAlign: "right" }}></span>
+              <span style={{ width: "120px", textAlign: "right" }}>{fmtB(kindRows.reduce((s, r) => s + r.total_shallow, 0))}</span>
+            </div>
+          </>
+        );
+      })()}
 
       <h3>Collection Fill Ratio</h3>
       <p className="subtitle">
@@ -2504,33 +2196,23 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
       </p>
       {cbsBuckets.length === 0 ? (
         <p className="subtitle">None.</p>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th className="num">Size &le;</th>
-              <th className="num">Collections</th>
-              <th className="num">Shallow</th>
-            </tr>
-          </thead>
-          <tbody>
-            {cbsBuckets.map((b, i) => (
-              <tr key={i}>
-                <td className="num">&le; {fmtCount(b.upper_len)}</td>
-                <td className="num">{fmtCount(b.objects)}</td>
-                <td className="num">{formatBytes(b.shallow)}</td>
-              </tr>
-            ))}
-          </tbody>
-          <tfoot>
-            <tr>
-              <td className="num"><strong>Total</strong></td>
-              <td className="num"><strong>{fmtCount(cbsBuckets.reduce((s, b) => s + b.objects, 0))}</strong></td>
-              <td className="num"><strong>{formatBytes(cbsBuckets.reduce((s, b) => s + b.shallow, 0))}</strong></td>
-            </tr>
-          </tfoot>
-        </table>
-      )}
+      ) : (() => {
+        const cbsCols: TableColumn<import("./types").SizeHistogramBucket>[] = [
+          { id: "size", name: "Size ≤", right: true, width: "120px", format: (b) => `≤ ${fmtCount(b.upper_len)}`, selector: (b) => b.upper_len },
+          { id: "collections", name: "Collections", right: true, width: "120px", format: (b) => fmtCount(b.objects), selector: (b) => b.objects },
+          { id: "shallow", name: "Shallow", right: true, width: "120px", format: (b) => fmtB(b.shallow), selector: (b) => b.shallow },
+        ];
+        return (
+          <>
+            <DataTable columns={cbsCols} data={cbsBuckets} customStyles={histogramTableStyles} dense highlightOnHover />
+            <div style={{ display: "flex", gap: "2rem", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
+              <span style={{ flex: 1 }}>Total</span>
+              <span style={{ width: "120px", textAlign: "right" }}>{fmtCount(cbsBuckets.reduce((s, b) => s + b.objects, 0))}</span>
+              <span style={{ width: "120px", textAlign: "right" }}>{fmtB(cbsBuckets.reduce((s, b) => s + b.shallow, 0))}</span>
+            </div>
+          </>
+        );
+      })()}
 
       <h3>Array Fill Ratio</h3>
       <p className="subtitle">{fmtCount(afr?.tracked ?? 0)} tracked object arrays.</p>
@@ -2547,33 +2229,23 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
       </p>
       {mcrBuckets.length === 0 ? (
         <p className="subtitle">None.</p>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th className="num">Load %</th>
-              <th className="num">Maps</th>
-              <th className="num">Shallow</th>
-            </tr>
-          </thead>
-          <tbody>
-            {mcrBuckets.map((b, i) => (
-              <tr key={i}>
-                <td className="num">{ratioLabel(b)}</td>
-                <td className="num">{fmtCount(b.objects)}</td>
-                <td className="num">{formatBytes(b.shallow)}</td>
-              </tr>
-            ))}
-          </tbody>
-          <tfoot>
-            <tr>
-              <td className="num"><strong>Total</strong></td>
-              <td className="num"><strong>{fmtCount(mcrBuckets.reduce((s, b) => s + b.objects, 0))}</strong></td>
-              <td className="num"><strong>{formatBytes(mcrBuckets.reduce((s, b) => s + b.shallow, 0))}</strong></td>
-            </tr>
-          </tfoot>
-        </table>
-      )}
+      ) : (() => {
+        const mcrCols: TableColumn<FillRatioBucket>[] = [
+          { id: "load", name: "Load %", right: true, width: "130px", format: (b) => ratioLabel(b), selector: (b) => b.lower_ratio_bp },
+          { id: "maps", name: "Maps", right: true, width: "110px", format: (b) => fmtCount(b.objects), selector: (b) => b.objects },
+          { id: "shallow", name: "Shallow", right: true, width: "110px", format: (b) => fmtB(b.shallow), selector: (b) => b.shallow },
+        ];
+        return (
+          <>
+            <DataTable columns={mcrCols} data={mcrBuckets} customStyles={histogramTableStyles} dense highlightOnHover />
+            <div style={{ display: "flex", gap: "2rem", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
+              <span style={{ flex: 1 }}>Total</span>
+              <span style={{ width: "110px", textAlign: "right" }}>{fmtCount(mcrBuckets.reduce((s, b) => s + b.objects, 0))}</span>
+              <span style={{ width: "110px", textAlign: "right" }}>{fmtB(mcrBuckets.reduce((s, b) => s + b.shallow, 0))}</span>
+            </div>
+          </>
+        );
+      })()}
 
       <h3>Constant Primitive Arrays</h3>
       <p className="subtitle">
@@ -2582,30 +2254,27 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
       </p>
       {cpaRows.length === 0 ? (
         <p className="subtitle">None.</p>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Array class</th>
-              <th className="num">Length</th>
-              <th className="num">Value</th>
-              <th className="num">Objects</th>
-              <th className="num">Shallow</th>
-              {cpaHasOwner && <th>Owner (Class#field)</th>}
-            </tr>
-          </thead>
-          <CappedTbody rows={cpaRows} cols={cpaHasOwner ? 6 : 5} renderRow={(r, i) => (
-              <tr key={i}>
-                <td><code>{r.array_class}</code></td>
-                <td className="num">{fmtCount(r.length)}</td>
-                <td className="num">{String(r.value)}</td>
-                <td className="num">{fmtCount(r.objects)}</td>
-                <td className="num">{formatBytes(r.shallow)}</td>
-                {cpaHasOwner && <td>{r.owner ? <code>{r.owner}</code> : "—"}</td>}
-              </tr>
-            )} />
-        </table>
-      )}
+      ) : (() => {
+        const { visible: cpaVis, extra: cpaExtra, showAll: cpaShowAll, setShowAll: setCpaShowAll } = useCapped(cpaRows);
+        const cpaCols: TableColumn<import("./types").ConstantArrayRow>[] = [
+          { id: "class", name: "Array class", grow: 1, cell: (r) => <code>{r.array_class}</code> },
+          { id: "length", name: "Length", right: true, width: "100px", format: (r) => fmtCount(r.length), selector: (r) => r.length },
+          { id: "value", name: "Value", right: true, width: "90px", format: (r) => String(r.value), selector: (r) => r.value },
+          { id: "objects", name: "Objects", right: true, width: "100px", format: (r) => fmtCount(r.objects), selector: (r) => r.objects },
+          { id: "shallow", name: "Shallow", right: true, width: "110px", format: (r) => fmtB(r.shallow), selector: (r) => r.shallow },
+          ...(cpaHasOwner ? [{ id: "owner", name: "Owner (Class#field)", grow: 1, cell: (r: import("./types").ConstantArrayRow) => r.owner ? <code>{r.owner}</code> : <span>—</span> } as TableColumn<import("./types").ConstantArrayRow>] : []),
+        ];
+        return (
+          <>
+            <DataTable columns={cpaCols} data={cpaVis} customStyles={histogramTableStyles} dense highlightOnHover />
+            {cpaExtra > 0 && (
+              <button className="show-more-btn" onClick={() => setCpaShowAll(!cpaShowAll)}>
+                {cpaShowAll ? "Collapse" : `Show ${fmtCount(cpaExtra)} more`}
+              </button>
+            )}
+          </>
+        );
+      })()}
 
       {topArraysBlock(topPrim, "primitive")}
       {topArraysBlock(topObj, "object")}
@@ -2618,33 +2287,21 @@ function CollectionsSection({ data }: { data?: CollectionsAnalysis }) {
 // --collections was off (data undefined → section not rendered). Mirrors
 // render_md.rs::render_collection_attribution (HTML has no bar columns).
 function TinyCollectionTable({ rows }: { rows: import("./types").TinyCollectionRow[] }) {
+  const [fmtB, kbBtn] = useFmtBytes();
+  const cols: TableColumn<import("./types").TinyCollectionRow>[] = [
+    { id: "field", name: "Class#field", grow: 1, cell: (r) => <code>{r.holder_class}#{r.field}</code> },
+    { id: "kind", name: "Kind", width: "100px", selector: (r) => r.container_kind },
+    { id: "empty", name: "Empty", right: true, width: "90px", format: (r) => fmtCount(r.empty_count), selector: (r) => r.empty_count },
+    { id: "singleton", name: "Singleton", right: true, width: "100px", format: (r) => fmtCount(r.singleton_count), selector: (r) => r.singleton_count },
+    { id: "overhead", name: "Overhead Bytes", right: true, width: "130px", format: (r) => fmtB(r.overhead_bytes), selector: (r) => r.overhead_bytes },
+  ];
   return (
-    <table>
-      <thead>
-        <tr>
-          <th>Class#field</th>
-          <th>Kind</th>
-          <th className="num">Empty</th>
-          <th className="num">Singleton</th>
-          <th className="num">Overhead Bytes</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((r, i) => (
-          <tr key={i}>
-            <td><code>{r.holder_class}#{r.field}</code></td>
-            <td>{r.container_kind}</td>
-            <td className="num">{fmtCount(r.empty_count)}</td>
-            <td className="num">{fmtCount(r.singleton_count)}</td>
-            <td className="num">{formatBytes(r.overhead_bytes)}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <DataTable columns={cols} data={rows} customStyles={histogramTableStyles} dense highlightOnHover />
   );
 }
 
 function CollectionAttributionSection({ data }: { data?: CollectionAttribution }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   if (!data) return null;
   const mostOverall = data.most_overall ?? [];
   const biggestSingle = data.biggest_single ?? [];
@@ -2653,6 +2310,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
   return (
     <section id="container-attribution-classfield">
       <h2>Container Attribution (Class#field)</h2>
+      {kbBtn && <div className="tools">{kbBtn}</div>}
       <p className="subtitle">
         Which holder <code>Class#field</code> points at the most container memory. Two rankings: total across
         all containers reached through a field, and the single largest container per field.
@@ -2661,66 +2319,51 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
       <h3>Most Overall</h3>
       {mostOverall.length === 0 ? (
         <p className="subtitle">None.</p>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Class#field</th>
-              <th>Kind</th>
-              <th className="num">Containers</th>
-              <th className="num">Holder Instances</th>
-              <th className="num">Total Elements</th>
-              <th className="num">Total Retained</th>
-              <th className="num">Wasted Bytes</th>
-            </tr>
-          </thead>
-          <tbody>
-            {overallCap.visible.map((r, i) => (
-              <tr key={i}>
-                <td><code>{r.holder_class}#{r.field}</code></td>
-                <td>{r.container_kind}</td>
-                <td className="num">{fmtCount(r.container_count)}</td>
-                <td className="num">{fmtCount(r.holder_instances)}</td>
-                <td className="num">{fmtCount(r.total_elements)}</td>
-                <td className="num">{formatBytes(r.total_retained)}</td>
-                <td className="num">{r.total_wasted_bytes != null ? formatBytes(r.total_wasted_bytes) : "—"}</td>
-              </tr>
-            ))}
-            <ShowMoreRow extra={overallCap.extra} cols={7} showAll={overallCap.showAll} setShowAll={overallCap.setShowAll} />
-          </tbody>
-        </table>
-      )}
+      ) : (() => {
+        const overallCols: TableColumn<import("./types").FieldAttributionRow>[] = [
+          { id: "field", name: "Class#field", grow: 1, cell: (r) => <code>{r.holder_class}#{r.field}</code> },
+          { id: "kind", name: "Kind", width: "100px", selector: (r) => r.container_kind },
+          { id: "containers", name: "Containers", right: true, width: "110px", format: (r) => fmtCount(r.container_count), selector: (r) => r.container_count },
+          { id: "holders", name: "Holder Instances", right: true, width: "140px", format: (r) => fmtCount(r.holder_instances), selector: (r) => r.holder_instances },
+          { id: "elements", name: "Total Elements", right: true, width: "130px", format: (r) => fmtCount(r.total_elements), selector: (r) => r.total_elements },
+          { id: "retained", name: "Total Retained", right: true, width: "130px", format: (r) => fmtB(r.total_retained), selector: (r) => r.total_retained },
+          { id: "wasted", name: "Wasted Bytes", right: true, width: "120px", format: (r) => r.total_wasted_bytes != null ? fmtB(r.total_wasted_bytes) : "—", selector: (r) => r.total_wasted_bytes ?? 0 },
+        ];
+        return (
+          <>
+            <DataTable columns={overallCols} data={overallCap.visible} customStyles={histogramTableStyles} dense highlightOnHover />
+            {overallCap.extra > 0 && (
+              <button className="show-more-btn" onClick={() => overallCap.setShowAll(!overallCap.showAll)}>
+                {overallCap.showAll ? "Collapse" : `Show ${fmtCount(overallCap.extra)} more`}
+              </button>
+            )}
+          </>
+        );
+      })()}
 
       <h3>Biggest Single</h3>
       {biggestSingle.length === 0 ? (
         <p className="subtitle">None.</p>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Class#field</th>
-              <th>Container Class</th>
-              <th>Kind</th>
-              <th className="num">Elements</th>
-              <th className="num">Capacity</th>
-              <th className="num">Retained</th>
-            </tr>
-          </thead>
-          <tbody>
-            {singleCap.visible.map((r, i) => (
-              <tr key={i}>
-                <td><code>{r.holder_class}#{r.field}</code></td>
-                <td><code>{r.container_class}</code></td>
-                <td>{r.container_kind}</td>
-                <td className="num">{fmtCount(r.elements)}</td>
-                <td className="num">{fmtCount(r.capacity)}</td>
-                <td className="num">{formatBytes(r.retained)}</td>
-              </tr>
-            ))}
-            <ShowMoreRow extra={singleCap.extra} cols={6} showAll={singleCap.showAll} setShowAll={singleCap.setShowAll} />
-          </tbody>
-        </table>
-      )}
+      ) : (() => {
+        const singleCols: TableColumn<import("./types").FieldAttributionBiggestRow>[] = [
+          { id: "field", name: "Class#field", grow: 1, cell: (r) => <code>{r.holder_class}#{r.field}</code> },
+          { id: "container", name: "Container Class", grow: 1, cell: (r) => <code>{r.container_class}</code> },
+          { id: "kind", name: "Kind", width: "100px", selector: (r) => r.container_kind },
+          { id: "elements", name: "Elements", right: true, width: "100px", format: (r) => fmtCount(r.elements), selector: (r) => r.elements },
+          { id: "capacity", name: "Capacity", right: true, width: "100px", format: (r) => fmtCount(r.capacity), selector: (r) => r.capacity },
+          { id: "retained", name: "Retained", right: true, width: "110px", format: (r) => fmtB(r.retained), selector: (r) => r.retained },
+        ];
+        return (
+          <>
+            <DataTable columns={singleCols} data={singleCap.visible} customStyles={histogramTableStyles} dense highlightOnHover />
+            {singleCap.extra > 0 && (
+              <button className="show-more-btn" onClick={() => singleCap.setShowAll(!singleCap.showAll)}>
+                {singleCap.showAll ? "Collapse" : `Show ${fmtCount(singleCap.extra)} more`}
+              </button>
+            )}
+          </>
+        );
+      })()}
 
       {data.tiny_overhead && data.tiny_overhead.length > 0 && (
         <>
@@ -2744,6 +2387,7 @@ function CollectionAttributionSection({ data }: { data?: CollectionAttribution }
 }
 
 function BiggestCollectionsTable({ rows, title }: { rows: BiggestCollectionRow[]; title: string }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   if (rows.length === 0) return null;
   const hasRetained = rows.some((r) => r.retained != null);
   const hasOwner = rows.some((r) => r.owner != null);
@@ -2773,61 +2417,47 @@ function BiggestCollectionsTable({ rows, title }: { rows: BiggestCollectionRow[]
   }
 
   const { visible, extra, showAll, setShowAll } = useCapped(coalesced);
+  type CoalescedRow = { row: BiggestCollectionRow; count: number };
+  const cols: TableColumn<CoalescedRow>[] = [
+    { id: "kind", name: "Kind", width: "80px", selector: ({ row: r }) => r.kind },
+    {
+      id: "class", name: "Container Class", grow: 1,
+      cell: ({ row: r, count }) => (
+        <>
+          <code>{r.container_class}</code>
+          {count > 1 && <span className="muted"> ×{fmtCount(count)}</span>}
+        </>
+      ),
+    },
+    { id: "elements", name: "Elements", right: true, width: "100px", format: ({ row: r, count }) => count > 1 ? `${fmtCount(r.elements)} each` : fmtCount(r.elements), selector: ({ row: r }) => r.elements },
+    ...(hasValue ? [{ id: "value", name: "Value Type", grow: 1, cell: ({ row: r }: CoalescedRow) => r.dominant_value_type ? <code>{r.dominant_value_type}</code> : <span>—</span> } as TableColumn<CoalescedRow>] : []),
+    ...(hasBreakdown ? [{
+      id: "breakdown", name: "Value Types (top)", grow: 2,
+      cell: ({ row: r }: CoalescedRow) => !r.value_type_breakdown || r.value_type_breakdown.length === 0
+        ? <span>—</span>
+        : <>{r.value_type_breakdown.map((s, j) => <span key={j}>{j > 0 ? ", " : ""}<code>{s.type_name}</code> ×{fmtCount(s.count)}</span>)}</>,
+    } as TableColumn<CoalescedRow>] : []),
+    ...(hasOwner ? [{ id: "owner", name: "Owner (Class#field)", grow: 1, cell: ({ row: r }: CoalescedRow) => r.owner ? <code>{r.owner}</code> : <span>—</span> } as TableColumn<CoalescedRow>] : []),
+    ...(hasRetained ? [{ id: "retained", name: "Retained", right: true, width: "110px", format: ({ row: r }: CoalescedRow) => r.retained != null ? fmtB(r.retained) : "—", selector: ({ row: r }: CoalescedRow) => r.retained ?? 0 } as TableColumn<CoalescedRow>] : []),
+  ];
   return (
     <>
       <h3>{title}</h3>
-      <table>
-        <thead>
-          <tr>
-            <th>Kind</th>
-            <th>Container Class</th>
-            <th className="num">Elements</th>
-            {hasValue && <th>Value Type</th>}
-            {hasBreakdown && <th>Value Types (top)</th>}
-            {hasOwner && <th>Owner (Class#field)</th>}
-            {hasRetained && <th className="num">Retained</th>}
-          </tr>
-        </thead>
-        <tbody>
-          {visible.map(({ row: r, count }, i) => (
-            <tr key={i}>
-              <td>{r.kind}</td>
-              <td>
-                <code>{r.container_class}</code>
-                {count > 1 && <span className="muted"> ×{fmtCount(count)}</span>}
-              </td>
-              <td className="num">{count > 1 ? `${fmtCount(r.elements)} each` : fmtCount(r.elements)}</td>
-              {hasValue && <td>{r.dominant_value_type ? <code>{r.dominant_value_type}</code> : "—"}</td>}
-              {hasBreakdown && (
-                <td>
-                  {!r.value_type_breakdown || r.value_type_breakdown.length === 0
-                    ? "—"
-                    : r.value_type_breakdown.map((s, j) => (
-                        <span key={j}>
-                          {j > 0 ? ", " : ""}
-                          <code>{s.type_name}</code> ×{fmtCount(s.count)}
-                        </span>
-                      ))}
-                </td>
-              )}
-              {hasOwner && <td>{r.owner ? <code>{r.owner}</code> : "—"}</td>}
-              {hasRetained && <td className="num">{r.retained != null ? formatBytes(r.retained) : "—"}</td>}
-            </tr>
-          ))}
-          <ShowMoreRow extra={extra} cols={99} showAll={showAll} setShowAll={setShowAll} />
-        </tbody>
-        <tfoot>
-          <tr>
-            <td className="num"><strong>Total</strong></td>
-            <td></td>
-            <td className="num"><strong>{fmtCount(totalElements)}</strong></td>
-            {hasValue && <td></td>}
-            {hasBreakdown && <td></td>}
-            {hasOwner && <td></td>}
-            {hasRetained && <td className="num"><strong>{formatBytes(totalRetained)}</strong></td>}
-          </tr>
-        </tfoot>
-      </table>
+      <DataTable columns={cols} data={visible} customStyles={histogramTableStyles} dense highlightOnHover />
+      {extra > 0 && (
+        <button className="show-more-btn" onClick={() => setShowAll(!showAll)}>
+          {showAll ? "Collapse" : `Show ${fmtCount(extra)} more`}
+        </button>
+      )}
+      <div style={{ display: "flex", gap: "2rem", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
+        <span style={{ width: "80px" }}></span>
+        <span style={{ flex: 1 }}>Total</span>
+        <span style={{ width: "100px", textAlign: "right" }}>{fmtCount(totalElements)}</span>
+        {hasValue && <span style={{ flex: 1 }}></span>}
+        {hasBreakdown && <span style={{ flex: 2 }}></span>}
+        {hasOwner && <span style={{ flex: 1 }}></span>}
+        {hasRetained && <span style={{ width: "110px", textAlign: "right" }}>{fmtB(totalRetained)}</span>}
+      </div>
     </>
   );
 }
@@ -2855,6 +2485,17 @@ function CollectionContentsSection({ data }: { data?: CollectionContents }) {
   if (!data) return null;
   const rows = data.rows ?? [];
   const { visible, extra, showAll, setShowAll } = useCapped(rows);
+  const cols: TableColumn<import("./types").CollectionContentsRow>[] = [
+    { id: "class", name: "Collection Class", grow: 1, cell: (r) => <code>{r.collection_class}</code> },
+    { id: "instances", name: "Instances", right: true, width: "110px", format: (r) => fmtCount(r.instances), selector: (r) => r.instances },
+    { id: "values", name: "Total Values", right: true, width: "120px", format: (r) => fmtCount(r.total_values), selector: (r) => r.total_values },
+    {
+      id: "types", name: "Top Value Types", grow: 2,
+      cell: (r) => r.top_value_types.length === 0
+        ? <span>—</span>
+        : <>{r.top_value_types.map((s, j) => <span key={j}>{j > 0 ? ", " : ""}<code>{s.type_name}</code> ×{fmtCount(s.count)}</span>)}</>,
+    },
+  ];
   return (
     <section id="collection-contents-by-type">
       <h2>Collection Contents by Type</h2>
@@ -2865,36 +2506,14 @@ function CollectionContentsSection({ data }: { data?: CollectionContents }) {
       {rows.length === 0 ? (
         <p className="subtitle">None.</p>
       ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Collection Class</th>
-              <th className="num">Instances</th>
-              <th className="num">Total Values</th>
-              <th>Top Value Types</th>
-            </tr>
-          </thead>
-          <tbody>
-            {visible.map((r, i) => (
-              <tr key={i}>
-                <td><code>{r.collection_class}</code></td>
-                <td className="num">{fmtCount(r.instances)}</td>
-                <td className="num">{fmtCount(r.total_values)}</td>
-                <td>
-                  {r.top_value_types.length === 0
-                    ? "—"
-                    : r.top_value_types.map((s, j) => (
-                        <span key={j}>
-                          {j > 0 ? ", " : ""}
-                          <code>{s.type_name}</code> ×{fmtCount(s.count)}
-                        </span>
-                      ))}
-                </td>
-              </tr>
-            ))}
-            <ShowMoreRow extra={extra} cols={4} showAll={showAll} setShowAll={setShowAll} />
-          </tbody>
-        </table>
+        <>
+          <DataTable columns={cols} data={visible} customStyles={histogramTableStyles} dense highlightOnHover />
+          {extra > 0 && (
+            <button className="show-more-btn" onClick={() => setShowAll(!showAll)}>
+              {showAll ? "Collapse" : `Show ${fmtCount(extra)} more`}
+            </button>
+          )}
+        </>
       )}
       {data.truncated && (
         <p className="subtitle">Truncated; a bounded sample of collection classes is shown.</p>
@@ -2908,15 +2527,28 @@ function CollectionContentsSection({ data }: { data?: CollectionContents }) {
 // Absent when --collections was off. Mirrors render_md.rs::render_fields_by_size
 // (HTML has no bar column).
 function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   if (!data) return null;
   const rows = data.rows ?? [];
   const totalRetained = rows.reduce((s, r) => s + r.total_retained, 0);
   const totalPointees = rows.reduce((s, r) => s + r.pointees, 0);
   const hasElements = rows.some((r) => (r.elements ?? 0) > 0);
   const { visible, extra, showAll, setShowAll } = useCapped(rows);
+  type FBSRow = import("./types").FieldBySizeRow;
+  const cols: TableColumn<FBSRow>[] = [
+    { id: "field", name: "Class#field", grow: 1, cell: (r) => <code>{r.holder_class}#{r.field}</code> },
+    { id: "pointee", name: "Runtime Pointee Type", grow: 1, cell: (r) => <code>{r.pointee_type}</code> },
+    { id: "category", name: "Category", width: "100px", format: (r) => r.category ?? "—" },
+    { id: "pointees", name: "Pointees", right: true, width: "100px", format: (r) => fmtCount(r.pointees), selector: (r) => r.pointees },
+    ...(hasElements ? [{ id: "elements", name: "Elements", right: true, width: "100px", format: (r: FBSRow) => r.elements != null ? fmtCount(r.elements) : "—", selector: (r: FBSRow) => r.elements ?? 0 } as TableColumn<FBSRow>] : []),
+    { id: "holders", name: "Holder Instances", right: true, width: "140px", format: (r) => fmtCount(r.holder_instances), selector: (r) => r.holder_instances },
+    { id: "sharing", name: "Sharing", right: true, width: "90px", format: (r) => r.holder_instances > 0 ? `${(r.pointees / r.holder_instances).toFixed(1)}×` : "—" },
+    { id: "retained", name: "Retained", right: true, width: "110px", format: (r) => fmtB(r.total_retained), selector: (r) => r.total_retained },
+  ];
   return (
     <section id="fields-by-retained-size-classfield">
       <h2>Fields by Retained Size (Class#field)</h2>
+      {kbBtn && <div className="tools">{kbBtn}</div>}
       {data.truncated && (
         <p className="subtitle">
           Field grouping was truncated (group or pointee cap hit); ranking is a bounded sample.
@@ -2930,47 +2562,24 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
       {rows.length === 0 ? (
         <p className="subtitle">None.</p>
       ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Class#field</th>
-              <th>Runtime Pointee Type</th>
-              <th>Category</th>
-              <th className="num">Pointees</th>
-              {hasElements && <th className="num">Elements</th>}
-              <th className="num">Holder Instances</th>
-              <th className="num">Sharing</th>
-              <th className="num">Retained</th>
-            </tr>
-          </thead>
-          <tbody>
-            {visible.map((r, i) => (
-              <tr key={i}>
-                <td><code>{r.holder_class}#{r.field}</code></td>
-                <td><code>{r.pointee_type}</code></td>
-                <td>{r.category ?? "—"}</td>
-                <td className="num">{fmtCount(r.pointees)}</td>
-                {hasElements && <td className="num">{r.elements != null ? fmtCount(r.elements) : "—"}</td>}
-                <td className="num">{fmtCount(r.holder_instances)}</td>
-                <td className="num">{r.holder_instances > 0 ? `${(r.pointees / r.holder_instances).toFixed(1)}×` : "—"}</td>
-                <td className="num">{formatBytes(r.total_retained)}</td>
-              </tr>
-            ))}
-            <ShowMoreRow extra={extra} cols={hasElements ? 8 : 7} showAll={showAll} setShowAll={setShowAll} />
-          </tbody>
-          <tfoot>
-            <tr>
-              <td className="num"><strong>Total</strong></td>
-              <td></td>
-              <td></td>
-              <td className="num"><strong>{fmtCount(totalPointees)}</strong></td>
-              {hasElements && <td className="num"><strong>{fmtCount(rows.reduce((s,r)=>s+(r.elements??0),0))}</strong></td>}
-              <td className="num"></td>
-              <td className="num"></td>
-              <td className="num"><strong>{formatBytes(totalRetained)}</strong></td>
-            </tr>
-          </tfoot>
-        </table>
+        <>
+          <DataTable columns={cols} data={visible} customStyles={histogramTableStyles} dense highlightOnHover />
+          {extra > 0 && (
+            <button className="show-more-btn" onClick={() => setShowAll(!showAll)}>
+              {showAll ? "Collapse" : `Show ${fmtCount(extra)} more`}
+            </button>
+          )}
+          <div style={{ display: "flex", gap: "2rem", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
+            <span style={{ flex: 1 }}>Total</span>
+            <span style={{ flex: 1 }}></span>
+            <span style={{ width: "100px" }}></span>
+            <span style={{ width: "100px", textAlign: "right" }}>{fmtCount(totalPointees)}</span>
+            {hasElements && <span style={{ width: "100px", textAlign: "right" }}>{fmtCount(rows.reduce((s, r) => s + (r.elements ?? 0), 0))}</span>}
+            <span style={{ width: "140px" }}></span>
+            <span style={{ width: "90px" }}></span>
+            <span style={{ width: "110px", textAlign: "right" }}>{fmtB(totalRetained)}</span>
+          </div>
+        </>
       )}
     </section>
   );
@@ -2980,37 +2589,29 @@ function FieldsBySizeSection({ data }: { data?: FieldsBySize }) {
 // Soft/weak/phantom reference referents (what they point at). Always-on;
 // mirrors render_md.rs::render_references.
 function RefClassTable({ rows }: { rows: RefStatClassRow[] }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   const { visible, extra, showAll, setShowAll } = useCapped(rows);
+  const cols: TableColumn<RefStatClassRow>[] = [
+    { id: "class", name: "Class", grow: 1, cell: (r) => <code>{r.pretty_class}</code> },
+    { id: "objects", name: "Objects", right: true, width: "100px", format: (r) => fmtCount(r.objects), selector: (r) => r.objects },
+    { id: "shallow", name: "Shallow", right: true, width: "110px", format: (r) => fmtB(r.shallow), selector: (r) => r.shallow },
+    { id: "retained", name: "Retained", right: true, width: "110px", format: (r) => fmtB(r.retained ?? 0), selector: (r) => r.retained ?? 0 },
+  ];
   return (
-    <table>
-      <thead>
-        <tr>
-          <th>Class</th>
-          <th className="num">Objects</th>
-          <th className="num">Shallow</th>
-          <th className="num">Retained</th>
-        </tr>
-      </thead>
-      <tbody>
-        {visible.map((r, i) => (
-          <tr key={i}>
-            <td><code>{r.pretty_class}</code></td>
-            <td className="num">{fmtCount(r.objects)}</td>
-            <td className="num">{formatBytes(r.shallow)}</td>
-            <td className="num">{formatBytes(r.retained ?? 0)}</td>
-          </tr>
-        ))}
-        <ShowMoreRow extra={extra} cols={4} showAll={showAll} setShowAll={setShowAll} />
-      </tbody>
-      <tfoot>
-        <tr>
-          <td className="num"><strong>Total</strong></td>
-          <td className="num"><strong>{fmtCount(rows.reduce((s, r) => s + r.objects, 0))}</strong></td>
-          <td className="num"><strong>{formatBytes(rows.reduce((s, r) => s + r.shallow, 0))}</strong></td>
-          <td className="num"><strong>{formatBytes(rows.reduce((s, r) => s + (r.retained ?? 0), 0))}</strong></td>
-        </tr>
-      </tfoot>
-    </table>
+    <>
+      <DataTable columns={cols} data={visible} customStyles={histogramTableStyles} dense highlightOnHover />
+      {extra > 0 && (
+        <button className="show-more-btn" onClick={() => setShowAll(!showAll)}>
+          {showAll ? "Collapse" : `Show ${fmtCount(extra)} more`}
+        </button>
+      )}
+      <div style={{ display: "flex", gap: "2rem", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
+        <span style={{ flex: 1 }}>Total</span>
+        <span style={{ width: "100px", textAlign: "right" }}>{fmtCount(rows.reduce((s, r) => s + r.objects, 0))}</span>
+        <span style={{ width: "110px", textAlign: "right" }}>{fmtB(rows.reduce((s, r) => s + r.shallow, 0))}</span>
+        <span style={{ width: "110px", textAlign: "right" }}>{fmtB(rows.reduce((s, r) => s + (r.retained ?? 0), 0))}</span>
+      </div>
+    </>
   );
 }
 
@@ -3060,6 +2661,7 @@ function ReferencesSection({ data }: { data?: ReferencesAnalysis }) {
 // concentrates) and Immediate Dominators (dominated-object rollup by dominator
 // class). Always-on; mirrors render_md.rs::render_dominator_analysis.
 function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   const drops = data?.big_drops?.rows ?? [];
   const threshold = data?.big_drops?.threshold ?? 0;
   const thresholdMb = (threshold / (1024 * 1024)).toFixed(1);
@@ -3069,6 +2671,7 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
   return (
     <section id="dominator-analysis">
       <h2>Dominator Analysis</h2>
+      {kbBtn && <div className="tools">{kbBtn}</div>}
 
       <h3>Big Drops</h3>
       <p className="subtitle">
@@ -3077,40 +2680,35 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
       </p>
       {drops.length === 0 ? (
         <p className="subtitle">No significant drops.</p>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Object</th>
-              <th className="num">Retained</th>
-              <th>Largest Child</th>
-              <th className="num">Child Ret.</th>
-              <th className="num">Drop</th>
-            </tr>
-          </thead>
-          <tbody>
-            {dropsCap.visible.map((r, i) => (
-              <tr key={i}>
-                <td><span className="copy-cell"><code>{r.display_class}</code><CopyBtn text={r.display_class} /></span></td>
-                <td className="num">{formatBytes(r.retained)}</td>
-                <td>{r.largest_child_class ? <code>{r.largest_child_class}</code> : "—"}</td>
-                <td className="num">{formatBytes(r.largest_child_retained)}</td>
-                <td className="num">{formatBytes(r.drop_bytes)}</td>
-              </tr>
-            ))}
-            <ShowMoreRow extra={dropsCap.extra} cols={5} showAll={dropsCap.showAll} setShowAll={dropsCap.setShowAll} />
-          </tbody>
-          <tfoot>
-            <tr>
-              <td className="num"><strong>Total</strong></td>
-              <td className="num"><strong>{formatBytes(drops.reduce((s, r) => s + r.retained, 0))}</strong></td>
-              <td></td>
-              <td className="num"><strong>{formatBytes(drops.reduce((s, r) => s + r.largest_child_retained, 0))}</strong></td>
-              <td className="num"><strong>{formatBytes(drops.reduce((s, r) => s + r.drop_bytes, 0))}</strong></td>
-            </tr>
-          </tfoot>
-        </table>
-      )}
+      ) : (() => {
+        const dropCols: TableColumn<import("./types").BigDropRow>[] = [
+          { id: "object", name: "Object", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.display_class}</code><CopyBtn text={r.display_class} /></span> },
+          { id: "retained", name: "Retained", right: true, width: "110px", format: (r) => fmtB(r.retained), selector: (r) => r.retained },
+          { id: "largest_child", name: "Largest Child", grow: 1, cell: (r) => r.largest_child_class ? <code>{r.largest_child_class}</code> : <span>—</span> },
+          { id: "child_ret", name: "Child Ret.", right: true, width: "110px", format: (r) => fmtB(r.largest_child_retained), selector: (r) => r.largest_child_retained },
+          { id: "drop", name: "Drop", right: true, width: "110px", format: (r) => fmtB(r.drop_bytes), selector: (r) => r.drop_bytes },
+        ];
+        const totalDropRetained = drops.reduce((s, r) => s + r.retained, 0);
+        const totalChildRetained = drops.reduce((s, r) => s + r.largest_child_retained, 0);
+        const totalDropBytes = drops.reduce((s, r) => s + r.drop_bytes, 0);
+        return (
+          <>
+            <DataTable columns={dropCols} data={dropsCap.visible} customStyles={histogramTableStyles} highlightOnHover dense />
+            {dropsCap.extra > 0 && (
+              <button className="show-more-btn" onClick={() => dropsCap.setShowAll((v) => !v)}>
+                {dropsCap.showAll ? "Collapse" : `Show ${fmtCount(dropsCap.extra)} more`}
+              </button>
+            )}
+            <div style={{ display: "flex", gap: "2rem", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
+              <span style={{ flex: 1 }}>Total</span>
+              <span style={{ width: "110px", textAlign: "right" }}>{fmtB(totalDropRetained)}</span>
+              <span style={{ flex: 1 }}></span>
+              <span style={{ width: "110px", textAlign: "right" }}>{fmtB(totalChildRetained)}</span>
+              <span style={{ width: "110px", textAlign: "right" }}>{fmtB(totalDropBytes)}</span>
+            </div>
+          </>
+        );
+      })()}
 
       <h3>Immediate Dominators</h3>
       <p className="subtitle">
@@ -3119,40 +2717,36 @@ function DominatorAnalysisSection({ data }: { data?: DominatorAnalysis }) {
       </p>
       {idoms.length === 0 ? (
         <p className="subtitle">No immediate dominators.</p>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Dominator Class</th>
-              <th className="num">#Dominators</th>
-              <th className="num">#Dominated</th>
-              <th className="num">Dom. Shallow</th>
-              <th className="num">Dominated Shallow</th>
-            </tr>
-          </thead>
-          <tbody>
-            {idomsCap.visible.map((r, i) => (
-              <tr key={i}>
-                <td><span className="copy-cell"><code>{r.dominator_class}</code><CopyBtn text={r.dominator_class} /></span></td>
-                <td className="num">{fmtCount(r.dominator_count)}</td>
-                <td className="num">{fmtCount(r.dominated_count)}</td>
-                <td className="num">{formatBytes(r.dominator_shallow)}</td>
-                <td className="num">{formatBytes(r.dominated_shallow)}</td>
-              </tr>
-            ))}
-            <ShowMoreRow extra={idomsCap.extra} cols={5} showAll={idomsCap.showAll} setShowAll={idomsCap.setShowAll} />
-          </tbody>
-          <tfoot>
-            <tr>
-              <td className="num"><strong>Total</strong></td>
-              <td className="num"><strong>{fmtCount(idoms.reduce((s, r) => s + r.dominator_count, 0))}</strong></td>
-              <td className="num"><strong>{fmtCount(idoms.reduce((s, r) => s + r.dominated_count, 0))}</strong></td>
-              <td className="num"><strong>{formatBytes(idoms.reduce((s, r) => s + r.dominator_shallow, 0))}</strong></td>
-              <td className="num"><strong>{formatBytes(idoms.reduce((s, r) => s + r.dominated_shallow, 0))}</strong></td>
-            </tr>
-          </tfoot>
-        </table>
-      )}
+      ) : (() => {
+        const idomCols: TableColumn<import("./types").ImmediateDominatorRow>[] = [
+          { id: "dominator_class", name: "Dominator Class", grow: 1, cell: (r) => <span className="copy-cell"><code>{r.dominator_class}</code><CopyBtn text={r.dominator_class} /></span> },
+          { id: "dominator_count", name: "#Dominators", right: true, width: "110px", format: (r) => fmtCount(r.dominator_count), selector: (r) => r.dominator_count },
+          { id: "dominated_count", name: "#Dominated", right: true, width: "110px", format: (r) => fmtCount(r.dominated_count), selector: (r) => r.dominated_count },
+          { id: "dominator_shallow", name: "Dom. Shallow", right: true, width: "120px", format: (r) => fmtB(r.dominator_shallow), selector: (r) => r.dominator_shallow },
+          { id: "dominated_shallow", name: "Dominated Shallow", right: true, width: "140px", format: (r) => fmtB(r.dominated_shallow), selector: (r) => r.dominated_shallow },
+        ];
+        const totalDomCount = idoms.reduce((s, r) => s + r.dominator_count, 0);
+        const totalDominatedCount = idoms.reduce((s, r) => s + r.dominated_count, 0);
+        const totalDomShallow = idoms.reduce((s, r) => s + r.dominator_shallow, 0);
+        const totalDominatedShallow = idoms.reduce((s, r) => s + r.dominated_shallow, 0);
+        return (
+          <>
+            <DataTable columns={idomCols} data={idomsCap.visible} customStyles={histogramTableStyles} highlightOnHover dense />
+            {idomsCap.extra > 0 && (
+              <button className="show-more-btn" onClick={() => idomsCap.setShowAll((v) => !v)}>
+                {idomsCap.showAll ? "Collapse" : `Show ${fmtCount(idomsCap.extra)} more`}
+              </button>
+            )}
+            <div style={{ display: "flex", gap: "2rem", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
+              <span style={{ flex: 1 }}>Total</span>
+              <span style={{ width: "110px", textAlign: "right" }}>{fmtCount(totalDomCount)}</span>
+              <span style={{ width: "110px", textAlign: "right" }}>{fmtCount(totalDominatedCount)}</span>
+              <span style={{ width: "120px", textAlign: "right" }}>{fmtB(totalDomShallow)}</span>
+              <span style={{ width: "140px", textAlign: "right" }}>{fmtB(totalDominatedShallow)}</span>
+            </div>
+          </>
+        );
+      })()}
     </section>
   );
 }
@@ -3168,6 +2762,7 @@ const UNREACHABLE_COLS: { key: UnreachableKey; label: string }[] = [
 ];
 
 function UnreachableCompositionTable({ comp }: { comp: HeapComposition }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   if (comp.by_kind.length === 0) return null;
   // When prim_array_by_type is available, expand "Primitive arrays" into
   // individual types so the chart shows byte[], int[], char[], etc.
@@ -3183,43 +2778,30 @@ function UnreachableCompositionTable({ comp }: { comp: HeapComposition }) {
       <ChartOrNote hasData={chartKinds.length >= 2} note="Composition chart needs at least two kinds; showing the table only.">
         <CompositionStackedBar data={chartKinds} />
       </ChartOrNote>
-      <table>
-        <thead>
-          <tr>
-            <th>Kind</th>
-            <th className="num">Objects</th>
-            <th className="num">Shallow</th>
-          </tr>
-        </thead>
-        <tbody>
-          {comp.by_kind.map((k, i) => (
-            <React.Fragment key={i}>
-              <tr>
-                <td>{k.kind}</td>
-                <td className="num">{fmtCount(k.objects)}</td>
-                <td className="num">{formatBytes(k.shallow_heap)}</td>
-              </tr>
-              {k.kind === "Primitive arrays" && comp.prim_array_by_type?.map((p, j) => (
-                <tr key={`p${j}`} style={{ fontSize: "0.88em", color: "var(--muted)" }}>
-                  <td style={{ paddingLeft: "1.5rem" }}>{p.kind}</td>
-                  <td className="num">{fmtCount(p.objects)}</td>
-                  <td className="num">{formatBytes(p.shallow_heap)}</td>
-                </tr>
-              ))}
-            </React.Fragment>
-          ))}
-        </tbody>
-      </table>
+      {(() => {
+        type CompRow = { kind: string; objects: number; shallow_heap: number; indent?: boolean };
+        const flatRows: CompRow[] = comp.by_kind.flatMap((k) => {
+          const main: CompRow = { kind: k.kind, objects: k.objects, shallow_heap: k.shallow_heap };
+          if (k.kind === "Primitive arrays" && comp.prim_array_by_type?.length) {
+            return [main, ...comp.prim_array_by_type.map((p) => ({ kind: p.kind, objects: p.objects, shallow_heap: p.shallow_heap, indent: true }))];
+          }
+          return [main];
+        });
+        const compCols: TableColumn<CompRow>[] = [
+          { id: "kind", name: "Kind", grow: 1, cell: (r) => <span style={r.indent ? { paddingLeft: "1.5rem", fontSize: "0.88em", color: "var(--muted)" } : undefined}>{r.kind}</span> },
+          { id: "objects", name: "Objects", right: true, width: "110px", cell: (r) => <span style={r.indent ? { fontSize: "0.88em", color: "var(--muted)" } : undefined}>{fmtCount(r.objects)}</span> },
+          { id: "shallow", name: "Shallow", right: true, width: "110px", cell: (r) => <span style={r.indent ? { fontSize: "0.88em", color: "var(--muted)" } : undefined}>{fmtB(r.shallow_heap)}</span> },
+        ];
+        return <DataTable columns={compCols} data={flatRows} customStyles={histogramTableStyles} dense />;
+      })()}
     </>
   );
 }
 
 function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   const rows: UnreachableClassRow[] = data?.unreachable_histogram ?? [];
-  const [sortKey, setSortKey] = React.useState<UnreachableKey>("shallow");
-  const sorted = React.useMemo(() => [...rows].sort((a, b) => b[sortKey] - a[sortKey]), [rows, sortKey]);
-  const { visible, extra, showAll, setShowAll } = useCapped(sorted);
-  const colCount = 1 + UNREACHABLE_COLS.length; // Class + data columns
+  const { visible, extra, showAll, setShowAll } = useCapped(rows);
   const unreachablePct = React.useMemo(() => {
     const total = (data?.total_shallow ?? 0) + (data?.unreachable_shallow ?? 0);
     return total > 0 ? (data?.unreachable_shallow ?? 0) / total * 100 : 0;
@@ -3227,13 +2809,14 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
   return (
     <section id="unreachable-objects">
       <h2>Unreachable Objects</h2>
+      {kbBtn && <div className="tools">{kbBtn}</div>}
       {rows.length === 0 ? (
         <p className="subtitle">No unreachable objects.</p>
       ) : (
         <>
           <p className="subtitle">
             {fmtCount(data?.unreachable_count ?? 0)} unreachable objects,{" "}
-            {formatBytes(data?.unreachable_shallow ?? 0)} shallow heap
+            {fmtB(data?.unreachable_shallow ?? 0)} shallow heap
             {` (within the unreachable forest retained = shallow since all paths stay in-forest; top ${fmtCount(rows.length)} classes by shallow).`}
           </p>
           <p className="subtitle">
@@ -3249,35 +2832,30 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
           )}
           <details open>
             <summary>Unreachable objects by class ({fmtCount(rows.length)} rows)</summary>
-            <table>
-              <thead>
-                <tr>
-                  <th>Class</th>
-                  {UNREACHABLE_COLS.map((c) => (
-                    <SortableTh<UnreachableClassRow> key={c.key} label={c.label} colKey={c.key} sortKey={sortKey} setSortKey={setSortKey} />
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {visible.map((r, i) => (
-                  <tr key={i}>
-                    <td><code>{r.pretty_class}</code></td>
-                    <td className="num">{fmtCount(r.objects)}</td>
-                    <td className="num">{formatBytes(r.shallow)}</td>
-                    <td className="num">{formatBytes(r.retained)}</td>
-                  </tr>
-                ))}
-                <ShowMoreRow extra={extra} cols={colCount} showAll={showAll} setShowAll={setShowAll} />
-              </tbody>
-              <tfoot>
-                <tr>
-                  <td><strong>Total</strong></td>
-                  <td className="num"><strong>{fmtCount(data?.unreachable_count ?? 0)}</strong></td>
-                  <td className="num"><strong>{formatBytes(data?.unreachable_shallow ?? 0)}</strong></td>
-                  <td className="num"><strong>{formatBytes(data?.unreachable_retained ?? 0)}</strong></td>
-                </tr>
-              </tfoot>
-            </table>
+            {(() => {
+              const unreachCols: TableColumn<UnreachableClassRow>[] = [
+                { id: "class", name: "Class", grow: 1, cell: (r) => <code>{r.pretty_class}</code> },
+                { id: "objects", name: "Objects", right: true, width: "110px", format: (r) => fmtCount(r.objects), selector: (r) => r.objects, sortable: true },
+                { id: "shallow", name: "Shallow", right: true, width: "110px", format: (r) => fmtB(r.shallow), selector: (r) => r.shallow, sortable: true },
+                { id: "retained", name: "Retained", right: true, width: "110px", format: (r) => fmtB(r.retained), selector: (r) => r.retained, sortable: true },
+              ];
+              return (
+                <>
+                  <DataTable columns={unreachCols} data={visible} customStyles={histogramTableStyles} highlightOnHover dense defaultSortFieldId="shallow" defaultSortAsc={false} />
+                  {extra > 0 && (
+                    <button className="show-more-btn" onClick={() => setShowAll((v) => !v)}>
+                      {showAll ? "Collapse" : `Show ${fmtCount(extra)} more`}
+                    </button>
+                  )}
+                  <div style={{ display: "flex", gap: "2rem", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
+                    <span style={{ flex: 1 }}>Total</span>
+                    <span style={{ width: "110px", textAlign: "right" }}>{fmtCount(data?.unreachable_count ?? 0)}</span>
+                    <span style={{ width: "110px", textAlign: "right" }}>{fmtB(data?.unreachable_shallow ?? 0)}</span>
+                    <span style={{ width: "110px", textAlign: "right" }}>{fmtB(data?.unreachable_retained ?? 0)}</span>
+                  </div>
+                </>
+              );
+            })()}
           </details>
         </>
       )}
@@ -3289,58 +2867,54 @@ function UnreachableObjectsSection({ data }: { data?: SystemOverview }) {
 // aggregated allocation sites. Honest note when the
 // dump carried no allocation stack-trace info. Mirrors report.rs::render_alloc_sites.
 function AllocSitesSection({ data }: { data: AllocSites }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   const { visible, extra, showAll, setShowAll } = useCapped(data.sites);
   return (
     <section id="allocation-sites">
       <h2>Allocation Sites</h2>
+      {kbBtn && <div className="tools">{kbBtn}</div>}
       <p className="subtitle">Objects grouped by the stack trace that allocated them. Shallow heap is additive; retained is omitted because summing per-object retained over-counts shared subgraphs.</p>
       {!data.traces_present ? (
         <p className="subtitle">
           Allocation tracking was off in this dump (<code>stack_trace_serial = 0</code>); no allocation sites available.
         </p>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Stack</th>
-              <th className="num">Objects</th>
-              <th className="num">Shallow</th>
-            </tr>
-          </thead>
-          <tbody>
-            {visible.map((s, i) => (
-              <tr key={i}>
-                <td>
-                  {s.frames.length === 0 ? (
-                    <span className="hint">serial {s.stack_serial} <span className="hint">(no frames recorded)</span></span>
-                  ) : s.frames.length === 1 ? (
-                    <code>{s.frames[0]}</code>
-                  ) : (
-                    <details className="stack-detail">
-                      <summary><code>{s.frames[0]}</code></summary>
-                      <ol className="stack-frames">
-                        {s.frames.map((f, fi) => (
-                          <li key={fi}><code>{f}</code></li>
-                        ))}
-                      </ol>
-                    </details>
-                  )}
-                </td>
-                <td className="num">{fmtCount(s.object_count)}</td>
-                <td className="num">{formatBytes(s.shallow_total)}</td>
-              </tr>
-            ))}
-            <ShowMoreRow extra={extra} cols={3} showAll={showAll} setShowAll={setShowAll} />
-          </tbody>
-          <tfoot>
-            <tr>
-              <td className="num"><strong>Total</strong></td>
-              <td className="num"><strong>{fmtCount(data.sites.reduce((s, r) => s + r.object_count, 0))}</strong></td>
-              <td className="num"><strong>{formatBytes(data.sites.reduce((s, r) => s + r.shallow_total, 0))}</strong></td>
-            </tr>
-          </tfoot>
-        </table>
-      )}
+      ) : (() => {
+        const allocCols: TableColumn<import("./types").AllocSite>[] = [
+          { id: "stack", name: "Stack", grow: 1, cell: (s) => s.frames.length === 0 ? (
+            <span className="hint">serial {s.stack_serial} <span className="hint">(no frames recorded)</span></span>
+          ) : s.frames.length === 1 ? (
+            <code>{s.frames[0]}</code>
+          ) : (
+            <details className="stack-detail">
+              <summary><code>{s.frames[0]}</code></summary>
+              <ol className="stack-frames">
+                {s.frames.map((f, fi) => (
+                  <li key={fi}><code>{f}</code></li>
+                ))}
+              </ol>
+            </details>
+          )},
+          { id: "objects", name: "Objects", right: true, width: "110px", format: (s) => fmtCount(s.object_count), selector: (s) => s.object_count },
+          { id: "shallow", name: "Shallow", right: true, width: "110px", format: (s) => fmtB(s.shallow_total), selector: (s) => s.shallow_total },
+        ];
+        const totalObjects = data.sites.reduce((s, r) => s + r.object_count, 0);
+        const totalShallow = data.sites.reduce((s, r) => s + r.shallow_total, 0);
+        return (
+          <>
+            <DataTable columns={allocCols} data={visible} customStyles={histogramTableStyles} highlightOnHover dense />
+            {extra > 0 && (
+              <button className="show-more-btn" onClick={() => setShowAll((v) => !v)}>
+                {showAll ? "Collapse" : `Show ${fmtCount(extra)} more`}
+              </button>
+            )}
+            <div style={{ display: "flex", gap: "2rem", fontSize: "0.86rem", fontWeight: 600, borderTop: "2px solid var(--border)", paddingTop: "0.3rem", marginBottom: "1rem", fontVariantNumeric: "tabular-nums" }}>
+              <span style={{ flex: 1 }}>Total</span>
+              <span style={{ width: "110px", textAlign: "right" }}>{fmtCount(totalObjects)}</span>
+              <span style={{ width: "110px", textAlign: "right" }}>{fmtB(totalShallow)}</span>
+            </div>
+          </>
+        );
+      })()}
     </section>
   );
 }
@@ -3362,28 +2936,19 @@ function RetentionConcentrationSection({ report }: { report: Report }) {
       </p>
       <ConcentrationChart rc={rc} />
       <ConcentrationStackedBar rc={rc} />
-      <table>
-        <thead>
-          <tr>
-            <th>Scope</th>
-            <th className="num">Retained Share</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>Top 1 object</td>
-            <td className="num">{fmtPct(rc.top1_bp / 100)}</td>
-          </tr>
-          <tr>
-            <td>Top 10 objects</td>
-            <td className="num">{fmtPct(rc.top10_bp / 100)}</td>
-          </tr>
-          <tr>
-            <td>Top 100 objects</td>
-            <td className="num">{fmtPct(rc.top100_bp / 100)}</td>
-          </tr>
-        </tbody>
-      </table>
+      {(() => {
+        type RcRow = { scope: string; bp: number };
+        const rcRows: RcRow[] = [
+          { scope: "Top 1 object", bp: rc.top1_bp },
+          { scope: "Top 10 objects", bp: rc.top10_bp },
+          { scope: "Top 100 objects", bp: rc.top100_bp },
+        ];
+        const rcCols: TableColumn<RcRow>[] = [
+          { id: "scope", name: "Scope", grow: 1, selector: (r) => r.scope },
+          { id: "share", name: "Retained Share", right: true, width: "140px", format: (r) => fmtPct(r.bp / 100) },
+        ];
+        return <DataTable columns={rcCols} data={rcRows} customStyles={histogramTableStyles} dense />;
+      })()}
       {rc.num_objects_ge_1pct > 0 && (
         <p className="subtitle"><em>{fmtCount(rc.num_objects_ge_1pct)} {rc.num_objects_ge_1pct === 1 ? "object" : "objects"} each hold ≥1% of the reachable heap.</em></p>
       )}
@@ -3395,24 +2960,36 @@ function RetentionConcentrationSection({ report }: { report: Report }) {
 // Objects per idom-hop below a GC root. Mirrors render_md.rs::render_dominator_depth.
 function DominatorDepthSection({ report }: { report: Report }) {
   const hist = report.overview.dominator_depth_histogram;
-  if (!hist || hist.length === 0) return null;
 
-  const totalObjs = hist.reduce((s, b) => s + b.objects, 0);
-  const maxDepth = hist.reduce((m, b) => Math.max(m, b.depth), 0);
+  const totalObjs = (hist ?? []).reduce((s, b) => s + b.objects, 0);
+  const maxDepth = (hist ?? []).reduce((m, b) => Math.max(m, b.depth), 0);
 
   // Compute cumulative percentage for each bucket.
   type DepthRow = { depth: number; objects: number; pct: number; cum: number };
-  const rows: DepthRow[] = [];
-  let cumSum = 0;
-  for (const b of hist) {
-    cumSum += b.objects;
-    rows.push({
-      depth: b.depth,
-      objects: b.objects,
-      pct: totalObjs > 0 ? (b.objects / totalObjs) * 100 : 0,
-      cum: totalObjs > 0 ? (cumSum / totalObjs) * 100 : 0,
+  const rows: DepthRow[] = React.useMemo(() => {
+    if (!hist) return [];
+    let cumSum = 0;
+    return hist.map((b) => {
+      cumSum += b.objects;
+      return {
+        depth: b.depth,
+        objects: b.objects,
+        pct: totalObjs > 0 ? (b.objects / totalObjs) * 100 : 0,
+        cum: totalObjs > 0 ? (cumSum / totalObjs) * 100 : 0,
+      };
     });
-  }
+  }, [hist, totalObjs]);
+
+  const { visible: depthVisible, extra: depthExtra, showAll: depthShowAll, setShowAll: setDepthShowAll } = useCapped(rows);
+
+  if (!hist || hist.length === 0) return null;
+
+  const depthCols: TableColumn<DepthRow>[] = [
+    { id: "depth", name: "Depth", right: true, width: "80px", selector: (r) => r.depth },
+    { id: "objects", name: "Objects", right: true, width: "110px", format: (r) => fmtCount(r.objects), selector: (r) => r.objects },
+    { id: "pct", name: "% Objects", right: true, width: "110px", format: (r) => fmtPct(r.pct), selector: (r) => r.pct },
+    { id: "cum", name: "Cumulative %", right: true, width: "120px", format: (r) => fmtPct(r.cum), selector: (r) => r.cum },
+  ];
 
   return (
     <section id="dominator-depth-distribution">
@@ -3425,24 +3002,12 @@ function DominatorDepthSection({ report }: { report: Report }) {
       <DepthHistogramChart data={hist} />
       <details>
         <summary>Full depth table ({fmtCount(hist.length)} buckets)</summary>
-        <table>
-          <thead>
-            <tr>
-              <th className="num">Depth</th>
-              <th className="num">Objects</th>
-              <th className="num">% Objects</th>
-              <th className="num">Cumulative %</th>
-            </tr>
-          </thead>
-          <CappedTbody rows={rows} cols={4} renderRow={(r, i) => (
-              <tr key={i}>
-                <td className="num">{r.depth}</td>
-                <td className="num">{fmtCount(r.objects)}</td>
-                <td className="num">{fmtPct(r.pct)}</td>
-                <td className="num">{fmtPct(r.cum)}</td>
-              </tr>
-            )} />
-        </table>
+        <DataTable columns={depthCols} data={depthVisible} customStyles={histogramTableStyles} dense />
+        {depthExtra > 0 && (
+          <button className="show-more-btn" onClick={() => setDepthShowAll((v) => !v)}>
+            {depthShowAll ? "Collapse" : `Show ${fmtCount(depthExtra)} more`}
+          </button>
+        )}
       </details>
     </section>
   );
@@ -3452,6 +3017,7 @@ function DominatorDepthSection({ report }: { report: Report }) {
 // Scalar signals for common Java leak patterns. Only rendered when at least
 // one indicator is non-zero. Mirrors render_md.rs::render_leak_indicators.
 function LeakIndicatorsSection({ data }: { data?: LeakIndicators }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   if (!data) return null;
   const { anonymous_class_count, thread_local_null_key_count, direct_byte_buffer_capacity_sum } = data;
   if (anonymous_class_count === 0 && thread_local_null_key_count === 0 && direct_byte_buffer_capacity_sum === 0) {
@@ -3460,37 +3026,23 @@ function LeakIndicatorsSection({ data }: { data?: LeakIndicators }) {
   return (
     <section id="leak-indicators">
       <h2>Leak Indicators</h2>
+      {kbBtn && <div className="tools">{kbBtn}</div>}
       <p className="subtitle">
         Scalar signals for common Java leak patterns. Non-zero values here are worth investigating.
       </p>
-      <table>
-        <thead>
-          <tr>
-            <th>Indicator</th>
-            <th className="num">Value</th>
-          </tr>
-        </thead>
-        <tbody>
-          {anonymous_class_count > 0 && (
-            <tr>
-              <td>Anonymous/generated classes</td>
-              <td className="num">{fmtCount(anonymous_class_count)}</td>
-            </tr>
-          )}
-          {thread_local_null_key_count > 0 && (
-            <tr>
-              <td><code>ThreadLocal</code> null-key entries (cleared referent)</td>
-              <td className="num">{fmtCount(thread_local_null_key_count)}</td>
-            </tr>
-          )}
-          {direct_byte_buffer_capacity_sum > 0 && (
-            <tr>
-              <td><code>DirectByteBuffer</code> total capacity</td>
-              <td className="num">{formatBytes(direct_byte_buffer_capacity_sum)}</td>
-            </tr>
-          )}
-        </tbody>
-      </table>
+      {(() => {
+        type LeakRow = { indicator: React.ReactNode; value: string };
+        const leakRows: LeakRow[] = [
+          ...(anonymous_class_count > 0 ? [{ indicator: "Anonymous/generated classes", value: fmtCount(anonymous_class_count) }] : []),
+          ...(thread_local_null_key_count > 0 ? [{ indicator: <><code>ThreadLocal</code> null-key entries (cleared referent)</>, value: fmtCount(thread_local_null_key_count) }] : []),
+          ...(direct_byte_buffer_capacity_sum > 0 ? [{ indicator: <><code>DirectByteBuffer</code> total capacity</>, value: fmtB(direct_byte_buffer_capacity_sum) }] : []),
+        ];
+        const leakCols: TableColumn<LeakRow>[] = [
+          { id: "indicator", name: "Indicator", grow: 1, cell: (r) => <span>{r.indicator}</span> },
+          { id: "value", name: "Value", right: true, width: "140px", selector: (r) => r.value },
+        ];
+        return <DataTable columns={leakCols} data={leakRows} customStyles={histogramTableStyles} dense />;
+      })()}
     </section>
   );
 }
@@ -3498,33 +3050,25 @@ function LeakIndicatorsSection({ data }: { data?: LeakIndicators }) {
 // ── Top Retainers (§813) ───────────────────────────────────────────────────────
 // Merged Class#field + stack-frame retainers, sorted by retained desc.
 function TopRetainersSection({ rows }: { rows?: import("./types").RetainerRow[] }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   if (!rows || rows.length === 0) return null;
   return (
     <section id="top-retainers">
       <h2>Top Retainers</h2>
+      {kbBtn && <div className="tools">{kbBtn}</div>}
       <p className="subtitle">
         Merged ranking of <code>Class#field</code> references and stack-frame locals by total
         retained heap. Fields come from collection attribution; stack frames from thread-local
         analysis (<code>--thread-locals</code>).
       </p>
-      <table>
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Kind</th>
-            <th className="num">Retained</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r, i) => (
-            <tr key={i}>
-              <td><code>{r.name}</code></td>
-              <td>{r.kind}</td>
-              <td className="num">{formatBytes(r.retained)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      {(() => {
+        const retainerCols: TableColumn<import("./types").RetainerRow>[] = [
+          { id: "name", name: "Name", grow: 1, cell: (r) => <code>{r.name}</code> },
+          { id: "kind", name: "Kind", width: "120px", selector: (r) => r.kind },
+          { id: "retained", name: "Retained", right: true, width: "120px", format: (r) => fmtB(r.retained), selector: (r) => r.retained },
+        ];
+        return <DataTable columns={retainerCols} data={rows} customStyles={histogramTableStyles} highlightOnHover dense defaultSortFieldId="retained" defaultSortAsc={false} />;
+      })()}
     </section>
   );
 }
@@ -3569,24 +3113,15 @@ function CustomQueriesSection({ report }: { report: Report }) {
             </p>
           ) : (
             <>
-              <table>
-                <thead>
-                  <tr>
-                    {q.columns.map((c, ci) => (
-                      <th key={ci}>{c.name}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {q.rows.map((row, ri) => (
-                    <tr key={ri}>
-                      {row.map((cell, ci) => (
-                        <td key={ci}>{fmtCell(cell)}</td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              {(() => {
+                const queryCols: TableColumn<QueryValue[]>[] = q.columns.map((c, ci) => ({
+                  id: `col_${ci}`,
+                  name: c.name,
+                  grow: 1,
+                  selector: (row) => fmtCell(row[ci]),
+                }));
+                return <DataTable columns={queryCols} data={q.rows} customStyles={histogramTableStyles} dense />;
+              })()}
               <p className="subtitle">
                 {q.row_count} row(s){q.truncated ? ", truncated" : ""}
               </p>
@@ -3640,10 +3175,10 @@ function GlossarySection() {
 const MINUS = "−"; // typographic minus, matching the Markdown renderer.
 
 // Signed byte delta, e.g. "+1.2 MB" / "−340 KB" / "0 B".
-function fmtDeltaBytes(n: number): string {
+function fmtDeltaBytes(n: number, fmtB: (n: number) => string): string {
   if (n === 0) return "0 B";
   const sign = n > 0 ? "+" : MINUS;
-  return sign + formatBytes(Math.abs(n));
+  return sign + fmtB(Math.abs(n));
 }
 
 // Signed count delta with thousands separators, e.g. "+1,024" / "−17" / "0".
@@ -3668,6 +3203,7 @@ function SeriesTable({
   rows: (SeriesClassRow | SeriesSuspectRow)[];
   showNew?: boolean;
 }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   const n = labels.length;
   // Sort key: -1 = Δ column (default), 0..n-1 = a per-report retained column.
   const [sortCol, setSortCol] = React.useState<number>(-1);
@@ -3713,9 +3249,9 @@ function SeriesTable({
           <tr key={row.pretty_class}>
             <td><code>{row.pretty_class}</code></td>
             {Array.from({ length: n }, (_, i) => (
-              <td key={i} className="num">{formatBytes(row.retained[i] ?? 0)}</td>
+              <td key={i} className="num">{fmtB(row.retained[i] ?? 0)}</td>
             ))}
-            <td className="num">{fmtDeltaBytes(row.delta_retained)}</td>
+            <td className="num">{fmtDeltaBytes(row.delta_retained, fmtB)}</td>
             {showNew ? (
               <td>{"is_new" in row && row.is_new ? "yes" : ""}</td>
             ) : null}
@@ -3756,7 +3292,7 @@ function DiffSection({
 }
 
 // The verdict line: mirrors the Markdown verdict (the sole percentage).
-function diffVerdict(diff: SeriesDiffResult): string {
+function diffVerdict(diff: SeriesDiffResult, fmtB: (n: number) => string): string {
   const firstShallow = diff.total_shallow[0] ?? 0;
   const newSuspects = diff.grown_suspects.filter((s) => s.is_new).length;
   let line: string;
@@ -3765,9 +3301,9 @@ function diffVerdict(diff: SeriesDiffResult): string {
     if (diff.delta_total_shallow > 0) {
       const lead = diff.growth_leaders[0];
       const driver = lead
-        ? `; largest driver ${lead.pretty_class} (${fmtDeltaBytes(lead.delta_retained)} retained)`
+        ? `; largest driver ${lead.pretty_class} (${fmtDeltaBytes(lead.delta_retained, fmtB)} retained)`
         : "";
-      line = `Heap grew by ${fmtDeltaBytes(diff.delta_total_shallow)} shallow (baseline was empty)${driver}.`;
+      line = `Heap grew by ${fmtDeltaBytes(diff.delta_total_shallow, fmtB)} shallow (baseline was empty)${driver}.`;
     } else {
       line = "Heap size is unchanged (baseline was empty).";
     }
@@ -3776,11 +3312,11 @@ function diffVerdict(diff: SeriesDiffResult): string {
     if (diff.delta_total_shallow > 0) {
       const lead = diff.growth_leaders[0];
       const driver = lead
-        ? `; largest driver ${lead.pretty_class} (${fmtDeltaBytes(lead.delta_retained)} retained)`
+        ? `; largest driver ${lead.pretty_class} (${fmtDeltaBytes(lead.delta_retained, fmtB)} retained)`
         : "";
-      line = `Heap grew ${pct.toFixed(1)}% (${fmtDeltaBytes(diff.delta_total_shallow)} shallow)${driver}.`;
+      line = `Heap grew ${pct.toFixed(1)}% (${fmtDeltaBytes(diff.delta_total_shallow, fmtB)} shallow)${driver}.`;
     } else if (diff.delta_total_shallow < 0) {
-      line = `Heap shrank ${Math.abs(pct).toFixed(1)}% (${fmtDeltaBytes(diff.delta_total_shallow)} shallow); no net growth.`;
+      line = `Heap shrank ${Math.abs(pct).toFixed(1)}% (${fmtDeltaBytes(diff.delta_total_shallow, fmtB)} shallow); no net growth.`;
     } else {
       line = "Heap size is unchanged.";
     }
@@ -3790,7 +3326,7 @@ function diffVerdict(diff: SeriesDiffResult): string {
     diff.gross_growth_retained > 0 &&
     diff.gross_growth_retained > Math.max(diff.net_delta_retained, 0) * 2
   ) {
-    line += ` Gross retained churn: +${formatBytes(diff.gross_growth_retained)} grown / ${MINUS}${formatBytes(diff.gross_shrink_retained)} reclaimed across steps.`;
+    line += ` Gross retained churn: +${fmtB(diff.gross_growth_retained)} grown / ${MINUS}${fmtB(diff.gross_shrink_retained)} reclaimed across steps.`;
   }
   if (newSuspects > 0) {
     line += ` ${newSuspects} new suspect${newSuspects === 1 ? "" : "s"}.`;
@@ -3800,6 +3336,7 @@ function diffVerdict(diff: SeriesDiffResult): string {
 
 // A dedicated table for Transient Spikes (§37.1): name | r1…rN | Peak | Peak−r1.
 function SpikeTable({ labels, rows }: { labels: string[]; rows: SeriesClassRow[] }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   const n = labels.length;
   return (
     <table className="data">
@@ -3818,10 +3355,10 @@ function SpikeTable({ labels, rows }: { labels: string[]; rows: SeriesClassRow[]
           <tr key={row.pretty_class}>
             <td><code>{row.pretty_class}</code></td>
             {Array.from({ length: n }, (_, i) => (
-              <td key={i} className="num">{formatBytes(row.retained[i] ?? 0)}</td>
+              <td key={i} className="num">{fmtB(row.retained[i] ?? 0)}</td>
             ))}
-            <td className="num">{formatBytes(row.peak_retained)}</td>
-            <td className="num">{fmtDeltaBytes(row.peak_over_baseline)}</td>
+            <td className="num">{fmtB(row.peak_retained)}</td>
+            <td className="num">{fmtDeltaBytes(row.peak_over_baseline, fmtB)}</td>
           </tr>
         ))}
       </tbody>
@@ -3830,6 +3367,7 @@ function SpikeTable({ labels, rows }: { labels: string[]; rows: SeriesClassRow[]
 }
 
 export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
+  const [fmtB, kbBtn] = useFmtBytes();
   const { labels } = diff;
   return (
     <div className="app">
@@ -3843,6 +3381,7 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
 
       <section className="diff-section">
         <h2>Reports</h2>
+        {kbBtn && <div className="tools">{kbBtn}</div>}
         <ol className="diff-legend">
           {labels.map((lbl, i) => (
             <li key={i}>
@@ -3854,12 +3393,12 @@ export function DiffApp({ diff }: { diff: SeriesDiffResult }) {
 
       <section className="diff-section">
         <h2>Headline Totals</h2>
-        <p><strong>Verdict:</strong> {diffVerdict(diff)}</p>
+        <p><strong>Verdict:</strong> {diffVerdict(diff, fmtB)}</p>
         <ul>
           <li><strong>Δ Objects (r1→rN):</strong> {fmtDeltaCount(diff.delta_total_objects)}</li>
-          <li><strong>Δ Shallow heap (r1→rN):</strong> {fmtDeltaBytes(diff.delta_total_shallow)}</li>
-          <li><strong>Net Δ Retained (all classes, r1→rN):</strong> {fmtDeltaBytes(diff.net_delta_retained)}</li>
-          <li><strong>Gross Retained churn (all classes, per-step):</strong> +{formatBytes(diff.gross_growth_retained)} grown / {MINUS}{formatBytes(diff.gross_shrink_retained)} reclaimed</li>
+          <li><strong>Δ Shallow heap (r1→rN):</strong> {fmtDeltaBytes(diff.delta_total_shallow, fmtB)}</li>
+          <li><strong>Net Δ Retained (all classes, r1→rN):</strong> {fmtDeltaBytes(diff.net_delta_retained, fmtB)}</li>
+          <li><strong>Gross Retained churn (all classes, per-step):</strong> +{fmtB(diff.gross_growth_retained)} grown / {MINUS}{fmtB(diff.gross_shrink_retained)} reclaimed</li>
         </ul>
       </section>
 

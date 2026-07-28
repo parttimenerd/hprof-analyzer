@@ -5,6 +5,16 @@ use flate2::read::GzDecoder;
 
 use crate::reader::HprofReader;
 
+/// `AsRef<[u8]>` wrapper around `Arc<Vec<u8>>` so `Cursor<ArcBuf>` implements
+/// `Read`.  This avoids copying the buffer when opening a new scan.
+#[derive(Clone)]
+struct ArcBuf(Arc<Vec<u8>>);
+impl AsRef<[u8]> for ArcBuf {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_slice()
+    }
+}
+
 /// Origin of an HPROF byte stream — either a filesystem path or an in-memory
 /// buffer. All parse passes take `&HprofSource` instead of `path: &str` and
 /// call `source.open()` to start a new sequential scan.
@@ -17,7 +27,10 @@ pub enum HprofSource {
     /// A filesystem path (CLI / native use).
     Path(String),
     /// An in-memory buffer (WASM / test use).
-    Bytes { data: Arc<[u8]>, name: String },
+    ///
+    /// `Arc<Vec<u8>>` is used instead of `Arc<[u8]>` so that WASM can call
+    /// `Arc::try_unwrap` after parsing to reclaim the buffer without copying.
+    Bytes { data: Arc<Vec<u8>>, name: String },
 }
 
 impl HprofSource {
@@ -27,11 +40,11 @@ impl HprofSource {
         match self {
             HprofSource::Path(p) => HprofReader::open(p),
             HprofSource::Bytes { data, .. } => {
-                let bytes = Arc::clone(data);
-                if bytes.len() >= 2 && bytes[0] == 0x1f && bytes[1] == 0x8b {
-                    HprofReader::from_reader(GzDecoder::new(Cursor::new(bytes)))
+                let buf = ArcBuf(Arc::clone(data));
+                if buf.0.len() >= 2 && buf.0[0] == 0x1f && buf.0[1] == 0x8b {
+                    HprofReader::from_reader(GzDecoder::new(Cursor::new(buf)))
                 } else {
-                    HprofReader::from_reader(Cursor::new(bytes))
+                    HprofReader::from_reader(Cursor::new(buf))
                 }
             }
         }
@@ -91,7 +104,7 @@ mod tests {
     #[test]
     fn bytes_display_name_is_name_field() {
         let s = HprofSource::Bytes {
-            data: Arc::from(b"dummy".as_ref()),
+            data: Arc::new(b"dummy".to_vec()),
             name: "my.hprof".to_string(),
         };
         assert_eq!(s.display_name(), "my.hprof");
@@ -100,7 +113,6 @@ mod tests {
 
     #[test]
     fn path_len_returns_file_size() {
-        // Use a fixture that is always present.
         let s = HprofSource::from("tests/fixtures/dump_2_scala-doku.hprof");
         let len = s.len().unwrap();
         assert!(len > 0, "fixture should have non-zero length");
@@ -108,7 +120,7 @@ mod tests {
 
     #[test]
     fn bytes_len_returns_data_len() {
-        let data: Arc<[u8]> = Arc::from(vec![1u8, 2, 3, 4, 5].as_slice());
+        let data: Arc<Vec<u8>> = Arc::new(vec![1u8, 2, 3, 4, 5]);
         let s = HprofSource::Bytes { data, name: "x.hprof".to_string() };
         assert_eq!(s.len().unwrap(), 5);
     }

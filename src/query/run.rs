@@ -903,6 +903,7 @@ pub fn run_resident_with_retained(
     let mut entries: Vec<(usize, SingleScanExecutor<'_, LiveResolver<'_>>)> = Vec::new();
     for (slot, (q, plan)) in flat.iter().enumerate() {
         let ex = if plan.needs.string_values
+            || plan.needs.retained
             || (plan.kind == crate::query::plan::StageKind::GroupBy
                 && plan.finalize_at == crate::query::plan::Phase::P3)
         {
@@ -1722,13 +1723,28 @@ pub struct ReplCache {
 
 impl ReplCache {
     pub fn build(source: &crate::source::HprofSource, reachable_only: bool) -> std::io::Result<ReplCache> {
+        Self::build_with_progress(source, reachable_only, &mut |_, _| {})
+    }
+
+    /// Like `build` but fires `progress(phase, fraction)` between phases so
+    /// callers can update a UI progress bar.  Called at:
+    ///   - `("pass1_a", 1.0)` after the first Pass1 (for p1_owned)
+    ///   - `("pass1_b", 1.0)` after the second Pass1 (for Pass2)
+    ///   - `("pass2",   1.0)` after Pass2 completes
+    pub fn build_with_progress(
+        source: &crate::source::HprofSource,
+        reachable_only: bool,
+        progress: &mut dyn FnMut(&str, f32),
+    ) -> std::io::Result<ReplCache> {
         let opts = crate::AnalyzeOptions {
             reachable_only,
             ..crate::AnalyzeOptions::default()
         };
         let source_cache = source.clone();
         let p1_owned = crate::pass1::Pass1::run(&source_cache, false)?;
+        progress("pass1_a", 1.0);
         let p1_for_pass2 = crate::pass1::Pass1::run(&source_cache, false)?;
+        progress("pass1_b", 1.0);
         let flat: Vec<(Query, QueryPlan)> = Vec::new();
         let mut empty = std::collections::HashMap::new();
         let mut empty_exists = std::collections::HashMap::new();
@@ -1741,6 +1757,7 @@ impl ReplCache {
             &mut empty,
             &mut empty_exists,
         )?;
+        progress("pass2", 1.0);
         let n = g.n;
         // g.shallow / g.class_idx are emptied during build (compressed). Restore.
         let shallow: Vec<u32> = shallow_c.restore()?;

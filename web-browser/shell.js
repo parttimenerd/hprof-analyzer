@@ -119,7 +119,19 @@ const SAMPLE_DUMPS = [
 
   document.getElementById('btn-analyze-report').addEventListener('click', () => {
     if (wasmReady && selectedFile) {
-      loadWasmSessionWithReport(selectedFile);
+      loadWasmSessionWithReport(selectedFile, {});
+    } else {
+      const msg = document.getElementById('report-message');
+      msg.textContent =
+        'WASM not available. Start the local server and use the OQL Shell mode: ' +
+        'hprof-analyzer query heap.hprof --server';
+      showScreen('report-screen');
+    }
+  });
+
+  document.getElementById('btn-full-analysis').addEventListener('click', () => {
+    if (wasmReady && selectedFile) {
+      loadWasmSessionWithReport(selectedFile, { findDuplicates: true, collections: true });
     } else {
       const msg = document.getElementById('report-message');
       msg.textContent =
@@ -179,6 +191,38 @@ async function loadSampleDump(sample) {
   modeButtons.style.display = 'flex';
 }
 
+// Stream-compress a File through CompressionStream, collecting into Uint8Array.
+// The File's raw bytes are never fully materialised in JS — only the compressed
+// output accumulates. For a 2 GB plaintext hprof this typically yields ~500 MB.
+// onProgress(bytesRead, total) fires steadily as input bytes are consumed.
+async function gzipCompressFile(file, onProgress) {
+  const total = file.size;
+  let inputRead = 0;
+
+  // Count input bytes as they pass through, before compression.
+  const counter = new TransformStream({
+    transform(chunk, controller) {
+      inputRead += chunk.byteLength;
+      if (onProgress) onProgress(inputRead, total);
+      controller.enqueue(chunk);
+    }
+  });
+
+  const stream = file.stream().pipeThrough(counter).pipeThrough(new CompressionStream('gzip'));
+  const reader = stream.getReader();
+  const chunks = [];
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+  }
+  const totalLen = chunks.reduce((s, c) => s + c.byteLength, 0);
+  const out = new Uint8Array(totalLen);
+  let off = 0;
+  for (const c of chunks) { out.set(c, off); off += c.byteLength; }
+  return out;
+}
+
 // Compress bytes with gzip using the browser's CompressionStream API.
 // Returns the compressed Uint8Array. Input is passed by reference; caller
 // should null it after this call to free memory before the WASM load.
@@ -201,6 +245,131 @@ async function gzipCompress(bytes) {
   return out;
 }
 
+// ── ETA estimation ────────────────────────────────────────────────────────────
+// Baseline ns/instance constants derived from measurements across 11 dumps
+// (fixture dumps + HyperAlloc 128 MB – 2 GB). Correction factors are persisted
+// in localStorage and updated after each run so estimates improve over time.
+const _ETA_KEY = 'hprof-analyzer.eta-factors';
+const _ETA_BASE = {
+  // nanoseconds per instance (from linear regression R²≈0.8)
+  parseNsPerInst: 10244,
+  domNsPerInst:   11129,
+  // millisecond offsets (regression intercepts, clamped to 0 for display)
+  parseOffsetMs:  0,
+  domOffsetMs:    0,
+  // compress: ms per raw MB (for non-gzip files). Gzip files skip JS compress.
+  compMsPerMB:    57,
+  // estimated instances per raw MB (for compress-phase parse estimate)
+  instPerMB:      1548,
+};
+
+// Sub-phase fractions of total parse time (pass1_a + pass1_b + pass2 = 1.0)
+const _LOAD_PHASE_FRACS = { pass1_a: 0.33, pass1_b: 0.33, pass2: 0.34 };
+// Sub-phase fractions of total analysis time
+const _ANAL_PHASE_FRACS = { pass1: 0.05, pass2: 0.20, rpo: 0.05, inbound: 0.15, dominators: 0.40, retained: 0.15 };
+
+function _etaFactors() {
+  try { return JSON.parse(localStorage.getItem(_ETA_KEY) || '{}'); } catch { return {}; }
+}
+
+function _etaSaveFactors(f) {
+  try { localStorage.setItem(_ETA_KEY, JSON.stringify(f)); } catch {}
+}
+
+// Record actual vs predicted and update the correction factor via EMA (α=0.3).
+function _etaRecord(phase, predictedMs, actualMs) {
+  if (predictedMs <= 0 || actualMs <= 0) return;
+  const ratio = actualMs / predictedMs;
+  const f = _etaFactors();
+  const prev = f[phase] ?? 1.0;
+  f[phase] = +(prev * 0.7 + ratio * 0.3).toFixed(4);
+  _etaSaveFactors(f);
+}
+
+function _etaPredict(phase, instances) {
+  const f = _etaFactors();
+  const correction = f[phase] ?? 1.0;
+  const base = _ETA_BASE;
+  let ms;
+  if (phase === 'parse') {
+    ms = (base.parseNsPerInst * instances / 1e6) + base.parseOffsetMs;
+  } else {
+    ms = (base.domNsPerInst * instances / 1e6) + base.domOffsetMs;
+  }
+  return Math.max(0, Math.round(ms * correction));
+}
+
+function _fmtEta(ms) {
+  if (ms < 1000) return '<1s';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `~${s}s`;
+  return `~${Math.floor(s/60)}m ${s%60}s`;
+}
+
+function _fmtCount(n) {
+  if (n >= 1e6) return `${(n/1e6).toFixed(1)}M`;
+  if (n >= 1e3) return `${(n/1e3).toFixed(0)}K`;
+  return String(n);
+}
+
+// Build a progress-bar controller.  Returns `{ setStage, onPhase }`.
+//   setStage(label, pct, blocking) — directly set label + bar pct
+//   onPhase(phase, fraction, phases, phasePcts, startPct, endPct) — called
+//     from a WASM phase callback; advances the bar proportionally within the
+//     [startPct, endPct] window based on how much of the phases are done.
+function _makeProgress(labelId, barId) {
+  let _rafId = null;
+  let _startTime = null;
+  let _fromPct = 0;
+  let _toPct = 0;
+  let _durationMs = 0;
+
+  function _cancelAnim() {
+    if (_rafId !== null) { cancelAnimationFrame(_rafId); _rafId = null; }
+  }
+
+  function _tick(now) {
+    const bar = document.getElementById(barId);
+    if (!bar) return;
+    const elapsed = now - _startTime;
+    const t = _durationMs > 0 ? Math.min(elapsed / _durationMs, 1) : 1;
+    // ease-out cubic
+    const ease = 1 - Math.pow(1 - t, 3);
+    const cur = _fromPct + (_toPct - _fromPct) * ease;
+    bar.style.width = cur.toFixed(2) + '%';
+    if (t < 1) _rafId = requestAnimationFrame(_tick);
+    else _rafId = null;
+  }
+
+  // Animate bar from current position to `pct` over `durationMs` ms.
+  function animateTo(pct, durationMs) {
+    _cancelAnim();
+    const bar = document.getElementById(barId);
+    const cur = bar ? parseFloat(bar.style.width) || 0 : 0;
+    _fromPct = cur;
+    _toPct = pct;
+    _durationMs = durationMs;
+    _startTime = performance.now();
+    _rafId = requestAnimationFrame(_tick);
+  }
+
+  const setStage = (label, pct, blocking = false, animMs = 300) => {
+    const lbl = document.getElementById(labelId);
+    const bar = document.getElementById(barId);
+    if (lbl) lbl.textContent = label;
+    if (bar) {
+      bar.classList.toggle('wasm-blocking', blocking);
+      animateTo(pct, animMs);
+    }
+  };
+
+  // Start a slow crawl animation from `fromPct` toward `toPct` over `durationMs`.
+  // Used to make the bar visually advance during a blocking WASM call.
+  const crawlTo = (toPct, durationMs) => animateTo(toPct, durationMs);
+
+  return { setStage, crawlTo };
+}
+
 async function loadWasmSession(file) {
   const statusEl = document.getElementById('wasm-load-status');
   const modeButtons = document.getElementById('mode-buttons');
@@ -216,78 +385,138 @@ async function loadWasmSession(file) {
     statusEl.style.display = '';
   }
 
-  const setStage = (label, pct) => {
-    const lbl = document.getElementById('wasm-load-label');
-    const bar = document.getElementById('wasm-load-bar');
-    if (lbl) lbl.textContent = label;
-    if (bar) bar.style.width = pct + '%';
+  const { setStage, crawlTo } = _makeProgress('wasm-load-label', 'wasm-load-bar');
+
+  const fileMB = file.size / (1024 * 1024);
+
+  // Peek at first 2 bytes to detect existing gzip — without loading the whole file.
+  const headerBuf = await file.slice(0, 2).arrayBuffer();
+  const header = new Uint8Array(headerBuf);
+  const isGzip = header[0] === 0x1f && header[1] === 0x8b;
+
+  // Pre-compute ETAs so we can show proportional bar
+  const compEtaMs  = isGzip ? 0 : Math.max(0, Math.round(_ETA_BASE.compMsPerMB * fileMB * (_etaFactors().compress ?? 1.0)));
+  const estInst    = Math.round(fileMB * _ETA_BASE.instPerMB);
+  const parseEtaMs = _etaPredict('parse', estInst);
+  const totalLoadMs = compEtaMs + parseEtaMs;
+
+  // Bar layout: 0→loadBarEnd is proportionally split between compress and parse;
+  // loadBarEnd→100 is the dominator/analysis phase.
+  const loadBarEnd = 60;
+  // Compress gets a slice of 0..loadBarEnd proportional to its share of total time.
+  const compBarEnd = totalLoadMs > 0
+    ? Math.round((compEtaMs / totalLoadMs) * loadBarEnd)
+    : 0;
+  const loadBarStart = compBarEnd;
+
+  // Phase-aware label + bar during load_with_progress callbacks.
+  // Phases arrive in execution order: pass1_a, pass1_b, pass2, compress.
+  // We track how much estimated time has elapsed to move the bar proportionally.
+  let loadElapsedMs = 0;
+  const onLoadPhase = (phase, _frac) => {
+    const phaseMs = phase === 'compress'
+      ? compEtaMs
+      : Math.round(parseEtaMs * (_LOAD_PHASE_FRACS[phase] ?? 0));
+    loadElapsedMs += phaseMs;
+    const barPct = totalLoadMs > 0
+      ? loadBarStart + Math.round((loadElapsedMs / totalLoadMs) * (loadBarEnd - loadBarStart))
+      : loadBarEnd;
+    const remainMs = Math.max(0, totalLoadMs - loadElapsedMs);
+    const label = _loadPhaseLabel(phase, remainMs, estInst);
+    setStage(label, Math.min(barPct, loadBarEnd), true);
   };
 
+  // Stream the file through CompressionStream (or read as-is if already gzip).
+  // Raw bytes are never fully materialised in JS — only the compressed output
+  // accumulates, keeping peak JS memory at ~N/4 instead of N.
   let bytes;
   try {
-    const buf = await file.arrayBuffer();
-    bytes = new Uint8Array(buf);
+    setStage(isGzip ? `Reading ${file.name}…` : `Compressing ${file.name}…`, 0);
+    await new Promise(r => setTimeout(r, 20));
+    if (isGzip) {
+      bytes = new Uint8Array(await file.arrayBuffer());
+    } else {
+      const compT0 = performance.now();
+      bytes = await gzipCompressFile(file, (inputRead, total) => {
+        const frac = total > 0 ? inputRead / total : 0;
+        const pct = Math.round(frac * compBarEnd);
+        const readMB = (inputRead / 1048576).toFixed(0);
+        const totMB  = (total    / 1048576).toFixed(0);
+        setStage(`Compressing ${file.name}… (${readMB} / ${totMB} MB)`, pct);
+      });
+      const compActual = performance.now() - compT0;
+      _etaRecord('compress', compEtaMs, compActual);
+    }
   } catch (e) {
-    if (statusEl) statusEl.textContent = `Error reading file: ${e.message}`;
+    if (statusEl) statusEl.innerHTML = _errorHtml('Reading file', file.name, e);
     if (modeButtons) modeButtons.style.display = 'flex';
     return;
   }
 
-  // Compress in JS before handing to WASM — the wasm-bindgen boundary copies
-  // whatever we pass, so passing ~N/4 compressed bytes instead of N raw bytes
-  // cuts the mandatory copy from 70 MB to ~17 MB for a typical dump.
-  const isGzip = bytes[0] === 0x1f && bytes[1] === 0x8b;
-  if (!isGzip) {
-    setStage('Compressing…', 10);
-    await new Promise(r => setTimeout(r, 20));
-    const compressed = await gzipCompress(bytes);
-    bytes = null; // free raw before WASM allocates
-    bytes = compressed;
-  }
-
-  setStage(`Parsing heap dump (Pass 1 + 2)…`, 20);
-  await new Promise(r => setTimeout(r, 20));
-
+  const tLoad0 = performance.now();
   try {
     if (wasmSession) { wasmSession.free(); wasmSession = null; }
-    wasmSession = HprofSession.load(bytes, file.name);
+    // Crawl the bar across the parse range while WASM blocks the thread.
+    crawlTo(loadBarEnd, parseEtaMs);
+    wasmSession = HprofSession.load_with_progress(bytes, file.name, onLoadPhase);
     wasmSession._fileName = file.name;
   } catch (e) {
-    if (statusEl) { statusEl.textContent = `Failed to load ${file.name}: ${e}`; }
+    if (statusEl) { statusEl.innerHTML = _errorHtml('Loading', file.name, e); }
     if (modeButtons) modeButtons.style.display = 'flex';
     return;
   }
-  // Free the raw buffer — WASM already made its own compressed copy.
-  // Letting the GC collect this now reduces peak memory before the analysis pass.
+  const loadActual = performance.now() - tLoad0;
+  _etaRecord('parse', parseEtaMs, loadActual - (isGzip ? 0 : loadActual * compEtaMs / Math.max(totalLoadMs, 1)));
   bytes = null;
 
   classNames = JSON.parse(wasmSession.class_names());
 
-  // Run full analysis (dominators + retained sizes) before showing the shell.
-  setStage('Computing dominators and retained sizes…', 55);
-  await new Promise(r => setTimeout(r, 20));
+  // ── Analysis phase: dominators ────────────────────────────────────────────
+  let instanceCount = estInst;
   try {
-    wasmSession.run_full_analysis();
+    const s = JSON.parse(wasmSession.stats());
+    instanceCount = s.instance_count || estInst;
+  } catch {}
+  const domEtaMs = _etaPredict('dominator', instanceCount);
+
+  let domElapsedMs = 0;
+  const onAnalPhase = (phase, _frac) => {
+    const phaseMs = Math.round(domEtaMs * (_ANAL_PHASE_FRACS[phase] ?? 0));
+    domElapsedMs += phaseMs;
+    const barPct = domEtaMs > 0
+      ? loadBarEnd + Math.round((domElapsedMs / domEtaMs) * (100 - loadBarEnd))
+      : 95;
+    const remainMs = Math.max(0, domEtaMs - domElapsedMs);
+    const label = _analPhaseLabel(phase, remainMs, instanceCount);
+    setStage(label, Math.min(barPct, 95), true);
+  };
+
+  setStage(`Computing dominators for ${_fmtCount(instanceCount)} objects… (${_fmtEta(domEtaMs)})`, loadBarEnd, true);
+  await new Promise(r => setTimeout(r, 20));
+
+  const tDom0 = performance.now();
+  try {
+    // Crawl the bar across the analysis range while WASM blocks the thread.
+    crawlTo(95, domEtaMs);
+    wasmSession.run_full_analysis_with_progress(onAnalPhase);
     hasRetained = true;
   } catch (e) {
-    // Non-fatal: shell still works, retained-size queries will error gracefully.
     hasRetained = false;
     showToast(`Analysis failed — @retainedHeapSize unavailable: ${e}`, 'error', 6000);
   }
+  _etaRecord('dominator', domEtaMs, performance.now() - tDom0);
 
   if (statusEl) statusEl.style.display = 'none';
-
   showWasmShell(file.name);
 }
 
 
-async function loadWasmSessionWithReport(file) {
+async function loadWasmSessionWithReport(file, opts = {}) {
   const msg = document.getElementById('report-message');
   const modeButtons = document.getElementById('mode-buttons');
   if (modeButtons) modeButtons.style.display = 'none';
   showScreen('report-screen');
 
-  // Show animated progress bar while WASM works (all calls are synchronous/blocking)
   msg.innerHTML = `
     <div class="wasm-progress">
       <div class="wasm-progress-label" id="wasm-progress-label">Reading ${escHtml(file.name)}…</div>
@@ -296,57 +525,157 @@ async function loadWasmSessionWithReport(file) {
       </div>
     </div>`;
 
-  const setStage = (label, pct) => {
-    const lbl = document.getElementById('wasm-progress-label');
-    const bar = document.getElementById('wasm-progress-bar');
-    if (lbl) lbl.textContent = label;
-    if (bar) bar.style.width = pct + '%';
+  const { setStage, crawlTo } = _makeProgress('wasm-progress-label', 'wasm-progress-bar');
+
+  const fileMB = file.size / (1024 * 1024);
+
+  // Peek at first 2 bytes to detect existing gzip — without loading the whole file.
+  const headerBuf2 = await file.slice(0, 2).arrayBuffer();
+  const header2 = new Uint8Array(headerBuf2);
+  const isGzip2 = header2[0] === 0x1f && header2[1] === 0x8b;
+
+  const compEtaMs  = isGzip2 ? 0 : Math.max(0, Math.round(_ETA_BASE.compMsPerMB * fileMB * (_etaFactors().compress ?? 1.0)));
+  const estInst    = Math.round(fileMB * _ETA_BASE.instPerMB);
+  const parseEtaMs = _etaPredict('parse', estInst);
+  const totalLoadMs = compEtaMs + parseEtaMs;
+  const loadBarEnd = 55;
+  const compBarEnd2 = totalLoadMs > 0
+    ? Math.round((compEtaMs / totalLoadMs) * loadBarEnd)
+    : 0;
+  const loadBarStart = compBarEnd2;
+
+  let loadElapsedMs = 0;
+  const onLoadPhase = (phase, _frac) => {
+    const phaseMs = phase === 'compress'
+      ? compEtaMs
+      : Math.round(parseEtaMs * (_LOAD_PHASE_FRACS[phase] ?? 0));
+    loadElapsedMs += phaseMs;
+    const barPct = totalLoadMs > 0
+      ? loadBarStart + Math.round((loadElapsedMs / totalLoadMs) * (loadBarEnd - loadBarStart))
+      : loadBarEnd;
+    const remainMs = Math.max(0, totalLoadMs - loadElapsedMs);
+    setStage(_loadPhaseLabel(phase, remainMs, estInst), Math.min(barPct, loadBarEnd), true);
   };
 
+  // Stream through CompressionStream so raw bytes never accumulate in JS.
   let bytes;
   try {
-    const buf = await file.arrayBuffer();
-    bytes = new Uint8Array(buf);
+    setStage(isGzip2 ? `Reading ${file.name}…` : `Compressing ${file.name}…`, 0);
+    await new Promise(r => setTimeout(r, 20));
+    if (isGzip2) {
+      bytes = new Uint8Array(await file.arrayBuffer());
+    } else {
+      const compT0 = performance.now();
+      bytes = await gzipCompressFile(file, (inputRead, total) => {
+        const frac = total > 0 ? inputRead / total : 0;
+        const pct = Math.round(frac * compBarEnd2);
+        const readMB = (inputRead / 1048576).toFixed(0);
+        const totMB  = (total    / 1048576).toFixed(0);
+        setStage(`Compressing ${file.name}… (${readMB} / ${totMB} MB)`, pct);
+      });
+      _etaRecord('compress', compEtaMs, performance.now() - compT0);
+    }
   } catch (e) {
-    msg.textContent = `Error reading file: ${e.message}`;
+    msg.innerHTML = _errorHtml('Reading file', file.name, e);
     return;
   }
 
-  const isGzip2 = bytes[0] === 0x1f && bytes[1] === 0x8b;
-  if (!isGzip2) {
-    setStage('Compressing…', 8);
-    await new Promise(r => setTimeout(r, 20));
-    const compressed = await gzipCompress(bytes);
-    bytes = null;
-    bytes = compressed;
-  }
-
-  setStage(`Parsing heap dump (Pass 1 + 2)…`, 15);
-  await new Promise(r => setTimeout(r, 20));
-
+  const tParse0 = performance.now();
   try {
     if (wasmSession) { wasmSession.free(); wasmSession = null; }
-    wasmSession = HprofSession.load(bytes, file.name);
+    crawlTo(loadBarEnd, parseEtaMs);
+    wasmSession = HprofSession.load_with_progress(bytes, file.name, onLoadPhase);
   } catch (e) {
-    msg.textContent = `Failed to load ${file.name}: ${e}`;
+    msg.innerHTML = _errorHtml('Loading', file.name, e);
     return;
   }
-  // Free the raw buffer early to reduce peak memory before analysis.
   bytes = null;
 
-  setStage('Computing dominators and retained sizes…', 55);
-  await new Promise(r => setTimeout(r, 20));
+  let instanceCount = estInst;
   try {
-    wasmSession.run_full_analysis();
+    const s = JSON.parse(wasmSession.stats());
+    instanceCount = s.instance_count || estInst;
+  } catch {}
+  const domEtaMs = _etaPredict('dominator', instanceCount);
+
+  let domElapsedMs = 0;
+  const onAnalPhase = (phase, _frac) => {
+    const phaseMs = Math.round(domEtaMs * (_ANAL_PHASE_FRACS[phase] ?? 0));
+    domElapsedMs += phaseMs;
+    const barPct = domEtaMs > 0
+      ? loadBarEnd + Math.round((domElapsedMs / domEtaMs) * (100 - loadBarEnd))
+      : 90;
+    const remainMs = Math.max(0, domEtaMs - domElapsedMs);
+    setStage(_analPhaseLabel(phase, remainMs, instanceCount), Math.min(barPct, 90), true);
+  };
+
+  setStage(`Computing dominators for ${_fmtCount(instanceCount)} objects… (${_fmtEta(domEtaMs)})`, loadBarEnd, true);
+  await new Promise(r => setTimeout(r, 20));
+
+  const tDom0 = performance.now();
+  try {
+    crawlTo(90, domEtaMs);
+    wasmSession.run_full_analysis_with_options_and_progress(
+      !!(opts.findDuplicates), !!(opts.collections), onAnalPhase);
+    _etaRecord('dominator', domEtaMs, performance.now() - tDom0);
     const reportHtml = wasmSession.get_report_html();
-    setStage('Opening report…', 90);
+    setStage('Opening report…', 92);
     await new Promise(r => setTimeout(r, 16));
     hasRetained = true;
     classNames = JSON.parse(wasmSession.class_names());
     openReportTab(reportHtml);
     showWasmShell(file.name);
   } catch (e) {
-    msg.textContent = `Analysis failed: ${e}`;
+    msg.innerHTML = _errorHtml('Analysis', file.name, e);
+  }
+}
+
+// Detect out-of-memory conditions from WASM/browser errors.
+function _isOomError(e) {
+  const s = String(e).toLowerCase();
+  return s.includes('out of memory') || s.includes('allocation failed') ||
+         s.includes('memory access out of bounds') || s.includes('unreachable') ||
+         s.includes('rangeerror') || (e instanceof RangeError);
+}
+
+// Return an HTML string for load/analysis errors, with OOM-specific guidance.
+function _errorHtml(action, fileName, e) {
+  const raw = String(e);
+  if (_isOomError(e)) {
+    const readmeUrl = 'https://github.com/parttimenerd/hprof-analyzer#quick-start';
+    return `<strong>Out of memory</strong> — <em>${escHtml(fileName)}</em> is too large for the browser's WASM heap.<br>` +
+           `Try the <strong>CLI</strong> instead — it has no memory cap and handles dumps of any size:<br>` +
+           `<code>hprof-analyzer ${escHtml(fileName)}</code><br>` +
+           `<a href="${readmeUrl}" target="_blank" rel="noopener">Install &amp; quick-start guide →</a>`;
+  }
+  return `${escHtml(action)} failed: ${escHtml(raw)}`;
+}
+
+// Human-readable label for a load sub-phase.
+function _loadPhaseLabel(phase, remainMs, estInst) {
+  const eta = remainMs > 0 ? ` (${_fmtEta(remainMs)})` : '';
+  switch (phase) {
+    case 'start':   return `Parsing heap dump${eta}…`;
+    case 'pass1_a': return `Pass 1 — reading records & building class index${eta}…`;
+    case 'pass1_b': return `Pass 1 (second scan)${eta}…`;
+    case 'pass2':   return `Pass 2 — scanning heap & building reference graph${eta}…`;
+    case 'compress': return `Compressing heap data for storage${eta}…`;
+    default:        return `Loading${eta}…`;
+  }
+}
+
+// Human-readable label for an analysis sub-phase.
+function _analPhaseLabel(phase, remainMs, instanceCount) {
+  const eta = remainMs > 0 ? ` (${_fmtEta(remainMs)})` : '';
+  const n = _fmtCount(instanceCount);
+  switch (phase) {
+    case 'pass1':      return `Pass 1 — re-reading class index${eta}…`;
+    case 'pass2':      return `Pass 2 — building reference graph${eta}…`;
+    case 'rpo':        return `Computing reachability for ${n} objects${eta}…`;
+    case 'inbound':    return `Building inbound reference index${eta}…`;
+    case 'dominators': return `Computing dominator tree for ${n} objects${eta}…`;
+    case 'retained':   return `Computing retained sizes${eta}…`;
+    default:           return `Analyzing${eta}…`;
   }
 }
 
@@ -3786,3 +4115,15 @@ function startTerminal() {
     // for both keystrokes and paste. Nothing to do here.
   });
 }
+
+// Expose URL-based loader for automated testing / Playwright.
+// Usage: await window._hprofLoadUrl('/path/to/dump.hprof', 'oql-shell')
+// mode: 'oql-shell' (default) | 'report'
+window._hprofLoadUrl = async (url, mode = 'oql-shell') => {
+  await loadSampleDump({ path: url, name: url.split('/').pop().replace(/\.hprof$/, '') });
+  const modeButtons = document.getElementById('mode-buttons');
+  if (modeButtons && modeButtons.style.display !== 'none') {
+    const btnId = mode === 'report' ? 'btn-report' : 'btn-oql-shell';
+    document.getElementById(btnId)?.click();
+  }
+};

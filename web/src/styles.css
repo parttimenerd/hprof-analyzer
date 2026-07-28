@@ -208,36 +208,51 @@ details > table thead, details > table tbody, details > table tfoot,
 .thread-locals-inline { margin-top: 0.4rem; }
 .thread-locals-label { font-size: 0.82rem; color: var(--muted); margin: 0 0 0.25rem; font-weight: 600; }
 
-/* Resizable tables must stay as display:table so table-layout:fixed works.
-   Restore display:table and use an outer wrapper for scroll instead.       */
-table.resizable-table {
-  display: table;
-  table-layout: fixed;
-  overflow-x: visible;
-}
-.resizable-table-wrap {
+/* Scrollable table wrapper — horizontal scroll on narrow viewports */
+.table-scroll {
   overflow-x: auto;
   max-width: 100%;
 }
+.table-scroll table {
+  white-space: nowrap;
+}
+/* Class and loader cells: truncate with ellipsis + title tooltip.
+   Width is controlled by TanStack (table-layout:fixed + col width), not max-width. */
+td.cls-cell, td.loader-cell, th.cls-th, th.loader-th {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+td.cls-cell .copy-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+}
+td.cls-cell code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
 
-/* Resizable-table column resize handle */
-.col-resize-handle {
+/* Column resize handle */
+.col-resizer {
   position: absolute;
   right: 0;
   top: 0;
-  bottom: 0;
-  width: 4px;
+  height: 100%;
+  width: 5px;
   cursor: col-resize;
   user-select: none;
-  z-index: 1;
+  touch-action: none;
+  background: transparent;
+  border-right: 2px solid transparent;
+  transition: border-color 0.1s;
 }
-.col-resize-handle:hover, .col-resize-handle.dragging {
-  background: var(--accent);
-  opacity: 0.5;
-}
-th.resizable {
-  position: relative;
-  overflow: hidden;
+.col-resizer:hover, .col-resizer-active {
+  border-right-color: var(--accent);
 }
 
 /* Mobile: single-column grids, tighter padding, scrollable wide tables. */

@@ -4,7 +4,7 @@
 # Output: tests/web-stress/dumps/dump-<size>m.hprof
 set -euo pipefail
 
-HYPERALLOC_JAR="/tmp/heapothesys/HyperAlloc/target/HyperAlloc-1.0.jar"
+HYPERALLOC_JAR="/tmp/heapothesys/HyperAlloc/target/HyperAlloc.jar"
 OUT_DIR="$(git rev-parse --show-toplevel)/tests/web-stress/dumps"
 mkdir -p "$OUT_DIR"
 

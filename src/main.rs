@@ -281,6 +281,9 @@ enum Cmd {
         /// List all named queries and exit.
         #[arg(long = "list-named")]
         list_named: bool,
+        /// When to show the live progress line on stderr.
+        #[arg(long, value_enum, default_value_t = ProgressWhen::Auto)]
+        progress: ProgressWhen,
     },
     /// Eclipse MAT cache generation
     Mat {
@@ -578,6 +581,7 @@ fn main() {
             all,
             run,
             list_named,
+            progress,
         }) => {
             if !input_is_hprof(&input) {
                 fail(format!(
@@ -647,6 +651,12 @@ fn main() {
                     ..DetailLevel::Default.options()
                 };
                 // Reuse the analyze pipeline, printing only the query results as text.
+                let show_progress = match progress {
+                    ProgressWhen::Always => true,
+                    ProgressWhen::Never => false,
+                    ProgressWhen::Auto => std::io::stderr().is_terminal(),
+                };
+                progress::set_enabled(show_progress);
                 if let Err(e) = run_queries(&input, opts) {
                     fail(analyze_error_hint(&input, &e));
                 }
@@ -823,15 +833,14 @@ pub(crate) fn analyze_to_report_with_retained(
     source: &crate::source::HprofSource,
     opts: &AnalyzeOptions,
 ) -> std::io::Result<(crate::report::Report, Vec<u64>)> {
-    analyze_to_report_inner(source.file_path(), opts)
+    analyze_to_report_inner(source, opts)
 }
 
 fn analyze_to_report_inner(
-    path: &str,
+    source: &crate::source::HprofSource,
     opts: &AnalyzeOptions,
 ) -> std::io::Result<(crate::report::Report, Vec<u64>)> {
-    let source = crate::source::HprofSource::from(path);
-    let p1 = pass1::Pass1::run(&source, false)?;
+    let p1 = pass1::Pass1::run(source, false)?;
 
     if p1.class_ids.len() > u32::MAX as usize {
         return Err(io::Error::new(
@@ -859,7 +868,7 @@ fn analyze_to_report_inner(
         _refwalk_csr,
         _string_values,
         _string_values_truncated,
-    ) = pass2::Pass2::build(&source, p1, compress, opts, &[], &mut no_in_sets, &mut no_exists_bools)?;
+    ) = pass2::Pass2::build(source, p1, compress, opts, &[], &mut no_in_sets, &mut no_exists_bools)?;
 
     inbound.compress_id_map(compress)?;
 

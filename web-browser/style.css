@@ -3,10 +3,9 @@ body {
   font-family: system-ui, -apple-system, sans-serif;
   background: #0f0f1a;
   color: #d0d0e0;
-  height: 100vh;
+  min-height: 100vh;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
 }
 
 /* ── Upload screen ──────────────────────────────────────────────────────────── */
@@ -18,7 +17,6 @@ body {
   min-height: 100vh;
   padding: 40px 20px;
   gap: 24px;
-  overflow-y: auto;
 }
 #upload-screen h1 { font-size: 2rem; color: #a0cfff; }
 #drop-zone {
@@ -158,7 +156,7 @@ button:hover { background: #4a6aaa; }
 
 /* ── Shell screen ───────────────────────────────────────────────────────────── */
 #shell-screen {
-  flex: 1;
+  height: 100vh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -183,7 +181,18 @@ button:hover { background: #4a6aaa; }
 }
 #btn-analyze:hover { background: #3a5a8a; }
 #btn-analyze:disabled { background: #1a2a3a; color: #555; cursor: default; }
-#analyze-status { font-size: .75rem; color: #888; }
+#analyze-status { font-size: .75rem; color: #888; display: flex; align-items: center; gap: 5px; }
+.analysis-spinner {
+  display: inline-block;
+  width: 10px; height: 10px;
+  border: 2px solid #555;
+  border-top-color: #7ab4ff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.analysis-status-text { color: #7ab4ff; }
 #btn-disconnect { background: #3a2a2a; padding: 4px 12px; font-size: .78rem; }
 #btn-disconnect:hover { background: #5a3a3a; }
 
@@ -418,7 +427,18 @@ button:hover { background: #4a6aaa; }
   width: 0%;
   background: linear-gradient(90deg, #3a6aaa, #60a0e0);
   border-radius: 3px;
-  transition: width 0.3s ease;
+  transition: width 0.4s ease;
+}
+/* During blocking WASM phases the bar width is fixed but a shimmer shows activity */
+.wasm-progress-bar.wasm-blocking {
+  transition: width 0.4s ease;
+  background: linear-gradient(90deg, #3a6aaa 0%, #60a0e0 40%, #80c8ff 50%, #60a0e0 60%, #3a6aaa 100%);
+  background-size: 200% 100%;
+  animation: wasm-shimmer 1.6s linear infinite;
+}
+@keyframes wasm-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
 }
 
 /* Report nav bar */
@@ -455,3 +475,33 @@ th.rpt-sort-hdr:hover { color: #a0c4ff; }
 th.rpt-sort-hdr::after { content: ' ⇕'; opacity: .3; font-size: .75em; }
 th.rpt-sort-asc::after  { content: ' ↑'; opacity: .8; font-size: .75em; }
 th.rpt-sort-desc::after { content: ' ↓'; opacity: .8; font-size: .75em; }
+
+/* ── Toast notifications ────────────────────────────────────────────────────── */
+#toast-container {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 9999;
+  pointer-events: none;
+}
+.toast {
+  padding: 10px 16px;
+  border-radius: 6px;
+  font-size: .82rem;
+  max-width: 340px;
+  background: #1e2a3a;
+  border: 1px solid #2a3a4a;
+  color: #d0d0e0;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  pointer-events: auto;
+  cursor: pointer;
+}
+.toast-visible { opacity: 1; transform: translateY(0); }
+.toast-success { border-color: #2a5a2a; background: #0f2a0f; color: #7dbb7d; }
+.toast-error   { border-color: #5a2a2a; background: #2a0f0f; color: #bb7d7d; }
+.toast-info    { border-color: #2a3a5a; background: #0f1a2a; color: #7ab4ff; }
