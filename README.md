@@ -60,16 +60,32 @@ Drop a `.hprof` file directly onto the page — the entire analysis runs in your
 browser via WebAssembly, no install required. Heap dumps **up to 3 GB** are
 supported.
 
-You can also connect to a locally running server for larger dumps or interactive
-OQL queries:
+| Landing page | OQL shell | Leak suspects report |
+|:---:|:---:|:---:|
+| ![Landing page](docs/screenshots/screenshot-landing.png) | ![OQL shell](docs/screenshots/screenshot-shell.png) | ![Leak suspects](docs/screenshots/screenshot-report-leaks.png) |
+
+Three modes are available after dropping a file:
+
+- **Analysis** — histogram, leak suspects, dominator tree, GC roots, retained sizes
+- **Full Analysis** — adds duplicate-string/array detection and collection fill-ratio
+- **OQL Shell** — interactive query shell; named-query sidebar + tab-completion work offline
+
+You can also connect to a locally running server for larger dumps:
 
 ```sh
 hprof-analyzer server heap.hprof   # prints http://127.0.0.1:7070
 ```
 
 All REPL commands (`!top`, `!sort`, `!stats`, `!obj`, …) and the full OQL
-engine work the same way in the browser and in the CLI. Tab-completion and
-named-query browsing work offline via WASM.
+engine work the same way in the browser and in the CLI. Useful shell commands:
+
+```
+/help oql        — full OQL language reference (works offline via WASM)
+/examples        — guided tour of OQL examples by category
+/examples group  — examples for GROUP BY / HAVING queries
+```
+
+Tab-completion and named-query browsing work fully offline via WASM.
 
 ## Quick start
 
@@ -512,6 +528,18 @@ live under `tests/fixtures/`.
 The HTML report embeds a pre-committed React bundle (`web/dist/bundle.js`), so
 Node.js is not needed for normal builds. To rebuild it after changing
 `web/src/`: `cd web && npm install && npm run build`.
+
+The self-contained browser bundle is assembled from the WASM module and the
+React bundle by `web-browser/assemble.py`:
+
+```sh
+# Build WASM module first
+wasm-pack build crates/hprof-wasm --target web --release
+
+# Assemble the browser bundle
+python3 web-browser/assemble.py           # → dist/hprof-analyzer-browser.html
+python3 web-browser/assemble.py -o /tmp/bundle.html   # custom output path
+```
 
 ## Support & Feedback
 
