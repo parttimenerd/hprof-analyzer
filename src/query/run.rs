@@ -868,7 +868,13 @@ pub fn run_resident_only(
     } else {
         std::collections::HashMap::new()
     };
-    let addr_vec = if needs_sv { id_map_to_addrs(&cache.p1.id_map) } else { Vec::new() };
+    let addr_vec = if needs_sv
+        || flat.iter().any(|(_, p)| p.finalize_at != crate::query::plan::Phase::P1)
+    {
+        id_map_to_addrs(&cache.p1.id_map)
+    } else {
+        Vec::new()
+    };
     let flat_results = resume_with_string_values(
         state, &flat, sv, None, dfn,
         &addr_vec, Some(&cache.shallow),
@@ -923,7 +929,13 @@ pub fn run_resident_with_retained(
     } else {
         std::collections::HashMap::new()
     };
-    let addr_vec = if needs_sv { id_map_to_addrs(&cache.p1.id_map) } else { Vec::new() };
+    let addr_vec = if needs_sv
+        || flat.iter().any(|(_, p)| p.finalize_at != crate::query::plan::Phase::P1)
+    {
+        id_map_to_addrs(&cache.p1.id_map)
+    } else {
+        Vec::new()
+    };
     let flat_results = resume_with_retained(
         state, &flat, retained, &cache.shallow, dfn, sv, &addr_vec,
         &cache.class_idx, &cache.class_names,
@@ -1051,7 +1063,9 @@ pub fn run_single_dump(
         let source = crate::source::HprofSource::from(path);
         let p1 = crate::pass1::Pass1::run(&source, false)?;
         let needs_sv = flat.iter().any(|(_, p)| p.needs.string_values);
-        let addr_vec = if needs_sv { id_map_to_addrs(&p1.id_map) } else { Vec::new() };
+        let needs_addr = needs_sv
+            || flat.iter().any(|(_, p)| p.finalize_at != crate::query::plan::Phase::P1);
+        let addr_vec = if needs_addr { id_map_to_addrs(&p1.id_map) } else { Vec::new() };
         let mut empty = std::collections::HashMap::new();
         let mut empty_exists = std::collections::HashMap::new();
         let (g, .., state, refwalk_csr, string_values, _sv_trunc) = crate::pass2::Pass2::build(
@@ -1183,7 +1197,9 @@ pub fn run_single_dump(
     let source_outer = crate::source::HprofSource::from(path);
     let p1_outer = crate::pass1::Pass1::run(&source_outer, false)?;
     let needs_sv = flat.iter().any(|(_, p)| p.needs.string_values);
-    let outer_addr_vec = if needs_sv { id_map_to_addrs(&p1_outer.id_map) } else { Vec::new() };
+    let needs_addr = needs_sv
+        || flat.iter().any(|(_, p)| p.finalize_at != crate::query::plan::Phase::P1);
+    let outer_addr_vec = if needs_addr { id_map_to_addrs(&p1_outer.id_map) } else { Vec::new() };
     let (outer_g, .., outer_state, outer_refwalk_csr, outer_sv, _outer_sv_trunc) =
         crate::pass2::Pass2::build(
             &source_outer,
