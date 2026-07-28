@@ -1188,6 +1188,14 @@ fn eval_late_pred_multi(
             let rv = eval_late_expr_multi(rhs, idx, ret, ctx, like_regexes);
             cmp_late_qv(&lv, *op, &rv, like_regexes)
         }
+        // InstanceOf: the late window has class names but no hierarchy data, so
+        // only exact class-name matching is possible (no subclass walk). This is
+        // a best-effort check — it correctly rejects objects whose class name
+        // doesn't match, but may miss true instanceof matches via subclassing.
+        // The alternative (returning `true`) would silently pass all rows.
+        Predicate::InstanceOf(cname) => ctx
+            .class_name_of(idx)
+            .is_some_and(|name| crate::query::execute::class_name_matches(name, cname)),
         _ => true,
     }
 }
@@ -4243,5 +4251,49 @@ mod arith_late_tests {
         assert!(r.error.is_none(), "unexpected error: {:?}", r.error);
         assert_eq!(r.row_count, 1, "only idx 1 (retained=100 > 80) passes");
         assert_eq!(r.rows[0][0], QueryValue::Int(1));
+    }
+
+    /// `eval_late_pred_multi` handles `InstanceOf` in the late window by exact
+    /// class-name matching (no hierarchy walk). An OR mixing InstanceOf with
+    /// @retainedHeapSize must correctly reject objects whose class doesn't match
+    /// rather than passing everything via the old `_ => true` catch-all.
+    #[test]
+    fn eval_late_pred_multi_instanceof_or_retained_rejects_nonmatching_class() {
+        let p = Predicate::Or(
+            Box::new(Predicate::InstanceOf("java.util.HashMap".to_string())),
+            Box::new(Predicate::Compare {
+                lhs: Expr::Attr(Attr::RetainedHeapSize),
+                op: CompareOp::Gt,
+                rhs: Expr::Lit(Value::Int(10000)),
+            }),
+        );
+        let class_names = vec!["java.lang.String".to_string()];
+        let class_idx = vec![0u32]; // object 0 is a String
+        let no_re = std::collections::HashMap::new();
+        let retained = [500u64]; // retained < 10000
+        let ctx = LateCtx {
+            retained: &retained,
+            class_idx: &class_idx,
+            class_names: &class_names,
+            ..ctx_for(&retained)
+        };
+        // String INSTANCEOF HashMap → false; retained(500) > 10000 → false; OR → false
+        assert!(!eval_late_pred_multi(&p, 0, 500, &ctx, &no_re),
+            "String object should NOT pass HashMap instanceof OR retained>10000 with low retained");
+
+        // Flip: now retained > 10000 so OR passes via retained arm
+        assert!(eval_late_pred_multi(&p, 0, 20000, &ctx, &no_re),
+            "High retained should pass OR even though instanceof is false");
+
+        // Object is a HashMap: instanceof arm is true → OR passes regardless of retained
+        let hm_names = vec!["java.util.HashMap".to_string()];
+        let ctx2 = LateCtx {
+            retained: &retained,
+            class_idx: &class_idx,
+            class_names: &hm_names,
+            ..ctx_for(&retained)
+        };
+        assert!(eval_late_pred_multi(&p, 0, 500, &ctx2, &no_re),
+            "HashMap object should pass instanceof arm even with low retained");
     }
 }
