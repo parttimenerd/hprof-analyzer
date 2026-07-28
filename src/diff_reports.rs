@@ -767,6 +767,7 @@ mod tests {
             waste_summary: None,
             top_retainers: Vec::new(),
             queries: Vec::new(),
+            analysis_flags: Default::default(),
         }
     }
 

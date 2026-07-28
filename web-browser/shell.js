@@ -1059,10 +1059,23 @@ function showWasmShell(name) {
 // ── Report screen ─────────────────────────────────────────────────────────────
 let prevScreen = null;  // tracks screen shown before report-screen
 
+// Show/hide the report-topbar action buttons based on whether a WASM session
+// with a cached report is active.
+function updateReportTopbar() {
+  const hasReport = !!(wasmSession && wasmSession.get_report_html && (() => {
+    try { return !!wasmSession.get_report_html(); } catch { return false; }
+  })());
+  const dlBtn = document.getElementById('btn-download-report');
+  const openBtn = document.getElementById('btn-open-report');
+  if (dlBtn) dlBtn.style.display = hasReport ? '' : 'none';
+  if (openBtn) openBtn.style.display = hasReport ? '' : 'none';
+}
+
 function showReport(report, fileName) {
   prevScreen = wasmSession ? 'shell-screen' : (serverUrl ? 'shell-screen' : null);
   renderWasmReport(report, fileName);
   showScreen('report-screen');
+  updateReportTopbar();
 }
 
 document.getElementById('btn-new-file').addEventListener('click', () => {
@@ -1085,7 +1098,40 @@ document.getElementById('btn-to-shell').addEventListener('click', () => {
   }
 });
 
-// ── Populate offline named-query list on connect screen ───────────────────────
+// ── Open full React report in new tab (report-screen topbar) ─────────────────
+document.getElementById('btn-open-report').addEventListener('click', () => {
+  if (!wasmSession) { showToast('No active session', 'info'); return; }
+  try {
+    const html = wasmSession.get_report_html();
+    if (html) {
+      openReportTab(html);
+    } else {
+      showToast('Report not yet generated — wait for analysis to complete', 'info');
+    }
+  } catch (e) {
+    showToast(`Report failed: ${e}`, 'error');
+  }
+});
+
+// ── Download self-contained HTML report file (report-screen topbar) ──────────
+document.getElementById('btn-download-report').addEventListener('click', () => {
+  if (!wasmSession) { showToast('No active session', 'info'); return; }
+  try {
+    const html = wasmSession.get_report_html();
+    if (!html) { showToast('Report not yet generated — wait for analysis to complete', 'info'); return; }
+    const fileName = (wasmSession._fileName || 'heap').replace(/\.hprof(\.gz)?$/i, '') + '-report.html';
+    const blob = new Blob([html], { type: 'text/html' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  } catch (e) {
+    showToast(`Download failed: ${e}`, 'error');
+  }
+});
 function populateOfflineList() {
   const list = document.getElementById('offline-query-list');
   if (list.hasChildNodes()) return;  // already populated
@@ -1175,6 +1221,22 @@ function padTo(s, w, rightAlign) {
   if (s.length > w) return s.slice(0, w - 1) + '…';
   return rightAlign ? s.padStart(w) : s.padEnd(w);
 }
+
+// ── Global keyboard shortcuts ─────────────────────────────────────────────────
+// Ctrl+Shift+R (or Cmd+Shift+R on Mac) — toggle between shell and report screens.
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'R') {
+    e.preventDefault();
+    const shellVisible  = document.getElementById('shell-screen').style.display  !== 'none';
+    const reportVisible = document.getElementById('report-screen').style.display !== 'none';
+    if (shellVisible) {
+      showScreen('report-screen');
+      updateReportTopbar();
+    } else if (reportVisible) {
+      document.getElementById('btn-to-shell').click();
+    }
+  }
+});
 
 // ── Connect screen ────────────────────────────────────────────────────────────
 document.getElementById('btn-connect').addEventListener('click', connectToServer);
@@ -1352,6 +1414,30 @@ async function pollAnalysisStatus() {
 })();
 
 // ── Sidebar ───────────────────────────────────────────────────────────────────
+// Singleton OQL preview popup, created once and reused.
+const _nqPreview = (() => {
+  const el = document.createElement('div');
+  el.className = 'nq-oql-preview';
+  el.style.display = 'none';
+  document.body.appendChild(el);
+  return el;
+})();
+
+function _showNqPreview(card, oql) {
+  _nqPreview.textContent = oql;
+  _nqPreview.style.display = 'block';
+  const rect = card.getBoundingClientRect();
+  // Position to the right of the sidebar; fall back to left if no room.
+  const previewW = Math.min(420, window.innerWidth - rect.right - 16);
+  if (previewW >= 150) {
+    _nqPreview.style.left = (rect.right + 8) + 'px';
+  } else {
+    _nqPreview.style.left = Math.max(4, rect.left - 436) + 'px';
+  }
+  const top = Math.min(rect.top, window.innerHeight - 220);
+  _nqPreview.style.top = top + 'px';
+}
+
 function buildSidebar(analysisReady) {
   const list = document.getElementById('named-query-list');
   list.innerHTML = '';
@@ -1367,9 +1453,6 @@ function buildSidebar(analysisReady) {
     const disabled = q.needs_retained && !analysisReady;
     const card = document.createElement('div');
     card.className = 'nq-card' + (disabled ? ' needs-analysis' : '');
-    card.title = disabled
-      ? `${q.oql}\n\n[Requires full analysis — click "Run Analysis" first]`
-      : q.oql;
     card.dataset.oql = q.oql;  // used by sidebar search to match OQL content
     const nameEl = document.createElement('div');
     nameEl.className = 'nq-name';
@@ -1379,8 +1462,15 @@ function buildSidebar(analysisReady) {
     descEl.textContent = q.display;
     card.appendChild(nameEl);
     card.appendChild(descEl);
+    // OQL preview on hover
+    const previewOql = disabled
+      ? q.oql + '\n\n[Requires full analysis — click "Run Analysis" first]'
+      : q.oql;
+    card.addEventListener('mouseenter', () => _showNqPreview(card, previewOql));
+    card.addEventListener('mouseleave', () => { _nqPreview.style.display = 'none'; });
     if (!disabled) {
       card.addEventListener('click', () => {
+        _nqPreview.style.display = 'none';
         if (term && window._hprofRunQuery) window._hprofRunQuery(q.oql);
         else if (term && window._hprofSetLine) window._hprofSetLine(q.oql);
       });
@@ -3743,6 +3833,7 @@ function startTerminal() {
     term.writeln('  Ctrl+A/E  line start/end  ·  Alt+←/→  word left/right');
     term.writeln('  Ctrl+K/W/U  kill  ·  Ctrl+Y  yank  ·  Ctrl+C  abort query  ·  Ctrl+L  clear');
     term.writeln('  \\  at end of line  →  continue query on next line');
+    term.writeln('  Ctrl+Shift+R  toggle between shell and report screen');
     if (namedQueries.length > 0) {
       term.writeln('');
       term.writeln('\x1b[33mNamed queries\x1b[0m  \x1b[2m(use /run <name> or click sidebar)\x1b[0m');

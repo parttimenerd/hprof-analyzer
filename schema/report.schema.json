@@ -14,6 +14,14 @@
         }
       ]
     },
+    "analysis_flags": {
+      "description": "Which opt-in analysis passes were enabled. Additive; defaults to all-false\nfor round-trip with older JSON (which lacks the field).",
+      "$ref": "#/$defs/AnalysisFlags",
+      "default": {
+        "collections": false,
+        "find_duplicates": false
+      }
+    },
     "arrays_by_size": {
       "description": "Power-of-two array-length histogram (object vs primitive arrays).\nAlways-on; additive, defaults to empty for round-trip with older JSON.",
       "$ref": "#/$defs/ArraysBySize",
@@ -265,6 +273,22 @@
         "traces_present",
         "sites"
       ]
+    },
+    "AnalysisFlags": {
+      "description": "Which opt-in analysis passes were enabled when the report was generated.\nUsed by the viewer to show context-appropriate \"not run\" messages.",
+      "type": "object",
+      "properties": {
+        "collections": {
+          "description": "`--collections` was passed (fill-ratio & waste analysis).",
+          "type": "boolean",
+          "default": false
+        },
+        "find_duplicates": {
+          "description": "`--find-duplicates` was passed (duplicate string/array analysis).",
+          "type": "boolean",
+          "default": false
+        }
+      }
     },
     "ArrayFillRatio": {
       "description": "Fill ratio of raw object arrays (non-null slots / length). Additive.",

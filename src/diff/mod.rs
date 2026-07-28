@@ -126,6 +126,7 @@ mod tests {
             triage: Vec::new(),
             top_retainers: Vec::new(),
             queries: Vec::new(),
+            analysis_flags: Default::default(),
         }
     }
 

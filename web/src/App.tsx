@@ -208,8 +208,8 @@ function StdTable<T extends object>({
 // thousands of histogram rows) stay navigable — MAT's report has an equivalent
 // left-hand section index.
 function Nav({ report }: { report: Report }) {
-  // [id, label, group?] — group is set only on the first link of each group.
-  const items: [string, string, string?][] = [];
+  // [id, label, group?, badge?] — group is set only on the first link of each group.
+  const items: [string, string, (string | undefined)?, (string | undefined)?][] = [];
 
   // ── Overview group ──
   items.push(
@@ -224,17 +224,19 @@ function Nav({ report }: { report: Report }) {
   );
 
   // ── Analysis group ──
-  items.push(["leak-suspects",       "Leak Suspects",    "Analysis"]);
+  const suspectCount = report.leaks.suspects.length;
+  const threadCount = report.threads?.threads?.length ?? 0;
+  items.push(["leak-suspects",       "Leak Suspects",    "Analysis", suspectCount > 0 ? String(suspectCount) : undefined]);
   items.push(["top-consumers",       "Top Consumers"]);
   items.push(["dominator-analysis", "Dominator Analysis"]);
-  items.push(["threads",            "Threads"]);
+  items.push(["threads",            "Threads", undefined, threadCount > 0 ? String(threadCount) : undefined]);
   if (report.top.size_distribution.count > 0) items.push(["size-distribution", "Size Distribution"]);
 
   // ── Data group ──
   let dataGroupSet = false;
-  const addData = (id: string, label: string) => {
-    if (!dataGroupSet) { items.push([id, label, "Data"]); dataGroupSet = true; }
-    else items.push([id, label]);
+  const addData = (id: string, label: string, badge?: string) => {
+    if (!dataGroupSet) { items.push([id, label, "Data", badge]); dataGroupSet = true; }
+    else items.push([id, label, undefined, badge]);
   };
   if (report.overview.duplicate_strings) addData("duplicate-strings-approximate", "Duplicate Strings");
   if (report.overview.duplicate_prim_arrays) addData("duplicate-prim-arrays", "Duplicate Prim Arrays");
@@ -251,7 +253,7 @@ function Nav({ report }: { report: Report }) {
   addData("references", "References");
   addData("unreachable-objects", "Unreachable Objects");
   if (report.alloc_sites) addData("alloc-sites", "Allocation Sites");
-  if (report.queries?.length) addData("custom-queries", "Custom Queries");
+  if (report.queries?.length) addData("custom-queries", "Custom Queries", String(report.queries.length));
 
   // ── Distribution group ──
   let distGroupSet = false;
@@ -297,10 +299,13 @@ function Nav({ report }: { report: Report }) {
 
   return (
     <nav className="toc">
-      {items.map(([id, label, group]) => (
+      {items.map(([id, label, group, badge]) => (
         <React.Fragment key={id}>
           {group && <span className="toc-group">{group}</span>}
-          <a href={`#${id}`} className={id === active ? "active" : ""}>{label}</a>
+          <a href={`#${id}`} className={id === active ? "active" : ""}>
+            {label}
+            {badge && <span className="toc-badge">{badge}</span>}
+          </a>
         </React.Fragment>
       ))}
     </nav>
@@ -451,34 +456,37 @@ function KpiStrip({ report }: { report: Report }) {
   return (
     <>
       <div className="kpi-grid">
-      <div className="kpi">
+      <a className="kpi kpi-link" href="#system-overview" title="Jump to System Overview">
         <div className="kpi-value">{fmtB(report.overview.total_shallow)}</div>
         <div className="kpi-label">Total reachable heap</div>
-      </div>
-      <div className="kpi">
+      </a>
+      <a className="kpi kpi-link" href="#system-overview" title="Jump to System Overview">
         <div className="kpi-value">{fmtCount(report.overview.total_objects)}</div>
         <div className="kpi-label">Objects</div>
-      </div>
-      <div className="kpi">
+      </a>
+      <a className="kpi kpi-link" href="#leak-suspects" title="Jump to Leak Suspects">
         <div className="kpi-value">{fmtCount(suspects.length)}</div>
         <div className="kpi-label">Leak suspects</div>
-      </div>
-      <div className="kpi">
+      </a>
+      <a className="kpi kpi-link" href="#leak-suspects" title="Jump to Leak Suspects">
         <div className="kpi-value">{topShare}</div>
         <div className="kpi-label">Top suspect share</div>
-      </div>
-      <div className="kpi">
+      </a>
+      <a className="kpi kpi-link" href="#leak-suspects" title="Jump to Leak Suspects">
         <div className="kpi-value">
           <code title={dominantClass}>{dominantClass}</code>
         </div>
         <div className="kpi-label">Dominant retainer</div>
-      </div>
-      <div className="kpi">
+      </a>
+      <a className="kpi kpi-link" href="#system-overview" title="Jump to System Overview">
         <div className="kpi-value">{fmtCount(report.overview.gc_roots)}</div>
         <div className="kpi-label">GC roots</div>
+      </a>
       </div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.5rem" }}>
+        <p className="subtitle" style={{ fontSize: "1rem", margin: 0 }}>{verdict}</p>
+        {kbBtn}
       </div>
-      <p className="subtitle" style={{ fontSize: "1rem" }}>{verdict}</p>
     </>
   );
 }
@@ -3368,9 +3376,16 @@ export default function App({ report }: { report: Report }) {
     <div className="app">
       <a href="#memory-triage" className="skip-link">Skip to content</a>
       <h1>
-        Heap Dump Analysis: <code>{report.overview?.source_name ?? "(unknown)"}</code>
+        Heap Dump Analysis:{" "}
+        <span className="copy-cell">
+          <code>{report.overview?.source_name ?? "(unknown)"}</code>
+          <CopyBtn text={report.overview?.source_name ?? ""} />
+        </span>
       </h1>
       <p className="subtitle" style={{ marginTop: "-0.5rem" }}>
+        {report.overview?.dump_creation != null
+          ? <>{formatEpochMs(report.overview.dump_creation)} · </>
+          : null}
         All sizes are binary (1&nbsp;KB = 1024 bytes, 1&nbsp;MB = 1024&nbsp;KB, and so on).
       </p>
       <div className="theme-toggle-wrap">

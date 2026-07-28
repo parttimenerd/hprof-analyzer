@@ -317,6 +317,26 @@ button:hover { background: #4a6aaa; }
 }
 .nq-card.needs-analysis .nq-name { color: #607080; }
 
+/* OQL preview popup shown on hover */
+.nq-oql-preview {
+  position: fixed;
+  z-index: 9998;
+  background: #0f0f20;
+  border: 1px solid #3a4a6a;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .74rem;
+  color: #a0c0ff;
+  white-space: pre;
+  max-width: 420px;
+  max-height: 200px;
+  overflow: auto;
+  pointer-events: none;
+  box-shadow: 0 4px 16px rgba(0,0,0,.5);
+  line-height: 1.55;
+}
+
 .sidebar-search-wrap {
   padding: 0 4px 8px;
   flex-shrink: 0;

@@ -66,6 +66,8 @@ h3 { font-size: 1.02rem; margin: 1.25rem 0 0.5rem; }
 /* At-a-glance KPI strip. */
 .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.75rem; margin: 0 0 1.5rem; }
 .kpi { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem 1rem; }
+.kpi-link { text-decoration: none; color: inherit; display: block; transition: border-color 0.12s, box-shadow 0.12s; }
+.kpi-link:hover { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 15%, transparent); }
 .kpi-value { font-size: 1.25rem; font-weight: 700; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kpi-value code { font-size: 0.95rem; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: help; }
 .kpi-label { color: var(--muted); font-size: 0.78rem; margin-top: 0.15rem; }
@@ -105,6 +107,7 @@ summary { cursor: pointer; color: var(--accent); font-size: 0.85rem; }
 .toc a { text-decoration: none; color: var(--muted); font-size: 0.82rem; padding: 0.2rem 0.6rem; border: 1px solid var(--border); border-radius: 999px; white-space: nowrap; }
 .toc a:hover { color: var(--accent); border-color: var(--accent); }
 .toc a.active { color: var(--accent); border-color: var(--accent); }
+.toc-badge { display: inline-block; background: var(--accent); color: #fff; border-radius: 999px; font-size: 0.65rem; font-weight: 700; line-height: 1; padding: 0.1rem 0.4rem; margin-left: 0.3rem; vertical-align: middle; font-variant-numeric: tabular-nums; }
 .toc-group { font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); opacity: 0.6; padding: 0 0.15rem; margin-left: 0.5rem; white-space: nowrap; }
 .toc-group:first-child { margin-left: 0; }
 .skip-link { position: absolute; left: -9999px; top: 1rem; z-index: 100; background: var(--accent); color: #fff; padding: 0.5rem 1rem; border-radius: 6px; font-size: 0.9rem; text-decoration: none; }

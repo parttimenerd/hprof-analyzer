@@ -102,7 +102,9 @@
 <div id="report-screen" style="display:none">
   <div id="report-topbar">
     <button id="btn-new-file">↩ New file</button>
-    <button id="btn-to-shell">⌨ OQL Shell</button>
+    <button id="btn-to-shell" title="Switch to OQL shell (Ctrl+Shift+R)">⌨ OQL Shell</button>
+    <button id="btn-open-report" title="Open full interactive report in a new tab">⧉ Full Report</button>
+    <button id="btn-download-report" title="Download self-contained HTML report file" style="display:none">⬇ Download</button>
   </div>
   <div id="report-container">
     <p id="report-message"></p>
@@ -115,7 +117,7 @@
     <span id="server-badge">● Connected</span>
     <span id="server-url-display"></span>
     <div id="topbar-actions">
-      <button id="btn-show-report" title="Show analysis report">
+      <button id="btn-show-report" title="Show analysis report (Ctrl+Shift+R)">
         Show Report
       </button>
       <span id="analyze-status"></span>
